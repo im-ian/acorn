@@ -13,14 +13,18 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  Activity,
   BarChart3,
   Bot,
   ChevronDown,
   Columns3,
   Copy,
+  ExternalLink,
   FolderOpen,
   GitBranch,
+  GitPullRequest,
   Maximize2,
   MessageSquareText,
   Minimize2,
@@ -40,6 +44,7 @@ import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import type { LayoutNode } from "../lib/layout";
 import { basename } from "../lib/pathUtils";
+import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
   PROJECT_SESSION_CREATE_MENU,
@@ -50,7 +55,16 @@ import {
   canRegenerateSessionTitle,
   canRenameSession,
 } from "../lib/sessionTitle";
-import type { Session, SessionStatus } from "../lib/types";
+import type {
+  Session,
+  SessionPullRequestSummary,
+  SessionStatus,
+} from "../lib/types";
+import {
+  summarizeAllSessionProcesses,
+  summarizeSessionProcesses,
+} from "../lib/sessionContext";
+import { useCurrentPullRequest } from "../lib/useCurrentPullRequest";
 import {
   AgentProviderIcon,
   resolveSessionAgentProvider,
@@ -793,6 +807,15 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   const canRegenerateTitle =
     canRegenerateSessionTitle(session) && !isGeneratingTitle;
   const canConfigureAutoClose = canConfigureSessionAutoClose(session);
+  const currentPullRequest = useCurrentPullRequest(session);
+  const processSummary = summarizeSessionProcesses(session.active_processes);
+  const processTooltipSummary = summarizeAllSessionProcesses(
+    session.active_processes,
+  );
+  const hasContextMetadata = Boolean(currentPullRequest || processSummary);
+  const pullRequestColor = currentPullRequest
+    ? pullRequestNumberClassName(currentPullRequest)
+    : null;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const openLabel = t("workspace.kanban.openSession").replace(
@@ -997,6 +1020,8 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
             branch={branchName}
             worktreeName={worktreeName}
             worktreePath={session.worktree_path}
+            currentPullRequest={currentPullRequest}
+            processSummary={processTooltipSummary}
           />
         }
         side="right"
@@ -1047,6 +1072,52 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
               data-testid="workspace-kanban-card-last-message"
             >
               {lastMessage}
+            </span>
+          ) : null}
+          {hasContextMetadata ? (
+            <span
+              className="flex min-w-0 items-center gap-1 text-[10px] leading-none text-fg-muted"
+              data-testid="workspace-kanban-card-context"
+            >
+              {currentPullRequest ? (
+                <button
+                  type="button"
+                  aria-label={`${sidebarText(t, "sidebar.metadata.openPullRequest")} #${currentPullRequest.number}`}
+                  title={currentPullRequest.title}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  onKeyUp={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void openUrl(currentPullRequest.url).catch(
+                      (err: unknown) => {
+                        console.error(
+                          "[WorkspaceMain] open PR URL failed",
+                          err,
+                        );
+                      },
+                    );
+                  }}
+                  className={cn(
+                    "inline-flex min-w-0 shrink-0 items-center gap-0.5 rounded-sm underline-offset-2 transition hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60",
+                    pullRequestColor,
+                  )}
+                >
+                  <span>{`PR #${currentPullRequest.number}`}</span>
+                  <ExternalLink size={9} aria-hidden className="opacity-80" />
+                </button>
+              ) : null}
+              {currentPullRequest && processSummary ? (
+                <span aria-hidden className="shrink-0 text-fg-muted/70">
+                  ·
+                </span>
+              ) : null}
+              {processSummary ? (
+                <span className="min-w-0 truncate font-mono">
+                  {processSummary}
+                </span>
+              ) : null}
             </span>
           ) : null}
           <span
@@ -1619,6 +1690,8 @@ function KanbanSessionCardTooltip({
   branch,
   worktreeName,
   worktreePath,
+  currentPullRequest,
+  processSummary,
 }: {
   t: Translator;
   title: string;
@@ -1626,6 +1699,8 @@ function KanbanSessionCardTooltip({
   branch?: string;
   worktreeName: string;
   worktreePath: string;
+  currentPullRequest?: SessionPullRequestSummary | null;
+  processSummary?: string | null;
 }) {
   const detached = t("workspace.kanban.tooltip.detached");
   return (
@@ -1647,12 +1722,28 @@ function KanbanSessionCardTooltip({
         value={branch || detached}
         valueClassName="font-mono"
       />
+      {currentPullRequest ? (
+        <KanbanSessionTooltipRow
+          icon={<GitPullRequest size={12} />}
+          label={sidebarText(t, "sidebar.metadata.openPullRequest")}
+          value={`#${currentPullRequest.number} ${currentPullRequest.title}`}
+          valueClassName={pullRequestNumberClassName(currentPullRequest)}
+        />
+      ) : null}
       <KanbanSessionTooltipRow
         icon={<FolderOpen size={12} />}
         label={t("workspace.kanban.tooltip.worktree")}
         value={`${worktreeName}\n${worktreePath}`}
         valueClassName="break-all font-mono"
       />
+      {processSummary ? (
+        <KanbanSessionTooltipRow
+          icon={<Activity size={12} />}
+          label={sidebarText(t, "sidebar.metadata.processes")}
+          value={processSummary}
+          valueClassName="font-mono"
+        />
+      ) : null}
     </span>
   );
 }

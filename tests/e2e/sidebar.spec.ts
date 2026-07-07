@@ -561,6 +561,7 @@ test.describe("sidebar: project lifecycle", () => {
       name: "Open PR #99",
     });
     await expect(prButton).toBeVisible();
+    await expect(prButton).toHaveClass(/text-emerald-400/);
     await prButton.click();
     const openedUrls = await page.evaluate(
       () =>
