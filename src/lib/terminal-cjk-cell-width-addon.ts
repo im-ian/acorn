@@ -13,6 +13,7 @@ interface DomRenderer {
   __acornCjkCellPatch?: {
     originalSetDefaultSpacing?: () => void;
     originalHandleResize?: (cols: number, rows: number) => void;
+    cjkCellWidthHeuristic?: boolean;
     // Legacy fields from the previous CJK-basis implementation. Keep reading
     // them so dev/HMR sessions can recover without recreating the terminal.
     originalCellWidth?: number;
@@ -50,8 +51,16 @@ interface TerminalInternals {
 }
 
 const CELL_WIDTH_EPSILON = 0.25;
+const PATCH_WIDTH_EPSILON = 0.001;
 
-export function patchTerminalCellMeasurements(term: TerminalInternals): void {
+interface CellMeasurementPatchOptions {
+  cjkCellWidthHeuristic?: boolean;
+}
+
+export function patchTerminalCellMeasurements(
+  term: TerminalInternals,
+  options: CellMeasurementPatchOptions = {},
+): void {
   const renderer = term._core?._renderService?._renderer?.value;
   const widthCache = renderer?._widthCache;
   if (!renderer || !widthCache || typeof widthCache.get !== "function") {
@@ -59,7 +68,17 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
   }
 
   restoreLegacyCellWidthPatch(renderer);
-  const targetCellWidth = measureTargetCellWidth(term, renderer, widthCache);
+  const patchOptions = normalizePatchOptions(options);
+  if (renderer.__acornCjkCellPatch) {
+    renderer.__acornCjkCellPatch.cjkCellWidthHeuristic =
+      patchOptions.cjkCellWidthHeuristic;
+  }
+  const targetCellWidth = measureTargetCellWidth(
+    term,
+    renderer,
+    widthCache,
+    patchOptions,
+  );
   if (targetCellWidth === null) {
     restoreTerminalCellMeasurements(renderer, widthCache);
     restoreDefaultSpacing(renderer);
@@ -70,7 +89,7 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
     renderer.__acornCjkCellPatch?.originalCellWidth ?? getCellWidth(renderer);
   if (
     renderer.__acornCjkCellPatch &&
-    !widthsDiffer(targetCellWidth, originalCellWidth)
+    !patchWidthsDiffer(targetCellWidth, originalCellWidth)
   ) {
     restoreTerminalCellMeasurements(renderer, widthCache);
     return;
@@ -78,7 +97,7 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
 
   if (
     !renderer.__acornCjkCellPatch &&
-    !widthsDiffer(targetCellWidth, getCellWidth(renderer))
+    !patchWidthsDiffer(targetCellWidth, getCellWidth(renderer))
   ) {
     restoreDefaultSpacing(renderer);
     return;
@@ -88,12 +107,19 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
     renderer.__acornCjkCellPatch = {
       originalSetDefaultSpacing: renderer._setDefaultSpacing?.bind(renderer),
       originalHandleResize: renderer.handleResize?.bind(renderer),
+      cjkCellWidthHeuristic: patchOptions.cjkCellWidthHeuristic,
       originalCellWidth: getCellWidth(renderer),
       originalCanvasWidth: renderer.dimensions?.css?.canvas?.width,
     };
     renderer._setDefaultSpacing = () => {
       restoreLegacyCellWidthPatch(renderer);
-      const targetCellWidth = measureTargetCellWidth(term, renderer, widthCache);
+      const patchOptions = currentPatchOptions(renderer);
+      const targetCellWidth = measureTargetCellWidth(
+        term,
+        renderer,
+        widthCache,
+        patchOptions,
+      );
       if (targetCellWidth === null) {
         restoreTerminalCellMeasurements(renderer, widthCache);
         restoreDefaultSpacing(renderer);
@@ -105,7 +131,7 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
       renderer.handleResize = (cols: number, rows: number) => {
         renderer.__acornCjkCellPatch?.originalHandleResize?.(cols, rows);
         rememberCurrentRendererMetrics(renderer);
-        patchTerminalCellMeasurements(term);
+        patchTerminalCellMeasurements(term, currentPatchOptions(renderer));
       };
     }
   }
@@ -209,6 +235,27 @@ function widthsDiffer(a: number, b: number): boolean {
   return Math.abs(a - b) > CELL_WIDTH_EPSILON;
 }
 
+function patchWidthsDiffer(a: number, b: number): boolean {
+  return Math.abs(a - b) > PATCH_WIDTH_EPSILON;
+}
+
+function normalizePatchOptions(
+  options: CellMeasurementPatchOptions,
+): Required<CellMeasurementPatchOptions> {
+  return {
+    cjkCellWidthHeuristic: options.cjkCellWidthHeuristic ?? true,
+  };
+}
+
+function currentPatchOptions(
+  renderer: DomRenderer,
+): Required<CellMeasurementPatchOptions> {
+  return {
+    cjkCellWidthHeuristic:
+      renderer.__acornCjkCellPatch?.cjkCellWidthHeuristic ?? true,
+  };
+}
+
 function configuredLetterSpacing(term: TerminalInternals): number {
   const letterSpacing = term.options?.letterSpacing;
   if (typeof letterSpacing !== "number" || !Number.isFinite(letterSpacing)) {
@@ -221,6 +268,7 @@ function measureTargetCellWidth(
   term: TerminalInternals,
   renderer: DomRenderer,
   widthCache: WidthCache,
+  options: CellMeasurementPatchOptions,
 ): number | null {
   if (renderer._rowContainer) {
     renderer._rowContainer.style.letterSpacing = "";
@@ -228,17 +276,25 @@ function measureTargetCellWidth(
   widthCache.clear?.();
 
   const asciiWidth = widthCache.get("W", false, false);
-  const hangulWidth = widthCache.get("가", false, false);
-  if (asciiWidth <= 0 || hangulWidth <= 0) return null;
+  if (asciiWidth <= 0) return null;
 
   const letterSpacing = configuredLetterSpacing(term);
-  return widthsDiffer(asciiWidth, hangulWidth)
-    ? asciiWidth + letterSpacing
-    : asciiWidth / 2 + letterSpacing;
+  if (options.cjkCellWidthHeuristic ?? true) {
+    const hangulWidth = widthCache.get("가", false, false);
+    if (hangulWidth <= 0) return null;
+    if (!widthsDiffer(asciiWidth, hangulWidth)) {
+      return asciiWidth / 2 + letterSpacing;
+    }
+  }
+  return getCellWidth(renderer) + fractionalLetterSpacingDelta(letterSpacing);
 }
 
 function restoreDefaultSpacing(renderer: DomRenderer): void {
   renderer._setDefaultSpacing?.();
+}
+
+function fractionalLetterSpacingDelta(letterSpacing: number): number {
+  return letterSpacing - Math.round(letterSpacing);
 }
 
 function recalibrateDefaultSpacing(
