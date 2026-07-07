@@ -57,6 +57,7 @@ describe("session context helpers", () => {
       url: "https://github.com/im-ian/acorn/pull/42",
       head_branch: "feature/sidebar-prs",
       base_branch: "main",
+      state: "OPEN",
       is_draft: false,
     });
   });

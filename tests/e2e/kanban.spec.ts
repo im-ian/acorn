@@ -78,19 +78,62 @@ test.describe("workspace kanban mode", () => {
         shell: "ready",
         broken: "errored",
       };
-      return ids.map((id) => ({
-        id,
-        status: statuses[id] ?? "ready",
-        branch: id === "shell" ? "shell" : `feat/${id}`,
-        last_message:
-          id === "broken"
-            ? "Updated from status polling."
-            : null,
-        last_user_message:
-          id === "broken" ? "Please check the failed tests." : null,
-        last_agent_message:
-          id === "broken" ? "Updated from status polling." : null,
-      }));
+      return ids.map((id) => {
+        const update: Record<string, unknown> = {
+          id,
+          status: statuses[id] ?? "ready",
+          branch: id === "shell" ? "shell" : `feat/${id}`,
+          last_message:
+            id === "broken"
+              ? "Updated from status polling."
+              : null,
+          last_user_message:
+            id === "broken" ? "Please check the failed tests." : null,
+          last_agent_message:
+            id === "broken" ? "Updated from status polling." : null,
+        };
+        if (id === "runner") {
+          update.git_context_path = "/tmp/demo-live-worktree";
+          update.active_processes = [
+            { pid: 11, name: "codex", depth: 2 },
+            { pid: 12, name: "rg", depth: 3 },
+            { pid: 13, name: "node", depth: 3 },
+          ];
+        }
+        return update;
+      });
+    });
+    await tauri.handle("list_pull_requests", (args) => {
+      if (args?.query !== "head:feat/runner") {
+        return { kind: "ok", items: [], account: "test" };
+      }
+      return {
+        kind: "ok",
+        account: "test",
+        items: [
+          {
+            number: 77,
+            title: "Add kanban PR context",
+            state: "OPEN",
+            author: "ian",
+            head_branch: "feat/runner",
+            base_branch: "main",
+            url: "https://github.com/im-ian/acorn/pull/77",
+            updated_at: "2026-01-01T00:00:00Z",
+            is_draft: false,
+            checks: null,
+            labels: [],
+          },
+        ],
+      };
+    });
+    await tauri.handle("plugin:opener|open_url", (args) => {
+      const w = window as unknown as {
+        __openUrlCalls?: Array<{ url?: string }>;
+      };
+      w.__openUrlCalls = w.__openUrlCalls ?? [];
+      w.__openUrlCalls.push(args as { url?: string });
+      return null;
     });
 
     await page.goto("/");
@@ -231,6 +274,36 @@ test.describe("workspace kanban mode", () => {
         .locator('[data-kanban-session-id="runner"]')
         .locator('[data-kanban-agent-icon="codex"]'),
     ).toBeVisible();
+    const runnerCard = board.locator('[data-kanban-session-id="runner"]');
+    const runnerContext = runnerCard.getByTestId(
+      "workspace-kanban-card-context",
+    );
+    await expect(runnerContext).toHaveText(/PR #77\s*·\s*codex, rg \+1/);
+    const runnerPrButton = runnerContext.getByRole("button", {
+      name: "Open PR #77",
+    });
+    await expect(runnerPrButton).toBeVisible();
+    await expect(runnerPrButton).toHaveClass(/text-emerald-400/);
+    await runnerPrButton.click();
+    const openedUrls = await page.evaluate(
+      () =>
+        (
+          (window as unknown as {
+            __openUrlCalls?: Array<{ url?: string }>;
+          }).__openUrlCalls ?? []
+        ).map((call) => call.url),
+    );
+    expect(openedUrls).toEqual([
+      "https://github.com/im-ian/acorn/pull/77",
+    ]);
+    await runnerCard.hover();
+    const runnerTooltip = page.getByRole("tooltip");
+    await expect(runnerTooltip).toContainText("Open PR");
+    await expect(runnerTooltip).toContainText("#77 Add kanban PR context");
+    await expect(runnerTooltip).toContainText("Processes");
+    await expect(runnerTooltip).toContainText("codex, rg, node");
+    await page.mouse.move(0, 0);
+    await expect(runnerTooltip).toHaveCount(0);
     await expect(
       board
         .locator('[data-kanban-session-id="shell"]')

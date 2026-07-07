@@ -38,6 +38,7 @@ export function findCurrentPullRequestForBranch(
     url: pr.url,
     head_branch: pr.head_branch,
     base_branch: pr.base_branch,
+    state: pr.state,
     is_draft: pr.is_draft,
   };
 }
