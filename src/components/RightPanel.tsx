@@ -53,6 +53,7 @@ import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import { rightPanelCache } from "../lib/right-panel-cache";
 import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
+import { primeCurrentPullRequestCacheFromListing } from "../lib/useCurrentPullRequest";
 import { useAppStore } from "../store";
 import {
   AgentProviderIcon,
@@ -2989,6 +2990,7 @@ function PullRequestsTab({
           repoPath,
           result.kind === "ok" ? result.account : null,
         );
+        primeCurrentPullRequestCacheFromListing(repoPath, result);
       } catch (e) {
         if (
           signal?.cancelled ||

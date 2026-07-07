@@ -4,7 +4,11 @@ import {
   currentPullRequestSearchQuery,
   findCurrentPullRequestForBranch,
 } from "./sessionContext";
-import type { Session, SessionPullRequestSummary } from "./types";
+import type {
+  PullRequestListing,
+  Session,
+  SessionPullRequestSummary,
+} from "./types";
 
 const CURRENT_PR_CACHE_TTL_MS = 60_000;
 const CURRENT_PR_EMPTY_RETRY_MS = 15_000;
@@ -15,10 +19,59 @@ type CurrentPullRequestCacheEntry = {
   promise?: Promise<SessionPullRequestSummary | null>;
 };
 
+type CurrentPullRequestSubscriber = {
+  projectRepoPath: string;
+  lookupRepoPath: string;
+  branch: string;
+  onPrime: (value: SessionPullRequestSummary) => void;
+};
+
 const currentPullRequestCache = new Map<string, CurrentPullRequestCacheEntry>();
+const currentPullRequestProjectCache = new Map<
+  string,
+  CurrentPullRequestCacheEntry
+>();
+const currentPullRequestSubscribers = new Set<CurrentPullRequestSubscriber>();
+
+function normalizeRepoPath(repoPath: string): string {
+  return repoPath.replace(/\\/g, "/").replace(/\/+$/, "");
+}
 
 function currentPullRequestCacheKey(repoPath: string, branch: string): string {
-  return `${repoPath}\u0000${branch}`;
+  return `${normalizeRepoPath(repoPath)}\u0000${branch}`;
+}
+
+function currentPullRequestProjectCacheKey(
+  repoPath: string,
+  branch: string,
+): string {
+  return `${normalizeRepoPath(repoPath)}\u0000${branch}`;
+}
+
+function setCurrentPullRequestCache(
+  repoPath: string,
+  branch: string,
+  value: SessionPullRequestSummary | null,
+  ttlMs: number,
+): void {
+  currentPullRequestCache.set(currentPullRequestCacheKey(repoPath, branch), {
+    value,
+    expiresAt: Date.now() + ttlMs,
+  });
+}
+
+function readPrimedCurrentPullRequest(
+  projectRepoPath: string,
+  branch: string,
+): SessionPullRequestSummary | null {
+  const key = currentPullRequestProjectCacheKey(projectRepoPath, branch);
+  const cached = currentPullRequestProjectCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    currentPullRequestProjectCache.delete(key);
+    return null;
+  }
+  return cached.value;
 }
 
 function currentPullRequestRepoPath(session: Session): string {
@@ -27,6 +80,46 @@ function currentPullRequestRepoPath(session: Session): string {
     session.worktree_path ||
     session.repo_path
   );
+}
+
+export function primeCurrentPullRequestCacheFromListing(
+  projectRepoPath: string,
+  listing: PullRequestListing,
+): void {
+  if (listing.kind !== "ok") return;
+
+  const expiresAt = Date.now() + CURRENT_PR_CACHE_TTL_MS;
+  const summariesByBranch = new Map<string, SessionPullRequestSummary>();
+  for (const item of listing.items) {
+    const summary = findCurrentPullRequestForBranch(
+      { kind: "ok", account: listing.account, items: [item] },
+      item.head_branch,
+    );
+    if (!summary) continue;
+    summariesByBranch.set(summary.head_branch, summary);
+    currentPullRequestProjectCache.set(
+      currentPullRequestProjectCacheKey(projectRepoPath, summary.head_branch),
+      {
+        value: summary,
+        expiresAt,
+      },
+    );
+  }
+
+  if (summariesByBranch.size === 0) return;
+  const normalizedProjectRepoPath = normalizeRepoPath(projectRepoPath);
+  for (const subscriber of currentPullRequestSubscribers) {
+    if (subscriber.projectRepoPath !== normalizedProjectRepoPath) continue;
+    const summary = summariesByBranch.get(subscriber.branch);
+    if (!summary) continue;
+    setCurrentPullRequestCache(
+      subscriber.lookupRepoPath,
+      subscriber.branch,
+      summary,
+      CURRENT_PR_CACHE_TTL_MS,
+    );
+    subscriber.onPrime(summary);
+  }
 }
 
 function loadCurrentPullRequest(
@@ -55,6 +148,14 @@ function loadCurrentPullRequest(
   });
 
   return promise.then((value) => {
+    const latest = currentPullRequestCache.get(key);
+    if (
+      latest &&
+      latest.promise !== promise &&
+      latest.expiresAt > Date.now()
+    ) {
+      return latest.value;
+    }
     currentPullRequestCache.set(key, {
       value,
       expiresAt:
@@ -70,12 +171,35 @@ export function useCurrentPullRequest(
 ): SessionPullRequestSummary | null {
   const branch = session.branch.trim();
   const repoPath = currentPullRequestRepoPath(session);
+  const projectRepoPath = normalizeRepoPath(session.repo_path);
   const cacheKey = branch ? currentPullRequestCacheKey(repoPath, branch) : null;
   const [lookupAttempt, setLookupAttempt] = useState(0);
   const [currentPullRequest, setCurrentPullRequest] =
-    useState<SessionPullRequestSummary | null>(() =>
-      cacheKey ? (currentPullRequestCache.get(cacheKey)?.value ?? null) : null,
-    );
+    useState<SessionPullRequestSummary | null>(() => {
+      if (!cacheKey) return null;
+      return (
+        readPrimedCurrentPullRequest(projectRepoPath, branch) ??
+        currentPullRequestCache.get(cacheKey)?.value ??
+        null
+      );
+    });
+
+  useEffect(() => {
+    if (!branch) return;
+    const subscriber: CurrentPullRequestSubscriber = {
+      projectRepoPath,
+      lookupRepoPath: normalizeRepoPath(repoPath),
+      branch,
+      onPrime: (value) => {
+        setCurrentPullRequest(value);
+        setLookupAttempt((attempt) => attempt + 1);
+      },
+    };
+    currentPullRequestSubscribers.add(subscriber);
+    return () => {
+      currentPullRequestSubscribers.delete(subscriber);
+    };
+  }, [branch, projectRepoPath, repoPath]);
 
   useEffect(() => {
     const query = currentPullRequestSearchQuery(branch);
@@ -92,6 +216,20 @@ export function useCurrentPullRequest(
         if (!cancelled) setLookupAttempt((attempt) => attempt + 1);
       }, CURRENT_PR_EMPTY_RETRY_MS);
     };
+    const primed = readPrimedCurrentPullRequest(projectRepoPath, branch);
+    if (primed) {
+      setCurrentPullRequestCache(
+        repoPath,
+        branch,
+        primed,
+        CURRENT_PR_CACHE_TTL_MS,
+      );
+      setCurrentPullRequest(primed);
+      return () => {
+        cancelled = true;
+        if (retryTimer !== null) window.clearTimeout(retryTimer);
+      };
+    }
     const cached = currentPullRequestCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       setCurrentPullRequest(cached.value);
@@ -117,7 +255,7 @@ export function useCurrentPullRequest(
       cancelled = true;
       if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [branch, cacheKey, lookupAttempt, repoPath]);
+  }, [branch, cacheKey, lookupAttempt, projectRepoPath, repoPath]);
 
   return currentPullRequest;
 }
