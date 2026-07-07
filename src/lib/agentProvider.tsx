@@ -9,14 +9,20 @@ import type { Session, SessionAgentProvider } from "./types";
 export {
   AGENT_PROVIDER_ORDER,
   AGENT_PROVIDER_REGISTRY,
+  AGENT_TOKEN_PROVIDER_ORDER,
   buildAgentForkCommand,
   buildAgentResumeCommand,
+  getAgentMentionPrefix,
   getAgentHookProviderEnvValue,
   getAgentProviderDefinition,
   inferAgentProvider,
+  isSessionAgentProvider,
   providerRequiresForkTranscriptPrep,
+  providerSupportsImagePasteFallback,
   providerSupportsHooks,
   providerSupportsCapability,
+  providerSupportsTokenUsage,
+  providerSupportsWorktreeAdoption,
 } from "./agentProviderRegistry";
 
 export function resolveSessionAgentProvider(

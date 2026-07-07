@@ -42,6 +42,8 @@ export type SessionTitleSource = "default" | "generated" | "manual";
 
 export type SessionAgentProvider = "claude" | "codex" | "antigravity";
 
+export type SessionAgentDetection = Record<SessionAgentProvider, string | null>;
+
 export type SessionTitleGenerationStatus =
   | "generated"
   | "not_ready"
@@ -64,7 +66,8 @@ export type AgentProviderCapability =
   | "resume"
   | "fork"
   | "status"
-  | "hooks";
+  | "hooks"
+  | "tokenUsage";
 
 export type AgentProviderIconMetadata =
   | {
@@ -98,10 +101,16 @@ export interface AgentProviderDefinition<
 > {
   id: TProvider;
   label: string;
+  agentOptionLabel: string;
+  oneshotHint: string;
   icon: AgentProviderIconMetadata;
   capabilities: readonly AgentProviderCapability[];
   hooks: AgentProviderHookMetadata;
   session: AgentProviderSessionMetadata;
+  imagePasteFallback: boolean;
+  mentionPrefix: string;
+  supportsWorktreeAdoption: boolean;
+  brandToneClassName: string;
   inferNamePattern: RegExp;
 }
 
@@ -280,10 +289,7 @@ export interface ProjectSettingsRecord {
   settings: ProjectSettings;
 }
 
-export type AgentHistoryProvider =
-  | "claude"
-  | "codex"
-  | "antigravity";
+export type AgentHistoryProvider = SessionAgentProvider;
 
 export interface AgentHistoryWorktree {
   name: string;

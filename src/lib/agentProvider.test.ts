@@ -2,15 +2,21 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_PROVIDER_ORDER,
   AGENT_PROVIDER_REGISTRY,
+  AGENT_TOKEN_PROVIDER_ORDER,
   buildAgentForkCommand,
   buildAgentResumeCommand,
   collectSessionAgentProviders,
   getAgentProviderDefinition,
   inferAgentProvider,
+  isSessionAgentProvider,
   getAgentHookProviderEnvValue,
+  getAgentMentionPrefix,
   providerRequiresForkTranscriptPrep,
+  providerSupportsImagePasteFallback,
   providerSupportsHooks,
   providerSupportsCapability,
+  providerSupportsTokenUsage,
+  providerSupportsWorktreeAdoption,
   resolveSessionAgentProvider,
 } from "./agentProvider";
 
@@ -113,6 +119,45 @@ describe("agent provider registry", () => {
     expect(getAgentHookProviderEnvValue("claude")).toBe("claude");
     expect(getAgentHookProviderEnvValue("codex")).toBe("codex");
     expect(getAgentHookProviderEnvValue("antigravity")).toBe("antigravity");
+  });
+
+  it("centralizes per-provider behavior flags", () => {
+    expect(isSessionAgentProvider("claude")).toBe(true);
+    expect(isSessionAgentProvider("ollama")).toBe(false);
+    expect(getAgentProviderDefinition("claude")).toMatchObject({
+      agentOptionLabel: "Claude Code",
+      oneshotHint: "claude -p --output-format text",
+      imagePasteFallback: true,
+      mentionPrefix: "@",
+      supportsWorktreeAdoption: true,
+      brandToneClassName: "bg-[#de7356]/15 text-[#de7356]",
+    });
+    expect(getAgentProviderDefinition("codex")).toMatchObject({
+      agentOptionLabel: "Codex",
+      oneshotHint: "codex exec --skip-git-repo-check",
+      imagePasteFallback: true,
+      mentionPrefix: "",
+      supportsWorktreeAdoption: false,
+      brandToneClassName: "bg-[#3867ff]/15 text-[#5f7dff]",
+    });
+    expect(getAgentProviderDefinition("antigravity")).toMatchObject({
+      agentOptionLabel: "Antigravity",
+      oneshotHint: "agy -p <prompt>",
+      imagePasteFallback: false,
+      mentionPrefix: "",
+      supportsWorktreeAdoption: false,
+      brandToneClassName: "bg-[#19a974]/15 text-[#22b47e]",
+    });
+    expect(providerSupportsTokenUsage("claude")).toBe(true);
+    expect(providerSupportsTokenUsage("codex")).toBe(true);
+    expect(providerSupportsTokenUsage("antigravity")).toBe(false);
+    expect(AGENT_TOKEN_PROVIDER_ORDER).toEqual(["claude", "codex"]);
+    expect(providerSupportsImagePasteFallback("claude")).toBe(true);
+    expect(providerSupportsImagePasteFallback("antigravity")).toBe(false);
+    expect(getAgentMentionPrefix("claude")).toBe("@");
+    expect(getAgentMentionPrefix("codex")).toBe("");
+    expect(providerSupportsWorktreeAdoption("claude")).toBe(true);
+    expect(providerSupportsWorktreeAdoption("codex")).toBe(false);
   });
 });
 

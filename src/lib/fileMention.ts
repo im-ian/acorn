@@ -1,3 +1,4 @@
+import { getAgentMentionPrefix } from "./agentProviderRegistry";
 import type { SessionAgentProvider } from "./types";
 
 function normalizePath(path: string): string {
@@ -25,6 +26,6 @@ export function formatTerminalFileMention(
   cwd: string,
   options: { agentProvider?: SessionAgentProvider | null } = {},
 ): string {
-  const prefix = options.agentProvider === "claude" ? "@" : "";
+  const prefix = getAgentMentionPrefix(options.agentProvider);
   return `${prefix}${escapeMentionPath(pathRelativeToCwd(filePath, cwd))} `;
 }

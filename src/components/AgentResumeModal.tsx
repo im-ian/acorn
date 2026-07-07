@@ -17,7 +17,7 @@ interface AgentResumeModalProps {
   /**
    * Invoked after any modal action (or backdrop dismiss) so the host can
    * drop the candidate from its state. The modal also calls the matching
-   * `acknowledge*Resume` API itself; the host only needs to clear its
+   * `acknowledgeAgentResume` API itself; the host only needs to clear its
    * in-memory candidate slot.
    */
   onDismiss: () => void;
@@ -80,13 +80,7 @@ export function AgentResumeModal({
   if (!candidate) return null;
 
   const ack = () => {
-    if (agent === "claude") {
-      void api.acknowledgeClaudeResume(sessionId).catch(() => {});
-    } else if (agent === "codex") {
-      void api.acknowledgeCodexResume(sessionId).catch(() => {});
-    } else {
-      void api.acknowledgeAntigravityResume(sessionId).catch(() => {});
-    }
+    void api.acknowledgeAgentResume(agent, sessionId).catch(() => {});
   };
 
   const handleResume = () => {

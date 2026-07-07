@@ -222,12 +222,7 @@ fn title_generation_command(mut resolved: ResolvedAiCommand) -> ResolvedAiComman
 
 fn resolve_transcript(session_id: uuid::Uuid) -> Option<(PathBuf, AgentHistoryProvider, String)> {
     if let Some(live) = agent_resume::live_transcript(session_id) {
-        let provider = match live.kind {
-            agent_resume::AgentKind::Claude => AgentHistoryProvider::Claude,
-            agent_resume::AgentKind::Codex => AgentHistoryProvider::Codex,
-            agent_resume::AgentKind::Antigravity => AgentHistoryProvider::Antigravity,
-        };
-        return Some((live.path, provider, live.id));
+        return Some((live.path, live.kind.into(), live.id));
     }
 
     todos::locate_transcript_for(&session_id.to_string())

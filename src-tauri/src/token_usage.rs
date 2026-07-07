@@ -1,9 +1,9 @@
-use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use acorn_transcript::read_tail;
 use directories::UserDirs;
 use serde::Serialize;
 use serde_json::Value;
@@ -159,7 +159,7 @@ fn read_codex_rate_limits_from_latest_sessions() -> Option<ProviderRateLimits> {
 }
 
 fn read_codex_rate_limits_from_session_file(file: &Path) -> Option<ProviderRateLimits> {
-    let text = read_tail_lossy(file, CODEX_SESSION_TAIL_BYTES).ok()?;
+    let text = read_tail(file, CODEX_SESSION_TAIL_BYTES).ok()?.text;
     for line in text.lines().rev() {
         if !line.contains("\"rate_limits\"") {
             continue;
@@ -349,19 +349,6 @@ fn collect_jsonl_files(root: &Path, files: &mut Vec<(PathBuf, SystemTime)>) {
     }
 }
 
-fn read_tail_lossy(path: &Path, max_bytes: u64) -> std::io::Result<String> {
-    if max_bytes == 0 {
-        return Ok(String::new());
-    }
-    let mut file = File::open(path)?;
-    let len = file.metadata()?.len();
-    let start = len.saturating_sub(max_bytes);
-    file.seek(SeekFrom::Start(start))?;
-    let mut buf = Vec::with_capacity(max_bytes.min(len) as usize);
-    file.read_to_end(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
 fn render_source_path(path: &Path) -> String {
     let Some(home) = home_dir() else {
         return path.display().to_string();
@@ -390,6 +377,7 @@ fn clamp_percent(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
     use std::io::Write;
 
     #[test]
@@ -437,7 +425,9 @@ mod tests {
 
         assert_eq!(parsed.five_hour.unwrap().used_percent, 42.0);
         assert_eq!(parsed.weekly, None);
-        let tail = read_tail_lossy(&path, CODEX_SESSION_TAIL_BYTES).expect("read tail");
+        let tail = read_tail(&path, CODEX_SESSION_TAIL_BYTES)
+            .expect("read tail")
+            .text;
         assert_eq!(tail.len(), CODEX_SESSION_TAIL_BYTES as usize);
         fs::remove_file(path).ok();
     }

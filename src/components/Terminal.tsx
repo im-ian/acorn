@@ -26,6 +26,10 @@ import {
   hasNativeFileDropData,
 } from "../lib/fileDrop";
 import { formatTerminalFileMention } from "../lib/fileMention";
+import {
+  AGENT_PROVIDER_ORDER,
+  providerSupportsImagePasteFallback,
+} from "../lib/agentProvider";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import {
   patchTerminalCellMeasurements,
@@ -83,7 +87,7 @@ import {
 } from "../lib/settings";
 import { buildXtermTheme } from "../lib/terminalTheme";
 import { useThemes, type ThemeMode } from "../lib/themes";
-import type { SessionAgentProvider } from "../lib/types";
+import type { SessionAgentDetection, SessionAgentProvider } from "../lib/types";
 import {
   showStoreResultToast,
   showTranslatedErrorToast,
@@ -178,6 +182,15 @@ const ANSI_DIM = "\x1b[2m";
 const SCROLL_TO_BOTTOM_VISIBLE_ROWS = 10;
 // xterm briefly leaves and re-enters hovered links when refreshed rows repaint.
 const LINK_TOOLTIP_HIDE_GRACE_MS = 80;
+
+function detectionHasImagePasteFallbackProvider(
+  detection: SessionAgentDetection,
+): boolean {
+  return AGENT_PROVIDER_ORDER.some(
+    (provider) =>
+      providerSupportsImagePasteFallback(provider) && Boolean(detection[provider]),
+  );
+}
 
 // Custom event the sticky-prompt banner listens to. Fired whenever the user
 // scrolls the terminal so the banner can swap to the prompt "in scope" at
@@ -927,9 +940,9 @@ export function Terminal({
     let agentProbeTimer: number | null = null;
     let daemonSessionAliveAtMount = false;
     let replayScrollbackOnSpawn = true;
-    let agentImagePasteFallbackActive =
-      pasteAgentProviderRef.current === "codex" ||
-      pasteAgentProviderRef.current === "claude";
+    let agentImagePasteFallbackActive = providerSupportsImagePasteFallback(
+      pasteAgentProviderRef.current,
+    );
 
     const refreshAgentDetection = () => {
       void api
@@ -937,10 +950,8 @@ export function Terminal({
         .then((agent) => {
           if (disposed) return;
           agentImagePasteFallbackActive =
-            pasteAgentProviderRef.current === "codex" ||
-            pasteAgentProviderRef.current === "claude" ||
-            Boolean(agent.codex) ||
-            Boolean(agent.claude);
+            providerSupportsImagePasteFallback(pasteAgentProviderRef.current) ||
+            detectionHasImagePasteFallbackProvider(agent);
         })
         .catch((err: unknown) => {
           console.debug("[Terminal] agent detection failed", err);
@@ -1196,15 +1207,15 @@ export function Terminal({
     const agentImagePasteFallbackIsActive = async (): Promise<boolean> => {
       if (
         agentImagePasteFallbackActive ||
-        pasteAgentProviderRef.current === "codex" ||
-        pasteAgentProviderRef.current === "claude"
+        providerSupportsImagePasteFallback(pasteAgentProviderRef.current)
       ) {
         return true;
       }
       try {
         const agent = await api.detectSessionAgent(sessionId);
         if (disposed) return false;
-        agentImagePasteFallbackActive = Boolean(agent.codex) || Boolean(agent.claude);
+        agentImagePasteFallbackActive =
+          detectionHasImagePasteFallbackProvider(agent);
         return agentImagePasteFallbackActive;
       } catch (err: unknown) {
         console.debug("[Terminal] agent detection failed", err);

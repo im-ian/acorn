@@ -10,7 +10,6 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
-  GitFork,
   GitPullRequest,
   Home,
   LayoutPanelLeft,
@@ -65,6 +64,10 @@ import {
   providerRequiresForkTranscriptPrep,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
+import {
+  buildAgentContextMenuItems,
+  createEmptySessionAgentDetection,
+} from "../lib/agentContextMenu";
 import { api, type WorktreeRemoval } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
@@ -139,6 +142,7 @@ import {
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import type {
   Session,
+  SessionAgentDetection,
   SessionAgentProvider,
   SessionKind,
   SessionMode,
@@ -2706,11 +2710,7 @@ function SessionRow({
     canRegenerateSessionTitle(session) && !isGeneratingTitle;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const [agent, setAgent] = useState<{
-    claude: string | null;
-    codex: string | null;
-    antigravity: string | null;
-  } | null>(null);
+  const [agent, setAgent] = useState<SessionAgentDetection | null>(null);
   const {
     attributes,
     listeners,
@@ -2745,7 +2745,7 @@ function SessionRow({
           err,
         });
         if (!cancelled) {
-          setAgent({ claude: null, codex: null, antigravity: null });
+          setAgent(createEmptySessionAgentDetection());
         }
       });
     return () => {
@@ -2819,62 +2819,15 @@ function SessionRow({
     : null;
   const forkItems: ContextMenuItem[] = (() => {
     if (!agent) return [];
-    const items: ContextMenuItem[] = [];
-    const providerCount = [agent.claude, agent.codex, agent.antigravity].filter(
-      Boolean,
-    ).length;
-    const multiple = providerCount > 1;
-    if (agent.claude) {
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkClaudeSession")
-          : sidebarText(t, "sidebar.actions.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () => void forkSession("claude", agent.claude!, false),
-      });
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkClaudeInNewWorktree")
-          : sidebarText(t, "sidebar.actions.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () => void forkSession("claude", agent.claude!, true),
-      });
-    }
-    if (agent.codex) {
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkCodexSession")
-          : sidebarText(t, "sidebar.actions.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () => void forkSession("codex", agent.codex!, false),
-      });
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkCodexInNewWorktree")
-          : sidebarText(t, "sidebar.actions.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () => void forkSession("codex", agent.codex!, true),
-      });
-    }
-    if (agent.antigravity) {
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkAntigravitySession")
-          : sidebarText(t, "sidebar.actions.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () =>
-          void forkSession("antigravity", agent.antigravity!, false),
-      });
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkAntigravityInNewWorktree")
-          : sidebarText(t, "sidebar.actions.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () =>
-          void forkSession("antigravity", agent.antigravity!, true),
-      });
-    }
-    return items;
+    return buildAgentContextMenuItems({
+      mode: "fork",
+      surface: "sidebar",
+      detection: agent,
+      t,
+      onFork: (provider, transcriptId, inNewWorktree) => {
+        void forkSession(provider, transcriptId, inNewWorktree);
+      },
+    });
   })();
   const folderMoveMenuItems: ContextMenuItem[] = [];
   const targetFolderMenuItems: ContextMenuItem[] = [];

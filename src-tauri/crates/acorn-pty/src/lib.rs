@@ -39,7 +39,7 @@ const TAIL_BUFFER_CAP: usize = 4 * 1024 * 1024;
 /// Sidebar dot before we let it fall back to `Idle`. Long enough to actually
 /// catch the user's eye after a transient command (`ls`, `git status`),
 /// short enough that an abandoned shell does not look perpetually pending.
-const NEEDS_INPUT_STICKY: Duration = Duration::from_secs(5);
+pub const NEEDS_INPUT_STICKY: Duration = Duration::from_secs(5);
 
 /// Errors surfaced by [`PtyManager`]. The host crate maps these into its
 /// own application error type — keeping a dedicated enum here means the
@@ -64,6 +64,50 @@ pub enum ShellHint {
     Running,
     NeedsInput,
     Idle,
+}
+
+/// Result of folding one liveness sample into the shell hint state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellHintTransition {
+    pub hint: ShellHint,
+    pub needs_input_until: Option<Instant>,
+}
+
+/// Fold the latest descendant-process sample into the shell hint state.
+///
+/// Callers own their previous-sample and sticky-deadline storage because
+/// daemon attachments and in-process PTYs have different lifetimes.
+#[must_use]
+pub fn transition_shell_hint(
+    had_child: bool,
+    has_child_now: bool,
+    needs_input_until: Option<Instant>,
+    now: Instant,
+) -> ShellHintTransition {
+    if has_child_now {
+        return ShellHintTransition {
+            hint: ShellHint::Running,
+            needs_input_until: None,
+        };
+    }
+
+    if had_child {
+        return ShellHintTransition {
+            hint: ShellHint::NeedsInput,
+            needs_input_until: Some(now + NEEDS_INPUT_STICKY),
+        };
+    }
+
+    match needs_input_until {
+        Some(deadline) if now < deadline => ShellHintTransition {
+            hint: ShellHint::NeedsInput,
+            needs_input_until: Some(deadline),
+        },
+        _ => ShellHintTransition {
+            hint: ShellHint::Idle,
+            needs_input_until: None,
+        },
+    }
 }
 
 /// Per-session PTY state held by the manager.
@@ -307,25 +351,9 @@ impl PtyManager {
         let handle = self.handles.get(session_id)?.clone();
         let had_child = handle.had_child.swap(has_child_now, Ordering::SeqCst);
         let mut sticky = handle.needs_input_until.lock();
-        let hint = if has_child_now {
-            *sticky = None;
-            ShellHint::Running
-        } else if had_child {
-            // Just transitioned from "child running" → "no child"; arm the
-            // sticky window so a quick command surfaces NeedsInput before
-            // the next poll erases the signal.
-            *sticky = Some(Instant::now() + NEEDS_INPUT_STICKY);
-            ShellHint::NeedsInput
-        } else {
-            match *sticky {
-                Some(deadline) if Instant::now() < deadline => ShellHint::NeedsInput,
-                _ => {
-                    *sticky = None;
-                    ShellHint::Idle
-                }
-            }
-        };
-        Some(hint)
+        let transition = transition_shell_hint(had_child, has_child_now, *sticky, Instant::now());
+        *sticky = transition.needs_input_until;
+        Some(transition.hint)
     }
 
     /// Drop the sticky NeedsInput cue, if any. Exposed so callers other than
@@ -428,6 +456,58 @@ fn wait_loop<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_hint_running_clears_sticky_deadline() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(1);
+
+        let transition = transition_shell_hint(false, true, Some(deadline), now);
+
+        assert_eq!(transition.hint, ShellHint::Running);
+        assert_eq!(transition.needs_input_until, None);
+    }
+
+    #[test]
+    fn shell_hint_child_exit_arms_needs_input_sticky() {
+        let now = Instant::now();
+
+        let transition = transition_shell_hint(true, false, None, now);
+
+        assert_eq!(transition.hint, ShellHint::NeedsInput);
+        assert_eq!(transition.needs_input_until, Some(now + NEEDS_INPUT_STICKY));
+    }
+
+    #[test]
+    fn shell_hint_retains_needs_input_inside_sticky_window() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(1);
+
+        let transition = transition_shell_hint(false, false, Some(deadline), now);
+
+        assert_eq!(transition.hint, ShellHint::NeedsInput);
+        assert_eq!(transition.needs_input_until, Some(deadline));
+    }
+
+    #[test]
+    fn shell_hint_expires_sticky_deadline_at_boundary() {
+        let now = Instant::now();
+
+        let transition = transition_shell_hint(false, false, Some(now), now);
+
+        assert_eq!(transition.hint, ShellHint::Idle);
+        assert_eq!(transition.needs_input_until, None);
+    }
+
+    #[test]
+    fn shell_hint_without_child_or_sticky_is_idle() {
+        let now = Instant::now();
+
+        let transition = transition_shell_hint(false, false, None, now);
+
+        assert_eq!(transition.hint, ShellHint::Idle);
+        assert_eq!(transition.needs_input_until, None);
+    }
 
     fn push_tail_keeps_recent_bytes_when_cap_exceeded() {
         let tail: Mutex<VecDeque<u8>> = Mutex::new(VecDeque::new());
