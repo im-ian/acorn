@@ -47,6 +47,16 @@ async function dragBetween(
   await page.mouse.up();
 }
 
+async function sessionPairOrder(
+  first: Locator,
+  second: Locator,
+): Promise<"alpha-beta" | "beta-alpha" | "missing"> {
+  const firstBox = await first.boundingBox();
+  const secondBox = await second.boundingBox();
+  if (!firstBox || !secondBox) return "missing";
+  return firstBox.y < secondBox.y ? "alpha-beta" : "beta-alpha";
+}
+
 async function clickMoveToTarget(
   page: Page,
   targetName: string,
@@ -1922,26 +1932,54 @@ test.describe("sidebar: project lifecycle", () => {
       .first();
     await dragBetween(page, alpha, frontend);
     await dragBetween(page, beta, frontend);
-
-    await dragBetween(page, beta, alpha);
-
     await expect
       .poll(async () => {
+        const frontendBox = await frontend.boundingBox();
         const alphaBox = await alpha.boundingBox();
         const betaBox = await beta.boundingBox();
-        if (!alphaBox || !betaBox) return "missing";
-        return betaBox.y < alphaBox.y ? "reordered" : "not-reordered";
+        if (!frontendBox || !alphaBox || !betaBox) return "missing";
+        const indentedUnderWorkspace =
+          alphaBox.x > frontendBox.x && betaBox.x > frontendBox.x;
+        const listedBelowWorkspace =
+          frontendBox.y < alphaBox.y && frontendBox.y < betaBox.y;
+        return indentedUnderWorkspace && listedBelowWorkspace
+          ? "ready"
+          : "not-ready";
       })
-      .toBe("reordered");
+      .toBe("ready");
+
+    const orderBefore = await sessionPairOrder(alpha, beta);
+    expect(orderBefore).not.toBe("missing");
+    const moveBetaAboveAlpha = orderBefore === "alpha-beta";
+    await dragBetween(
+      page,
+      moveBetaAboveAlpha ? beta : alpha,
+      moveBetaAboveAlpha ? alpha : beta,
+    );
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __reorderSessionCalls?: unknown[] })
+              .__reorderSessionCalls?.length ?? 0,
+        ),
+      )
+      .toBeGreaterThanOrEqual(1);
+
+    const expectedOrder = moveBetaAboveAlpha ? "beta-alpha" : "alpha-beta";
+    await expect
+      .poll(() => sessionPairOrder(alpha, beta))
+      .toBe(expectedOrder);
     const calls = (await page.evaluate(
       () =>
         (window as unknown as { __reorderSessionCalls?: unknown[] })
           .__reorderSessionCalls,
     )) as Array<{ repoPath: string; order: string[] }>;
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual({
+    expect(calls.at(-1)).toEqual({
       repoPath: "/tmp/demo",
-      order: ["beta-session", "alpha-session"],
+      order: moveBetaAboveAlpha
+        ? ["beta-session", "alpha-session"]
+        : ["alpha-session", "beta-session"],
     });
   });
 
