@@ -335,7 +335,7 @@ function App() {
     useState<string | null>(null);
   const pendingRemoveNeedsRunningWarning =
     pendingRemove !== null &&
-    pendingRemove.status === "running" &&
+    pendingRemove.status === "working" &&
     settings.sessions.warnBeforeClosingRunning &&
     runningCloseWarningConfirmedId !== pendingRemove.id;
   const pendingRemoveSkipsDialog =
@@ -1668,6 +1668,10 @@ function App() {
         e.preventDefault();
         useAppStore.getState().cycleTab(-1);
       },
+      [shortcuts.focusLatestNeedsInput]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        useAppStore.getState().selectLatestNeedsInputSession();
+      },
       [shortcuts.nextProject]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().cycleProject(1);
@@ -1937,7 +1941,7 @@ function pickResumeCandidate(
 }
 
 function shouldSkipResumeProbeForStatus(status: SessionStatus): boolean {
-  return status === "running" || status === "needs_input";
+  return status === "working" || status === "waiting_for_input";
 }
 
 export default App;

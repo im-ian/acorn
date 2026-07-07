@@ -14,7 +14,7 @@ const BASE_SESSION = {
   worktree_path: "/tmp/demo",
   branch: "main",
   isolated: false,
-  status: "idle",
+  status: "ready",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:05Z",
   last_message: null,
@@ -46,7 +46,7 @@ test.describe("session lifecycle", () => {
     // a global getByRole match.
     const sidebar = page.locator('[data-panel-id="sidebar"]');
     const row = sidebar
-      .getByRole("button", { name: /^alpha main · Idle/ })
+      .getByRole("button", { name: /^alpha main · Ready/ })
       .first();
     await row.click();
     // After activation the row's accessible name now includes the visible
@@ -95,7 +95,7 @@ test.describe("session lifecycle", () => {
 
     const sidebar = page.locator('[data-panel-id="sidebar"]');
     const row = sidebar
-      .getByRole("button", { name: /^alpha main · Idle/ })
+      .getByRole("button", { name: /^alpha main · Ready/ })
       .first();
     await row.dblclick();
 
@@ -134,7 +134,7 @@ test.describe("session lifecycle", () => {
               worktree_path: "/tmp/demo",
               branch: "main",
               isolated: false,
-              status: "idle",
+              status: "ready",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:05Z",
               last_message: null,
@@ -156,7 +156,7 @@ test.describe("session lifecycle", () => {
 
     const sidebar = page.locator('[data-panel-id="sidebar"]');
     const row = sidebar
-      .getByRole("button", { name: /^alpha main · Idle/ })
+      .getByRole("button", { name: /^alpha main · Ready/ })
       .first();
     await expect(row).toBeVisible();
 
@@ -175,7 +175,7 @@ test.describe("session lifecycle", () => {
     await dialog.getByRole("button", { name: /^Remove$/ }).click();
 
     await expect(
-      sidebar.getByRole("button", { name: /^alpha main · Idle/ }),
+      sidebar.getByRole("button", { name: /^alpha main · Ready/ }),
     ).toHaveCount(0);
 
     const calls = (await page.evaluate(
@@ -189,7 +189,7 @@ test.describe("session lifecycle", () => {
     expect(calls[0].removeWorktree).toBe(false);
   });
 
-  test("closing a running session shows a warning before removal", async ({
+  test("closing a working session shows a warning before removal", async ({
     page,
     tauri,
   }) => {
@@ -217,7 +217,7 @@ test.describe("session lifecycle", () => {
               worktree_path: "/tmp/demo",
               branch: "main",
               isolated: false,
-              status: "running",
+              status: "working",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:05Z",
               last_message: null,
@@ -239,7 +239,7 @@ test.describe("session lifecycle", () => {
 
     const sidebar = page.locator('[data-panel-id="sidebar"]');
     const row = sidebar
-      .getByRole("button", { name: /^alpha main · Running/ })
+      .getByRole("button", { name: /^alpha main · Working/ })
       .first();
     await expect(row).toBeVisible();
 
@@ -249,7 +249,7 @@ test.describe("session lifecycle", () => {
       .click();
 
     const warning = page.getByRole("dialog", {
-      name: "Close running session?",
+      name: "Close working session?",
     });
     await expect(warning).toBeVisible();
     await expect(warning).toContainText(
@@ -271,7 +271,7 @@ test.describe("session lifecycle", () => {
     await warning.getByRole("button", { name: "Close session" }).click();
 
     await expect(
-      sidebar.getByRole("button", { name: /^alpha main · Running/ }),
+      sidebar.getByRole("button", { name: /^alpha main · Working/ }),
     ).toHaveCount(0);
 
     const calls = (await page.evaluate(
@@ -319,7 +319,7 @@ test.describe("session lifecycle", () => {
               branch: "main",
               isolated: true,
               in_worktree: true,
-              status: "idle",
+              status: "ready",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:05Z",
               last_message: null,
@@ -341,7 +341,7 @@ test.describe("session lifecycle", () => {
 
     const sidebar = page.locator('[data-panel-id="sidebar"]');
     const row = sidebar
-      .getByRole("button", { name: /^alpha worktree main · Idle/ })
+      .getByRole("button", { name: /^alpha worktree main · Ready/ })
       .first();
     await expect(row).toBeVisible();
 
@@ -352,7 +352,7 @@ test.describe("session lifecycle", () => {
 
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(
-      sidebar.getByRole("button", { name: /^alpha worktree main · Idle/ }),
+      sidebar.getByRole("button", { name: /^alpha worktree main · Ready/ }),
     ).toHaveCount(0);
 
     const calls = (await page.evaluate(
@@ -393,7 +393,7 @@ test.describe("session lifecycle", () => {
               branch: "main",
               isolated: true,
               in_worktree: true,
-              status: "idle",
+              status: "ready",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:05Z",
               last_message: null,
@@ -415,7 +415,7 @@ test.describe("session lifecycle", () => {
 
     const sidebar = page.locator('[data-panel-id="sidebar"]');
     const row = sidebar
-      .getByRole("button", { name: /^alpha worktree main · Idle/ })
+      .getByRole("button", { name: /^alpha worktree main · Ready/ })
       .first();
     await expect(row).toBeVisible();
 
@@ -450,7 +450,7 @@ test.describe("session lifecycle", () => {
       .click();
 
     await expect(
-      sidebar.getByRole("button", { name: /^alpha worktree main · Idle/ }),
+      sidebar.getByRole("button", { name: /^alpha worktree main · Ready/ }),
     ).toHaveCount(0);
 
     const calls = (await page.evaluate(
@@ -527,7 +527,7 @@ test.describe("session lifecycle", () => {
               branch: "main",
               isolated: true,
               in_worktree: true,
-              status: "idle",
+              status: "ready",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:05Z",
               last_message: null,
@@ -549,7 +549,7 @@ test.describe("session lifecycle", () => {
 
     const sidebar = page.locator('[data-panel-id="sidebar"]');
     const row = sidebar
-      .getByRole("button", { name: /^alpha main · Idle/ })
+      .getByRole("button", { name: /^alpha main · Ready/ })
       .first();
     await expect(row).toBeVisible();
 
@@ -560,7 +560,7 @@ test.describe("session lifecycle", () => {
 
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(
-      sidebar.getByRole("button", { name: /^alpha main · Idle/ }),
+      sidebar.getByRole("button", { name: /^alpha main · Ready/ }),
     ).toHaveCount(0);
 
     const calls = (await page.evaluate(

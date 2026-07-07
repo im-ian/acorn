@@ -118,6 +118,31 @@ interface SessionPlacementIntent {
 const sessionPlacementById = new Map<string, SessionPlacementIntent>();
 const activeSessionPlacementIntents = new Set<SessionPlacementIntent>();
 
+function coalescedSessionNotificationKey(
+  notification: SessionNotification,
+): string | null {
+  if (notification.kind !== "waiting_for_input") return null;
+  return `${notification.sessionId}:${notification.kind}`;
+}
+
+function normalizeSessionNotifications(
+  notifications: SessionNotification[],
+  maxHistory: number,
+): SessionNotification[] {
+  const seen = new Set<string>();
+  const next: SessionNotification[] = [];
+  for (const notification of notifications) {
+    const key = coalescedSessionNotificationKey(notification);
+    if (key) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    next.push(notification);
+    if (next.length >= maxHistory) break;
+  }
+  return next;
+}
+
 async function loadWorkSummaryTokenBaseline(
   session: Session | null | undefined,
 ): Promise<WorkSummaryTokenBaseline | undefined> {
@@ -334,6 +359,7 @@ interface AppStateModel {
   requestRemoveSession: (id: string) => void;
   clearPendingRemove: () => void;
   cycleTab: (direction: 1 | -1) => void;
+  selectLatestNeedsInputSession: () => boolean;
   cycleProject: (direction: 1 | -1) => void;
   addProject: (title?: string) => Promise<void>;
   createNewProject: (
@@ -949,6 +975,24 @@ function findProjectFolder(
   for (const folders of Object.values(state.projectFolders ?? {})) {
     const folder = folders.find((candidate) => candidate.id === folderId);
     if (folder) return folder;
+  }
+  return null;
+}
+
+function latestNeedsInputSessionId(
+  state: Pick<AppStateModel, "sessions" | "sessionNotifications">,
+): string | null {
+  const sessionsById = new Map(
+    state.sessions.map((session) => [session.id, session]),
+  );
+  for (const notification of state.sessionNotifications) {
+    if (notification.kind !== "waiting_for_input") continue;
+    const session = sessionsById.get(notification.sessionId);
+    if (session?.status === "waiting_for_input") return session.id;
+  }
+  for (let index = state.sessions.length - 1; index >= 0; index -= 1) {
+    const session = state.sessions[index];
+    if (session.status === "waiting_for_input") return session.id;
   }
   return null;
 }
@@ -2224,6 +2268,14 @@ export const useAppStore = create<AppStateModel>()(
     });
   },
 
+  selectLatestNeedsInputSession() {
+    const sessionId = latestNeedsInputSessionId(get());
+    if (!sessionId) return false;
+    get().selectSession(sessionId);
+    get().setWorkspaceViewMode("panes");
+    return get().activeSessionId === sessionId;
+  },
+
   cycleProject(direction) {
     const { projects, activeProject } = get();
     if (projects.length === 0) return;
@@ -3168,12 +3220,17 @@ export const useAppStore = create<AppStateModel>()(
 
   addSessionNotification(notification) {
     const maxHistory = useSettings.getState().settings.notifications.maxHistory;
-    set((s) => ({
-      sessionNotifications: [
-        notification,
-        ...s.sessionNotifications.filter((n) => n.id !== notification.id),
-      ].slice(0, maxHistory),
-    }));
+    set((s) => {
+      const existing = s.sessionNotifications.filter(
+        (n) => n.id !== notification.id,
+      );
+      return {
+        sessionNotifications: normalizeSessionNotifications(
+          [notification, ...existing],
+          maxHistory,
+        ),
+      };
+    });
   },
 
   markSessionNotificationRead(id) {
@@ -3670,6 +3727,10 @@ export const useAppStore = create<AppStateModel>()(
         state.sessionFolderIds = normalizeStringRecord(state.sessionFolderIds);
         state.autoCloseSessionIds = normalizeTrueRecord(
           state.autoCloseSessionIds,
+        );
+        state.sessionNotifications = normalizeSessionNotifications(
+          state.sessionNotifications ?? [],
+          useSettings.getState().settings.notifications.maxHistory,
         );
         state.activeProjectFolderId =
           state.activeProjectFolderId ??

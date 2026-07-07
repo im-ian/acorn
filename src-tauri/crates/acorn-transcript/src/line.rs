@@ -24,8 +24,8 @@ impl TranscriptRole {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnState {
-    NeedsInput,
-    Running,
+    WaitingForInput,
+    Working,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -279,13 +279,13 @@ fn claude_turn_state(value: &Value) -> Option<TurnState> {
     }
     let msg = value.get("message")?;
     if line_type == "user" {
-        return Some(TurnState::Running);
+        return Some(TurnState::Working);
     }
     let stop_reason = msg.get("stop_reason").and_then(Value::as_str).unwrap_or("");
     Some(match stop_reason {
-        "end_turn" | "stop_sequence" => TurnState::NeedsInput,
-        "tool_use" => TurnState::Running,
-        _ => TurnState::Running,
+        "end_turn" | "stop_sequence" => TurnState::WaitingForInput,
+        "tool_use" => TurnState::Working,
+        _ => TurnState::Working,
     })
 }
 
@@ -295,23 +295,23 @@ fn codex_turn_state(value: &Value) -> Option<TurnState> {
         .and_then(Value::as_str)
         .unwrap_or("");
     match payload_type {
-        "task_complete" => Some(TurnState::NeedsInput),
-        "user_message" => Some(TurnState::Running),
-        "function_call" | "function_call_output" | "reasoning" => Some(TurnState::Running),
+        "task_complete" => Some(TurnState::WaitingForInput),
+        "user_message" => Some(TurnState::Working),
+        "function_call" | "function_call_output" | "reasoning" => Some(TurnState::Working),
         "agent_message" => {
             let phase = value
                 .pointer("/payload/phase")
                 .and_then(Value::as_str)
                 .unwrap_or("");
             Some(if phase == "final_answer" {
-                TurnState::NeedsInput
+                TurnState::WaitingForInput
             } else {
-                TurnState::Running
+                TurnState::Working
             })
         }
         "message" => {
             if value.pointer("/payload/role").and_then(Value::as_str) == Some("assistant") {
-                Some(TurnState::Running)
+                Some(TurnState::Working)
             } else {
                 None
             }
@@ -324,14 +324,14 @@ fn antigravity_turn_state(value: &Value) -> Option<TurnState> {
     let line_type = value.get("type").and_then(Value::as_str).unwrap_or("");
     let status = value.get("status").and_then(Value::as_str).unwrap_or("");
     match line_type {
-        "USER_INPUT" => Some(TurnState::Running),
+        "USER_INPUT" => Some(TurnState::Working),
         "PLANNER_RESPONSE" => Some(if status == "DONE" {
-            TurnState::NeedsInput
+            TurnState::WaitingForInput
         } else {
-            TurnState::Running
+            TurnState::Working
         }),
         "CONVERSATION_HISTORY" | "" => None,
-        _ => Some(TurnState::Running),
+        _ => Some(TurnState::Working),
     }
 }
 
@@ -672,10 +672,10 @@ mod tests {
     }
 
     #[test]
-    fn claude_user_turn_maps_to_running() {
+    fn claude_user_turn_maps_to_working() {
         assert_eq!(
             classify(AgentKind::Claude, user_turn(), true),
-            Some(TurnState::Running),
+            Some(TurnState::Working),
         );
     }
 
@@ -689,15 +689,15 @@ mod tests {
         );
         assert_eq!(
             classify(AgentKind::Claude, &tail, true),
-            Some(TurnState::NeedsInput),
+            Some(TurnState::WaitingForInput),
         );
     }
 
     #[test]
-    fn claude_unknown_stop_reason_treated_as_running() {
+    fn claude_unknown_stop_reason_treated_as_working() {
         assert_eq!(
             classify(AgentKind::Claude, &assistant("max_tokens"), true),
-            Some(TurnState::Running),
+            Some(TurnState::Working),
         );
     }
 
@@ -706,25 +706,25 @@ mod tests {
         let tail = format!("ent\":[]}}}}\n{}\n", user_turn());
         assert_eq!(
             classify(AgentKind::Claude, &tail, false),
-            Some(TurnState::Running),
+            Some(TurnState::Working),
         );
     }
 
     #[test]
-    fn codex_task_complete_maps_to_needs_input() {
+    fn codex_task_complete_maps_to_waiting_for_input() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
-            Some(TurnState::NeedsInput),
+            Some(TurnState::WaitingForInput),
         );
     }
 
     #[test]
-    fn codex_final_answer_agent_message_maps_to_needs_input() {
+    fn codex_final_answer_agent_message_maps_to_waiting_for_input() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"agent_message","message":"all done","phase":"final_answer","memory_citation":null}}"#;
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
-            Some(TurnState::NeedsInput),
+            Some(TurnState::WaitingForInput),
         );
     }
 
@@ -737,25 +737,25 @@ mod tests {
         );
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
-            Some(TurnState::NeedsInput),
+            Some(TurnState::WaitingForInput),
         );
     }
 
     #[test]
-    fn antigravity_done_planner_maps_to_needs_input() {
+    fn antigravity_done_planner_maps_to_waiting_for_input() {
         let tail = r#"{"type":"PLANNER_RESPONSE","status":"DONE","content":"done"}"#;
         assert_eq!(
             classify(AgentKind::Antigravity, tail, true),
-            Some(TurnState::NeedsInput),
+            Some(TurnState::WaitingForInput),
         );
     }
 
     #[test]
-    fn antigravity_non_planner_done_maps_to_running() {
+    fn antigravity_non_planner_done_maps_to_working() {
         let tail = r#"{"type":"TOOL_CALL","status":"DONE","content":"done"}"#;
         assert_eq!(
             classify(AgentKind::Antigravity, tail, true),
-            Some(TurnState::Running),
+            Some(TurnState::Working),
         );
     }
 

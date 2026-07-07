@@ -1,17 +1,15 @@
 export type SessionStatus =
-  | "idle"
-  | "running"
-  | "needs_input"
-  | "failed"
-  | "completed";
+  | "ready"
+  | "working"
+  | "waiting_for_input"
+  | "errored";
 
 export type SessionStatusReason = "turn_complete" | "shell_prompt";
 
 export type SessionNotificationKind =
-  | "needs_input"
-  | "failed"
-  | "completed"
-  | "became_idle";
+  | "waiting_for_input"
+  | "errored"
+  | "became_ready";
 
 export interface SessionNotification {
   id: string;

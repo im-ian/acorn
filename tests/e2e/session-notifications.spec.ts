@@ -22,7 +22,7 @@ test.describe("session notification center", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "running",
+        status: "working",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -39,7 +39,7 @@ test.describe("session notification center", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "running",
+        status: "working",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -52,7 +52,7 @@ test.describe("session notification center", () => {
     await tauri.handle("detect_session_statuses", () => [
       {
         id: "session-2",
-        status: "needs_input",
+        status: "waiting_for_input",
         branch: null,
         agent_provider: null,
       },
@@ -80,13 +80,16 @@ test.describe("session notification center", () => {
 
     const activityBody = page.getByTestId("sidebar-activity-body");
     const resizeHandle = page.getByTestId("sidebar-activity-resize-handle");
-    const [bodyBoxBefore, resizeHandleBox] = await Promise.all([
-      activityBody.boundingBox(),
-      resizeHandle.boundingBox(),
-    ]);
+    const [bodyBoxBefore, resizeHandleBox, activityBoxBeforeResize] =
+      await Promise.all([
+        activityBody.boundingBox(),
+        resizeHandle.boundingBox(),
+        activity.boundingBox(),
+      ]);
     expect(bodyBoxBefore).not.toBeNull();
     expect(resizeHandleBox).not.toBeNull();
-    if (!bodyBoxBefore || !resizeHandleBox) {
+    expect(activityBoxBeforeResize).not.toBeNull();
+    if (!bodyBoxBefore || !resizeHandleBox || !activityBoxBeforeResize) {
       throw new Error("missing sidebar activity resize target");
     }
     expect(resizeHandleBox.height).toBeGreaterThanOrEqual(12);
@@ -107,17 +110,34 @@ test.describe("session notification center", () => {
         ),
       )
       .toBeGreaterThan(bodyBoxBefore.height + 48);
+    const [resizeHandleBoxAfter, activityBoxAfterResize] = await Promise.all([
+      resizeHandle.boundingBox(),
+      activity.boundingBox(),
+    ]);
+    expect(resizeHandleBoxAfter).not.toBeNull();
+    expect(activityBoxAfterResize).not.toBeNull();
+    if (!resizeHandleBoxAfter || !activityBoxAfterResize) {
+      throw new Error("missing sidebar activity resized layout");
+    }
+    expect(resizeHandleBoxAfter.y).toBeLessThan(resizeHandleBox.y - 48);
+    expect(
+      Math.abs(
+        activityBoxAfterResize.y +
+          activityBoxAfterResize.height -
+          (activityBoxBeforeResize.y + activityBoxBeforeResize.height),
+      ),
+    ).toBeLessThan(4);
 
     await page.getByRole("button", { name: "Session notifications" }).click();
 
     await expect(
-      page.getByRole("menu").getByText("Needs input"),
+      page.getByRole("menu").getByText("Waiting for input"),
     ).toBeVisible();
     await expect(
       page.getByRole("menu").getByText("demo · agent run"),
     ).toBeVisible();
 
-    await page.getByRole("menuitem", { name: /Needs input/ }).click();
+    await page.getByRole("menuitem", { name: /Waiting for input/ }).click();
 
     await expect(page.getByRole("button", { name: "Session notifications" }))
       .not.toContainText("1");
@@ -153,7 +173,7 @@ test.describe("session notification center", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "running",
+        status: "working",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -171,7 +191,7 @@ test.describe("session notification center", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "running",
+        status: "working",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -185,7 +205,7 @@ test.describe("session notification center", () => {
     await tauri.handle("detect_session_statuses", () => [
       {
         id: "session-2",
-        status: "needs_input",
+        status: "waiting_for_input",
         branch: "main",
         agent_provider: null,
         last_message: "Awaiting input.",

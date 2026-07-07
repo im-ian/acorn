@@ -39,13 +39,13 @@ pub struct StreamAttachment {
     output_token: Option<u64>,
     /// OS process id of the daemon-side PTY child captured at spawn /
     /// attach. Used by status polling to walk descendants for
-    /// shell-mode classification (Running / NeedsInput / Idle).
+    /// shell-mode classification (Working / WaitingForInput / Ready).
     pub pid: Option<u32>,
     /// Previous "has live descendant" sample. Drives the
-    /// Running → NeedsInput transition the same way
+    /// Working -> WaitingForInput transition the same way
     /// `PtyHandle.had_child` does for in-process sessions.
     had_child: AtomicBool,
-    /// Deadline for the sticky NeedsInput cue. Cleared by an input
+    /// Deadline for the sticky WaitingForInput cue. Cleared by an input
     /// write or by the next status poll past the deadline.
     needs_input_until: Mutex<Option<Instant>>,
 }
@@ -119,9 +119,9 @@ impl StreamRegistry {
 
     /// Drive the shell-mode state machine the same way the in-process
     /// path does: fold a fresh `has_child_now` against the previous
-    /// observation and the sticky NeedsInput deadline. Returns `None`
+    /// observation and the sticky WaitingForInput deadline. Returns `None`
     /// when no attachment exists for `id` so the caller can treat that
-    /// as Idle.
+    /// as Ready.
     pub fn update_shell_state(&self, id: &Uuid, has_child_now: bool) -> Option<ShellHint> {
         let handle = self.inner.get(id)?.value().clone();
         let had_child = handle.had_child.swap(has_child_now, Ordering::SeqCst);

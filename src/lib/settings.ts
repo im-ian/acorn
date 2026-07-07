@@ -218,7 +218,7 @@ export interface AcornSettings {
      */
     defaultWorkspaceViewMode: DefaultWorkspaceViewMode;
     /**
-     * Move project sidebar tabs that need attention ahead of idle work.
+     * Move project sidebar tabs that need attention ahead of ready work.
      * The saved manual order is preserved and restored when this is off.
      */
     prioritizeNeedsInputTabs: boolean;
@@ -314,7 +314,7 @@ export interface AcornSettings {
      */
     confirmRemove: boolean;
     /**
-     * Warn before closing a session that Acorn currently marks as running.
+     * Warn before closing a session that Acorn currently marks as working.
      * This sits ahead of the normal removal confirmation so users get an
      * explicit chance to avoid killing active shell or agent work.
      */
@@ -360,9 +360,8 @@ export interface AcornSettings {
     maxHistory: number;
     autoDeleteRead: boolean;
     events: {
-      needsInput: boolean;
-      failed: boolean;
-      completed: boolean;
+      waitingForInput: boolean;
+      errored: boolean;
     };
   };
   /**
@@ -528,9 +527,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     maxHistory: NOTIFICATION_HISTORY_LIMIT_DEFAULT,
     autoDeleteRead: true,
     events: {
-      needsInput: true,
-      failed: true,
-      completed: false,
+      waitingForInput: true,
+      errored: true,
     },
   },
   statusBar: {
@@ -895,6 +893,12 @@ function loadSettings(): AcornSettings {
     >;
     const terminalRaw: Partial<AcornSettings["terminal"]> = parsed.terminal ?? {};
     const sessionsRaw = (parsed.sessions ?? {}) as PersistedSessionSettings;
+    const notificationEventsRaw = (parsed.notifications?.events ?? {}) as {
+      waitingForInput?: unknown;
+      needsInput?: unknown;
+      errored?: unknown;
+      failed?: unknown;
+    };
 
     // Prefer the `agents` block; fall back to values stored under the older
     // `commitMessage` shape, then to the Claude default.
@@ -1115,8 +1119,18 @@ function loadSettings(): AcornSettings {
             ? parsed.notifications.autoDeleteRead
             : DEFAULT_SETTINGS.notifications.autoDeleteRead,
         events: {
-          ...DEFAULT_SETTINGS.notifications.events,
-          ...(parsed.notifications?.events ?? {}),
+          waitingForInput:
+            typeof notificationEventsRaw.waitingForInput === "boolean"
+              ? notificationEventsRaw.waitingForInput
+              : typeof notificationEventsRaw.needsInput === "boolean"
+                ? notificationEventsRaw.needsInput
+                : DEFAULT_SETTINGS.notifications.events.waitingForInput,
+          errored:
+            typeof notificationEventsRaw.errored === "boolean"
+              ? notificationEventsRaw.errored
+              : typeof notificationEventsRaw.failed === "boolean"
+                ? notificationEventsRaw.failed
+                : DEFAULT_SETTINGS.notifications.events.errored,
         },
       },
       statusBar: {

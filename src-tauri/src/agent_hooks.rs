@@ -39,10 +39,10 @@ pub enum AgentHookEventKind {
 impl AgentHookEventKind {
     pub fn session_status(self) -> SessionStatus {
         match self {
-            Self::Start => SessionStatus::Running,
-            Self::NeedsInput => SessionStatus::NeedsInput,
-            Self::Stop => SessionStatus::Completed,
-            Self::Error => SessionStatus::Failed,
+            Self::Start => SessionStatus::Working,
+            Self::NeedsInput => SessionStatus::WaitingForInput,
+            Self::Stop => SessionStatus::Ready,
+            Self::Error => SessionStatus::Errored,
         }
     }
 }
@@ -65,7 +65,7 @@ pub fn apply_agent_hook_event(
 
     // Mark the hook channel live so the transcript-tail status poll defers
     // turn-boundary classification to these events instead of clobbering a
-    // just-set resting status (Completed/NeedsInput) back to Running on its
+    // just-set resting status (Ready/WaitingForInput) back to Working on its
     // next tick. See `poll_defers_to_hook` in `commands`.
     sessions.mark_hook_active(&event.session_id);
 
@@ -399,19 +399,19 @@ mod tests {
     fn hook_event_kind_maps_to_session_status() {
         assert_eq!(
             AgentHookEventKind::Start.session_status(),
-            acorn_session::SessionStatus::Running
+            acorn_session::SessionStatus::Working
         );
         assert_eq!(
             AgentHookEventKind::NeedsInput.session_status(),
-            acorn_session::SessionStatus::NeedsInput
+            acorn_session::SessionStatus::WaitingForInput
         );
         assert_eq!(
             AgentHookEventKind::Stop.session_status(),
-            acorn_session::SessionStatus::Completed
+            acorn_session::SessionStatus::Ready
         );
         assert_eq!(
             AgentHookEventKind::Error.session_status(),
-            acorn_session::SessionStatus::Failed
+            acorn_session::SessionStatus::Errored
         );
     }
 
@@ -442,10 +442,10 @@ mod tests {
         )
         .expect("event applies");
 
-        assert_eq!(status, SessionStatus::NeedsInput);
+        assert_eq!(status, SessionStatus::WaitingForInput);
         assert_eq!(
             sessions.get(&session_id).expect("session").status,
-            SessionStatus::NeedsInput
+            SessionStatus::WaitingForInput
         );
     }
 

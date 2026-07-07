@@ -130,13 +130,13 @@ function setLocalChatSessionStatus(
 }
 
 function sessionStatusFromChatState(state: ChatSessionState): SessionStatus {
-  if (chatStateIsRunning(state)) return "running";
+  if (chatStateIsRunning(state)) return "working";
   const lastMessage = state.messages[state.messages.length - 1];
   const lastTurn = state.turns[state.turns.length - 1];
   if (lastMessage?.status === "error" || lastTurn?.status === "error") {
-    return "failed";
+    return "errored";
   }
-  return "needs_input";
+  return "waiting_for_input";
 }
 
 function isChatScrolledBack(element: HTMLElement): boolean {
@@ -893,7 +893,7 @@ export function ChatPane({
       };
       latestChatStateRef.current = optimisticState;
       setState(optimisticState);
-      setLocalChatSessionStatus(sessionId, "running");
+      setLocalChatSessionStatus(sessionId, "working");
       const saved = await api.sendChatMessage(
         sessionId,
         chatAiRequest(provider, settings),
@@ -912,7 +912,7 @@ export function ChatPane({
         setState(previousState);
         setDraft(submittedDraft);
         setAttachments(submittedAttachments);
-        setLocalChatSessionStatus(sessionId, "failed");
+        setLocalChatSessionStatus(sessionId, "errored");
       } else if (latestState?.session_id === sessionId) {
         setLocalChatSessionStatus(
           sessionId,
@@ -1010,7 +1010,7 @@ export function ChatPane({
     setMessageActionBusyId(message.id);
     setSending(true);
     setError(null);
-    setLocalChatSessionStatus(sessionId, "running");
+    setLocalChatSessionStatus(sessionId, "working");
     try {
       const saved = await api.retryChatMessage(
         sessionId,
@@ -1024,7 +1024,7 @@ export function ChatPane({
       setEditDraft("");
     } catch (err) {
       setError(String(err));
-      setLocalChatSessionStatus(sessionId, "failed");
+      setLocalChatSessionStatus(sessionId, "errored");
     } finally {
       setSending(false);
       setMessageActionBusyId(null);

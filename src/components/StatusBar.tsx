@@ -54,11 +54,10 @@ const TOKEN_USAGE_POLL_MS = 60_000;
 type StatusBarTranslationKey = Extract<TranslationKey, `statusBar.${string}`>;
 
 const SESSION_STATUS_KEYS: Record<SessionStatus, StatusBarTranslationKey> = {
-  idle: "statusBar.sessionStatus.idle",
-  running: "statusBar.sessionStatus.running",
-  needs_input: "statusBar.sessionStatus.needsInput",
-  failed: "statusBar.sessionStatus.failed",
-  completed: "statusBar.sessionStatus.completed",
+  ready: "statusBar.sessionStatus.ready",
+  working: "statusBar.sessionStatus.working",
+  waiting_for_input: "statusBar.sessionStatus.waitingForInput",
+  errored: "statusBar.sessionStatus.errored",
 };
 
 function statusBarText(t: Translator, key: StatusBarTranslationKey): string {
@@ -737,10 +736,9 @@ const NOTIFICATION_KIND_KEYS: Record<
   SessionNotificationKind,
   StatusBarTranslationKey
 > = {
-  needs_input: "statusBar.notifications.kind.needsInput",
-  failed: "statusBar.notifications.kind.failed",
-  completed: "statusBar.notifications.kind.completed",
-  became_idle: "statusBar.notifications.kind.becameIdle",
+  waiting_for_input: "statusBar.notifications.kind.waitingForInput",
+  errored: "statusBar.notifications.kind.errored",
+  became_ready: "statusBar.notifications.kind.becameReady",
 };
 
 function SessionNotificationsButton() {
@@ -1017,8 +1015,8 @@ function NotificationRow({
 }
 
 function notificationDotClass(kind: SessionNotificationKind): string {
-  if (kind === "failed") return "bg-danger";
-  if (kind === "completed") return "bg-accent";
+  if (kind === "errored") return "bg-danger";
+  if (kind === "became_ready") return "bg-fg-muted";
   return "bg-warning";
 }
 

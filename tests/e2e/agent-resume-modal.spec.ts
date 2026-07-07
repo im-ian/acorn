@@ -14,7 +14,7 @@ const SESSION = {
   worktree_path: REPO_PATH,
   branch: "main",
   isolated: false,
-  status: "idle",
+  status: "ready",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:05Z",
   last_message: null,
@@ -22,7 +22,7 @@ const SESSION = {
 };
 const RUNNING_SESSION = {
   ...SESSION,
-  status: "running",
+  status: "working",
 };
 const CANDIDATE_UUID = "deadbeef-1234-5678-9abc-def012345678";
 
@@ -68,7 +68,7 @@ test.describe("agent resume modal", () => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [SESSION]);
     await tauri.handle("detect_session_statuses", () => [
-      { id: "s-resume", status: "running", branch: null },
+      { id: "s-resume", status: "working", branch: null },
     ]);
     await tauri.handle("get_agent_resume_candidate", (args) => {
       const w = window as unknown as { __ACORN_RESUME_PROBES__?: number };

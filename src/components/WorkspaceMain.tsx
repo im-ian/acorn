@@ -24,10 +24,12 @@ import {
   Maximize2,
   MessageSquareText,
   Minimize2,
+  Pencil,
   PencilLine,
   Plus,
   RotateCcw,
   Search,
+  Sparkles,
   Tag,
   Terminal as TerminalIcon,
   Trash2,
@@ -44,12 +46,21 @@ import {
   type ProjectSessionCreateAction,
 } from "../lib/projectSessionCreateActions";
 import { canConfigureSessionAutoClose } from "../lib/sessionAgentState";
+import {
+  canRegenerateSessionTitle,
+  canRenameSession,
+} from "../lib/sessionTitle";
 import type { Session, SessionStatus } from "../lib/types";
 import {
   AgentProviderIcon,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
-import { useSettings } from "../lib/settings";
+import {
+  resolveAiExecutionRequest,
+  resolveSessionTitlePrompt,
+  useSettings,
+} from "../lib/settings";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   KANBAN_COLUMN_STATUSES,
@@ -78,11 +89,10 @@ import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
 
 const STATUS_TONE: Record<SessionStatus, StatusTone> = {
-  idle: "neutral",
-  running: "accent",
-  needs_input: "warning",
-  failed: "danger",
-  completed: "success",
+  ready: "neutral",
+  working: "accent",
+  waiting_for_input: "warning",
+  errored: "danger",
 };
 
 // Pair each column status (ordered by the board library) with its UI tone, so
@@ -96,11 +106,10 @@ const KANBAN_COLUMNS: ReadonlyArray<{
 }));
 
 const STATUS_ICON_CLASS: Record<SessionStatus, string> = {
-  idle: "text-fg-muted",
-  running: "text-accent",
-  needs_input: "text-warning",
-  failed: "text-danger",
-  completed: "text-accent/70",
+  ready: "text-fg-muted",
+  working: "text-accent",
+  waiting_for_input: "text-warning",
+  errored: "text-danger",
 };
 
 type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
@@ -482,7 +491,7 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                     <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2.5">
                       <StatusDot
                         tone={column.tone}
-                        pulse={column.status === "running"}
+                        pulse={column.status === "working"}
                       />
                       <h2 className="min-w-0 flex-1 truncate text-[12px] font-medium text-fg">
                         {label}
@@ -758,11 +767,14 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   onOpen: (sessionId: string, anchor: HTMLElement) => void;
 }) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const worktreeName = basename(session.worktree_path);
   const branchName = session.branch?.trim();
   const lastMessage =
     session.last_agent_message?.trim() || session.last_message?.trim();
   const selectSession = useAppStore((s) => s.selectSession);
+  const renameSession = useAppStore((s) => s.renameSession);
+  const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
   const setWorkspaceViewMode = useAppStore((s) => s.setWorkspaceViewMode);
   const toggleSessionAutoClose = useAppStore(
@@ -774,12 +786,24 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   );
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
+  const isGeneratingTitle = useAppStore((s) =>
+    Boolean(s.generatingSessionTitleIds[session.id]),
+  );
+  const canRename = canRenameSession(session, { isGeneratingTitle });
+  const canRegenerateTitle =
+    canRegenerateSessionTitle(session) && !isGeneratingTitle;
   const canConfigureAutoClose = canConfigureSessionAutoClose(session);
+  const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const openLabel = t("workspace.kanban.openSession").replace(
     "{name}",
     session.name,
   );
+
+  useEffect(() => {
+    if (isGeneratingTitle && editing) setEditing(false);
+  }, [editing, isGeneratingTitle]);
+
   function openContextMenu(x: number, y: number) {
     setMenu({ x, y });
   }
@@ -791,18 +815,55 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   }
 
   function handlePointerDown(event: ReactPointerEvent) {
+    if (editing) return;
     if (event.button !== 2) return;
     event.preventDefault();
     openContextMenu(event.clientX, event.clientY);
   }
 
-  function handleOpen(event: ReactMouseEvent<HTMLButtonElement>) {
+  function handleOpen(event: ReactMouseEvent<HTMLElement>) {
     onOpen(session.id, event.currentTarget);
+  }
+
+  async function submitRename(next: string) {
+    setEditing(false);
+    if (canRename && next && next !== session.name) {
+      await renameSession(session.id, next);
+      const error = useAppStore.getState().consumeError();
+      if (error) showToast(`${t("toasts.session.renameFailed")} ${error}`);
+    }
+  }
+
+  async function regenerateTitle() {
+    const settings = useSettings.getState().settings;
+    const status = await generateSessionTitle(
+      session.id,
+      resolveAiExecutionRequest(settings),
+      resolveSessionTitlePrompt(settings),
+      true,
+    );
+    if (status === "not_ready") {
+      showToast(t("toasts.session.titleNotReady"));
+    } else if (status !== "generated") {
+      showToast(t("toasts.session.titleRegenerateSkipped"));
+    }
   }
 
   const sessionMenuItems = useMemo<ContextMenuItem[]>(
     () => [
       workspaceContextMenuGroupTitle(t, "session"),
+      {
+        label: sidebarText(t, "sidebar.actions.rename"),
+        icon: <Pencil size={12} />,
+        onClick: () => setEditing(true),
+        disabled: !canRename,
+      },
+      {
+        label: sidebarText(t, "sidebar.actions.regenerateName"),
+        icon: <Sparkles size={12} />,
+        onClick: () => void regenerateTitle(),
+        disabled: !canRegenerateTitle,
+      },
       {
         label: openLabel,
         icon:
@@ -901,16 +962,23 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
     [
       autoCloseEnabled,
       canConfigureAutoClose,
+      canRegenerateTitle,
+      canRename,
       editorConfigured,
+      generateSessionTitle,
+      isGeneratingTitle,
       onOpen,
       openLabel,
       openWorkSummaryTab,
+      renameSession,
       requestRemoveSession,
       selectSession,
       session.branch,
       session.id,
       session.mode,
+      session.name,
       session.worktree_path,
+      showToast,
       setWorkspaceViewMode,
       t,
       toggleSessionAutoClose,
@@ -936,22 +1004,41 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
         multiline
         className="flex w-full"
       >
-        <button
-          type="button"
+        <div
+          role="button"
+          tabIndex={0}
           data-testid="workspace-kanban-card"
           data-kanban-session-id={session.id}
-          onClick={handleOpen}
+          onClick={editing ? undefined : handleOpen}
           onPointerDown={handlePointerDown}
           onContextMenu={handleContextMenu}
+          onKeyDown={(event) => {
+            if (editing) return;
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onOpen(session.id, event.currentTarget);
+            } else if (event.key === "F2") {
+              event.preventDefault();
+              if (canRename) setEditing(true);
+            }
+          }}
           className="group flex w-full flex-col gap-2 rounded-md border border-border bg-bg-elevated/45 p-2 text-left transition hover:border-accent/45 hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           aria-label={openLabel}
         >
           <span className="flex min-w-0 items-start gap-1.5">
             <WorkspaceSessionIcon session={session} scope="kanban" />
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[12px] font-medium leading-5 text-fg">
-                {session.name}
-              </span>
+              {editing ? (
+                <KanbanCardRenameInput
+                  initial={session.name}
+                  onSubmit={submitRename}
+                  onCancel={() => setEditing(false)}
+                />
+              ) : (
+                <span className="block truncate text-[12px] font-medium leading-5 text-fg">
+                  {session.name}
+                </span>
+              )}
             </span>
           </span>
           {lastMessage ? (
@@ -994,7 +1081,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
               </>
             ) : null}
           </span>
-        </button>
+        </div>
       </Tooltip>
       <ContextMenu
         open={menu !== null}
@@ -1006,6 +1093,49 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
     </>
   );
 });
+
+function KanbanCardRenameInput({
+  initial,
+  onSubmit,
+  onCancel,
+}: {
+  initial: string;
+  onSubmit: (value: string) => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.select();
+  }, []);
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      data-kanban-card-rename-input
+      autoFocus
+      value={value}
+      onChange={(event) => setValue(event.currentTarget.value)}
+      onClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void onSubmit(value.trim());
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+      onBlur={() => void onSubmit(value.trim())}
+      className="h-5 w-full min-w-0 rounded border border-accent bg-input px-1 text-[12px] font-medium leading-4 text-fg outline-none"
+    />
+  );
+}
 
 function KanbanTerminalPopover({
   session,
@@ -1307,7 +1437,7 @@ function KanbanTerminalPopover({
                 icon={
                   <StatusDot
                     tone={statusTone}
-                    pulse={session.status === "running"}
+                    pulse={session.status === "working"}
                     size="xs"
                   />
                 }
@@ -1591,10 +1721,9 @@ function WorkspaceSessionIcon({
     isMedium ? "size-6 rounded-md" : "size-5 rounded",
     "shrink-0 border border-border bg-bg-elevated",
     "flex items-center justify-center transition-colors",
-    session.status === "needs_input" && "border-warning/35",
-    session.status === "failed" && "border-danger/35",
-    session.status === "running" && "border-accent/35",
-    session.status === "completed" && "border-accent/25",
+    session.status === "waiting_for_input" && "border-warning/35",
+    session.status === "errored" && "border-danger/35",
+    session.status === "working" && "border-accent/35",
     STATUS_ICON_CLASS[session.status],
   );
 
@@ -1669,16 +1798,14 @@ function WorkspaceSessionTerminalPopoverMetaItem({
 
 function statusLabel(t: Translator, status: SessionStatus): string {
   switch (status) {
-    case "idle":
-      return t("sidebar.status.idle");
-    case "running":
-      return t("sidebar.status.running");
-    case "needs_input":
-      return t("sidebar.status.needs_input");
-    case "failed":
-      return t("sidebar.status.failed");
-    case "completed":
-      return t("sidebar.status.completed");
+    case "ready":
+      return t("sidebar.status.ready");
+    case "working":
+      return t("sidebar.status.working");
+    case "waiting_for_input":
+      return t("sidebar.status.waiting_for_input");
+    case "errored":
+      return t("sidebar.status.errored");
   }
 }
 

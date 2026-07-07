@@ -16,6 +16,13 @@ const ANTIGRAVITY_NOTIFY_NAME: &str = "acorn-antigravity-notify";
 const HOOK_ENDPOINT_NAME: &str = "agent-hook-endpoint";
 
 const CODEX_WRAPPER_BODY: &str = r#"#!/bin/sh
+_acorn_wrapper_dir="${ACORN_AGENT_WRAPPER_DIR-}"
+if [ -z "$_acorn_wrapper_dir" ]; then
+  case "$0" in
+    */*) _acorn_wrapper_dir=${0%/*} ;;
+  esac
+fi
+
 _acorn_find_real_binary() {
   _acorn_name="$1"
   _acorn_old_ifs=$IFS
@@ -24,7 +31,7 @@ _acorn_find_real_binary() {
     [ -n "$_acorn_dir" ] || continue
     _acorn_dir=${_acorn_dir%/}
     case "$_acorn_dir" in
-      "$ACORN_AGENT_WRAPPER_DIR") continue ;;
+      "$_acorn_wrapper_dir") continue ;;
     esac
     if [ -x "$_acorn_dir/$_acorn_name" ] && [ ! -d "$_acorn_dir/$_acorn_name" ]; then
       IFS=$_acorn_old_ifs
@@ -197,6 +204,13 @@ curl -sf -X POST \
 // `acorn-claude-notify` for the lifecycle events we care about. No write
 // ever touches a path under the user's home `.claude/`.
 const CLAUDE_WRAPPER_BODY: &str = r#"#!/bin/sh
+_acorn_wrapper_dir="${ACORN_AGENT_WRAPPER_DIR-}"
+if [ -z "$_acorn_wrapper_dir" ]; then
+  case "$0" in
+    */*) _acorn_wrapper_dir=${0%/*} ;;
+  esac
+fi
+
 _acorn_find_real_binary() {
   _acorn_name="$1"
   _acorn_old_ifs=$IFS
@@ -205,7 +219,7 @@ _acorn_find_real_binary() {
     [ -n "$_acorn_dir" ] || continue
     _acorn_dir=${_acorn_dir%/}
     case "$_acorn_dir" in
-      "$ACORN_AGENT_WRAPPER_DIR") continue ;;
+      "$_acorn_wrapper_dir") continue ;;
     esac
     if [ -x "$_acorn_dir/$_acorn_name" ] && [ ! -d "$_acorn_dir/$_acorn_name" ]; then
       IFS=$_acorn_old_ifs
@@ -286,6 +300,13 @@ curl -sf -X POST \
 "#;
 
 const ANTIGRAVITY_WRAPPER_BODY: &str = r#"#!/bin/sh
+_acorn_wrapper_dir="${ACORN_AGENT_WRAPPER_DIR-}"
+if [ -z "$_acorn_wrapper_dir" ]; then
+  case "$0" in
+    */*) _acorn_wrapper_dir=${0%/*} ;;
+  esac
+fi
+
 _acorn_find_real_binary() {
   _acorn_name="$1"
   _acorn_old_ifs=$IFS
@@ -294,7 +315,7 @@ _acorn_find_real_binary() {
     [ -n "$_acorn_dir" ] || continue
     _acorn_dir=${_acorn_dir%/}
     case "$_acorn_dir" in
-      "$ACORN_AGENT_WRAPPER_DIR") continue ;;
+      "$_acorn_wrapper_dir") continue ;;
     esac
     if [ -x "$_acorn_dir/$_acorn_name" ] && [ ! -d "$_acorn_dir/$_acorn_name" ]; then
       IFS=$_acorn_old_ifs
@@ -550,6 +571,9 @@ fn write_executable(path: &Path, body: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     struct ScratchDir(PathBuf);
 
@@ -578,12 +602,54 @@ mod tests {
         format!("'{}'", input.replace('\'', r"'\''"))
     }
 
+    fn run_wrapper_with_timeout(
+        program: impl AsRef<std::ffi::OsStr>,
+        path: &str,
+        wrapper_env: Option<&Path>,
+    ) -> io::Result<std::process::Output> {
+        let mut command = Command::new(program);
+        command
+            .arg("sentinel")
+            .env("PATH", path)
+            .env_remove("ACORN_AGENT_HOOK_SESSION_ID")
+            .env_remove("ACORN_AGENT_HOOK_URL")
+            .env_remove("ACORN_AGENT_HOOK_TOKEN")
+            .env_remove("CODEX_TUI_SESSION_LOG_PATH")
+            .env_remove("CODEX_TUI_RECORD_SESSION")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if let Some(wrapper_env) = wrapper_env {
+            command.env("ACORN_AGENT_WRAPPER_DIR", wrapper_env);
+        } else {
+            command.env_remove("ACORN_AGENT_WRAPPER_DIR");
+        }
+        let mut child = command.spawn()?;
+
+        let started = Instant::now();
+        loop {
+            if child.try_wait()?.is_some() {
+                return child.wait_with_output();
+            }
+            if started.elapsed() > Duration::from_secs(2) {
+                child.kill()?;
+                let _ = child.wait();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "wrapper did not resolve the real binary",
+                ));
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     #[test]
     fn writes_codex_wrapper_and_notify_helper() {
         let base = ScratchDir::new("codex");
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
 
         let wrapper = fs::read_to_string(dir.join("codex")).unwrap();
+        assert!(wrapper.contains("_acorn_wrapper_dir=\"${ACORN_AGENT_WRAPPER_DIR-}\""));
+        assert!(wrapper.contains("_acorn_wrapper_dir=${0%/*}"));
         assert!(wrapper.contains("--enable hooks"));
         assert!(!wrapper.contains("--enable codex_hooks"));
         assert!(wrapper
@@ -600,6 +666,62 @@ mod tests {
         assert!(!notify.contains("event=\"stop\""));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
+    }
+
+    #[test]
+    fn wrappers_skip_their_own_dir_when_wrapper_env_is_absent() {
+        let base = ScratchDir::new("self-skip");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        fs::create_dir_all(&real_dir).unwrap();
+
+        for name in ["claude", "codex", "agy"] {
+            write_executable(
+                &real_dir.join(name),
+                &format!("#!/bin/sh\nprintf 'real-{name}:%s\\n' \"$1\"\n"),
+            )
+            .unwrap();
+
+            let path = format!("{}:{}", wrapper_dir.display(), real_dir.display());
+            let output = run_wrapper_with_timeout(name, &path, None)
+                .unwrap_or_else(|err| panic!("{name} wrapper failed to find real binary: {err}"));
+            assert!(
+                output.status.success(),
+                "{name} wrapper exited unsuccessfully: stderr={}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!("real-{name}:sentinel\n")
+            );
+        }
+    }
+
+    #[test]
+    fn wrappers_still_skip_env_wrapper_dir_when_present() {
+        let base = ScratchDir::new("env-skip");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        fs::create_dir_all(&real_dir).unwrap();
+
+        for name in ["claude", "codex", "agy"] {
+            write_executable(
+                &real_dir.join(name),
+                &format!("#!/bin/sh\nprintf 'real-{name}:%s\\n' \"$1\"\n"),
+            )
+            .unwrap();
+
+            let path = format!("{}:{}", wrapper_dir.display(), real_dir.display());
+            let output =
+                run_wrapper_with_timeout(name, &path, Some(&wrapper_dir)).unwrap_or_else(|err| {
+                    panic!("{name} wrapper failed with ACORN_AGENT_WRAPPER_DIR set: {err}")
+                });
+            assert!(output.status.success());
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!("real-{name}:sentinel\n")
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -626,6 +748,8 @@ mod tests {
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
 
         let wrapper = fs::read_to_string(dir.join("claude")).unwrap();
+        assert!(wrapper.contains("_acorn_wrapper_dir=\"${ACORN_AGENT_WRAPPER_DIR-}\""));
+        assert!(wrapper.contains("_acorn_wrapper_dir=${0%/*}"));
         assert!(wrapper.contains("_acorn_find_real_binary claude"));
         assert!(wrapper.contains("ACORN_AGENT_HOOK_URL"));
         assert!(wrapper.contains("ACORN_AGENT_HOOK_TOKEN"));
@@ -748,9 +872,8 @@ mod tests {
         let base = ScratchDir::new("endpoint");
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
 
-        let path =
-            write_agent_hook_endpoint_at(&dir, "http://127.0.0.1:12345/agent-hook", "tok-1")
-                .unwrap();
+        let path = write_agent_hook_endpoint_at(&dir, "http://127.0.0.1:12345/agent-hook", "tok-1")
+            .unwrap();
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             "http://127.0.0.1:12345/agent-hook\ntok-1\n"
@@ -826,6 +949,8 @@ mod tests {
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
 
         let wrapper = fs::read_to_string(dir.join("agy")).unwrap();
+        assert!(wrapper.contains("_acorn_wrapper_dir=\"${ACORN_AGENT_WRAPPER_DIR-}\""));
+        assert!(wrapper.contains("_acorn_wrapper_dir=${0%/*}"));
         assert!(wrapper.contains("_acorn_find_real_binary agy"));
         assert!(wrapper.contains(".system_generated/logs/transcript.jsonl"));
         assert!(wrapper.contains("ANTIGRAVITY_DIR"));

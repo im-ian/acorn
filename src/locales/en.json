@@ -78,8 +78,8 @@
         "label": "Project tabs",
         "hint": "Controls the order of sessions and workspaces inside each project in the left sidebar.",
         "priority": {
-          "label": "Move needs-input and failed tabs to the top",
-          "description": "Keeps your manual order saved, but displays tabs waiting on you or blocked by errors ahead of idle work."
+          "label": "Move waiting and error tabs to the top",
+          "description": "Keeps your manual order saved, but displays tabs waiting on you or blocked by errors ahead of ready work."
         }
       },
       "kanbanTerminalPopover": {
@@ -186,9 +186,9 @@
         "checkbox": "Show confirmation before removing plain sessions"
       },
       "warnBeforeClosingRunning": {
-        "label": "Running-session close warning",
-        "hint": "Show a warning before closing a session that is still running. Closing a running session terminates its active shell or agent process.",
-        "checkbox": "Show warning before closing running sessions"
+        "label": "Working-session close warning",
+        "hint": "Show a warning before closing a session that is still working. Closing a working session terminates its active shell or agent process.",
+        "checkbox": "Show warning before closing working sessions"
       },
       "confirmDeleteIsolatedWorktrees": {
         "label": "Isolated worktree cleanup prompt",
@@ -419,17 +419,13 @@
       },
       "triggers": {
         "label": "Trigger on",
-        "needsInput": {
-          "label": "Needs input",
-          "description": "Claude is waiting on the user."
+        "waitingForInput": {
+          "label": "Waiting for input",
+          "description": "An agent or shell command is waiting on the user."
         },
-        "failed": {
-          "label": "Failed",
-          "description": "Session terminated with an error."
-        },
-        "completed": {
-          "label": "Completed",
-          "description": "Session reached the completed state."
+        "errored": {
+          "label": "Error",
+          "description": "A session hit an agent or runtime error."
         }
       },
       "history": {
@@ -507,6 +503,9 @@
         },
         "prevTab": {
           "label": "Previous tab"
+        },
+        "focusLatestNeedsInput": {
+          "label": "Latest needs-input tab"
         },
         "nextProject": {
           "label": "Next project"
@@ -833,11 +832,10 @@
     "agentTokensResetIn": "resets in {reset}",
     "agentTokensUpdated": "updated {time}",
     "sessionStatus": {
-      "idle": "idle",
-      "running": "running",
-      "needsInput": "needs input",
-      "failed": "failed",
-      "completed": "completed"
+      "ready": "ready",
+      "working": "working",
+      "waitingForInput": "waiting for input",
+      "errored": "error"
     },
     "notifications": {
       "ariaLabel": "Session notifications",
@@ -848,10 +846,9 @@
       "empty": "No session status changes yet.",
       "itemTitle": "{project} · {session}",
       "kind": {
-        "needsInput": "Needs input",
-        "failed": "Failed",
-        "completed": "Completed",
-        "becameIdle": "Idle"
+        "waitingForInput": "Waiting for input",
+        "errored": "Error",
+        "becameReady": "Ready"
       },
       "actions": {
         "markAllRead": "Mark all read",
@@ -1036,11 +1033,10 @@
   },
   "sidebar": {
     "status": {
-      "idle": "Idle",
-      "running": "Running",
-      "needs_input": "Needs input",
-      "failed": "Failed",
-      "completed": "Completed"
+      "ready": "Ready",
+      "working": "Working",
+      "waiting_for_input": "Waiting for input",
+      "errored": "Error"
     },
     "dialog": {
       "selectExistingProject": "Select an existing project",
@@ -1139,10 +1135,9 @@
       "empty": "No session activity yet",
       "itemTitle": "{project} · {session}",
       "kind": {
-        "needsInput": "Needs input",
-        "failed": "Failed",
-        "completed": "Completed",
-        "becameIdle": "Idle"
+        "waitingForInput": "Waiting for input",
+        "errored": "Error",
+        "becameReady": "Ready"
       },
       "actions": {
         "markAllRead": "Mark all read",
@@ -1332,10 +1327,9 @@
       "empty": "No session activity yet",
       "itemTitle": "{project} · {session}",
       "kind": {
-        "needsInput": "Needs input",
-        "failed": "Failed",
-        "completed": "Completed",
-        "becameIdle": "Idle"
+        "waitingForInput": "Waiting for input",
+        "errored": "Error",
+        "becameReady": "Ready"
       },
       "actions": {
         "markAllRead": "Mark all read",
@@ -1581,8 +1575,8 @@
       "remove": "Remove"
     },
     "runningSessionClose": {
-      "title": "Close running session?",
-      "message": "This session is still running. Closing it will terminate the active shell or agent process.",
+      "title": "Close working session?",
+      "message": "This session is still working. Closing it will terminate the active shell or agent process.",
       "sessionLabel": "Session",
       "dontWarnAgain": "Don't warn again (toggle in Settings → Sessions)",
       "continue": "Close session"

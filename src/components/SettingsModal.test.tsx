@@ -452,7 +452,7 @@ describe("SettingsModal font controls", () => {
     openInterfaceTab();
 
     act(() => {
-      checkboxByLabel("Move needs-input and failed tabs to the top").click();
+      checkboxByLabel("Move waiting and error tabs to the top").click();
     });
 
     expect(patchInterface).toHaveBeenCalledWith({
@@ -1025,6 +1025,7 @@ describe("SettingsModal font controls", () => {
     expect(bodyText).toContain("Reset all shortcuts");
     expect(bodyText).toContain("Open command palette");
     expect(bodyText).toContain("New control session");
+    expect(bodyText).toContain("Latest needs-input tab");
     expect(bodyText).toContain("Right panel");
     expect(bodyText).toContain("Record");
     expect(bodyText).toMatch(/⌘P|Ctrl\+P/);

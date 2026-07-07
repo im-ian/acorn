@@ -16,7 +16,7 @@ type ImmediatePollArgs = Omit<PollScheduleArgs, "now"> & {
 };
 
 export function isVolatileSessionStatus(status: SessionStatus): boolean {
-  return status === "running" || status === "needs_input";
+  return status === "working" || status === "waiting_for_input";
 }
 
 export function sessionStatusPollIntervalMs(

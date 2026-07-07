@@ -16,7 +16,7 @@ const SESSION = {
   worktree_path: "/tmp/demo",
   branch: "main",
   isolated: false,
-  status: "idle",
+  status: "ready",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:05Z",
   last_message: null,
@@ -101,7 +101,7 @@ test.describe("background sessions settings", () => {
     await expect(tooltip).toContainText("Branch");
     await expect(tooltip).toContainText("main");
     await expect(tooltip).toContainText("Status");
-    await expect(tooltip).toContainText("idle");
+    await expect(tooltip).toContainText("ready");
     await expect(tooltip).toContainText("Worktree");
     await expect(tooltip).toContainText("/tmp/demo");
     await expect(tooltip.locator("svg")).toHaveCount(5);
@@ -128,7 +128,7 @@ test.describe("background sessions settings", () => {
           worktree_path: "/tmp/demo",
           branch: "main",
           isolated: false,
-          status: "running",
+          status: "working",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:05Z",
           last_message: null,
@@ -178,7 +178,7 @@ test.describe("background sessions settings", () => {
       return [
         {
           id: "s-1",
-          status: "idle",
+          status: "ready",
           branch: "main",
           agent_provider: null,
           agent_transcript_id: null,
@@ -214,7 +214,7 @@ test.describe("background sessions settings", () => {
     await expect(
       page
         .locator('[data-panel-id="sidebar"]')
-        .getByRole("button", { name: /^alpha main · Idle/ }),
+        .getByRole("button", { name: /^alpha main · Ready/ }),
     ).toBeVisible();
     await expect
       .poll(() =>
@@ -243,7 +243,7 @@ test.describe("background sessions settings", () => {
               worktree_path: "/tmp/demo",
               branch: "main",
               isolated: false,
-              status: "idle",
+              status: "ready",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:05Z",
               last_message: null,

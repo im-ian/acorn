@@ -166,19 +166,17 @@ import {
 } from "./ui";
 
 const SESSION_STATUS_TONE: Record<SessionStatus, StatusTone> = {
-  idle: "neutral",
-  running: "accent",
-  needs_input: "warning",
-  failed: "danger",
-  completed: "accent",
+  ready: "neutral",
+  working: "accent",
+  waiting_for_input: "warning",
+  errored: "danger",
 };
 
 const STATUS_ICON: Record<SessionStatus, string> = {
-  idle: "text-fg-muted",
-  running: "text-accent animate-pulse",
-  needs_input: "text-warning",
-  failed: "text-danger",
-  completed: "text-accent/60",
+  ready: "text-fg-muted",
+  working: "text-accent animate-pulse",
+  waiting_for_input: "text-warning",
+  errored: "text-danger",
 };
 
 function autoCloseSessionRowClassName(active: boolean): string {
@@ -1230,7 +1228,7 @@ export function Sidebar() {
           </Tooltip>
         </div>
       </header>
-      <div className="acorn-no-scrollbar flex flex-1 flex-col overflow-y-auto px-1 pb-2">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <DndContext
           sensors={sensors}
           collisionDetection={scopedCollision}
@@ -1238,129 +1236,136 @@ export function Sidebar() {
           onDragEnd={onDragEnd}
           onDragCancel={() => setActiveDragId(null)}
         >
-          {projectGroups.length === 0 ? (
-            <EmptyState onOpenProject={onAddExistingProject} />
-          ) : (
-            <SortableContext
-              items={projectIds}
-              strategy={verticalListSortingStrategy}
-            >
-              <ul className="flex flex-col gap-1.5">
-                {projectGroups.map((project) => {
-                  return (
-                    <ProjectGroupView
-                      key={project.repoPath}
-                      project={project}
-                      collapsed={collapsed.has(project.repoPath)}
-                      activeSessionId={activeSessionId}
-                      isActiveProject={activeProject === project.repoPath}
-                      workspaceViewMode={
-                        activeProject === project.repoPath
-                          ? workspaceViewMode
-                          : "panes"
-                      }
-                      activeProjectFolderId={activeProjectFolderId}
-                      topLevelOrder={projectItemOrders[project.repoPath] ?? []}
-                      prioritizeNeedsInputTabs={prioritizeNeedsInputTabs}
-                      onTitleClick={() =>
-                        applyClickPlan(
-                          planTitleClick({
-                            wasActive: activeProject === project.repoPath,
-                            wasCollapsed: collapsed.has(project.repoPath),
-                          }),
-                          project,
-                        )
-                      }
-                      onChevronClick={() =>
-                        applyClickPlan(
-                          planChevronClick({
-                            wasActive: activeProject === project.repoPath,
-                            wasCollapsed: collapsed.has(project.repoPath),
-                          }),
-                          project,
-                        )
-                      }
-                      onActivate={() => {
-                        setActiveProject(project.repoPath);
-                        expandProject(project.repoPath);
-                        const target = pickSessionToActivate(
-                          project.sessions,
-                          activeSessionId,
-                        );
-                        if (target) selectSession(target);
-                      }}
-                      onSelectFolder={setActiveProjectFolder}
-                      onSelectSession={(folderId, sessionId) => {
-                        setActiveProjectFolder(folderId);
-                        selectSession(sessionId);
-                      }}
-                      onRemoveSession={(s) => requestRemoveSession(s.id)}
-                      onAddSession={(folder, isolated, kind, mode = "terminal") =>
-                        onNewSession(
+          <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pb-2">
+            {projectGroups.length === 0 ? (
+              <EmptyState onOpenProject={onAddExistingProject} />
+            ) : (
+              <SortableContext
+                items={projectIds}
+                strategy={verticalListSortingStrategy}
+              >
+                <ul className="flex flex-col gap-1.5">
+                  {projectGroups.map((project) => {
+                    return (
+                      <ProjectGroupView
+                        key={project.repoPath}
+                        project={project}
+                        collapsed={collapsed.has(project.repoPath)}
+                        activeSessionId={activeSessionId}
+                        isActiveProject={activeProject === project.repoPath}
+                        workspaceViewMode={
+                          activeProject === project.repoPath
+                            ? workspaceViewMode
+                            : "panes"
+                        }
+                        activeProjectFolderId={activeProjectFolderId}
+                        topLevelOrder={projectItemOrders[project.repoPath] ?? []}
+                        prioritizeNeedsInputTabs={prioritizeNeedsInputTabs}
+                        onTitleClick={() =>
+                          applyClickPlan(
+                            planTitleClick({
+                              wasActive: activeProject === project.repoPath,
+                              wasCollapsed: collapsed.has(project.repoPath),
+                            }),
+                            project,
+                          )
+                        }
+                        onChevronClick={() =>
+                          applyClickPlan(
+                            planChevronClick({
+                              wasActive: activeProject === project.repoPath,
+                              wasCollapsed: collapsed.has(project.repoPath),
+                            }),
+                            project,
+                          )
+                        }
+                        onActivate={() => {
+                          setActiveProject(project.repoPath);
+                          expandProject(project.repoPath);
+                          const target = pickSessionToActivate(
+                            project.sessions,
+                            activeSessionId,
+                          );
+                          if (target) selectSession(target);
+                        }}
+                        onSelectFolder={setActiveProjectFolder}
+                        onSelectSession={(folderId, sessionId) => {
+                          setActiveProjectFolder(folderId);
+                          selectSession(sessionId);
+                        }}
+                        onRemoveSession={(s) => requestRemoveSession(s.id)}
+                        onAddSession={(
+                          folder,
                           isolated,
                           kind,
-                          {
-                            placement: {
-                              repoPath: project.repoPath,
-                              projectScoped: true,
-                              projectFolderId: folder.id,
+                          mode = "terminal",
+                        ) =>
+                          onNewSession(
+                            isolated,
+                            kind,
+                            {
+                              placement: {
+                                repoPath: project.repoPath,
+                                projectScoped: true,
+                                projectFolderId: folder.id,
+                              },
+                              launch: {
+                                kind: "workspaceCwd",
+                                cwdPath: folder.cwdPath,
+                              },
                             },
-                            launch: {
-                              kind: "workspaceCwd",
-                              cwdPath: folder.cwdPath,
-                            },
-                          },
-                          mode,
-                        )
-                      }
-                      onAddFolder={() => onAddProjectFolder(project.repoPath)}
-                      onAddWorktreeFolder={() =>
-                        void onAddProjectFolderWorktree(project.repoPath)
-                      }
-                      onRenameFolder={renameProjectFolder}
-                      onRemoveFolder={requestRemoveProjectFolder}
-                      onMoveSessionToFolder={moveSessionToProjectFolder}
-                      onRemoveProject={() =>
-                        requestRemoveProject(project.repoPath)
-                      }
-                      onOpenSettings={() => setSettingsProject(project)}
-                      collapsedFolderIds={collapsedFolders}
-                      onToggleFolder={toggleProjectFolder}
-                    />
-                  );
-                })}
-              </ul>
-            </SortableContext>
-          )}
-          <LocalTerminalArea
-            groups={localWorkspaceGroups}
-            activeSessionId={activeSessionId}
-            activeProjectFolderId={activeProjectFolderId}
-            collapsedFolderIds={collapsedFolders}
-            onCreate={() => onNewLocalSession()}
-            onCreateInFolder={(folder) =>
-              onNewLocalSession({
-                placement: {
-                  repoPath: folder.repoPath,
-                  projectScoped: false,
-                  projectFolderId: folder.id,
-                },
-                launch: {
-                  kind: "workspaceCwd",
-                  cwdPath: folder.cwdPath,
-                },
-              })
-            }
-            onCreateWorkspace={onAddLocalWorkspace}
-            onFocusArea={focusLocalSessions}
-            onSelectFolder={setActiveProjectFolder}
-            onToggleFolder={toggleProjectFolder}
-            onSelectSession={selectSession}
-            onRemoveSession={(s) => requestRemoveSession(s.id)}
-            onRenameFolder={renameProjectFolder}
-            onRemoveFolder={requestRemoveProjectFolder}
-            onMoveSessionToFolder={moveSessionToProjectFolder}
-          />
+                            mode,
+                          )
+                        }
+                        onAddFolder={() => onAddProjectFolder(project.repoPath)}
+                        onAddWorktreeFolder={() =>
+                          void onAddProjectFolderWorktree(project.repoPath)
+                        }
+                        onRenameFolder={renameProjectFolder}
+                        onRemoveFolder={requestRemoveProjectFolder}
+                        onMoveSessionToFolder={moveSessionToProjectFolder}
+                        onRemoveProject={() =>
+                          requestRemoveProject(project.repoPath)
+                        }
+                        onOpenSettings={() => setSettingsProject(project)}
+                        collapsedFolderIds={collapsedFolders}
+                        onToggleFolder={toggleProjectFolder}
+                      />
+                    );
+                  })}
+                </ul>
+              </SortableContext>
+            )}
+            <LocalTerminalArea
+              groups={localWorkspaceGroups}
+              activeSessionId={activeSessionId}
+              activeProjectFolderId={activeProjectFolderId}
+              collapsedFolderIds={collapsedFolders}
+              onCreate={() => onNewLocalSession()}
+              onCreateInFolder={(folder) =>
+                onNewLocalSession({
+                  placement: {
+                    repoPath: folder.repoPath,
+                    projectScoped: false,
+                    projectFolderId: folder.id,
+                  },
+                  launch: {
+                    kind: "workspaceCwd",
+                    cwdPath: folder.cwdPath,
+                  },
+                })
+              }
+              onCreateWorkspace={onAddLocalWorkspace}
+              onFocusArea={focusLocalSessions}
+              onSelectFolder={setActiveProjectFolder}
+              onToggleFolder={toggleProjectFolder}
+              onSelectSession={selectSession}
+              onRemoveSession={(s) => requestRemoveSession(s.id)}
+              onRenameFolder={renameProjectFolder}
+              onRemoveFolder={requestRemoveProjectFolder}
+              onMoveSessionToFolder={moveSessionToProjectFolder}
+            />
+          </div>
           <DragOverlay dropAnimation={null}>
             {activeDragId
               ? renderDragOverlay(activeDragId, projectGroups, sessions, t)
@@ -3371,8 +3376,7 @@ function SessionStatusMarker({
         <StatusDot
           tone={SESSION_STATUS_TONE[session.status]}
           size="sm"
-          pulse={session.status === "running"}
-          className={session.status === "completed" ? "opacity-60" : undefined}
+          pulse={session.status === "working"}
         />
       )}
     </span>
@@ -3679,10 +3683,9 @@ const SIDEBAR_ACTIVITY_KIND_KEYS: Record<
   SessionNotificationKind,
   SidebarTranslationKey
 > = {
-  needs_input: "sidebar.activity.kind.needsInput",
-  failed: "sidebar.activity.kind.failed",
-  completed: "sidebar.activity.kind.completed",
-  became_idle: "sidebar.activity.kind.becameIdle",
+  waiting_for_input: "sidebar.activity.kind.waitingForInput",
+  errored: "sidebar.activity.kind.errored",
+  became_ready: "sidebar.activity.kind.becameReady",
 };
 
 function SessionActivityInbox() {
@@ -3782,7 +3785,7 @@ function SessionActivityInbox() {
   return (
     <section
       aria-label={sidebarText(t, "sidebar.activity.ariaLabel")}
-      className="mt-3 flex shrink-0 flex-col pt-1"
+      className="mt-auto flex shrink-0 flex-col px-1 pb-2 pt-1"
     >
       <ResizeHandle
         mode="manual"
@@ -3965,8 +3968,8 @@ function SidebarActivityRow({
 }
 
 function sidebarActivityDotTone(kind: SessionNotificationKind): StatusTone {
-  if (kind === "failed") return "danger";
-  if (kind === "completed") return "accent";
+  if (kind === "errored") return "danger";
+  if (kind === "became_ready") return "neutral";
   return "warning";
 }
 

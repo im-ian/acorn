@@ -200,9 +200,10 @@ fn collect_mappings_cached(
     mappings
 }
 
-/// Resolve the provider conversation id created by a completed one-shot
-/// agent run. Native chat uses this after non-interactive CLI calls that
-/// create provider-side transcripts but do not print their id on stdout.
+/// Resolve the provider conversation id created by an agent run in `cwd`.
+/// Native chat uses this after non-interactive one-shot CLI calls that
+/// create provider-side transcripts but do not print their id on stdout;
+/// the path-returning sibling below also serves live processes.
 ///
 /// The helper intentionally returns `None` for ambiguous matches instead
 /// of guessing. A wrong provider cursor would silently resume another chat,
@@ -212,6 +213,18 @@ pub fn find_completed_agent_run(
     kind: AgentKind,
     process_start: SystemTime,
 ) -> Option<String> {
+    find_agent_run_transcript(cwd, kind, process_start).map(|(_, id)| id)
+}
+
+/// Path-returning form of [`find_completed_agent_run`]. The status poll's
+/// codex marker fallback needs the transcript path (to read status and
+/// previews) alongside the id it persists, under the same conservative
+/// matching policy.
+pub fn find_agent_run_transcript(
+    cwd: &Path,
+    kind: AgentKind,
+    process_start: SystemTime,
+) -> Option<(PathBuf, String)> {
     let now = SystemTime::now();
     let recency_cutoff = now
         .checked_sub(Duration::from_secs(RECENCY_WINDOW_SECS))
@@ -229,22 +242,19 @@ pub fn find_completed_agent_run(
             now,
             false,
             &HashSet::new(),
-        )
-        .map(|(_, id)| id),
+        ),
         AgentKind::Codex => find_completed_codex_jsonl(
             cwd,
             codex_sessions_root().as_deref(),
             recency_cutoff,
             process_start,
-        )
-        .map(|(_, id)| id),
+        ),
         AgentKind::Antigravity => find_completed_antigravity_jsonl(
             cwd,
             &antigravity_brain_roots(),
             recency_cutoff,
             process_start,
-        )
-        .map(|(_, id)| id),
+        ),
     }
 }
 
@@ -496,6 +506,19 @@ fn scan_live_mappings(
                 }
             }
             out.push((c.session_id, c.kind, uuid));
+        } else {
+            // A live agent process with no matching transcript is the
+            // failure this scan exists to prevent — downstream, resume
+            // and tab-title generation silently stall on it. Keep the
+            // miss visible.
+            tracing::debug!(
+                session_id = %c.session_id,
+                kind = ?c.kind,
+                pid = c.pid,
+                cwd = ?c.cwd,
+                role = ?c.role,
+                "transcript_watcher: live agent matched no transcript this cycle"
+            );
         }
     }
 
@@ -960,7 +983,10 @@ fn find_recent_codex_jsonl(
         let Some(uuid) = extract_uuid_from_path(&path) else {
             continue;
         };
-        if read_codex_transcript_cwd(&path).as_deref() != Some(cwd) {
+        let Some(head) = read_codex_rollout_head(&path) else {
+            continue;
+        };
+        if head.cwd != cwd || !head.is_terminal_writer() {
             continue;
         }
         let birth = meta.created().unwrap_or(mtime);
@@ -993,10 +1019,10 @@ fn find_completed_codex_jsonl(
         if mtime < recency_cutoff || mtime < process_start {
             continue;
         }
-        let Some(transcript_cwd) = read_codex_transcript_cwd(&path) else {
+        let Some(head) = read_codex_rollout_head(&path) else {
             continue;
         };
-        if transcript_cwd != cwd {
+        if head.cwd != cwd || !head.is_terminal_writer() {
             continue;
         }
         let Some(uuid) = extract_uuid_from_path(&path) else {
@@ -1121,7 +1147,31 @@ fn find_completed_antigravity_jsonl(
 
 /// Read codex rollout's first non-empty JSONL line and pull `payload.cwd`.
 /// The first event is a `SessionMeta` with cwd nested under `payload`.
-fn read_codex_transcript_cwd(path: &Path) -> Option<PathBuf> {
+struct CodexRolloutHead {
+    cwd: PathBuf,
+    originator: Option<String>,
+}
+
+/// Rollout writers that share `~/.codex/sessions` with the terminal CLI but
+/// can never belong to an Acorn PTY session. Codex Desktop records every GUI
+/// conversation here; pairing one with a terminal process steals the marker
+/// from the real tui rollout (or trips the unique-candidate policy). Missing
+/// or unknown originators stay eligible — rollouts from older CLIs
+/// (`codex_cli_rs`) and `codex exec` one-shots are legitimate matches.
+const CODEX_GUI_HOST_ORIGINATORS: &[&str] = &["Codex Desktop"];
+
+impl CodexRolloutHead {
+    fn is_terminal_writer(&self) -> bool {
+        self.originator
+            .as_deref()
+            .is_none_or(|originator| !CODEX_GUI_HOST_ORIGINATORS.contains(&originator))
+    }
+}
+
+/// Read `cwd` (and `originator` when present) from a codex rollout's leading
+/// `session_meta` line. Both live at the top level in old formats and under
+/// `payload` in current ones.
+fn read_codex_rollout_head(path: &Path) -> Option<CodexRolloutHead> {
     use std::io::{BufRead, BufReader};
     let f = std::fs::File::open(path).ok()?;
     let reader = BufReader::new(f);
@@ -1132,15 +1182,17 @@ fn read_codex_transcript_cwd(path: &Path) -> Option<PathBuf> {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
-        if let Some(cwd) = v.get("cwd").and_then(|c| c.as_str()) {
-            return Some(PathBuf::from(cwd));
-        }
-        if let Some(cwd) = v
-            .get("payload")
-            .and_then(|p| p.get("cwd"))
-            .and_then(|c| c.as_str())
-        {
-            return Some(PathBuf::from(cwd));
+        for scope in [Some(&v), v.get("payload")] {
+            let Some(scope) = scope else { continue };
+            if let Some(cwd) = scope.get("cwd").and_then(|c| c.as_str()) {
+                return Some(CodexRolloutHead {
+                    cwd: PathBuf::from(cwd),
+                    originator: scope
+                        .get("originator")
+                        .and_then(|o| o.as_str())
+                        .map(str::to_string),
+                });
+            }
         }
     }
     None
@@ -2279,6 +2331,193 @@ mod tests {
             pinned.map(|(_, id)| id).as_deref(),
             Some("019e2001-3250-76b0-8410-2e073b38a2c1"),
             "rotation must stay off when not the sole codex in cwd"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Codex Desktop shares `~/.codex/sessions` with the terminal CLI. Its
+    /// rollouts carry `originator: "Codex Desktop"` and can never belong to
+    /// an Acorn PTY session, so live pairing must skip them even when the
+    /// cwd matches.
+    #[test]
+    fn find_recent_codex_jsonl_ignores_gui_host_rollouts() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-cxgui-{}", uuid::Uuid::new_v4().simple()));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+
+        let write_rollout = |name: &str, originator: Option<&str>| {
+            let path = day.join(name);
+            let mut f = File::create(&path).unwrap();
+            match originator {
+                Some(originator) => writeln!(
+                    f,
+                    "{{\"payload\":{{\"cwd\":\"{}\",\"originator\":\"{originator}\"}}}}",
+                    cwd.display()
+                )
+                .unwrap(),
+                None => writeln!(f, "{{\"payload\":{{\"cwd\":\"{}\"}}}}", cwd.display()).unwrap(),
+            }
+            path
+        };
+
+        let desktop = write_rollout(
+            "rollout-2026-06-10T10-00-00-019e2001-3250-76b0-8410-2e073b38a2d1.jsonl",
+            Some("Codex Desktop"),
+        );
+        let now = fs::metadata(&desktop).unwrap().modified().unwrap();
+        let process_start = now - Duration::from_secs(5);
+
+        let picked = find_recent_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            false,
+            &HashSet::new(),
+        );
+        assert!(
+            picked.is_none(),
+            "a GUI-host rollout must never pair with a terminal codex process"
+        );
+
+        let tui = write_rollout(
+            "rollout-2026-06-10T10-00-01-019e2001-3250-76b0-8410-2e073b38a2d2.jsonl",
+            Some("codex-tui"),
+        );
+        set_mtime(&tui, now);
+        let picked = find_recent_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            false,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some("019e2001-3250-76b0-8410-2e073b38a2d2"),
+            "the tui rollout must win with the GUI-host sibling filtered out"
+        );
+
+        // Rollouts predating the originator field stay eligible.
+        let legacy = write_rollout(
+            "rollout-2026-06-10T10-00-02-019e2001-3250-76b0-8410-2e073b38a2d3.jsonl",
+            None,
+        );
+        set_mtime(&legacy, now);
+        let picked = find_recent_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            false,
+            &HashSet::new(),
+        );
+        assert!(
+            picked.is_some(),
+            "legacy rollouts without originator must remain eligible"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Backs `find_agent_run_transcript`, the path-returning form the
+    /// status poll's codex marker fallback consumes: the resolver must
+    /// hand back the rollout path alongside the id.
+    #[test]
+    fn find_completed_codex_jsonl_returns_path_and_id() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-cxlive-{}", uuid::Uuid::new_v4().simple()));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+
+        let id = "019e2001-3250-76b0-8410-2e073b38a2f1";
+        let rollout = day.join(format!("rollout-2026-06-10T10-00-00-{id}.jsonl"));
+        let mut f = File::create(&rollout).unwrap();
+        writeln!(
+            f,
+            "{{\"payload\":{{\"cwd\":\"{}\",\"originator\":\"codex-tui\"}}}}",
+            cwd.display()
+        )
+        .unwrap();
+        let now = fs::metadata(&rollout).unwrap().modified().unwrap();
+        let process_start = now - Duration::from_secs(5);
+
+        let resolved = find_completed_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+        );
+        assert_eq!(
+            resolved,
+            Some((rollout.clone(), id.to_string())),
+            "resolver must return both the rollout path and its id"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The completed-run resolver refuses ambiguous matches, so a GUI-host
+    /// rollout in the same cwd would otherwise turn one legitimate
+    /// candidate into two and resolve nothing.
+    #[test]
+    fn find_completed_codex_jsonl_ignores_gui_host_rollouts() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-cxguic-{}", uuid::Uuid::new_v4().simple()));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+
+        let write_rollout = |name: &str, originator: &str| {
+            let path = day.join(name);
+            let mut f = File::create(&path).unwrap();
+            writeln!(
+                f,
+                "{{\"payload\":{{\"cwd\":\"{}\",\"originator\":\"{originator}\"}}}}",
+                cwd.display()
+            )
+            .unwrap();
+            path
+        };
+
+        write_rollout(
+            "rollout-2026-06-10T10-00-00-019e2001-3250-76b0-8410-2e073b38a2e1.jsonl",
+            "Codex Desktop",
+        );
+        let exec = write_rollout(
+            "rollout-2026-06-10T10-00-01-019e2001-3250-76b0-8410-2e073b38a2e2.jsonl",
+            "codex_exec",
+        );
+        let now = fs::metadata(&exec).unwrap().modified().unwrap();
+        let process_start = now - Duration::from_secs(5);
+
+        let resolved = find_completed_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+        );
+        assert_eq!(
+            resolved.map(|(_, id)| id).as_deref(),
+            Some("019e2001-3250-76b0-8410-2e073b38a2e2"),
+            "GUI-host rollouts must not break the unique-candidate policy"
         );
 
         fs::remove_dir_all(&root).unwrap();
