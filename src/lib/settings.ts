@@ -125,6 +125,9 @@ export const TERMINAL_FONT_SIZE_STEP = 0.25;
 export const TERMINAL_LETTER_SPACING_MIN = -2;
 export const TERMINAL_LETTER_SPACING_MAX = 6;
 export const TERMINAL_LETTER_SPACING_STEP = 0.25;
+export const TERMINAL_LINE_HEIGHT_MIN = 1.0;
+export const TERMINAL_LINE_HEIGHT_MAX = 2.0;
+export const TERMINAL_LINE_HEIGHT_STEP = 0.05;
 
 export type ToastPosition = "top" | "bottom";
 export type DefaultWorkspaceViewMode = "panes" | "kanban";
@@ -691,7 +694,11 @@ function normalizeLineHeight(v: unknown, fallback: number): number {
   if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
   // Clamp to the same range the Stepper enforces in the UI so a hand-
   // edited localStorage value can't make the terminal unusable.
-  return Math.max(1.0, Math.min(2.0, v));
+  const clamped = Math.max(
+    TERMINAL_LINE_HEIGHT_MIN,
+    Math.min(TERMINAL_LINE_HEIGHT_MAX, v),
+  );
+  return Math.round(clamped * 100) / 100;
 }
 
 export function normalizeTerminalFontSize(
@@ -1371,6 +1378,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
               : normalizeTerminalFontSmoothing(
                   patch.fontSmoothing,
                   s.settings.terminal.fontSmoothing,
+                ),
+          lineHeight:
+            patch.lineHeight === undefined
+              ? s.settings.terminal.lineHeight
+              : normalizeLineHeight(
+                  patch.lineHeight,
+                  s.settings.terminal.lineHeight,
                 ),
           rightClickPasteSelection:
             patch.rightClickPasteSelection === undefined
