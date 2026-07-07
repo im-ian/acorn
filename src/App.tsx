@@ -70,7 +70,6 @@ import {
   startNotificationClickHandler,
   startSessionNotificationWatcher,
 } from "./lib/notifications";
-import { startSessionAutoCloseWatcher } from "./lib/sessionAutoClose";
 import { findFocusedSessionId } from "./lib/focus";
 import { isSessionTabId } from "./lib/workspaceTabs";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
@@ -286,7 +285,6 @@ function App() {
     fileExplorerDropHoverTarget ?? nativeFileDropHoverTarget;
   const refreshAll = useAppStore((s) => s.refreshAll);
   const sessions = useAppStore((s) => s.sessions);
-  const autoCloseSessionIds = useAppStore((s) => s.autoCloseSessionIds);
   const projects = useAppStore((s) => s.projects);
   const projectFolders = useAppStore((s) => s.projectFolders);
   const layout = useAppStore((s) => s.layout);
@@ -845,10 +843,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    return startSessionAutoCloseWatcher();
-  }, []);
-
-  useEffect(() => {
     return startFocusedSessionNotificationReadWatcher();
   }, []);
 
@@ -895,7 +889,6 @@ function App() {
       );
       return (
         latestSession != null &&
-        !latestState.autoCloseSessionIds[sessionId] &&
         canAutoGenerateSessionTitle(
           latestSession,
           latestSettings.agents.autoGenerateSessionTitles,
@@ -922,7 +915,7 @@ function App() {
       sessions,
       enabled: settings.agents.autoGenerateSessionTitles,
       inFlightIds: inFlight,
-      excludedSessionIds: new Set(Object.keys(autoCloseSessionIds)),
+      excludedSessionIds: new Set(),
       lastAttemptAt,
       now,
       retryMs: SESSION_TITLE_RETRY_MS,
@@ -981,7 +974,7 @@ function App() {
       }
       retryTimers.clear();
     };
-  }, [autoCloseSessionIds, sessions, settings, sessionTitleRetryTick]);
+  }, [sessions, settings, sessionTitleRetryTick]);
 
   useEffect(() => {
     return startSessionActivityInboxWatcher();

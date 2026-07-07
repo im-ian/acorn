@@ -362,12 +362,12 @@ describe("session title helpers", () => {
     expect(
       planAutoGenerateSessionTitles({
         sessions: [
-          session({ id: "auto-close" }),
+          session({ id: "excluded" }),
           session({ id: "normal" }),
         ],
         enabled: true,
         inFlightIds: new Set(),
-        excludedSessionIds: new Set(["auto-close"]),
+        excludedSessionIds: new Set(["excluded"]),
         lastAttemptAt: new Map(),
         now: 1_000,
         retryMs: 30_000,

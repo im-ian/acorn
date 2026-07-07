@@ -50,7 +50,6 @@ import {
   PROJECT_SESSION_CREATE_MENU,
   type ProjectSessionCreateAction,
 } from "../lib/projectSessionCreateActions";
-import { canConfigureSessionAutoClose } from "../lib/sessionAgentState";
 import {
   canRegenerateSessionTitle,
   canRenameSession,
@@ -791,13 +790,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
   const setWorkspaceViewMode = useAppStore((s) => s.setWorkspaceViewMode);
-  const toggleSessionAutoClose = useAppStore(
-    (s) => s.toggleSessionAutoClose,
-  );
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
-  const autoCloseEnabled = useAppStore((s) =>
-    Boolean(s.autoCloseSessionIds[session.id]),
-  );
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
   const isGeneratingTitle = useAppStore((s) =>
@@ -806,7 +799,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   const canRename = canRenameSession(session, { isGeneratingTitle });
   const canRegenerateTitle =
     canRegenerateSessionTitle(session) && !isGeneratingTitle;
-  const canConfigureAutoClose = canConfigureSessionAutoClose(session);
   const currentPullRequest = useCurrentPullRequest(session);
   const processSummary = summarizeSessionProcesses(session.active_processes);
   const processTooltipSummary = summarizeAllSessionProcesses(
@@ -914,16 +906,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
             });
         },
       },
-      ...(canConfigureAutoClose
-        ? [
-            {
-              type: "checkbox",
-              label: sidebarText(t, "sidebar.actions.autoCloseWhenFinished"),
-              checked: autoCloseEnabled,
-              onChange: () => toggleSessionAutoClose(session.id),
-            } satisfies ContextMenuItem,
-          ]
-        : []),
       workspaceContextMenuGroupTitle(t, "open"),
       {
         label: sidebarText(t, "sidebar.actions.openWorktreeInEditor"),
@@ -983,8 +965,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
       },
     ],
     [
-      autoCloseEnabled,
-      canConfigureAutoClose,
       canRegenerateTitle,
       canRename,
       editorConfigured,
@@ -1004,7 +984,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
       showToast,
       setWorkspaceViewMode,
       t,
-      toggleSessionAutoClose,
       worktreeName,
     ],
   );

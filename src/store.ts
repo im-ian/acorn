@@ -73,7 +73,6 @@ import {
   type SessionFolderAssignments,
 } from "./lib/projectFolders";
 import { canRegenerateSessionTitle } from "./lib/sessionTitle";
-import { canConfigureSessionAutoClose } from "./lib/sessionAgentState";
 import {
   summarizeTokenUsage,
   type WorkSummaryTokenBaseline,
@@ -288,8 +287,6 @@ interface AppStateModel {
    * never on an interval, so the batched probe stays cheap.
    */
   liveInWorktree: Record<string, boolean>;
-  /** Session ids whose tab should be removed once the active agent finishes a turn. */
-  autoCloseSessionIds: Record<string, true>;
   /** Session ids currently waiting for an AI-generated tab title. Ephemeral. */
   generatingSessionTitleIds: Record<string, true>;
   loadInitialStatus: () => Promise<void>;
@@ -355,7 +352,6 @@ interface AppStateModel {
     force?: boolean,
   ) => Promise<SessionTitleGenerationStatus>;
   adoptSessionWorktree: (id: string, worktreePath: string) => Promise<void>;
-  toggleSessionAutoClose: (id: string) => void;
   requestRemoveSession: (id: string) => void;
   clearPendingRemove: () => void;
   cycleTab: (direction: 1 | -1) => void;
@@ -1016,15 +1012,6 @@ function sessionMatchesProjectFolderCwd(
   return sameWorkspacePath(session.worktree_path, folder.cwdPath);
 }
 
-function keepTrueRecordIds(
-  record: Record<string, true>,
-  ids: ReadonlySet<string>,
-): Record<string, true> {
-  return Object.fromEntries(
-    Object.entries(record).filter(([id]) => ids.has(id)),
-  ) as Record<string, true>;
-}
-
 function canAssignSessionToProjectFolder(
   state: Pick<AppStateModel, "projectFolders" | "sessionFolderIds">,
   session: Session,
@@ -1400,7 +1387,6 @@ export const useAppStore = create<AppStateModel>()(
   pendingRemoveProject: null,
   sessionsLoadedCleanly: true,
   liveInWorktree: {},
-  autoCloseSessionIds: {},
   generatingSessionTitleIds: {},
 
   async loadInitialStatus() {
@@ -1457,9 +1443,6 @@ export const useAppStore = create<AppStateModel>()(
                 sessionIds.has(notification.sessionId),
               )
             : s.sessionNotifications,
-          autoCloseSessionIds: shouldPruneActivity
-            ? keepTrueRecordIds(s.autoCloseSessionIds, sessionIds)
-            : s.autoCloseSessionIds,
           workspaces: reconciled.workspaces,
           projectFolders: reconciled.projectFolders,
           sessionFolderIds: reconciled.sessionFolderIds,
@@ -1587,9 +1570,6 @@ export const useAppStore = create<AppStateModel>()(
               sessionIds.has(notification.sessionId),
             )
           : s.sessionNotifications,
-        autoCloseSessionIds: shouldPruneActivity
-          ? keepTrueRecordIds(s.autoCloseSessionIds, sessionIds)
-          : s.autoCloseSessionIds,
         workspaces: reconciled.workspaces,
         projectFolders: reconciled.projectFolders,
         sessionFolderIds: reconciled.sessionFolderIds,
@@ -2669,10 +2649,6 @@ export const useAppStore = create<AppStateModel>()(
       for (const removalId of removalIds) {
         delete pendingTerminalInput[removalId];
       }
-      const autoCloseSessionIds = { ...s.autoCloseSessionIds };
-      for (const removalId of removalIds) {
-        delete autoCloseSessionIds[removalId];
-      }
       const terminalPopupSessionId =
         s.terminalPopupSessionId && removalIds.has(s.terminalPopupSessionId)
           ? null
@@ -2684,7 +2660,6 @@ export const useAppStore = create<AppStateModel>()(
         error: null,
         liveInWorktree,
         pendingTerminalInput,
-        autoCloseSessionIds,
         terminalPopupSessionId,
         sessionNotifications: s.sessionNotifications.filter(
           (notification) => !removalIds.has(notification.sessionId),
@@ -2745,8 +2720,6 @@ export const useAppStore = create<AppStateModel>()(
     if (force) {
       const session = get().sessions.find((candidate) => candidate.id === id);
       if (!session || !canRegenerateSessionTitle(session)) return "skipped";
-    } else if (get().autoCloseSessionIds[id]) {
-      return "skipped";
     }
 
     const startedAt = Date.now();
@@ -2762,17 +2735,11 @@ export const useAppStore = create<AppStateModel>()(
       resultStatus = result.status;
       const updated = result.session;
       if (result.status === "generated" && updated?.id) {
-        let applied = false;
-        set((s) => {
-          if (!force && s.autoCloseSessionIds[updated.id]) return s;
-          applied = true;
-          return {
-            sessions: s.sessions.map((session) =>
-              session.id === updated.id ? updated : session,
-            ),
-          };
-        });
-        if (!applied) resultStatus = "skipped";
+        set((s) => ({
+          sessions: s.sessions.map((session) =>
+            session.id === updated.id ? updated : session,
+          ),
+        }));
       }
     } catch (e) {
       console.warn("[acorn] generateSessionTitle failed", e);
@@ -2801,21 +2768,6 @@ export const useAppStore = create<AppStateModel>()(
     } catch (e) {
       set({ error: errorMessage(e) });
     }
-  },
-
-  toggleSessionAutoClose(id) {
-    set((s) => {
-      const session = s.sessions.find((candidate) => candidate.id === id);
-      if (!session || session.kind !== "regular") return s;
-      const autoCloseSessionIds = { ...s.autoCloseSessionIds };
-      if (autoCloseSessionIds[id]) {
-        delete autoCloseSessionIds[id];
-      } else {
-        if (!canConfigureSessionAutoClose(session)) return s;
-        autoCloseSessionIds[id] = true;
-      }
-      return { autoCloseSessionIds };
-    });
   },
 
   requestRemoveSession(id) {
@@ -3585,7 +3537,6 @@ export const useAppStore = create<AppStateModel>()(
         rightTab: state.rightTab,
         rightTabByGroup: state.rightTabByGroup,
         sessionNotifications: state.sessionNotifications,
-        autoCloseSessionIds: state.autoCloseSessionIds,
         workspaceTabs: Object.fromEntries(
           Object.entries(state.workspaceTabs).filter(([, tab]) =>
             isRestorableWorkspaceTab(tab),
@@ -3733,9 +3684,6 @@ export const useAppStore = create<AppStateModel>()(
           state.activeProjectFolderId,
         );
         state.sessionFolderIds = normalizeStringRecord(state.sessionFolderIds);
-        state.autoCloseSessionIds = normalizeTrueRecord(
-          state.autoCloseSessionIds,
-        );
         state.sessionNotifications = normalizeSessionNotifications(
           state.sessionNotifications ?? [],
           useSettings.getState().settings.notifications.maxHistory,
@@ -3832,15 +3780,6 @@ function normalizeStringRecord(value: unknown): Record<string, string> {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
-}
-
-function normalizeTrueRecord(value: unknown): Record<string, true> {
-  if (!value || typeof value !== "object") return {};
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).filter(
-      (entry): entry is [string, true] => entry[1] === true,
     ),
   );
 }
