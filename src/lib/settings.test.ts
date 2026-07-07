@@ -9,7 +9,6 @@ import {
   NOTIFICATION_HISTORY_LIMIT_MAX,
   TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS,
   TERMINAL_FONT_PRESET_FIELDS,
-  TERMINAL_FONT_PRESETS,
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN,
   TERMINAL_FONT_SIZE_STEP,
@@ -431,14 +430,18 @@ describe("terminal font presets", () => {
     });
   });
 
-  it("matches the default terminal font settings to the default preset", () => {
-    expect(matchingTerminalFontPresetId(DEFAULT_SETTINGS)).toBe(
-      "default",
-    );
-    expect(terminalFontPresetById("missing")).toBeNull();
+  it("starts with no Acorn-provided terminal font presets", () => {
+    expect(DEFAULT_SETTINGS.fontPresets.terminal).toEqual([]);
+    expect(
+      matchingTerminalFontPresetId(
+        DEFAULT_SETTINGS,
+        DEFAULT_SETTINGS.fontPresets.terminal,
+      ),
+    ).toBeNull();
+    expect(terminalFontPresetById([], "missing")).toBeNull();
   });
 
-  it("covers every font-related field in each preset", () => {
+  it("defines the font fields saved in each user preset", () => {
     expect(TERMINAL_FONT_PRESET_FIELDS).toEqual([
       "fontFamily",
       "fontSize",
@@ -451,20 +454,71 @@ describe("terminal font presets", () => {
     expect(TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS).toEqual([
       "cjkCellWidthHeuristic",
     ]);
-
-    const expectedFields = [...TERMINAL_FONT_PRESET_FIELDS].sort();
-    const expectedExperimentFields = [
-      ...TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS,
-    ].sort();
-    for (const preset of TERMINAL_FONT_PRESETS) {
-      expect(Object.keys(preset.settings).sort()).toEqual(expectedFields);
-      expect(Object.keys(preset.experiments).sort()).toEqual(
-        expectedExperimentFields,
-      );
-    }
   });
 
-  it("applies and persists all font-related fields from a preset", async () => {
+  it("loads persisted user font presets and normalizes their values", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        fontPresets: {
+          terminal: [
+            {
+              id: "tiny",
+              name: "  Tiny  Mono  ",
+              settings: {
+                fontFamily: '"Berkeley Mono", Menlo, monospace',
+                fontSize: 4,
+                letterSpacing: 9,
+                fontSmoothing: "sharp",
+                fontWeight: 450,
+                fontWeightBold: 900,
+                lineHeight: 9,
+              },
+              experiments: {
+                cjkCellWidthHeuristic: true,
+              },
+            },
+            {
+              id: "duplicate",
+              name: "tiny mono",
+              settings: {
+                fontFamily: "Ignored",
+              },
+            },
+            {
+              id: "broken",
+              name: "",
+              settings: null,
+            },
+          ],
+        },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.fontPresets.terminal).toEqual([
+      {
+        id: "tiny",
+        name: "Tiny Mono",
+        settings: {
+          fontFamily: '"Berkeley Mono", Menlo, monospace',
+          fontSize: TERMINAL_FONT_SIZE_MIN,
+          letterSpacing: TERMINAL_LETTER_SPACING_MAX,
+          fontSmoothing: DEFAULT_SETTINGS.terminal.fontSmoothing,
+          fontWeight: DEFAULT_SETTINGS.terminal.fontWeight,
+          fontWeightBold: 900,
+          lineHeight: TERMINAL_LINE_HEIGHT_MAX,
+        },
+        experiments: {
+          cjkCellWidthHeuristic: true,
+        },
+      },
+    ]);
+  });
+
+  it("registers the current terminal font settings as a user preset", async () => {
     vi.resetModules();
     const {
       TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS: experimentFields,
@@ -474,69 +528,142 @@ describe("terminal font presets", () => {
       useSettings,
     } = await import("./settings");
 
-    const preset = presetById("comfortable");
-    expect(preset).not.toBeNull();
-    if (!preset) return;
-
-    useSettings.getState().patchTerminal(preset.settings);
-    useSettings.getState().patchExperiments(preset.experiments);
+    useSettings.getState().patchTerminal({
+      fontFamily: '"Berkeley Mono", Menlo, monospace',
+      fontSize: 13.25,
+      letterSpacing: 0.25,
+      fontSmoothing: "subpixel",
+      fontWeight: 500,
+      fontWeightBold: 800,
+      lineHeight: 1.2,
+    });
+    useSettings.getState().patchExperiments({
+      cjkCellWidthHeuristic: true,
+    });
+    const presetId = useSettings
+      .getState()
+      .saveTerminalFontPreset("  Focus  Mono  ");
 
     const settings = useSettings.getState().settings;
     const persisted = JSON.parse(
       localStorage.getItem(STORAGE_KEY) ?? "{}",
     );
+    const preset = presetById(settings.fontPresets.terminal, presetId ?? "");
 
-    expect(matchPreset(settings)).toBe("comfortable");
+    expect(presetId).toBe("font-focus-mono");
+    expect(preset).not.toBeNull();
+    expect(preset?.name).toBe("Focus Mono");
+    expect(matchPreset(settings, settings.fontPresets.terminal)).toBe(
+      "font-focus-mono",
+    );
+    expect(persisted.fontPresets.terminal).toHaveLength(1);
+    expect(persisted.fontPresets.terminal[0].name).toBe("Focus Mono");
     for (const field of fields) {
-      expect(settings.terminal[field]).toBe(preset.settings[field]);
-      expect(persisted.terminal[field]).toBe(preset.settings[field]);
+      expect(preset?.settings[field]).toBe(settings.terminal[field]);
+      expect(persisted.fontPresets.terminal[0].settings[field]).toBe(
+        settings.terminal[field],
+      );
     }
     for (const field of experimentFields) {
-      expect(settings.experiments[field]).toBe(preset.experiments[field]);
-      expect(persisted.experiments[field]).toBe(preset.experiments[field]);
+      expect(preset?.experiments[field]).toBe(settings.experiments[field]);
+      expect(persisted.fontPresets.terminal[0].experiments[field]).toBe(
+        settings.experiments[field],
+      );
     }
+  });
+
+  it("updates an existing user preset when saving the same name", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(
+      useSettings.getState().saveTerminalFontPreset("Focus Mono"),
+    ).toBe("font-focus-mono");
+
+    useSettings.getState().patchTerminal({ fontSize: 15 });
+    expect(
+      useSettings.getState().saveTerminalFontPreset("focus mono"),
+    ).toBe("font-focus-mono");
+
+    const presets = useSettings.getState().settings.fontPresets.terminal;
+    expect(presets).toHaveLength(1);
+    expect(presets[0].name).toBe("focus mono");
+    expect(presets[0].settings.fontSize).toBe(15);
+  });
+
+  it("applies and deletes user font presets without changing unrelated settings", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings.getState().patchTerminal({
+      fontFamily: 'D2Coding, "Sarasa Mono K", "JetBrains Mono", monospace',
+      fontSize: 13,
+      letterSpacing: 0,
+      lineHeight: 1.15,
+    });
+    useSettings.getState().patchExperiments({
+      cjkCellWidthHeuristic: true,
+    });
+    const presetId = useSettings.getState().saveTerminalFontPreset("CJK Mono");
+
+    useSettings.getState().patchTerminal({ fontSize: 11, lineHeight: 1 });
+    useSettings.getState().patchExperiments({
+      cjkCellWidthHeuristic: false,
+      stickyPrompt: true,
+    });
+    useSettings.getState().applyTerminalFontPreset(presetId ?? "");
+
+    expect(useSettings.getState().settings.terminal.fontSize).toBe(13);
+    expect(useSettings.getState().settings.terminal.lineHeight).toBe(1.15);
+    expect(
+      useSettings.getState().settings.experiments.cjkCellWidthHeuristic,
+    ).toBe(true);
+    expect(useSettings.getState().settings.experiments.stickyPrompt).toBe(
+      true,
+    );
+
+    useSettings.getState().deleteTerminalFontPreset(presetId ?? "");
+
+    expect(useSettings.getState().settings.fontPresets.terminal).toEqual([]);
+    expect(useSettings.getState().settings.terminal.fontSize).toBe(13);
+    expect(
+      useSettings.getState().settings.experiments.cjkCellWidthHeuristic,
+    ).toBe(true);
   });
 
   it("treats manually changed font settings as custom", () => {
-    expect(
-      matchingTerminalFontPresetId({
-        terminal: {
-          ...DEFAULT_SETTINGS.terminal,
-          fontSize: DEFAULT_SETTINGS.terminal.fontSize + 0.25,
-        },
-        experiments: DEFAULT_SETTINGS.experiments,
-      }),
-    ).toBeNull();
-  });
+    const preset = {
+      id: "font-default-copy",
+      name: "Default copy",
+      settings: {
+        fontFamily: DEFAULT_SETTINGS.terminal.fontFamily,
+        fontSize: DEFAULT_SETTINGS.terminal.fontSize,
+        letterSpacing: DEFAULT_SETTINGS.terminal.letterSpacing,
+        fontSmoothing: DEFAULT_SETTINGS.terminal.fontSmoothing,
+        fontWeight: DEFAULT_SETTINGS.terminal.fontWeight,
+        fontWeightBold: DEFAULT_SETTINGS.terminal.fontWeightBold,
+        lineHeight: DEFAULT_SETTINGS.terminal.lineHeight,
+      },
+      experiments: {
+        cjkCellWidthHeuristic:
+          DEFAULT_SETTINGS.experiments.cjkCellWidthHeuristic,
+      },
+    };
 
-  it("includes the CJK cell-width correction in preset matching", () => {
-    const preset = terminalFontPresetById("cjk");
-    expect(preset).not.toBeNull();
-    if (!preset) return;
-
     expect(
-      matchingTerminalFontPresetId({
-        terminal: {
-          ...DEFAULT_SETTINGS.terminal,
-          ...preset.settings,
-        },
-        experiments: {
-          ...DEFAULT_SETTINGS.experiments,
-          ...preset.experiments,
-        },
-      }),
-    ).toBe("cjk");
+      matchingTerminalFontPresetId(DEFAULT_SETTINGS, [preset]),
+    ).toBe("font-default-copy");
     expect(
-      matchingTerminalFontPresetId({
-        terminal: {
-          ...DEFAULT_SETTINGS.terminal,
-          ...preset.settings,
+      matchingTerminalFontPresetId(
+        {
+          terminal: {
+            ...DEFAULT_SETTINGS.terminal,
+            fontSize: DEFAULT_SETTINGS.terminal.fontSize + 0.25,
+          },
+          experiments: DEFAULT_SETTINGS.experiments,
         },
-        experiments: {
-          ...DEFAULT_SETTINGS.experiments,
-          cjkCellWidthHeuristic: false,
-        },
-      }),
+        [preset],
+      ),
     ).toBeNull();
   });
 });

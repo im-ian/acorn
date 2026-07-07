@@ -117,27 +117,17 @@
     },
     "terminal": {
       "fontPreset": {
-        "label": "Font preset",
-        "hint": "Applies the family stack, size, spacing, anti-aliasing, weights, and line height together.",
+        "label": "Font presets",
+        "hint": "Save the current terminal font settings as your own preset, then apply it later.",
+        "selectLabel": "Saved font preset",
         "custom": "Custom",
-        "options": {
-          "default": {
-            "label": "Acorn default",
-            "description": "Balanced JetBrains Mono stack at 12px."
-          },
-          "compact": {
-            "label": "Compact",
-            "description": "Smaller type with tighter horizontal spacing."
-          },
-          "comfortable": {
-            "label": "Comfortable",
-            "description": "Larger type with more row and cell spacing."
-          },
-          "cjk": {
-            "label": "CJK mono",
-            "description": "D2Coding / Sarasa stack tuned for Korean and CJK glyphs."
-          }
-        }
+        "customHint": "Current settings are not saved as a preset.",
+        "empty": "No saved presets",
+        "nameLabel": "Preset name",
+        "namePlaceholder": "e.g. Compact D2Coding",
+        "save": "Save current",
+        "delete": "Delete",
+        "deleteLabel": "Delete selected font preset"
       },
       "fontFamily": {
         "label": "Font family",

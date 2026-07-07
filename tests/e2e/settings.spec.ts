@@ -112,7 +112,7 @@ test.describe("settings modal", () => {
       .toBe("subpixel");
   });
 
-  test("applies terminal font presets and marks manual font changes as custom", async ({
+  test("registers terminal font presets and applies them later", async ({
     page,
   }) => {
     await page.goto("/");
@@ -122,36 +122,41 @@ test.describe("settings modal", () => {
     await modal.getByRole("button", { name: /^(Terminal|터미널)$/ }).click();
 
     const presetSelect = modal.getByRole("combobox", {
-      name: /^(Font preset|글꼴 프리셋)$/,
+      name: /^(Saved font preset|저장된 글꼴 프리셋)$/,
     });
-    await expect(presetSelect).toContainText("Acorn default");
+    await expect(presetSelect).toContainText("No saved presets");
 
-    await presetSelect.click();
-    await page.getByRole("option", { name: /CJK mono/ }).click();
+    await modal
+      .getByRole("textbox", {
+        name: /^(Preset name|프리셋 이름)$/,
+      })
+      .fill("Default copy");
+    await modal
+      .getByRole("button", {
+        name: /^(Save current|현재 설정 저장)$/,
+      })
+      .click();
 
-    await expect(presetSelect).toContainText("CJK mono");
+    await expect(presetSelect).toContainText("Default copy");
     await expect
       .poll(() =>
         page.evaluate(() => {
           const raw = window.localStorage.getItem("acorn:settings:v1");
           const settings = raw ? JSON.parse(raw) : null;
-          const terminal = settings?.terminal ?? null;
-          return {
-            fontFamily: terminal?.fontFamily ?? null,
-            fontSize: terminal?.fontSize ?? null,
-            letterSpacing: terminal?.letterSpacing ?? null,
-            lineHeight: terminal?.lineHeight ?? null,
-            cjkCellWidthHeuristic:
-              settings?.experiments?.cjkCellWidthHeuristic ?? null,
-          };
+          return settings?.fontPresets?.terminal?.[0] ?? null;
         }),
       )
-      .toEqual({
-        fontFamily: 'D2Coding, "Sarasa Mono K", "JetBrains Mono", monospace',
-        fontSize: 13,
-        letterSpacing: 0,
-        lineHeight: 1.15,
-        cjkCellWidthHeuristic: true,
+      .toMatchObject({
+        id: "font-default-copy",
+        name: "Default copy",
+        settings: {
+          fontSize: 12,
+          letterSpacing: 0,
+          lineHeight: 1,
+        },
+        experiments: {
+          cjkCellWidthHeuristic: false,
+        },
       });
 
     const fontSizeField = modal
@@ -164,6 +169,21 @@ test.describe("settings modal", () => {
     await fontSizeInput.press("Enter");
 
     await expect(presetSelect).toContainText("Custom");
+
+    await presetSelect.click();
+    await page.getByRole("option", { name: "Default copy" }).click();
+
+    await expect(presetSelect).toContainText("Default copy");
+    await expect(fontSizeInput).toHaveValue("12");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          const settings = raw ? JSON.parse(raw) : null;
+          return settings?.terminal?.fontSize ?? null;
+        }),
+      )
+      .toBe(12);
   });
 
   test("changes kanban terminal popover settings and persists them", async ({
