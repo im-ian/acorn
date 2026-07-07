@@ -1344,6 +1344,7 @@ function KanbanTerminalPopover({
       if (!(target instanceof Node)) return;
       if (popoverRef.current?.contains(target)) return;
       if (anchor.contains(target)) return;
+      if (isModalDialogOpen()) return;
       onClose();
     };
     document.addEventListener("pointerdown", handlePointerDown, true);
@@ -1590,6 +1591,10 @@ function KanbanTerminalPopover({
   );
 
   return createPortal(popover, document.body);
+}
+
+function isModalDialogOpen(): boolean {
+  return document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
 }
 
 function defaultKanbanTerminalPopoverSize(): KanbanTerminalPopoverSize {
