@@ -149,6 +149,7 @@ import type {
   SessionNotificationKind,
   SessionPullRequestSummary,
   SessionStatus,
+  SessionStatusReason,
 } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
@@ -234,6 +235,26 @@ function contextMenuGroupTitle(
 
 function statusLabel(t: Translator, status: SessionStatus): string {
   return sidebarText(t, `sidebar.status.${status}`);
+}
+
+function statusReasonLabel(
+  t: Translator,
+  reason: SessionStatusReason | null | undefined,
+): string | null {
+  switch (reason) {
+    case "turn_complete":
+      return sidebarText(t, "sidebar.statusReason.turn_complete");
+    case "shell_prompt":
+      return sidebarText(t, "sidebar.statusReason.shell_prompt");
+    default:
+      return null;
+  }
+}
+
+function statusDetailLabel(t: Translator, session: Session): string {
+  const label = statusLabel(t, session.status);
+  const reason = statusReasonLabel(t, session.status_reason);
+  return reason ? `${label} · ${reason}` : label;
 }
 
 function isLocalTerminalAreaFocused(): boolean {
@@ -4545,7 +4566,7 @@ function buildSessionHoverDetails(
         icon={<Activity size={12} />}
         iconClassName={STATUS_ICON[session.status]}
         label={sidebarText(t, "sidebar.metadata.status")}
-        value={statusLabel(t, session.status)}
+        value={statusDetailLabel(t, session)}
         valueClassName={STATUS_ICON[session.status]}
       />
       {session.kind === "control" ? (

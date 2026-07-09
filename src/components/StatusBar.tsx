@@ -38,6 +38,7 @@ import type {
   SessionNotification,
   SessionNotificationKind,
   SessionStatus,
+  SessionStatusReason,
   AgentTokenProvider,
   AgentTokenUsageMetric,
   AgentTokenUsageSnapshot,
@@ -60,6 +61,30 @@ const SESSION_STATUS_KEYS: Record<SessionStatus, StatusBarTranslationKey> = {
   waiting_for_input: "statusBar.sessionStatus.waitingForInput",
   errored: "statusBar.sessionStatus.errored",
 };
+
+function sessionStatusReasonLabel(
+  t: Translator,
+  reason: SessionStatusReason | null | undefined,
+): string | null {
+  switch (reason) {
+    case "turn_complete":
+      return statusBarText(t, "statusBar.sessionStatusReason.turn_complete");
+    case "shell_prompt":
+      return statusBarText(t, "statusBar.sessionStatusReason.shell_prompt");
+    default:
+      return null;
+  }
+}
+
+function sessionStatusDetailLabel(
+  t: Translator,
+  status: SessionStatus,
+  reason: SessionStatusReason | null | undefined,
+): string {
+  const label = statusBarText(t, SESSION_STATUS_KEYS[status]);
+  const reasonLabel = sessionStatusReasonLabel(t, reason);
+  return reasonLabel ? `${label} · ${reasonLabel}` : label;
+}
 
 function statusBarText(t: Translator, key: StatusBarTranslationKey): string {
   return t(key);
@@ -314,7 +339,14 @@ export function StatusBar() {
             {showSessionCount ? (
               <span className="text-fg-muted/50">|</span>
             ) : null}
-            <span className="whitespace-nowrap">
+            <span
+              className="whitespace-nowrap"
+              title={sessionStatusDetailLabel(
+                t,
+                active.status,
+                active.status_reason,
+              )}
+            >
               {statusBarFormat(t, "statusBar.status", {
                 status: statusBarText(t, SESSION_STATUS_KEYS[active.status]),
               })}

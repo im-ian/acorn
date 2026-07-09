@@ -854,6 +854,10 @@
       "waitingForInput": "waiting for input",
       "errored": "error"
     },
+    "sessionStatusReason": {
+      "turn_complete": "agent turn complete",
+      "shell_prompt": "shell prompt detected"
+    },
     "notifications": {
       "ariaLabel": "Session notifications",
       "tooltipEmpty": "No unread session notifications",
@@ -1056,6 +1060,10 @@
       "working": "Working",
       "waiting_for_input": "Waiting for input",
       "errored": "Error"
+    },
+    "statusReason": {
+      "turn_complete": "Agent turn complete",
+      "shell_prompt": "Shell prompt detected"
     },
     "dialog": {
       "selectExistingProject": "Select an existing project",

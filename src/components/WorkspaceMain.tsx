@@ -60,6 +60,7 @@ import type {
   Session,
   SessionPullRequestSummary,
   SessionStatus,
+  SessionStatusReason,
 } from "../lib/types";
 import {
   summarizeAllSessionProcesses,
@@ -1903,8 +1904,9 @@ function KanbanTerminalPopover({
                     size="xs"
                   />
                 }
+                title={statusDetailLabel(t, session)}
               >
-                {statusLabel(t, session.status)}
+                {statusDetailLabel(t, session)}
               </WorkspaceSessionTerminalPopoverMetaItem>
               {currentPullRequest ? (
                 <KanbanTerminalPopoverPullRequestMetaItem
@@ -2430,6 +2432,26 @@ function statusLabel(t: Translator, status: SessionStatus): string {
     case "errored":
       return t("sidebar.status.errored");
   }
+}
+
+function statusReasonLabel(
+  t: Translator,
+  reason: SessionStatusReason | null | undefined,
+): string | null {
+  switch (reason) {
+    case "turn_complete":
+      return t("sidebar.statusReason.turn_complete");
+    case "shell_prompt":
+      return t("sidebar.statusReason.shell_prompt");
+    default:
+      return null;
+  }
+}
+
+function statusDetailLabel(t: Translator, session: Session): string {
+  const label = statusLabel(t, session.status);
+  const reason = statusReasonLabel(t, session.status_reason);
+  return reason ? `${label} · ${reason}` : label;
 }
 
 function sidebarText(t: Translator, key: SidebarTranslationKey): string {
