@@ -169,7 +169,7 @@ type ShortcutGroup = {
   items: ShortcutItem[];
 };
 
-const SHORTCUT_GROUPS: ShortcutGroup[] = [
+export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
     titleKey: "settings.shortcuts.groups.general",
     items: [
@@ -246,6 +246,22 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       {
         id: "toggleRightPanel",
         labelKey: "settings.shortcuts.items.toggleRightPanel.label",
+      },
+      {
+        id: "focusPaneLeft",
+        labelKey: "settings.shortcuts.items.focusPaneLeft.label",
+      },
+      {
+        id: "focusPaneRight",
+        labelKey: "settings.shortcuts.items.focusPaneRight.label",
+      },
+      {
+        id: "focusPaneUp",
+        labelKey: "settings.shortcuts.items.focusPaneUp.label",
+      },
+      {
+        id: "focusPaneDown",
+        labelKey: "settings.shortcuts.items.focusPaneDown.label",
       },
       {
         id: "splitVertical",
