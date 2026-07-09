@@ -3,6 +3,7 @@ import { GitPullRequestClosed } from "lucide-react";
 import { api } from "../lib/api";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { emitPullRequestMutation } from "../lib/pullRequestEvents";
 import { useToasts } from "../lib/toasts";
 import type { PullRequestDetail } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
@@ -84,6 +85,15 @@ export function ClosePullRequestDialog({
     setError(null);
     try {
       await api.closePullRequest(repoPath, detail.number);
+      emitPullRequestMutation({
+        kind: "closed",
+        repoPath,
+        number: detail.number,
+        headBranch: detail.head_branch,
+        baseBranch: detail.base_branch,
+        title: detail.title,
+        isDraft: detail.is_draft,
+      });
       onClosed();
     } catch (e) {
       const message = String(e);

@@ -234,6 +234,37 @@ describe("rightPanelCache", () => {
     expect(rightPanelCache.getPullRequests(REPO, "merged", 50)).toBeNull();
   });
 
+  it("keeps a fresh PR in-flight request when a stale invalidated request settles", async () => {
+    const listing: PullRequestListing = {
+      kind: "ok",
+      items: [],
+      account: "tester",
+    };
+    const stale = deferred<PullRequestListing>();
+    const fresh = deferred<PullRequestListing>();
+    mockApi.listPullRequests
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(fresh.promise);
+
+    const staleRequest = rightPanelCache.fetchPullRequests(REPO, "open", 50);
+    rightPanelCache.invalidatePullRequests(REPO);
+    const freshRequest = rightPanelCache.fetchPullRequests(REPO, "open", 50);
+
+    expect(freshRequest).not.toBe(staleRequest);
+    expect(mockApi.listPullRequests).toHaveBeenCalledTimes(2);
+
+    stale.resolve(listing);
+    await staleRequest;
+
+    expect(rightPanelCache.fetchPullRequests(REPO, "open", 50)).toBe(
+      freshRequest,
+    );
+    expect(mockApi.listPullRequests).toHaveBeenCalledTimes(2);
+
+    fresh.resolve(listing);
+    await freshRequest;
+  });
+
   it("does not repopulate pruned issue data from a stale in-flight request", async () => {
     const listing: IssueListing = {
       kind: "ok",

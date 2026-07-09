@@ -236,10 +236,18 @@ class RightPanelCacheManager {
         return result;
       })
       .finally(() => {
-        this.prListInFlight.delete(key);
+        if (this.prListInFlight.get(key) === promise) {
+          this.prListInFlight.delete(key);
+        }
       });
     this.prListInFlight.set(key, promise);
     return promise;
+  }
+
+  invalidatePullRequests(repoPath: string): void {
+    this.bumpRepoVersion(repoPath);
+    this.deleteJsonKeysForRepo(this.prListCache, repoPath);
+    this.deleteJsonKeysForRepo(this.prListInFlight, repoPath);
   }
 
   getIssues(
@@ -414,6 +422,12 @@ class RightPanelCacheManager {
     for (const key of map.keys()) {
       const repoPath = this.repoFromJsonKey(key);
       if (repoPath && !retained.has(repoPath)) removed.add(repoPath);
+    }
+  }
+
+  private deleteJsonKeysForRepo<T>(map: Map<string, T>, repoPath: string): void {
+    for (const key of map.keys()) {
+      if (this.repoFromJsonKey(key) === repoPath) map.delete(key);
     }
   }
 
