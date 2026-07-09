@@ -4,6 +4,11 @@ import {
   currentPullRequestSearchQuery,
   findCurrentPullRequestForBranch,
 } from "./sessionContext";
+import {
+  onPullRequestMutation,
+  pullRequestMutationAffectsOpenContext,
+  type PullRequestMutationEvent,
+} from "./pullRequestEvents";
 import type {
   PullRequestListing,
   Session,
@@ -24,6 +29,7 @@ type CurrentPullRequestSubscriber = {
   lookupRepoPath: string;
   branch: string;
   onPrime: (value: SessionPullRequestSummary) => void;
+  onInvalidate: () => void;
 };
 
 const currentPullRequestCache = new Map<string, CurrentPullRequestCacheEntry>();
@@ -80,6 +86,47 @@ function currentPullRequestRepoPath(session: Session): string {
     session.worktree_path ||
     session.repo_path
   );
+}
+
+function mutationMatchesSubscriber(
+  event: PullRequestMutationEvent,
+  subscriber: CurrentPullRequestSubscriber,
+): boolean {
+  const repoPath = normalizeRepoPath(event.repoPath);
+  if (
+    repoPath !== subscriber.projectRepoPath &&
+    repoPath !== subscriber.lookupRepoPath
+  ) {
+    return false;
+  }
+  return !event.headBranch || event.headBranch === subscriber.branch;
+}
+
+function invalidateCurrentPullRequestCaches(
+  event: PullRequestMutationEvent,
+): void {
+  if (!pullRequestMutationAffectsOpenContext(event.kind)) return;
+  for (const subscriber of currentPullRequestSubscribers) {
+    if (!mutationMatchesSubscriber(event, subscriber)) continue;
+    currentPullRequestProjectCache.delete(
+      currentPullRequestProjectCacheKey(
+        subscriber.projectRepoPath,
+        subscriber.branch,
+      ),
+    );
+    currentPullRequestCache.delete(
+      currentPullRequestCacheKey(subscriber.lookupRepoPath, subscriber.branch),
+    );
+    subscriber.onInvalidate();
+  }
+}
+
+onPullRequestMutation(invalidateCurrentPullRequestCaches);
+
+export function resetCurrentPullRequestCacheForTests(): void {
+  currentPullRequestCache.clear();
+  currentPullRequestProjectCache.clear();
+  currentPullRequestSubscribers.clear();
 }
 
 export function primeCurrentPullRequestCacheFromListing(
@@ -192,6 +239,10 @@ export function useCurrentPullRequest(
       branch,
       onPrime: (value) => {
         setCurrentPullRequest(value);
+        setLookupAttempt((attempt) => attempt + 1);
+      },
+      onInvalidate: () => {
+        setCurrentPullRequest(null);
         setLookupAttempt((attempt) => attempt + 1);
       },
     };

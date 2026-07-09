@@ -12,6 +12,7 @@ import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { loadLastMergeMethod, saveLastMergeMethod } from "../lib/merge-prefs";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
+import { emitPullRequestMutation } from "../lib/pullRequestEvents";
 import {
   aiCommitProviderLabel,
   resolveAiCommitRequest,
@@ -251,6 +252,15 @@ export function MergePullRequestDialog({
         acceptsMessage ? body : null,
         checksBlock.blocked && adminMerge,
       );
+      emitPullRequestMutation({
+        kind: "merged",
+        repoPath,
+        number: detail.number,
+        headBranch: detail.head_branch,
+        baseBranch: detail.base_branch,
+        title: detail.title,
+        isDraft: detail.is_draft,
+      });
       onMerged();
     } catch (e) {
       const message = String(e);
