@@ -1185,6 +1185,7 @@ describe("workspace tabs", () => {
       turn_count: 2,
       complete_turns: 2,
       running_turns: 0,
+      recent_messages: [],
       token_usage: {
         input_tokens: 220,
         output_tokens: 80,
@@ -1240,6 +1241,7 @@ describe("workspace tabs", () => {
       turn_count: 2,
       complete_turns: 2,
       running_turns: 0,
+      recent_messages: [],
       token_usage: {
         input_tokens: 320,
         output_tokens: 90,
@@ -1310,6 +1312,7 @@ describe("workspace tabs", () => {
       turn_count: 2,
       complete_turns: 2,
       running_turns: 0,
+      recent_messages: [],
       token_usage: {
         input_tokens: 220,
         output_tokens: 80,

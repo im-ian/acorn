@@ -422,6 +422,10 @@ describe("WorkSummaryView", () => {
       turn_count: 2,
       complete_turns: 2,
       running_turns: 0,
+      recent_messages: [
+        { role: "user", text: "Please review the failing tests." },
+        { role: "assistant", text: "The status poll fallback is fixed." },
+      ],
       token_usage: {
         input_tokens: 220,
         output_tokens: 80,
@@ -461,6 +465,9 @@ describe("WorkSummaryView", () => {
       "transcript-1",
     );
     expect(container.textContent).toContain("4 messages");
+    expect(container.textContent).toContain("Recent messages");
+    expect(container.textContent).toContain("Please review the failing tests.");
+    expect(container.textContent).toContain("The status poll fallback is fixed.");
     expect(container.textContent).toContain("320 tokens");
   });
 
@@ -476,6 +483,7 @@ describe("WorkSummaryView", () => {
       turn_count: 2,
       complete_turns: 2,
       running_turns: 0,
+      recent_messages: [],
       token_usage: {
         input_tokens: 220,
         output_tokens: 80,
@@ -536,6 +544,7 @@ describe("WorkSummaryView", () => {
       turn_count: 2,
       complete_turns: 2,
       running_turns: 0,
+      recent_messages: [],
       token_usage: {
         input_tokens: 220,
         output_tokens: 80,
@@ -557,6 +566,7 @@ describe("WorkSummaryView", () => {
       turn_count: 3,
       complete_turns: 3,
       running_turns: 0,
+      recent_messages: [],
       token_usage: {
         input_tokens: 300,
         output_tokens: 120,

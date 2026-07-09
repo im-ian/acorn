@@ -28,6 +28,8 @@ const READ_HEAD_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const READ_TAIL_BYTES: u64 = 256 * 1024;
 const PREVIEW_CHARS: usize = 160;
 const TITLE_CONTEXT_ENTRY_CHARS: usize = 700;
+const RECENT_SUMMARY_MESSAGES: usize = 6;
+const SUMMARY_MESSAGE_PREVIEW_CHARS: usize = 600;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -100,7 +102,14 @@ pub struct AgentTranscriptSummary {
     pub turn_count: u64,
     pub complete_turns: u64,
     pub running_turns: u64,
+    pub recent_messages: Vec<AgentTranscriptMessagePreview>,
     pub token_usage: AgentTranscriptTokenUsage,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentTranscriptMessagePreview {
+    pub role: String,
+    pub text: String,
 }
 
 pub fn list_agent_history(
@@ -671,6 +680,7 @@ fn summarize_agent_transcript(
     let mut assistant_messages = 0_u64;
     let mut summed_usage = AgentTranscriptTokenUsage::default();
     let mut cumulative_usage = AgentTranscriptTokenUsage::default();
+    let mut recent_messages = VecDeque::new();
     let kind = provider.kind();
 
     for line in BufReader::new(file).lines().map_while(Result::ok) {
@@ -683,10 +693,28 @@ fn summarize_agent_transcript(
         };
         let parsed = parse_transcript_value(kind, &value);
         if let Some(entry) = title_context_entry(&parsed) {
-            match entry.role {
-                "User" => user_messages += 1,
-                "Assistant" => assistant_messages += 1,
-                _ => {}
+            let role = match entry.role {
+                "User" => {
+                    user_messages += 1;
+                    Some("user")
+                }
+                "Assistant" => {
+                    assistant_messages += 1;
+                    Some("assistant")
+                }
+                _ => None,
+            };
+            if let Some((role, text)) = role.and_then(|role| {
+                collapse_preview(&entry.text, SUMMARY_MESSAGE_PREVIEW_CHARS)
+                    .map(|text| (role, text))
+            }) {
+                if recent_messages.len() == RECENT_SUMMARY_MESSAGES {
+                    recent_messages.pop_front();
+                }
+                recent_messages.push_back(AgentTranscriptMessagePreview {
+                    role: role.to_string(),
+                    text,
+                });
             }
             message_count += 1;
         }
@@ -717,6 +745,7 @@ fn summarize_agent_transcript(
         turn_count: user_messages,
         complete_turns,
         running_turns,
+        recent_messages: recent_messages.into_iter().collect(),
         token_usage,
     })
 }
@@ -2164,6 +2193,11 @@ mod tests {
         assert_eq!(summary.token_usage.reasoning_tokens, 4);
         assert_eq!(summary.token_usage.total_tokens, 59);
         assert_eq!(summary.token_usage.messages_with_usage, 1);
+        assert_eq!(summary.recent_messages.len(), 2);
+        assert_eq!(summary.recent_messages[0].role, "user");
+        assert_eq!(summary.recent_messages[0].text, "Do it");
+        assert_eq!(summary.recent_messages[1].role, "assistant");
+        assert_eq!(summary.recent_messages[1].text, "Done");
     }
 
     #[test]

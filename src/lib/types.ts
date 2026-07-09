@@ -336,7 +336,13 @@ export interface AgentTranscriptSummary {
   turn_count: number;
   complete_turns: number;
   running_turns: number;
+  recent_messages: AgentTranscriptMessagePreview[];
   token_usage: AgentTranscriptTokenUsage;
+}
+
+export interface AgentTranscriptMessagePreview {
+  role: "user" | "assistant";
+  text: string;
 }
 
 export interface CommitInfo {

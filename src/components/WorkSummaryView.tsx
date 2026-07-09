@@ -101,6 +101,7 @@ interface WorkSummarySnapshot {
 interface WorkSummaryConversationSnapshot {
   chat: WorkSummaryChatMetrics | null;
   tokens: WorkSummaryTokenUsage | null;
+  messages: AgentTranscriptSummary["recent_messages"];
 }
 
 interface AgentTranscriptLocation {
@@ -119,6 +120,9 @@ export function WorkSummaryView({
   const [summary, setSummary] = useState<WorkSummary | null>(null);
   const [chat, setChat] = useState<WorkSummaryChatMetrics | null>(null);
   const [tokens, setTokens] = useState<WorkSummaryTokenUsage | null>(null);
+  const [messages, setMessages] = useState<AgentTranscriptSummary["recent_messages"]>(
+    [],
+  );
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [conversationLoading, setConversationLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -138,7 +142,7 @@ export function WorkSummaryView({
 
   const fetchConversation = useCallback(async (): Promise<WorkSummaryConversationSnapshot> => {
     if (!session) {
-      return { chat: null, tokens: null };
+      return { chat: null, tokens: null, messages: [] };
     }
 
     if (session.mode === "chat") {
@@ -146,6 +150,7 @@ export function WorkSummaryView({
       return {
         chat: summarizeChatSession(chatState),
         tokens: summarizeTokenUsage(chatState),
+        messages: [],
       };
     }
 
@@ -168,10 +173,11 @@ export function WorkSummaryView({
       return {
         chat: transcript ? chatMetricsFromTranscript(transcript) : null,
         tokens: transcript ? tokenUsageFromTranscript(transcript) : null,
+        messages: transcript?.recent_messages ?? [],
       };
     }
 
-    return { chat: null, tokens: null };
+    return { chat: null, tokens: null, messages: [] };
   }, [
     session?.agent_transcript_path,
     session?.agent_transcript_provider,
@@ -189,6 +195,7 @@ export function WorkSummaryView({
     (snapshot: WorkSummaryConversationSnapshot) => {
       setChat(snapshot.chat);
       setTokens(snapshot.tokens);
+      setMessages(snapshot.messages);
     },
     [],
   );
@@ -562,24 +569,45 @@ export function WorkSummaryView({
             {conversationPending ? (
               <ConversationSkeleton />
             ) : chat ? (
-              <div className="grid grid-cols-2 gap-2 p-3">
-                <ConversationStat
-                  label={wt(t, "workSummary.conversation.user")}
-                  value={chat.userMessages}
-                />
-                <ConversationStat
-                  label={wt(t, "workSummary.conversation.assistant")}
-                  value={chat.assistantMessages}
-                />
-                <ConversationStat
-                  label={wt(t, "workSummary.conversation.turns")}
-                  value={chat.turnCount}
-                />
-                <ConversationStat
-                  label={wt(t, "workSummary.conversation.runningTurns")}
-                  value={chat.runningTurns}
-                />
-              </div>
+              <>
+                <div className="grid grid-cols-2 gap-2 p-3">
+                  <ConversationStat
+                    label={wt(t, "workSummary.conversation.user")}
+                    value={chat.userMessages}
+                  />
+                  <ConversationStat
+                    label={wt(t, "workSummary.conversation.assistant")}
+                    value={chat.assistantMessages}
+                  />
+                  <ConversationStat
+                    label={wt(t, "workSummary.conversation.turns")}
+                    value={chat.turnCount}
+                  />
+                  <ConversationStat
+                    label={wt(t, "workSummary.conversation.runningTurns")}
+                    value={chat.runningTurns}
+                  />
+                </div>
+                {messages.length > 0 ? (
+                  <div
+                    className="border-t border-border px-3 pb-3 pt-2"
+                    data-testid="work-summary-recent-messages"
+                  >
+                    <div className="mb-2 text-[10px] font-medium uppercase text-fg-muted">
+                      {wt(t, "workSummary.conversation.recentMessages")}
+                    </div>
+                    <div className="space-y-2">
+                      {messages.map((message, index) => (
+                        <TranscriptMessagePreview
+                          key={`${message.role}:${index}:${message.text}`}
+                          message={message}
+                          t={t}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </>
             ) : (
               <EmptyLine>
                 {wt(t, "workSummary.conversation.terminalHint")}
@@ -694,6 +722,32 @@ function ConversationStat({
     <div className="rounded-md bg-bg-sidebar/40 px-3 py-2">
       <div className="text-[11px] text-fg-muted">{label}</div>
       <div className="mt-1 font-mono text-base tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function TranscriptMessagePreview({
+  message,
+  t,
+}: {
+  message: AgentTranscriptSummary["recent_messages"][number];
+  t: Translator;
+}) {
+  const label =
+    message.role === "user"
+      ? wt(t, "workSummary.conversation.user")
+      : wt(t, "workSummary.conversation.assistant");
+  return (
+    <div
+      className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2 rounded-md bg-bg-sidebar/40 px-3 py-2 text-xs"
+      data-testid={`work-summary-recent-message-${message.role}`}
+    >
+      <div className="text-[10px] font-medium uppercase text-fg-muted">
+        {label}
+      </div>
+      <div className="line-clamp-3 min-w-0 whitespace-pre-wrap break-words text-fg">
+        {message.text}
+      </div>
     </div>
   );
 }
