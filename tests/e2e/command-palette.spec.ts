@@ -168,4 +168,79 @@ test.describe("command palette", () => {
       page.getByRole("option", { name: /Switch to feature-branch/i }),
     ).toBeVisible();
   });
+
+  test("opens unread session activity from the palette", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "session-1",
+        name: "foreground",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "session-2",
+        name: "agent run",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.handle("detect_session_statuses", () => [
+      {
+        id: "session-2",
+        status: "waiting_for_input",
+        branch: null,
+        agent_provider: null,
+      },
+    ]);
+
+    await page.goto("/");
+    await expect(page.getByRole("button", { name: "Session notifications" }))
+      .toContainText("1");
+
+    await pressHotkey(page, { mod: true, key: "p" });
+    const palette = page.getByRole("dialog", { name: /Command palette/i });
+    await expect(palette.getByText("Unread activity")).toBeVisible();
+
+    await palette
+      .getByRole("option", { name: /Waiting for input.*agent run.*demo/ })
+      .click();
+
+    await expect(palette).toHaveCount(0);
+    await expect(page.getByText("agent run").first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Session notifications" }))
+      .not.toContainText("1");
+  });
 });
