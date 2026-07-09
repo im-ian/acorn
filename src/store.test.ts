@@ -1055,6 +1055,22 @@ describe("workspace tabs", () => {
     });
   });
 
+  it("keeps kanban mode when opening a code viewer tab", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+
+    const s = useAppStore.getState();
+    expect(s.workspaceViewMode).toBe("kanban");
+    expect(s.workspaces[REPO_A].viewMode).toBe("kanban");
+    expect(s.activeTabId).toMatch(/^code-viewer:/);
+    expect(s.workspaceTabs[s.activeTabId!]).toMatchObject({
+      kind: "code",
+      path: `${REPO_A}/src/App.tsx`,
+    });
+  });
+
   it("opens a work summary tab for the active session worktree", async () => {
     const active = session("a1", REPO_A, {
       name: "Feature runner",
