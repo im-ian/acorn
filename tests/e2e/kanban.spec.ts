@@ -145,7 +145,7 @@ test.describe("workspace kanban mode", () => {
     ).toContainText("PR #77");
   });
 
-  test("groups active workspace sessions by status and opens a card terminal popover", async ({
+  test("groups active workspace sessions by lifecycle and opens a card terminal popover", async ({
     page,
     tauri,
   }) => {
@@ -302,14 +302,17 @@ test.describe("workspace kanban mode", () => {
     await page.keyboard.press("Escape");
 
     await expect(
-      board.getByRole("heading", { name: "Waiting for input" }),
+      board.getByRole("heading", { name: "Waiting" }),
     ).toBeVisible();
-    await expect(board.getByRole("heading", { name: "Error" })).toBeVisible();
+    await expect(board.getByRole("heading", { name: "Review" })).toBeVisible();
     await expect(board.getByRole("heading", { name: "Working" })).toBeVisible();
-    await expect(board.getByRole("heading", { name: "Ready" })).toBeVisible();
+    await expect(board.getByRole("heading", { name: "Idle" })).toBeVisible();
+    await expect(
+      board.getByRole("heading", { name: "Done" }),
+    ).toBeVisible();
     await expect(
       board.locator("section > header h2"),
-    ).toHaveText(["Ready", "Waiting for input", "Working", "Error"]);
+    ).toHaveText(["Idle", "Working", "Waiting", "Review", "Done"]);
 
     const filterInput = board.getByLabel("Filter sessions");
     await expect(filterInput).toBeVisible();
@@ -323,15 +326,15 @@ test.describe("workspace kanban mode", () => {
     await filterInput.fill("");
 
     await board.getByLabel("Sort sessions").selectOption("name-asc");
-    const readyCards = board.locator(
-      'section[aria-label="Ready"] [data-testid="workspace-kanban-card"]',
+    const idleCards = board.locator(
+      'section[aria-label="Idle"] [data-testid="workspace-kanban-card"]',
     );
-    await expect(readyCards).toHaveCount(2);
-    await expect(readyCards.nth(0)).toHaveAttribute(
+    await expect(idleCards).toHaveCount(2);
+    await expect(idleCards.nth(0)).toHaveAttribute(
       "data-kanban-session-id",
       "alpha",
     );
-    await expect(readyCards.nth(1)).toHaveAttribute(
+    await expect(idleCards.nth(1)).toHaveAttribute(
       "data-kanban-session-id",
       "shell",
     );
@@ -477,13 +480,13 @@ test.describe("workspace kanban mode", () => {
     const kanbanScroll = page.getByTestId("workspace-kanban-scroll");
     const kanbanColumnWidths = () =>
       board
-        .locator("[data-kanban-column-status]")
+        .locator("[data-kanban-column-stage]")
         .evaluateAll((columns) =>
           columns.map((column) => column.getBoundingClientRect().width),
         );
     const kanbanFitMetrics = () =>
       board
-        .locator("[data-kanban-column-status]")
+        .locator("[data-kanban-column-stage]")
         .evaluateAll((columns) => {
           const firstColumn = columns[0];
           if (!firstColumn) throw new Error("missing kanban columns");
@@ -515,45 +518,45 @@ test.describe("workspace kanban mode", () => {
         });
     const columnWidthSpread = (widths: number[]) =>
       Math.max(...widths) - Math.min(...widths);
-    const readyColumn = board.locator('[data-kanban-column-status="ready"]');
-    const needsInputColumn = board.locator(
-      '[data-kanban-column-status="waiting_for_input"]',
+    const idleColumn = board.locator('[data-kanban-column-stage="idle"]');
+    const waitingColumn = board.locator(
+      '[data-kanban-column-stage="waiting"]',
     );
-    const readyResizeHandle = board
-      .locator('[data-kanban-resize-status="ready"]');
-    await expect(readyResizeHandle).toBeVisible();
+    const idleResizeHandle = board
+      .locator('[data-kanban-resize-stage="idle"]');
+    await expect(idleResizeHandle).toBeVisible();
     const initialFit = await kanbanFitMetrics();
     expect(columnWidthSpread(initialFit.columnWidths)).toBeLessThan(1);
     expect(Math.abs(initialFit.unusedWidth)).toBeLessThan(1);
-    const [readyWidthBefore, needsInputWidthBefore, scrollWidthBefore] =
+    const [idleWidthBefore, waitingWidthBefore, scrollWidthBefore] =
       await Promise.all([
-        readyColumn.evaluate((column) => column.getBoundingClientRect().width),
-        needsInputColumn.evaluate((column) =>
+        idleColumn.evaluate((column) => column.getBoundingClientRect().width),
+        waitingColumn.evaluate((column) =>
           column.getBoundingClientRect().width,
         ),
         kanbanScroll.evaluate((scroll) => scroll.scrollWidth),
       ]);
-    await readyResizeHandle.focus();
+    await idleResizeHandle.focus();
     for (let i = 0; i < 6; i += 1) {
-      await readyResizeHandle.press("Shift+ArrowRight");
+      await idleResizeHandle.press("Shift+ArrowRight");
     }
     const minimumResizeDelta = 100;
     await expect
       .poll(async () =>
-        readyColumn.evaluate((column) => column.getBoundingClientRect().width),
+        idleColumn.evaluate((column) => column.getBoundingClientRect().width),
       )
-      .toBeGreaterThan(readyWidthBefore + minimumResizeDelta);
-    const [readyWidthAfter, needsInputWidthAfter, scrollWidthAfter] =
+      .toBeGreaterThan(idleWidthBefore + minimumResizeDelta);
+    const [idleWidthAfter, waitingWidthAfter, scrollWidthAfter] =
       await Promise.all([
-        readyColumn.evaluate((column) => column.getBoundingClientRect().width),
-        needsInputColumn.evaluate((column) =>
+        idleColumn.evaluate((column) => column.getBoundingClientRect().width),
+        waitingColumn.evaluate((column) =>
           column.getBoundingClientRect().width,
         ),
         kanbanScroll.evaluate((scroll) => scroll.scrollWidth),
       ]);
     expect(
-      needsInputWidthAfter,
-    ).toBeLessThanOrEqual(needsInputWidthBefore);
+      waitingWidthAfter,
+    ).toBeLessThanOrEqual(waitingWidthBefore);
     expect(scrollWidthAfter).toBeGreaterThanOrEqual(scrollWidthBefore);
 
     // Equalize distributes the mean width across columns, so every column ends
@@ -572,8 +575,8 @@ test.describe("workspace kanban mode", () => {
       .toBeLessThan(1);
     const equalizedWidths = await kanbanColumnWidths();
     const equalizedWidth = equalizedWidths[0] ?? 0;
-    expect(equalizedWidth).toBeLessThan(readyWidthAfter);
-    expect(equalizedWidth).toBeGreaterThan(needsInputWidthAfter);
+    expect(equalizedWidth).toBeLessThan(idleWidthAfter);
+    expect(equalizedWidth).toBeGreaterThan(waitingWidthAfter);
 
     await board.getByRole("button", { name: "Reset sizes" }).click();
     await expect
@@ -871,15 +874,15 @@ test.describe("workspace kanban mode", () => {
     await expect(shell).toBeFocused();
 
     await shell.press("ArrowRight");
-    await expect(needsReview).toBeFocused();
-
-    await needsReview.press("ArrowRight");
     await expect(runner).toBeFocused();
 
     await runner.press("ArrowRight");
     await expect(broken).toBeFocused();
 
-    await broken.press("ArrowLeft");
+    await broken.press("ArrowDown");
+    await expect(needsReview).toBeFocused();
+
+    await needsReview.press("ArrowLeft");
     await expect(runner).toBeFocused();
 
     await runner.press("Enter");

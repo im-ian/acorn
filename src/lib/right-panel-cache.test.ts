@@ -78,6 +78,72 @@ describe("rightPanelCache", () => {
     expect(mockApi.listPullRequests).toHaveBeenCalledTimes(1);
   });
 
+  it("bypasses stale in-flight PR fetches when forced", async () => {
+    const staleListing: PullRequestListing = {
+      kind: "ok",
+      items: [
+        {
+          number: 1,
+          title: "stale",
+          state: "OPEN",
+          author: "tester",
+          head_branch: "feat/stale",
+          base_branch: "main",
+          url: "https://example.test/1",
+          updated_at: "2026-01-01T00:00:00.000Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+      account: "tester",
+    };
+    const freshListing: PullRequestListing = {
+      kind: "ok",
+      items: [
+        {
+          number: 2,
+          title: "fresh",
+          state: "MERGED",
+          author: "tester",
+          head_branch: "feat/fresh",
+          base_branch: "main",
+          url: "https://example.test/2",
+          updated_at: "2026-01-02T00:00:00.000Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+      account: "tester",
+    };
+    const stale = deferred<PullRequestListing>();
+    const fresh = deferred<PullRequestListing>();
+    mockApi.listPullRequests
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(fresh.promise);
+
+    const first = rightPanelCache.fetchPullRequests(REPO, "open", 50);
+    const forced = rightPanelCache.fetchPullRequests(REPO, "open", 50, {
+      force: true,
+    });
+
+    expect(forced).not.toBe(first);
+    expect(mockApi.listPullRequests).toHaveBeenCalledTimes(2);
+
+    fresh.resolve(freshListing);
+    await expect(forced).resolves.toBe(freshListing);
+    expect(rightPanelCache.getPullRequests(REPO, "open", 50)).toBe(
+      freshListing,
+    );
+
+    stale.resolve(staleListing);
+    await expect(first).resolves.toBe(staleListing);
+    expect(rightPanelCache.getPullRequests(REPO, "open", 50)).toBe(
+      freshListing,
+    );
+  });
+
   it("dedupes in-flight issue fetches and reuses cached results", async () => {
     const listing: IssueListing = {
       kind: "ok",

@@ -945,7 +945,9 @@
         "newSession": "New session",
         "newWorktreeSession": "New worktree",
         "newChatSession": "New chat",
-        "newControlSession": "Control"
+        "newControlSession": "Control",
+        "markAsDone": "Mark as done",
+        "restoreFromDone": "Restore from done"
       },
       "sort": {
         "label": "Sort sessions",
@@ -994,6 +996,24 @@
         "openTerminal": "Open terminal",
         "sendUnavailable": "Open the terminal to send to this session.",
         "sendError": "Could not send the message."
+      },
+      "stage": {
+        "idle": "Idle",
+        "working": "Working",
+        "waiting": "Waiting",
+        "review": "Review",
+        "done": "Done"
+      },
+      "card": {
+        "stalled": "Stalled",
+        "dwellTitle": "In this column for {duration}",
+        "openPullRequest": "Open pull request #{number}"
+      },
+      "quickReply": {
+        "label": "Quick reply",
+        "placeholder": "Reply and press Enter…",
+        "send": "Send reply",
+        "error": "Send failed — try again"
       }
     }
   },

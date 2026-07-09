@@ -3,7 +3,6 @@ import {
   DEFAULT_KANBAN_SORT_MODE,
   KANBAN_COLUMN_DEFAULT_WIDTH,
   KANBAN_COLUMN_MIN_WIDTH,
-  KANBAN_COLUMN_STATUSES,
   clampKanbanColumnWidth,
   defaultKanbanBoardPrefs,
   defaultKanbanColumnWidths,
@@ -15,6 +14,7 @@ import {
   writeKanbanBoardPrefs,
   type KanbanBoardPrefs,
 } from "./kanbanBoard";
+import { KANBAN_LIFECYCLE_STAGES } from "./kanbanLifecycle";
 import type { Session } from "./types";
 
 function makeSession(overrides: Partial<Session>): Session {
@@ -32,7 +32,7 @@ function makeSession(overrides: Partial<Session>): Session {
   } as unknown as Session;
 }
 
-const STORAGE_KEY = "acorn:workspace-kanban:board-prefs:v1";
+const STORAGE_KEY = "acorn:workspace-kanban:board-prefs:v2";
 
 describe("clampKanbanColumnWidth", () => {
   it("raises widths below the minimum to the minimum", () => {
@@ -52,7 +52,7 @@ describe("clampKanbanColumnWidth", () => {
 describe("defaultKanbanColumnWidths", () => {
   it("returns one default width per column", () => {
     const widths = defaultKanbanColumnWidths();
-    expect(widths).toHaveLength(KANBAN_COLUMN_STATUSES.length);
+    expect(widths).toHaveLength(KANBAN_LIFECYCLE_STAGES.length);
     expect(widths.every((w) => w === KANBAN_COLUMN_DEFAULT_WIDTH)).toBe(true);
   });
 });
@@ -73,9 +73,9 @@ describe("toKanbanSortMode", () => {
 
 describe("equalizeKanbanColumnWidths", () => {
   it("sets every column to the clamped mean of the current widths", () => {
-    // mean of [480, 240, 240, 240] = 300
-    const result = equalizeKanbanColumnWidths([480, 240, 240, 240]);
-    expect(result).toEqual([300, 300, 300, 300]);
+    // mean of [480, 240, 240, 240, 300] = 300
+    const result = equalizeKanbanColumnWidths([480, 240, 240, 240, 300]);
+    expect(result).toEqual([300, 300, 300, 300, 300]);
   });
 
   it("never produces a width below the minimum", () => {
@@ -88,7 +88,7 @@ describe("equalizeKanbanColumnWidths", () => {
   });
 
   it("differs from reset when widths are uneven", () => {
-    const equalized = equalizeKanbanColumnWidths([440, 200, 200, 200]);
+    const equalized = equalizeKanbanColumnWidths([440, 200, 200, 200, 240]);
     expect(equalized).not.toEqual(defaultKanbanColumnWidths());
     expect(new Set(equalized).size).toBe(1);
   });
@@ -197,9 +197,10 @@ describe("board prefs persistence", () => {
 
   it("round-trips prefs for a project", () => {
     const prefs: KanbanBoardPrefs = {
-      columnWidths: [300, 250, 200, 180],
+      columnWidths: [300, 250, 220, 200, 180],
       sortMode: "name-asc",
       filterQuery: "shell",
+      manualDoneSessionIds: ["done-1", "done-2"],
     };
     writeKanbanBoardPrefs("/repo/a", prefs);
     expect(readKanbanBoardPrefs("/repo/a")).toEqual(prefs);
@@ -207,23 +208,26 @@ describe("board prefs persistence", () => {
 
   it("does not write when the project id is null", () => {
     writeKanbanBoardPrefs(null, {
-      columnWidths: [300, 300, 300, 300],
+      columnWidths: [300, 300, 300, 300, 300],
       sortMode: "name-asc",
       filterQuery: "x",
+      manualDoneSessionIds: [],
     });
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
   it("isolates prefs between projects", () => {
     writeKanbanBoardPrefs("/repo/a", {
-      columnWidths: [300, 300, 300, 300],
+      columnWidths: [300, 300, 300, 300, 300],
       sortMode: "name-asc",
       filterQuery: "a-only",
+      manualDoneSessionIds: [],
     });
     writeKanbanBoardPrefs("/repo/b", {
       columnWidths: defaultKanbanColumnWidths(),
       sortMode: "created-desc",
       filterQuery: "b-only",
+      manualDoneSessionIds: [],
     });
     expect(readKanbanBoardPrefs("/repo/a").filterQuery).toBe("a-only");
     expect(readKanbanBoardPrefs("/repo/b").filterQuery).toBe("b-only");
@@ -234,16 +238,30 @@ describe("board prefs persistence", () => {
     window.localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        "/repo/a": { columnWidths: { idle: 10, running: 400 } },
+        "/repo/a": { columnWidths: { idle: 10, working: 400 } },
       }),
     );
     const prefs = readKanbanBoardPrefs("/repo/a");
-    // Legacy idle/running keys migrate to ready/working; the rest fall back.
+    // idle clamped up, working kept, the rest fall back to the default width.
     expect(prefs.columnWidths[0]).toBe(KANBAN_COLUMN_MIN_WIDTH);
-    expect(prefs.columnWidths[2]).toBe(400);
-    expect(prefs.columnWidths[1]).toBe(KANBAN_COLUMN_DEFAULT_WIDTH);
+    expect(prefs.columnWidths[1]).toBe(400);
+    expect(prefs.columnWidths[2]).toBe(KANBAN_COLUMN_DEFAULT_WIDTH);
     expect(prefs.sortMode).toBe(DEFAULT_KANBAN_SORT_MODE);
     expect(prefs.filterQuery).toBe("");
+    expect(prefs.manualDoneSessionIds).toEqual([]);
+  });
+
+  it("drops non-string manual done ids on read", () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        "/repo/a": { manualDoneSessionIds: ["ok", 3, null, "ok2"] },
+      }),
+    );
+    expect(readKanbanBoardPrefs("/repo/a").manualDoneSessionIds).toEqual([
+      "ok",
+      "ok2",
+    ]);
   });
 
   it("falls back to defaults for corrupt stored JSON", () => {

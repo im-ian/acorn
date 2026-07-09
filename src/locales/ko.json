@@ -945,7 +945,9 @@
         "newSession": "새 세션",
         "newWorktreeSession": "새 워크트리",
         "newChatSession": "새 채팅",
-        "newControlSession": "컨트롤"
+        "newControlSession": "컨트롤",
+        "markAsDone": "완료로 표시",
+        "restoreFromDone": "완료 해제"
       },
       "sort": {
         "label": "세션 정렬",
@@ -994,6 +996,24 @@
         "openTerminal": "터미널 열기",
         "sendUnavailable": "이 세션에는 터미널을 열어 입력하세요.",
         "sendError": "메시지를 보내지 못했습니다."
+      },
+      "stage": {
+        "idle": "대기",
+        "working": "작업 중",
+        "waiting": "입력 필요",
+        "review": "리뷰",
+        "done": "완료"
+      },
+      "card": {
+        "stalled": "정체",
+        "dwellTitle": "이 컬럼에 {duration} 머무름",
+        "openPullRequest": "풀 리퀘스트 #{number} 열기"
+      },
+      "quickReply": {
+        "label": "빠른 답장",
+        "placeholder": "답장 입력 후 Enter…",
+        "send": "답장 보내기",
+        "error": "전송 실패 — 다시 시도"
       }
     }
   },

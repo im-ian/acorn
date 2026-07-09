@@ -224,8 +224,12 @@ class RightPanelCacheManager {
     const key = this.prListKey(repoPath, filter, limit);
     const cached = this.prListCache.get(key);
     if (cached && !options.force) return Promise.resolve(cached);
+    if (options.force) {
+      this.prListCache.delete(key);
+      this.bumpRepoVersion(repoPath);
+    }
     const existing = this.prListInFlight.get(key);
-    if (existing) return existing;
+    if (existing && !options.force) return existing;
     const version = this.repoVersion(repoPath);
     const promise = api
       .listPullRequests(repoPath, filter, limit)
