@@ -2295,6 +2295,35 @@ describe("pollSessionStatuses", () => {
     );
   });
 
+  it("merges live agent transcript paths from status polling", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          agent_provider: "codex",
+          agent_transcript_id: "codex-old",
+          agent_transcript_path: "/Users/me/.codex/sessions/old.jsonl",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "working",
+        agent_provider: "codex",
+        agent_transcript_id: "codex-new",
+        agent_transcript_path: "/Users/me/.codex/sessions/new.jsonl",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.agent_transcript_path).toBe(
+      "/Users/me/.codex/sessions/new.jsonl",
+    );
+  });
+
   it("merges active process summaries from status polling", async () => {
     await seed(
       [project(REPO_A, 0)],
