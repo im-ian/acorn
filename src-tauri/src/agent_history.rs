@@ -1,8 +1,9 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use acorn_agent::AgentKind;
 use acorn_transcript::{
@@ -30,8 +31,9 @@ const PREVIEW_CHARS: usize = 160;
 const TITLE_CONTEXT_ENTRY_CHARS: usize = 700;
 const RECENT_SUMMARY_MESSAGES: usize = 6;
 const SUMMARY_MESSAGE_PREVIEW_CHARS: usize = 600;
+const TRANSCRIPT_SUMMARY_CACHE_MAX_ENTRIES: usize = 128;
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentHistoryProvider {
     Claude,
@@ -110,6 +112,27 @@ pub struct AgentTranscriptSummary {
 pub struct AgentTranscriptMessagePreview {
     pub role: String,
     pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TranscriptSummaryCacheKey {
+    provider: AgentHistoryProvider,
+    id: String,
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct TranscriptSummaryCacheEntry {
+    len: u64,
+    modified: Option<SystemTime>,
+    summary: AgentTranscriptSummary,
+}
+
+type TranscriptSummaryCache = HashMap<TranscriptSummaryCacheKey, TranscriptSummaryCacheEntry>;
+
+fn transcript_summary_cache() -> &'static Mutex<TranscriptSummaryCache> {
+    static CACHE: OnceLock<Mutex<TranscriptSummaryCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub fn list_agent_history(
@@ -674,6 +697,18 @@ fn summarize_agent_transcript(
     id: String,
     path: &Path,
 ) -> Option<AgentTranscriptSummary> {
+    let metadata = fs::metadata(path).ok()?;
+    let len = metadata.len();
+    let modified = metadata.modified().ok();
+    let cache_key = TranscriptSummaryCacheKey {
+        provider: provider.clone(),
+        id: id.clone(),
+        path: path.to_path_buf(),
+    };
+    if let Some(summary) = cached_transcript_summary(&cache_key, len, modified) {
+        return Some(summary);
+    }
+
     let file = fs::File::open(path).ok()?;
     let mut message_count = 0_u64;
     let mut user_messages = 0_u64;
@@ -734,11 +769,11 @@ fn summarize_agent_transcript(
     };
     let complete_turns = user_messages.min(assistant_messages);
     let running_turns = user_messages.saturating_sub(assistant_messages);
-    Some(AgentTranscriptSummary {
+    let summary = AgentTranscriptSummary {
         provider,
         id,
         transcript_path: path.display().to_string(),
-        updated_at: file_updated_at(path),
+        updated_at: updated_at_from_modified(modified),
         message_count,
         user_messages,
         assistant_messages,
@@ -747,7 +782,78 @@ fn summarize_agent_transcript(
         running_turns,
         recent_messages: recent_messages.into_iter().collect(),
         token_usage,
-    })
+    };
+    store_transcript_summary_cache(cache_key, len, modified, summary.clone());
+    Some(summary)
+}
+
+fn cached_transcript_summary(
+    key: &TranscriptSummaryCacheKey,
+    len: u64,
+    modified: Option<SystemTime>,
+) -> Option<AgentTranscriptSummary> {
+    let cache = transcript_summary_cache().lock().ok()?;
+    let entry = cache.get(key)?;
+    if entry.len == len && entry.modified == modified {
+        Some(entry.summary.clone())
+    } else {
+        None
+    }
+}
+
+fn store_transcript_summary_cache(
+    key: TranscriptSummaryCacheKey,
+    len: u64,
+    modified: Option<SystemTime>,
+    summary: AgentTranscriptSummary,
+) {
+    let Ok(mut cache) = transcript_summary_cache().lock() else {
+        return;
+    };
+    if cache.len() >= TRANSCRIPT_SUMMARY_CACHE_MAX_ENTRIES && !cache.contains_key(&key) {
+        if let Some(evict) = cache.keys().next().cloned() {
+            cache.remove(&evict);
+        }
+    }
+    cache.insert(
+        key,
+        TranscriptSummaryCacheEntry {
+            len,
+            modified,
+            summary,
+        },
+    );
+}
+
+fn updated_at_from_modified(modified: Option<SystemTime>) -> u64 {
+    modified
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn clear_transcript_summary_cache_for_test() {
+    if let Ok(mut cache) = transcript_summary_cache().lock() {
+        cache.clear();
+    }
+}
+
+#[cfg(test)]
+fn cached_transcript_message_count_for_test(
+    provider: AgentHistoryProvider,
+    id: &str,
+    path: &Path,
+) -> Option<u64> {
+    let key = TranscriptSummaryCacheKey {
+        provider,
+        id: id.to_string(),
+        path: path.to_path_buf(),
+    };
+    transcript_summary_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&key).map(|entry| entry.summary.message_count))
 }
 
 fn transcript_usage_from_value(
@@ -2265,6 +2371,79 @@ mod tests {
         assert_eq!(summary.recent_messages[0].text, "Do it");
         assert_eq!(summary.recent_messages[1].role, "assistant");
         assert_eq!(summary.recent_messages[1].text, "Done");
+    }
+
+    #[test]
+    fn transcript_summary_cache_reuses_unchanged_file_and_invalidates_on_append() {
+        clear_transcript_summary_cache_for_test();
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("rollout-2026-05-21T10-13-44-019e4818-7c15-7e60-9b3b-898a1c7803d6.jsonl");
+        let id = "019e4818-7c15-7e60-9b3b-898a1c7803d6";
+        fs::write(
+            &transcript,
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "payload": {
+                        "id": id,
+                        "role": "user",
+                        "content": "Check transcript cache",
+                    },
+                })
+            ),
+        )
+        .unwrap();
+
+        let first =
+            summarize_agent_transcript(AgentHistoryProvider::Codex, id.to_string(), &transcript)
+                .unwrap();
+        let second =
+            summarize_agent_transcript(AgentHistoryProvider::Codex, id.to_string(), &transcript)
+                .unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(first.message_count, 1);
+        assert_eq!(
+            cached_transcript_message_count_for_test(AgentHistoryProvider::Codex, id, &transcript),
+            Some(1)
+        );
+
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "payload": {
+                    "role": "assistant",
+                    "content": "Cache invalidated.",
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let updated =
+            summarize_agent_transcript(AgentHistoryProvider::Codex, id.to_string(), &transcript)
+                .unwrap();
+
+        assert_eq!(updated.message_count, 2);
+        assert_eq!(updated.assistant_messages, 1);
+        assert_eq!(
+            updated
+                .recent_messages
+                .last()
+                .map(|message| message.text.as_str()),
+            Some("Cache invalidated.")
+        );
+        assert_eq!(
+            cached_transcript_message_count_for_test(AgentHistoryProvider::Codex, id, &transcript),
+            Some(2)
+        );
     }
 
     #[test]
