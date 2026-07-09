@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -423,9 +424,34 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
     [selectSession, openTerminalPopup],
   );
 
+  const focusKanbanSessionCard = useCallback(
+    (sessionId: string) => {
+      const card = document.querySelector<HTMLElement>(
+        `[data-kanban-session-id="${cssAttributeEscape(sessionId)}"]`,
+      );
+      card?.focus();
+      card?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    },
+    [],
+  );
+
+  const focusAdjacentSessionCard = useCallback(
+    (sessionId: string, direction: KanbanCardFocusDirection) => {
+      const nextSessionId = nextKanbanSessionId(
+        sessionsByStatus,
+        sessionId,
+        direction,
+      );
+      if (nextSessionId) focusKanbanSessionCard(nextSessionId);
+    },
+    [focusKanbanSessionCard, sessionsByStatus],
+  );
+
   function closeTerminalPopover() {
+    const anchor = terminalPopover?.anchor;
     closeTerminalPopup();
     setTerminalPopover(null);
+    if (anchor) requestAnimationFrame(() => anchor.focus());
   }
 
   function resizeColumn(index: number, nextWidth: number) {
@@ -575,6 +601,7 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                             key={session.id}
                             session={session}
                             onOpen={openSessionTerminal}
+                            onFocusAdjacent={focusAdjacentSessionCard}
                           />
                         ))
                       ) : (
@@ -827,12 +854,80 @@ function KanbanCreateSessionDropdown({ t }: { t: Translator }) {
   );
 }
 
+type KanbanCardFocusDirection = "up" | "down" | "left" | "right";
+
+function nextKanbanSessionId(
+  sessionsByStatus: ReadonlyMap<SessionStatus, readonly Session[]>,
+  sessionId: string,
+  direction: KanbanCardFocusDirection,
+): string | null {
+  const columns = KANBAN_COLUMNS.map(
+    ({ status }) => sessionsByStatus.get(status) ?? [],
+  );
+  let currentColumnIndex = -1;
+  let currentSessionIndex = -1;
+
+  for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {
+    const sessionIndex = columns[columnIndex].findIndex(
+      (session) => session.id === sessionId,
+    );
+    if (sessionIndex === -1) continue;
+    currentColumnIndex = columnIndex;
+    currentSessionIndex = sessionIndex;
+    break;
+  }
+
+  if (currentColumnIndex === -1 || currentSessionIndex === -1) return null;
+
+  if (direction === "up" || direction === "down") {
+    const column = columns[currentColumnIndex];
+    const nextIndex = currentSessionIndex + (direction === "down" ? 1 : -1);
+    return column[nextIndex]?.id ?? null;
+  }
+
+  const step = direction === "right" ? 1 : -1;
+  for (
+    let columnIndex = currentColumnIndex + step;
+    columnIndex >= 0 && columnIndex < columns.length;
+    columnIndex += step
+  ) {
+    const column = columns[columnIndex];
+    if (column.length === 0) continue;
+    const nextIndex = Math.min(currentSessionIndex, column.length - 1);
+    return column[nextIndex]?.id ?? null;
+  }
+
+  return null;
+}
+
+function kanbanCardFocusDirection(
+  key: string,
+): KanbanCardFocusDirection | null {
+  switch (key) {
+    case "ArrowUp":
+      return "up";
+    case "ArrowDown":
+      return "down";
+    case "ArrowLeft":
+      return "left";
+    case "ArrowRight":
+      return "right";
+    default:
+      return null;
+  }
+}
+
 const KanbanSessionCard = memo(function KanbanSessionCard({
   session,
   onOpen,
+  onFocusAdjacent,
 }: {
   session: Session;
   onOpen: (sessionId: string, anchor: HTMLElement) => void;
+  onFocusAdjacent: (
+    sessionId: string,
+    direction: KanbanCardFocusDirection,
+  ) => void;
 }) {
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
@@ -893,6 +988,24 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
 
   function handleOpen(event: ReactMouseEvent<HTMLElement>) {
     onOpen(session.id, event.currentTarget);
+  }
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (editing) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onOpen(session.id, event.currentTarget);
+      return;
+    }
+    if (event.key === "F2") {
+      event.preventDefault();
+      if (canRename) setEditing(true);
+      return;
+    }
+    const direction = kanbanCardFocusDirection(event.key);
+    if (!direction) return;
+    event.preventDefault();
+    onFocusAdjacent(session.id, direction);
   }
 
   async function submitRename(next: string) {
@@ -1071,16 +1184,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
           onClick={editing ? undefined : handleOpen}
           onPointerDown={handlePointerDown}
           onContextMenu={handleContextMenu}
-          onKeyDown={(event) => {
-            if (editing) return;
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              onOpen(session.id, event.currentTarget);
-            } else if (event.key === "F2") {
-              event.preventDefault();
-              if (canRename) setEditing(true);
-            }
-          }}
+          onKeyDown={handleKeyDown}
           className="group flex w-full flex-col gap-2 rounded-md border border-border bg-bg-elevated/45 p-2 text-left transition hover:border-accent/45 hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           aria-label={openLabel}
         >
@@ -1497,6 +1601,13 @@ function KanbanTerminalPopover({
     window.addEventListener("pointercancel", stopResize);
   }
 
+  function handlePopoverKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    onClose();
+  }
+
   const popoverStyle: CSSProperties = isExpanded
     ? {
         position: "fixed",
@@ -1521,6 +1632,7 @@ function KanbanTerminalPopover({
       role="dialog"
       aria-label={t("workspace.kanban.terminalPopover.ariaLabel")}
       data-testid="kanban-terminal-popover"
+      onKeyDown={handlePopoverKeyDown}
       className="relative z-50 flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-bg-elevated shadow-2xl shadow-black/35"
       style={popoverStyle}
     >
