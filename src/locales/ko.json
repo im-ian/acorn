@@ -1008,12 +1008,6 @@
         "stalled": "정체",
         "dwellTitle": "이 컬럼에 {duration} 머무름",
         "openPullRequest": "풀 리퀘스트 #{number} 열기"
-      },
-      "quickReply": {
-        "label": "빠른 답장",
-        "placeholder": "답장 입력 후 Enter…",
-        "send": "답장 보내기",
-        "error": "전송 실패 — 다시 시도"
       }
     }
   },
