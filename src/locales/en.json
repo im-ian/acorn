@@ -942,8 +942,14 @@
         "nameAsc": "Name"
       },
       "openSession": "Open {name}",
+      "preview": {
+        "user": "User",
+        "agent": "Agent"
+      },
       "tooltip": {
         "title": "Title",
+        "lastUserMessage": "Last user message",
+        "lastAgentMessage": "Last agent message",
         "lastMessage": "Last message",
         "noLastMessage": "No last message",
         "branch": "Branch",

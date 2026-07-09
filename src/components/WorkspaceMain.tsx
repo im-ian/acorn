@@ -122,6 +122,25 @@ const KANBAN_COLUMNS: ReadonlyArray<{
   tone: STATUS_TONE[status],
 }));
 
+interface KanbanConversationPreview {
+  userMessage?: string;
+  agentMessage?: string;
+  fallbackMessage?: string;
+}
+
+function trimPreviewMessage(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function kanbanConversationPreview(session: Session): KanbanConversationPreview {
+  return {
+    userMessage: trimPreviewMessage(session.last_user_message),
+    agentMessage: trimPreviewMessage(session.last_agent_message),
+    fallbackMessage: trimPreviewMessage(session.last_message),
+  };
+}
+
 const STATUS_ICON_CLASS: Record<SessionStatus, string> = {
   ready: "text-fg-muted",
   working: "text-accent",
@@ -936,8 +955,12 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   const worktreeName = basename(session.worktree_path);
   const transcriptPath = session.agent_transcript_path?.trim() || null;
   const branchName = session.branch?.trim();
+  const conversationPreview = kanbanConversationPreview(session);
   const lastMessage =
-    session.last_agent_message?.trim() || session.last_message?.trim();
+    conversationPreview.agentMessage ?? conversationPreview.fallbackMessage;
+  const hasStructuredPreview = Boolean(
+    conversationPreview.userMessage || conversationPreview.agentMessage,
+  );
   const selectSession = useAppStore((s) => s.selectSession);
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
@@ -1176,7 +1199,9 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
           <KanbanSessionCardTooltip
             t={t}
             title={session.name}
-            lastMessage={lastMessage}
+            userMessage={conversationPreview.userMessage}
+            agentMessage={conversationPreview.agentMessage}
+            fallbackMessage={conversationPreview.fallbackMessage}
             branch={branchName}
             worktreeName={worktreeName}
             worktreePath={session.worktree_path}
@@ -1217,7 +1242,39 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
               )}
             </span>
           </span>
-          {lastMessage ? (
+          {hasStructuredPreview ? (
+            <span
+              className="flex min-w-0 flex-col gap-1 text-[11px] leading-4 text-fg-muted"
+              data-testid="workspace-kanban-card-last-message"
+            >
+              {conversationPreview.userMessage ? (
+                <span
+                  className="flex min-w-0 items-baseline gap-1.5"
+                  data-testid="workspace-kanban-card-user-message"
+                >
+                  <span className="shrink-0 text-[9px] font-medium uppercase text-fg-muted/70">
+                    {t("workspace.kanban.preview.user")}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {conversationPreview.userMessage}
+                  </span>
+                </span>
+              ) : null}
+              {conversationPreview.agentMessage ? (
+                <span
+                  className="flex min-w-0 items-baseline gap-1.5"
+                  data-testid="workspace-kanban-card-agent-message"
+                >
+                  <span className="shrink-0 text-[9px] font-medium uppercase text-fg-muted/70">
+                    {t("workspace.kanban.preview.agent")}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {conversationPreview.agentMessage}
+                  </span>
+                </span>
+              ) : null}
+            </span>
+          ) : lastMessage ? (
             <span
               className="line-clamp-2 text-[11px] leading-4 text-fg-muted"
               data-testid="workspace-kanban-card-last-message"
@@ -2242,7 +2299,9 @@ function writeKanbanTerminalPopoverSize(
 function KanbanSessionCardTooltip({
   t,
   title,
-  lastMessage,
+  userMessage,
+  agentMessage,
+  fallbackMessage,
   branch,
   worktreeName,
   worktreePath,
@@ -2251,7 +2310,9 @@ function KanbanSessionCardTooltip({
 }: {
   t: Translator;
   title: string;
-  lastMessage?: string;
+  userMessage?: string;
+  agentMessage?: string;
+  fallbackMessage?: string;
   branch?: string;
   worktreeName: string;
   worktreePath: string;
@@ -2259,6 +2320,7 @@ function KanbanSessionCardTooltip({
   processSummary?: string | null;
 }) {
   const detached = t("workspace.kanban.tooltip.detached");
+  const hasStructuredPreview = Boolean(userMessage || agentMessage);
   return (
     <span className="flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-1.5">
       <KanbanSessionTooltipRow
@@ -2266,12 +2328,33 @@ function KanbanSessionCardTooltip({
         label={t("workspace.kanban.tooltip.title")}
         value={title}
       />
-      <KanbanSessionTooltipRow
-        icon={<MessageSquareText size={12} />}
-        label={t("workspace.kanban.tooltip.lastMessage")}
-        value={lastMessage || t("workspace.kanban.tooltip.noLastMessage")}
-        valueClassName={lastMessage ? undefined : "text-fg-muted"}
-      />
+      {hasStructuredPreview ? (
+        <>
+          {userMessage ? (
+            <KanbanSessionTooltipRow
+              icon={<MessageSquareText size={12} />}
+              label={t("workspace.kanban.tooltip.lastUserMessage")}
+              value={userMessage}
+            />
+          ) : null}
+          {agentMessage ? (
+            <KanbanSessionTooltipRow
+              icon={<Bot size={12} />}
+              label={t("workspace.kanban.tooltip.lastAgentMessage")}
+              value={agentMessage}
+            />
+          ) : null}
+        </>
+      ) : (
+        <KanbanSessionTooltipRow
+          icon={<MessageSquareText size={12} />}
+          label={t("workspace.kanban.tooltip.lastMessage")}
+          value={
+            fallbackMessage || t("workspace.kanban.tooltip.noLastMessage")
+          }
+          valueClassName={fallbackMessage ? undefined : "text-fg-muted"}
+        />
+      )}
       <KanbanSessionTooltipRow
         icon={<GitBranch size={12} />}
         label={t("workspace.kanban.tooltip.branch")}
