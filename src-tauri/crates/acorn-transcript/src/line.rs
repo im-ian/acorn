@@ -36,8 +36,7 @@ pub struct ParsedTranscriptLine {
     pub text: Option<String>,
     /// Text used by history list head/tail sampling.
     pub state_text: Option<String>,
-    /// Role used by history list head/tail sampling. This intentionally
-    /// preserves Codex's older payload-only role filtering.
+    /// Role used by history list head/tail sampling.
     pub state_role: TranscriptRole,
     /// Role used by resume/status-preview tail scanning.
     pub preview_role: TranscriptRole,
@@ -158,17 +157,22 @@ pub fn assistant_message_text(value: &Value) -> Option<String> {
 }
 
 fn parse_codex_value(value: &Value) -> ParsedTranscriptLine {
-    let payload = value.get("payload");
-    let payload_role = role_from_str(payload.and_then(|p| p.get("role")).and_then(Value::as_str));
-    let role = role_from_str(
-        payload
-            .and_then(|p| p.get("role"))
+    let event = codex_event_value(value);
+    let event_role = role_from_str(
+        event
+            .get("role")
             .and_then(Value::as_str)
             .or_else(|| value.get("role").and_then(Value::as_str)),
     );
-    let texts = value_texts(value);
-    let response_text = codex_response_text(value);
-    let state_text = match payload_role {
+    let role = role_from_str(
+        event
+            .get("role")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("role").and_then(Value::as_str)),
+    );
+    let texts = codex_event_texts(value, event);
+    let response_text = codex_response_text(value, event);
+    let state_text = match event_role {
         TranscriptRole::User => joined_text(&texts),
         TranscriptRole::Assistant => first_text(&texts),
         TranscriptRole::Other => None,
@@ -178,21 +182,21 @@ fn parse_codex_value(value: &Value) -> ParsedTranscriptLine {
         TranscriptRole::Assistant => first_text(&texts).or_else(|| response_text.clone()),
         TranscriptRole::Other => None,
     };
-    let (preview_role, preview_text) = codex_preview_role_and_text(value, payload_role);
+    let (preview_role, preview_text) = codex_preview_role_and_text(value, event, event_role);
 
     ParsedTranscriptLine {
         role,
         text,
         state_text,
-        state_role: payload_role,
+        state_role: event_role,
         preview_role,
         preview_text,
         response_text,
         turn_state: codex_turn_state(value),
-        session_id: string_at(payload, "id")
-            .or_else(|| string_at(payload, "session_id"))
+        session_id: string_at(Some(event), "id")
+            .or_else(|| string_at(Some(event), "session_id"))
             .or_else(|| string_at(Some(value), "session_id")),
-        cwd: string_at(payload, "cwd")
+        cwd: string_at(Some(event), "cwd")
             .or_else(|| string_at(Some(value), "cwd"))
             .or_else(|| extract_cwd_from_text(&texts)),
     }
@@ -290,19 +294,14 @@ fn claude_turn_state(value: &Value) -> Option<TurnState> {
 }
 
 fn codex_turn_state(value: &Value) -> Option<TurnState> {
-    let payload_type = value
-        .pointer("/payload/type")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let event = codex_event_value(value);
+    let payload_type = event.get("type").and_then(Value::as_str).unwrap_or("");
     match payload_type {
-        "task_complete" => Some(TurnState::WaitingForInput),
+        "task_complete" | "turn_complete" => Some(TurnState::WaitingForInput),
         "user_message" => Some(TurnState::Working),
         "function_call" | "function_call_output" | "reasoning" => Some(TurnState::Working),
         "agent_message" => {
-            let phase = value
-                .pointer("/payload/phase")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let phase = event.get("phase").and_then(Value::as_str).unwrap_or("");
             Some(if phase == "final_answer" {
                 TurnState::WaitingForInput
             } else {
@@ -310,7 +309,7 @@ fn codex_turn_state(value: &Value) -> Option<TurnState> {
             })
         }
         "message" => {
-            if value.pointer("/payload/role").and_then(Value::as_str) == Some("assistant") {
+            if event.get("role").and_then(Value::as_str) == Some("assistant") {
                 Some(TurnState::Working)
             } else {
                 None
@@ -318,6 +317,14 @@ fn codex_turn_state(value: &Value) -> Option<TurnState> {
         }
         _ => None,
     }
+}
+
+fn codex_event_value(value: &Value) -> &Value {
+    value
+        .get("payload")
+        .filter(|v| v.is_object())
+        .or_else(|| value.get("msg").filter(|v| v.is_object()))
+        .unwrap_or(value)
 }
 
 fn antigravity_turn_state(value: &Value) -> Option<TurnState> {
@@ -337,22 +344,20 @@ fn antigravity_turn_state(value: &Value) -> Option<TurnState> {
 
 fn codex_preview_role_and_text(
     value: &Value,
-    payload_role: TranscriptRole,
+    event: &Value,
+    event_role: TranscriptRole,
 ) -> (TranscriptRole, Option<String>) {
-    match payload_role {
-        TranscriptRole::User => (
-            TranscriptRole::User,
-            codex_payload_message_preview_text(value),
-        ),
+    match event_role {
+        TranscriptRole::User => (TranscriptRole::User, codex_message_preview_text(event)),
         TranscriptRole::Assistant => (
             TranscriptRole::Assistant,
-            codex_payload_message_preview_text(value)
-                .or_else(|| codex_response_output_preview_text(value))
-                .or_else(|| codex_payload_message_fallback_text(value)),
+            codex_message_preview_text(event)
+                .or_else(|| codex_response_output_preview_text(value, event))
+                .or_else(|| codex_message_fallback_text(event)),
         ),
         TranscriptRole::Other => {
-            let text = codex_response_output_preview_text(value)
-                .or_else(|| codex_payload_message_fallback_text(value));
+            let text = codex_response_output_preview_text(value, event)
+                .or_else(|| codex_message_fallback_text(event));
             if text.is_some() {
                 (TranscriptRole::Assistant, text)
             } else {
@@ -386,8 +391,20 @@ fn preview_from_content_value(content: &Value) -> Option<String> {
     None
 }
 
-fn codex_payload_message_preview_text(value: &Value) -> Option<String> {
-    if let Some(content) = value.pointer("/payload/content") {
+fn codex_event_texts(value: &Value, event: &Value) -> Vec<String> {
+    if std::ptr::eq(value, event) {
+        return value_texts(value);
+    }
+
+    let mut out = value_texts(event);
+    if let Some(response_payload) = value.get("response_payload") {
+        out.extend(value_texts(response_payload));
+    }
+    out
+}
+
+fn codex_message_preview_text(value: &Value) -> Option<String> {
+    if let Some(content) = value.get("content") {
         if let Some(text) = content.as_str() {
             return collapsible_text(text);
         }
@@ -403,22 +420,22 @@ fn codex_payload_message_preview_text(value: &Value) -> Option<String> {
             }
         }
     }
-    codex_payload_message_fallback_text(value)
+    codex_message_fallback_text(value)
 }
 
-fn codex_payload_message_fallback_text(value: &Value) -> Option<String> {
+fn codex_message_fallback_text(value: &Value) -> Option<String> {
     value
-        .pointer("/payload/message")
+        .get("message")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(ToString::to_string)
 }
 
-fn codex_response_output_preview_text(value: &Value) -> Option<String> {
+fn codex_response_output_preview_text(value: &Value, event: &Value) -> Option<String> {
     let arrays = [
-        value.pointer("/payload/response/output"),
+        event.pointer("/response/output"),
         value.pointer("/response_payload/output"),
-        value.pointer("/payload/output"),
+        event.pointer("/output"),
     ];
     for arr in arrays.into_iter().flatten() {
         let Some(items) = arr.as_array() else {
@@ -440,13 +457,13 @@ fn codex_response_output_preview_text(value: &Value) -> Option<String> {
     None
 }
 
-fn codex_response_text(value: &Value) -> Option<String> {
-    for pointer in [
-        "/payload/response/output",
-        "/response_payload/output",
-        "/payload/output",
+fn codex_response_text(value: &Value, event: &Value) -> Option<String> {
+    for output in [
+        event.pointer("/response/output"),
+        value.pointer("/response_payload/output"),
+        event.pointer("/output"),
     ] {
-        if let Some(v) = value.pointer(pointer) {
+        if let Some(v) = output {
             let texts = value_texts(v);
             if let Some(text) = first_text(&texts) {
                 return Some(text);
@@ -713,6 +730,73 @@ mod tests {
     #[test]
     fn codex_task_complete_maps_to_waiting_for_input() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
+        assert_eq!(
+            classify(AgentKind::Codex, tail, true),
+            Some(TurnState::WaitingForInput),
+        );
+    }
+
+    #[test]
+    fn codex_turn_complete_maps_to_waiting_for_input() {
+        let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"turn_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
+        assert_eq!(
+            classify(AgentKind::Codex, tail, true),
+            Some(TurnState::WaitingForInput),
+        );
+    }
+
+    #[test]
+    fn codex_msg_wrapped_turn_complete_maps_to_waiting_for_input() {
+        let tail = r#"{"msg":{"type":"turn_complete","last_agent_message":"done"}}"#;
+        assert_eq!(
+            classify(AgentKind::Codex, tail, true),
+            Some(TurnState::WaitingForInput),
+        );
+    }
+
+    #[test]
+    fn codex_msg_wrapped_user_message_extracts_message_metadata() {
+        let value: Value = serde_json::from_str(
+            r#"{"session_id":"outer-session","msg":{"type":"user_message","role":"user","content":"hello codex","cwd":"/tmp/project","id":"inner-session"}}"#,
+        )
+        .unwrap();
+        let parsed = parse_transcript_value(AgentKind::Codex, &value);
+
+        assert_eq!(parsed.turn_state, Some(TurnState::Working));
+        assert_eq!(parsed.role, TranscriptRole::User);
+        assert_eq!(parsed.text.as_deref(), Some("hello codex"));
+        assert_eq!(parsed.state_role, TranscriptRole::User);
+        assert_eq!(parsed.state_text.as_deref(), Some("hello codex"));
+        assert_eq!(parsed.preview_role, TranscriptRole::User);
+        assert_eq!(parsed.preview_text.as_deref(), Some("hello codex"));
+        assert_eq!(parsed.session_id.as_deref(), Some("inner-session"));
+        assert_eq!(parsed.cwd.as_deref(), Some("/tmp/project"));
+    }
+
+    #[test]
+    fn codex_msg_wrapped_commentary_agent_message_maps_to_working() {
+        let value: Value = serde_json::from_str(
+            r#"{"msg":{"type":"agent_message","role":"assistant","message":"still working","phase":"commentary"}}"#,
+        )
+        .unwrap();
+        let parsed = parse_transcript_value(AgentKind::Codex, &value);
+
+        assert_eq!(parsed.turn_state, Some(TurnState::Working));
+        assert_eq!(parsed.role, TranscriptRole::Assistant);
+        assert_eq!(parsed.text.as_deref(), Some("still working"));
+        assert_eq!(parsed.preview_role, TranscriptRole::Assistant);
+        assert_eq!(parsed.preview_text.as_deref(), Some("still working"));
+    }
+
+    #[test]
+    fn codex_bare_event_envelope_without_inner_type_is_ignored() {
+        let tail = r#"{"type":"event_msg","timestamp":"t"}"#;
+        assert_eq!(classify(AgentKind::Codex, tail, true), None);
+    }
+
+    #[test]
+    fn codex_top_level_turn_complete_maps_to_waiting_for_input() {
+        let tail = r#"{"type":"turn_complete","last_agent_message":"done"}"#;
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
             Some(TurnState::WaitingForInput),
