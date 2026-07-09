@@ -471,6 +471,116 @@ describe("WorkSummaryView", () => {
     expect(container.textContent).toContain("320 tokens");
   });
 
+  it("clears recent transcript messages while switching sessions", async () => {
+    const pendingNextTranscript = deferred<
+      Awaited<ReturnType<typeof mocks.agentTranscriptSummary>>
+    >();
+    mocks.agentTranscriptSummary
+      .mockResolvedValueOnce({
+        provider: "codex",
+        id: "transcript-1",
+        transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
+        updated_at: 1_766_000_000,
+        message_count: 2,
+        user_messages: 1,
+        assistant_messages: 1,
+        turn_count: 1,
+        complete_turns: 1,
+        running_turns: 0,
+        recent_messages: [{ role: "assistant", text: "Old session answer" }],
+        token_usage: {
+          input_tokens: 100,
+          output_tokens: 40,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
+          reasoning_tokens: 0,
+          total_tokens: 140,
+          messages_with_usage: 1,
+        },
+      })
+      .mockReturnValueOnce(pendingNextTranscript.promise);
+    const firstTab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: `${REPO}/.worktrees/s1`,
+      sessionId: "s1",
+      title: "Feature runner Summary",
+    });
+    const secondTab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: `${REPO}/.worktrees/s2`,
+      sessionId: "s2",
+      title: "Second runner Summary",
+    });
+
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={firstTab}
+          session={session({
+            mode: "terminal",
+            agent_transcript_id: "transcript-1",
+          })}
+          isActive
+        />,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("Old session answer");
+
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={secondTab}
+          session={session({
+            id: "s2",
+            name: "Second runner",
+            worktree_path: `${REPO}/.worktrees/s2`,
+            branch: "feat/second",
+            mode: "terminal",
+            agent_transcript_id: "transcript-2",
+          })}
+          isActive
+        />,
+      );
+    });
+
+    expect(mocks.agentTranscriptSummary).toHaveBeenLastCalledWith(
+      REPO,
+      "transcript-2",
+    );
+    expect(container.textContent).not.toContain("Old session answer");
+
+    await act(async () => {
+      pendingNextTranscript.resolve({
+        provider: "codex",
+        id: "transcript-2",
+        transcript_path: "/Users/me/.codex/sessions/transcript-2.jsonl",
+        updated_at: 1_766_000_001,
+        message_count: 2,
+        user_messages: 1,
+        assistant_messages: 1,
+        turn_count: 1,
+        complete_turns: 1,
+        running_turns: 0,
+        recent_messages: [{ role: "assistant", text: "New session answer" }],
+        token_usage: {
+          input_tokens: 120,
+          output_tokens: 60,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
+          reasoning_tokens: 0,
+          total_tokens: 180,
+          messages_with_usage: 1,
+        },
+      });
+      await pendingNextTranscript.promise;
+    });
+
+    expect(container.textContent).toContain("New session answer");
+  });
+
   it("loads a terminal agent transcript by paired path on first render", async () => {
     mocks.agentTranscriptSummaryAtPath.mockResolvedValue({
       provider: "codex",

@@ -128,6 +128,14 @@ export function WorkSummaryView({
   const [error, setError] = useState<string | null>(null);
   const transcriptLocationRef = useRef<AgentTranscriptLocation | null>(null);
   const loading = summaryLoading || conversationLoading;
+  const conversationIdentity = [
+    tab.repoPath,
+    session?.id ?? "",
+    session?.mode ?? "",
+    session?.agent_transcript_provider ?? "",
+    session?.agent_transcript_id ?? "",
+    session?.agent_transcript_path ?? "",
+  ].join("\u0000");
 
   const fetchSummary = useCallback(async (): Promise<WorkSummarySnapshot> => {
     const status = await api.fsGitStatus(tab.cwdPath, GIT_STATUS_FILE_LIMIT);
@@ -199,6 +207,13 @@ export function WorkSummaryView({
     },
     [],
   );
+
+  useEffect(() => {
+    transcriptLocationRef.current = null;
+    setChat(null);
+    setTokens(null);
+    setMessages([]);
+  }, [conversationIdentity]);
 
   const load = useCallback(async () => {
     setSummaryLoading(true);

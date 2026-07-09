@@ -2201,6 +2201,64 @@ mod tests {
     }
 
     #[test]
+    fn transcript_summary_keeps_only_most_recent_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("rollout-2026-05-21T10-13-44-019e4818-7c15-7e60-9b3b-898a1c7803d6.jsonl");
+        let mut file = fs::File::create(&transcript).unwrap();
+        for index in 0..8 {
+            let role = if index % 2 == 0 { "user" } else { "assistant" };
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "payload": {
+                        "role": role,
+                        "content": format!("message {index}"),
+                    },
+                })
+            )
+            .unwrap();
+        }
+        drop(file);
+
+        let item = AgentHistoryItem {
+            provider: AgentHistoryProvider::Codex,
+            id: "019e4818-7c15-7e60-9b3b-898a1c7803d6".to_string(),
+            title: "message 0".to_string(),
+            preview: Some("message 7".to_string()),
+            cwd: Some("/tmp/demo".to_string()),
+            worktree: None,
+            transcript_path: transcript.display().to_string(),
+            updated_at: 1_766_000_000,
+            resume_command: None,
+        };
+
+        let summary = summarize_agent_history_item(&item).unwrap();
+
+        assert_eq!(summary.message_count, 8);
+        assert_eq!(summary.recent_messages.len(), RECENT_SUMMARY_MESSAGES);
+        assert_eq!(
+            summary
+                .recent_messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "message 2",
+                "message 3",
+                "message 4",
+                "message 5",
+                "message 6",
+                "message 7",
+            ]
+        );
+        assert_eq!(summary.recent_messages[0].role, "user");
+        assert_eq!(summary.recent_messages[5].role, "assistant");
+    }
+
+    #[test]
     fn transcript_summary_at_path_reads_validated_codex_file() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
