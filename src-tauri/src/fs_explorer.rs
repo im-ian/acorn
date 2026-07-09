@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+use crate::worktree;
 
 const EVENT_FS_CHANGED: &str = "acorn:fs-changed";
 const WATCH_BATCH_WINDOW: Duration = Duration::from_millis(75);
@@ -253,6 +254,22 @@ impl FsScope {
         }
         project_roots.sort();
         project_roots.dedup();
+        for project_root in &project_roots {
+            match worktree::list_worktree_paths(project_root) {
+                Ok(worktrees) => {
+                    for worktree_path in worktrees {
+                        Self::push_root(&mut roots, worktree_path);
+                    }
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        path = %project_root.display(),
+                        error = %err,
+                        "skipping linked worktree filesystem scope roots"
+                    );
+                }
+            }
+        }
         for session in state.sessions.list() {
             if session.project_scoped == false {
                 continue;
@@ -1689,6 +1706,22 @@ mod tests {
         session
     }
 
+    fn init_repo_with_tracked_file(path: &Path) -> git2::Repository {
+        let repo = git2::Repository::init(path).unwrap();
+        fs::write(path.join("tracked.txt"), b"initial").unwrap();
+        let sig = git2::Signature::now("acorn-test", "test@acorn").unwrap();
+        let tree_id = {
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("tracked.txt")).unwrap();
+            index.write_tree().unwrap()
+        };
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        drop(tree);
+        repo
+    }
+
     #[test]
     fn scope_from_state_ignores_local_session_roots() {
         let state = AppState::new();
@@ -1733,6 +1766,25 @@ mod tests {
 
         assert!(roots.contains(&repo.path().canonicalize().unwrap()));
         assert!(roots.contains(&worktree.path().canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn scope_from_state_includes_registered_project_linked_worktrees() {
+        let state = AppState::new();
+        let repo_dir = tmpdir();
+        let linked_parent = tmpdir();
+        let linked_worktree = linked_parent.path().join("PR532");
+        let repo = init_repo_with_tracked_file(repo_dir.path());
+        repo.worktree("PR532", &linked_worktree, None).unwrap();
+        state
+            .projects
+            .ensure(repo_dir.path().to_path_buf(), "repo".to_string());
+
+        let scope = FsScope::from_state(&state);
+        let roots = scope.roots;
+
+        assert!(roots.contains(&repo_dir.path().canonicalize().unwrap()));
+        assert!(roots.contains(&linked_worktree.canonicalize().unwrap()));
     }
 
     fn create_event(paths: Vec<PathBuf>) -> Event {
