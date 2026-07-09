@@ -40,6 +40,10 @@ import {
   repaintTerminalViewport,
 } from "../lib/terminalRepaint";
 import {
+  createTerminalOutputWriter,
+  type TerminalOutputWriter,
+} from "../lib/terminalOutputWriter";
+import {
   findConversationPromptTarget,
   scanForContextPrompt,
   TERMINAL_CONVERSATION_NAV_EVENT,
@@ -577,6 +581,8 @@ export function Terminal({
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
+  const isActiveRef = useRef(isActive);
+  const outputWriterRef = useRef<TerminalOutputWriter | null>(null);
   const pasteAgentProviderRef =
     useRef<SessionAgentProvider | null>(pasteAgentProvider);
   const agentProviderRef = useRef<SessionAgentProvider | null>(agentProvider);
@@ -589,6 +595,12 @@ export function Terminal({
   const fontSmoothing = useSettings(
     (s) => s.settings.terminal.fontSmoothing,
   );
+
+  isActiveRef.current = isActive;
+
+  useEffect(() => {
+    if (isActive) outputWriterRef.current?.flushSoon();
+  }, [isActive]);
 
   useEffect(() => {
     pasteAgentProviderRef.current = pasteAgentProvider;
@@ -2416,6 +2428,39 @@ export function Terminal({
       }
     }
 
+    const outputWriter = createTerminalOutputWriter({
+      write: (bytes, onParsed) => {
+        term.write(bytes, onParsed);
+      },
+      afterWrite: () => {
+        if (disposed) return;
+        if (isActiveRef.current) {
+          // Hidden portal targets keep their xterm buffer current but do not
+          // need DOM repaint work until TerminalHost moves them on-screen.
+          scheduleViewportFrameRepaint();
+          scheduleViewportIdleRepaint();
+        }
+        // The sticky prompt is buffer-derived; keep it in sync with parsed
+        // output even when the terminal was hidden during the write.
+        scheduleContextDispatch();
+      },
+      isActive: () => isActiveRef.current,
+    });
+    outputWriterRef.current = outputWriter;
+    const OUTPUT_WRITER_IDLE_SAVE_TIMEOUT_MS = 200;
+    const waitForOutputWriterIdleBeforeSave = async () => {
+      let timer: number | null = null;
+      await Promise.race([
+        outputWriter.whenIdle(),
+        new Promise<void>((resolve) => {
+          timer = window.setTimeout(resolve, OUTPUT_WRITER_IDLE_SAVE_TIMEOUT_MS);
+        }),
+      ]);
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+
     // React StrictMode in dev runs effects twice (mount → cleanup → mount).
     // Without per-await `disposed` guards, the first IIFE keeps progressing
     // after its cleanup has run, and ends up issuing `pty_spawn` for a
@@ -2426,23 +2471,9 @@ export function Terminal({
     // PTY to also exit (zsh prints "Saving session..." twice). Guard every
     // await resumption point so a disposed mount short-circuits cleanly.
     const handlePtyOutput = (bytes: Uint8Array) => {
-      term.write(bytes, () => {
-        if (disposed) return;
-        // The parser has drained this chunk. Force a frame-bound
-        // refresh so fast cursor-move/erase TUIs do not leave stale
-        // DOM cursor blocks or cells behind.
-        scheduleViewportFrameRepaint();
-        // Also schedule a viewport repaint once the burst goes quiet,
-        // so a TUI redraw interrupted mid-stream doesn't leave stale
-        // glyphs from a wider previous line painted on screen.
-        scheduleViewportIdleRepaint();
-        // A new prompt row may have just been rendered. Rescan the
-        // buffer so the sticky banner picks it up in the same frame
-        // instead of waiting for the user's next scroll.
-        scheduleContextDispatch();
-      });
-      // Output will land in the buffer — schedule a debounced save so the
-      // new content reaches disk ~1s after activity ends.
+      outputWriter.enqueue(bytes);
+      // Output is queued for the buffer — schedule a debounced save so the new
+      // content reaches disk ~1s after activity ends.
       scheduleScrollbackSave();
       // Agents can create a worktree and chdir a descendant process without
       // triggering our shell's OSC 7 prompt hook. Probe the live descendant
@@ -2746,6 +2777,10 @@ export function Terminal({
       // StrictMode mount → cleanup → mount cycle.
       if ((!options?.force && disposed) || !savesAllowed) return;
       try {
+        if (!disposed) {
+          await waitForOutputWriterIdleBeforeSave();
+        }
+        if ((!options?.force && disposed) || !savesAllowed) return;
         const data = serializeAddon.serialize({
           scrollback: SCROLLBACK_MAX_ROWS,
         });
@@ -2784,6 +2819,10 @@ export function Terminal({
         // reattach is unavailable or delayed. `savesAllowed` still protects
         // StrictMode's pre-load cleanup from writing an empty buffer.
         void persistScrollbackAsync({ force: true });
+      }
+      outputWriter.dispose();
+      if (outputWriterRef.current === outputWriter) {
+        outputWriterRef.current = null;
       }
       if (viewportRepaintTimer !== null) {
         window.clearTimeout(viewportRepaintTimer);
