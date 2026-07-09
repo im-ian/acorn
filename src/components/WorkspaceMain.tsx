@@ -49,6 +49,7 @@ import {
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
+import { isInAcornFloatingLayer } from "../lib/floatingLayer";
 import type { LayoutNode } from "../lib/layout";
 import { basename } from "../lib/pathUtils";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
@@ -2089,12 +2090,7 @@ function KanbanTerminalPopover({
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      if (
-        target instanceof Element &&
-        target.closest("[data-acorn-context-menu]")
-      ) {
-        return;
-      }
+      if (isInAcornFloatingLayer(target)) return;
       if (popoverRef.current?.contains(target)) return;
       if (anchor.contains(target)) return;
       if (isModalDialogOpen()) return;

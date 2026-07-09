@@ -481,6 +481,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
         ? createPortal(
             <div
               ref={listboxRef}
+              data-acorn-floating-layer="select"
               className="fixed z-[60] overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated font-mono text-xs text-fg shadow-xl"
               style={{
                 left: listboxRect.left,
