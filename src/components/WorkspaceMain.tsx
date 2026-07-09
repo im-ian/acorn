@@ -25,7 +25,6 @@ import {
   Clock,
   Columns3,
   Copy,
-  CornerDownLeft,
   ExternalLink,
   FolderOpen,
   GitBranch,
@@ -1388,8 +1387,8 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
         className="flex w-full"
       >
         {/*
-          Not a <button>: the waiting-stage quick-reply nests a real <input>,
-          and interactive content inside a button is invalid and breaks focus.
+          Not a <button>: cards can contain their own focusable controls, and
+          interactive content inside a button is invalid and breaks focus.
         */}
         <div
           role="button"
@@ -1583,9 +1582,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
               </span>
             ) : null}
           </span>
-          {stage === "waiting" && session.mode !== "chat" ? (
-            <KanbanQuickReply t={t} sessionId={session.id} />
-          ) : null}
         </div>
       </Tooltip>
       <ContextMenu
@@ -1658,88 +1654,6 @@ function KanbanPullRequestChip({
           <CheckCircle2 size={10} className="shrink-0 text-success" />
         )
       ) : null}
-    </span>
-  );
-}
-
-/**
- * Inline reply box on Waiting cards. Writes straight to the session PTY with
- * a trailing `\r` (what xterm sends for Enter — `\n` would land as a literal
- * LF in the line buffer instead of submitting). Terminal-mode sessions only;
- * the caller hides this for chat sessions.
- */
-function KanbanQuickReply({
-  t,
-  sessionId,
-}: {
-  t: Translator;
-  sessionId: string;
-}) {
-  const [value, setValue] = useState("");
-  const [sending, setSending] = useState(false);
-  const [failed, setFailed] = useState(false);
-
-  async function send() {
-    const text = value.trim();
-    if (!text || sending) return;
-    setSending(true);
-    setFailed(false);
-    try {
-      await api.ptyWrite(sessionId, `${text}\r`);
-      setValue("");
-    } catch (err) {
-      console.error("[WorkspaceMain] kanban quick reply failed", err);
-      setFailed(true);
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <span
-      className="flex items-center gap-1"
-      data-testid="workspace-kanban-card-quick-reply"
-      onClick={(event) => event.stopPropagation()}
-      onPointerDown={(event) => event.stopPropagation()}
-      onKeyDown={(event) => event.stopPropagation()}
-    >
-      <input
-        value={value}
-        onChange={(event) => {
-          setValue(event.currentTarget.value);
-          if (failed) setFailed(false);
-        }}
-        onKeyDown={(event) => {
-          event.stopPropagation();
-          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-            event.preventDefault();
-            void send();
-          }
-        }}
-        disabled={sending}
-        aria-label={t("workspace.kanban.quickReply.label")}
-        aria-invalid={failed || undefined}
-        placeholder={
-          failed
-            ? t("workspace.kanban.quickReply.error")
-            : t("workspace.kanban.quickReply.placeholder")
-        }
-        className={cn(
-          "h-6 min-w-0 flex-1 rounded border bg-bg px-1.5 text-[11px] text-fg outline-none transition placeholder:text-fg-muted/60 focus:border-warning/60 focus:ring-1 focus:ring-warning/40",
-          failed
-            ? "border-danger/60 placeholder:text-danger/80"
-            : "border-border",
-        )}
-      />
-      <button
-        type="button"
-        onClick={() => void send()}
-        disabled={sending || value.trim().length === 0}
-        aria-label={t("workspace.kanban.quickReply.send")}
-        className="inline-flex h-6 shrink-0 items-center justify-center rounded border border-border bg-bg px-1.5 text-fg-muted transition hover:border-warning/50 hover:text-fg disabled:cursor-default disabled:opacity-45"
-      >
-        <CornerDownLeft size={11} />
-      </button>
     </span>
   );
 }
