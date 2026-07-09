@@ -23,7 +23,7 @@ function makeSession(overrides: Partial<Session>): Session {
     name: "session",
     branch: "main",
     worktree_path: "/repo/session",
-    status: "idle",
+    status: "ready",
     mode: "agent",
     kind: "session",
     created_at: "2026-01-01T00:00:00.000Z",
@@ -73,9 +73,9 @@ describe("toKanbanSortMode", () => {
 
 describe("equalizeKanbanColumnWidths", () => {
   it("sets every column to the clamped mean of the current widths", () => {
-    // mean of [552, 192, 192, 192, 192] = 264
-    const result = equalizeKanbanColumnWidths([552, 192, 192, 192, 192]);
-    expect(result).toEqual([264, 264, 264, 264, 264]);
+    // mean of [480, 240, 240, 240, 300] = 300
+    const result = equalizeKanbanColumnWidths([480, 240, 240, 240, 300]);
+    expect(result).toEqual([300, 300, 300, 300, 300]);
   });
 
   it("never produces a width below the minimum", () => {
@@ -88,7 +88,7 @@ describe("equalizeKanbanColumnWidths", () => {
   });
 
   it("differs from reset when widths are uneven", () => {
-    const equalized = equalizeKanbanColumnWidths([400, 200, 200, 200, 200]);
+    const equalized = equalizeKanbanColumnWidths([440, 200, 200, 200, 240]);
     expect(equalized).not.toEqual(defaultKanbanColumnWidths());
     expect(new Set(equalized).size).toBe(1);
   });
@@ -197,7 +197,7 @@ describe("board prefs persistence", () => {
 
   it("round-trips prefs for a project", () => {
     const prefs: KanbanBoardPrefs = {
-      columnWidths: [300, 250, 200, 180, 160],
+      columnWidths: [300, 250, 220, 200, 180],
       sortMode: "name-asc",
       filterQuery: "shell",
       manualDoneSessionIds: ["done-1", "done-2"],

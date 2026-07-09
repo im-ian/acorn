@@ -7,6 +7,7 @@ import {
   Keyboard,
   Loader2,
   RefreshCcw,
+  Save,
   Settings as SettingsIcon,
   Sparkles,
   Trash2,
@@ -62,6 +63,7 @@ import {
   NOTIFICATION_HISTORY_LIMIT_MAX,
   NOTIFICATION_HISTORY_LIMIT_MIN,
   PR_REFRESH_INTERVAL_OPTIONS,
+  matchingTerminalFontPresetId,
   resolveAiExecutionRequest,
   resolveSessionTitlePrompt,
   SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
@@ -73,6 +75,9 @@ import {
   TERMINAL_LETTER_SPACING_MAX,
   TERMINAL_LETTER_SPACING_MIN,
   TERMINAL_LETTER_SPACING_STEP,
+  TERMINAL_LINE_HEIGHT_MAX,
+  TERMINAL_LINE_HEIGHT_MIN,
+  TERMINAL_LINE_HEIGHT_STEP,
   TOAST_POSITION_OPTIONS,
   type KanbanTerminalPopoverDefaultSize,
   type KanbanTerminalPopoverPlacement,
@@ -86,6 +91,7 @@ import {
   type ToastPosition,
   TERMINAL_FONT_SMOOTHING_VALUES,
   TERMINAL_FONT_WEIGHTS,
+  terminalFontPresetById,
   useSettings,
 } from "../lib/settings";
 import {
@@ -163,7 +169,7 @@ type ShortcutGroup = {
   items: ShortcutItem[];
 };
 
-const SHORTCUT_GROUPS: ShortcutGroup[] = [
+export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
     titleKey: "settings.shortcuts.groups.general",
     items: [
@@ -217,6 +223,10 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
         labelKey: "settings.shortcuts.items.prevTab.label",
       },
       {
+        id: "focusLatestNeedsInput",
+        labelKey: "settings.shortcuts.items.focusLatestNeedsInput.label",
+      },
+      {
         id: "nextProject",
         labelKey: "settings.shortcuts.items.nextProject.label",
       },
@@ -236,6 +246,22 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       {
         id: "toggleRightPanel",
         labelKey: "settings.shortcuts.items.toggleRightPanel.label",
+      },
+      {
+        id: "focusPaneLeft",
+        labelKey: "settings.shortcuts.items.focusPaneLeft.label",
+      },
+      {
+        id: "focusPaneRight",
+        labelKey: "settings.shortcuts.items.focusPaneRight.label",
+      },
+      {
+        id: "focusPaneUp",
+        labelKey: "settings.shortcuts.items.focusPaneUp.label",
+      },
+      {
+        id: "focusPaneDown",
+        labelKey: "settings.shortcuts.items.focusPaneDown.label",
       },
       {
         id: "splitVertical",
@@ -556,11 +582,131 @@ function terminalFontSmoothingLabel(
 
 function TerminalSettings() {
   const settings = useSettings((s) => s.settings);
+  const applyTerminalFontPreset = useSettings((s) => s.applyTerminalFontPreset);
+  const saveTerminalFontPreset = useSettings((s) => s.saveTerminalFontPreset);
+  const deleteTerminalFontPreset = useSettings(
+    (s) => s.deleteTerminalFontPreset,
+  );
   const patchTerminal = useSettings((s) => s.patchTerminal);
   const t = useTranslation();
+  const terminalFontPresets = settings.fontPresets.terminal;
+  const activeFontPresetId = matchingTerminalFontPresetId(
+    settings,
+    terminalFontPresets,
+  );
+  const activeFontPreset = activeFontPresetId
+    ? terminalFontPresetById(terminalFontPresets, activeFontPresetId)
+    : null;
+  const [presetNameDraft, setPresetNameDraft] = useState(
+    () => activeFontPreset?.name ?? "",
+  );
+  const activeFontPresetMarker = `${activeFontPresetId ?? ""}\u0000${
+    activeFontPreset?.name ?? ""
+  }`;
+  const previousActiveFontPresetMarkerRef = useRef<string>(
+    activeFontPresetMarker,
+  );
+
+  useEffect(() => {
+    if (previousActiveFontPresetMarkerRef.current === activeFontPresetMarker) {
+      return;
+    }
+    previousActiveFontPresetMarkerRef.current = activeFontPresetMarker;
+    setPresetNameDraft(activeFontPreset?.name ?? "");
+  }, [activeFontPreset?.name, activeFontPresetMarker]);
+
+  const hasFontPresets = terminalFontPresets.length > 0;
+  const fontPresetOptions: SelectItem[] = [
+    ...(hasFontPresets && activeFontPresetId === null
+      ? [
+          {
+            value: "custom",
+            label: st(t, "settings.terminal.fontPreset.custom"),
+            description: st(t, "settings.terminal.fontPreset.customHint"),
+            disabled: true,
+          },
+        ]
+      : []),
+    ...(hasFontPresets
+      ? terminalFontPresets.map((preset) => ({
+          value: preset.id,
+          label: preset.name,
+        }))
+      : [
+          {
+            value: "empty",
+            label: st(t, "settings.terminal.fontPreset.empty"),
+            disabled: true,
+          },
+        ]),
+  ];
+  const savePreset = () => {
+    saveTerminalFontPreset(presetNameDraft);
+  };
 
   return (
     <section className="space-y-4">
+      <Field
+        label={st(t, "settings.terminal.fontPreset.label")}
+        hint={st(t, "settings.terminal.fontPreset.hint")}
+      >
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={
+                activeFontPresetId ??
+                (hasFontPresets ? "custom" : "empty")
+              }
+              onValueChange={(presetId) => {
+                if (presetId === "custom" || presetId === "empty") return;
+                applyTerminalFontPreset(presetId);
+              }}
+              options={fontPresetOptions}
+              className="min-w-[14rem] flex-1"
+              aria-label={st(t, "settings.terminal.fontPreset.selectLabel")}
+            />
+            <Button
+              variant="dangerGhost"
+              onClick={() => {
+                if (activeFontPresetId) {
+                  deleteTerminalFontPreset(activeFontPresetId);
+                }
+              }}
+              disabled={!activeFontPresetId}
+              aria-label={st(t, "settings.terminal.fontPreset.deleteLabel")}
+            >
+              <Trash2 size={12} />
+              {st(t, "settings.terminal.fontPreset.delete")}
+            </Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <TextInput
+              value={presetNameDraft}
+              onChange={(event) => setPresetNameDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  savePreset();
+                  event.currentTarget.blur();
+                }
+              }}
+              placeholder={st(
+                t,
+                "settings.terminal.fontPreset.namePlaceholder",
+              )}
+              aria-label={st(t, "settings.terminal.fontPreset.nameLabel")}
+              className="min-w-[14rem] flex-1"
+            />
+            <Button
+              variant="outline"
+              onClick={savePreset}
+              disabled={!presetNameDraft.trim()}
+            >
+              <Save size={12} />
+              {st(t, "settings.terminal.fontPreset.save")}
+            </Button>
+          </div>
+        </div>
+      </Field>
       <Field
         label={st(t, "settings.terminal.fontFamily.label")}
         hint={st(t, "settings.terminal.fontFamily.hint")}
@@ -645,9 +791,9 @@ function TerminalSettings() {
       >
         <Stepper
           value={settings.terminal.lineHeight}
-          min={1.0}
-          max={2.0}
-          step={0.05}
+          min={TERMINAL_LINE_HEIGHT_MIN}
+          max={TERMINAL_LINE_HEIGHT_MAX}
+          step={TERMINAL_LINE_HEIGHT_STEP}
           format={(n) => n.toFixed(2)}
           onChange={(n) => patchTerminal({ lineHeight: n })}
         />
@@ -1182,19 +1328,57 @@ function InterfaceSettings({ t }: { t: SettingsTranslator }) {
           }
           t={t}
         />
+        <ProjectTabPrioritySection
+          value={settings.interface.prioritizeNeedsInputTabs}
+          onChange={(prioritizeNeedsInputTabs) =>
+            patchInterface({ prioritizeNeedsInputTabs })
+          }
+          t={t}
+        />
       </div>
       <KanbanTerminalPopoverSettings
         placement={settings.interface.kanbanTerminalPopoverPlacement}
         defaultSize={settings.interface.kanbanTerminalPopoverDefaultSize}
+        openOnCreate={settings.interface.openKanbanTerminalOnSessionCreate}
         onPlacementChange={(kanbanTerminalPopoverPlacement) =>
           patchInterface({ kanbanTerminalPopoverPlacement })
         }
         onDefaultSizeChange={(kanbanTerminalPopoverDefaultSize) =>
           patchInterface({ kanbanTerminalPopoverDefaultSize })
         }
+        onOpenOnCreateChange={(openKanbanTerminalOnSessionCreate) =>
+          patchInterface({ openKanbanTerminalOnSessionCreate })
+        }
         t={t}
       />
     </section>
+  );
+}
+
+function ProjectTabPrioritySection({
+  value,
+  onChange,
+  t,
+}: {
+  value: boolean;
+  onChange: (value: boolean) => void;
+  t: SettingsTranslator;
+}) {
+  return (
+    <Field
+      label={st(t, "settings.interface.projectTabs.label")}
+      hint={st(t, "settings.interface.projectTabs.hint")}
+    >
+      <CheckboxRow
+        label={st(t, "settings.interface.projectTabs.priority.label")}
+        description={st(
+          t,
+          "settings.interface.projectTabs.priority.description",
+        )}
+        checked={value}
+        onChange={onChange}
+      />
+    </Field>
   );
 }
 
@@ -1248,14 +1432,18 @@ function DefaultWorkspaceViewModeSection({
 function KanbanTerminalPopoverSettings({
   placement,
   defaultSize,
+  openOnCreate,
   onPlacementChange,
   onDefaultSizeChange,
+  onOpenOnCreateChange,
   t,
 }: {
   placement: KanbanTerminalPopoverPlacement;
   defaultSize: KanbanTerminalPopoverDefaultSize;
+  openOnCreate: boolean;
   onPlacementChange: (value: KanbanTerminalPopoverPlacement) => void;
   onDefaultSizeChange: (value: KanbanTerminalPopoverDefaultSize) => void;
+  onOpenOnCreateChange: (value: boolean) => void;
   t: SettingsTranslator;
 }) {
   return (
@@ -1267,6 +1455,18 @@ function KanbanTerminalPopoverSettings({
       )}
     >
       <div className="space-y-4">
+        <CheckboxRow
+          label={st(
+            t,
+            "settings.interface.kanbanTerminalPopover.openOnCreate.label",
+          )}
+          description={st(
+            t,
+            "settings.interface.kanbanTerminalPopover.openOnCreate.description",
+          )}
+          checked={openOnCreate}
+          onChange={onOpenOnCreateChange}
+        />
         <Field
           label={st(
             t,
@@ -2102,38 +2302,29 @@ function NotificationSettings() {
       <Field label={st(t, "settings.notifications.triggers.label")}>
         <div className="flex flex-col gap-1">
           <CheckboxRow
-            label={st(t, "settings.notifications.triggers.needsInput.label")}
+            label={st(
+              t,
+              "settings.notifications.triggers.waitingForInput.label",
+            )}
             description={st(
               t,
-              "settings.notifications.triggers.needsInput.description",
+              "settings.notifications.triggers.waitingForInput.description",
             )}
-            checked={settings.notifications.events.needsInput}
+            checked={settings.notifications.events.waitingForInput}
             disabled={!enabled}
             onChange={(v) =>
-              patchNotifications({ events: { needsInput: v } })
+              patchNotifications({ events: { waitingForInput: v } })
             }
           />
           <CheckboxRow
-            label={st(t, "settings.notifications.triggers.failed.label")}
+            label={st(t, "settings.notifications.triggers.errored.label")}
             description={st(
               t,
-              "settings.notifications.triggers.failed.description",
+              "settings.notifications.triggers.errored.description",
             )}
-            checked={settings.notifications.events.failed}
+            checked={settings.notifications.events.errored}
             disabled={!enabled}
-            onChange={(v) => patchNotifications({ events: { failed: v } })}
-          />
-          <CheckboxRow
-            label={st(t, "settings.notifications.triggers.completed.label")}
-            description={st(
-              t,
-              "settings.notifications.triggers.completed.description",
-            )}
-            checked={settings.notifications.events.completed}
-            disabled={!enabled}
-            onChange={(v) =>
-              patchNotifications({ events: { completed: v } })
-            }
+            onChange={(v) => patchNotifications({ events: { errored: v } })}
           />
         </div>
       </Field>

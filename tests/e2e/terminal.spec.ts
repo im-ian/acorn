@@ -22,7 +22,7 @@ async function seedAlphaBetaTerminals(tauri: TauriMock): Promise<void> {
       worktree_path: "/tmp/demo",
       branch: "main",
       isolated: false,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
@@ -34,7 +34,7 @@ async function seedAlphaBetaTerminals(tauri: TauriMock): Promise<void> {
       worktree_path: "/tmp/demo",
       branch: "main",
       isolated: false,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:01Z",
       updated_at: "2026-01-01T00:00:06Z",
       last_message: null,
@@ -60,7 +60,7 @@ async function seedWritableTerminal(tauri: TauriMock): Promise<void> {
       worktree_path: "/tmp/demo",
       branch: "main",
       isolated: false,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
@@ -554,7 +554,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -586,7 +586,7 @@ test.describe("terminal: spawn", () => {
     await page.goto("/");
 
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
 
     await expect
@@ -630,7 +630,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
 
     const terminal = page.locator("[data-pane-body] .acorn-terminal");
@@ -649,6 +649,73 @@ test.describe("terminal: spawn", () => {
       .toBe("subpixel-antialiased");
   });
 
+  test("applies fractional terminal letter spacing to the renderer", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { letterSpacing: -0.25 } }),
+      );
+    });
+    await seedWritableTerminal(tauri);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const rowContainer =
+            document.querySelector<HTMLElement>(".xterm-rows");
+          const firstRow =
+            document.querySelector<HTMLElement>(".xterm-rows > div");
+          return {
+            letterSpacing: Number.parseFloat(
+              rowContainer?.style.letterSpacing ?? "",
+            ),
+            firstRowWidth: firstRow?.style.width ?? null,
+          };
+        }),
+      )
+      .toMatchObject({
+        letterSpacing: expect.closeTo(-0.25, 0.05),
+        firstRowWidth: expect.stringMatching(/\.\d+px$/),
+      });
+  });
+
+  test("applies terminal line height setting to xterm rows", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { fontSize: 20, lineHeight: 2 } }),
+      );
+    });
+    await seedWritableTerminal(tauri);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+
+    const firstRow = page
+      .locator("[data-pane-body] .xterm-rows > div")
+      .first();
+    await firstRow.waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        firstRow.evaluate((element) => element.getBoundingClientRect().height),
+      )
+      .toBeGreaterThan(30);
+  });
+
   test("normalizes no-break spaces when pasting shell commands", async ({
     page,
     tauri,
@@ -657,7 +724,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
     await page.waitForTimeout(150);
@@ -711,7 +778,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
     await expect
@@ -761,7 +828,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
     await expect
@@ -812,7 +879,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
     await expect
@@ -873,7 +940,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
     await page.waitForTimeout(150);
@@ -921,7 +988,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
     await page.waitForTimeout(150);
@@ -952,7 +1019,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
     await page.waitForTimeout(150);
@@ -982,7 +1049,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
     await page.waitForTimeout(150);
@@ -1023,7 +1090,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
     await page.waitForTimeout(150);
@@ -1100,7 +1167,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1122,7 +1189,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^Claude claude main · Idle$/ })
+      .getByRole("button", { name: /^Claude claude main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
 
@@ -1176,7 +1243,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
 
     await expect
@@ -1257,7 +1324,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await pressHotkey(page, { mod: true, key: "d" });
 
@@ -1320,7 +1387,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1338,7 +1405,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await expect
       .poll(() =>
@@ -1391,7 +1458,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1409,7 +1476,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await expect
       .poll(() =>
@@ -1454,7 +1521,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1472,7 +1539,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await expect
       .poll(() =>
@@ -1515,7 +1582,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1558,7 +1625,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
 
     const linkText = "src/components/FolderPermissionWarmupModal.tsx:78";
@@ -1634,7 +1701,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1672,7 +1739,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
 
     const linkText = "../../.claude/rules/typescript/coding-style.md";
@@ -1749,7 +1816,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1788,7 +1855,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
 
     await expect
@@ -1855,7 +1922,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo/.acorn/worktrees/current",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1900,7 +1967,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
 
     await expect
@@ -1976,7 +2043,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -2005,7 +2072,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
 
     await expect
@@ -2085,7 +2152,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -2103,7 +2170,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
 
     await expect
@@ -2247,7 +2314,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -2265,7 +2332,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await expect
       .poll(() =>
@@ -2336,7 +2403,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -2354,7 +2421,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await expect
       .poll(() =>
@@ -2427,7 +2494,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -2452,7 +2519,7 @@ test.describe("terminal: spawn", () => {
       )
       .toBe("1.25");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
 
     await expect
@@ -2519,7 +2586,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -2535,7 +2602,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
     await page.waitForTimeout(150);
@@ -2579,7 +2646,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -2598,7 +2665,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
     await expect
@@ -2660,7 +2727,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -2670,7 +2737,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Idle$/ })
+      .getByRole("button", { name: /^shell main · Ready$/ })
       .click();
     await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
 
@@ -2731,7 +2798,7 @@ test.describe("terminal: spawn", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "running",
+        status: "working",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -2759,7 +2826,7 @@ test.describe("terminal: spawn", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^shell main · Running$/ })
+      .getByRole("button", { name: /^shell main · Working$/ })
       .click();
 
     await expect

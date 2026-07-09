@@ -17,6 +17,7 @@
 //! `Error::ProtocolMismatch` reply. Minor-version differences are tolerated
 //! through additive optional fields (serde `#[serde(default)]`).
 
+use acorn_agent::AgentKind as InteractiveAgentKind;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -229,6 +230,35 @@ pub enum AgentKind {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NonInteractiveAgentKind(pub AgentKind);
+
+impl From<InteractiveAgentKind> for AgentKind {
+    fn from(kind: InteractiveAgentKind) -> Self {
+        match kind {
+            InteractiveAgentKind::Claude => Self::ClaudeCode,
+            InteractiveAgentKind::Codex => Self::Codex,
+            InteractiveAgentKind::Antigravity => Self::Antigravity,
+        }
+    }
+}
+
+impl TryFrom<AgentKind> for InteractiveAgentKind {
+    type Error = NonInteractiveAgentKind;
+
+    fn try_from(kind: AgentKind) -> Result<Self, Self::Error> {
+        match kind {
+            AgentKind::ClaudeCode => Ok(Self::Claude),
+            AgentKind::Codex => Ok(Self::Codex),
+            AgentKind::Antigravity => Ok(Self::Antigravity),
+            AgentKind::Aider
+            | AgentKind::Llm
+            | AgentKind::OpenInterpreter
+            | AgentKind::Unknown => Err(NonInteractiveAgentKind(kind)),
+        }
+    }
+}
+
 /// Control-socket response. Tagged on `seq` so a persistent connection can
 /// have multiple in-flight requests without ambiguity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -391,6 +421,37 @@ mod tests {
         let s = serde_json::to_string(&h).unwrap();
         let parsed: Hello = serde_json::from_str(&s).unwrap();
         assert_eq!(parsed, h);
+    }
+
+    #[test]
+    fn agent_kind_wire_values_and_interactive_bridge_stay_stable() {
+        assert_eq!(
+            serde_json::to_string(&AgentKind::ClaudeCode).unwrap(),
+            "\"claude-code\""
+        );
+        assert_eq!(serde_json::to_string(&AgentKind::Codex).unwrap(), "\"codex\"");
+        assert_eq!(
+            serde_json::to_string(&AgentKind::Antigravity).unwrap(),
+            "\"antigravity\""
+        );
+
+        assert_eq!(
+            AgentKind::from(InteractiveAgentKind::Claude),
+            AgentKind::ClaudeCode
+        );
+        assert_eq!(
+            InteractiveAgentKind::try_from(AgentKind::ClaudeCode).unwrap(),
+            InteractiveAgentKind::Claude
+        );
+        assert_eq!(
+            InteractiveAgentKind::try_from(AgentKind::Codex).unwrap(),
+            InteractiveAgentKind::Codex
+        );
+        assert_eq!(
+            InteractiveAgentKind::try_from(AgentKind::Antigravity).unwrap(),
+            InteractiveAgentKind::Antigravity
+        );
+        assert!(InteractiveAgentKind::try_from(AgentKind::Aider).is_err());
     }
 
     #[test]

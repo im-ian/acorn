@@ -52,7 +52,7 @@ function prStateUpper(pr: PullRequestInfo | null): string | null {
  * 2. PR merged/closed       → done
  * 3. agent running          → working
  * 4. turn done + dirty tree → review
- * 5. needs input / failed   → waiting
+ * 5. waiting/error          → waiting
  * 6. open PR                → review
  * 7. otherwise              → idle
  *
@@ -68,14 +68,11 @@ export function deriveKanbanStage(
   if (context.manualDone) return "done";
   const prState = prStateUpper(context.pr);
   if (prState === "MERGED" || prState === "CLOSED") return "done";
-  if (session.status === "running") return "working";
-  if (
-    (session.status === "needs_input" || session.status === "completed") &&
-    context.hasDiff
-  ) {
+  if (session.status === "working") return "working";
+  if (session.status === "waiting_for_input" && context.hasDiff) {
     return "review";
   }
-  if (session.status === "needs_input" || session.status === "failed") {
+  if (session.status === "waiting_for_input" || session.status === "errored") {
     return "waiting";
   }
   if (prState === "OPEN") return "review";

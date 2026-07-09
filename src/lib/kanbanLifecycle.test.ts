@@ -19,7 +19,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     name: "session",
     branch: "feat/x",
     worktree_path: "/repo/x",
-    status: "idle",
+    status: "ready",
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -49,11 +49,10 @@ function ctx(overrides: Partial<KanbanStageContext> = {}): KanbanStageContext {
 describe("deriveKanbanStage", () => {
   it("maps bare statuses without board context", () => {
     const expected: Record<SessionStatus, KanbanLifecycleStage> = {
-      idle: "idle",
-      running: "working",
-      needs_input: "waiting",
-      failed: "waiting",
-      completed: "idle",
+      ready: "idle",
+      working: "working",
+      waiting_for_input: "waiting",
+      errored: "waiting",
     };
     for (const [status, stage] of Object.entries(expected)) {
       expect(
@@ -65,27 +64,18 @@ describe("deriveKanbanStage", () => {
     }
   });
 
-  it("puts a completed session with a dirty worktree in review", () => {
+  it("puts a waiting-for-input session with a dirty worktree in review", () => {
     expect(
       deriveKanbanStage(
-        makeSession({ status: "completed" }),
+        makeSession({ status: "waiting_for_input" }),
         ctx({ hasDiff: true }),
       ),
     ).toBe("review");
   });
 
-  it("puts a needs-input session with a dirty worktree in review", () => {
+  it("keeps a ready session with a clean worktree in idle", () => {
     expect(
-      deriveKanbanStage(
-        makeSession({ status: "needs_input" }),
-        ctx({ hasDiff: true }),
-      ),
-    ).toBe("review");
-  });
-
-  it("keeps a completed session with a clean worktree in idle", () => {
-    expect(
-      deriveKanbanStage(makeSession({ status: "completed" }), ctx()),
+      deriveKanbanStage(makeSession({ status: "ready" }), ctx()),
     ).toBe("idle");
   });
 
@@ -107,19 +97,19 @@ describe("deriveKanbanStage", () => {
   it("keeps running and waiting sessions live even with an open PR", () => {
     expect(
       deriveKanbanStage(
-        makeSession({ status: "running" }),
+        makeSession({ status: "working" }),
         ctx({ pr: makePr("OPEN") }),
       ),
     ).toBe("working");
     expect(
       deriveKanbanStage(
-        makeSession({ status: "needs_input" }),
+        makeSession({ status: "waiting_for_input" }),
         ctx({ pr: makePr("OPEN") }),
       ),
     ).toBe("waiting");
     expect(
       deriveKanbanStage(
-        makeSession({ status: "failed" }),
+        makeSession({ status: "errored" }),
         ctx({ pr: makePr("OPEN") }),
       ),
     ).toBe("waiting");
@@ -129,7 +119,7 @@ describe("deriveKanbanStage", () => {
     for (const state of ["MERGED", "CLOSED"]) {
       expect(
         deriveKanbanStage(
-          makeSession({ status: "running" }),
+          makeSession({ status: "working" }),
           ctx({ pr: makePr(state) }),
         ),
       ).toBe("done");
@@ -139,7 +129,7 @@ describe("deriveKanbanStage", () => {
   it("lets a manual done pin outrank everything", () => {
     expect(
       deriveKanbanStage(
-        makeSession({ status: "needs_input" }),
+        makeSession({ status: "waiting_for_input" }),
         ctx({ pr: makePr("OPEN"), hasDiff: true, manualDone: true }),
       ),
     ).toBe("done");
@@ -214,7 +204,7 @@ describe("isKanbanSessionStalled", () => {
   it("flags a working session past the threshold", () => {
     expect(
       isKanbanSessionStalled(
-        makeSession({ status: "running", updated_at: updatedAt }),
+        makeSession({ status: "working", updated_at: updatedAt }),
         "working",
         updatedMs + KANBAN_STALL_THRESHOLD_MS,
       ),
@@ -224,7 +214,7 @@ describe("isKanbanSessionStalled", () => {
   it("does not flag fresh working sessions or other stages", () => {
     expect(
       isKanbanSessionStalled(
-        makeSession({ status: "running", updated_at: updatedAt }),
+        makeSession({ status: "working", updated_at: updatedAt }),
         "working",
         updatedMs + KANBAN_STALL_THRESHOLD_MS - 1,
       ),
@@ -241,7 +231,7 @@ describe("isKanbanSessionStalled", () => {
   it("never flags an unparseable timestamp", () => {
     expect(
       isKanbanSessionStalled(
-        makeSession({ status: "running", updated_at: "not-a-date" }),
+        makeSession({ status: "working", updated_at: "not-a-date" }),
         "working",
         Number.MAX_SAFE_INTEGER,
       ),

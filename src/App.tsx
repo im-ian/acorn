@@ -38,6 +38,7 @@ import {
   type ResumeCandidate,
   type StagedRevMismatch,
 } from "./lib/api";
+import { AGENT_PROVIDER_ORDER } from "./lib/agentProviderRegistry";
 import {
   DEFAULT_HOTKEYS,
   hotkeyBindingsFor,
@@ -69,7 +70,6 @@ import {
   startNotificationClickHandler,
   startSessionNotificationWatcher,
 } from "./lib/notifications";
-import { startSessionAutoCloseWatcher } from "./lib/sessionAutoClose";
 import { findFocusedSessionId } from "./lib/focus";
 import { isSessionTabId } from "./lib/workspaceTabs";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
@@ -244,10 +244,7 @@ function updateUiScalePercent(delta: number) {
 }
 
 function focusPaneTerminal(paneId: string) {
-  const escaped =
-    typeof CSS !== "undefined" && typeof CSS.escape === "function"
-      ? CSS.escape(paneId)
-      : paneId.replace(/(["\\\]\[])/g, "\\$1");
+  const escaped = cssAttributeEscape(paneId);
   const pane = document.querySelector(
     `[data-pane-body="${escaped}"]`,
   ) as HTMLElement | null;
@@ -255,6 +252,28 @@ function focusPaneTerminal(paneId: string) {
     (pane?.querySelector(".xterm-helper-textarea") as HTMLElement | null) ??
     (pane?.querySelector(FOCUSABLE_SELECTOR) as HTMLElement | null);
   target?.focus();
+}
+
+function focusKanbanSessionCard(sessionId: string) {
+  const card = document.querySelector(
+    `[data-kanban-session-id="${cssAttributeEscape(sessionId)}"]`,
+  ) as HTMLElement | null;
+  card?.focus();
+}
+
+function closeTerminalPopoverFromHotkey(): boolean {
+  const state = useAppStore.getState();
+  const sessionId = state.terminalPopupSessionId;
+  if (!sessionId) return false;
+  state.closeTerminalPopup();
+  requestAnimationFrame(() => focusKanbanSessionCard(sessionId));
+  return true;
+}
+
+function cssAttributeEscape(value: string): string {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function"
+    ? CSS.escape(value)
+    : value.replace(/(["\\\]\[])/g, "\\$1");
 }
 
 function dispatchFocusedTerminalConversationNav(
@@ -285,7 +304,6 @@ function App() {
     fileExplorerDropHoverTarget ?? nativeFileDropHoverTarget;
   const refreshAll = useAppStore((s) => s.refreshAll);
   const sessions = useAppStore((s) => s.sessions);
-  const autoCloseSessionIds = useAppStore((s) => s.autoCloseSessionIds);
   const projects = useAppStore((s) => s.projects);
   const projectFolders = useAppStore((s) => s.projectFolders);
   const layout = useAppStore((s) => s.layout);
@@ -334,7 +352,7 @@ function App() {
     useState<string | null>(null);
   const pendingRemoveNeedsRunningWarning =
     pendingRemove !== null &&
-    pendingRemove.status === "running" &&
+    pendingRemove.status === "working" &&
     settings.sessions.warnBeforeClosingRunning &&
     runningCloseWarningConfirmedId !== pendingRemove.id;
   const pendingRemoveSkipsDialog =
@@ -486,12 +504,11 @@ function App() {
   // zustand pushes a new `sessions` array reference (boot rehydrate,
   // reconcile, refresh, status polling) does NOT re-probe sessions we
   // already checked. Busy sessions are marked as checked without hitting
-  // the candidate APIs, because an active claude/codex should never be
-  // interrupted by a resume prompt for the transcript it is already using.
-  // That dedup is what holds the "cold boot only" UX promise: after
-  // the user finishes a claude run and the persister updates
-  // `claude.id`, the in-memory map stays stable, so the modal never
-  // pops mid-session.
+  // the candidate APIs, because an active agent should never be interrupted
+  // by a resume prompt for the transcript it is already using. That dedup
+  // is what holds the "cold boot only" UX promise: after the user finishes
+  // an agent run and the persister updates its marker file, the in-memory
+  // map stays stable, so the modal never pops mid-session.
   const resumeModalEnabled = useSettings(
     (s) => s.settings.experiments.resumeModal,
   );
@@ -573,12 +590,15 @@ function App() {
     for (const sid of toProbe) probedSessionsRef.current.add(sid);
     void Promise.all(
       toProbe.map(async (sid) => {
-        const [claude, codex, antigravity] = await Promise.all([
-          api.getClaudeResumeCandidate(sid).catch(() => null),
-          api.getCodexResumeCandidate(sid).catch(() => null),
-          api.getAntigravityResumeCandidate(sid).catch(() => null),
-        ]);
-        const pick = pickResumeCandidate(claude, codex, antigravity);
+        const candidates = await Promise.all(
+          AGENT_PROVIDER_ORDER.map(async (agent) => {
+            const candidate = await api
+              .getAgentResumeCandidate(agent, sid)
+              .catch(() => null);
+            return [agent, candidate] as const;
+          }),
+        );
+        const pick = pickResumeCandidate(candidates);
         return pick ? ([sid, pick] as const) : null;
       }),
     )
@@ -842,10 +862,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    return startSessionAutoCloseWatcher();
-  }, []);
-
-  useEffect(() => {
     return startFocusedSessionNotificationReadWatcher();
   }, []);
 
@@ -892,7 +908,6 @@ function App() {
       );
       return (
         latestSession != null &&
-        !latestState.autoCloseSessionIds[sessionId] &&
         canAutoGenerateSessionTitle(
           latestSession,
           latestSettings.agents.autoGenerateSessionTitles,
@@ -919,7 +934,7 @@ function App() {
       sessions,
       enabled: settings.agents.autoGenerateSessionTitles,
       inFlightIds: inFlight,
-      excludedSessionIds: new Set(Object.keys(autoCloseSessionIds)),
+      excludedSessionIds: new Set(),
       lastAttemptAt,
       now,
       retryMs: SESSION_TITLE_RETRY_MS,
@@ -978,7 +993,7 @@ function App() {
       }
       retryTimers.clear();
     };
-  }, [autoCloseSessionIds, sessions, settings, sessionTitleRetryTick]);
+  }, [sessions, settings, sessionTitleRetryTick]);
 
   useEffect(() => {
     return startSessionActivityInboxWatcher();
@@ -1388,14 +1403,14 @@ function App() {
     };
   }, []);
 
-  // Agent hook callbacks update backend session status immediately. Refresh
-  // the session list from backend state so hook status can surface without
-  // waiting for the next transcript/process poll.
+  // Agent hook callbacks update backend session status immediately. Poll the
+  // affected session so hook status still goes through process-aware status
+  // arbitration before it reaches the UI.
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     let cancelled = false;
-    listen<string>(AGENT_HOOK_STATUS_EVENT, () => {
-      useAppStore.getState().refreshSessions();
+    listen<string>(AGENT_HOOK_STATUS_EVENT, (event) => {
+      void useAppStore.getState().pollSessionStatuses([event.payload]);
     })
       .then((fn) => {
         if (cancelled) {
@@ -1655,6 +1670,7 @@ function App() {
       },
       [shortcuts.closeTab]: (e: KeyboardEvent) => {
         e.preventDefault();
+        if (closeTerminalPopoverFromHotkey()) return;
         useAppStore.getState().closeFocusedTab();
       },
       [shortcuts.nextTab]: (e: KeyboardEvent) => {
@@ -1664,6 +1680,10 @@ function App() {
       [shortcuts.prevTab]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().cycleTab(-1);
+      },
+      [shortcuts.focusLatestNeedsInput]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        useAppStore.getState().selectLatestNeedsInputSession();
       },
       [shortcuts.nextProject]: (e: KeyboardEvent) => {
         e.preventDefault();
@@ -1921,17 +1941,10 @@ function App() {
  * means the transcript path could not be stat'd; treat as oldest.
  */
 function pickResumeCandidate(
-  claude: ResumeCandidate | null,
-  codex: ResumeCandidate | null,
-  antigravity: ResumeCandidate | null,
+  entries: readonly (readonly [AgentKind, ResumeCandidate | null])[],
 ): { agent: AgentKind; candidate: ResumeCandidate } | null {
-  const candidates = [
-    claude ? ({ agent: "claude", candidate: claude } as const) : null,
-    codex ? ({ agent: "codex", candidate: codex } as const) : null,
-    antigravity
-      ? ({ agent: "antigravity", candidate: antigravity } as const)
-      : null,
-  ]
+  const candidates = entries
+    .map(([agent, candidate]) => (candidate ? { agent, candidate } : null))
     .filter(
       (entry): entry is { agent: AgentKind; candidate: ResumeCandidate } =>
         entry !== null,
@@ -1941,7 +1954,7 @@ function pickResumeCandidate(
 }
 
 function shouldSkipResumeProbeForStatus(status: SessionStatus): boolean {
-  return status === "running" || status === "needs_input";
+  return status === "working" || status === "waiting_for_input";
 }
 
 export default App;

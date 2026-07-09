@@ -55,7 +55,7 @@ function session(overrides: Partial<Session> = {}): Session {
     worktree_path: `${REPO}/.worktrees/s1`,
     branch: "feat/summary",
     isolated: false,
-    status: "idle",
+    status: "ready",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     last_message: "done",
@@ -193,6 +193,7 @@ function deferred<T>() {
 describe("WorkSummaryView", () => {
   let container: HTMLDivElement;
   let root: Root;
+  let restoreClipboard: (() => void) | null = null;
 
   beforeEach(() => {
     container = document.createElement("div");
@@ -228,6 +229,8 @@ describe("WorkSummaryView", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    restoreClipboard?.();
+    restoreClipboard = null;
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -462,6 +465,120 @@ describe("WorkSummaryView", () => {
     );
     expect(container.textContent).toContain("4 messages");
     expect(container.textContent).toContain("320 tokens");
+  });
+
+  it("loads a terminal agent transcript by paired path on first render", async () => {
+    const clipboardWriteText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardWriteText },
+    });
+    restoreClipboard = () => {
+      if (originalClipboard) {
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      } else {
+        delete (navigator as unknown as { clipboard?: Clipboard }).clipboard;
+      }
+    };
+    mocks.agentTranscriptSummaryAtPath.mockResolvedValue({
+      provider: "codex",
+      id: "transcript-1",
+      transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
+      updated_at: 1_766_000_000,
+      message_count: 4,
+      user_messages: 2,
+      assistant_messages: 2,
+      turn_count: 2,
+      complete_turns: 2,
+      running_turns: 0,
+      token_usage: {
+        input_tokens: 220,
+        output_tokens: 80,
+        cache_read_tokens: 20,
+        cache_creation_tokens: 0,
+        reasoning_tokens: 12,
+        total_tokens: 320,
+        messages_with_usage: 1,
+      },
+    });
+    const tab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: `${REPO}/.worktrees/s1`,
+      sessionId: "s1",
+      title: "Feature runner Summary",
+    });
+
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={tab}
+          session={session({
+            mode: "terminal",
+            agent_provider: null,
+            agent_transcript_provider: "codex",
+            agent_transcript_id: "transcript-1",
+            agent_transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
+          })}
+          isActive
+        />,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mocks.agentTranscriptSummaryAtPath).toHaveBeenCalledWith(
+      REPO,
+      "codex",
+      "transcript-1",
+      "/Users/me/.codex/sessions/transcript-1.jsonl",
+    );
+    expect(mocks.agentTranscriptSummary).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("4 messages");
+    expect(container.textContent).toContain("320 tokens");
+    expect(
+      container.querySelector(
+        '[data-work-summary-metadata-key="transcriptProvider"]',
+      )?.textContent,
+    ).toContain("codex");
+    expect(
+      container.querySelector(
+        '[data-work-summary-metadata-key="transcriptPath"]',
+      )?.textContent,
+    ).toContain("/Users/me/.codex/sessions/transcript-1.jsonl");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    clipboardWriteText.mockRejectedValueOnce(new Error("denied"));
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Copy transcript path"]',
+        )!
+        .click();
+      await Promise.resolve();
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "[WorkSummaryView] clipboard write failed",
+      expect.any(Error),
+    );
+    expect(container.textContent).not.toContain("denied");
+    warn.mockRestore();
+
+    const copyButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Copy transcript path"]',
+    );
+    expect(copyButton).toBeTruthy();
+    await act(async () => {
+      copyButton!.click();
+      await Promise.resolve();
+    });
+    expect(clipboardWriteText).toHaveBeenCalledWith(
+      "/Users/me/.codex/sessions/transcript-1.jsonl",
+    );
   });
 
   it("polls a terminal agent transcript by cached path after the initial id lookup", async () => {

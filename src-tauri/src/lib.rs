@@ -42,6 +42,8 @@ use tracing_subscriber::EnvFilter;
 
 use crate::state::AppState;
 
+const MAIN_WINDOW_LABEL: &str = "main";
+
 #[derive(Clone, Copy)]
 struct NonPanickingStderr;
 
@@ -114,6 +116,49 @@ fn normalize_loaded_session(mut session: acorn_session::Session) -> (acorn_sessi
         session.repo_path = repo_path;
     }
     (session, changed)
+}
+
+fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    #[cfg(target_os = "macos")]
+    if let Err(err) = app.show() {
+        tracing::warn!(error = %err, "failed to show application");
+    }
+
+    let window = match app.get_webview_window(MAIN_WINDOW_LABEL) {
+        Some(window) => window,
+        None => {
+            let Some(config) = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|config| config.label == MAIN_WINDOW_LABEL)
+                .or_else(|| app.config().app.windows.first())
+            else {
+                tracing::warn!("failed to recreate main window: no window config");
+                return;
+            };
+            match tauri::WebviewWindowBuilder::from_config(app, config)
+                .and_then(|builder| builder.build())
+            {
+                Ok(window) => window,
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to recreate main window");
+                    return;
+                }
+            }
+        }
+    };
+
+    if let Err(err) = window.unminimize() {
+        tracing::warn!(error = %err, "failed to unminimize main window");
+    }
+    if let Err(err) = window.show() {
+        tracing::warn!(error = %err, "failed to show main window");
+    }
+    if let Err(err) = window.set_focus() {
+        tracing::warn!(error = %err, "failed to focus main window");
+    }
 }
 
 #[cfg(test)]
@@ -191,14 +236,10 @@ pub fn run() {
     #[cfg(not(debug_assertions))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            reveal_main_window(app);
         }));
     }
-    builder
+    builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -304,7 +345,7 @@ pub fn run() {
                 }
                 #[cfg(debug_assertions)]
                 if event.id() == "reload" {
-                    if let Some(window) = handle.get_webview_window("main") {
+                    if let Some(window) = handle.get_webview_window(MAIN_WINDOW_LABEL) {
                         if let Err(err) = window.eval("window.location.reload()") {
                             tracing::warn!("failed to reload webview: {err}");
                         }
@@ -339,9 +380,27 @@ pub fn run() {
                 }
             }) {
                 Ok(server) => {
+                    // Publish this run's URL + token to the stable endpoint
+                    // file the notify scripts read at send time. Without it,
+                    // agent sessions that survived an app restart (daemon
+                    // PTYs) would keep POSTing hook events to the previous
+                    // run's dead port and pin their status forever.
+                    if let Err(err) = agent_wrappers::write_agent_hook_endpoint(
+                        server.hook_url(),
+                        server.token(),
+                    ) {
+                        tracing::warn!(
+                            error = %err,
+                            "agent hook endpoint publish failed; sessions surviving a restart will lose hook status updates",
+                        );
+                    }
                     *state.agent_hooks.lock() = Some(std::sync::Arc::new(server));
                 }
                 Err(err) => {
+                    // Drop any stale endpoint file from a previous run — it
+                    // would win over the notify scripts' env fallback and
+                    // swallow events silently.
+                    agent_wrappers::remove_agent_hook_endpoint();
                     tracing::warn!(error = %err, "agent hook server disabled");
                 }
             }
@@ -605,12 +664,8 @@ pub fn run() {
             commands::agent_transcript_summary_at_path,
             commands::list_unscoped_agent_history,
             commands::trash_agent_history_transcript,
-            commands::get_claude_resume_candidate,
-            commands::acknowledge_claude_resume,
-            commands::get_codex_resume_candidate,
-            commands::acknowledge_codex_resume,
-            commands::get_antigravity_resume_candidate,
-            commands::acknowledge_antigravity_resume,
+            commands::get_agent_resume_candidate,
+            commands::acknowledge_agent_resume,
             commands::staged_rev_mismatch_status,
             commands::acknowledge_staged_rev_mismatch,
             power_assertion::prevent_sleep_status,
@@ -642,7 +697,15 @@ pub fn run() {
             fs_explorer::fs_git_diff_stats,
             fs_explorer::fs_git_diff_lines,
             fs_explorer::fs_watch_set_root,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        ]);
+
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    app.run(|app, _event| {
+        #[cfg(target_os = "macos")]
+        if matches!(_event, tauri::RunEvent::Reopen { .. }) {
+            reveal_main_window(app);
+        }
+    });
 }

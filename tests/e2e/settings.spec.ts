@@ -61,6 +61,31 @@ test.describe("settings modal", () => {
       .toBe(0.75);
   });
 
+  test("adjusts terminal line height and persists it", async ({ page }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Terminal|터미널)$/ }).click();
+
+    const field = modal.getByText("Line height", { exact: true }).locator("..");
+    const valueInput = field.getByRole("textbox", { name: /^(Value|값)$/ });
+    await expect(valueInput).toHaveValue("1.00");
+
+    await valueInput.fill("1.35");
+    await valueInput.press("Enter");
+
+    await expect(valueInput).toHaveValue("1.35");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).terminal?.lineHeight : null;
+        }),
+      )
+      .toBe(1.35);
+  });
+
   test("changes terminal anti-aliasing and persists it", async ({ page }) => {
     await page.goto("/");
     await pressHotkey(page, { mod: true, key: "," });
@@ -87,6 +112,80 @@ test.describe("settings modal", () => {
       .toBe("subpixel");
   });
 
+  test("registers terminal font presets and applies them later", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Terminal|터미널)$/ }).click();
+
+    const presetSelect = modal.getByRole("combobox", {
+      name: /^(Saved font preset|저장된 글꼴 프리셋)$/,
+    });
+    await expect(presetSelect).toContainText("No saved presets");
+
+    await modal
+      .getByRole("textbox", {
+        name: /^(Preset name|프리셋 이름)$/,
+      })
+      .fill("Default copy");
+    await modal
+      .getByRole("button", {
+        name: /^(Save current|현재 설정 저장)$/,
+      })
+      .click();
+
+    await expect(presetSelect).toContainText("Default copy");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          const settings = raw ? JSON.parse(raw) : null;
+          return settings?.fontPresets?.terminal?.[0] ?? null;
+        }),
+      )
+      .toMatchObject({
+        id: "font-default-copy",
+        name: "Default copy",
+        settings: {
+          fontSize: 12,
+          letterSpacing: 0,
+          lineHeight: 1,
+        },
+        experiments: {
+          cjkCellWidthHeuristic: false,
+        },
+      });
+
+    const fontSizeField = modal
+      .getByText("Font size", { exact: true })
+      .locator("..");
+    const fontSizeInput = fontSizeField.getByRole("textbox", {
+      name: /^(Value|값)$/,
+    });
+    await fontSizeInput.fill("14");
+    await fontSizeInput.press("Enter");
+
+    await expect(presetSelect).toContainText("Custom");
+
+    await presetSelect.click();
+    await page.getByRole("option", { name: "Default copy" }).click();
+
+    await expect(presetSelect).toContainText("Default copy");
+    await expect(fontSizeInput).toHaveValue("12");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          const settings = raw ? JSON.parse(raw) : null;
+          return settings?.terminal?.fontSize ?? null;
+        }),
+      )
+      .toBe(12);
+  });
+
   test("changes kanban terminal popover settings and persists them", async ({
     page,
   }) => {
@@ -96,6 +195,9 @@ test.describe("settings modal", () => {
     const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
     await expect(modal.getByText("Kanban terminal popover")).toBeVisible();
 
+    await modal
+      .getByText("Open new session terminals immediately", { exact: true })
+      .click();
     await modal.getByText("Center of screen", { exact: true }).click();
     await modal.getByText("Full screen", { exact: true }).click();
 
@@ -109,12 +211,15 @@ test.describe("settings modal", () => {
               settings?.interface?.kanbanTerminalPopoverPlacement ?? null,
             defaultSize:
               settings?.interface?.kanbanTerminalPopoverDefaultSize ?? null,
+            openOnCreate:
+              settings?.interface?.openKanbanTerminalOnSessionCreate ?? null,
           };
         }),
       )
       .toEqual({
         placement: "center",
         defaultSize: "fullscreen",
+        openOnCreate: true,
       });
   });
 
@@ -155,6 +260,29 @@ test.describe("settings modal", () => {
       .getByRole("button", { name: "Reset all shortcuts" })
       .click();
     await expect(modal.getByText(/⌘=|Ctrl\+=/).first()).toBeVisible();
+  });
+
+  test("records a custom pane focus shortcut", async ({ page }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Shortcuts|단축키)$/ }).click();
+
+    await expect(modal.getByText("Focus pane to the left")).toBeVisible();
+    await expect(modal.getByText("Focus pane to the right")).toBeVisible();
+    await expect(modal.getByText("Focus pane above")).toBeVisible();
+    await expect(modal.getByText("Focus pane below")).toBeVisible();
+
+    await modal
+      .getByRole("button", {
+        name: "Record shortcut for Focus pane to the left",
+      })
+      .click();
+    await expect(modal.getByText("Press keys")).toBeVisible();
+
+    await pressHotkey(page, { mod: true, alt: true, key: "u" });
+    await expect(modal.getByText(/⌥⌘U|Ctrl\+Alt\+U/)).toBeVisible();
   });
 
   test("syncs the keep-awake toggle with the backend and local settings", async ({
@@ -227,7 +355,7 @@ test.describe("settings modal", () => {
       .toBe(false);
   });
 
-  test("toggles the running-session close warning from Sessions settings", async ({
+  test("toggles the working-session close warning from Sessions settings", async ({
     page,
   }) => {
     await page.goto("/");
@@ -237,7 +365,7 @@ test.describe("settings modal", () => {
     await modal.getByRole("button", { name: /^(Sessions|세션)$/ }).click();
 
     const checkbox = modal.getByRole("checkbox", {
-      name: /Show warning before closing running sessions|실행 중인 세션을 닫기 전에 경고 표시/,
+      name: /Show warning before closing working sessions|작업 중인 세션을 닫기 전에 경고 표시/,
     });
     await expect(checkbox).toBeChecked();
     await checkbox.click();

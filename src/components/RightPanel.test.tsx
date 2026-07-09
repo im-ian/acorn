@@ -72,6 +72,7 @@ vi.mock("./FileExplorer", () => ({
 
 import { api } from "../lib/api";
 import { listen } from "@tauri-apps/api/event";
+import { emitPullRequestMutation } from "../lib/pullRequestEvents";
 import { rightPanelCache } from "../lib/right-panel-cache";
 import { DEFAULT_SETTINGS, useSettings } from "../lib/settings";
 import { __resetIsGitHubRepoCacheForTests } from "../lib/useIsGitHubRepo";
@@ -443,7 +444,7 @@ describe("RightPanel background tab loading", () => {
           branch: "HEAD",
           isolated: false,
           project_scoped: false,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -556,7 +557,7 @@ describe("RightPanel background tab loading", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "needs_input",
+          status: "waiting_for_input",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:02Z",
           last_message: null,
@@ -719,6 +720,53 @@ describe("RightPanel background tab loading", () => {
 
     expect(container.textContent).toContain("Add PR row display options");
     expect(container.textContent).not.toContain("1/2");
+  });
+
+  it("refreshes PR rows when a lifecycle mutation event lands", async () => {
+    useAppStore.setState({ rightTab: "prs" });
+    let openFetches = 0;
+    mockApi.listPullRequests.mockImplementation(
+      async (repoPath, state = "open") => {
+        if (repoPath === REPO && state === "open") {
+          openFetches += 1;
+          return {
+            kind: "ok",
+            items: [
+              openFetches === 1
+                ? labeledPullRequest
+                : {
+                    ...labeledPullRequest,
+                    number: 249,
+                    title: "Fresh PR list after mutation",
+                  },
+            ],
+            account: "tester",
+          };
+        }
+        return { kind: "ok", items: [], account: "tester" };
+      },
+    );
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("Hide git tabs outside repositories");
+    expect(container.textContent).not.toContain("Fresh PR list after mutation");
+
+    await act(async () => {
+      emitPullRequestMutation({
+        kind: "merged",
+        repoPath: REPO,
+        number: labeledPullRequest.number,
+        headBranch: labeledPullRequest.head_branch,
+      });
+    });
+    await flushPromises();
+
+    expect(openFetches).toBeGreaterThanOrEqual(2);
+    expect(container.textContent).toContain("Fresh PR list after mutation");
   });
 
   it("opens issue detail in app from the Issues tab", async () => {

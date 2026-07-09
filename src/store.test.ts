@@ -90,7 +90,7 @@ function session(
     worktree_path: `${repoPath}/.worktrees/${id}`,
     branch: `feat/${id}`,
     isolated: false,
-    status: "idle",
+    status: "ready",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
@@ -110,9 +110,9 @@ function notification(
   return {
     id,
     sessionId: "s1",
-    kind: "needs_input",
-    status: "needs_input",
-    previousStatus: "running",
+    kind: "waiting_for_input",
+    status: "waiting_for_input",
+    previousStatus: "working",
     sessionName: "s1",
     projectName: "repo-a",
     repoPath: REPO_A,
@@ -194,7 +194,6 @@ function resetStore(): void {
       pendingRemoveProject: null,
       sessionsLoadedCleanly: true,
       liveInWorktree: {},
-      autoCloseSessionIds: {},
       generatingSessionTitleIds: {},
     },
     false,
@@ -269,10 +268,71 @@ describe("multi-input", () => {
   });
 });
 
+describe("needs-input navigation", () => {
+  it("selects the latest needs-input session from the activity inbox", async () => {
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [
+        session("a1", REPO_A, { status: "waiting_for_input" }),
+        session("b1", REPO_B, { status: "waiting_for_input" }),
+      ],
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("n-a", {
+        sessionId: "a1",
+        sessionName: "a1",
+        repoPath: REPO_A,
+        createdAt: "2026-01-01T00:00:01Z",
+      }),
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("n-b", {
+        sessionId: "b1",
+        sessionName: "b1",
+        repoPath: REPO_B,
+        createdAt: "2026-01-01T00:00:02Z",
+      }),
+    );
+    useAppStore.getState().setActiveProject(REPO_B);
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+    useAppStore.getState().setActiveProject(REPO_A);
+
+    expect(useAppStore.getState().selectLatestNeedsInputSession()).toBe(true);
+
+    expect(useAppStore.getState().activeProject).toBe(REPO_B);
+    expect(useAppStore.getState().activeSessionId).toBe("b1");
+    expect(useAppStore.getState().workspaceViewMode).toBe("panes");
+  });
+
+  it("falls back to the last current needs-input session", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, { status: "waiting_for_input" }),
+        session("a2", REPO_A, { status: "ready" }),
+        session("a3", REPO_A, { status: "waiting_for_input" }),
+      ],
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("stale", {
+        sessionId: "a2",
+        sessionName: "a2",
+        repoPath: REPO_A,
+      }),
+    );
+
+    expect(useAppStore.getState().selectLatestNeedsInputSession()).toBe(true);
+
+    expect(useAppStore.getState().activeSessionId).toBe("a3");
+  });
+});
+
 describe("sessionNotifications", () => {
   it("adds newest notifications first and caps the in-memory list", () => {
     for (let i = 0; i < 105; i += 1) {
-      useAppStore.getState().addSessionNotification(notification(`n${i}`));
+      useAppStore.getState().addSessionNotification(
+        notification(`n${i}`, { sessionId: `s${i}` }),
+      );
     }
 
     const maxHistory = DEFAULT_SETTINGS.notifications.maxHistory;
@@ -282,10 +342,129 @@ describe("sessionNotifications", () => {
     expect(items[items.length - 1]?.id).toBe(`n${105 - maxHistory}`);
   });
 
+  it("coalesces needs-input activity per session", () => {
+    useAppStore.getState().addSessionNotification(
+      notification("old", {
+        sessionId: "s1",
+        createdAt: "2026-01-01T00:00:00Z",
+        readAt: "2026-01-01T00:01:00Z",
+      }),
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("other", { sessionId: "s2" }),
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("latest", {
+        sessionId: "s1",
+        createdAt: "2026-01-01T00:02:00Z",
+      }),
+    );
+
+    const items = useAppStore.getState().sessionNotifications;
+    expect(items.map((item) => item.id)).toEqual(["latest", "other"]);
+    expect(items[0]?.readAt).toBeUndefined();
+  });
+
+  it("normalizes duplicate persisted needs-input activity on rehydrate", async () => {
+    window.localStorage.clear();
+    resetStore();
+    window.localStorage.setItem(
+      "acorn-workspaces",
+      JSON.stringify({
+        state: {
+          sessionNotifications: [
+            notification("latest", {
+              sessionId: "s1",
+              createdAt: "2026-01-01T00:02:00Z",
+            }),
+            notification("old", {
+              sessionId: "s1",
+              createdAt: "2026-01-01T00:00:00Z",
+            }),
+            notification("other", { sessionId: "s2" }),
+          ],
+        },
+        version: 4,
+      }),
+    );
+
+    await useAppStore.persist.rehydrate();
+
+    expect(
+      useAppStore.getState().sessionNotifications.map((item) => item.id),
+    ).toEqual(["latest", "other"]);
+  });
+
+  it("migrates legacy persisted activity status names on rehydrate", async () => {
+    window.localStorage.clear();
+    resetStore();
+    window.localStorage.setItem(
+      "acorn-workspaces",
+      JSON.stringify({
+        state: {
+          sessionNotifications: [
+            {
+              id: "legacy-needs",
+              sessionId: "s1",
+              kind: "needs_input",
+              status: "needs_input",
+              previousStatus: "running",
+              sessionName: "s1",
+              projectName: "repo-a",
+              repoPath: REPO_A,
+              createdAt: "2026-01-01T00:02:00Z",
+            },
+            {
+              id: "legacy-idle",
+              sessionId: "s2",
+              kind: "became_idle",
+              status: "idle",
+              previousStatus: "needs_input",
+              sessionName: "s2",
+              projectName: "repo-b",
+              repoPath: REPO_B,
+              createdAt: "2026-01-01T00:01:00Z",
+            },
+            {
+              id: "unknown",
+              sessionId: "s3",
+              kind: "unknown",
+              status: "idle",
+              previousStatus: "running",
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+          ],
+        },
+        version: 4,
+      }),
+    );
+
+    await useAppStore.persist.rehydrate();
+
+    expect(useAppStore.getState().sessionNotifications).toMatchObject([
+      {
+        id: "legacy-needs",
+        kind: "waiting_for_input",
+        status: "waiting_for_input",
+        previousStatus: "working",
+      },
+      {
+        id: "legacy-idle",
+        kind: "became_ready",
+        status: "ready",
+        previousStatus: "waiting_for_input",
+      },
+    ]);
+  });
+
   it("marks individual and all notifications read, then clears read items when auto-delete is disabled", () => {
     useSettings.getState().patchNotifications({ autoDeleteRead: false });
-    useAppStore.getState().addSessionNotification(notification("n1"));
-    useAppStore.getState().addSessionNotification(notification("n2"));
+    useAppStore
+      .getState()
+      .addSessionNotification(notification("n1", { sessionId: "s1" }));
+    useAppStore
+      .getState()
+      .addSessionNotification(notification("n2", { sessionId: "s2" }));
 
     useAppStore.getState().markSessionNotificationRead("n1");
     expect(
@@ -311,57 +490,18 @@ describe("sessionNotifications", () => {
   });
 
   it("dismisses one notification without touching others", () => {
-    useAppStore.getState().addSessionNotification(notification("n1"));
-    useAppStore.getState().addSessionNotification(notification("n2"));
+    useAppStore
+      .getState()
+      .addSessionNotification(notification("n1", { sessionId: "s1" }));
+    useAppStore
+      .getState()
+      .addSessionNotification(notification("n2", { sessionId: "s2" }));
 
     useAppStore.getState().dismissSessionNotification("n1");
 
     expect(
       useAppStore.getState().sessionNotifications.map((item) => item.id),
     ).toEqual(["n2"]);
-  });
-});
-
-describe("session auto-close flags", () => {
-  it("toggles per-session auto-close state", async () => {
-    await seed(
-      [project(REPO_A, 0)],
-      [session("a1", REPO_A, { agent_provider: "codex" })],
-    );
-
-    useAppStore.getState().toggleSessionAutoClose("a1");
-    expect(useAppStore.getState().autoCloseSessionIds).toEqual({ a1: true });
-
-    useAppStore.getState().toggleSessionAutoClose("a1");
-    expect(useAppStore.getState().autoCloseSessionIds).toEqual({});
-  });
-
-  it("ignores unknown session ids", () => {
-    useAppStore.getState().toggleSessionAutoClose("missing");
-
-    expect(useAppStore.getState().autoCloseSessionIds).toEqual({});
-  });
-
-  it("does not enable auto-close for plain terminal sessions", async () => {
-    await seed(
-      [project(REPO_A, 0)],
-      [session("plain", REPO_A, { agent_provider: null })],
-    );
-
-    useAppStore.getState().toggleSessionAutoClose("plain");
-
-    expect(useAppStore.getState().autoCloseSessionIds).toEqual({});
-  });
-
-  it("ignores control sessions because removing them can cascade", async () => {
-    await seed(
-      [project(REPO_A, 0)],
-      [session("ctl", REPO_A, { kind: "control" })],
-    );
-
-    useAppStore.getState().toggleSessionAutoClose("ctl");
-
-    expect(useAppStore.getState().autoCloseSessionIds).toEqual({});
   });
 });
 
@@ -472,6 +612,28 @@ describe("focusLocalSessions", () => {
 
     expect(useAppStore.getState().activeProject).toBeNull();
     expect(useAppStore.getState().activeSessionId).toBeNull();
+  });
+
+  it("can switch the empty local area out of kanban mode", async () => {
+    useSettings.setState({
+      settings: {
+        ...structuredClone(DEFAULT_SETTINGS),
+        interface: {
+          ...DEFAULT_SETTINGS.interface,
+          defaultWorkspaceViewMode: "kanban",
+        },
+      },
+    });
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+
+    useAppStore.getState().focusLocalSessions();
+    expect(useAppStore.getState().activeProject).toBeNull();
+    expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
+
+    useAppStore.getState().setWorkspaceViewMode("panes");
+
+    expect(useAppStore.getState().workspaceViewMode).toBe("panes");
+    expect(useAppStore.getState().workspaces[REPO_A].viewMode).toBe("kanban");
   });
 });
 
@@ -955,6 +1117,22 @@ describe("workspace tabs", () => {
     });
   });
 
+  it("keeps kanban mode when opening a code viewer tab", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+
+    const s = useAppStore.getState();
+    expect(s.workspaceViewMode).toBe("kanban");
+    expect(s.workspaces[REPO_A].viewMode).toBe("kanban");
+    expect(s.activeTabId).toMatch(/^code-viewer:/);
+    expect(s.workspaceTabs[s.activeTabId!]).toMatchObject({
+      kind: "code",
+      path: `${REPO_A}/src/App.tsx`,
+    });
+  });
+
   it("opens a work summary tab for the active session worktree", async () => {
     const active = session("a1", REPO_A, {
       name: "Feature runner",
@@ -1038,6 +1216,62 @@ describe("workspace tabs", () => {
         messagesWithUsage: 1,
       }),
     });
+  });
+
+  it("loads terminal work summary token baseline from the paired transcript path", async () => {
+    const active = session("a1", REPO_A, {
+      name: "Feature runner",
+      worktree_path: `${REPO_A}/.worktrees/a1`,
+      mode: "terminal",
+      agent_provider: null,
+      agent_transcript_provider: "codex",
+      agent_transcript_id: "transcript-1",
+      agent_transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
+    });
+    await seed([project(REPO_A, 0)], [active]);
+    mockApi.agentTranscriptSummaryAtPath.mockResolvedValueOnce({
+      provider: "codex",
+      id: "transcript-1",
+      transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
+      updated_at: 1_766_000_000,
+      message_count: 4,
+      user_messages: 2,
+      assistant_messages: 2,
+      turn_count: 2,
+      complete_turns: 2,
+      running_turns: 0,
+      token_usage: {
+        input_tokens: 320,
+        output_tokens: 90,
+        cache_read_tokens: 12,
+        cache_creation_tokens: 3,
+        reasoning_tokens: 21,
+        total_tokens: 426,
+        messages_with_usage: 2,
+      },
+    });
+
+    await useAppStore.getState().openWorkSummaryTab();
+    await flushPromises();
+
+    expect(mockApi.agentTranscriptSummaryAtPath).toHaveBeenCalledWith(
+      REPO_A,
+      "codex",
+      "transcript-1",
+      "/Users/me/.codex/sessions/transcript-1.jsonl",
+    );
+    expect(mockApi.agentTranscriptSummary).not.toHaveBeenCalled();
+    expect(useAppStore.getState().workspaceTabs[useAppStore.getState().activeTabId!])
+      .toMatchObject({
+        kind: "work-summary",
+        sessionId: "a1",
+        tokenBaseline: expect.objectContaining({
+          inputTokens: 320,
+          outputTokens: 90,
+          totalTokens: 426,
+          messagesWithUsage: 2,
+        }),
+      });
   });
 
   it("opens a work summary tab before terminal token baseline loading finishes", async () => {
@@ -1308,9 +1542,6 @@ describe("removeSession", () => {
     useAppStore.getState().addSessionNotification(
       notification("n2", { sessionId: "a2" }),
     );
-    useAppStore.setState({
-      autoCloseSessionIds: { a1: true, a2: true },
-    });
 
     const pending = deferred<null>();
     mockApi.removeSession.mockReturnValueOnce(pending.promise);
@@ -1322,7 +1553,6 @@ describe("removeSession", () => {
     expect(
       useAppStore.getState().sessionNotifications.map((item) => item.id),
     ).toEqual(["n2"]);
-    expect(useAppStore.getState().autoCloseSessionIds).toEqual({ a2: true });
 
     pending.resolve(null);
     await removal;
@@ -1577,6 +1807,39 @@ describe("splitFocusedPane", () => {
     expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
   });
 
+  it("stores the instant session view mode separately from project mode", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("project", REPO_A, { worktree_path: REPO_A }),
+        session("instant", REPO_A, {
+          project_scoped: false,
+          worktree_path: REPO_A,
+        }),
+      ],
+    );
+
+    useAppStore.getState().selectSession("project");
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+    expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
+
+    useAppStore.getState().selectSession("instant");
+    useAppStore.getState().setWorkspaceViewMode("panes");
+
+    let state = useAppStore.getState();
+    expect(state.workspaceViewMode).toBe("panes");
+    expect(state.workspaces[REPO_A].viewMode).toBe("kanban");
+    expect(state.workspaces[REPO_A].localViewMode).toBe("panes");
+
+    useAppStore.getState().selectSession("project");
+    expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
+
+    useAppStore.getState().selectSession("instant");
+    state = useAppStore.getState();
+    expect(state.workspaceViewMode).toBe("panes");
+    expect(state.workspaces[REPO_A].viewMode).toBe("kanban");
+  });
+
   it("tracks the terminal popup session independently from pane selection", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A), session("a2", REPO_A)]);
 
@@ -1652,7 +1915,6 @@ describe("splitFocusedPane", () => {
     useAppStore.getState().addSessionNotification(
       notification("n-persist", { sessionId: "a1" }),
     );
-    useAppStore.getState().toggleSessionAutoClose("a1");
 
     const restored = useAppStore.getState().layout;
     expect(restored.kind).toBe("split");
@@ -1666,7 +1928,6 @@ describe("splitFocusedPane", () => {
     expect(persisted.state.sessionNotifications).toEqual([
       notification("n-persist", { sessionId: "a1" }),
     ]);
-    expect(persisted.state.autoCloseSessionIds).toEqual({ a1: true });
 
     resetStore();
     window.localStorage.setItem("acorn-workspaces", raw!);
@@ -1679,7 +1940,6 @@ describe("splitFocusedPane", () => {
     expect(useAppStore.getState().sessionNotifications).toEqual([
       notification("n-persist", { sessionId: "a1" }),
     ]);
-    expect(useAppStore.getState().autoCloseSessionIds).toEqual({ a1: true });
   });
 });
 
@@ -2032,16 +2292,16 @@ describe("pollSessionStatuses", () => {
   it("merges status updates without touching unmodified sessions", async () => {
     await seed(
       [project(REPO_A, 0)],
-      [session("a1", REPO_A), session("a2", REPO_A, { status: "running" })],
+      [session("a1", REPO_A), session("a2", REPO_A, { status: "working" })],
     );
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
-      { id: "a1", status: "needs_input", branch: null },
-      { id: "a2", status: "running", branch: null }, // unchanged
+      { id: "a1", status: "waiting_for_input", branch: null },
+      { id: "a2", status: "working", branch: null }, // unchanged
     ]);
     await useAppStore.getState().pollSessionStatuses();
     const sessions = useAppStore.getState().sessions;
-    expect(sessions.find((s) => s.id === "a1")?.status).toBe("needs_input");
-    expect(sessions.find((s) => s.id === "a2")?.status).toBe("running");
+    expect(sessions.find((s) => s.id === "a1")?.status).toBe("waiting_for_input");
+    expect(sessions.find((s) => s.id === "a2")?.status).toBe("working");
   });
 
   it("polls only the requested existing session ids", async () => {
@@ -2050,7 +2310,7 @@ describe("pollSessionStatuses", () => {
       [session("a1", REPO_A), session("a2", REPO_A)],
     );
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
-      { id: "a2", status: "running", branch: "feat/a2-live" },
+      { id: "a2", status: "working", branch: "feat/a2-live" },
     ]);
 
     await useAppStore
@@ -2059,8 +2319,8 @@ describe("pollSessionStatuses", () => {
 
     expect(mockApi.detectSessionStatuses).toHaveBeenCalledWith(["a2"]);
     const sessions = useAppStore.getState().sessions;
-    expect(sessions.find((s) => s.id === "a1")?.status).toBe("idle");
-    expect(sessions.find((s) => s.id === "a2")?.status).toBe("running");
+    expect(sessions.find((s) => s.id === "a1")?.status).toBe("ready");
+    expect(sessions.find((s) => s.id === "a2")?.status).toBe("working");
     expect(sessions.find((s) => s.id === "a2")?.branch).toBe("feat/a2-live");
   });
 
@@ -2077,7 +2337,7 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
       {
         id: "a1",
-        status: "running",
+        status: "working",
         agent_provider: "claude",
         agent_transcript_id: "claude-new",
         branch: null,
@@ -2091,12 +2351,105 @@ describe("pollSessionStatuses", () => {
     );
   });
 
+  it("merges live agent transcript paths from status polling", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          agent_provider: "codex",
+          agent_transcript_id: "codex-old",
+          agent_transcript_path: "/Users/me/.codex/sessions/old.jsonl",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "working",
+        agent_provider: "codex",
+        agent_transcript_id: "codex-new",
+        agent_transcript_path: "/Users/me/.codex/sessions/new.jsonl",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.agent_transcript_path).toBe(
+      "/Users/me/.codex/sessions/new.jsonl",
+    );
+  });
+
+  it("merges paired agent transcript providers from status polling", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          agent_provider: "codex",
+          agent_transcript_id: "codex-old",
+          agent_transcript_path: "/Users/me/.codex/sessions/old.jsonl",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "ready",
+        agent_provider: null,
+        agent_transcript_provider: "codex",
+        agent_transcript_id: "codex-old",
+        agent_transcript_path: "/Users/me/.codex/sessions/old.jsonl",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    const stored = useAppStore.getState().sessions[0];
+    expect(stored?.agent_provider).toBeNull();
+    expect(stored?.agent_transcript_provider).toBe("codex");
+  });
+
+  it("merges active process summaries from status polling", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          status: "working",
+          active_processes: [{ pid: 10, name: "node", depth: 1 }],
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "working",
+        branch: null,
+        git_context_path: "/repo/acorn-worktree",
+        active_processes: [
+          { pid: 11, name: "codex", depth: 2 },
+          { pid: 12, name: "rg", depth: 3 },
+        ],
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.active_processes).toEqual([
+      { pid: 11, name: "codex", depth: 2 },
+      { pid: 12, name: "rg", depth: 3 },
+    ]);
+    expect(useAppStore.getState().sessions[0]?.git_context_path).toBe(
+      "/repo/acorn-worktree",
+    );
+  });
+
   it("merges last messages from status polling even when status is unchanged", async () => {
     await seed(
       [project(REPO_A, 0)],
       [
         session("a1", REPO_A, {
-          status: "running",
+          status: "working",
           last_message: "Older transcript preview",
         }),
       ],
@@ -2104,7 +2457,7 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
       {
         id: "a1",
-        status: "running",
+        status: "working",
         last_message: "New transcript preview",
         branch: null,
       },
@@ -2122,7 +2475,7 @@ describe("pollSessionStatuses", () => {
       [project(REPO_A, 0)],
       [
         session("a1", REPO_A, {
-          status: "running",
+          status: "working",
           last_user_message: "Older user prompt",
           last_agent_message: "Older agent response",
         }),
@@ -2131,7 +2484,7 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
       {
         id: "a1",
-        status: "running",
+        status: "working",
         last_user_message: "New user prompt",
         last_agent_message: "New agent response",
         branch: null,
@@ -2153,7 +2506,7 @@ describe("pollSessionStatuses", () => {
       [project(REPO_A, 0)],
       [
         session("a1", REPO_A, {
-          status: "running",
+          status: "working",
           last_message: "Current transcript preview",
         }),
       ],
@@ -2161,7 +2514,7 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
       {
         id: "a1",
-        status: "running",
+        status: "working",
         branch: null,
       },
     ]);
@@ -2178,7 +2531,7 @@ describe("pollSessionStatuses", () => {
       [project(REPO_A, 0)],
       [
         session("a1", REPO_A, {
-          status: "needs_input",
+          status: "waiting_for_input",
           agent_provider: "codex",
         }),
       ],
@@ -2186,7 +2539,7 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
       {
         id: "a1",
-        status: "needs_input",
+        status: "waiting_for_input",
         status_reason: "turn_complete",
         agent_provider: "codex",
         branch: null,
@@ -2197,6 +2550,102 @@ describe("pollSessionStatuses", () => {
 
     expect(useAppStore.getState().sessions[0]?.status_reason).toBe(
       "turn_complete",
+    );
+  });
+
+  it("records when a polled session status starts", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T12:34:56.000Z"));
+      await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+      mockApi.detectSessionStatuses.mockResolvedValueOnce([
+        {
+          id: "a1",
+          status: "waiting_for_input",
+          branch: null,
+        },
+      ]);
+
+      await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+      expect(useAppStore.getState().sessions[0]?.status_started_at).toBe(
+        "2026-01-01T12:34:56.000Z",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves status start time while the polled status is unchanged", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          status: "working",
+          status_started_at: "2026-01-01T00:00:00.000Z",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "working",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.status_started_at).toBe(
+      "2026-01-01T00:00:00.000Z",
+    );
+  });
+
+  it("records first observed active status time when polling starts mid-status", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T12:34:56.000Z"));
+      await seed(
+        [project(REPO_A, 0)],
+        [
+          session("a1", REPO_A, {
+            status: "working",
+          }),
+        ],
+      );
+      mockApi.detectSessionStatuses.mockResolvedValueOnce([
+        {
+          id: "a1",
+          status: "working",
+          branch: null,
+        },
+      ]);
+
+      await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+      expect(useAppStore.getState().sessions[0]?.status_started_at).toBe(
+        "2026-01-01T12:34:56.000Z",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses backend status start time when status polling provides one", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "working",
+        status_started_at: "2026-01-01T01:02:03.000Z",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.status_started_at).toBe(
+      "2026-01-01T01:02:03.000Z",
     );
   });
 
@@ -2213,7 +2662,7 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
       {
         id: "a1",
-        status: "idle",
+        status: "ready",
         agent_provider: null,
         agent_transcript_id: "codex-old",
         branch: null,
@@ -2244,7 +2693,7 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
       {
         id: "a1",
-        status: "running",
+        status: "working",
         branch: null,
         auto_title_enabled: true,
       },
@@ -2267,10 +2716,10 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses
       .mockImplementationOnce(async () => {
         await firstBlocker;
-        return [{ id: "a1", status: "running", branch: null }];
+        return [{ id: "a1", status: "working", branch: null }];
       })
       .mockResolvedValueOnce([
-        { id: "a2", status: "needs_input", branch: null },
+        { id: "a2", status: "waiting_for_input", branch: null },
       ]);
 
     const first = useAppStore.getState().pollSessionStatuses(["a1"]);
@@ -2285,8 +2734,8 @@ describe("pollSessionStatuses", () => {
     expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(2);
     expect(mockApi.detectSessionStatuses).toHaveBeenNthCalledWith(2, ["a2"]);
     const sessions = useAppStore.getState().sessions;
-    expect(sessions.find((s) => s.id === "a1")?.status).toBe("running");
-    expect(sessions.find((s) => s.id === "a2")?.status).toBe("needs_input");
+    expect(sessions.find((s) => s.id === "a1")?.status).toBe("working");
+    expect(sessions.find((s) => s.id === "a2")?.status).toBe("waiting_for_input");
   });
 
   it("coalesces subset requests covered by an active full poll", async () => {
@@ -2301,8 +2750,8 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses.mockImplementationOnce(async () => {
       await fullBlocker;
       return [
-        { id: "a1", status: "running", branch: null },
-        { id: "a2", status: "needs_input", branch: null },
+        { id: "a1", status: "working", branch: null },
+        { id: "a2", status: "waiting_for_input", branch: null },
       ];
     });
 
@@ -2317,8 +2766,8 @@ describe("pollSessionStatuses", () => {
 
     expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(1);
     const sessions = useAppStore.getState().sessions;
-    expect(sessions.find((s) => s.id === "a1")?.status).toBe("running");
-    expect(sessions.find((s) => s.id === "a2")?.status).toBe("needs_input");
+    expect(sessions.find((s) => s.id === "a1")?.status).toBe("working");
+    expect(sessions.find((s) => s.id === "a2")?.status).toBe("waiting_for_input");
   });
 
   it("queues new session ids that appear during an active full poll", async () => {
@@ -2330,10 +2779,10 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses
       .mockImplementationOnce(async () => {
         await fullBlocker;
-        return [{ id: "a1", status: "running", branch: null }];
+        return [{ id: "a1", status: "working", branch: null }];
       })
       .mockResolvedValueOnce([
-        { id: "a2", status: "needs_input", branch: null },
+        { id: "a2", status: "waiting_for_input", branch: null },
       ]);
 
     const full = useAppStore.getState().pollSessionStatuses();
@@ -2353,8 +2802,8 @@ describe("pollSessionStatuses", () => {
     expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(2);
     expect(mockApi.detectSessionStatuses).toHaveBeenNthCalledWith(2, ["a2"]);
     const sessions = useAppStore.getState().sessions;
-    expect(sessions.find((s) => s.id === "a1")?.status).toBe("running");
-    expect(sessions.find((s) => s.id === "a2")?.status).toBe("needs_input");
+    expect(sessions.find((s) => s.id === "a1")?.status).toBe("working");
+    expect(sessions.find((s) => s.id === "a2")?.status).toBe("waiting_for_input");
   });
 
   it("is a no-op when there are no sessions to poll", async () => {
@@ -2406,57 +2855,6 @@ describe("generateSessionTitle", () => {
     expect(useAppStore.getState().sessions[0]?.title_source).toBe("generated");
   });
 
-  it("skips automatic title generation for auto-close sessions", async () => {
-    await seed(
-      [project(REPO_A, 0)],
-      [session("a1", REPO_A, { agent_provider: "codex" })],
-    );
-    useAppStore.setState({ autoCloseSessionIds: { a1: true } });
-
-    const ai = { provider: "codex" as const, ollamaModel: "", llmModel: "" };
-    const status = await useAppStore
-      .getState()
-      .generateSessionTitle("a1", ai, "Title prompt");
-
-    expect(status).toBe("skipped");
-    expect(mockApi.generateSessionTitle).not.toHaveBeenCalled();
-    expect(useAppStore.getState().sessions[0]?.name).toBe("a1");
-    expect(useAppStore.getState().generatingSessionTitleIds).toEqual({});
-  });
-
-  it("does not apply an automatic title result after auto-close is enabled", async () => {
-    await seed(
-      [project(REPO_A, 0)],
-      [session("a1", REPO_A, { agent_provider: "codex" })],
-    );
-    let resolveTitle!: (value: GenerateSessionTitleResult) => void;
-    mockApi.generateSessionTitle.mockImplementationOnce(
-      () =>
-        new Promise<GenerateSessionTitleResult>((resolve) => {
-          resolveTitle = resolve;
-        }),
-    );
-
-    const ai = { provider: "codex" as const, ollamaModel: "", llmModel: "" };
-    const request = useAppStore
-      .getState()
-      .generateSessionTitle("a1", ai, "Title prompt");
-    useAppStore.setState({ autoCloseSessionIds: { a1: true } });
-
-    resolveTitle({
-      status: "generated",
-      session: session("a1", REPO_A, {
-        name: "Should Not Apply",
-        title_source: "generated",
-      }),
-    });
-
-    await expect(request).resolves.toBe("skipped");
-    expect(useAppStore.getState().sessions[0]?.name).toBe("a1");
-    expect(useAppStore.getState().sessions[0]?.title_source).toBe("default");
-    expect(useAppStore.getState().generatingSessionTitleIds).toEqual({});
-  });
-
   it("passes force when manually regenerating a generated session title", async () => {
     await seed(
       [project(REPO_A, 0)],
@@ -2469,7 +2867,6 @@ describe("generateSessionTitle", () => {
         }),
       ],
     );
-    useAppStore.setState({ autoCloseSessionIds: { a1: true } });
     mockApi.generateSessionTitle.mockResolvedValueOnce({
       status: "generated",
       session: session("a1", REPO_A, {
@@ -3194,7 +3591,7 @@ describe("right panel groups", () => {
     expect(s.rightTabByGroup.github).toBe("actions");
     // Other groups untouched.
     expect(s.rightTabByGroup.code).toBe("files");
-    expect(s.rightTabByGroup.agents).toBe("activity");
+    expect(s.rightTabByGroup.agents).toBe("history");
   });
 
   it("setRightGroup restores the group's last sub-tab", () => {

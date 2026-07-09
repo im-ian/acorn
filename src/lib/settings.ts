@@ -13,6 +13,11 @@ import {
   type HotkeyId,
 } from "./hotkeys";
 import { isLanguage, type Language } from "./i18n";
+import {
+  AGENT_PROVIDER_ORDER,
+  getAgentProviderDefinition,
+  isSessionAgentProvider,
+} from "./agentProviderRegistry";
 
 const STORAGE_KEY = "acorn:settings:v1";
 
@@ -41,23 +46,14 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   label: string;
   /** One-shot invocation hint shown in Settings. */
   oneshotHint: string;
-}> = [
-  {
-    value: "claude",
-    label: "Claude Code",
-    oneshotHint: "claude -p --output-format text",
-  },
-  {
-    value: "codex",
-    label: "Codex",
-    oneshotHint: "codex exec --skip-git-repo-check",
-  },
-  {
-    value: "antigravity",
-    label: "Antigravity",
-    oneshotHint: "agy -p <prompt>",
-  },
-];
+}> = AGENT_PROVIDER_ORDER.map((value) => {
+  const definition = getAgentProviderDefinition(value);
+  return {
+    value,
+    label: definition.agentOptionLabel,
+    oneshotHint: definition.oneshotHint,
+  };
+});
 
 const LEGACY_DEFAULT_SESSION_TITLE_PROMPT = `You are naming an Acorn terminal tab from the user's first agent prompt.
 
@@ -129,6 +125,9 @@ export const TERMINAL_FONT_SIZE_STEP = 0.25;
 export const TERMINAL_LETTER_SPACING_MIN = -2;
 export const TERMINAL_LETTER_SPACING_MAX = 6;
 export const TERMINAL_LETTER_SPACING_STEP = 0.25;
+export const TERMINAL_LINE_HEIGHT_MIN = 1.0;
+export const TERMINAL_LINE_HEIGHT_MAX = 2.0;
+export const TERMINAL_LINE_HEIGHT_STEP = 0.05;
 
 export type ToastPosition = "top" | "bottom";
 export type DefaultWorkspaceViewMode = "panes" | "kanban";
@@ -168,6 +167,43 @@ export type TerminalFontSmoothing =
   | "none";
 export const TERMINAL_FONT_SMOOTHING_VALUES: ReadonlyArray<TerminalFontSmoothing> =
   ["grayscale", "subpixel", "system", "none"];
+
+export const TERMINAL_FONT_PRESET_FIELDS = [
+  "fontFamily",
+  "fontSize",
+  "letterSpacing",
+  "fontSmoothing",
+  "fontWeight",
+  "fontWeightBold",
+  "lineHeight",
+] as const;
+
+export const TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS = [
+  "cjkCellWidthHeuristic",
+] as const;
+
+type TerminalFontPresetField = (typeof TERMINAL_FONT_PRESET_FIELDS)[number];
+type TerminalFontPresetExperimentField =
+  (typeof TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS)[number];
+
+export type TerminalFontPresetSettings = Pick<
+  AcornSettings["terminal"],
+  TerminalFontPresetField
+>;
+export type TerminalFontPresetExperimentSettings = Pick<
+  AcornSettings["experiments"],
+  TerminalFontPresetExperimentField
+>;
+
+export interface TerminalFontPreset {
+  id: string;
+  name: string;
+  settings: TerminalFontPresetSettings;
+  experiments: TerminalFontPresetExperimentSettings;
+}
+
+export const TERMINAL_FONT_PRESET_LIMIT = 50;
+export const TERMINAL_FONT_PRESET_NAME_MAX_CHARS = 80;
 
 /**
  * Which field acorn shows as the primary line of a sidebar session row.
@@ -222,6 +258,11 @@ export interface AcornSettings {
      */
     defaultWorkspaceViewMode: DefaultWorkspaceViewMode;
     /**
+     * Move project sidebar tabs that need attention ahead of ready work.
+     * The saved manual order is preserved and restored when this is off.
+     */
+    prioritizeNeedsInputTabs: boolean;
+    /**
      * Initial placement for terminal popovers opened from kanban cards.
      * Users can still drag the popover after it opens.
      */
@@ -231,6 +272,11 @@ export interface AcornSettings {
      * `custom` uses the remembered user-resized popover size.
      */
     kanbanTerminalPopoverDefaultSize: KanbanTerminalPopoverDefaultSize;
+    /**
+     * Open the terminal popover as soon as a terminal session is created while
+     * the active workspace is in kanban mode.
+     */
+    openKanbanTerminalOnSessionCreate: boolean;
   };
   terminal: {
     fontFamily: string;
@@ -313,7 +359,7 @@ export interface AcornSettings {
      */
     confirmRemove: boolean;
     /**
-     * Warn before closing a session that Acorn currently marks as running.
+     * Warn before closing a session that Acorn currently marks as working.
      * This sits ahead of the normal removal confirmation so users get an
      * explicit chance to avoid killing active shell or agent work.
      */
@@ -359,9 +405,8 @@ export interface AcornSettings {
     maxHistory: number;
     autoDeleteRead: boolean;
     events: {
-      needsInput: boolean;
-      failed: boolean;
-      completed: boolean;
+      waitingForInput: boolean;
+      errored: boolean;
     };
   };
   /**
@@ -436,6 +481,9 @@ export interface AcornSettings {
     uiScalePercent: number;
     toastPosition: ToastPosition;
   };
+  fontPresets: {
+    terminal: TerminalFontPreset[];
+  };
   shortcuts: HotkeyConfig;
   /**
    * Opt-in toggles for unfinished features. Anything under here is
@@ -461,12 +509,11 @@ export interface AcornSettings {
      */
     cjkCellWidthHeuristic: boolean;
     /**
-     * Cold-boot "Resume previous conversation" modal for claude / codex.
+     * Cold-boot "Resume previous conversation" modal for session agents.
      * On Acorn launch, probes every persisted session for an unfinished
      * agent transcript and pops a one-shot modal when the user focuses
-     * one. Disable to suppress the modal entirely (the underlying
-     * `claude.id` / `codex.id` files still get written by the persister
-     * for future debugging).
+     * one. Disable to suppress the modal entirely; marker files still get
+     * written by the persister for future debugging.
      */
     resumeModal: boolean;
     /**
@@ -482,8 +529,10 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   language: "en",
   interface: {
     defaultWorkspaceViewMode: "panes",
+    prioritizeNeedsInputTabs: false,
     kanbanTerminalPopoverPlacement: "card",
     kanbanTerminalPopoverDefaultSize: "custom",
+    openKanbanTerminalOnSessionCreate: false,
   },
   terminal: {
     fontFamily: fontStackFromSlots(
@@ -527,9 +576,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     maxHistory: NOTIFICATION_HISTORY_LIMIT_DEFAULT,
     autoDeleteRead: true,
     events: {
-      needsInput: true,
-      failed: true,
-      completed: false,
+      waitingForInput: true,
+      errored: true,
     },
   },
   statusBar: {
@@ -577,6 +625,9 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     uiScalePercent: 100,
     toastPosition: "top",
   },
+  fontPresets: {
+    terminal: [],
+  },
   shortcuts: { ...DEFAULT_HOTKEYS },
   experiments: {
     stickyPrompt: false,
@@ -586,14 +637,62 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
 };
 
+export function terminalFontPresetById(
+  presets: ReadonlyArray<TerminalFontPreset>,
+  id: string,
+): TerminalFontPreset | null {
+  return presets.find((preset) => preset.id === id) ?? null;
+}
+
+export function terminalFontPresetSettings(
+  settings: Pick<AcornSettings, "terminal">,
+): TerminalFontPresetSettings {
+  return {
+    fontFamily: settings.terminal.fontFamily,
+    fontSize: settings.terminal.fontSize,
+    letterSpacing: settings.terminal.letterSpacing,
+    fontSmoothing: settings.terminal.fontSmoothing,
+    fontWeight: settings.terminal.fontWeight,
+    fontWeightBold: settings.terminal.fontWeightBold,
+    lineHeight: settings.terminal.lineHeight,
+  };
+}
+
+export function terminalFontPresetExperiments(
+  settings: Pick<AcornSettings, "experiments">,
+): TerminalFontPresetExperimentSettings {
+  return {
+    cjkCellWidthHeuristic: settings.experiments.cjkCellWidthHeuristic,
+  };
+}
+
+export function terminalFontPresetMatches(
+  settings: Pick<AcornSettings, "terminal" | "experiments">,
+  preset: TerminalFontPreset,
+): boolean {
+  return (
+    TERMINAL_FONT_PRESET_FIELDS.every((field) =>
+      Object.is(settings.terminal[field], preset.settings[field]),
+    ) &&
+    TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS.every((field) =>
+      Object.is(settings.experiments[field], preset.experiments[field]),
+    )
+  );
+}
+
+export function matchingTerminalFontPresetId(
+  settings: Pick<AcornSettings, "terminal" | "experiments">,
+  presets: ReadonlyArray<TerminalFontPreset>,
+): string | null {
+  return (
+    presets.find((preset) =>
+      terminalFontPresetMatches(settings, preset),
+    )?.id ?? null
+  );
+}
+
 const VALID_WEIGHTS = new Set<TerminalFontWeight>([
   100, 200, 300, 400, 500, 600, 700, 800, 900,
-]);
-
-const VALID_AGENTS = new Set<AgentProvider>([
-  "claude",
-  "antigravity",
-  "codex",
 ]);
 
 const VALID_PR_INTERVALS = new Set<number>(
@@ -698,7 +797,11 @@ function normalizeLineHeight(v: unknown, fallback: number): number {
   if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
   // Clamp to the same range the Stepper enforces in the UI so a hand-
   // edited localStorage value can't make the terminal unusable.
-  return Math.max(1.0, Math.min(2.0, v));
+  const clamped = Math.max(
+    TERMINAL_LINE_HEIGHT_MIN,
+    Math.min(TERMINAL_LINE_HEIGHT_MAX, v),
+  );
+  return Math.round(clamped * 100) / 100;
 }
 
 export function normalizeTerminalFontSize(
@@ -781,6 +884,143 @@ function normalizeWeight(
   return fallback;
 }
 
+function normalizeTerminalFontPresetName(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const name = v.trim().replace(/\s+/g, " ");
+  if (!name) return null;
+  return Array.from(name)
+    .slice(0, TERMINAL_FONT_PRESET_NAME_MAX_CHARS)
+    .join("");
+}
+
+function terminalFontPresetIdBase(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug ? `font-${slug}` : "font-preset";
+}
+
+function uniqueTerminalFontPresetId(
+  name: string,
+  presets: ReadonlyArray<TerminalFontPreset>,
+): string {
+  const existing = new Set(presets.map((preset) => preset.id));
+  const base = terminalFontPresetIdBase(name);
+  if (!existing.has(base)) return base;
+
+  for (let index = 2; index < 10_000; index += 1) {
+    const candidate = `${base}-${index}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+
+  return `${base}-${Date.now()}`;
+}
+
+function normalizeTerminalFontPresetId(v: unknown, fallback: string): string {
+  if (typeof v !== "string") return fallback;
+  const id = v.trim();
+  return id ? id.slice(0, 120) : fallback;
+}
+
+function normalizeTerminalFontPresetSettings(
+  v: unknown,
+): TerminalFontPresetSettings | null {
+  if (!v || typeof v !== "object") return null;
+  const raw = v as Partial<TerminalFontPresetSettings>;
+  return {
+    fontFamily:
+      typeof raw.fontFamily === "string" && raw.fontFamily.trim()
+        ? raw.fontFamily
+        : DEFAULT_SETTINGS.terminal.fontFamily,
+    fontSize: normalizeTerminalFontSize(
+      raw.fontSize,
+      DEFAULT_SETTINGS.terminal.fontSize,
+    ),
+    letterSpacing: normalizeTerminalLetterSpacing(
+      raw.letterSpacing,
+      DEFAULT_SETTINGS.terminal.letterSpacing,
+    ),
+    fontSmoothing: normalizeTerminalFontSmoothing(
+      raw.fontSmoothing,
+      DEFAULT_SETTINGS.terminal.fontSmoothing,
+    ),
+    fontWeight: normalizeWeight(
+      raw.fontWeight,
+      DEFAULT_SETTINGS.terminal.fontWeight,
+    ),
+    fontWeightBold: normalizeWeight(
+      raw.fontWeightBold,
+      DEFAULT_SETTINGS.terminal.fontWeightBold,
+    ),
+    lineHeight: normalizeLineHeight(
+      raw.lineHeight,
+      DEFAULT_SETTINGS.terminal.lineHeight,
+    ),
+  };
+}
+
+function normalizeTerminalFontPresetExperiments(
+  v: unknown,
+): TerminalFontPresetExperimentSettings {
+  const raw =
+    v && typeof v === "object"
+      ? (v as Partial<TerminalFontPresetExperimentSettings>)
+      : {};
+  return {
+    cjkCellWidthHeuristic:
+      typeof raw.cjkCellWidthHeuristic === "boolean"
+        ? raw.cjkCellWidthHeuristic
+        : DEFAULT_SETTINGS.experiments.cjkCellWidthHeuristic,
+  };
+}
+
+function normalizeTerminalFontPresets(
+  v: unknown,
+): TerminalFontPreset[] {
+  if (!Array.isArray(v)) return DEFAULT_SETTINGS.fontPresets.terminal;
+
+  const presets: TerminalFontPreset[] = [];
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
+
+  for (const item of v) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as {
+      id?: unknown;
+      name?: unknown;
+      settings?: unknown;
+      experiments?: unknown;
+    };
+    const name = normalizeTerminalFontPresetName(raw.name);
+    const settings = normalizeTerminalFontPresetSettings(raw.settings);
+    if (!name || !settings) continue;
+
+    const nameKey = name.toLocaleLowerCase();
+    if (seenNames.has(nameKey)) continue;
+
+    const fallbackId = uniqueTerminalFontPresetId(name, presets);
+    const id = normalizeTerminalFontPresetId(raw.id, fallbackId);
+    const uniqueId = seenIds.has(id)
+      ? uniqueTerminalFontPresetId(name, presets)
+      : id;
+
+    presets.push({
+      id: uniqueId,
+      name,
+      settings,
+      experiments: normalizeTerminalFontPresetExperiments(raw.experiments),
+    });
+    seenIds.add(uniqueId);
+    seenNames.add(nameKey);
+
+    if (presets.length >= TERMINAL_FONT_PRESET_LIMIT) break;
+  }
+
+  return presets;
+}
+
 function normalizeSelectedAgent(
   v: unknown,
   fallback: SelectedAgent,
@@ -788,7 +1028,7 @@ function normalizeSelectedAgent(
   if (v === "gemini") return "antigravity";
   if (
     typeof v === "string" &&
-    (VALID_AGENTS.has(v as AgentProvider) || v === "custom")
+    (isSessionAgentProvider(v) || v === "custom")
   ) {
     return v as SelectedAgent;
   }
@@ -899,7 +1139,16 @@ function loadSettings(): AcornSettings {
       AcornSettings["interface"]
     >;
     const terminalRaw: Partial<AcornSettings["terminal"]> = parsed.terminal ?? {};
+    const fontPresetsRaw = (parsed.fontPresets ?? {}) as {
+      terminal?: unknown;
+    };
     const sessionsRaw = (parsed.sessions ?? {}) as PersistedSessionSettings;
+    const notificationEventsRaw = (parsed.notifications?.events ?? {}) as {
+      waitingForInput?: unknown;
+      needsInput?: unknown;
+      errored?: unknown;
+      failed?: unknown;
+    };
 
     // Prefer the `agents` block; fall back to values stored under the older
     // `commitMessage` shape, then to the Claude default.
@@ -991,6 +1240,10 @@ function loadSettings(): AcornSettings {
           interfaceRaw.defaultWorkspaceViewMode,
           DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode,
         ),
+        prioritizeNeedsInputTabs:
+          typeof interfaceRaw.prioritizeNeedsInputTabs === "boolean"
+            ? interfaceRaw.prioritizeNeedsInputTabs
+            : DEFAULT_SETTINGS.interface.prioritizeNeedsInputTabs,
         kanbanTerminalPopoverPlacement:
           normalizeKanbanTerminalPopoverPlacement(
             interfaceRaw.kanbanTerminalPopoverPlacement,
@@ -1001,6 +1254,10 @@ function loadSettings(): AcornSettings {
             interfaceRaw.kanbanTerminalPopoverDefaultSize,
             DEFAULT_SETTINGS.interface.kanbanTerminalPopoverDefaultSize,
           ),
+        openKanbanTerminalOnSessionCreate:
+          typeof interfaceRaw.openKanbanTerminalOnSessionCreate === "boolean"
+            ? interfaceRaw.openKanbanTerminalOnSessionCreate
+            : DEFAULT_SETTINGS.interface.openKanbanTerminalOnSessionCreate,
       },
       terminal: {
         ...DEFAULT_SETTINGS.terminal,
@@ -1116,8 +1373,18 @@ function loadSettings(): AcornSettings {
             ? parsed.notifications.autoDeleteRead
             : DEFAULT_SETTINGS.notifications.autoDeleteRead,
         events: {
-          ...DEFAULT_SETTINGS.notifications.events,
-          ...(parsed.notifications?.events ?? {}),
+          waitingForInput:
+            typeof notificationEventsRaw.waitingForInput === "boolean"
+              ? notificationEventsRaw.waitingForInput
+              : typeof notificationEventsRaw.needsInput === "boolean"
+                ? notificationEventsRaw.needsInput
+                : DEFAULT_SETTINGS.notifications.events.waitingForInput,
+          errored:
+            typeof notificationEventsRaw.errored === "boolean"
+              ? notificationEventsRaw.errored
+              : typeof notificationEventsRaw.failed === "boolean"
+                ? notificationEventsRaw.failed
+                : DEFAULT_SETTINGS.notifications.events.errored,
         },
       },
       statusBar: {
@@ -1178,6 +1445,9 @@ function loadSettings(): AcornSettings {
             : DEFAULT_SETTINGS.sessionDisplay.showDetailsOnHover,
       },
       appearance,
+      fontPresets: {
+        terminal: normalizeTerminalFontPresets(fontPresetsRaw.terminal),
+      },
       shortcuts: resolveHotkeys(
         (parsed.shortcuts ?? {}) as Partial<Record<HotkeyId, unknown>>,
       ),
@@ -1267,6 +1537,9 @@ interface SettingsState {
       fontSlots?: AcornSettings["appearance"]["fontSlots"];
     },
   ) => void;
+  applyTerminalFontPreset: (id: string) => void;
+  saveTerminalFontPreset: (name: string) => string | null;
+  deleteTerminalFontPreset: (id: string) => void;
   patchShortcut: (id: HotkeyId, binding: string) => void;
   resetShortcut: (id: HotkeyId) => void;
   resetShortcuts: () => void;
@@ -1301,6 +1574,10 @@ export const useSettings = create<SettingsState>((set, get) => ({
                   patch.defaultWorkspaceViewMode,
                   s.settings.interface.defaultWorkspaceViewMode,
                 ),
+          prioritizeNeedsInputTabs:
+            patch.prioritizeNeedsInputTabs === undefined
+              ? s.settings.interface.prioritizeNeedsInputTabs
+              : patch.prioritizeNeedsInputTabs,
           kanbanTerminalPopoverPlacement:
             patch.kanbanTerminalPopoverPlacement === undefined
               ? s.settings.interface.kanbanTerminalPopoverPlacement
@@ -1315,6 +1592,12 @@ export const useSettings = create<SettingsState>((set, get) => ({
                   patch.kanbanTerminalPopoverDefaultSize,
                   s.settings.interface.kanbanTerminalPopoverDefaultSize,
                 ),
+          openKanbanTerminalOnSessionCreate:
+            patch.openKanbanTerminalOnSessionCreate === undefined
+              ? s.settings.interface.openKanbanTerminalOnSessionCreate
+              : typeof patch.openKanbanTerminalOnSessionCreate === "boolean"
+                ? patch.openKanbanTerminalOnSessionCreate
+                : s.settings.interface.openKanbanTerminalOnSessionCreate,
         },
       };
       persist(next);
@@ -1354,6 +1637,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
               : normalizeTerminalFontSmoothing(
                   patch.fontSmoothing,
                   s.settings.terminal.fontSmoothing,
+                ),
+          lineHeight:
+            patch.lineHeight === undefined
+              ? s.settings.terminal.lineHeight
+              : normalizeLineHeight(
+                  patch.lineHeight,
+                  s.settings.terminal.lineHeight,
                 ),
           rightClickPasteSelection:
             patch.rightClickPasteSelection === undefined
@@ -1509,6 +1799,86 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const next: AcornSettings = {
         ...s.settings,
         appearance,
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  applyTerminalFontPreset: (id) =>
+    set((s) => {
+      const preset = terminalFontPresetById(
+        s.settings.fontPresets.terminal,
+        id,
+      );
+      if (!preset) return s;
+      const next: AcornSettings = {
+        ...s.settings,
+        terminal: {
+          ...s.settings.terminal,
+          ...preset.settings,
+        },
+        experiments: {
+          ...s.settings.experiments,
+          ...preset.experiments,
+        },
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  saveTerminalFontPreset: (name) => {
+    let savedId: string | null = null;
+    set((s) => {
+      const normalizedName = normalizeTerminalFontPresetName(name);
+      if (!normalizedName) return s;
+
+      const presets = s.settings.fontPresets.terminal;
+      const existingIndex = presets.findIndex(
+        (preset) =>
+          preset.name.toLocaleLowerCase() ===
+          normalizedName.toLocaleLowerCase(),
+      );
+      const preset: TerminalFontPreset = {
+        id:
+          existingIndex >= 0
+            ? presets[existingIndex].id
+            : uniqueTerminalFontPresetId(normalizedName, presets),
+        name: normalizedName,
+        settings: terminalFontPresetSettings(s.settings),
+        experiments: terminalFontPresetExperiments(s.settings),
+      };
+      savedId = preset.id;
+
+      const terminal =
+        existingIndex >= 0
+          ? presets.map((item, index) =>
+              index === existingIndex ? preset : item,
+            )
+          : [preset, ...presets].slice(0, TERMINAL_FONT_PRESET_LIMIT);
+      const next: AcornSettings = {
+        ...s.settings,
+        fontPresets: {
+          ...s.settings.fontPresets,
+          terminal,
+        },
+      };
+      persist(next);
+      return { settings: next };
+    });
+    return savedId;
+  },
+  deleteTerminalFontPreset: (id) =>
+    set((s) => {
+      const terminal = s.settings.fontPresets.terminal.filter(
+        (preset) => preset.id !== id,
+      );
+      if (terminal.length === s.settings.fontPresets.terminal.length) {
+        return s;
+      }
+      const next: AcornSettings = {
+        ...s.settings,
+        fontPresets: {
+          ...s.settings.fontPresets,
+          terminal,
+        },
       };
       persist(next);
       return { settings: next };

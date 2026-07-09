@@ -74,9 +74,21 @@
         "label": "기본 작업공간 모드",
         "hint": "새 프로젝트 작업공간을 만들 때 사용할 모드입니다. 이미 프로젝트별로 선택한 모드는 유지됩니다."
       },
+      "projectTabs": {
+        "label": "프로젝트 탭",
+        "hint": "좌측 사이드바의 각 프로젝트 안에서 세션과 작업공간이 표시되는 순서를 제어합니다.",
+        "priority": {
+          "label": "입력 대기 및 오류 탭을 상단으로 이동",
+          "description": "수동 순서는 저장된 채로 유지하고, 사용자 입력을 기다리거나 오류로 막힌 탭을 준비된 작업보다 먼저 표시합니다."
+        }
+      },
       "kanbanTerminalPopover": {
         "title": "칸반 터미널 팝오버",
         "description": "칸반 카드에서 터미널을 열 때 위치와 시작 크기를 정합니다.",
+        "openOnCreate": {
+          "label": "새 세션 터미널을 즉시 열기",
+          "description": "칸반 모드에서 터미널 세션을 만들면 해당 터미널 팝오버를 바로 엽니다."
+        },
         "placement": {
           "label": "표시 위치",
           "hint": "칸반 카드에서 터미널을 열 때 처음 나타나는 위치입니다.",
@@ -104,6 +116,19 @@
       }
     },
     "terminal": {
+      "fontPreset": {
+        "label": "글꼴 프리셋",
+        "hint": "현재 터미널 글꼴 설정을 내 프리셋으로 저장한 뒤 나중에 다시 적용합니다.",
+        "selectLabel": "저장된 글꼴 프리셋",
+        "custom": "사용자 지정",
+        "customHint": "현재 설정은 저장된 프리셋과 일치하지 않습니다.",
+        "empty": "저장된 프리셋 없음",
+        "nameLabel": "프리셋 이름",
+        "namePlaceholder": "예: 조밀한 D2Coding",
+        "save": "현재 설정 저장",
+        "delete": "삭제",
+        "deleteLabel": "선택한 글꼴 프리셋 삭제"
+      },
       "fontFamily": {
         "label": "글꼴 패밀리",
         "hint": "쉼표로 구분한 글꼴 목록입니다. 먼저 해석되는 글꼴이 사용됩니다."
@@ -178,9 +203,9 @@
         "checkbox": "일반 세션을 제거하기 전에 확인 표시"
       },
       "warnBeforeClosingRunning": {
-        "label": "실행 중 세션 닫기 경고",
-        "hint": "아직 실행 중인 세션을 닫기 전에 경고를 표시합니다. 실행 중인 세션을 닫으면 활성 셸이나 에이전트 프로세스가 종료됩니다.",
-        "checkbox": "실행 중인 세션을 닫기 전에 경고 표시"
+        "label": "작업 중 세션 닫기 경고",
+        "hint": "아직 작업 중인 세션을 닫기 전에 경고를 표시합니다. 작업 중인 세션을 닫으면 활성 셸이나 에이전트 프로세스가 종료됩니다.",
+        "checkbox": "작업 중인 세션을 닫기 전에 경고 표시"
       },
       "confirmDeleteIsolatedWorktrees": {
         "label": "격리 워크트리 정리 확인",
@@ -367,7 +392,7 @@
         "hint": "하단 상태 표시줄에 표시할 선택 배지를 고릅니다.",
         "sessionActivity": {
           "label": "세션 활동",
-          "description": "읽지 않은 세션 활동으로 바로 가는 벨 버튼입니다. 숨겨도 Activity 탭은 계속 사용할 수 있습니다."
+          "description": "읽지 않은 세션 활동으로 바로 가는 벨 버튼입니다. 숨겨도 사이드바 활동 목록은 계속 사용할 수 있습니다."
         },
         "sessionCount": {
           "label": "세션 수",
@@ -411,17 +436,13 @@
       },
       "triggers": {
         "label": "알림 조건",
-        "needsInput": {
-          "label": "입력 필요",
-          "description": "Claude가 사용자 입력을 기다리고 있습니다."
+        "waitingForInput": {
+          "label": "입력 대기",
+          "description": "에이전트 또는 셸 명령이 사용자 입력을 기다리고 있습니다."
         },
-        "failed": {
-          "label": "실패",
-          "description": "세션이 오류로 종료되었습니다."
-        },
-        "completed": {
-          "label": "완료",
-          "description": "세션이 완료 상태에 도달했습니다."
+        "errored": {
+          "label": "오류",
+          "description": "세션에서 에이전트 또는 런타임 오류가 발생했습니다."
         }
       },
       "history": {
@@ -500,6 +521,9 @@
         "prevTab": {
           "label": "이전 탭"
         },
+        "focusLatestNeedsInput": {
+          "label": "마지막 입력 필요 탭"
+        },
         "nextProject": {
           "label": "다음 프로젝트"
         },
@@ -511,6 +535,18 @@
         },
         "toggleRightPanel": {
           "label": "오른쪽 패널 열기/닫기"
+        },
+        "focusPaneLeft": {
+          "label": "왼쪽 Pane으로 포커스 이동"
+        },
+        "focusPaneRight": {
+          "label": "오른쪽 Pane으로 포커스 이동"
+        },
+        "focusPaneUp": {
+          "label": "위쪽 Pane으로 포커스 이동"
+        },
+        "focusPaneDown": {
+          "label": "아래쪽 Pane으로 포커스 이동"
         },
         "splitVertical": {
           "label": "Pane 세로 분할"
@@ -825,11 +861,14 @@
     "agentTokensResetIn": "갱신까지 {reset}",
     "agentTokensUpdated": "확인 시각 {time}",
     "sessionStatus": {
-      "idle": "유휴",
-      "running": "실행 중",
-      "needsInput": "입력 필요",
-      "failed": "실패",
-      "completed": "완료"
+      "ready": "준비됨",
+      "working": "작업 중",
+      "waitingForInput": "입력 대기",
+      "errored": "오류"
+    },
+    "sessionStatusReason": {
+      "turn_complete": "에이전트 응답 완료",
+      "shell_prompt": "셸 프롬프트 감지"
     },
     "notifications": {
       "ariaLabel": "세션 알림",
@@ -840,10 +879,9 @@
       "empty": "아직 세션 상태 변경이 없습니다.",
       "itemTitle": "{project} · {session}",
       "kind": {
-        "needsInput": "입력 필요",
-        "failed": "실패",
-        "completed": "완료",
-        "becameIdle": "유휴"
+        "waitingForInput": "입력 대기",
+        "errored": "오류",
+        "becameReady": "준비됨"
       },
       "actions": {
         "markAllRead": "모두 읽음",
@@ -918,8 +956,14 @@
         "nameAsc": "이름"
       },
       "openSession": "{name} 열기",
+      "preview": {
+        "user": "사용자",
+        "agent": "에이전트"
+      },
       "tooltip": {
         "title": "제목",
+        "lastUserMessage": "마지막 사용자 메시지",
+        "lastAgentMessage": "마지막 에이전트 메시지",
         "lastMessage": "마지막 메시지",
         "noLastMessage": "마지막 메시지 없음",
         "branch": "브랜치",
@@ -935,6 +979,8 @@
         "ariaLabel": "세션 터미널",
         "expand": "터미널 크게 보기",
         "restore": "터미널 원래 크기로",
+        "resetPosition": "터미널 원위치",
+        "resetSize": "터미널 크기 초기화",
         "resize": "터미널 크기 조절"
       },
       "popover": {
@@ -1048,11 +1094,14 @@
   },
   "sidebar": {
     "status": {
-      "idle": "유휴",
-      "running": "실행 중",
-      "needs_input": "입력 필요",
-      "failed": "실패",
-      "completed": "완료"
+      "ready": "준비됨",
+      "working": "작업 중",
+      "waiting_for_input": "입력 대기",
+      "errored": "오류"
+    },
+    "statusReason": {
+      "turn_complete": "에이전트 응답 완료",
+      "shell_prompt": "셸 프롬프트 감지"
     },
     "dialog": {
       "selectExistingProject": "기존 프로젝트 선택",
@@ -1091,7 +1140,6 @@
       "rename": "이름 변경",
       "regenerateName": "이름 다시 생성",
       "openWorkSummary": "작업 요약 열기",
-      "autoCloseWhenFinished": "에이전트 완료 시 닫기",
       "forkClaudeSession": "Claude 세션 포크",
       "forkSession": "세션 포크",
       "forkClaudeInNewWorktree": "새 워크트리에 Claude 포크",
@@ -1103,10 +1151,12 @@
       "equalizePaneSizes": "Pane 크기 균등화",
       "openWorktreeInEditor": "편집기에서 워크트리 열기",
       "worktreePath": "워크트리 경로",
+      "transcriptPath": "트랜스크립트 경로",
       "worktreeName": "워크트리 이름",
       "branchName": "브랜치 이름",
       "sessionId": "세션 ID",
       "copyWorktreePath": "워크트리 경로 복사",
+      "copyTranscriptPath": "트랜스크립트 경로 복사",
       "remove": "제거",
       "removeSession": "세션 제거",
       "removeSessionMenu": "세션 제거"
@@ -1143,6 +1193,25 @@
       "newWorkspace": "새 작업공간",
       "empty": "더블클릭하면 인스턴트 세션을 시작할 수 있습니다."
     },
+    "activity": {
+      "ariaLabel": "세션 활동",
+      "title": "활동",
+      "unreadCount": "읽지 않음 {count}개",
+      "readCount": "읽음 {count}개",
+      "empty": "아직 세션 활동이 없습니다",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "waitingForInput": "입력 대기",
+        "errored": "오류",
+        "becameReady": "준비됨"
+      },
+      "actions": {
+        "markAllRead": "모두 읽음",
+        "clearRead": "읽은 항목 지우기",
+        "resize": "활동 영역 크기 조절",
+        "dismiss": "닫기"
+      }
+    },
     "emptyProject": {
       "createSession": "더블클릭하면 세션을 시작할 수 있습니다."
     },
@@ -1157,6 +1226,8 @@
       "branch": "브랜치",
       "detached": "(detached)",
       "workingDirectory": "작업 디렉터리",
+      "openPullRequest": "열린 PR",
+      "processes": "프로세스",
       "status": "상태",
       "kind": "종류",
       "controlSession": "컨트롤 세션",
@@ -1189,7 +1260,6 @@
       "rename": "이름 변경",
       "regenerateName": "이름 다시 생성",
       "openWorkSummary": "작업 요약 열기",
-      "autoCloseWhenFinished": "에이전트 완료 시 닫기",
       "forkClaudeSession": "Claude 세션 포크",
       "forkSession": "세션 포크",
       "forkClaudeInNewWorktree": "새 워크트리에 Claude 포크",
@@ -1244,6 +1314,9 @@
       "status": "상태",
       "mode": "모드",
       "transcript": "Transcript",
+      "transcriptProvider": "Transcript 제공자",
+      "transcriptPath": "Transcript 경로",
+      "copyTranscriptPath": "Transcript 경로 복사",
       "updated": "업데이트"
     },
     "files": {
@@ -1322,10 +1395,9 @@
       "empty": "아직 세션 활동이 없습니다",
       "itemTitle": "{project} · {session}",
       "kind": {
-        "needsInput": "입력 필요",
-        "failed": "실패",
-        "completed": "완료",
-        "becameIdle": "유휴"
+        "waitingForInput": "입력 대기",
+        "errored": "오류",
+        "becameReady": "준비됨"
       },
       "actions": {
         "markAllRead": "모두 읽음",
@@ -1360,6 +1432,7 @@
       "runSession": "새 터미널에서 실행",
       "runInWorktree": "워크트리에서 실행",
       "copyResume": "resume 명령 복사",
+      "copyTranscriptPath": "transcript 경로 복사",
       "copyWorktreePath": "워크트리 경로 복사",
       "moveTranscriptToTrash": "transcript를 휴지통으로 이동...",
       "worktreeMissing": "없음",
@@ -1571,8 +1644,8 @@
       "remove": "제거"
     },
     "runningSessionClose": {
-      "title": "실행 중인 세션을 닫을까요?",
-      "message": "이 세션은 아직 실행 중입니다. 닫으면 활성 셸이나 에이전트 프로세스가 종료됩니다.",
+      "title": "작업 중인 세션을 닫을까요?",
+      "message": "이 세션은 아직 작업 중입니다. 닫으면 활성 셸이나 에이전트 프로세스가 종료됩니다.",
       "sessionLabel": "세션",
       "dontWarnAgain": "다시 경고하지 않기(설정 → 세션에서 변경)",
       "continue": "세션 닫기"
@@ -1929,6 +2002,7 @@
     "groups": {
       "sessions": "세션",
       "switchSession": "세션 전환",
+      "activity": "새 활동",
       "view": "보기",
       "terminal": "터미널",
       "ipc": "IPC",
@@ -1959,6 +2033,13 @@
       "shellEnvReloadFailed": "셸 환경을 다시 불러오지 못했습니다.",
       "ipcRestarted": "IPC 서버를 다시 시작했습니다.",
       "ipcRestartFailedPrefix": "IPC 서버를 다시 시작하지 못했습니다:"
+    },
+    "activity": {
+      "kind": {
+        "waitingForInput": "입력 대기",
+        "errored": "오류",
+        "becameReady": "준비됨"
+      }
     }
   },
   "backgroundSessions": {

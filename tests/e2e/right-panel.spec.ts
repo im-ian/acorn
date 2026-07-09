@@ -23,7 +23,7 @@ async function seedActiveSession(
       worktree_path: "/tmp/demo",
       branch: "main",
       isolated: false,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
@@ -50,7 +50,7 @@ async function seedActiveWorktreeSession(
       worktree_path: "/tmp/demo/.acorn/worktrees/demo-1",
       branch: "main",
       isolated: true,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
@@ -1019,7 +1019,7 @@ test.describe("right panel: tab switching", () => {
     await tauri.handle("read_session_todos", () => null);
 
     await page.goto("/");
-    await page.getByRole("button", { name: /^sess main · Idle$/ }).click();
+    await page.getByRole("button", { name: /^sess main · Ready$/ }).click();
     // Give the polling loop a tick to fetch and apply the null response.
     await expect(page.getByText(/Select a commit to see diff/i)).toBeVisible();
   });
@@ -1056,7 +1056,7 @@ test.describe("right panel: tab switching", () => {
         worktree_path: "/tmp/repo-a",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1068,7 +1068,7 @@ test.describe("right panel: tab switching", () => {
         worktree_path: "/tmp/repo-b",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1113,7 +1113,7 @@ test.describe("right panel: tab switching", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("button", { name: /^sess-a main · Idle$/ }).click();
+    await page.getByRole("button", { name: /^sess-a main · Ready$/ }).click();
     // Wait for A's first page to render.
     await expect(page.getByText("p0 AAA #0")).toBeVisible();
     // Trigger loadMore by scrolling the commits panel to the bottom — the
@@ -1135,7 +1135,7 @@ test.describe("right panel: tab switching", () => {
       );
     });
     // Switch to project B before A's page-1 resolves.
-    await page.getByRole("button", { name: /^sess-b main · Idle$/ }).click();
+    await page.getByRole("button", { name: /^sess-b main · Ready$/ }).click();
     // Wait for B's first page to render — confirms switch landed.
     await expect(page.getByText("p0 BBB #0")).toBeVisible();
     // Give A's delayed page-1 plenty of time to resolve.
@@ -1177,7 +1177,7 @@ test.describe("right panel: tab switching", () => {
         branch: "alpha",
         isolated: true,
         in_worktree: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1190,7 +1190,7 @@ test.describe("right panel: tab switching", () => {
         branch: "beta",
         isolated: true,
         in_worktree: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1203,9 +1203,11 @@ test.describe("right panel: tab switching", () => {
       return null;
     });
     await tauri.handle("list_pull_requests", (args) => {
-      const w = window as unknown as { __prRepoPaths?: string[] };
-      w.__prRepoPaths = w.__prRepoPaths ?? [];
-      w.__prRepoPaths.push((args as { repoPath: string }).repoPath);
+      const w = window as unknown as {
+        __prCalls?: Array<{ repoPath: string; query?: string | null }>;
+      };
+      w.__prCalls = w.__prCalls ?? [];
+      w.__prCalls.push(args as { repoPath: string; query?: string | null });
       return { kind: "ok", items: [], account: null };
     });
     await tauri.handle("list_issues", (args) => {
@@ -1224,7 +1226,7 @@ test.describe("right panel: tab switching", () => {
     await page.goto("/");
     await page
       .locator('[data-panel-id="sidebar"]')
-      .getByRole("button", { name: /^alpha worktree alpha · Idle$/ })
+      .getByRole("button", { name: /^alpha worktree alpha · Ready$/ })
       .click();
     await page.getByRole("button", { name: "GitHub" }).click();
     await expect(page.getByText(/No open pull requests/i)).toBeVisible();
@@ -1238,7 +1240,7 @@ test.describe("right panel: tab switching", () => {
     await pressHotkey(page, { mod: true, key: "d" });
     await page
       .locator('[data-panel-id="sidebar"]')
-      .getByRole("button", { name: /^beta worktree beta · Idle$/ })
+      .getByRole("button", { name: /^beta worktree beta · Ready$/ })
       .click();
     await expect(page.locator("[data-pane-body]")).toHaveCount(2);
     await expect(page.getByText(/No open pull requests/i)).toBeVisible();
@@ -1250,12 +1252,14 @@ test.describe("right panel: tab switching", () => {
     await page.waitForTimeout(1_500);
     const initialCalls = await page.evaluate(() => {
       const w = window as unknown as {
-        __prRepoPaths?: string[];
+        __prCalls?: Array<{ repoPath: string; query?: string | null }>;
         __issueRepoPaths?: string[];
         __workflowRepoPaths?: string[];
       };
       return [
-        ...(w.__prRepoPaths ?? []),
+        ...(w.__prCalls ?? [])
+          .filter((call) => !call.query?.startsWith("head:"))
+          .map((call) => call.repoPath),
         ...(w.__issueRepoPaths ?? []),
         ...(w.__workflowRepoPaths ?? []),
       ];
@@ -1268,11 +1272,11 @@ test.describe("right panel: tab switching", () => {
 
     await page.evaluate(() => {
       const w = window as unknown as {
-        __prRepoPaths?: string[];
+        __prCalls?: Array<{ repoPath: string; query?: string | null }>;
         __issueRepoPaths?: string[];
         __workflowRepoPaths?: string[];
       };
-      w.__prRepoPaths = [];
+      w.__prCalls = [];
       w.__issueRepoPaths = [];
       w.__workflowRepoPaths = [];
     });
@@ -1285,12 +1289,14 @@ test.describe("right panel: tab switching", () => {
 
     const calls = await page.evaluate(() => {
       const w = window as unknown as {
-        __prRepoPaths?: string[];
+        __prCalls?: Array<{ repoPath: string; query?: string | null }>;
         __issueRepoPaths?: string[];
         __workflowRepoPaths?: string[];
       };
       return {
-        prs: w.__prRepoPaths ?? [],
+        prs: (w.__prCalls ?? [])
+          .filter((call) => !call.query?.startsWith("head:"))
+          .map((call) => call.repoPath),
         issues: w.__issueRepoPaths ?? [],
         workflows: w.__workflowRepoPaths ?? [],
       };
@@ -1399,7 +1405,7 @@ test.describe("right panel: groups", () => {
         branch: "HEAD",
         isolated: false,
         project_scoped: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -1590,7 +1596,7 @@ test.describe("right panel: groups", () => {
       worktree_path: "/tmp/demo",
       branch: "main",
       isolated: false,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
@@ -1606,7 +1612,7 @@ test.describe("right panel: groups", () => {
         worktree_path: (args as { worktreePath: string }).worktreePath,
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1680,7 +1686,7 @@ test.describe("right panel: groups", () => {
         worktree_path: (args as { repoPath: string }).repoPath,
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1744,7 +1750,7 @@ test.describe("right panel: groups", () => {
       worktree_path: "/tmp/demo",
       branch: "main",
       isolated: false,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
@@ -1760,7 +1766,7 @@ test.describe("right panel: groups", () => {
         worktree_path: (args as { worktreePath: string }).worktreePath,
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1855,5 +1861,58 @@ test.describe("right panel: groups", () => {
       transcriptPath: "/tmp/claude-trash.jsonl",
     });
     await expect(page.getByText("Disposable transcript")).toHaveCount(0);
+  });
+
+  test("History context menu copies the transcript path", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (text: string) => {
+            const w = window as unknown as { __clipboardWrites?: string[] };
+            w.__clipboardWrites = w.__clipboardWrites ?? [];
+            w.__clipboardWrites.push(text);
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    await seedActiveSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "codex",
+        id: "codex-copy-path",
+        title: "Copy path transcript",
+        preview: null,
+        cwd: "/tmp/demo",
+        worktree: null,
+        transcript_path: "/tmp/codex-copy-path.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-copy-path",
+      },
+    ]);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    await page.getByText("Copy path transcript").click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Copy transcript path" })
+      .click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __clipboardWrites?: string[] })
+                .__clipboardWrites?.at(-1) ?? null,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe("/tmp/codex-copy-path.jsonl");
   });
 });

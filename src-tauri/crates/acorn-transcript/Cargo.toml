@@ -8,6 +8,7 @@ publish = false
 name = "acorn_transcript"
 
 [dependencies]
+acorn-agent = { path = "../acorn-agent" }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }
 tracing = { workspace = true }

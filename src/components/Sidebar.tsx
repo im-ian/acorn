@@ -2,13 +2,15 @@ import {
   Activity,
   BarChart3,
   Bot,
+  CheckCheck,
   ChevronRight,
   Copy,
+  ExternalLink,
   Folder,
   FolderOpen,
   FolderPlus,
   GitBranch,
-  GitFork,
+  GitPullRequest,
   Home,
   LayoutPanelLeft,
   MessageSquareText,
@@ -23,13 +25,16 @@ import {
   X,
 } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   DndContext,
@@ -59,6 +64,10 @@ import {
   providerRequiresForkTranscriptPrep,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
+import {
+  buildAgentContextMenuItems,
+  createEmptySessionAgentDetection,
+} from "../lib/agentContextMenu";
 import { api, type WorktreeRemoval } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
@@ -74,14 +83,18 @@ import {
   canRegenerateSessionTitle,
   canRenameSession,
 } from "../lib/sessionTitle";
+import {
+  summarizeAllSessionProcesses,
+  summarizeSessionProcesses,
+} from "../lib/sessionContext";
 import { suggestDefaultSessionName } from "../lib/sessionName";
-import { canConfigureSessionAutoClose } from "../lib/sessionAgentState";
 import {
   hasRecordedWorktree,
   shouldAutoDeleteSessionWorktree,
 } from "../lib/sessionWorktree";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
+import { useCurrentPullRequest } from "../lib/useCurrentPullRequest";
 import { showWorktreeRemovalToast } from "../lib/operationToasts";
 import {
   buildLocalSessions,
@@ -98,6 +111,13 @@ import {
   type ProjectFolderGroup,
   type ProjectFolderProjectGroup,
 } from "../lib/projectFolders";
+import {
+  buildProjectTopLevelItems,
+  orderProjectTopLevelItems,
+  orderSessionsByPriority,
+  type ProjectTopLevelFolderItem,
+  type ProjectTopLevelSessionItem,
+} from "../lib/sidebarProjectItems";
 import {
   applySessionCreateRequest,
   buildSessionCreateRequest,
@@ -118,17 +138,24 @@ import {
   planTitleClick,
   type ProjectClickPlan,
 } from "../lib/sidebar-actions";
+import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import type {
   Session,
+  SessionAgentDetection,
   SessionAgentProvider,
   SessionKind,
   SessionMode,
+  SessionNotification,
+  SessionNotificationKind,
+  SessionPullRequestSummary,
   SessionStatus,
+  SessionStatusReason,
 } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { RemoveProjectFolderDialog } from "./RemoveProjectFolderDialog";
+import { ResizeHandle } from "./ResizeHandle";
 import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
 import { Tooltip } from "./Tooltip";
 import {
@@ -139,30 +166,27 @@ import {
 } from "./ui";
 
 const SESSION_STATUS_TONE: Record<SessionStatus, StatusTone> = {
-  idle: "neutral",
-  running: "accent",
-  needs_input: "warning",
-  failed: "danger",
-  completed: "accent",
+  ready: "neutral",
+  working: "accent",
+  waiting_for_input: "warning",
+  errored: "danger",
 };
 
 const STATUS_ICON: Record<SessionStatus, string> = {
-  idle: "text-fg-muted",
-  running: "text-accent animate-pulse",
-  needs_input: "text-warning",
-  failed: "text-danger",
-  completed: "text-accent/60",
+  ready: "text-fg-muted",
+  working: "text-accent animate-pulse",
+  waiting_for_input: "text-warning",
+  errored: "text-danger",
 };
-
-function autoCloseSessionRowClassName(active: boolean): string {
-  return active
-    ? "!bg-warning/15 text-fg shadow-sm ring-1 ring-warning/25 focus-visible:!bg-warning/15"
-    : "!bg-warning/10 text-fg hover:!bg-warning/15 focus-visible:!bg-warning/15";
-}
 
 const COLLAPSED_KEY = "acorn:sidebar:collapsed-projects";
 const FOLDER_COLLAPSED_KEY = "acorn:sidebar:collapsed-project-folders";
 const PROJECT_ITEM_ORDER_KEY = "acorn:sidebar:project-item-order";
+const ACTIVITY_HEIGHT_KEY = "acorn:sidebar:activity-height";
+const ACTIVITY_DEFAULT_HEIGHT = 192;
+const ACTIVITY_MIN_HEIGHT = 96;
+const ACTIVITY_MAX_HEIGHT = 420;
+const ACTIVITY_KEYBOARD_STEP = 16;
 
 const PROJECT_DRAG_PREFIX = "project:";
 const FOLDER_DRAG_PREFIX = "folder:";
@@ -176,6 +200,18 @@ type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
 
 function sidebarText(t: Translator, key: SidebarTranslationKey): string {
   return t(key);
+}
+
+function sidebarFormat(
+  t: Translator,
+  key: SidebarTranslationKey,
+  values: Record<string, string | number>,
+): string {
+  return sidebarText(t, key).replace(/\{(\w+)\}/g, (match, name) =>
+    Object.prototype.hasOwnProperty.call(values, name)
+      ? String(values[name])
+      : match,
+  );
 }
 
 type SidebarContextMenuGroup =
@@ -201,6 +237,26 @@ function statusLabel(t: Translator, status: SessionStatus): string {
   return sidebarText(t, `sidebar.status.${status}`);
 }
 
+function statusReasonLabel(
+  t: Translator,
+  reason: SessionStatusReason | null | undefined,
+): string | null {
+  switch (reason) {
+    case "turn_complete":
+      return sidebarText(t, "sidebar.statusReason.turn_complete");
+    case "shell_prompt":
+      return sidebarText(t, "sidebar.statusReason.shell_prompt");
+    default:
+      return null;
+  }
+}
+
+function statusDetailLabel(t: Translator, session: Session): string {
+  const label = statusLabel(t, session.status);
+  const reason = statusReasonLabel(t, session.status_reason);
+  return reason ? `${label} · ${reason}` : label;
+}
+
 function isLocalTerminalAreaFocused(): boolean {
   if (typeof document === "undefined") return false;
   const active = document.activeElement;
@@ -221,6 +277,7 @@ export function Sidebar() {
   const activeProjectFolderId = useAppStore((s) => s.activeProjectFolderId);
   const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const selectSession = useAppStore((s) => s.selectSession);
+  const openTerminalPopup = useAppStore((s) => s.openTerminalPopup);
   const focusLocalSessions = useAppStore((s) => s.focusLocalSessions);
   const setActiveProject = useAppStore((s) => s.setActiveProject);
   const setActiveProjectFolder = useAppStore((s) => s.setActiveProjectFolder);
@@ -233,6 +290,9 @@ export function Sidebar() {
   );
   const confirmDeleteEmptyWorktreeWorkspaces = useSettings(
     (s) => s.settings.sessions.confirmDeleteEmptyWorktreeWorkspaces,
+  );
+  const prioritizeNeedsInputTabs = useSettings(
+    (s) => s.settings.interface.prioritizeNeedsInputTabs,
   );
   const deleteIsolatedWorktreesWithoutPrompt =
     !confirmDeleteIsolatedWorktrees;
@@ -313,11 +373,6 @@ export function Sidebar() {
     }
     return null;
   }, [allWorkspaceGroups, pendingRemoveProjectFolderId]);
-  const localSessions = useMemo(
-    () => buildLocalSessions(sessions),
-    [sessions],
-  );
-
   const sensors = useSensors(
     useSensor(PointerSensor, {
       // 5px movement avoids hijacking clicks on the project header / session row.
@@ -358,6 +413,13 @@ export function Sidebar() {
     });
   }
 
+  function selectSidebarSession(sessionId: string) {
+    selectSession(sessionId);
+    if (useAppStore.getState().workspaceViewMode === "kanban") {
+      openTerminalPopup(sessionId);
+    }
+  }
+
   function applyClickPlan(
     plan: ProjectClickPlan,
     project: ProjectFolderProjectGroup,
@@ -370,7 +432,7 @@ export function Sidebar() {
     if (plan.shouldActivate) {
       setActiveProject(project.repoPath);
       const target = pickSessionToActivate(project.sessions, activeSessionId);
-      if (target) selectSession(target);
+      if (target) selectSidebarSession(target);
     }
   }
 
@@ -829,6 +891,31 @@ export function Sidebar() {
     return true;
   }
 
+  function currentSessionDragSnapshot() {
+    const state = useAppStore.getState();
+    const currentProjectGroups = buildProjectFolderGroups(
+      state.projects,
+      state.sessions,
+      state.projectFolders,
+      state.sessionFolderIds,
+    );
+    const currentLocalWorkspaceGroups = buildLocalSessionFolderGroups(
+      state.projects,
+      state.sessions,
+      state.projectFolders,
+      state.sessionFolderIds,
+    );
+    return {
+      sessions: state.sessions,
+      projectGroups: currentProjectGroups,
+      localSessions: buildLocalSessions(state.sessions),
+      allWorkspaceGroups: [
+        ...currentProjectGroups,
+        ...currentLocalWorkspaceGroups,
+      ],
+    };
+  }
+
   function onDragEnd(event: DragEndEvent) {
     setActiveDragId(null);
     const { active, over } = event;
@@ -865,21 +952,32 @@ export function Sidebar() {
       return;
     }
 
-    if (activeId.startsWith(SESSION_DRAG_PREFIX)) {
+    const sessionDragSnapshot = activeId.startsWith(SESSION_DRAG_PREFIX)
+      ? currentSessionDragSnapshot()
+      : null;
+
+    if (sessionDragSnapshot && activeId.startsWith(SESSION_DRAG_PREFIX)) {
+      const {
+        sessions: currentSessions,
+        allWorkspaceGroups: currentAllWorkspaceGroups,
+      } = sessionDragSnapshot;
       const activeSid = activeId.slice(SESSION_DRAG_PREFIX.length);
-      const activeSession = sessions.find((s) => s.id === activeSid);
+      const activeSession = currentSessions.find((s) => s.id === activeSid);
       if (!activeSession) return;
       const activeFolderId = projectFolderIdForSession(
-        allWorkspaceGroups,
+        currentAllWorkspaceGroups,
         activeSid,
       );
       const activeFolder = activeFolderId
-        ? projectFolderById(allWorkspaceGroups, activeFolderId)
+        ? projectFolderById(currentAllWorkspaceGroups, activeFolderId)
         : null;
 
       if (overId.startsWith(SESSION_FOLDER_DROP_PREFIX)) {
         const folderId = overId.slice(SESSION_FOLDER_DROP_PREFIX.length);
-        const targetFolder = projectFolderById(allWorkspaceGroups, folderId);
+        const targetFolder = projectFolderById(
+          currentAllWorkspaceGroups,
+          folderId,
+        );
         if (targetFolder?.repoPath !== activeSession.repo_path) return;
         if (
           isSessionDragCrossingLockedWorkspace(
@@ -910,7 +1008,7 @@ export function Sidebar() {
             : dropRepoPath;
         const targetFolderId = defaultProjectFolderId(repoPath);
         const targetFolder = projectFolderById(
-          allWorkspaceGroups,
+          currentAllWorkspaceGroups,
           targetFolderId,
         );
         if (
@@ -932,13 +1030,20 @@ export function Sidebar() {
     }
 
     if (
+      sessionDragSnapshot &&
       activeId.startsWith(SESSION_DRAG_PREFIX) &&
       overId.startsWith(SESSION_DRAG_PREFIX)
     ) {
+      const {
+        sessions: currentSessions,
+        projectGroups: currentProjectGroups,
+        localSessions: currentLocalSessions,
+        allWorkspaceGroups: currentAllWorkspaceGroups,
+      } = sessionDragSnapshot;
       const activeSid = activeId.slice(SESSION_DRAG_PREFIX.length);
       const overSid = overId.slice(SESSION_DRAG_PREFIX.length);
-      const activeSession = sessions.find((s) => s.id === activeSid);
-      const overSession = sessions.find((s) => s.id === overSid);
+      const activeSession = currentSessions.find((s) => s.id === activeSid);
+      const overSession = currentSessions.find((s) => s.id === overSid);
       if (!activeSession || !overSession) return;
       if (
         (activeSession.project_scoped === false) !==
@@ -949,18 +1054,18 @@ export function Sidebar() {
       // Cross-project drops are not supported yet — silently ignore.
       if (activeSession.repo_path !== overSession.repo_path) return;
       const activeFolderId = projectFolderIdForSession(
-        allWorkspaceGroups,
+        currentAllWorkspaceGroups,
         activeSid,
       );
       const overFolderId = projectFolderIdForSession(
-        allWorkspaceGroups,
+        currentAllWorkspaceGroups,
         overSid,
       );
       const activeFolder = activeFolderId
-        ? projectFolderById(allWorkspaceGroups, activeFolderId)
+        ? projectFolderById(currentAllWorkspaceGroups, activeFolderId)
         : null;
       const overFolder = overFolderId
-        ? projectFolderById(allWorkspaceGroups, overFolderId)
+        ? projectFolderById(currentAllWorkspaceGroups, overFolderId)
         : null;
       if (
         isSessionDragCrossingLockedWorkspace(
@@ -975,7 +1080,7 @@ export function Sidebar() {
       }
       const project =
         activeSession.project_scoped !== false
-          ? (projectGroups.find(
+          ? (currentProjectGroups.find(
               (group) => group.repoPath === activeSession.repo_path,
             ) ?? null)
           : null;
@@ -1020,11 +1125,17 @@ export function Sidebar() {
           sessionFolderAssignmentForDrop(activeSession, overFolderId),
         );
       }
+      const targetFolderSessions = overFolderId
+        ? projectFolderGroupById(currentAllWorkspaceGroups, overFolderId)
+            ?.sessions
+        : null;
       const orderedSessions =
-        activeSession.project_scoped === false
-          ? localSessions
-          : (projectGroups.find((g) => g.repoPath === activeSession.repo_path)
-              ?.sessions ?? []);
+        targetFolderSessions ??
+        (activeSession.project_scoped === false
+          ? currentLocalSessions
+          : (currentProjectGroups.find(
+              (g) => g.repoPath === activeSession.repo_path,
+            )?.sessions ?? []));
       const next = orderedSessionIdsAfterDrop(
         orderedSessions,
         activeSid,
@@ -1073,7 +1184,7 @@ export function Sidebar() {
           </Tooltip>
         </div>
       </header>
-      <div className="acorn-no-scrollbar flex flex-1 flex-col overflow-y-auto px-1 pb-2">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <DndContext
           sensors={sensors}
           collisionDetection={scopedCollision}
@@ -1081,134 +1192,143 @@ export function Sidebar() {
           onDragEnd={onDragEnd}
           onDragCancel={() => setActiveDragId(null)}
         >
-          {projectGroups.length === 0 ? (
-            <EmptyState onOpenProject={onAddExistingProject} />
-          ) : (
-            <SortableContext
-              items={projectIds}
-              strategy={verticalListSortingStrategy}
-            >
-              <ul className="flex flex-col gap-1.5">
-                {projectGroups.map((project) => {
-                  return (
-                    <ProjectGroupView
-                      key={project.repoPath}
-                      project={project}
-                      collapsed={collapsed.has(project.repoPath)}
-                      activeSessionId={activeSessionId}
-                      isActiveProject={activeProject === project.repoPath}
-                      workspaceViewMode={
-                        activeProject === project.repoPath
-                          ? workspaceViewMode
-                          : "panes"
-                      }
-                      activeProjectFolderId={activeProjectFolderId}
-                      topLevelOrder={projectItemOrders[project.repoPath] ?? []}
-                      onTitleClick={() =>
-                        applyClickPlan(
-                          planTitleClick({
-                            wasActive: activeProject === project.repoPath,
-                            wasCollapsed: collapsed.has(project.repoPath),
-                          }),
-                          project,
-                        )
-                      }
-                      onChevronClick={() =>
-                        applyClickPlan(
-                          planChevronClick({
-                            wasActive: activeProject === project.repoPath,
-                            wasCollapsed: collapsed.has(project.repoPath),
-                          }),
-                          project,
-                        )
-                      }
-                      onActivate={() => {
-                        setActiveProject(project.repoPath);
-                        expandProject(project.repoPath);
-                        const target = pickSessionToActivate(
-                          project.sessions,
-                          activeSessionId,
-                        );
-                        if (target) selectSession(target);
-                      }}
-                      onSelectFolder={setActiveProjectFolder}
-                      onSelectSession={(folderId, sessionId) => {
-                        setActiveProjectFolder(folderId);
-                        selectSession(sessionId);
-                      }}
-                      onRemoveSession={(s) => requestRemoveSession(s.id)}
-                      onAddSession={(folder, isolated, kind, mode = "terminal") =>
-                        onNewSession(
+          <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pb-2">
+            {projectGroups.length === 0 ? (
+              <EmptyState onOpenProject={onAddExistingProject} />
+            ) : (
+              <SortableContext
+                items={projectIds}
+                strategy={verticalListSortingStrategy}
+              >
+                <ul className="flex flex-col gap-1.5">
+                  {projectGroups.map((project) => {
+                    return (
+                      <ProjectGroupView
+                        key={project.repoPath}
+                        project={project}
+                        collapsed={collapsed.has(project.repoPath)}
+                        activeSessionId={activeSessionId}
+                        isActiveProject={activeProject === project.repoPath}
+                        workspaceViewMode={
+                          activeProject === project.repoPath
+                            ? workspaceViewMode
+                            : "panes"
+                        }
+                        activeProjectFolderId={activeProjectFolderId}
+                        topLevelOrder={projectItemOrders[project.repoPath] ?? []}
+                        prioritizeNeedsInputTabs={prioritizeNeedsInputTabs}
+                        onTitleClick={() =>
+                          applyClickPlan(
+                            planTitleClick({
+                              wasActive: activeProject === project.repoPath,
+                              wasCollapsed: collapsed.has(project.repoPath),
+                            }),
+                            project,
+                          )
+                        }
+                        onChevronClick={() =>
+                          applyClickPlan(
+                            planChevronClick({
+                              wasActive: activeProject === project.repoPath,
+                              wasCollapsed: collapsed.has(project.repoPath),
+                            }),
+                            project,
+                          )
+                        }
+                        onActivate={() => {
+                          setActiveProject(project.repoPath);
+                          expandProject(project.repoPath);
+                          const target = pickSessionToActivate(
+                            project.sessions,
+                            activeSessionId,
+                          );
+                          if (target) selectSidebarSession(target);
+                        }}
+                        onSelectFolder={setActiveProjectFolder}
+                        onSelectSession={(folderId, sessionId) => {
+                          setActiveProjectFolder(folderId);
+                          selectSidebarSession(sessionId);
+                        }}
+                        onRemoveSession={(s) => requestRemoveSession(s.id)}
+                        onAddSession={(
+                          folder,
                           isolated,
                           kind,
-                          {
-                            placement: {
-                              repoPath: project.repoPath,
-                              projectScoped: true,
-                              projectFolderId: folder.id,
+                          mode = "terminal",
+                        ) =>
+                          onNewSession(
+                            isolated,
+                            kind,
+                            {
+                              placement: {
+                                repoPath: project.repoPath,
+                                projectScoped: true,
+                                projectFolderId: folder.id,
+                              },
+                              launch: {
+                                kind: "workspaceCwd",
+                                cwdPath: folder.cwdPath,
+                              },
                             },
-                            launch: {
-                              kind: "workspaceCwd",
-                              cwdPath: folder.cwdPath,
-                            },
-                          },
-                          mode,
-                        )
-                      }
-                      onAddFolder={() => onAddProjectFolder(project.repoPath)}
-                      onAddWorktreeFolder={() =>
-                        void onAddProjectFolderWorktree(project.repoPath)
-                      }
-                      onRenameFolder={renameProjectFolder}
-                      onRemoveFolder={requestRemoveProjectFolder}
-                      onMoveSessionToFolder={moveSessionToProjectFolder}
-                      onRemoveProject={() =>
-                        requestRemoveProject(project.repoPath)
-                      }
-                      onOpenSettings={() => setSettingsProject(project)}
-                      collapsedFolderIds={collapsedFolders}
-                      onToggleFolder={toggleProjectFolder}
-                    />
-                  );
-                })}
-              </ul>
-            </SortableContext>
-          )}
-          <LocalTerminalArea
-            groups={localWorkspaceGroups}
-            activeSessionId={activeSessionId}
-            activeProjectFolderId={activeProjectFolderId}
-            collapsedFolderIds={collapsedFolders}
-            onCreate={() => onNewLocalSession()}
-            onCreateInFolder={(folder) =>
-              onNewLocalSession({
-                placement: {
-                  repoPath: folder.repoPath,
-                  projectScoped: false,
-                  projectFolderId: folder.id,
-                },
-                launch: {
-                  kind: "workspaceCwd",
-                  cwdPath: folder.cwdPath,
-                },
-              })
-            }
-            onCreateWorkspace={onAddLocalWorkspace}
-            onFocusArea={focusLocalSessions}
-            onSelectFolder={setActiveProjectFolder}
-            onToggleFolder={toggleProjectFolder}
-            onSelectSession={selectSession}
-            onRemoveSession={(s) => requestRemoveSession(s.id)}
-            onRenameFolder={renameProjectFolder}
-            onRemoveFolder={requestRemoveProjectFolder}
-            onMoveSessionToFolder={moveSessionToProjectFolder}
-          />
+                            mode,
+                          )
+                        }
+                        onAddFolder={() => onAddProjectFolder(project.repoPath)}
+                        onAddWorktreeFolder={() =>
+                          void onAddProjectFolderWorktree(project.repoPath)
+                        }
+                        onRenameFolder={renameProjectFolder}
+                        onRemoveFolder={requestRemoveProjectFolder}
+                        onMoveSessionToFolder={moveSessionToProjectFolder}
+                        onRemoveProject={() =>
+                          requestRemoveProject(project.repoPath)
+                        }
+                        onOpenSettings={() => setSettingsProject(project)}
+                        collapsedFolderIds={collapsedFolders}
+                        onToggleFolder={toggleProjectFolder}
+                      />
+                    );
+                  })}
+                </ul>
+              </SortableContext>
+            )}
+            <LocalTerminalArea
+              groups={localWorkspaceGroups}
+              activeSessionId={activeSessionId}
+              activeProjectFolderId={activeProjectFolderId}
+              collapsedFolderIds={collapsedFolders}
+              onCreate={() => onNewLocalSession()}
+              onCreateInFolder={(folder) =>
+                onNewLocalSession({
+                  placement: {
+                    repoPath: folder.repoPath,
+                    projectScoped: false,
+                    projectFolderId: folder.id,
+                  },
+                  launch: {
+                    kind: "workspaceCwd",
+                    cwdPath: folder.cwdPath,
+                  },
+                })
+              }
+              onCreateWorkspace={onAddLocalWorkspace}
+              onFocusArea={focusLocalSessions}
+              onSelectFolder={setActiveProjectFolder}
+              onToggleFolder={toggleProjectFolder}
+              onSelectSession={selectSidebarSession}
+              onRemoveSession={(s) => requestRemoveSession(s.id)}
+              onRenameFolder={renameProjectFolder}
+              onRemoveFolder={requestRemoveProjectFolder}
+              onMoveSessionToFolder={moveSessionToProjectFolder}
+            />
+          </div>
           <DragOverlay dropAnimation={null}>
             {activeDragId
               ? renderDragOverlay(activeDragId, projectGroups, sessions, t)
               : null}
           </DragOverlay>
         </DndContext>
+        <SessionActivityInbox />
       </div>
       <NewProjectDialog
         open={newProjectOpen}
@@ -1374,6 +1494,7 @@ function SessionRowPreview({
         session={session}
         titleText={titleText}
         metadataText={metadataText}
+        currentPullRequest={null}
         showKindIcons={sessionDisplay.icons.sessionKind}
         t={t}
         onSubmitRename={() => undefined}
@@ -1421,11 +1542,18 @@ function projectFolderById(
   projectGroups: ProjectFolderProjectGroup[],
   folderId: string,
 ): ProjectFolder | null {
+  return projectFolderGroupById(projectGroups, folderId)?.folder ?? null;
+}
+
+function projectFolderGroupById(
+  projectGroups: ProjectFolderProjectGroup[],
+  folderId: string,
+): ProjectFolderGroup | null {
   for (const project of projectGroups) {
     const folderGroup = project.folders.find(
       (candidate) => candidate.folder.id === folderId,
     );
-    if (folderGroup) return folderGroup.folder;
+    if (folderGroup) return folderGroup;
   }
   return null;
 }
@@ -1597,69 +1725,6 @@ function projectSessionCreateMenuForWorkspace(
   });
 }
 
-interface ProjectTopLevelSessionItem {
-  id: string;
-  type: "session";
-  session: Session;
-  folderId: string;
-}
-
-interface ProjectTopLevelFolderItem {
-  id: string;
-  type: "folder";
-  folderGroup: ProjectFolderGroup;
-}
-
-type ProjectTopLevelItem =
-  | ProjectTopLevelSessionItem
-  | ProjectTopLevelFolderItem;
-
-function buildProjectTopLevelItems(
-  project: ProjectFolderProjectGroup,
-  order: readonly string[],
-): ProjectTopLevelItem[] {
-  const defaultFolderGroup =
-    project.folders.find((folderGroup) =>
-      isDefaultProjectFolder(folderGroup.folder),
-    ) ?? project.folders[0] ?? null;
-  const directSessions: ProjectTopLevelItem[] = (
-    defaultFolderGroup?.sessions ?? []
-  ).map((session) => ({
-    id: sessionDragId(session.id),
-    type: "session",
-    session,
-    folderId:
-      defaultFolderGroup?.folder.id ?? defaultProjectFolderId(project.repoPath),
-  }));
-  const folders: ProjectTopLevelItem[] = project.folders
-    .filter((folderGroup) => !isDefaultProjectFolder(folderGroup.folder))
-    .map((folderGroup) => ({
-      id: folderDragId(folderGroup.folder.id),
-      type: "folder",
-      folderGroup,
-    }));
-  return orderProjectTopLevelItems([...directSessions, ...folders], order);
-}
-
-function orderProjectTopLevelItems(
-  items: readonly ProjectTopLevelItem[],
-  order: readonly string[],
-): ProjectTopLevelItem[] {
-  const itemById = new Map(items.map((item) => [item.id, item]));
-  const seen = new Set<string>();
-  const ordered: ProjectTopLevelItem[] = [];
-  for (const id of order) {
-    const item = itemById.get(id);
-    if (!item || seen.has(id)) continue;
-    ordered.push(item);
-    seen.add(id);
-  }
-  for (const item of items) {
-    if (!seen.has(item.id)) ordered.push(item);
-  }
-  return ordered;
-}
-
 function isSessionRowDragId(id: string): boolean {
   return (
     id.startsWith(SESSION_DRAG_PREFIX) &&
@@ -1754,6 +1819,7 @@ interface ProjectGroupViewProps {
   workspaceViewMode: WorkspaceViewMode;
   activeProjectFolderId: string | null;
   topLevelOrder: readonly string[];
+  prioritizeNeedsInputTabs: boolean;
   /** Title click: activate (preserve collapse if inactive); ensure expanded if already active. */
   onTitleClick: () => void;
   /** Chevron click: activate + toggle expand. */
@@ -1788,6 +1854,7 @@ function ProjectGroupView({
   workspaceViewMode,
   activeProjectFolderId,
   topLevelOrder,
+  prioritizeNeedsInputTabs,
   onTitleClick,
   onChevronClick,
   onActivate,
@@ -1932,8 +1999,13 @@ function ProjectGroupView({
     (folderGroup) => folderGroup.folder,
   );
   const topLevelItems = useMemo(
-    () => buildProjectTopLevelItems(project, topLevelOrder),
-    [project, topLevelOrder],
+    () =>
+      buildProjectTopLevelItems(
+        project,
+        topLevelOrder,
+        prioritizeNeedsInputTabs,
+      ),
+    [prioritizeNeedsInputTabs, project, topLevelOrder],
   );
   const topLevelItemIds = useMemo(
     () => topLevelItems.map((item) => item.id),
@@ -2192,6 +2264,7 @@ function ProjectGroupView({
                     collapsed={collapsedFolderIds.has(
                       item.folderGroup.folder.id,
                     )}
+                    prioritizeNeedsInputTabs={prioritizeNeedsInputTabs}
                     onToggleFolder={() =>
                       onToggleFolder(item.folderGroup.folder.id)
                     }
@@ -2238,6 +2311,7 @@ interface ProjectFolderViewProps {
   activeSessionId: string | null;
   active: boolean;
   collapsed: boolean;
+  prioritizeNeedsInputTabs: boolean;
   onToggleFolder: () => void;
   onActivate: () => void;
   onSelectSession: (sessionId: string) => void;
@@ -2258,6 +2332,7 @@ function ProjectFolderView({
   activeSessionId,
   active,
   collapsed,
+  prioritizeNeedsInputTabs,
   onToggleFolder,
   onActivate,
   onSelectSession,
@@ -2299,9 +2374,14 @@ function ProjectFolderView({
     transform: CSS.Transform.toString(transform),
     transition,
   };
+  const orderedSessions = useMemo(
+    () =>
+      orderSessionsByPriority(folderGroup.sessions, prioritizeNeedsInputTabs),
+    [folderGroup.sessions, prioritizeNeedsInputTabs],
+  );
   const sessionIds = useMemo(
-    () => folderGroup.sessions.map((s) => sessionDragId(s.id)),
-    [folderGroup.sessions],
+    () => orderedSessions.map((s) => sessionDragId(s.id)),
+    [orderedSessions],
   );
   const folderCreateMenu = useMemo(
     () => projectSessionCreateMenuForWorkspace(folder, true),
@@ -2597,7 +2677,7 @@ function ProjectFolderView({
                 {sidebarText(t, "sidebar.emptyProjectFolder.noSessions")}
               </li>
             ) : (
-              folderGroup.sessions.map((session) => (
+              orderedSessions.map((session) => (
                 <SessionRow
                   key={session.id}
                   session={session}
@@ -2644,9 +2724,6 @@ function SessionRow({
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
-  const toggleSessionAutoClose = useAppStore(
-    (s) => s.toggleSessionAutoClose,
-  );
   const createSession = useAppStore((s) => s.createSession);
   const selectSession = useAppStore((s) => s.selectSession);
   const setPendingTerminalInput = useAppStore(
@@ -2674,7 +2751,9 @@ function SessionRow({
     isWorktreeWorkspace(currentProjectFolder) &&
     normalizeWorkspacePath(session.worktree_path) ===
       normalizeWorkspacePath(currentWorkspaceCwd);
+  const currentPullRequest = useCurrentPullRequest(session);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
+  const transcriptPath = session.agent_transcript_path?.trim() || null;
   const metadataText = composeSessionMetadata(
     t,
     session,
@@ -2688,25 +2767,17 @@ function SessionRow({
     },
   );
   const hoverDetails = sessionDisplay.showDetailsOnHover
-    ? buildSessionHoverDetails(t, session)
+    ? buildSessionHoverDetails(t, session, currentPullRequest)
     : null;
   const isGeneratingTitle = useAppStore((s) =>
     Boolean(s.generatingSessionTitleIds[session.id]),
   );
-  const autoCloseEnabled = useAppStore((s) =>
-    Boolean(s.autoCloseSessionIds[session.id]),
-  );
-  const canConfigureAutoClose = canConfigureSessionAutoClose(session);
   const canRename = canRenameSession(session, { isGeneratingTitle });
   const canRegenerateTitle =
     canRegenerateSessionTitle(session) && !isGeneratingTitle;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const [agent, setAgent] = useState<{
-    claude: string | null;
-    codex: string | null;
-    antigravity: string | null;
-  } | null>(null);
+  const [agent, setAgent] = useState<SessionAgentDetection | null>(null);
   const {
     attributes,
     listeners,
@@ -2741,7 +2812,7 @@ function SessionRow({
           err,
         });
         if (!cancelled) {
-          setAgent({ claude: null, codex: null, antigravity: null });
+          setAgent(createEmptySessionAgentDetection());
         }
       });
     return () => {
@@ -2815,62 +2886,15 @@ function SessionRow({
     : null;
   const forkItems: ContextMenuItem[] = (() => {
     if (!agent) return [];
-    const items: ContextMenuItem[] = [];
-    const providerCount = [agent.claude, agent.codex, agent.antigravity].filter(
-      Boolean,
-    ).length;
-    const multiple = providerCount > 1;
-    if (agent.claude) {
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkClaudeSession")
-          : sidebarText(t, "sidebar.actions.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () => void forkSession("claude", agent.claude!, false),
-      });
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkClaudeInNewWorktree")
-          : sidebarText(t, "sidebar.actions.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () => void forkSession("claude", agent.claude!, true),
-      });
-    }
-    if (agent.codex) {
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkCodexSession")
-          : sidebarText(t, "sidebar.actions.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () => void forkSession("codex", agent.codex!, false),
-      });
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkCodexInNewWorktree")
-          : sidebarText(t, "sidebar.actions.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () => void forkSession("codex", agent.codex!, true),
-      });
-    }
-    if (agent.antigravity) {
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkAntigravitySession")
-          : sidebarText(t, "sidebar.actions.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () =>
-          void forkSession("antigravity", agent.antigravity!, false),
-      });
-      items.push({
-        label: multiple
-          ? sidebarText(t, "sidebar.actions.forkAntigravityInNewWorktree")
-          : sidebarText(t, "sidebar.actions.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () =>
-          void forkSession("antigravity", agent.antigravity!, true),
-      });
-    }
-    return items;
+    return buildAgentContextMenuItems({
+      mode: "fork",
+      surface: "sidebar",
+      detection: agent,
+      t,
+      onFork: (provider, transcriptId, inNewWorktree) => {
+        void forkSession(provider, transcriptId, inNewWorktree);
+      },
+    });
   })();
   const folderMoveMenuItems: ContextMenuItem[] = [];
   const targetFolderMenuItems: ContextMenuItem[] = [];
@@ -2964,16 +2988,6 @@ function SessionRow({
         void openWorkSummaryTab({ sessionId: session.id });
       },
     },
-    ...(canConfigureAutoClose
-      ? [
-          {
-            type: "checkbox",
-            label: sidebarText(t, "sidebar.actions.autoCloseWhenFinished"),
-            checked: autoCloseEnabled,
-            onChange: () => toggleSessionAutoClose(session.id),
-          } satisfies ContextMenuItem,
-        ]
-      : []),
     ...(forkItems.length > 0
       ? [contextMenuGroupTitle(t, "fork"), ...forkItems]
       : []),
@@ -3013,6 +3027,15 @@ function SessionRow({
           icon: <Copy size={12} />,
           onClick: () => void copyToClipboard(session.worktree_path),
         },
+        ...(transcriptPath
+          ? [
+              {
+                label: sidebarText(t, "sidebar.actions.transcriptPath"),
+                icon: <Copy size={12} />,
+                onClick: () => void copyToClipboard(transcriptPath),
+              } satisfies ContextMenuItem,
+            ]
+          : []),
         {
           label: sidebarText(t, "sidebar.actions.worktreeName"),
           icon: <Copy size={12} />,
@@ -3076,15 +3099,10 @@ function SessionRow({
         density: "sidebar",
         interactive: true,
         selected: active,
-        selectedClassName: autoCloseEnabled
-          ? autoCloseSessionRowClassName(true)
-          : "bg-bg-elevated shadow-sm",
+        selectedClassName: "bg-bg-elevated shadow-sm",
         surface: "sidebar",
         className: cn(
           "group flex w-full cursor-pointer items-start gap-1.5 text-left",
-          autoCloseEnabled &&
-            !active &&
-            autoCloseSessionRowClassName(false),
           isDragging && "opacity-40",
         ),
       })}
@@ -3103,6 +3121,7 @@ function SessionRow({
         session={session}
         titleText={titleText}
         metadataText={metadataText}
+        currentPullRequest={currentPullRequest}
         showKindIcons={sessionDisplay.icons.sessionKind}
         hideWorktreeIcon={hideWorkspaceDuplicateContext}
         t={t}
@@ -3164,6 +3183,7 @@ interface SessionRowLabelProps {
   session: Session;
   titleText: string;
   metadataText: string;
+  currentPullRequest: SessionPullRequestSummary | null;
   showKindIcons: boolean;
   hideWorktreeIcon?: boolean;
   t: Translator;
@@ -3176,6 +3196,7 @@ function SessionRowLabel({
   session,
   titleText,
   metadataText,
+  currentPullRequest,
   showKindIcons,
   hideWorktreeIcon = false,
   t,
@@ -3188,6 +3209,11 @@ function SessionRowLabel({
   // in which case `liveInWorktree[id]` is `undefined`.
   const liveInWorktree = useAppStore((s) => s.liveInWorktree[session.id]);
   const inWorktree = liveInWorktree ?? hasRecordedWorktree(session);
+  const processSummary = summarizeSessionProcesses(session.active_processes);
+  const hasContextMetadata = Boolean(currentPullRequest || processSummary);
+  const pullRequestColor = currentPullRequest
+    ? pullRequestNumberClassName(currentPullRequest)
+    : null;
   const body = (
     <span className="min-w-0 flex-1">
       <span className="flex h-5 items-center gap-1">
@@ -3218,8 +3244,52 @@ function SessionRowLabel({
         ) : null}
       </span>
       {metadataText ? (
-        <span className="block truncate text-[11px] text-fg-muted">
+        <span
+          data-session-base-metadata="true"
+          className="block truncate text-[11px] text-fg-muted"
+        >
           {metadataText}
+        </span>
+      ) : null}
+      {hasContextMetadata ? (
+        <span
+          data-session-context-metadata="true"
+          className="flex min-w-0 items-center gap-1 text-[11px] leading-4 text-fg-muted"
+        >
+          {currentPullRequest ? (
+            <button
+              type="button"
+              aria-label={`${sidebarText(t, "sidebar.metadata.openPullRequest")} #${currentPullRequest.number}`}
+              title={currentPullRequest.title}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+              onKeyUp={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                void openUrl(currentPullRequest.url).catch((err: unknown) => {
+                  console.error("[Sidebar] open PR URL failed", err);
+                });
+              }}
+              className={cn(
+                "inline-flex shrink-0 items-center gap-0.5 rounded-sm underline-offset-2 transition hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60",
+                pullRequestColor,
+              )}
+            >
+              <span>{`PR #${currentPullRequest.number}`}</span>
+              <ExternalLink size={9} aria-hidden className="opacity-80" />
+            </button>
+          ) : null}
+          {currentPullRequest && processSummary ? (
+            <span aria-hidden className="shrink-0 text-fg-muted/70">
+              ·
+            </span>
+          ) : null}
+          {processSummary ? (
+            <span className="min-w-0 truncate font-mono">
+              {processSummary}
+            </span>
+          ) : null}
         </span>
       ) : null}
     </span>
@@ -3263,8 +3333,7 @@ function SessionStatusMarker({
         <StatusDot
           tone={SESSION_STATUS_TONE[session.status]}
           size="sm"
-          pulse={session.status === "running"}
-          className={session.status === "completed" ? "opacity-60" : undefined}
+          pulse={session.status === "working"}
         />
       )}
     </span>
@@ -3567,6 +3636,335 @@ function LocalTerminalArea({
   );
 }
 
+const SIDEBAR_ACTIVITY_KIND_KEYS: Record<
+  SessionNotificationKind,
+  SidebarTranslationKey
+> = {
+  waiting_for_input: "sidebar.activity.kind.waitingForInput",
+  errored: "sidebar.activity.kind.errored",
+  became_ready: "sidebar.activity.kind.becameReady",
+};
+
+function SessionActivityInbox() {
+  const t = useTranslation();
+  const notifications = useAppStore((s) => s.sessionNotifications);
+  const markAllRead = useAppStore((s) => s.markAllSessionNotificationsRead);
+  const clearRead = useAppStore((s) => s.clearReadSessionNotifications);
+  const [activityHeight, setActivityHeight] = useState(() =>
+    readSidebarActivityHeight(),
+  );
+  const [resizing, setResizing] = useState(false);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const unreadCount = notifications.filter((notification) => !notification.readAt)
+    .length;
+  const readCount = notifications.length - unreadCount;
+
+  useEffect(() => {
+    return () => {
+      resizeCleanupRef.current?.();
+      resizeCleanupRef.current = null;
+    };
+  }, []);
+
+  function commitHeight(nextHeight: number) {
+    const clamped = clampSidebarActivityHeight(nextHeight);
+    setActivityHeight(clamped);
+    writeSidebarActivityHeight(clamped);
+  }
+
+  function startResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    resizeCleanupRef.current?.();
+
+    const source = event.currentTarget;
+    const pointerId = event.pointerId;
+    const startY = event.clientY;
+    const startHeight = activityHeight;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    setResizing(true);
+
+    const cleanup = () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      setResizing(false);
+      try {
+        source.releasePointerCapture?.(pointerId);
+      } catch {
+        // The pointer may already be released if the handle unmounted.
+      }
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerEnd);
+      window.removeEventListener("pointercancel", onPointerEnd);
+      source.removeEventListener("lostpointercapture", onPointerEnd);
+      if (resizeCleanupRef.current === cleanup) {
+        resizeCleanupRef.current = null;
+      }
+    };
+
+    function onPointerMove(moveEvent: PointerEvent) {
+      if (moveEvent.pointerId !== pointerId) return;
+      commitHeight(startHeight + startY - moveEvent.clientY);
+    }
+
+    function onPointerEnd(endEvent: PointerEvent) {
+      if (endEvent.pointerId !== pointerId) return;
+      cleanup();
+    }
+
+    resizeCleanupRef.current = cleanup;
+    try {
+      source.setPointerCapture?.(pointerId);
+    } catch {
+      // Window listeners still cover normal in-window dragging.
+    }
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerEnd);
+    window.addEventListener("pointercancel", onPointerEnd);
+    source.addEventListener("lostpointercapture", onPointerEnd);
+  }
+
+  function onResizeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    commitHeight(
+      activityHeight +
+        (event.key === "ArrowUp"
+          ? ACTIVITY_KEYBOARD_STEP
+          : -ACTIVITY_KEYBOARD_STEP),
+    );
+  }
+
+  return (
+    <section
+      aria-label={sidebarText(t, "sidebar.activity.ariaLabel")}
+      className="mt-auto flex shrink-0 flex-col px-1 pb-2 pt-1"
+    >
+      <ResizeHandle
+        mode="manual"
+        direction="vertical"
+        gap
+        manualDragging={resizing}
+        onPointerDown={startResize}
+        onKeyDown={onResizeKeyDown}
+        aria-label={sidebarText(t, "sidebar.activity.actions.resize")}
+        aria-valuemin={ACTIVITY_MIN_HEIGHT}
+        aria-valuemax={ACTIVITY_MAX_HEIGHT}
+        aria-valuenow={activityHeight}
+        data-testid="sidebar-activity-resize-handle"
+        className="mx-1 h-3"
+      />
+      <header className="flex h-8 shrink-0 items-center justify-between gap-2 px-3">
+        <h2 className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-fg-muted">
+          <Activity size={13} className="shrink-0" />
+          <span className="truncate">
+            {sidebarText(t, "sidebar.activity.title")}
+          </span>
+          {unreadCount > 0 ? (
+            <span className="min-w-3 shrink-0 rounded-full bg-warning px-1 text-center text-[9px] leading-3 text-bg-sidebar">
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </span>
+          ) : null}
+        </h2>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Tooltip
+            label={sidebarText(t, "sidebar.activity.actions.markAllRead")}
+            side="top"
+          >
+            <button
+              type="button"
+              onClick={markAllRead}
+              disabled={unreadCount === 0}
+              aria-label={sidebarText(
+                t,
+                "sidebar.activity.actions.markAllRead",
+              )}
+              className="flex size-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+            >
+              <CheckCheck size={13} />
+            </button>
+          </Tooltip>
+          <Tooltip
+            label={sidebarText(t, "sidebar.activity.actions.clearRead")}
+            side="top"
+          >
+            <button
+              type="button"
+              onClick={clearRead}
+              disabled={readCount === 0}
+              aria-label={sidebarText(t, "sidebar.activity.actions.clearRead")}
+              className="flex size-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+            >
+              <Trash2 size={12} />
+            </button>
+          </Tooltip>
+        </div>
+      </header>
+      <div className="mx-1 overflow-hidden rounded-md border border-border/70 bg-bg/20">
+        <div className="flex items-center gap-2 border-b border-border/60 px-2 py-1 text-[10px] uppercase text-fg-muted">
+          <span>
+            {sidebarFormat(t, "sidebar.activity.unreadCount", {
+              count: unreadCount,
+            })}
+          </span>
+          {readCount > 0 ? (
+            <span>
+              {sidebarFormat(t, "sidebar.activity.readCount", {
+                count: readCount,
+              })}
+            </span>
+          ) : null}
+        </div>
+        <div
+          className="min-h-0"
+          style={{ height: activityHeight }}
+          data-testid="sidebar-activity-body"
+        >
+          {notifications.length === 0 ? (
+            <div className="flex h-full items-center justify-center px-3 text-center text-[11px] text-fg-muted">
+              {sidebarText(t, "sidebar.activity.empty")}
+            </div>
+          ) : (
+            <ul className="acorn-no-scrollbar h-full overflow-y-auto p-1">
+              {notifications.map((notification) => (
+                <SidebarActivityRow
+                  key={notification.id}
+                  notification={notification}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SidebarActivityRow({
+  notification,
+}: {
+  notification: SessionNotification;
+}) {
+  const t = useTranslation();
+  const selectSession = useAppStore((s) => s.selectSession);
+  const openTerminalPopup = useAppStore((s) => s.openTerminalPopup);
+  const markRead = useAppStore((s) => s.markSessionNotificationRead);
+  const dismiss = useAppStore((s) => s.dismissSessionNotification);
+  const unread = !notification.readAt;
+
+  const openSession = () => {
+    markRead(notification.id);
+    selectSession(notification.sessionId);
+    if (useAppStore.getState().workspaceViewMode === "kanban") {
+      openTerminalPopup(notification.sessionId);
+    }
+  };
+
+  return (
+    <li
+      className={listRowClassName({
+        density: "sidebar",
+        surface: "sidebar",
+        interactive: true,
+        selected: unread,
+        selectedClassName: "bg-warning/5",
+        className: "group flex items-start gap-2",
+      })}
+    >
+      <button
+        type="button"
+        onClick={openSession}
+        className="flex min-w-0 flex-1 items-start gap-2 text-left"
+      >
+        <StatusDot
+          tone={sidebarActivityDotTone(notification.kind)}
+          size="sm"
+          className="mt-1"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span
+              className={cn(
+                "truncate font-mono text-[11px]",
+                unread ? "text-fg" : "text-fg-muted",
+              )}
+            >
+              {sidebarText(t, SIDEBAR_ACTIVITY_KIND_KEYS[notification.kind])}
+            </span>
+            <span className="shrink-0 font-mono text-[10px] text-fg-muted/70">
+              {formatSidebarActivityTime(notification.createdAt)}
+            </span>
+          </span>
+          <span className="block truncate text-[11px] text-fg">
+            {sidebarFormat(t, "sidebar.activity.itemTitle", {
+              project: notification.projectName,
+              session: notification.sessionName,
+            })}
+          </span>
+          <span className="block truncate text-[10px] text-fg-muted">
+            {notification.repoPath}
+          </span>
+        </span>
+      </button>
+      <Tooltip label={sidebarText(t, "sidebar.activity.actions.dismiss")} side="top">
+        <button
+          type="button"
+          onClick={() => dismiss(notification.id)}
+          aria-label={sidebarText(t, "sidebar.activity.actions.dismiss")}
+          className="rounded p-1 text-fg-muted opacity-0 transition hover:bg-bg-sidebar hover:text-fg group-hover:opacity-100"
+        >
+          <X size={12} />
+        </button>
+      </Tooltip>
+    </li>
+  );
+}
+
+function sidebarActivityDotTone(kind: SessionNotificationKind): StatusTone {
+  if (kind === "errored") return "danger";
+  if (kind === "became_ready") return "neutral";
+  return "warning";
+}
+
+function formatSidebarActivityTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function clampSidebarActivityHeight(height: number): number {
+  if (!Number.isFinite(height)) return ACTIVITY_DEFAULT_HEIGHT;
+  return Math.round(
+    Math.min(Math.max(height, ACTIVITY_MIN_HEIGHT), ACTIVITY_MAX_HEIGHT),
+  );
+}
+
+function readSidebarActivityHeight(): number {
+  try {
+    const raw = localStorage.getItem(ACTIVITY_HEIGHT_KEY);
+    if (!raw) return ACTIVITY_DEFAULT_HEIGHT;
+    const parsed = Number(raw);
+    return clampSidebarActivityHeight(parsed);
+  } catch {
+    return ACTIVITY_DEFAULT_HEIGHT;
+  }
+}
+
+function writeSidebarActivityHeight(height: number): void {
+  try {
+    localStorage.setItem(
+      ACTIVITY_HEIGHT_KEY,
+      String(clampSidebarActivityHeight(height)),
+    );
+  } catch {
+    // Ignore storage failures; the current drag should still resize the panel.
+  }
+}
+
 interface LocalWorkspaceViewProps {
   folderGroup: ProjectFolderGroup;
   projectFolders: ProjectFolder[];
@@ -3850,10 +4248,8 @@ function LocalSessionRow({
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
-  const toggleSessionAutoClose = useAppStore(
-    (s) => s.toggleSessionAutoClose,
-  );
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  const currentPullRequest = useCurrentPullRequest(session);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
   const metadataText = composeSessionMetadata(
     t,
@@ -3864,15 +4260,11 @@ function LocalSessionRow({
     ? resolveSessionAgentProvider(session)
     : null;
   const hoverDetails = sessionDisplay.showDetailsOnHover
-    ? buildSessionHoverDetails(t, session)
+    ? buildSessionHoverDetails(t, session, currentPullRequest)
     : null;
   const isGeneratingTitle = useAppStore((s) =>
     Boolean(s.generatingSessionTitleIds[session.id]),
   );
-  const autoCloseEnabled = useAppStore((s) =>
-    Boolean(s.autoCloseSessionIds[session.id]),
-  );
-  const canConfigureAutoClose = canConfigureSessionAutoClose(session);
   const canRename = canRenameSession(session, { isGeneratingTitle });
   const canRegenerateTitle =
     canRegenerateSessionTitle(session) && !isGeneratingTitle;
@@ -3927,6 +4319,7 @@ function LocalSessionRow({
     onSelect();
   }
 
+  const transcriptPath = session.agent_transcript_path?.trim() || null;
   const menuItems: ContextMenuItem[] = [
     {
       label: sidebarText(t, "sidebar.actions.rename"),
@@ -3940,16 +4333,6 @@ function LocalSessionRow({
       onClick: () => void regenerateTitle(),
       disabled: !canRegenerateTitle,
     },
-    ...(canConfigureAutoClose
-      ? [
-          {
-            type: "checkbox",
-            label: sidebarText(t, "sidebar.actions.autoCloseWhenFinished"),
-            checked: autoCloseEnabled,
-            onChange: () => toggleSessionAutoClose(session.id),
-          } satisfies ContextMenuItem,
-        ]
-      : []),
     ...(canCreateWorktreeWorkspace
       ? [
           { type: "separator" as const },
@@ -3975,6 +4358,15 @@ function LocalSessionRow({
       icon: <Copy size={12} />,
       onClick: () => void copyToClipboard(session.worktree_path),
     },
+    ...(transcriptPath
+      ? [
+          {
+            label: sidebarText(t, "sidebar.actions.copyTranscriptPath"),
+            icon: <Copy size={12} />,
+            onClick: () => void copyToClipboard(transcriptPath),
+          } satisfies ContextMenuItem,
+        ]
+      : []),
     { type: "separator" },
     {
       label: sidebarText(t, "sidebar.actions.removeSessionMenu"),
@@ -4020,15 +4412,10 @@ function LocalSessionRow({
         density: "sidebar",
         interactive: true,
         selected: active,
-        selectedClassName: autoCloseEnabled
-          ? autoCloseSessionRowClassName(true)
-          : "bg-bg-elevated shadow-sm",
+        selectedClassName: "bg-bg-elevated shadow-sm",
         surface: "sidebar",
         className: cn(
           "group flex w-full cursor-pointer items-start gap-1.5 text-left",
-          autoCloseEnabled &&
-            !active &&
-            autoCloseSessionRowClassName(false),
           isDragging && "opacity-40",
         ),
       })}
@@ -4047,6 +4434,7 @@ function LocalSessionRow({
         session={session}
         titleText={titleText}
         metadataText={metadataText}
+        currentPullRequest={currentPullRequest}
         showKindIcons={sessionDisplay.icons.sessionKind}
         t={t}
         onSubmitRename={async (next) => {
@@ -4147,9 +4535,16 @@ function composeSessionMetadata(
   return parts.join(" · ");
 }
 
-function buildSessionHoverDetails(t: Translator, session: Session): ReactNode {
+function buildSessionHoverDetails(
+  t: Translator,
+  session: Session,
+  currentPullRequest: SessionPullRequestSummary | null = null,
+): ReactNode {
   const branch =
     session.branch || sidebarText(t, "sidebar.metadata.detached");
+  const processSummary = summarizeAllSessionProcesses(
+    session.active_processes,
+  );
 
   return (
     <span className="flex w-72 max-w-full flex-col gap-1.5">
@@ -4164,17 +4559,34 @@ function buildSessionHoverDetails(t: Translator, session: Session): ReactNode {
         value={branch}
         valueClassName="font-mono"
       />
+      {currentPullRequest ? (
+        <SessionHoverDetailRow
+          icon={<GitPullRequest size={12} />}
+          iconClassName={pullRequestNumberClassName(currentPullRequest)}
+          label={sidebarText(t, "sidebar.metadata.openPullRequest")}
+          value={`#${currentPullRequest.number} ${currentPullRequest.title}`}
+          valueClassName={pullRequestNumberClassName(currentPullRequest)}
+        />
+      ) : null}
       <SessionHoverDetailRow
         icon={<Folder size={12} />}
         label={sidebarText(t, "sidebar.metadata.workingDirectory")}
         value={session.worktree_path}
         valueClassName="break-all font-mono"
       />
+      {processSummary ? (
+        <SessionHoverDetailRow
+          icon={<Activity size={12} />}
+          label={sidebarText(t, "sidebar.metadata.processes")}
+          value={processSummary}
+          valueClassName="font-mono"
+        />
+      ) : null}
       <SessionHoverDetailRow
         icon={<Activity size={12} />}
         iconClassName={STATUS_ICON[session.status]}
         label={sidebarText(t, "sidebar.metadata.status")}
-        value={statusLabel(t, session.status)}
+        value={statusDetailLabel(t, session)}
         valueClassName={STATUS_ICON[session.status]}
       />
       {session.kind === "control" ? (

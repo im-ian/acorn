@@ -3,10 +3,10 @@
 //! The `agent_resume_persister` background task mirrors the live transcript
 //! UUID of each running `claude` / `codex` / `antigravity` process into
 //! per-session files under Acorn's data dir. This module owns the on-disk
-//! layout, the modal candidate readers for providers with verified resume
-//! commands, and the acknowledgement writers; the persister is the only
+//! layout, the modal candidate reader for providers with verified resume
+//! commands, and the acknowledgement writer; the persister is the only
 //! writer of `*.id`, the frontend modal is the only writer of
-//! `*.id.acknowledged` via the `acknowledge_*_resume` commands.
+//! `*.id.acknowledged`.
 //!
 //! On-disk layout (under `<data_dir>/agent-state/<session-uuid>/`):
 //!
@@ -30,6 +30,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use acorn_agent::AgentKind;
+use acorn_transcript::{collapse_preview, parse_transcript_line, read_tail, TranscriptRole};
+
 const AGENT_STATE_DIR_NAME: &str = "agent-state";
 
 const CLAUDE_ID_FILE: &str = "claude.id";
@@ -40,8 +43,7 @@ const ANTIGRAVITY_ID_FILE: &str = "antigravity.id";
 const ANTIGRAVITY_ID_ACK_FILE: &str = "antigravity.id.acknowledged";
 
 /// Per-Acorn-session scratch directory the resume persister writes
-/// `*.id` into. The directory is also the modal's read source via the
-/// provider-specific `*_resume_candidate` helpers.
+/// `*.id` into. The directory is also the modal's read source.
 pub fn ensure_session_state_dir(session_id: uuid::Uuid) -> io::Result<PathBuf> {
     ensure_session_state_dir_at(&acorn_daemon::paths::data_dir()?, session_id)
 }
@@ -80,38 +82,19 @@ pub struct ResumeCandidate {
     pub preview: Option<String>,
 }
 
-/// Surface the claude-side modal candidate for `session_id`, or `Ok(None)`
-/// when there is nothing to ask the user about (no claude has run, or the
-/// latest UUID was already acknowledged).
-pub fn claude_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<ResumeCandidate>> {
+/// Surface the modal candidate for `session_id` and `kind`, or `Ok(None)`
+/// when there is nothing to ask the user about.
+pub fn resume_candidate(
+    session_id: uuid::Uuid,
+    kind: AgentKind,
+) -> io::Result<Option<ResumeCandidate>> {
+    let (id_file, ack_file) = resume_state_files(kind);
     candidate_at(
         &acorn_daemon::paths::data_dir()?,
         session_id,
-        CLAUDE_ID_FILE,
-        CLAUDE_ID_ACK_FILE,
-        AgentKind::Claude,
-    )
-}
-
-/// Surface the codex-side modal candidate for `session_id`, or `Ok(None)`.
-pub fn codex_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<ResumeCandidate>> {
-    candidate_at(
-        &acorn_daemon::paths::data_dir()?,
-        session_id,
-        CODEX_ID_FILE,
-        CODEX_ID_ACK_FILE,
-        AgentKind::Codex,
-    )
-}
-
-/// Antigravity equivalent of `codex_resume_candidate`.
-pub fn antigravity_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<ResumeCandidate>> {
-    candidate_at(
-        &acorn_daemon::paths::data_dir()?,
-        session_id,
-        ANTIGRAVITY_ID_FILE,
-        ANTIGRAVITY_ID_ACK_FILE,
-        AgentKind::Antigravity,
+        id_file,
+        ack_file,
+        kind,
     )
 }
 
@@ -124,15 +107,6 @@ pub struct LiveTranscript {
     pub id: String,
     pub path: PathBuf,
     pub kind: AgentKind,
-}
-
-/// Which agent's transcript a marker points at. Public so other modules
-/// (e.g. `session_status`) can dispatch their per-format parser.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AgentKind {
-    Claude,
-    Codex,
-    Antigravity,
 }
 
 /// Resolve `session_id` to the live transcript its in-flight agent is
@@ -214,36 +188,15 @@ fn live_transcript_for_kind_in_dir_with_locator(
     Some(LiveTranscript { id, path, kind })
 }
 
-/// Mark the current `claude.id` value as seen so the modal stops popping
-/// for the same UUID. No-op if `claude.id` does not exist.
-pub fn acknowledge_claude_resume(session_id: uuid::Uuid) -> io::Result<()> {
+/// Mark the current provider id value as seen so the modal stops popping
+/// for the same UUID. No-op if the provider id file does not exist.
+pub fn acknowledge_resume(session_id: uuid::Uuid, kind: AgentKind) -> io::Result<()> {
+    let (id_file, ack_file) = resume_state_files(kind);
     acknowledge_at(
         &acorn_daemon::paths::data_dir()?,
         session_id,
-        CLAUDE_ID_FILE,
-        CLAUDE_ID_ACK_FILE,
-    )
-}
-
-/// Mark the current `codex.id` value as seen. No-op if `codex.id` does
-/// not exist.
-pub fn acknowledge_codex_resume(session_id: uuid::Uuid) -> io::Result<()> {
-    acknowledge_at(
-        &acorn_daemon::paths::data_dir()?,
-        session_id,
-        CODEX_ID_FILE,
-        CODEX_ID_ACK_FILE,
-    )
-}
-
-/// Mark the current `antigravity.id` value as seen. No-op if `antigravity.id`
-/// does not exist.
-pub fn acknowledge_antigravity_resume(session_id: uuid::Uuid) -> io::Result<()> {
-    acknowledge_at(
-        &acorn_daemon::paths::data_dir()?,
-        session_id,
-        ANTIGRAVITY_ID_FILE,
-        ANTIGRAVITY_ID_ACK_FILE,
+        id_file,
+        ack_file,
     )
 }
 
@@ -289,6 +242,14 @@ fn candidate_at(
         last_activity_unix,
         preview,
     }))
+}
+
+fn resume_state_files(kind: AgentKind) -> (&'static str, &'static str) {
+    match kind {
+        AgentKind::Claude => (CLAUDE_ID_FILE, CLAUDE_ID_ACK_FILE),
+        AgentKind::Codex => (CODEX_ID_FILE, CODEX_ID_ACK_FILE),
+        AgentKind::Antigravity => (ANTIGRAVITY_ID_FILE, ANTIGRAVITY_ID_ACK_FILE),
+    }
 }
 
 fn acknowledge_at(
@@ -368,241 +329,37 @@ pub(crate) fn extract_conversation_preview(
     kind: AgentKind,
     path: &Path,
 ) -> io::Result<ConversationPreview> {
-    match kind {
-        AgentKind::Claude => extract_claude_conversation_preview(path),
-        AgentKind::Codex => extract_codex_conversation_preview(path),
-        AgentKind::Antigravity => extract_antigravity_conversation_preview(path),
+    let tail = read_tail(path, PREVIEW_TAIL_BYTES)?;
+    let mut preview = ConversationPreview::default();
+    for line in tail.text.lines().rev() {
+        let Some(parsed) = parse_transcript_line(kind, line) else {
+            continue;
+        };
+        match parsed.preview_role {
+            TranscriptRole::Assistant if preview.last_agent_message.is_none() => {
+                preview.last_agent_message = parsed
+                    .preview_text
+                    .as_deref()
+                    .and_then(|text| collapse_preview(text, PREVIEW_CHARS));
+            }
+            TranscriptRole::User if preview.last_user_message.is_none() => {
+                preview.last_user_message = parsed
+                    .preview_text
+                    .as_deref()
+                    .and_then(|text| collapse_preview(text, PREVIEW_CHARS));
+            }
+            TranscriptRole::Other => {}
+            _ => {}
+        }
+        if preview.last_user_message.is_some() && preview.last_agent_message.is_some() {
+            break;
+        }
     }
+    Ok(preview)
 }
 
 const PREVIEW_TAIL_BYTES: u64 = 262_144;
 const PREVIEW_CHARS: usize = 90;
-
-/// Walk the last ~256 KiB of the transcript looking for the most recent
-/// `assistant` line and return its first text segment, truncated and
-/// newline-collapsed for single-line display. Conservative parsing —
-/// any JSON parse error or unexpected shape silently yields `None`.
-fn extract_claude_conversation_preview(path: &Path) -> io::Result<ConversationPreview> {
-    let text = read_tail_lossy(path)?;
-    let mut preview = ConversationPreview::default();
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || !trimmed.starts_with('{') {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-            continue;
-        };
-        match v.get("type").and_then(|t| t.as_str()) {
-            Some("assistant") if preview.last_agent_message.is_none() => {
-                preview.last_agent_message = claude_message_preview(&v);
-            }
-            Some("user") if preview.last_user_message.is_none() => {
-                preview.last_user_message = claude_message_preview(&v);
-            }
-            _ => {}
-        }
-        if preview.last_user_message.is_some() && preview.last_agent_message.is_some() {
-            break;
-        }
-    }
-    Ok(preview)
-}
-
-/// Codex rollout schema: each line is a JSON event. Conversation turns
-/// live under either `payload.message` (older rollouts) or
-/// `payload.response.output[].content[].text` / `response_payload.output[]
-/// .content[].text` (newer ones). Try the cheap variants in reverse so
-/// the latest assistant turn wins; give up to `None` if nothing matches —
-/// the modal still renders the UUID + timestamp.
-fn extract_codex_conversation_preview(path: &Path) -> io::Result<ConversationPreview> {
-    let text = read_tail_lossy(path)?;
-    let mut preview = ConversationPreview::default();
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || !trimmed.starts_with('{') {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-            continue;
-        };
-
-        let payload_role = v.pointer("/payload/role").and_then(|r| r.as_str());
-        match payload_role {
-            Some("assistant") if preview.last_agent_message.is_none() => {
-                preview.last_agent_message = codex_payload_message_preview(&v);
-            }
-            Some("user") if preview.last_user_message.is_none() => {
-                preview.last_user_message = codex_payload_message_preview(&v);
-            }
-            _ => {}
-        }
-
-        if preview.last_agent_message.is_none() && payload_role != Some("user") {
-            preview.last_agent_message = codex_response_output_preview(&v)
-                .or_else(|| codex_payload_message_fallback_preview(&v));
-        }
-
-        if preview.last_user_message.is_some() && preview.last_agent_message.is_some() {
-            break;
-        }
-    }
-    Ok(preview)
-}
-
-fn extract_antigravity_conversation_preview(path: &Path) -> io::Result<ConversationPreview> {
-    extract_antigravity_brain_conversation_preview(path)
-}
-
-fn extract_antigravity_brain_conversation_preview(path: &Path) -> io::Result<ConversationPreview> {
-    let text = read_tail_lossy(path)?;
-    let mut preview = ConversationPreview::default();
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || !trimmed.starts_with('{') {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-            continue;
-        };
-        match v.get("type").and_then(|t| t.as_str()) {
-            Some("PLANNER_RESPONSE") if preview.last_agent_message.is_none() => {
-                preview.last_agent_message = v
-                    .get("content")
-                    .and_then(|t| t.as_str())
-                    .and_then(collapse_preview);
-            }
-            Some("USER_INPUT") if preview.last_user_message.is_none() => {
-                preview.last_user_message = v
-                    .get("content")
-                    .and_then(|t| t.as_str())
-                    .and_then(collapse_antigravity_user_preview);
-            }
-            _ => {}
-        }
-        if preview.last_user_message.is_some() && preview.last_agent_message.is_some() {
-            break;
-        }
-    }
-    Ok(preview)
-}
-
-fn claude_message_preview(v: &serde_json::Value) -> Option<String> {
-    let content = v.get("message").and_then(|m| m.get("content"))?;
-    preview_from_content_value(content)
-}
-
-fn preview_from_content_value(content: &serde_json::Value) -> Option<String> {
-    if let Some(text) = content.as_str() {
-        return collapse_preview(text);
-    }
-    let items = content.as_array()?;
-    for item in items {
-        if item.get("type").and_then(|t| t.as_str()) != Some("text") {
-            continue;
-        }
-        let Some(text) = item.get("text").and_then(|t| t.as_str()) else {
-            continue;
-        };
-        if let Some(p) = collapse_preview(text) {
-            return Some(p);
-        }
-    }
-    None
-}
-
-fn codex_payload_message_preview(v: &serde_json::Value) -> Option<String> {
-    if let Some(content) = v.pointer("/payload/content") {
-        if let Some(text) = content.as_str() {
-            return collapse_preview(text);
-        }
-        if let Some(items) = content.as_array() {
-            for item in items.iter().rev() {
-                let text = item
-                    .get("text")
-                    .or_else(|| item.get("output_text"))
-                    .and_then(|t| t.as_str());
-                if let Some(text) = text {
-                    if let Some(p) = collapse_preview(text) {
-                        return Some(p);
-                    }
-                }
-            }
-        }
-    }
-    codex_payload_message_fallback_preview(v)
-}
-
-fn codex_payload_message_fallback_preview(v: &serde_json::Value) -> Option<String> {
-    v.pointer("/payload/message")
-        .and_then(|m| m.as_str())
-        .filter(|s| !s.is_empty())
-        .and_then(collapse_preview)
-}
-
-fn codex_response_output_preview(v: &serde_json::Value) -> Option<String> {
-    let arrays = [
-        v.pointer("/payload/response/output"),
-        v.pointer("/response_payload/output"),
-        v.pointer("/payload/output"),
-    ];
-    for arr in arrays.into_iter().flatten() {
-        let Some(items) = arr.as_array() else {
-            continue;
-        };
-        for item in items.iter().rev() {
-            let content = item.get("content").and_then(|c| c.as_array());
-            let Some(content) = content else { continue };
-            for c in content.iter().rev() {
-                if let Some(text) = c.get("text").and_then(|t| t.as_str()) {
-                    if let Some(p) = collapse_preview(text) {
-                        return Some(p);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-fn collapse_antigravity_user_preview(s: &str) -> Option<String> {
-    let content = extract_tagged_antigravity_user_request(s).unwrap_or(s);
-    collapse_preview(content)
-}
-
-fn extract_tagged_antigravity_user_request(s: &str) -> Option<&str> {
-    let start_tag = "<USER_REQUEST>";
-    let end_tag = "</USER_REQUEST>";
-    let start = s.find(start_tag)? + start_tag.len();
-    let rest = &s[start..];
-    let end = rest.find(end_tag).unwrap_or(rest.len());
-    Some(&rest[..end])
-}
-
-fn read_tail_lossy(path: &Path) -> io::Result<String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut f = fs::File::open(path)?;
-    let len = f.metadata()?.len();
-    let start = len.saturating_sub(PREVIEW_TAIL_BYTES);
-    f.seek(SeekFrom::Start(start))?;
-    let mut buf = Vec::with_capacity(PREVIEW_TAIL_BYTES as usize);
-    f.read_to_end(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
-fn collapse_preview(s: &str) -> Option<String> {
-    let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return None;
-    }
-    let truncated: String = collapsed.chars().take(PREVIEW_CHARS).collect();
-    let suffix = if collapsed.chars().count() > PREVIEW_CHARS {
-        "…"
-    } else {
-        ""
-    };
-    Some(format!("{truncated}{suffix}"))
-}
 
 #[cfg(test)]
 mod tests {
@@ -846,7 +603,7 @@ mod tests {
     #[test]
     fn collapse_preview_truncates_with_ellipsis() {
         let long = "a ".repeat(120);
-        let out = collapse_preview(&long).unwrap();
+        let out = collapse_preview(&long, PREVIEW_CHARS).unwrap();
         assert!(out.ends_with("…"));
         assert!(out.chars().count() <= PREVIEW_CHARS + 1);
     }

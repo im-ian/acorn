@@ -5,6 +5,112 @@ import {
 } from "./terminal-cjk-cell-width-addon";
 
 describe("terminal CJK cell width patch", () => {
+  it("applies fractional letter spacing when CJK calibration is disabled", () => {
+    const rowContainer = document.createElement("div");
+    const rowFactory = {};
+    const rowElement = document.createElement("div");
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _rowElements: [rowElement],
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
+          if (chars === "W") return 8;
+          if (chars === "가") return 16;
+          return 8;
+        },
+      },
+      dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
+    };
+    const terminal = {
+      cols: 6,
+      options: { letterSpacing: -0.25 },
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal, {
+      cjkCellWidthHeuristic: false,
+    });
+
+    expect(renderer.dimensions.css.cell.width).toBe(7.75);
+    expect(renderer.dimensions.css.canvas.width).toBe(46.5);
+    expect(rowElement.style.width).toBe("46.5px");
+    expect(rowContainer.style.letterSpacing).toBe("-0.25px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: -0.25 });
+  });
+
+  it("preserves xterm's default spacing correction when applying fractional letter spacing", () => {
+    const rowContainer = document.createElement("div");
+    const rowFactory = {};
+    const rowElement = document.createElement("div");
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _rowElements: [rowElement],
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
+          if (chars === "W") return 8;
+          if (chars === "가") return 16;
+          return 8;
+        },
+      },
+      dimensions: { css: { cell: { width: 8.5 }, canvas: { width: 51 } } },
+    };
+    const terminal = {
+      cols: 6,
+      options: { letterSpacing: -0.25 },
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal, {
+      cjkCellWidthHeuristic: false,
+    });
+
+    expect(renderer.dimensions.css.cell.width).toBe(8.25);
+    expect(renderer.dimensions.css.canvas.width).toBe(49.5);
+    expect(rowElement.style.width).toBe("49.5px");
+    expect(rowContainer.style.letterSpacing).toBe("0.25px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: 0.25 });
+  });
+
+  it("skips CJK half-width calibration when the heuristic is disabled", () => {
+    const rowContainer = document.createElement("div");
+    const rowFactory = {};
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) =>
+          chars === "W" || chars === "가" ? 8 : 8,
+      },
+      dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
+    };
+    const terminal = {
+      cols: 6,
+      options: { letterSpacing: 0 },
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal, {
+      cjkCellWidthHeuristic: false,
+    });
+
+    expect(renderer).not.toHaveProperty("__acornCjkCellPatch");
+    expect(renderer.dimensions.css.cell.width).toBe(8);
+    expect(renderer.dimensions.css.canvas.width).toBe(48);
+    expect(rowContainer.style.letterSpacing).toBe("");
+    expect(rowFactory).not.toHaveProperty("defaultSpacing");
+  });
+
   it("treats differing W and Hangul measurements as ASCII and leaves spacing untouched", () => {
     const rowContainer = document.createElement("div");
     const rowFactory = {};
@@ -392,10 +498,10 @@ describe("terminal CJK cell width patch", () => {
     wideGlyphWidth = 16;
     patchTerminalCellMeasurements(terminal);
 
-    expect(rowContainer.style.letterSpacing).toBe("0px");
-    expect(rowFactory).toMatchObject({ defaultSpacing: 0 });
-    expect(renderer.dimensions.css.cell.width).toBe(7);
-    expect(renderer.dimensions.css.canvas.width).toBe(42);
+    expect(rowContainer.style.letterSpacing).toBe("1px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: 1 });
+    expect(renderer.dimensions.css.cell.width).toBe(8);
+    expect(renderer.dimensions.css.canvas.width).toBe(48);
   });
 
   it("recovers global cell width from the legacy CJK basis patch when auto patching", () => {

@@ -1,17 +1,15 @@
 export type SessionStatus =
-  | "idle"
-  | "running"
-  | "needs_input"
-  | "failed"
-  | "completed";
+  | "ready"
+  | "working"
+  | "waiting_for_input"
+  | "errored";
 
 export type SessionStatusReason = "turn_complete" | "shell_prompt";
 
 export type SessionNotificationKind =
-  | "needs_input"
-  | "failed"
-  | "completed"
-  | "became_idle";
+  | "waiting_for_input"
+  | "errored"
+  | "became_ready";
 
 export interface SessionNotification {
   id: string;
@@ -44,6 +42,8 @@ export type SessionTitleSource = "default" | "generated" | "manual";
 
 export type SessionAgentProvider = "claude" | "codex" | "antigravity";
 
+export type SessionAgentDetection = Record<SessionAgentProvider, string | null>;
+
 export type SessionTitleGenerationStatus =
   | "generated"
   | "not_ready"
@@ -66,7 +66,8 @@ export type AgentProviderCapability =
   | "resume"
   | "fork"
   | "status"
-  | "hooks";
+  | "hooks"
+  | "tokenUsage";
 
 export type AgentProviderIconMetadata =
   | {
@@ -100,10 +101,16 @@ export interface AgentProviderDefinition<
 > {
   id: TProvider;
   label: string;
+  agentOptionLabel: string;
+  oneshotHint: string;
   icon: AgentProviderIconMetadata;
   capabilities: readonly AgentProviderCapability[];
   hooks: AgentProviderHookMetadata;
   session: AgentProviderSessionMetadata;
+  imagePasteFallback: boolean;
+  mentionPrefix: string;
+  supportsWorktreeAdoption: boolean;
+  brandToneClassName: string;
   inferNamePattern: RegExp;
 }
 
@@ -118,6 +125,8 @@ export interface Session {
   status: SessionStatus;
   /** Ephemeral status-poll detail. Not persisted in backend sessions. */
   status_reason?: SessionStatusReason | null;
+  /** Ephemeral time when the current status started. */
+  status_started_at?: string | null;
   created_at: string;
   updated_at: string;
   last_message: string | null;
@@ -138,8 +147,22 @@ export interface Session {
   in_worktree: boolean;
   /** Current live agent provider, if a known agent process is under the PTY. */
   agent_provider?: SessionAgentProvider | null;
+  /** Provider for the paired transcript path/id, independent from live process state. */
+  agent_transcript_provider?: SessionAgentProvider | null;
   /** Most recently paired agent transcript id, if Acorn has paired this tab to one. */
   agent_transcript_id?: string | null;
+  /** Ephemeral path to the transcript currently used for status/preview reads. */
+  agent_transcript_path?: string | null;
+  /** Ephemeral live process names observed under the session PTY. */
+  active_processes?: SessionProcessSummary[];
+  /** Ephemeral git workdir that produced the current live branch. */
+  git_context_path?: string | null;
+}
+
+export interface SessionProcessSummary {
+  pid: number;
+  name: string;
+  depth: number;
 }
 
 export type ChatRole = "system" | "user" | "assistant" | "tool";
@@ -272,10 +295,7 @@ export interface ProjectSettingsRecord {
   settings: ProjectSettings;
 }
 
-export type AgentHistoryProvider =
-  | "claude"
-  | "codex"
-  | "antigravity";
+export type AgentHistoryProvider = SessionAgentProvider;
 
 export interface AgentHistoryWorktree {
   name: string;
@@ -441,6 +461,16 @@ export type PullRequestListing =
   | { kind: "ok"; items: PullRequestInfo[]; account: string }
   | { kind: "not_github" }
   | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
+
+export interface SessionPullRequestSummary {
+  number: number;
+  title: string;
+  url: string;
+  head_branch: string;
+  base_branch: string;
+  state: string;
+  is_draft: boolean;
+}
 
 export interface IssueInfo {
   number: number;

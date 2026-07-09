@@ -7,6 +7,8 @@ import {
   MOUNTED_TERMINAL_LIMIT_MAX,
   MOUNTED_TERMINAL_LIMIT_MIN,
   NOTIFICATION_HISTORY_LIMIT_MAX,
+  TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS,
+  TERMINAL_FONT_PRESET_FIELDS,
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN,
   TERMINAL_FONT_SIZE_STEP,
@@ -14,10 +16,15 @@ import {
   TERMINAL_LETTER_SPACING_MAX,
   TERMINAL_LETTER_SPACING_MIN,
   TERMINAL_LETTER_SPACING_STEP,
+  TERMINAL_LINE_HEIGHT_MAX,
+  TERMINAL_LINE_HEIGHT_MIN,
+  TERMINAL_LINE_HEIGHT_STEP,
+  matchingTerminalFontPresetId,
   resolveAiCommitRequest,
   resolveAiExecutionRequest,
   resolveSessionTitlePrompt,
   SESSION_TITLE_PROMPT_MAX_CHARS,
+  terminalFontPresetById,
 } from "./settings";
 import { DEFAULT_HOTKEYS } from "./hotkeys";
 
@@ -96,12 +103,16 @@ describe("interface settings", () => {
 
   it("defaults new workspaces to pane mode", () => {
     expect(DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode).toBe("panes");
+    expect(DEFAULT_SETTINGS.interface.prioritizeNeedsInputTabs).toBe(false);
     expect(
       DEFAULT_SETTINGS.interface.kanbanTerminalPopoverPlacement,
     ).toBe("card");
     expect(
       DEFAULT_SETTINGS.interface.kanbanTerminalPopoverDefaultSize,
     ).toBe("custom");
+    expect(
+      DEFAULT_SETTINGS.interface.openKanbanTerminalOnSessionCreate,
+    ).toBe(false);
   });
 
   it("loads a persisted default workspace mode", async () => {
@@ -110,8 +121,10 @@ describe("interface settings", () => {
       JSON.stringify({
         interface: {
           defaultWorkspaceViewMode: "kanban",
+          prioritizeNeedsInputTabs: true,
           kanbanTerminalPopoverPlacement: "center",
           kanbanTerminalPopoverDefaultSize: "fullscreen",
+          openKanbanTerminalOnSessionCreate: true,
         },
       }),
     );
@@ -123,6 +136,9 @@ describe("interface settings", () => {
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("kanban");
     expect(
+      useSettings.getState().settings.interface.prioritizeNeedsInputTabs,
+    ).toBe(true);
+    expect(
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverPlacement,
     ).toBe("center");
@@ -130,6 +146,10 @@ describe("interface settings", () => {
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverDefaultSize,
     ).toBe("fullscreen");
+    expect(
+      useSettings.getState().settings.interface
+        .openKanbanTerminalOnSessionCreate,
+    ).toBe(true);
   });
 
   it("falls back for unsupported interface values", async () => {
@@ -138,8 +158,10 @@ describe("interface settings", () => {
       JSON.stringify({
         interface: {
           defaultWorkspaceViewMode: "grid",
+          prioritizeNeedsInputTabs: "yes",
           kanbanTerminalPopoverPlacement: "dock",
           kanbanTerminalPopoverDefaultSize: "huge",
+          openKanbanTerminalOnSessionCreate: "yes",
         },
       }),
     );
@@ -151,6 +173,9 @@ describe("interface settings", () => {
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("panes");
     expect(
+      useSettings.getState().settings.interface.prioritizeNeedsInputTabs,
+    ).toBe(false);
+    expect(
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverPlacement,
     ).toBe("card");
@@ -158,6 +183,10 @@ describe("interface settings", () => {
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverDefaultSize,
     ).toBe("custom");
+    expect(
+      useSettings.getState().settings.interface
+        .openKanbanTerminalOnSessionCreate,
+    ).toBe(false);
   });
 
   it("patches interface settings and preserves the previous value for invalid patches", async () => {
@@ -168,12 +197,17 @@ describe("interface settings", () => {
       .getState()
       .patchInterface({
         defaultWorkspaceViewMode: "kanban",
+        prioritizeNeedsInputTabs: true,
         kanbanTerminalPopoverPlacement: "center",
         kanbanTerminalPopoverDefaultSize: "fullscreen",
+        openKanbanTerminalOnSessionCreate: true,
       });
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("kanban");
+    expect(
+      useSettings.getState().settings.interface.prioritizeNeedsInputTabs,
+    ).toBe(true);
     expect(
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverPlacement,
@@ -182,6 +216,10 @@ describe("interface settings", () => {
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverDefaultSize,
     ).toBe("fullscreen");
+    expect(
+      useSettings.getState().settings.interface
+        .openKanbanTerminalOnSessionCreate,
+    ).toBe(true);
 
     const invalidMode =
       "grid" as unknown as typeof DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode;
@@ -189,16 +227,22 @@ describe("interface settings", () => {
       "dock" as unknown as typeof DEFAULT_SETTINGS.interface.kanbanTerminalPopoverPlacement;
     const invalidDefaultSize =
       "huge" as unknown as typeof DEFAULT_SETTINGS.interface.kanbanTerminalPopoverDefaultSize;
+    const invalidOpenOnCreate =
+      "yes" as unknown as typeof DEFAULT_SETTINGS.interface.openKanbanTerminalOnSessionCreate;
     useSettings
       .getState()
       .patchInterface({
         defaultWorkspaceViewMode: invalidMode,
         kanbanTerminalPopoverPlacement: invalidPlacement,
         kanbanTerminalPopoverDefaultSize: invalidDefaultSize,
+        openKanbanTerminalOnSessionCreate: invalidOpenOnCreate,
       });
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("kanban");
+    expect(
+      useSettings.getState().settings.interface.prioritizeNeedsInputTabs,
+    ).toBe(true);
     expect(
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverPlacement,
@@ -207,6 +251,10 @@ describe("interface settings", () => {
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverDefaultSize,
     ).toBe("fullscreen");
+    expect(
+      useSettings.getState().settings.interface
+        .openKanbanTerminalOnSessionCreate,
+    ).toBe(true);
   });
 });
 
@@ -354,6 +402,269 @@ describe("terminal.fontSmoothing settings", () => {
       fontSmoothing: invalidFontSmoothing,
     });
     expect(useSettings.getState().settings.terminal.fontSmoothing).toBe("none");
+  });
+});
+
+describe("terminal font presets", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("starts with no Acorn-provided terminal font presets", () => {
+    expect(DEFAULT_SETTINGS.fontPresets.terminal).toEqual([]);
+    expect(
+      matchingTerminalFontPresetId(
+        DEFAULT_SETTINGS,
+        DEFAULT_SETTINGS.fontPresets.terminal,
+      ),
+    ).toBeNull();
+    expect(terminalFontPresetById([], "missing")).toBeNull();
+  });
+
+  it("defines the font fields saved in each user preset", () => {
+    expect(TERMINAL_FONT_PRESET_FIELDS).toEqual([
+      "fontFamily",
+      "fontSize",
+      "letterSpacing",
+      "fontSmoothing",
+      "fontWeight",
+      "fontWeightBold",
+      "lineHeight",
+    ]);
+    expect(TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS).toEqual([
+      "cjkCellWidthHeuristic",
+    ]);
+  });
+
+  it("loads persisted user font presets and normalizes their values", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        fontPresets: {
+          terminal: [
+            {
+              id: "tiny",
+              name: "  Tiny  Mono  ",
+              settings: {
+                fontFamily: '"Berkeley Mono", Menlo, monospace',
+                fontSize: 4,
+                letterSpacing: 9,
+                fontSmoothing: "sharp",
+                fontWeight: 450,
+                fontWeightBold: 900,
+                lineHeight: 9,
+              },
+              experiments: {
+                cjkCellWidthHeuristic: true,
+              },
+            },
+            {
+              id: "duplicate",
+              name: "tiny mono",
+              settings: {
+                fontFamily: "Ignored",
+              },
+            },
+            {
+              id: "broken",
+              name: "",
+              settings: null,
+            },
+          ],
+        },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.fontPresets.terminal).toEqual([
+      {
+        id: "tiny",
+        name: "Tiny Mono",
+        settings: {
+          fontFamily: '"Berkeley Mono", Menlo, monospace',
+          fontSize: TERMINAL_FONT_SIZE_MIN,
+          letterSpacing: TERMINAL_LETTER_SPACING_MAX,
+          fontSmoothing: DEFAULT_SETTINGS.terminal.fontSmoothing,
+          fontWeight: DEFAULT_SETTINGS.terminal.fontWeight,
+          fontWeightBold: 900,
+          lineHeight: TERMINAL_LINE_HEIGHT_MAX,
+        },
+        experiments: {
+          cjkCellWidthHeuristic: true,
+        },
+      },
+    ]);
+  });
+
+  it("registers the current terminal font settings as a user preset", async () => {
+    vi.resetModules();
+    const {
+      TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS: experimentFields,
+      TERMINAL_FONT_PRESET_FIELDS: fields,
+      matchingTerminalFontPresetId: matchPreset,
+      terminalFontPresetById: presetById,
+      useSettings,
+    } = await import("./settings");
+
+    useSettings.getState().patchTerminal({
+      fontFamily: '"Berkeley Mono", Menlo, monospace',
+      fontSize: 13.25,
+      letterSpacing: 0.25,
+      fontSmoothing: "subpixel",
+      fontWeight: 500,
+      fontWeightBold: 800,
+      lineHeight: 1.2,
+    });
+    useSettings.getState().patchExperiments({
+      cjkCellWidthHeuristic: true,
+    });
+    const presetId = useSettings
+      .getState()
+      .saveTerminalFontPreset("  Focus  Mono  ");
+
+    const settings = useSettings.getState().settings;
+    const persisted = JSON.parse(
+      localStorage.getItem(STORAGE_KEY) ?? "{}",
+    );
+    const preset = presetById(settings.fontPresets.terminal, presetId ?? "");
+
+    expect(presetId).toBe("font-focus-mono");
+    expect(preset).not.toBeNull();
+    expect(preset?.name).toBe("Focus Mono");
+    expect(matchPreset(settings, settings.fontPresets.terminal)).toBe(
+      "font-focus-mono",
+    );
+    expect(persisted.fontPresets.terminal).toHaveLength(1);
+    expect(persisted.fontPresets.terminal[0].name).toBe("Focus Mono");
+    for (const field of fields) {
+      expect(preset?.settings[field]).toBe(settings.terminal[field]);
+      expect(persisted.fontPresets.terminal[0].settings[field]).toBe(
+        settings.terminal[field],
+      );
+    }
+    for (const field of experimentFields) {
+      expect(preset?.experiments[field]).toBe(settings.experiments[field]);
+      expect(persisted.fontPresets.terminal[0].experiments[field]).toBe(
+        settings.experiments[field],
+      );
+    }
+  });
+
+  it("updates an existing user preset when saving the same name", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(
+      useSettings.getState().saveTerminalFontPreset("Focus Mono"),
+    ).toBe("font-focus-mono");
+
+    useSettings.getState().patchTerminal({ fontSize: 15 });
+    expect(
+      useSettings.getState().saveTerminalFontPreset("focus mono"),
+    ).toBe("font-focus-mono");
+
+    const presets = useSettings.getState().settings.fontPresets.terminal;
+    expect(presets).toHaveLength(1);
+    expect(presets[0].name).toBe("focus mono");
+    expect(presets[0].settings.fontSize).toBe(15);
+  });
+
+  it("applies and deletes user font presets without changing unrelated settings", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings.getState().patchTerminal({
+      fontFamily: 'D2Coding, "Sarasa Mono K", "JetBrains Mono", monospace',
+      fontSize: 13,
+      letterSpacing: 0,
+      lineHeight: 1.15,
+    });
+    useSettings.getState().patchExperiments({
+      cjkCellWidthHeuristic: true,
+    });
+    const presetId = useSettings.getState().saveTerminalFontPreset("CJK Mono");
+
+    useSettings.getState().patchTerminal({ fontSize: 11, lineHeight: 1 });
+    useSettings.getState().patchExperiments({
+      cjkCellWidthHeuristic: false,
+      stickyPrompt: true,
+    });
+    useSettings.getState().applyTerminalFontPreset(presetId ?? "");
+
+    expect(useSettings.getState().settings.terminal.fontSize).toBe(13);
+    expect(useSettings.getState().settings.terminal.lineHeight).toBe(1.15);
+    expect(
+      useSettings.getState().settings.experiments.cjkCellWidthHeuristic,
+    ).toBe(true);
+    expect(useSettings.getState().settings.experiments.stickyPrompt).toBe(
+      true,
+    );
+
+    useSettings.getState().deleteTerminalFontPreset(presetId ?? "");
+
+    expect(useSettings.getState().settings.fontPresets.terminal).toEqual([]);
+    expect(useSettings.getState().settings.terminal.fontSize).toBe(13);
+    expect(
+      useSettings.getState().settings.experiments.cjkCellWidthHeuristic,
+    ).toBe(true);
+  });
+
+  it("treats manually changed font settings as custom", () => {
+    const preset = {
+      id: "font-default-copy",
+      name: "Default copy",
+      settings: {
+        fontFamily: DEFAULT_SETTINGS.terminal.fontFamily,
+        fontSize: DEFAULT_SETTINGS.terminal.fontSize,
+        letterSpacing: DEFAULT_SETTINGS.terminal.letterSpacing,
+        fontSmoothing: DEFAULT_SETTINGS.terminal.fontSmoothing,
+        fontWeight: DEFAULT_SETTINGS.terminal.fontWeight,
+        fontWeightBold: DEFAULT_SETTINGS.terminal.fontWeightBold,
+        lineHeight: DEFAULT_SETTINGS.terminal.lineHeight,
+      },
+      experiments: {
+        cjkCellWidthHeuristic:
+          DEFAULT_SETTINGS.experiments.cjkCellWidthHeuristic,
+      },
+    };
+
+    expect(
+      matchingTerminalFontPresetId(DEFAULT_SETTINGS, [preset]),
+    ).toBe("font-default-copy");
+    expect(
+      matchingTerminalFontPresetId(
+        {
+          terminal: {
+            ...DEFAULT_SETTINGS.terminal,
+            fontSize: DEFAULT_SETTINGS.terminal.fontSize + 0.25,
+          },
+          experiments: DEFAULT_SETTINGS.experiments,
+        },
+        [preset],
+      ),
+    ).toBeNull();
   });
 });
 
@@ -593,6 +904,81 @@ describe("terminal.letterSpacing settings", () => {
 
   it("uses a fractional UI step for terminal letter spacing", () => {
     expect(TERMINAL_LETTER_SPACING_STEP).toBe(0.25);
+  });
+});
+
+describe("terminal.lineHeight settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("defaults to stock xterm line height", () => {
+    expect(DEFAULT_SETTINGS.terminal.lineHeight).toBe(1.0);
+  });
+
+  it("loads persisted line height and clamps it", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { lineHeight: 1.35 } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.lineHeight).toBe(1.35);
+  });
+
+  it("clamps out-of-range persisted line height", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { lineHeight: 99 } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.lineHeight).toBe(
+      TERMINAL_LINE_HEIGHT_MAX,
+    );
+  });
+
+  it("preserves patched decimal line height inside the supported range", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings
+      .getState()
+      .patchTerminal({ lineHeight: TERMINAL_LINE_HEIGHT_MIN - 0.4 });
+    expect(useSettings.getState().settings.terminal.lineHeight).toBe(
+      TERMINAL_LINE_HEIGHT_MIN,
+    );
+
+    useSettings.getState().patchTerminal({ lineHeight: 1.375 });
+    expect(useSettings.getState().settings.terminal.lineHeight).toBe(1.38);
+  });
+
+  it("uses a fractional UI step for terminal line height", () => {
+    expect(TERMINAL_LINE_HEIGHT_STEP).toBe(0.05);
   });
 });
 

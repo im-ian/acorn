@@ -42,7 +42,7 @@ const BASE_SESSION: Session = {
   worktree_path: "/repo/acorn",
   branch: "main",
   isolated: false,
-  status: "running",
+  status: "working",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
   last_message: null,
@@ -99,7 +99,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -123,7 +123,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -140,7 +140,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -149,10 +149,92 @@ describe("notifications", () => {
     expect(useAppStore.getState().sessionNotifications).toMatchObject([
       {
         sessionId: "session-1",
-        status: "needs_input",
+        status: "waiting_for_input",
       },
     ]);
     expect(useAppStore.getState().sessionNotifications[0]?.readAt).toBeUndefined();
+    dispose();
+  });
+
+  it("does not record in-app activity for the focused session transition", () => {
+    useAppStore.setState({ activeSessionId: "session-1" });
+    const dispose = startSessionActivityInboxWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "waiting_for_input",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+
+    expect(useAppStore.getState().sessionNotifications).toEqual([]);
+    dispose();
+  });
+
+  it("records in-app activity for the active session when the app is not focused", () => {
+    Object.defineProperty(document, "hasFocus", {
+      configurable: true,
+      value: () => false,
+    });
+    useAppStore.setState({ activeSessionId: "session-1" });
+    const dispose = startSessionActivityInboxWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "waiting_for_input",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+
+    expect(useAppStore.getState().sessionNotifications).toMatchObject([
+      {
+        sessionId: "session-1",
+        status: "waiting_for_input",
+      },
+    ]);
+    dispose();
+  });
+
+  it("coalesces repeated needs-input activity for the same session", () => {
+    const dispose = startSessionActivityInboxWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "waiting_for_input",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+    const firstId = useAppStore.getState().sessionNotifications[0]?.id;
+    expect(firstId).toBeTruthy();
+
+    useAppStore.getState().markSessionNotificationRead(firstId!);
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "working",
+          updated_at: "2026-01-01T00:01:30Z",
+        }),
+      ],
+    });
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "waiting_for_input",
+          updated_at: "2026-01-01T00:02:00Z",
+        }),
+      ],
+    });
+
+    const notifications = useAppStore.getState().sessionNotifications;
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]?.id).not.toBe(firstId);
+    expect(notifications[0]?.readAt).toBeUndefined();
     dispose();
   });
 
@@ -164,7 +246,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -174,7 +256,7 @@ describe("notifications", () => {
     const [notification] = useAppStore.getState().sessionNotifications;
     expect(notification).toMatchObject({
       sessionId: "session-1",
-      status: "needs_input",
+      status: "waiting_for_input",
     });
     expect(notification?.readAt).toEqual(expect.any(String));
     disposeActivity();
@@ -183,24 +265,28 @@ describe("notifications", () => {
 
   it("trims in-app activity to the configured maximum", () => {
     useSettings.getState().patchNotifications({ maxHistory: 2 });
+    useAppStore.setState({
+      sessions: [
+        session({ id: "session-1", name: "Agent 1" }),
+        session({ id: "session-2", name: "Agent 2" }),
+        session({ id: "session-3", name: "Agent 3" }),
+      ],
+    });
     const dispose = startSessionActivityInboxWatcher();
 
     for (let i = 1; i <= 3; i += 1) {
+      const id = `session-${i}`;
       useAppStore.setState({
-        sessions: [
-          session({
-            status: "needs_input",
-            updated_at: `2026-01-01T00:0${i}:00Z`,
-          }),
-        ],
-      });
-      useAppStore.setState({
-        sessions: [
-          session({
-            status: "running",
-            updated_at: `2026-01-01T00:0${i}:30Z`,
-          }),
-        ],
+        sessions: useAppStore.getState().sessions.map((existing) =>
+          existing.id === id
+            ? session({
+                id,
+                name: existing.name,
+                status: "waiting_for_input",
+                updated_at: `2026-01-01T00:0${i}:00Z`,
+              })
+            : existing,
+        ),
       });
     }
 
@@ -216,7 +302,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],

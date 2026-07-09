@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "crates/acorn-agent",
     "crates/acorn-paths",
     "crates/acorn-daemon",
     "crates/acorn-ipc",
@@ -60,7 +61,7 @@ strip = "debuginfo"
 
 [package]
 name = "acorn"
-version = "1.21.0"
+version = "1.23.1"
 description = "Acorn — parallel AI coding agent sessions across isolated git worktrees"
 authors = ["im-ian"]
 edition = "2021"
@@ -90,6 +91,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+acorn-agent = { path = "crates/acorn-agent" }
 acorn-daemon = { path = "crates/acorn-daemon" }
 acorn-ipc = { path = "crates/acorn-ipc" }
 acorn-paths = { path = "crates/acorn-paths" }

@@ -22,13 +22,14 @@ use crate::pull_requests::{
 use crate::state::AppState;
 use crate::todos::{self, TodoItem};
 use crate::worktree;
+use acorn_agent::AgentKind;
 use acorn_session::scrollback;
 use acorn_session::status as session_status;
-use acorn_session::status::AgentKind as StatusAgentKind;
 use acorn_session::status::StatusReason as SessionStatusReason;
 use acorn_session::{
     Project, Session, SessionAgentProvider, SessionKind, SessionMode, SessionOwner, SessionStatus,
 };
+use acorn_transcript::{assistant_message_text, collapse_preview};
 
 use serde::Serialize;
 use tauri_plugin_dialog::DialogExt;
@@ -557,11 +558,7 @@ impl ChatCliOutputParser {
         self.emit_text_candidate(&event, on_chunk);
     }
 
-    fn emit_text_candidate(
-        &mut self,
-        event: &ChatStreamTextEvent,
-        on_chunk: &mut dyn FnMut(&str),
-    ) {
+    fn emit_text_candidate(&mut self, event: &ChatStreamTextEvent, on_chunk: &mut dyn FnMut(&str)) {
         let text = event.text.as_str();
         if text.is_empty() {
             return;
@@ -756,35 +753,6 @@ fn json_delta_text(value: &serde_json::Value) -> Option<String> {
         .or_else(|| string_field(value, &["content"]))
 }
 
-fn assistant_message_text(value: &serde_json::Value) -> Option<String> {
-    if value
-        .get("role")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|role| role != "assistant")
-    {
-        return None;
-    }
-    if let Some(text) = value.get("content").and_then(serde_json::Value::as_str) {
-        return Some(text.to_string());
-    }
-    let content = value.get("content")?.as_array()?;
-    let text = content
-        .iter()
-        .filter_map(chat_content_part_text)
-        .collect::<String>();
-    if text.is_empty() { None } else { Some(text) }
-}
-
-fn chat_content_part_text(value: &serde_json::Value) -> Option<&str> {
-    let part_type = value.get("type").and_then(serde_json::Value::as_str);
-    match part_type {
-        Some("text") | Some("output_text") | Some("message") | None => {
-            value.get("text").and_then(serde_json::Value::as_str)
-        }
-        _ => None,
-    }
-}
-
 fn string_field(value: &serde_json::Value, path: &[&str]) -> Option<String> {
     let mut cursor = value;
     for key in path {
@@ -856,7 +824,7 @@ struct ChatCliInvocation {
     prompt: String,
     native_thread_id: Option<String>,
     resume_token: Option<String>,
-    transcript_discovery: Option<acorn_transcript::AgentKind>,
+    transcript_discovery: Option<AgentKind>,
     output_mode: ChatCliOutputMode,
 }
 
@@ -958,7 +926,7 @@ fn resolve_chat_cli_invocation(
                     prompt,
                     native_thread_id: None,
                     resume_token: None,
-                    transcript_discovery: Some(acorn_transcript::AgentKind::Codex),
+                    transcript_discovery: Some(AgentKind::Codex),
                     output_mode: ChatCliOutputMode::CodexJson,
                 })
             }
@@ -988,7 +956,7 @@ fn resolve_chat_cli_invocation(
                     prompt,
                     native_thread_id: None,
                     resume_token: None,
-                    transcript_discovery: Some(acorn_transcript::AgentKind::Antigravity),
+                    transcript_discovery: Some(AgentKind::Antigravity),
                     output_mode: ChatCliOutputMode::Text,
                 })
             }
@@ -1689,18 +1657,18 @@ fn prepare_chat_retry_branch(
 fn chat_session_status_for_message_status(status: persistence::ChatMessageStatus) -> SessionStatus {
     match status {
         persistence::ChatMessageStatus::Pending | persistence::ChatMessageStatus::Streaming => {
-            SessionStatus::Running
+            SessionStatus::Working
         }
         persistence::ChatMessageStatus::Complete | persistence::ChatMessageStatus::Cancelled => {
-            SessionStatus::NeedsInput
+            SessionStatus::WaitingForInput
         }
-        persistence::ChatMessageStatus::Error => SessionStatus::Failed,
+        persistence::ChatMessageStatus::Error => SessionStatus::Errored,
     }
 }
 
 fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> SessionStatus {
     if chat_state_has_running_message(chat_state) {
-        return SessionStatus::Running;
+        return SessionStatus::Working;
     }
     let last_message = chat_state.messages.last();
     let last_turn = chat_state.turns.last();
@@ -1709,9 +1677,9 @@ fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> 
         .is_some_and(|status| status == persistence::ChatMessageStatus::Error)
         || last_turn.is_some_and(|turn| turn.status == persistence::ChatTurnStatus::Error)
     {
-        SessionStatus::Failed
+        SessionStatus::Errored
     } else {
-        SessionStatus::NeedsInput
+        SessionStatus::WaitingForInput
     }
 }
 
@@ -1950,20 +1918,22 @@ fn reset_macos_developer_permissions_inner(bundle_id: &str) -> Vec<MacosPermissi
 
     MACOS_DEVELOPER_TCC_SERVICES
         .iter()
-        .map(|service| match reset_macos_tcc_service(service.service, bundle_id) {
-            Ok(()) => MacosPermissionResetResult {
-                id: service.id,
-                service: service.service,
-                status: "reset",
-                error: None,
+        .map(
+            |service| match reset_macos_tcc_service(service.service, bundle_id) {
+                Ok(()) => MacosPermissionResetResult {
+                    id: service.id,
+                    service: service.service,
+                    status: "reset",
+                    error: None,
+                },
+                Err(err) => MacosPermissionResetResult {
+                    id: service.id,
+                    service: service.service,
+                    status: "error",
+                    error: Some(err.to_string()),
+                },
             },
-            Err(err) => MacosPermissionResetResult {
-                id: service.id,
-                service: service.service,
-                status: "error",
-                error: Some(err.to_string()),
-            },
-        })
+        )
         .collect()
 }
 
@@ -3400,11 +3370,7 @@ pub async fn remove_project(
         for session in session_ids {
             terminate_session_pty(&app_state, &session.id);
             if drop_worktrees && staged_worktree_paths.insert(session.worktree_path.clone()) {
-                if worktree_path_used_outside_project(
-                    &app_state,
-                    &path,
-                    &session.worktree_path,
-                ) {
+                if worktree_path_used_outside_project(&app_state, &path, &session.worktree_path) {
                     tracing::warn!(
                         repo_path = %session.repo_path.display(),
                         worktree_path = %session.worktree_path.display(),
@@ -3593,12 +3559,26 @@ fn session_title_readiness_inner(
         .as_ref()
         .map(|input| input.transcript_id.as_str());
     if !crate::session_titles::can_generate_title(&session, transcript_id) {
+        // The auto-title planner retries on this status forever; without a
+        // trace the gate that keeps a tab stuck on "new session-N" is
+        // invisible (auto-title opt-out, manual title, unchanged transcript).
+        tracing::debug!(
+            session_id = %id,
+            title_source = ?session.title_source,
+            auto_title_enabled = ?session.auto_title_enabled,
+            has_title_input = transcript_id.is_some(),
+            "session title readiness: skipped (not eligible)"
+        );
         return Ok(SessionTitleReadinessResult {
             status: SessionTitleReadinessStatus::Skipped,
             session: enrich_session(session),
         });
     }
     if title_input.is_none() {
+        tracing::debug!(
+            session_id = %id,
+            "session title readiness: not ready (no transcript context resolved)"
+        );
         return Ok(SessionTitleReadinessResult {
             status: SessionTitleReadinessStatus::NotReady,
             session: enrich_session(session),
@@ -3787,16 +3767,16 @@ pub fn prepare_chat_session_worktree(
     Ok(enrich_session(updated))
 }
 
-#[derive(Serialize, Default)]
-pub struct AgentDetection {
-    /// Parent claude session id when a claude transcript is present at
-    /// `~/.claude/projects/<slug>/<uuid>.jsonl`. This is whatever UUID
-    /// claude minted for its most recent run in this Acorn session.
-    pub claude: Option<String>,
-    /// Codex session UUID captured from the live rollout transcript.
-    pub codex: Option<String>,
-    /// Antigravity conversation UUID captured from the live brain transcript.
-    pub antigravity: Option<String>,
+pub type AgentDetection = HashMap<AgentKind, Option<String>>;
+
+fn empty_agent_detection() -> AgentDetection {
+    [
+        (AgentKind::Claude, None),
+        (AgentKind::Codex, None),
+        (AgentKind::Antigravity, None),
+    ]
+    .into_iter()
+    .collect()
 }
 
 /// Stage a parent claude transcript inside the new worktree's project
@@ -3915,22 +3895,12 @@ fn detect_session_agent_inner(state: AppState, session_id: String) -> AppResult<
     let parsed = parse_id(&session_id)?;
     let session_pids = crate::agent_resume_persister::collect_session_pids(&state);
     let mappings = acorn_transcript::collect_live_mappings(&session_pids);
-    let mut detection = AgentDetection::default();
+    let mut detection = empty_agent_detection();
     for (sid, kind, uuid) in mappings {
         if sid != parsed {
             continue;
         }
-        match kind {
-            acorn_transcript::AgentKind::Claude => {
-                detection.claude = Some(uuid);
-            }
-            acorn_transcript::AgentKind::Codex => {
-                detection.codex = Some(uuid);
-            }
-            acorn_transcript::AgentKind::Antigravity => {
-                detection.antigravity = Some(uuid);
-            }
-        }
+        detection.insert(kind, Some(uuid));
     }
     Ok(detection)
 }
@@ -4922,18 +4892,33 @@ pub struct SessionStatusEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_agent_message: Option<String>,
     pub agent_provider: Option<SessionAgentProvider>,
+    pub agent_transcript_provider: Option<SessionAgentProvider>,
     pub agent_transcript_id: Option<String>,
+    pub agent_transcript_path: Option<String>,
+    pub active_processes: Vec<SessionProcessSummary>,
     /// Current branch read live from the session's worktree on each poll.
     /// `None` when the worktree has no readable HEAD (e.g. detached, or
     /// path was deleted out from under acorn). Lets the frontend reflect
     /// `git checkout` performed inside the session without requiring a
     /// manual refresh.
     pub branch: Option<String>,
+    /// Git workdir that produced `branch`. This may differ from the
+    /// recorded session worktree when a shell has `cd`'d into another
+    /// repo/worktree; consumers that query git/GitHub should keep the
+    /// branch and repo path paired.
+    pub git_context_path: Option<String>,
     /// Auto-title opt-in after this poll. Carries the promotion performed
     /// when an agent transcript is first detected (see
     /// `auto_title_promotion_needed`) so the frontend planner becomes
     /// eligible without waiting for the next full session refresh.
     pub auto_title_enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SessionProcessSummary {
+    pub pid: u32,
+    pub name: String,
+    pub depth: u32,
 }
 
 /// A session created as a plain terminal starts with
@@ -4951,14 +4936,17 @@ fn auto_title_promotion_needed(auto_title_enabled: Option<bool>, has_transcript:
 fn chat_conversation_preview(
     chat_state: &persistence::ChatSessionState,
 ) -> agent_resume::ConversationPreview {
+    const STATUS_PREVIEW_CHARS: usize = 90;
     let mut preview = agent_resume::ConversationPreview::default();
     for message in chat_state.messages.iter().rev() {
         match message.role {
             persistence::ChatRole::User if preview.last_user_message.is_none() => {
-                preview.last_user_message = collapse_status_preview(&message.content);
+                preview.last_user_message =
+                    collapse_preview(&message.content, STATUS_PREVIEW_CHARS);
             }
             persistence::ChatRole::Assistant if preview.last_agent_message.is_none() => {
-                preview.last_agent_message = collapse_status_preview(&message.content);
+                preview.last_agent_message =
+                    collapse_preview(&message.content, STATUS_PREVIEW_CHARS);
             }
             _ => {}
         }
@@ -4969,22 +4957,14 @@ fn chat_conversation_preview(
     preview
 }
 
-fn collapse_status_preview(s: &str) -> Option<String> {
-    const STATUS_PREVIEW_CHARS: usize = 90;
-    let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return None;
-    }
-    let truncated = collapsed
-        .chars()
-        .take(STATUS_PREVIEW_CHARS)
-        .collect::<String>();
-    let suffix = if collapsed.chars().count() > STATUS_PREVIEW_CHARS {
-        "…"
-    } else {
-        ""
-    };
-    Some(format!("{truncated}{suffix}"))
+fn git_context_for_path(path: &std::path::Path) -> Option<(String, String)> {
+    let branch = worktree::current_branch(path).ok()?;
+    let repo = worktree::ensure_repo(path).ok()?;
+    let workdir = repo.workdir()?;
+    let root = workdir
+        .canonicalize()
+        .unwrap_or_else(|_| workdir.to_path_buf());
+    Some((branch, root.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
@@ -5008,23 +4988,23 @@ pub async fn detect_session_statuses(
 ///
 /// Agent lifecycle hooks are the authoritative turn-boundary signal. While an
 /// agent process is alive under a hooked session the poll defers the entire
-/// Running/NeedsInput distinction to the hook-set store value and does not
+/// Working/WaitingForInput distinction to the hook-set store value and does not
 /// consult the transcript tail at all, because the tail is stale in *both*
 /// directions around a turn boundary:
 /// - just after a turn ends, a long/tool-heavy turn's `end_turn` line may be
 ///   outside the 256 KiB window (or absent entirely), so the tail still reads
-///   Running;
+///   Working;
 /// - just after the next prompt is submitted (UserPromptSubmit already fired
-///   Running), the tail still shows the *previous* turn's `end_turn` and reads
-///   NeedsInput until the agent flushes the new turn's line.
+///   Working), the tail still shows the *previous* turn's `end_turn` and reads
+///   WaitingForInput until the agent flushes the new turn's line.
 ///
 /// Letting either through races the independent ~1s poll against the hook. The
-/// NeedsInput direction is the dangerous one: it mislabels a just-started turn
-/// as `NeedsInput`+`turn_complete`, which the opt-in auto-close acts on to kill
-/// a live agent mid-turn. So the poll trusts the hook, not the tail, whenever
-/// an agent is live.
+/// WaitingForInput direction is the dangerous one: it mislabels a just-started
+/// turn as `waiting_for_input`+`turn_complete`, which the opt-in auto-close
+/// acts on to kill a live agent mid-turn. So the poll trusts the hook, not the
+/// tail, whenever an agent is live.
 ///
-/// The poll keeps ownership only of the Idle edge: once no agent process is
+/// The poll keeps ownership only of the Ready edge: once no agent process is
 /// live (`live_agent` false — the agent exited, or an unrelated command now
 /// owns the PTY) it drives status again. Trade-off: a *dropped* terminating
 /// hook (fire-and-forget transport) can leave status lagging at the last hook
@@ -5032,6 +5012,36 @@ pub async fn detect_session_statuses(
 /// makes that rare, and it self-heals rather than losing data.
 fn poll_defers_to_hook(hook_active: bool, live_agent: bool) -> bool {
     hook_active && live_agent
+}
+
+/// Recover a turn boundary that was crossed while the app was closed.
+///
+/// `hook_active` persists across restarts, so right after boot the poll
+/// already defers to the persisted hook-set status. But a hooked agent whose
+/// turn *ended* while no app instance was listening lost that turn-end event
+/// forever — the store still says Working and, since a resting agent emits no
+/// further events, nothing would ever correct it. Until the first hook event
+/// of this run confirms the channel, allow exactly the one transition hooks
+/// can no longer report: Working -> WaitingForInput backed by a real turn-complete
+/// marker in the transcript.
+///
+/// One-directional on purpose: while the app is closed nobody can submit a
+/// prompt to the session, so WaitingForInput -> Working cannot happen offline
+/// and a stale-tail Working must never demote a persisted resting status. Once an
+/// event lands this run (`hook_confirmed_this_run`), hooks own both
+/// directions again and this reconciliation switches off — leaving it open
+/// in-run would recreate the UserPromptSubmit-vs-stale-tail race the full
+/// hook deference exists to close.
+fn hook_boot_reconciled_status(
+    stored: SessionStatus,
+    hook_confirmed_this_run: bool,
+    detection: session_status::StatusDetection,
+) -> Option<SessionStatus> {
+    (!hook_confirmed_this_run
+        && stored == SessionStatus::Working
+        && detection.status == SessionStatus::WaitingForInput
+        && detection.reason == Some(SessionStatusReason::TurnComplete))
+    .then_some(SessionStatus::WaitingForInput)
 }
 
 fn detect_session_statuses_blocking(
@@ -5046,13 +5056,12 @@ fn detect_session_statuses_blocking(
     // root). Without this, the StatusBar/Sidebar branch stays pinned to the
     // project root's branch regardless of `git checkout` performed inside
     // the PTY.
-    let mut sys =
-        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
-    );
+    let refresh = ProcessRefreshKind::new()
+        .with_cwd(UpdateKind::Always)
+        .with_exe(UpdateKind::Always)
+        .with_cmd(UpdateKind::Always);
+    let mut sys = System::new_with_specifics(RefreshKind::new().with_processes(refresh));
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
     let children = build_children_map(&sys);
     let daemon_session_pids = std::sync::OnceLock::<HashMap<Uuid, u32>>::new();
     let daemon_pid_for = |uuid: Uuid| {
@@ -5085,11 +5094,13 @@ fn detect_session_statuses_blocking(
             let previous = session
                 .as_ref()
                 .map(|s| s.status)
-                .unwrap_or(SessionStatus::Idle);
+                .unwrap_or(SessionStatus::Ready);
             if matches!(session.as_ref().map(|s| s.mode), Some(SessionMode::Chat)) {
-                let branch = session
+                let git_context = session
                     .as_ref()
-                    .and_then(|s| worktree::current_branch(&s.worktree_path).ok());
+                    .and_then(|s| git_context_for_path(&s.worktree_path));
+                let branch = git_context.as_ref().map(|(branch, _)| branch.clone());
+                let git_context_path = git_context.map(|(_, path)| path);
                 let conversation_preview = persistence::load_chat_session_state(&id)
                     .ok()
                     .map(|state| chat_conversation_preview(&state));
@@ -5107,19 +5118,22 @@ fn detect_session_statuses_blocking(
                         .as_ref()
                         .and_then(|p| p.last_agent_message.clone()),
                     agent_provider: session.as_ref().and_then(|s| s.agent_provider),
+                    agent_transcript_provider: None,
                     agent_transcript_id: session
                         .as_ref()
                         .and_then(|s| s.agent_transcript_id.clone()),
+                    agent_transcript_path: None,
+                    active_processes: Vec::new(),
                     branch,
+                    git_context_path,
                     auto_title_enabled: session.as_ref().and_then(|s| s.auto_title_enabled),
                 };
             }
             // Routing-aware pid lookup. Daemon-managed sessions live
             // in `stream_registry` (their root pid was captured from
             // the daemon at spawn / attach); legacy in-process sessions
-            // live in `state.pty`. Each side drives its own shell-state
-            // machine because the sticky NeedsInput deadline is
-            // per-attachment, not global.
+            // live in `state.pty`. Each side keeps separate liveness storage
+            // because the sticky WaitingForInput deadline is per attachment.
             let daemon_pid = session
                 .as_ref()
                 .and_then(|s| s.daemon_session_id)
@@ -5145,9 +5159,16 @@ fn detect_session_statuses_blocking(
                 }
             });
             let root_pid_value = root_pid.map(|(pid, _)| pid);
-            let live_agent_kind = root_pid_value.and_then(|pid| {
-                live_agent_kind_in_descendants(&sys, &children, Pid::from_u32(pid))
-            });
+            let active_processes = root_pid_value
+                .map(|pid| session_process_summaries(&sys, &children, Pid::from_u32(pid)))
+                .unwrap_or_default();
+            let live_agent = root_pid_value
+                .and_then(|pid| live_agent_in_descendants(&sys, &children, Pid::from_u32(pid)));
+            let live_agent_kind = live_agent.map(|(kind, _)| kind);
+            let live_codex_tool_child = matches!(live_agent_kind, Some(AgentKind::Codex))
+                && root_pid_value.is_some_and(|pid| {
+                    live_codex_has_tool_descendant(&sys, &children, Pid::from_u32(pid))
+                });
             // Resolve the live transcript via the persister's resume markers
             // first (covers claude/codex/antigravity run inside a shell session — JSONL
             // is named after the agent's own UUID, not Acorn's). When the PTY
@@ -5155,39 +5176,33 @@ fn detect_session_statuses_blocking(
             // marker. A nested peer agent from another provider can update its
             // own marker while the parent agent is still the session owner.
             let live = parsed_id.and_then(|uuid| match live_agent_kind {
-                Some(kind) => agent_resume::live_transcript_for_kind(
-                    uuid,
-                    status_agent_kind_to_resume_kind(kind),
-                ),
+                Some(kind) => agent_resume::live_transcript_for_kind(uuid, kind),
                 None => agent_resume::live_transcript(uuid),
             });
+            // Claude gets a marker-less fallback below via the todos
+            // mapping; codex has no equivalent, so a persister miss (pid
+            // gap at spawn, ambiguous host scan) silently disables auto
+            // titles and resume for the whole session. Bind the live
+            // codex process straight to its rollout instead.
+            let live = live.or_else(|| codex_live_transcript_fallback(&sys, parsed_id, live_agent));
             let agent_transcript_id = live.as_ref().map(|t| t.id.clone());
             let transcript = match live.as_ref() {
-                Some(t) => {
-                    let kind = match t.kind {
-                        agent_resume::AgentKind::Claude => acorn_session::status::AgentKind::Claude,
-                        agent_resume::AgentKind::Codex => acorn_session::status::AgentKind::Codex,
-                        agent_resume::AgentKind::Antigravity => {
-                            acorn_session::status::AgentKind::Antigravity
-                        }
-                    };
-                    Some((t.path.clone(), kind))
-                }
-                None if matches!(live_agent_kind, None | Some(StatusAgentKind::Claude)) => {
+                Some(t) => Some((t.path.clone(), t.kind)),
+                None if matches!(live_agent_kind, None | Some(AgentKind::Claude)) => {
                     todos::locate_transcript_for(&id)
                         .ok()
                         .flatten()
-                        .map(|p| (p, acorn_session::status::AgentKind::Claude))
+                        .map(|p| (p, AgentKind::Claude))
                 }
                 None => None,
             };
             let conversation_preview = transcript.as_ref().and_then(|(path, kind)| {
-                agent_resume::extract_conversation_preview(
-                    status_agent_kind_to_resume_kind(*kind),
-                    path,
-                )
-                .ok()
+                agent_resume::extract_conversation_preview(*kind, path).ok()
             });
+            let agent_transcript_path = transcript
+                .as_ref()
+                .map(|(path, _)| path.to_string_lossy().into_owned());
+            let agent_transcript_provider = transcript.as_ref().map(|(_, kind)| *kind);
             let transcript_preview = conversation_preview
                 .as_ref()
                 .and_then(|p| p.last_agent_message.clone());
@@ -5199,7 +5214,7 @@ fn detect_session_statuses_blocking(
             // Durable transcript markers keep resume/title features working
             // after exit, but provider badges should reflect only a live
             // agent process under the PTY.
-            let agent_provider = live_agent_kind.map(status_agent_kind_to_provider);
+            let agent_provider = live_agent_kind;
             let auto_title_enabled = {
                 let current = session.as_ref().and_then(|s| s.auto_title_enabled);
                 match parsed_id {
@@ -5228,10 +5243,35 @@ fn detect_session_statuses_blocking(
             // I/O, and reusing the `previous` captured before that I/O would
             // clobber the newer hook status back to an old value.
             let status = if defer_to_hook {
-                parsed_id
+                let stored = parsed_id
                     .and_then(|uuid| state.sessions.get(&uuid).ok())
                     .map(|s| s.status)
-                    .unwrap_or(previous)
+                    .unwrap_or(previous);
+                // A turn that ended while the app was closed lost its
+                // turn-end hook event; recover it from the transcript until
+                // the first event of this run re-confirms the channel (see
+                // `hook_boot_reconciled_status`). The this-run flag is read
+                // here — after the poll's I/O — so an event landing during
+                // that window disables the recovery before it can clobber
+                // the fresher hook write.
+                let reconciled = parsed_id.and_then(|uuid| {
+                    hook_boot_reconciled_status(
+                        stored,
+                        state.sessions.is_hook_confirmed_this_run(&uuid),
+                        detection,
+                    )
+                });
+                if let (Some(uuid), Some(reconciled)) = (parsed_id, reconciled) {
+                    let _ = state.sessions.refresh_status(&uuid, reconciled);
+                }
+                let hook_status = reconciled.unwrap_or(stored);
+                // Codex can report turn-complete while a background terminal
+                // command is still alive. Keep the UI Working until it exits.
+                if hook_status == SessionStatus::WaitingForInput && live_codex_tool_child {
+                    SessionStatus::Working
+                } else {
+                    hook_status
+                }
             } else {
                 detection.status
             };
@@ -5240,14 +5280,15 @@ fn detect_session_statuses_blocking(
             //     performed inside the terminal (and `claude -w` worktrees)
             //  2. recorded session worktree_path — fallback when no live PTY
             //     or descendant cwd lies outside any git repo
-            let live_cwd_branch = root_pid_value
+            let live_git_context = root_pid_value
                 .and_then(|pid| deepest_descendant_cwd(&sys, Pid::from_u32(pid)))
-                .and_then(|p| worktree::current_branch(std::path::Path::new(&p)).ok());
-            let branch = live_cwd_branch.or_else(|| {
-                session
-                    .as_ref()
-                    .and_then(|s| worktree::current_branch(&s.worktree_path).ok())
-            });
+                .and_then(|p| git_context_for_path(std::path::Path::new(&p)));
+            let fallback_git_context = session
+                .as_ref()
+                .and_then(|s| git_context_for_path(&s.worktree_path));
+            let git_context = live_git_context.or(fallback_git_context);
+            let branch = git_context.as_ref().map(|(branch, _)| branch.clone());
+            let git_context_path = git_context.map(|(_, path)| path);
             // Mirror the detected status into the in-memory store so persisted
             // sessions reflect liveness on next save. Best-effort: ignore errors
             // (e.g. UUID parse failure for a stale id from the frontend).
@@ -5279,8 +5320,12 @@ fn detect_session_statuses_blocking(
                     .as_ref()
                     .and_then(|p| p.last_agent_message.clone()),
                 agent_provider,
+                agent_transcript_provider,
                 agent_transcript_id,
+                agent_transcript_path,
+                active_processes,
                 branch,
+                git_context_path,
                 auto_title_enabled,
             }
         })
@@ -5328,22 +5373,6 @@ fn shell_hint_for_unattached_daemon_status_poll(has_live_descendant: bool) -> ac
     }
 }
 
-fn status_agent_kind_to_provider(kind: StatusAgentKind) -> SessionAgentProvider {
-    match kind {
-        StatusAgentKind::Claude => SessionAgentProvider::Claude,
-        StatusAgentKind::Codex => SessionAgentProvider::Codex,
-        StatusAgentKind::Antigravity => SessionAgentProvider::Antigravity,
-    }
-}
-
-fn status_agent_kind_to_resume_kind(kind: StatusAgentKind) -> agent_resume::AgentKind {
-    match kind {
-        StatusAgentKind::Claude => agent_resume::AgentKind::Claude,
-        StatusAgentKind::Codex => agent_resume::AgentKind::Codex,
-        StatusAgentKind::Antigravity => agent_resume::AgentKind::Antigravity,
-    }
-}
-
 /// One pass over `sys.processes()` that yields parent→children adjacency.
 /// Built once per poll so the per-session BFS does not rescan the whole
 /// table for every PTY root.
@@ -5360,49 +5389,179 @@ fn build_children_map(sys: &System) -> HashMap<Pid, Vec<Pid>> {
 fn refine_shell_hint_for_unpaired_agent(
     shell_hint: Option<acorn_pty::ShellHint>,
     has_transcript: bool,
-    live_agent_kind: Option<StatusAgentKind>,
+    live_agent_kind: Option<AgentKind>,
 ) -> Option<acorn_pty::ShellHint> {
     if has_transcript {
         return shell_hint;
     }
     match (shell_hint, live_agent_kind) {
-        (Some(acorn_pty::ShellHint::Running), Some(StatusAgentKind::Codex)) => {
+        (Some(acorn_pty::ShellHint::Running), Some(AgentKind::Codex)) => {
             Some(acorn_pty::ShellHint::NeedsInput)
         }
         _ => shell_hint,
     }
 }
 
-fn live_agent_kind_in_descendants(
+/// Bind a live codex process to its rollout when the durable `codex.id`
+/// marker is missing. The persister normally writes that marker within
+/// seconds, but it can miss a run entirely (no root pid captured at spawn,
+/// host-scan ambiguity) and nothing retries on its behalf — codex, unlike
+/// claude, has no marker-less transcript mapping. Resolve the rollout from
+/// the process's own cwd and start time under the conservative
+/// single-candidate policy, and persist the marker so title generation and
+/// resume converge on the same binding.
+///
+/// Known limitation: the single-candidate policy has no `assigned`-set
+/// reservation, so two codex processes in the same cwd stay ambiguous and
+/// the fallback fails safe to `None` rather than guessing.
+fn codex_live_transcript_fallback(
     sys: &System,
-    children: &HashMap<Pid, Vec<Pid>>,
-    root: Pid,
-) -> Option<StatusAgentKind> {
-    nearest_agent_kind_in_tree(children, root, |pid| {
-        let proc = sys.process(pid)?;
-        if process_basename_matches(proc, "codex") {
-            return Some(StatusAgentKind::Codex);
+    session_id: Option<Uuid>,
+    live_agent: Option<(AgentKind, Pid)>,
+) -> Option<agent_resume::LiveTranscript> {
+    let session_id = session_id?;
+    let (kind, pid) = live_agent?;
+    if kind != AgentKind::Codex {
+        return None;
+    }
+    let proc = sys.process(pid)?;
+    let cwd = proc.cwd()?;
+    let process_start = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(proc.start_time());
+    let Some((path, id)) =
+        acorn_transcript::find_agent_run_transcript(cwd, AgentKind::Codex, process_start)
+    else {
+        tracing::debug!(
+            %session_id,
+            pid = pid.as_u32(),
+            ?cwd,
+            "status poll: live codex has no unambiguous rollout; marker fallback skipped"
+        );
+        return None;
+    };
+    match crate::agent_resume_persister::bind_session_marker(session_id, AgentKind::Codex, &id) {
+        Ok(()) => {
+            note_codex_bind_recovered(&mut codex_bind_failure_registry(), session_id);
+            tracing::info!(
+                %session_id,
+                %id,
+                ?path,
+                "status poll: bound live codex transcript via marker fallback"
+            );
         }
-        if process_basename_matches(proc, "claude") {
-            return Some(StatusAgentKind::Claude);
+        Err(err) => {
+            // A persistent write failure (permissions, deleted state dir)
+            // re-enters this fallback every poll tick; warn once per
+            // failure streak, then drop to debug until a bind succeeds.
+            if note_codex_bind_failure(&mut codex_bind_failure_registry(), session_id) {
+                tracing::warn!(
+                    %session_id, %id, error = %err,
+                    "status poll: codex marker fallback write failed"
+                );
+            } else {
+                tracing::debug!(
+                    %session_id, %id, error = %err,
+                    "status poll: codex marker fallback write still failing"
+                );
+            }
         }
-        if process_basename_matches(proc, "agy")
-            || process_basename_matches(proc, "antigravity")
-            || process_basename_matches(proc, "antigravity-cli")
-        {
-            return Some(StatusAgentKind::Antigravity);
-        }
-        None
+    }
+    Some(agent_resume::LiveTranscript {
+        id,
+        path,
+        kind: AgentKind::Codex,
     })
 }
 
+/// Sessions whose codex marker fallback already warned about a write
+/// failure this streak. Guards the poll-frequency `warn!` from repeating
+/// every tick while the failure persists.
+fn codex_bind_failure_registry() -> std::sync::MutexGuard<'static, HashSet<Uuid>> {
+    static WARNED: std::sync::OnceLock<Mutex<HashSet<Uuid>>> = std::sync::OnceLock::new();
+    WARNED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Record a fallback write failure; `true` when this is the first failure
+/// of the current streak (i.e. the caller should warn, not just debug).
+fn note_codex_bind_failure(warned: &mut HashSet<Uuid>, session_id: Uuid) -> bool {
+    warned.insert(session_id)
+}
+
+/// A successful bind ends the failure streak so the next failure warns again.
+fn note_codex_bind_recovered(warned: &mut HashSet<Uuid>, session_id: Uuid) {
+    warned.remove(&session_id);
+}
+
+/// Resolve the nearest live agent process under `root`, with its pid.
+///
+/// `found_pid` rides side-channel out of the closure; the pairing with the
+/// returned kind is only sound because `nearest_agent_kind_in_tree` stops at
+/// the FIRST `Some` the callback yields (see its doc). If that traversal ever
+/// keeps scanning past a match, refactor the callback to return
+/// `Option<(AgentKind, Pid)>` instead of relying on this capture.
+fn live_agent_in_descendants(
+    sys: &System,
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+) -> Option<(AgentKind, Pid)> {
+    let mut found_pid = None;
+    let kind = nearest_agent_kind_in_tree(children, root, |pid| {
+        let proc = sys.process(pid)?;
+        let kind = if process_basename_matches(proc, "codex") {
+            AgentKind::Codex
+        } else if process_basename_matches(proc, "claude") {
+            AgentKind::Claude
+        } else if process_basename_matches(proc, "agy")
+            || process_basename_matches(proc, "antigravity")
+            || process_basename_matches(proc, "antigravity-cli")
+        {
+            AgentKind::Antigravity
+        } else {
+            return None;
+        };
+        found_pid = Some(pid);
+        Some(kind)
+    })?;
+    Some((kind, found_pid?))
+}
+
+fn live_codex_has_tool_descendant(
+    sys: &System,
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+) -> bool {
+    has_unignored_descendant_below_nearest_matching(
+        children,
+        root,
+        |pid| {
+            sys.process(pid)
+                .is_some_and(|proc| process_primary_basename_matches(proc, "codex"))
+        },
+        |pid| {
+            sys.process(pid)
+                .is_some_and(is_codex_persistent_helper_process)
+        },
+    )
+}
+
+fn is_codex_persistent_helper_process(proc: &sysinfo::Process) -> bool {
+    process_basename_matches(proc, "node_repl")
+        || process_basename_matches(proc, "SkyComputerUseClient")
+}
+
+/// BFS from `root` that returns on the FIRST pid the callback classifies.
+/// `live_agent_in_descendants` depends on this early-return to pair its
+/// side-channel pid with the returned kind — keep the invariant if this
+/// traversal ever grows ranking or multi-match behavior.
 fn nearest_agent_kind_in_tree<F>(
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
     mut kind_for_pid: F,
-) -> Option<StatusAgentKind>
+) -> Option<AgentKind>
 where
-    F: FnMut(Pid) -> Option<StatusAgentKind>,
+    F: FnMut(Pid) -> Option<AgentKind>,
 {
     let mut queue = VecDeque::new();
     if let Some(direct) = children.get(&root) {
@@ -5423,11 +5582,112 @@ where
     None
 }
 
+fn nearest_descendant_matching<F>(
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+    mut matches: F,
+) -> Option<Pid>
+where
+    F: FnMut(Pid) -> bool,
+{
+    let mut queue = VecDeque::new();
+    if let Some(direct) = children.get(&root) {
+        let mut direct = direct.clone();
+        direct.sort_by_key(|pid| pid.as_u32());
+        queue.extend(direct);
+    }
+    while let Some(pid) = queue.pop_front() {
+        if matches(pid) {
+            return Some(pid);
+        }
+        if let Some(kids) = children.get(&pid) {
+            let mut kids = kids.clone();
+            kids.sort_by_key(|pid| pid.as_u32());
+            queue.extend(kids);
+        }
+    }
+    None
+}
+
+fn has_unignored_descendant_below_nearest_matching<F, G>(
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+    matches: F,
+    mut ignore_subtree: G,
+) -> bool
+where
+    F: FnMut(Pid) -> bool,
+    G: FnMut(Pid) -> bool,
+{
+    let Some(anchor) = nearest_descendant_matching(children, root, matches) else {
+        return false;
+    };
+    let mut queue = VecDeque::new();
+    if let Some(direct) = children.get(&anchor) {
+        let mut direct = direct.clone();
+        direct.sort_by_key(|pid| pid.as_u32());
+        queue.extend(direct);
+    }
+    while let Some(pid) = queue.pop_front() {
+        if ignore_subtree(pid) {
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
 /// `true` if any descendant of `root` exists in the children map. The root
 /// itself does not count — we only care about commands launched *under* the
-/// PTY shell, which is what flips Idle ↔ Running for terminal sessions.
+/// PTY shell, which is what flips Ready <-> Working for terminal sessions.
 fn has_live_descendant(children: &HashMap<Pid, Vec<Pid>>, root: Pid) -> bool {
     children.get(&root).is_some_and(|direct| !direct.is_empty())
+}
+
+fn session_process_summaries(
+    sys: &System,
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+) -> Vec<SessionProcessSummary> {
+    let mut queue = VecDeque::new();
+    if let Some(direct) = children.get(&root) {
+        let mut direct = direct.clone();
+        direct.sort_by_key(|pid| pid.as_u32());
+        queue.extend(direct.into_iter().map(|pid| (pid, 1)));
+    }
+
+    let mut summaries = Vec::new();
+    let mut fallback = Vec::new();
+    while let Some((pid, depth)) = queue.pop_front() {
+        if let Some(proc) = sys.process(pid) {
+            let summary = SessionProcessSummary {
+                pid: pid.as_u32(),
+                name: process_display_name(proc),
+                depth,
+            };
+            if is_session_process_noise(&summary.name) {
+                fallback.push(summary);
+            } else {
+                summaries.push(summary);
+            }
+        }
+        if let Some(kids) = children.get(&pid) {
+            let mut kids = kids.clone();
+            kids.sort_by_key(|child| child.as_u32());
+            queue.extend(kids.into_iter().map(|child| (child, depth + 1)));
+        }
+    }
+
+    if summaries.is_empty() {
+        fallback
+    } else {
+        summaries
+    }
+}
+
+fn is_session_process_noise(name: &str) -> bool {
+    let base = basename(name).trim_matches(&['(', ')'][..]);
+    matches!(base, "sh" | "bash" | "zsh" | "tail")
 }
 
 #[cfg(test)]
@@ -5440,7 +5700,7 @@ mod status_hint_tests {
             refine_shell_hint_for_unpaired_agent(
                 Some(acorn_pty::ShellHint::Running),
                 false,
-                Some(StatusAgentKind::Codex),
+                Some(AgentKind::Codex),
             ),
             Some(acorn_pty::ShellHint::NeedsInput),
         );
@@ -5452,7 +5712,7 @@ mod status_hint_tests {
             refine_shell_hint_for_unpaired_agent(
                 Some(acorn_pty::ShellHint::Running),
                 true,
-                Some(StatusAgentKind::Codex),
+                Some(AgentKind::Codex),
             ),
             Some(acorn_pty::ShellHint::Running),
         );
@@ -5464,7 +5724,7 @@ mod status_hint_tests {
             refine_shell_hint_for_unpaired_agent(
                 Some(acorn_pty::ShellHint::Running),
                 false,
-                Some(StatusAgentKind::Claude),
+                Some(AgentKind::Claude),
             ),
             Some(acorn_pty::ShellHint::Running),
         );
@@ -5472,7 +5732,7 @@ mod status_hint_tests {
             refine_shell_hint_for_unpaired_agent(
                 Some(acorn_pty::ShellHint::Running),
                 false,
-                Some(StatusAgentKind::Antigravity),
+                Some(AgentKind::Antigravity),
             ),
             Some(acorn_pty::ShellHint::Running),
         );
@@ -5490,15 +5750,15 @@ mod status_hint_tests {
 
         let kind = nearest_agent_kind_in_tree(&children, root, |pid| {
             if pid == codex {
-                Some(StatusAgentKind::Codex)
+                Some(AgentKind::Codex)
             } else if pid == nested_claude {
-                Some(StatusAgentKind::Claude)
+                Some(AgentKind::Claude)
             } else {
                 None
             }
         });
 
-        assert_eq!(kind, Some(StatusAgentKind::Codex));
+        assert_eq!(kind, Some(AgentKind::Codex));
     }
 
     #[test]
@@ -5512,6 +5772,85 @@ mod status_hint_tests {
 
         assert!(has_live_descendant(&children, root));
         assert!(!has_live_descendant(&children, grandchild));
+    }
+
+    #[test]
+    fn matching_agent_with_child_reports_live_work_below_agent() {
+        let root = Pid::from_u32(1);
+        let wrapper = Pid::from_u32(2);
+        let codex = Pid::from_u32(3);
+        let tool = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![wrapper]);
+        children.insert(wrapper, vec![codex]);
+        children.insert(codex, vec![tool]);
+
+        assert!(has_unignored_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |_| false,
+        ));
+    }
+
+    #[test]
+    fn matching_agent_without_child_reports_no_live_work_below_agent() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+
+        assert!(!has_unignored_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |_| false,
+        ));
+    }
+
+    #[test]
+    fn matching_agent_with_only_ignored_child_reports_no_live_work_below_agent() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let helper = Pid::from_u32(3);
+        let helper_child = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![helper]);
+        children.insert(helper, vec![helper_child]);
+
+        assert!(!has_unignored_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |pid| pid == helper,
+        ));
+    }
+
+    #[test]
+    fn matching_agent_with_ignored_helper_and_tool_reports_live_work_below_agent() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let helper = Pid::from_u32(3);
+        let tool = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![helper, tool]);
+
+        assert!(has_unignored_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |pid| pid == helper,
+        ));
+    }
+
+    #[test]
+    fn session_process_noise_filters_shell_wrappers() {
+        assert!(is_session_process_noise("(zsh)"));
+        assert!(is_session_process_noise("tail"));
+        assert!(!is_session_process_noise("codex"));
+        assert!(!is_session_process_noise("rg"));
     }
 }
 
@@ -5878,77 +6217,41 @@ pub(crate) fn stage_remove_linked_worktree_at_path(
     worktree::stage_remove_worktree_at_path(repo_path, worktree_path)
 }
 
-/// Surface the "이전 Claude 대화 있음" candidate for a session — used by
-/// the frontend modal that pops on session focus. `None` means there is
-/// nothing the user needs to decide about (no claude has run, or the
-/// last id is already acknowledged, or claude is currently active in
-/// this session's PTY tree and the modal would be redundant).
+/// Surface the previous-agent-conversation candidate for a session. `None`
+/// means there is nothing the user needs to decide about, or the same
+/// provider is currently active in this session's PTY tree and the modal
+/// would be redundant.
 #[tauri::command]
-pub fn get_claude_resume_candidate(
+pub fn get_agent_resume_candidate(
     state: State<'_, AppState>,
     session_id: String,
+    kind: AgentKind,
 ) -> AppResult<Option<agent_resume::ResumeCandidate>> {
     let id = parse_id(&session_id)?;
-    if agent_is_running_in_session(&state, &id, "claude") {
-        return Ok(None);
-    }
-    agent_resume::claude_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
-}
-
-/// Codex equivalent of `get_claude_resume_candidate`. Codex auto-resume
-/// (which the deleted shim used to perform) is gone; the user now picks
-/// the resume target through the modal whenever a fresh codex UUID lands
-/// in the per-session state file.
-#[tauri::command]
-pub fn get_codex_resume_candidate(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> AppResult<Option<agent_resume::ResumeCandidate>> {
-    let id = parse_id(&session_id)?;
-    if agent_is_running_in_session(&state, &id, "codex") {
-        return Ok(None);
-    }
-    agent_resume::codex_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
-}
-
-/// Antigravity equivalent of `get_claude_resume_candidate`.
-#[tauri::command]
-pub fn get_antigravity_resume_candidate(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> AppResult<Option<agent_resume::ResumeCandidate>> {
-    let id = parse_id(&session_id)?;
-    if agent_is_running_in_session(&state, &id, "agy")
-        || agent_is_running_in_session(&state, &id, "antigravity")
-        || agent_is_running_in_session(&state, &id, "antigravity-cli")
+    if agent_running_basenames(kind)
+        .iter()
+        .any(|basename| agent_is_running_in_session(&state, &id, basename))
     {
         return Ok(None);
     }
-    agent_resume::antigravity_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
+    agent_resume::resume_candidate(id, kind).map_err(|e| AppError::Other(e.to_string()))
 }
 
-/// Mark the current `claude.id` as seen so the modal does not pop again
-/// for the same UUID. Invoked by every modal-button handler (이어하기 /
-/// ID 복사 / 취소) — the only thing that revives the candidate is a
-/// *new* JSONL appearing under a different UUID.
+/// Mark the provider's current id as seen so the modal does not pop again
+/// for the same UUID. The only thing that revives the candidate is a new
+/// transcript appearing under a different UUID.
 #[tauri::command]
-pub fn acknowledge_claude_resume(session_id: String) -> AppResult<()> {
+pub fn acknowledge_agent_resume(session_id: String, kind: AgentKind) -> AppResult<()> {
     let id = parse_id(&session_id)?;
-    agent_resume::acknowledge_claude_resume(id).map_err(|e| AppError::Other(e.to_string()))
+    agent_resume::acknowledge_resume(id, kind).map_err(|e| AppError::Other(e.to_string()))
 }
 
-/// Codex equivalent of `acknowledge_claude_resume`.
-#[tauri::command]
-pub fn acknowledge_codex_resume(session_id: String) -> AppResult<()> {
-    let id = parse_id(&session_id)?;
-    agent_resume::acknowledge_codex_resume(id).map_err(|e| AppError::Other(e.to_string()))
-}
-
-/// Antigravity equivalent of `acknowledge_claude_resume`.
-#[tauri::command]
-pub fn acknowledge_antigravity_resume(session_id: String) -> AppResult<()> {
-    let id = parse_id(&session_id)?;
-    agent_resume::acknowledge_antigravity_resume(id).map_err(|e| AppError::Other(e.to_string()))
+fn agent_running_basenames(kind: AgentKind) -> &'static [&'static str] {
+    match kind {
+        AgentKind::Claude => &["claude"],
+        AgentKind::Codex => &["codex"],
+        AgentKind::Antigravity => &["agy", "antigravity", "antigravity-cli"],
+    }
 }
 
 /// `true` when a process matching `basename` is alive anywhere in the
@@ -5998,13 +6301,46 @@ fn agent_is_running_in_session(state: &AppState, session_id: &Uuid, basename: &s
 }
 
 /// Match a process by `target` against any of: exe-path basename,
-/// `proc.name()`, or argv[0] basename. macOS `p_comm` is truncated to
+/// `proc.name()`, or argv basename. macOS `p_comm` is truncated to
 /// 16 chars and can land as a full path *or* a basename depending on
 /// how the process was invoked; sysinfo can also surface either form
 /// from `exe()` (resolved via `proc_pidinfo`). Checking every channel
 /// makes the detection robust against the user's `claude` binary
 /// being a Bun-compiled symlink target rather than a script.
 fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
+    if process_primary_basename_matches(proc, target) {
+        return true;
+    }
+    for arg in proc.cmd().iter().skip(1) {
+        let s = arg.to_string_lossy();
+        if process_basename_part_matches(&s, target) {
+            return true;
+        }
+    }
+    false
+}
+
+fn process_primary_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
+    if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
+        if process_basename_part_matches(exe, target) {
+            return true;
+        }
+    }
+    if let Some(name) = proc.name().to_str() {
+        if process_basename_part_matches(name, target) {
+            return true;
+        }
+    }
+    if let Some(arg0) = proc.cmd().first() {
+        let s = arg0.to_string_lossy();
+        if process_basename_part_matches(&s, target) {
+            return true;
+        }
+    }
+    false
+}
+
+fn process_basename_part_matches(s: &str, target: &str) -> bool {
     fn basename_matches(s: &str, target: &str) -> bool {
         let base = s.rsplit('/').next().unwrap_or(s);
         base == target
@@ -6013,23 +6349,7 @@ fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
             || base.strip_suffix(".cjs") == Some(target)
     }
 
-    if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
-        if basename_matches(exe, target) {
-            return true;
-        }
-    }
-    if let Some(name) = proc.name().to_str() {
-        if basename_matches(name, target) {
-            return true;
-        }
-    }
-    for arg in proc.cmd() {
-        let s = arg.to_string_lossy();
-        if basename_matches(&s, target) {
-            return true;
-        }
-    }
-    false
+    basename_matches(s, target)
 }
 
 pub(crate) fn sanitize_worktree_name(name: &str) -> String {
@@ -6215,15 +6535,15 @@ mod tests {
     #[test]
     fn poll_defers_while_a_hooked_agent_is_live() {
         // While the agent process is alive the hook owns the turn boundary and
-        // the transcript tail is ignored in both directions (stale Running just
-        // after a turn ends, stale NeedsInput just after the next prompt).
+        // the transcript tail is ignored in both directions (stale Working just
+        // after a turn ends, stale WaitingForInput just after the next prompt).
         assert!(poll_defers_to_hook(true, true));
     }
 
     #[test]
     fn poll_owns_status_once_the_agent_is_gone() {
         // Agent exited, or an unrelated command now owns the PTY — the poll
-        // drives liveness again, including the Idle edge that no hook reports.
+        // drives liveness again, including the Ready edge that no hook reports.
         assert!(!poll_defers_to_hook(true, false));
     }
 
@@ -6236,36 +6556,111 @@ mod tests {
     }
 
     #[test]
+    fn boot_reconciliation_recovers_turn_end_lost_while_app_was_closed() {
+        // Persisted hook status says Working, no event has confirmed the
+        // channel this run, and the transcript holds a real turn-complete
+        // marker — the turn ended while nobody was listening.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::WaitingForInput,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::Working,
+                false,
+                detection
+            ),
+            Some(acorn_session::SessionStatus::WaitingForInput)
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_is_off_once_a_hook_event_confirms_the_channel() {
+        // An event reached this run's hook server — hooks own both directions
+        // again; re-opening the transcript passthrough would recreate the
+        // UserPromptSubmit-vs-stale-tail race.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::WaitingForInput,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::Working,
+                true,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_never_demotes_a_resting_status() {
+        // Nobody can submit a prompt while the app is closed, so a persisted
+        // WaitingForInput can only be stale in the direction hooks will
+        // re-report; a stale-tail reading must not touch it.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::Working,
+            reason: None,
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::WaitingForInput,
+                false,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_requires_a_turn_complete_marker() {
+        // A shell-prompt WaitingForInput hint is not evidence the agent's turn
+        // ended — only a transcript turn-complete marker flips Working.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::WaitingForInput,
+            reason: Some(super::SessionStatusReason::ShellPrompt),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::Working,
+                false,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn chat_message_status_maps_to_session_status() {
         assert_eq!(
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Pending
             ),
-            acorn_session::SessionStatus::Running
+            acorn_session::SessionStatus::Working
         );
         assert_eq!(
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Streaming
             ),
-            acorn_session::SessionStatus::Running
+            acorn_session::SessionStatus::Working
         );
         assert_eq!(
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Complete
             ),
-            acorn_session::SessionStatus::NeedsInput
+            acorn_session::SessionStatus::WaitingForInput
         );
         assert_eq!(
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Error
             ),
-            acorn_session::SessionStatus::Failed
+            acorn_session::SessionStatus::Errored
         );
         assert_eq!(
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Cancelled
             ),
-            acorn_session::SessionStatus::NeedsInput
+            acorn_session::SessionStatus::WaitingForInput
         );
     }
 
@@ -6560,17 +6955,13 @@ mod tests {
         assert!(context.prompt.contains("Earlier summary"));
         assert!(context.prompt.contains("Use adapters"));
         assert!(context.prompt.contains("current question"));
-        assert!(
-            context
-                .included_message_ids
-                .contains(&"current-user".to_string())
-        );
+        assert!(context
+            .included_message_ids
+            .contains(&"current-user".to_string()));
         assert!(!context.prompt.contains("old user content"));
-        assert!(
-            !context
-                .included_message_ids
-                .contains(&"old-user".to_string())
-        );
+        assert!(!context
+            .included_message_ids
+            .contains(&"old-user".to_string()));
     }
 
     #[test]
@@ -6987,28 +7378,22 @@ mod tests {
         let inputs = adapter.inputs.lock().unwrap();
 
         assert!(inputs[0].context.is_some());
-        assert!(
-            inputs[0]
-                .thread
-                .as_ref()
-                .unwrap()
-                .native_thread_id
-                .is_none()
-        );
-        assert!(
-            result
-                .final_state
-                .provider_threads
-                .iter()
-                .any(|thread| thread.provider == "codex")
-        );
-        assert!(
-            result
-                .final_state
-                .provider_threads
-                .iter()
-                .any(|thread| thread.provider == "claude")
-        );
+        assert!(inputs[0]
+            .thread
+            .as_ref()
+            .unwrap()
+            .native_thread_id
+            .is_none());
+        assert!(result
+            .final_state
+            .provider_threads
+            .iter()
+            .any(|thread| thread.provider == "codex"));
+        assert!(result
+            .final_state
+            .provider_threads
+            .iter()
+            .any(|thread| thread.provider == "claude"));
         assert_eq!(
             result.final_state.context_snapshots[0].mode,
             crate::persistence::ContextSnapshotMode::CompiledContext
@@ -7641,6 +8026,21 @@ mod tests {
         assert!(!super::auto_title_promotion_needed(None, true));
     }
 
+    /// The fallback's write-failure warning must fire once per failure
+    /// streak: repeat failures drop to debug, and a successful bind
+    /// re-arms the warning for the next streak.
+    #[test]
+    fn codex_bind_failure_warns_once_per_streak() {
+        let mut warned = std::collections::HashSet::new();
+        let session_id = Uuid::from_u128(7);
+
+        assert!(super::note_codex_bind_failure(&mut warned, session_id));
+        assert!(!super::note_codex_bind_failure(&mut warned, session_id));
+
+        super::note_codex_bind_recovered(&mut warned, session_id);
+        assert!(super::note_codex_bind_failure(&mut warned, session_id));
+    }
+
     #[test]
     fn unattached_daemon_session_shell_hint_uses_live_descendants() {
         assert_eq!(
@@ -7719,19 +8119,15 @@ mod tests {
         repo
     }
 
-    // Regression: libgit2's default `Repository::worktree(name, path, None)`
-    // auto-creates a branch named after the worktree. When that branch
-    // already exists (e.g. the user's primary branch happens to share the
-    // repo basename), the call returned ErrorCode::Exists and bubbled up to
-    // the user as "failed to write reference 'refs/heads/<name>'". The
-    // retry loop now bumps the suffix on Exists just like it does for
-    // path collisions.
+    // Regression: a generated worktree branch name can collide with an
+    // existing branch. The retry loop bumps the suffix on Exists just like it
+    // does for path collisions.
     #[test]
     fn create_unique_worktree_bumps_suffix_when_branch_name_taken() {
         let repo_dir = unique_repo_dir("branch-collision");
         let repo = init_repo_with_commit(&repo_dir);
-        // Create a branch named after the repo so the libgit2 auto-branch
-        // creation would collide on the first attempt.
+        // Create a branch named after the repo so generated branch creation
+        // collides on the first attempt.
         let head_commit = repo
             .head()
             .and_then(|h| h.peel_to_commit())
@@ -7792,10 +8188,8 @@ mod tests {
     #[test]
     fn worktree_delete_guard_rejects_peer_session_on_same_worktree_path() {
         let state = crate::state::AppState::default();
-        let root = std::env::temp_dir().join(format!(
-            "acorn-worktree-guard-{}",
-            Uuid::new_v4().simple()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("acorn-worktree-guard-{}", Uuid::new_v4().simple()));
         let repo = root.join("repo");
         let other_repo = root.join("other");
         let worktree = repo.join(".acorn/worktrees/shared");
@@ -7840,9 +8234,7 @@ mod tests {
         ));
 
         assert!(super::worktree_path_used_outside_project(
-            &state,
-            repo,
-            &worktree,
+            &state, repo, &worktree,
         ));
         assert!(!super::worktree_path_used_outside_project(
             &state,
@@ -7862,12 +8254,8 @@ mod tests {
             &worktree.display().to_string(),
         ));
 
-        super::ensure_no_sessions_using_worktree_path_except(
-            &state,
-            &worktree,
-            Some(&active.id),
-        )
-        .expect("target session should not block its own worktree deletion");
+        super::ensure_no_sessions_using_worktree_path_except(&state, &worktree, Some(&active.id))
+            .expect("target session should not block its own worktree deletion");
     }
 
     #[test]

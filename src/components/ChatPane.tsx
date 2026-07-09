@@ -33,7 +33,11 @@ import {
   useSettings,
   type AcornSettings,
 } from "../lib/settings";
-import { AgentProviderIcon } from "../lib/agentProvider";
+import {
+  AgentProviderIcon,
+  getAgentProviderDefinition,
+  isSessionAgentProvider,
+} from "../lib/agentProvider";
 import { pathRelativeToCwd } from "../lib/fileMention";
 import { useDialogShortcuts } from "../lib/dialog";
 import { useAppStore } from "../store";
@@ -87,14 +91,11 @@ function pickEmptyComposerTitle(): string {
 function providerFromString(
   value: string | null | undefined,
 ): ChatProvider | null {
-  return value === "codex" || value === "claude" || value === "antigravity"
-    ? value
-    : null;
+  return isSessionAgentProvider(value) ? value : null;
 }
 
 function defaultProvider(settings: AcornSettings): ChatProvider {
-  if (settings.agents.selected === "antigravity") return "antigravity";
-  return settings.agents.selected === "codex" ? "codex" : "claude";
+  return providerFromString(settings.agents.selected) ?? "claude";
 }
 
 function chatAiRequest(
@@ -129,13 +130,13 @@ function setLocalChatSessionStatus(
 }
 
 function sessionStatusFromChatState(state: ChatSessionState): SessionStatus {
-  if (chatStateIsRunning(state)) return "running";
+  if (chatStateIsRunning(state)) return "working";
   const lastMessage = state.messages[state.messages.length - 1];
   const lastTurn = state.turns[state.turns.length - 1];
   if (lastMessage?.status === "error" || lastTurn?.status === "error") {
-    return "failed";
+    return "errored";
   }
-  return "needs_input";
+  return "waiting_for_input";
 }
 
 function isChatScrolledBack(element: HTMLElement): boolean {
@@ -466,13 +467,10 @@ function StreamingChatMessageBody({
 }
 
 function providerLabel(provider: string | null | undefined): string {
+  const sessionProvider = providerFromString(provider);
+  if (sessionProvider) return getAgentProviderDefinition(sessionProvider).label;
+
   switch (provider) {
-    case "antigravity":
-      return "Antigravity";
-    case "claude":
-      return "Claude";
-    case "codex":
-      return "Codex";
     case "ollama":
       return "Ollama";
     case "llm":
@@ -895,7 +893,7 @@ export function ChatPane({
       };
       latestChatStateRef.current = optimisticState;
       setState(optimisticState);
-      setLocalChatSessionStatus(sessionId, "running");
+      setLocalChatSessionStatus(sessionId, "working");
       const saved = await api.sendChatMessage(
         sessionId,
         chatAiRequest(provider, settings),
@@ -914,7 +912,7 @@ export function ChatPane({
         setState(previousState);
         setDraft(submittedDraft);
         setAttachments(submittedAttachments);
-        setLocalChatSessionStatus(sessionId, "failed");
+        setLocalChatSessionStatus(sessionId, "errored");
       } else if (latestState?.session_id === sessionId) {
         setLocalChatSessionStatus(
           sessionId,
@@ -1012,7 +1010,7 @@ export function ChatPane({
     setMessageActionBusyId(message.id);
     setSending(true);
     setError(null);
-    setLocalChatSessionStatus(sessionId, "running");
+    setLocalChatSessionStatus(sessionId, "working");
     try {
       const saved = await api.retryChatMessage(
         sessionId,
@@ -1026,7 +1024,7 @@ export function ChatPane({
       setEditDraft("");
     } catch (err) {
       setError(String(err));
-      setLocalChatSessionStatus(sessionId, "failed");
+      setLocalChatSessionStatus(sessionId, "errored");
     } finally {
       setSending(false);
       setMessageActionBusyId(null);

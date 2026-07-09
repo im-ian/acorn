@@ -303,12 +303,8 @@ export const tauriMockSource = `
     // Resume modal probes every session focus for all session agents.
     // Default to "no candidate" so non-resume E2Es never see the modal;
     // tests that exercise the modal override this via __ACORN_MOCK_HANDLERS__.
-    if (cmd === 'get_claude_resume_candidate') return Promise.resolve(null);
-    if (cmd === 'get_codex_resume_candidate') return Promise.resolve(null);
-    if (cmd === 'get_antigravity_resume_candidate') return Promise.resolve(null);
-    if (cmd === 'acknowledge_claude_resume') return Promise.resolve(undefined);
-    if (cmd === 'acknowledge_codex_resume') return Promise.resolve(undefined);
-    if (cmd === 'acknowledge_antigravity_resume') return Promise.resolve(undefined);
+    if (cmd === 'get_agent_resume_candidate') return Promise.resolve(null);
+    if (cmd === 'acknowledge_agent_resume') return Promise.resolve(undefined);
     // Staged-rev mismatch is the daemon-stale prompt at boot. Default to
     // "no mismatch" so non-related E2Es never see the modal; tests that
     // exercise it override via __ACORN_MOCK_HANDLERS__.

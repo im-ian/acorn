@@ -25,9 +25,11 @@ import {
 import { api } from "../lib/api";
 import {
   AgentProviderIcon,
+  providerSupportsTokenUsage,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
 import { cn } from "../lib/cn";
+import { createInFlightCoalescer } from "../lib/inFlightCoalescer";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
@@ -36,6 +38,7 @@ import type {
   SessionNotification,
   SessionNotificationKind,
   SessionStatus,
+  SessionStatusReason,
   AgentTokenProvider,
   AgentTokenUsageMetric,
   AgentTokenUsageSnapshot,
@@ -53,12 +56,35 @@ const TOKEN_USAGE_POLL_MS = 60_000;
 type StatusBarTranslationKey = Extract<TranslationKey, `statusBar.${string}`>;
 
 const SESSION_STATUS_KEYS: Record<SessionStatus, StatusBarTranslationKey> = {
-  idle: "statusBar.sessionStatus.idle",
-  running: "statusBar.sessionStatus.running",
-  needs_input: "statusBar.sessionStatus.needsInput",
-  failed: "statusBar.sessionStatus.failed",
-  completed: "statusBar.sessionStatus.completed",
+  ready: "statusBar.sessionStatus.ready",
+  working: "statusBar.sessionStatus.working",
+  waiting_for_input: "statusBar.sessionStatus.waitingForInput",
+  errored: "statusBar.sessionStatus.errored",
 };
+
+function sessionStatusReasonLabel(
+  t: Translator,
+  reason: SessionStatusReason | null | undefined,
+): string | null {
+  switch (reason) {
+    case "turn_complete":
+      return statusBarText(t, "statusBar.sessionStatusReason.turn_complete");
+    case "shell_prompt":
+      return statusBarText(t, "statusBar.sessionStatusReason.shell_prompt");
+    default:
+      return null;
+  }
+}
+
+function sessionStatusDetailLabel(
+  t: Translator,
+  status: SessionStatus,
+  reason: SessionStatusReason | null | undefined,
+): string {
+  const label = statusBarText(t, SESSION_STATUS_KEYS[status]);
+  const reasonLabel = sessionStatusReasonLabel(t, reason);
+  return reasonLabel ? `${label} · ${reasonLabel}` : label;
+}
 
 function statusBarText(t: Translator, key: StatusBarTranslationKey): string {
   return t(key);
@@ -114,13 +140,17 @@ function tildify(path: string, home: string | null): string {
 function toAgentTokenProvider(
   provider: ReturnType<typeof resolveSessionAgentProvider>,
 ): AgentTokenProvider | null {
-  return provider === "codex" || provider === "claude" ? provider : null;
+  return providerSupportsTokenUsage(provider) ? provider : null;
 }
 
 interface MemorySnapshot {
   bytes: number;
   processes: MemoryProcess[];
 }
+
+const getCoalescedMemoryUsage = createInFlightCoalescer(() =>
+  api.getMemoryUsage(),
+);
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -147,7 +177,7 @@ function useMemoryUsage(
     let cancelled = false;
     const tick = async () => {
       try {
-        const usage = await api.getMemoryUsage();
+        const usage = await getCoalescedMemoryUsage();
         if (!cancelled) {
           setSnapshot({ bytes: usage.bytes, processes: usage.processes });
         }
@@ -309,7 +339,14 @@ export function StatusBar() {
             {showSessionCount ? (
               <span className="text-fg-muted/50">|</span>
             ) : null}
-            <span className="whitespace-nowrap">
+            <span
+              className="whitespace-nowrap"
+              title={sessionStatusDetailLabel(
+                t,
+                active.status,
+                active.status_reason,
+              )}
+            >
               {statusBarFormat(t, "statusBar.status", {
                 status: statusBarText(t, SESSION_STATUS_KEYS[active.status]),
               })}
@@ -736,10 +773,9 @@ const NOTIFICATION_KIND_KEYS: Record<
   SessionNotificationKind,
   StatusBarTranslationKey
 > = {
-  needs_input: "statusBar.notifications.kind.needsInput",
-  failed: "statusBar.notifications.kind.failed",
-  completed: "statusBar.notifications.kind.completed",
-  became_idle: "statusBar.notifications.kind.becameIdle",
+  waiting_for_input: "statusBar.notifications.kind.waitingForInput",
+  errored: "statusBar.notifications.kind.errored",
+  became_ready: "statusBar.notifications.kind.becameReady",
 };
 
 function SessionNotificationsButton() {
@@ -933,6 +969,7 @@ function NotificationRow({
 }) {
   const t = useTranslation();
   const selectSession = useAppStore((s) => s.selectSession);
+  const openTerminalPopup = useAppStore((s) => s.openTerminalPopup);
   const markRead = useAppStore((s) => s.markSessionNotificationRead);
   const dismiss = useAppStore((s) => s.dismissSessionNotification);
   const unread = !notification.readAt;
@@ -940,6 +977,9 @@ function NotificationRow({
   const openSession = () => {
     markRead(notification.id);
     selectSession(notification.sessionId);
+    if (useAppStore.getState().workspaceViewMode === "kanban") {
+      openTerminalPopup(notification.sessionId);
+    }
     onClose();
   };
 
@@ -1012,8 +1052,8 @@ function NotificationRow({
 }
 
 function notificationDotClass(kind: SessionNotificationKind): string {
-  if (kind === "failed") return "bg-danger";
-  if (kind === "completed") return "bg-accent";
+  if (kind === "errored") return "bg-danger";
+  if (kind === "became_ready") return "bg-fg-muted";
   return "bg-warning";
 }
 

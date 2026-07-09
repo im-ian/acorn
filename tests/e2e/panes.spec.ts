@@ -19,7 +19,7 @@ const SESSION = {
   worktree_path: "/tmp/demo",
   branch: "main",
   isolated: false,
-  status: "idle" as const,
+  status: "ready" as const,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:05Z",
   last_message: null,
@@ -85,7 +85,7 @@ test.describe("pane / sidebar shortcuts", () => {
               worktree_path: "/tmp/demo",
               branch: "main",
               isolated: false,
-              status: "idle",
+              status: "ready",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:00Z",
               last_message: null,
@@ -112,7 +112,7 @@ test.describe("pane / sidebar shortcuts", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -148,7 +148,7 @@ test.describe("pane / sidebar shortcuts", () => {
     });
     expect(calls[0].cwdPath).toBeUndefined();
     await expect(
-      page.locator("aside").getByRole("button", { name: /^demo main · Idle/ }),
+      page.locator("aside").getByRole("button", { name: /^demo main · Ready/ }),
     ).toBeVisible();
   });
 
@@ -166,7 +166,7 @@ test.describe("pane / sidebar shortcuts", () => {
         worktree_path: "/tmp/demo/.acorn/worktrees/feature",
         branch: "feature",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -182,7 +182,7 @@ test.describe("pane / sidebar shortcuts", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:01Z",
         updated_at: "2026-01-01T00:00:01Z",
         last_message: null,
@@ -208,7 +208,7 @@ test.describe("pane / sidebar shortcuts", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:01Z",
         updated_at: "2026-01-01T00:00:01Z",
         last_message: null,
@@ -222,7 +222,7 @@ test.describe("pane / sidebar shortcuts", () => {
     await page.goto("/");
     await page
       .locator("aside")
-      .getByRole("button", { name: /^worker worktree feature · Idle/ })
+      .getByRole("button", { name: /^worker worktree feature · Ready/ })
       .click();
 
     await page.locator('[data-pane-tab-filler="root"]').dblclick();
@@ -284,7 +284,7 @@ test.describe("pane / sidebar shortcuts", () => {
     // Activate the session so a pane is focused with content.
     await page
       .locator('[data-panel-id="sidebar"]')
-      .getByRole("button", { name: /^alpha main · Idle/ })
+      .getByRole("button", { name: /^alpha main · Ready/ })
       .first()
       .click();
 
@@ -310,7 +310,7 @@ test.describe("pane / sidebar shortcuts", () => {
 
     await page
       .locator('[data-panel-id="sidebar"]')
-      .getByRole("button", { name: /^alpha main · Idle/ })
+      .getByRole("button", { name: /^alpha main · Ready/ })
       .first()
       .click();
 
@@ -338,6 +338,46 @@ test.describe("pane / sidebar shortcuts", () => {
     );
   });
 
+  test("Control+Alt+] focuses the latest needs-input tab", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      {
+        ...SESSION,
+        id: "ready",
+        name: "ready",
+        status: "ready",
+      },
+      {
+        ...SESSION,
+        id: "need-earlier",
+        name: "earlier",
+        status: "waiting_for_input",
+      },
+      {
+        ...SESSION,
+        id: "need-latest",
+        name: "latest",
+        status: "waiting_for_input",
+      },
+    ]);
+
+    await page.goto("/");
+    await expect(page.locator('[data-tab-drag-handle="ready"]')).toBeVisible();
+    await expect(
+      page.locator('[data-tab-drag-handle="need-latest"]'),
+    ).toBeVisible();
+
+    await pressHotkey(page, { control: true, alt: true, key: "]" });
+
+    const latestTab = page
+      .locator('[data-tab-drag-handle="need-latest"]')
+      .locator("xpath=ancestor::div[@role='button'][1]");
+    await expect(latestTab).toHaveClass(/acorn-tab-active-bg/);
+  });
+
   test("tab close button has a reliable hit area outside the drag handle", async ({
     page,
     tauri,
@@ -349,7 +389,7 @@ test.describe("pane / sidebar shortcuts", () => {
 
     await page
       .locator('[data-panel-id="sidebar"]')
-      .getByRole("button", { name: /^alpha main · Idle/ })
+      .getByRole("button", { name: /^alpha main · Ready/ })
       .first()
       .click();
 
@@ -447,7 +487,7 @@ test.describe("pane / sidebar shortcuts", () => {
 
     await page
       .locator('[data-panel-id="sidebar"]')
-      .getByRole("button", { name: /^alpha main · Idle/ })
+      .getByRole("button", { name: /^alpha main · Ready/ })
       .first()
       .click();
 
@@ -511,7 +551,7 @@ test.describe("pane / sidebar shortcuts", () => {
             worktree_path: "/tmp/demo",
             branch: "main",
             isolated: false,
-            status: "idle",
+            status: "ready",
             created_at: "2026-01-01T00:00:00Z",
             updated_at: "2026-01-01T00:00:05Z",
             last_message: null,
@@ -527,7 +567,7 @@ test.describe("pane / sidebar shortcuts", () => {
             worktree_path: "/tmp/demo",
             branch: "main",
             isolated: false,
-            status: "idle",
+            status: "ready",
             created_at: "2026-01-01T00:00:01Z",
             updated_at: "2026-01-01T00:00:04Z",
             last_message: null,
@@ -554,7 +594,7 @@ test.describe("pane / sidebar shortcuts", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at:
           call === 1 ? "2026-01-01T00:00:02Z" : "2026-01-01T00:00:03Z",
         updated_at:
@@ -597,7 +637,7 @@ test.describe("pane / sidebar shortcuts", () => {
           worktree_path: "/tmp/demo",
           branch: "main",
           isolated: false,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:05Z",
           last_message: null,
@@ -613,7 +653,7 @@ test.describe("pane / sidebar shortcuts", () => {
           worktree_path: "/tmp/demo",
           branch: "main",
           isolated: false,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:01Z",
           updated_at: "2026-01-01T00:00:04Z",
           last_message: null,
@@ -629,7 +669,7 @@ test.describe("pane / sidebar shortcuts", () => {
           worktree_path: "/tmp/demo",
           branch: "main",
           isolated: false,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:03Z",
           updated_at: "2026-01-01T00:00:03Z",
           last_message: null,
@@ -657,7 +697,7 @@ test.describe("pane / sidebar shortcuts", () => {
           worktree_path: "/tmp/demo",
           branch: "main",
           isolated: false,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:02Z",
           updated_at: "2026-01-01T00:00:02Z",
           last_message: null,
@@ -718,7 +758,7 @@ test.describe("pane / sidebar shortcuts", () => {
               worktree_path: "/tmp/demo",
               branch: "main",
               isolated: false,
-              status: "idle",
+              status: "ready",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:05Z",
               last_message: null,
@@ -735,7 +775,7 @@ test.describe("pane / sidebar shortcuts", () => {
 
     const sidebar = page.locator('[data-panel-id="sidebar"]');
     await sidebar
-      .getByRole("button", { name: /^alpha main · Idle/ })
+      .getByRole("button", { name: /^alpha main · Ready/ })
       .first()
       .click();
 

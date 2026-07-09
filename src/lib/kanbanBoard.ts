@@ -7,12 +7,12 @@ import type { Session } from "./types";
 
 export type KanbanSortMode = "updated-desc" | "created-desc" | "name-asc";
 
-export const KANBAN_COLUMN_DEFAULT_WIDTH = 192;
-export const KANBAN_COLUMN_MIN_WIDTH = 152;
+export const KANBAN_COLUMN_DEFAULT_WIDTH = 240;
+export const KANBAN_COLUMN_MIN_WIDTH = 180;
 export const DEFAULT_KANBAN_SORT_MODE: KanbanSortMode = "updated-desc";
 
-// v1 stored widths keyed by SessionStatus columns; the board now uses derived
-// lifecycle stages, so v1 entries are abandoned and defaults apply once.
+// v1 stored widths were keyed by raw SessionStatus columns. The lifecycle
+// board stores widths by derived stage so status renames never shuffle columns.
 const BOARD_PREFS_STORAGE_KEY = "acorn:workspace-kanban:board-prefs:v2";
 
 /** Persisted, per-project board view state. */
@@ -55,7 +55,7 @@ export function toKanbanSortMode(value: unknown): KanbanSortMode {
 /**
  * Equalize sets every column to the mean of the current widths (clamped to the
  * minimum). This is deliberately distinct from reset, which restores the fixed
- * default width — so the two toolbar actions never collapse into the same
+ * default width, so the two toolbar actions never collapse into the same
  * result.
  */
 export function equalizeKanbanColumnWidths(

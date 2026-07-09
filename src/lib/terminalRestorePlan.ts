@@ -36,9 +36,11 @@ export function planTerminalRestore({
       replayScrollback: false,
     };
   }
+  // No local snapshot is restored, so let daemon attach replay bytes written
+  // between PTY spawn and stream attachment, including the first shell prompt.
   return {
     snapshot: null,
     source: null,
-    replayScrollback: false,
+    replayScrollback: true,
   };
 }

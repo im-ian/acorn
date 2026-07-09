@@ -74,9 +74,21 @@
         "label": "Default workspace mode",
         "hint": "Mode used when Acorn creates a new project workspace. Existing project-specific choices stay unchanged."
       },
+      "projectTabs": {
+        "label": "Project tabs",
+        "hint": "Controls the order of sessions and workspaces inside each project in the left sidebar.",
+        "priority": {
+          "label": "Move waiting and error tabs to the top",
+          "description": "Keeps your manual order saved, but displays tabs waiting on you or blocked by errors ahead of ready work."
+        }
+      },
       "kanbanTerminalPopover": {
         "title": "Kanban terminal popover",
         "description": "Controls where card terminals open and how large they start.",
+        "openOnCreate": {
+          "label": "Open new session terminals immediately",
+          "description": "When you create a terminal session in kanban mode, open its terminal popover right away."
+        },
         "placement": {
           "label": "Open position",
           "hint": "Initial placement when you open a terminal from a kanban card.",
@@ -104,6 +116,19 @@
       }
     },
     "terminal": {
+      "fontPreset": {
+        "label": "Font presets",
+        "hint": "Save the current terminal font settings as your own preset, then apply it later.",
+        "selectLabel": "Saved font preset",
+        "custom": "Custom",
+        "customHint": "Current settings are not saved as a preset.",
+        "empty": "No saved presets",
+        "nameLabel": "Preset name",
+        "namePlaceholder": "e.g. Compact D2Coding",
+        "save": "Save current",
+        "delete": "Delete",
+        "deleteLabel": "Delete selected font preset"
+      },
       "fontFamily": {
         "label": "Font family",
         "hint": "Comma-separated stack. First family that resolves wins."
@@ -178,9 +203,9 @@
         "checkbox": "Show confirmation before removing plain sessions"
       },
       "warnBeforeClosingRunning": {
-        "label": "Running-session close warning",
-        "hint": "Show a warning before closing a session that is still running. Closing a running session terminates its active shell or agent process.",
-        "checkbox": "Show warning before closing running sessions"
+        "label": "Working-session close warning",
+        "hint": "Show a warning before closing a session that is still working. Closing a working session terminates its active shell or agent process.",
+        "checkbox": "Show warning before closing working sessions"
       },
       "confirmDeleteIsolatedWorktrees": {
         "label": "Isolated worktree cleanup prompt",
@@ -367,7 +392,7 @@
         "hint": "Choose which optional badges show in the bottom status bar.",
         "sessionActivity": {
           "label": "Session activity",
-          "description": "Bell shortcut for unread session activity. The Activity tab remains available when hidden."
+          "description": "Bell shortcut for unread session activity. The sidebar activity list remains available when hidden."
         },
         "sessionCount": {
           "label": "Session count",
@@ -411,17 +436,13 @@
       },
       "triggers": {
         "label": "Trigger on",
-        "needsInput": {
-          "label": "Needs input",
-          "description": "Claude is waiting on the user."
+        "waitingForInput": {
+          "label": "Waiting for input",
+          "description": "An agent or shell command is waiting on the user."
         },
-        "failed": {
-          "label": "Failed",
-          "description": "Session terminated with an error."
-        },
-        "completed": {
-          "label": "Completed",
-          "description": "Session reached the completed state."
+        "errored": {
+          "label": "Error",
+          "description": "A session hit an agent or runtime error."
         }
       },
       "history": {
@@ -500,6 +521,9 @@
         "prevTab": {
           "label": "Previous tab"
         },
+        "focusLatestNeedsInput": {
+          "label": "Latest needs-input tab"
+        },
         "nextProject": {
           "label": "Next project"
         },
@@ -511,6 +535,18 @@
         },
         "toggleRightPanel": {
           "label": "Toggle right panel"
+        },
+        "focusPaneLeft": {
+          "label": "Focus pane to the left"
+        },
+        "focusPaneRight": {
+          "label": "Focus pane to the right"
+        },
+        "focusPaneUp": {
+          "label": "Focus pane above"
+        },
+        "focusPaneDown": {
+          "label": "Focus pane below"
         },
         "splitVertical": {
           "label": "Split pane vertically"
@@ -825,11 +861,14 @@
     "agentTokensResetIn": "resets in {reset}",
     "agentTokensUpdated": "updated {time}",
     "sessionStatus": {
-      "idle": "idle",
-      "running": "running",
-      "needsInput": "needs input",
-      "failed": "failed",
-      "completed": "completed"
+      "ready": "ready",
+      "working": "working",
+      "waitingForInput": "waiting for input",
+      "errored": "error"
+    },
+    "sessionStatusReason": {
+      "turn_complete": "agent turn complete",
+      "shell_prompt": "shell prompt detected"
     },
     "notifications": {
       "ariaLabel": "Session notifications",
@@ -840,10 +879,9 @@
       "empty": "No session status changes yet.",
       "itemTitle": "{project} · {session}",
       "kind": {
-        "needsInput": "Needs input",
-        "failed": "Failed",
-        "completed": "Completed",
-        "becameIdle": "Idle"
+        "waitingForInput": "Waiting for input",
+        "errored": "Error",
+        "becameReady": "Ready"
       },
       "actions": {
         "markAllRead": "Mark all read",
@@ -918,8 +956,14 @@
         "nameAsc": "Name"
       },
       "openSession": "Open {name}",
+      "preview": {
+        "user": "User",
+        "agent": "Agent"
+      },
       "tooltip": {
         "title": "Title",
+        "lastUserMessage": "Last user message",
+        "lastAgentMessage": "Last agent message",
         "lastMessage": "Last message",
         "noLastMessage": "No last message",
         "branch": "Branch",
@@ -935,6 +979,8 @@
         "ariaLabel": "Session terminal",
         "expand": "Expand terminal",
         "restore": "Restore terminal size",
+        "resetPosition": "Reset terminal position",
+        "resetSize": "Reset terminal size",
         "resize": "Resize terminal"
       },
       "popover": {
@@ -1048,11 +1094,14 @@
   },
   "sidebar": {
     "status": {
-      "idle": "Idle",
-      "running": "Running",
-      "needs_input": "Needs input",
-      "failed": "Failed",
-      "completed": "Completed"
+      "ready": "Ready",
+      "working": "Working",
+      "waiting_for_input": "Waiting for input",
+      "errored": "Error"
+    },
+    "statusReason": {
+      "turn_complete": "Agent turn complete",
+      "shell_prompt": "Shell prompt detected"
     },
     "dialog": {
       "selectExistingProject": "Select an existing project",
@@ -1091,7 +1140,6 @@
       "rename": "Rename",
       "regenerateName": "Regenerate Name",
       "openWorkSummary": "Open Work Summary",
-      "autoCloseWhenFinished": "Close When Agent Finishes",
       "forkClaudeSession": "Fork Claude Session",
       "forkSession": "Fork Session",
       "forkClaudeInNewWorktree": "Fork Claude in New Worktree",
@@ -1103,10 +1151,12 @@
       "equalizePaneSizes": "Equalize Pane Sizes",
       "openWorktreeInEditor": "Open Worktree in Editor",
       "worktreePath": "Worktree Path",
+      "transcriptPath": "Transcript Path",
       "worktreeName": "Worktree Name",
       "branchName": "Branch Name",
       "sessionId": "Session ID",
       "copyWorktreePath": "Copy Worktree Path",
+      "copyTranscriptPath": "Copy Transcript Path",
       "remove": "Remove",
       "removeSession": "Remove session",
       "removeSessionMenu": "Remove Session"
@@ -1143,6 +1193,25 @@
       "newWorkspace": "New workspace",
       "empty": "Double-click to start an instant session."
     },
+    "activity": {
+      "ariaLabel": "Session activity",
+      "title": "Activity",
+      "unreadCount": "{count} unread",
+      "readCount": "{count} read",
+      "empty": "No session activity yet",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "waitingForInput": "Waiting for input",
+        "errored": "Error",
+        "becameReady": "Ready"
+      },
+      "actions": {
+        "markAllRead": "Mark all read",
+        "clearRead": "Clear read",
+        "resize": "Resize activity",
+        "dismiss": "Dismiss"
+      }
+    },
     "emptyProject": {
       "createSession": "Double-click to start a session."
     },
@@ -1157,6 +1226,8 @@
       "branch": "Branch",
       "detached": "(detached)",
       "workingDirectory": "Working directory",
+      "openPullRequest": "Open PR",
+      "processes": "Processes",
       "status": "Status",
       "kind": "Kind",
       "controlSession": "Control session",
@@ -1189,7 +1260,6 @@
       "rename": "Rename",
       "regenerateName": "Regenerate Name",
       "openWorkSummary": "Open Work Summary",
-      "autoCloseWhenFinished": "Close When Agent Finishes",
       "forkClaudeSession": "Fork Claude Session",
       "forkSession": "Fork Session",
       "forkClaudeInNewWorktree": "Fork Claude in New Worktree",
@@ -1244,6 +1314,9 @@
       "status": "Status",
       "mode": "Mode",
       "transcript": "Transcript",
+      "transcriptProvider": "Transcript provider",
+      "transcriptPath": "Transcript path",
+      "copyTranscriptPath": "Copy transcript path",
       "updated": "Updated"
     },
     "files": {
@@ -1322,10 +1395,9 @@
       "empty": "No session activity yet",
       "itemTitle": "{project} · {session}",
       "kind": {
-        "needsInput": "Needs input",
-        "failed": "Failed",
-        "completed": "Completed",
-        "becameIdle": "Idle"
+        "waitingForInput": "Waiting for input",
+        "errored": "Error",
+        "becameReady": "Ready"
       },
       "actions": {
         "markAllRead": "Mark all read",
@@ -1360,6 +1432,7 @@
       "runSession": "Run in new terminal",
       "runInWorktree": "Run in worktree",
       "copyResume": "Copy resume command",
+      "copyTranscriptPath": "Copy transcript path",
       "copyWorktreePath": "Copy worktree path",
       "moveTranscriptToTrash": "Move transcript to Trash...",
       "worktreeMissing": "missing",
@@ -1571,8 +1644,8 @@
       "remove": "Remove"
     },
     "runningSessionClose": {
-      "title": "Close running session?",
-      "message": "This session is still running. Closing it will terminate the active shell or agent process.",
+      "title": "Close working session?",
+      "message": "This session is still working. Closing it will terminate the active shell or agent process.",
       "sessionLabel": "Session",
       "dontWarnAgain": "Don't warn again (toggle in Settings → Sessions)",
       "continue": "Close session"
@@ -1929,6 +2002,7 @@
     "groups": {
       "sessions": "Sessions",
       "switchSession": "Switch session",
+      "activity": "Unread activity",
       "view": "View",
       "terminal": "Terminal",
       "ipc": "IPC",
@@ -1959,6 +2033,13 @@
       "shellEnvReloadFailed": "Failed to reload shell environment.",
       "ipcRestarted": "IPC server restarted.",
       "ipcRestartFailedPrefix": "Failed to restart IPC server:"
+    },
+    "activity": {
+      "kind": {
+        "waitingForInput": "Waiting for input",
+        "errored": "Error",
+        "becameReady": "Ready"
+      }
     }
   },
   "backgroundSessions": {

@@ -49,11 +49,21 @@ import { api, FS_CHANGED_EVENT, type FsChangePayload } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openFileInEditor } from "../lib/editor";
 import { joinPath } from "../lib/paths";
+import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
+import {
+  onPullRequestMutation,
+  pullRequestMutationAffectsOpenContext,
+} from "../lib/pullRequestEvents";
 import { rightPanelCache } from "../lib/right-panel-cache";
 import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
+import { primeCurrentPullRequestCacheFromListing } from "../lib/useCurrentPullRequest";
 import { useAppStore } from "../store";
-import { AgentProviderIcon } from "../lib/agentProvider";
+import {
+  AgentProviderIcon,
+  getAgentProviderDefinition,
+  isSessionAgentProvider,
+} from "../lib/agentProvider";
 import {
   invalidateGitRepositoryStatus,
   prefetchGitHubRepoStatus,
@@ -82,9 +92,6 @@ import type {
   PullRequestInfo,
   PullRequestLabel,
   PullRequestListing,
-  SessionNotification,
-  SessionNotificationKind,
-  SessionAgentProvider,
   StagedFile,
   TodoItem,
   WorkflowJob,
@@ -124,12 +131,10 @@ import {
   SkeletonCircle,
   SkeletonList,
   SkeletonText,
-  StatusDot,
   TextInput,
   listBoxClassName,
   listRowClassName,
   type ListRowDensity,
-  type StatusTone,
 } from "./ui";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -236,11 +241,6 @@ export function RightPanel() {
   const rightTab = useAppStore((s) => s.rightTab);
   const setRightTab = useAppStore((s) => s.setRightTab);
   const setRightGroup = useAppStore((s) => s.setRightGroup);
-  const activityUnreadCount = useAppStore(
-    (s) =>
-      s.sessionNotifications.filter((notification) => !notification.readAt)
-        .length,
-  );
   const active = sessions.find((s) => s.id === activeSessionId);
   const activeWorkspaceTab = activeTabId ? workspaceTabs[activeTabId] : undefined;
   // The session's recorded worktree path is what we set at spawn time. The
@@ -453,6 +453,16 @@ export function RightPanel() {
     rightPanelCache.retainRepos(retainedRepoPaths);
   }, [retainedRepoPaths]);
 
+  useEffect(() => {
+    return onPullRequestMutation((event) => {
+      if (!pullRequestMutationAffectsOpenContext(event.kind)) return;
+      const eventRepoPath = normalizeRepoPath(event.repoPath);
+      if (!eventRepoPath || eventRepoPath !== projectRootRepoPath) return;
+      rightPanelCache.invalidatePullRequests(eventRepoPath);
+      setPrListVersion((version) => version + 1);
+    });
+  }, [projectRootRepoPath]);
+
   return (
     <aside className="flex h-full w-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar">
       <nav
@@ -485,13 +495,7 @@ export function RightPanel() {
               key={tab}
               icon={tabIcon(tab)}
               label={rt(t, tabLabelKey(tab))}
-              badge={
-                tab === "activity"
-                  ? activityUnreadCount
-                  : tab === "todos"
-                    ? todosState.todos.length
-                    : undefined
-              }
+              badge={tab === "todos" ? todosState.todos.length : undefined}
               active={tab === rightTab}
               onClick={() => setRightTab(tab)}
             />
@@ -499,9 +503,7 @@ export function RightPanel() {
         </nav>
       ) : null}
       <div className="flex-1 overflow-hidden">
-        {rightTab === "activity" ? (
-          <ActivityTab />
-        ) : rightTab === "todos" ? (
+        {rightTab === "todos" ? (
           active && showTodos ? (
             <TodosTab todos={todosState.todos} />
           ) : (
@@ -754,8 +756,6 @@ function tabIcon(tab: RightTab): ReactNode {
       return <CircleDot size={12} />;
     case "actions":
       return <Activity size={12} />;
-    case "activity":
-      return <CircleAlert size={12} />;
     case "todos":
       return <ListTodo size={12} />;
     case "history":
@@ -1284,179 +1284,10 @@ function countByStatus(todos: TodoItem[]) {
   return { pending, in_progress, completed };
 }
 
-const ACTIVITY_KIND_KEYS: Record<
-  SessionNotificationKind,
-  RightPanelTranslationKey
-> = {
-  needs_input: "rightPanel.activity.kind.needsInput",
-  failed: "rightPanel.activity.kind.failed",
-  completed: "rightPanel.activity.kind.completed",
-  became_idle: "rightPanel.activity.kind.becameIdle",
-};
-
-function ActivityTab() {
-  const t = useTranslation();
-  const notifications = useAppStore((s) => s.sessionNotifications);
-  const markAllRead = useAppStore((s) => s.markAllSessionNotificationsRead);
-  const clearRead = useAppStore((s) => s.clearReadSessionNotifications);
-  const unreadCount = notifications.filter((notification) => !notification.readAt)
-    .length;
-  const readCount = notifications.length - unreadCount;
-
-  return (
-    <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
-        <div className="min-w-0 text-[10px] uppercase tracking-wide text-fg-muted">
-          <span className="mr-3">
-            {rtf(t, "rightPanel.activity.unreadCount", {
-              count: unreadCount,
-            })}
-          </span>
-          {readCount > 0 ? (
-            <span>
-              {rtf(t, "rightPanel.activity.readCount", { count: readCount })}
-            </span>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-1">
-          <Tooltip
-            label={rt(t, "rightPanel.activity.actions.markAllRead")}
-            side="top"
-          >
-            <button
-              type="button"
-              onClick={markAllRead}
-              disabled={unreadCount === 0}
-              className="rounded border border-border px-2 py-1 text-[10px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
-            >
-              {rt(t, "rightPanel.activity.actions.markAllRead")}
-            </button>
-          </Tooltip>
-          <Tooltip
-            label={rt(t, "rightPanel.activity.actions.clearRead")}
-            side="top"
-          >
-            <button
-              type="button"
-              onClick={clearRead}
-              disabled={readCount === 0}
-              className="rounded border border-border px-2 py-1 text-[10px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
-            >
-              {rt(t, "rightPanel.activity.actions.clearRead")}
-            </button>
-          </Tooltip>
-        </div>
-      </div>
-      {notifications.length === 0 ? (
-        <Empty msg={rt(t, "rightPanel.activity.empty")} />
-      ) : (
-        <ListBox className="acorn-no-scrollbar flex-1 overflow-y-auto">
-          {notifications.map((notification) => (
-            <ActivityRow key={notification.id} notification={notification} />
-          ))}
-        </ListBox>
-      )}
-    </div>
-  );
-}
-
-function ActivityRow({
-  notification,
-}: {
-  notification: SessionNotification;
-}) {
-  const t = useTranslation();
-  const selectSession = useAppStore((s) => s.selectSession);
-  const markRead = useAppStore((s) => s.markSessionNotificationRead);
-  const dismiss = useAppStore((s) => s.dismissSessionNotification);
-  const unread = !notification.readAt;
-
-  const openSession = () => {
-    markRead(notification.id);
-    selectSession(notification.sessionId);
-  };
-
-  return (
-    <ListRow
-      interactive
-      className="group flex items-start gap-2"
-      selected={unread}
-      selectedClassName="bg-warning/5"
-    >
-      <button
-        type="button"
-        onClick={openSession}
-        className="flex min-w-0 flex-1 items-start gap-2 text-left"
-      >
-        <StatusDot
-          tone={activityDotTone(notification.kind)}
-          size="sm"
-          className="mt-1"
-        />
-        <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-center gap-2">
-            <span
-              className={cn(
-                "truncate font-mono text-[11px]",
-                unread ? "text-fg" : "text-fg-muted",
-              )}
-            >
-              {rt(t, ACTIVITY_KIND_KEYS[notification.kind])}
-            </span>
-            <span className="shrink-0 font-mono text-[10px] text-fg-muted/70">
-              {formatActivityTime(notification.createdAt)}
-            </span>
-          </span>
-          <span className="block truncate text-[11px] text-fg">
-            {rtf(t, "rightPanel.activity.itemTitle", {
-              project: notification.projectName,
-              session: notification.sessionName,
-            })}
-          </span>
-          <span className="block truncate text-[10px] text-fg-muted">
-            {notification.repoPath}
-          </span>
-        </span>
-      </button>
-      <Tooltip label={rt(t, "rightPanel.activity.actions.dismiss")} side="top">
-        <button
-          type="button"
-          onClick={() => dismiss(notification.id)}
-          className="rounded p-1 text-fg-muted opacity-0 transition hover:bg-bg-sidebar hover:text-fg group-hover:opacity-100"
-        >
-          <X size={12} />
-        </button>
-      </Tooltip>
-    </ListRow>
-  );
-}
-
-function activityDotTone(kind: SessionNotificationKind): StatusTone {
-  if (kind === "failed") return "danger";
-  if (kind === "completed") return "accent";
-  return "warning";
-}
-
-function formatActivityTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
 const ALL_AGENT_HISTORY_PROVIDERS = "__all__";
 type AgentHistoryProviderFilter =
   | typeof ALL_AGENT_HISTORY_PROVIDERS
   | AgentHistoryProvider;
-
-function isAgentProvider(
-  provider: AgentHistoryProvider,
-): provider is SessionAgentProvider {
-  return (
-    provider === "claude" ||
-    provider === "codex" ||
-    provider === "antigravity"
-  );
-}
 
 function AgentHistoryTab({
   scope,
@@ -1567,7 +1398,7 @@ function AgentHistoryTab({
     item: AgentHistoryItem,
     mode: "auto" | "repo" | "worktree" = "auto",
   ) {
-    if (!isAgentProvider(item.provider)) return;
+    if (!isSessionAgentProvider(item.provider)) return;
     const agentProvider = item.provider;
     if (!item.resume_command) return;
     setError(null);
@@ -1710,12 +1541,9 @@ function AgentHistoryTab({
         ) : (
           <div className={listBoxClassName({ text: "none" })}>
             {visibleItems.map((item) => {
+              if (!isSessionAgentProvider(item.provider)) return null;
               const providerTone =
-                item.provider === "codex"
-                  ? "bg-[#3867ff]/15 text-[#5f7dff]"
-                  : item.provider === "antigravity"
-                    ? "bg-[#19a974]/15 text-[#22b47e]"
-                  : "bg-[#de7356]/15 text-[#de7356]";
+                getAgentProviderDefinition(item.provider).brandToneClassName;
               return (
                 <div
                   key={`${item.provider}:${item.id}:${item.transcript_path}`}
@@ -1845,6 +1673,11 @@ function AgentHistoryTab({
                   icon: <Copy size={12} />,
                   disabled: !menu.item.resume_command,
                   onClick: () => void copy(menu.item.resume_command ?? ""),
+                },
+                {
+                  label: rt(t, "rightPanel.history.copyTranscriptPath"),
+                  icon: <Copy size={12} />,
+                  onClick: () => void copy(menu.item.transcript_path),
                 },
                 {
                   label: rt(t, "rightPanel.history.copyWorktreePath"),
@@ -3176,6 +3009,7 @@ function PullRequestsTab({
           repoPath,
           result.kind === "ok" ? result.account : null,
         );
+        primeCurrentPullRequestCacheFromListing(repoPath, result);
       } catch (e) {
         if (
           signal?.cancelled ||
@@ -4862,15 +4696,7 @@ function PrRow({
   /** Render CI/check status in the metadata row. */
   showChecks?: boolean;
 }) {
-  const upper = pr.state.toUpperCase();
-  const isDraft = pr.is_draft && upper === "OPEN";
-  const numberColor = isDraft
-    ? "text-fg-muted"
-    : upper === "OPEN"
-      ? "text-emerald-400"
-      : upper === "MERGED"
-        ? "text-purple-400"
-        : "text-rose-400";
+  const numberColor = pullRequestNumberClassName(pr);
   const meta =
     showBranches || showChecks ? (
       <span className="flex min-w-0 items-center gap-1">

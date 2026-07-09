@@ -132,8 +132,9 @@ import {
   SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
   useSettings,
 } from "../lib/settings";
+import { HOTKEY_IDS } from "../lib/hotkeys";
 import { useAppStore } from "../store";
-import { SettingsModal } from "./SettingsModal";
+import { SettingsModal, SHORTCUT_GROUPS } from "./SettingsModal";
 
 const mockApi = vi.mocked(api);
 
@@ -304,6 +305,14 @@ function clickOption(label: string) {
   clickElement(option);
 }
 
+function checkboxByLabel(label: string): HTMLInputElement {
+  const input = Array.from(
+    document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+  ).find((checkbox) => checkbox.closest("label")?.textContent?.includes(label));
+  if (!input) throw new Error(`Checkbox not found: ${label}`);
+  return input;
+}
+
 function pressKey(element: HTMLElement, key: string) {
   act(() => {
     element.dispatchEvent(
@@ -429,6 +438,29 @@ describe("SettingsModal font controls", () => {
     });
   });
 
+  it("patches the project tab priority toggle from the Interface tab", async () => {
+    const patchInterface = vi.fn();
+    useSettings.setState({
+      open: true,
+      settings: cloneSettings(),
+      patchInterface,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openInterfaceTab();
+
+    act(() => {
+      checkboxByLabel("Move waiting and error tabs to the top").click();
+    });
+
+    expect(patchInterface).toHaveBeenCalledWith({
+      prioritizeNeedsInputTabs: true,
+    });
+  });
+
   it("patches kanban terminal popover options from the Interface tab", async () => {
     const patchInterface = vi.fn();
     useSettings.setState({
@@ -487,7 +519,9 @@ describe("SettingsModal font controls", () => {
       await Promise.resolve();
     });
 
-    const fontFamily = document.querySelector<HTMLInputElement>("input");
+    const fontFamily = Array.from(
+      document.querySelectorAll<HTMLInputElement>("input"),
+    ).find((input) => input.value === DEFAULT_SETTINGS.terminal.fontFamily);
     const patchTerminal = useSettings.getState().patchTerminal;
     const bodyText = document.body.textContent ?? "";
 
@@ -994,9 +1028,23 @@ describe("SettingsModal font controls", () => {
     expect(bodyText).toContain("Reset all shortcuts");
     expect(bodyText).toContain("Open command palette");
     expect(bodyText).toContain("New control session");
+    expect(bodyText).toContain("Latest needs-input tab");
+    expect(bodyText).toContain("Focus pane to the left");
+    expect(bodyText).toContain("Focus pane to the right");
+    expect(bodyText).toContain("Focus pane above");
+    expect(bodyText).toContain("Focus pane below");
     expect(bodyText).toContain("Right panel");
     expect(bodyText).toContain("Record");
     expect(bodyText).toMatch(/⌘P|Ctrl\+P/);
+  });
+
+  it("keeps every configurable hotkey visible in shortcut settings", () => {
+    const listedIds = SHORTCUT_GROUPS.flatMap((group) =>
+      group.items.map((item) => item.id),
+    );
+
+    expect(new Set(listedIds)).toEqual(new Set(HOTKEY_IDS));
+    expect(listedIds).toHaveLength(new Set(listedIds).size);
   });
 
   it("records and resets a shortcut binding", async () => {

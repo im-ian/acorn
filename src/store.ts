@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { api, type AiExecutionRequest, type WorktreeRemoval } from "./lib/api";
 import type {
+  AgentTranscriptSummary,
   Project,
   Session,
   SessionAgentProvider,
@@ -9,6 +10,9 @@ import type {
   SessionMode,
   SessionTitleGenerationStatus,
   SessionNotification,
+  SessionNotificationKind,
+  SessionProcessSummary,
+  SessionStatus,
 } from "./lib/types";
 import { commandRequestsWorktreeAdoption } from "./lib/worktreeAdoption";
 import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideModal";
@@ -72,7 +76,6 @@ import {
   type SessionFolderAssignments,
 } from "./lib/projectFolders";
 import { canRegenerateSessionTitle } from "./lib/sessionTitle";
-import { canConfigureSessionAutoClose } from "./lib/sessionAgentState";
 import {
   summarizeTokenUsage,
   type WorkSummaryTokenBaseline,
@@ -94,6 +97,19 @@ let activeStatusPollIds = new Set<string>();
 let refreshSessionsSeq = 0;
 let sessionPlacementSeq = 0;
 
+function sessionProcessSummariesEqual(
+  a: readonly SessionProcessSummary[],
+  b: readonly SessionProcessSummary[],
+): boolean {
+  if (a.length !== b.length) return false;
+  return a.every(
+    (process, index) =>
+      process.pid === b[index]?.pid &&
+      process.name === b[index]?.name &&
+      process.depth === b[index]?.depth,
+  );
+}
+
 interface SessionPlacementIntent {
   projectFolderId: string;
   paneId: PaneId;
@@ -103,6 +119,112 @@ interface SessionPlacementIntent {
 
 const sessionPlacementById = new Map<string, SessionPlacementIntent>();
 const activeSessionPlacementIntents = new Set<SessionPlacementIntent>();
+
+function coalescedSessionNotificationKey(
+  notification: SessionNotification,
+): string | null {
+  if (notification.kind !== "waiting_for_input") return null;
+  return `${notification.sessionId}:${notification.kind}`;
+}
+
+function normalizeSessionStatus(value: unknown): SessionStatus | null {
+  if (
+    value === "ready" ||
+    value === "working" ||
+    value === "waiting_for_input" ||
+    value === "errored"
+  ) {
+    return value;
+  }
+  if (value === "idle") return "ready";
+  if (value === "running") return "working";
+  if (value === "needs_input") return "waiting_for_input";
+  if (value === "error") return "errored";
+  return null;
+}
+
+function normalizeSessionNotificationKind(
+  value: unknown,
+): SessionNotificationKind | null {
+  if (
+    value === "waiting_for_input" ||
+    value === "errored" ||
+    value === "became_ready"
+  ) {
+    return value;
+  }
+  if (value === "needs_input") return "waiting_for_input";
+  if (value === "became_idle") return "became_ready";
+  if (value === "error") return "errored";
+  return null;
+}
+
+function statusForNotificationKind(
+  kind: SessionNotificationKind,
+): SessionStatus {
+  if (kind === "waiting_for_input") return "waiting_for_input";
+  if (kind === "errored") return "errored";
+  return "ready";
+}
+
+function normalizeSessionNotification(
+  value: unknown,
+): SessionNotification | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const kind = normalizeSessionNotificationKind(raw.kind);
+  if (!kind || typeof raw.sessionId !== "string") return null;
+  const status =
+    normalizeSessionStatus(raw.status) ?? statusForNotificationKind(kind);
+  const previousStatus = normalizeSessionStatus(raw.previousStatus) ?? "ready";
+  const createdAt =
+    typeof raw.createdAt === "string"
+      ? raw.createdAt
+      : new Date(0).toISOString();
+  const repoPath = typeof raw.repoPath === "string" ? raw.repoPath : "";
+  const sessionName =
+    typeof raw.sessionName === "string" ? raw.sessionName : raw.sessionId;
+  const projectName =
+    typeof raw.projectName === "string"
+      ? raw.projectName
+      : repoPath.split("/").filter(Boolean).pop() ?? repoPath;
+  return {
+    id:
+      typeof raw.id === "string"
+        ? raw.id
+        : `${createdAt}:${raw.sessionId}:${kind}`,
+    sessionId: raw.sessionId,
+    kind,
+    status,
+    previousStatus,
+    sessionName,
+    projectName,
+    repoPath,
+    createdAt,
+    ...(typeof raw.readAt === "string" ? { readAt: raw.readAt } : {}),
+  };
+}
+
+function normalizeSessionNotifications(
+  notifications: unknown,
+  maxHistory: number,
+): SessionNotification[] {
+  if (!Array.isArray(notifications)) return [];
+  const seen = new Set<string>();
+  const next: SessionNotification[] = [];
+  for (const rawNotification of notifications) {
+    const notification = normalizeSessionNotification(rawNotification);
+    if (!notification) continue;
+    const key = coalescedSessionNotificationKey(notification);
+    if (key) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    next.push(notification);
+    if (next.length >= maxHistory) break;
+  }
+  return next;
+}
 
 async function loadWorkSummaryTokenBaseline(
   session: Session | null | undefined,
@@ -117,7 +239,20 @@ async function loadWorkSummaryTokenBaseline(
       };
     }
     if (!session.agent_transcript_id) return undefined;
-    const transcript = await api.agentTranscriptSummary(
+    let transcript: AgentTranscriptSummary | null = null;
+    if (session.agent_transcript_provider && session.agent_transcript_path) {
+      try {
+        transcript = await api.agentTranscriptSummaryAtPath(
+          session.repo_path,
+          session.agent_transcript_provider,
+          session.agent_transcript_id,
+          session.agent_transcript_path,
+        );
+      } catch {
+        transcript = null;
+      }
+    }
+    transcript ??= await api.agentTranscriptSummary(
       session.repo_path,
       session.agent_transcript_id,
     );
@@ -154,11 +289,13 @@ export interface ProjectWorkspace {
   panes: Record<PaneId, PaneState>;
   focusedPaneId: PaneId;
   viewMode?: WorkspaceViewMode;
+  localViewMode?: WorkspaceViewMode;
   rightTab?: RightTab;
   rightTabByGroup?: Record<RightGroup, RightTab>;
 }
 
 export type WorkspaceViewMode = "panes" | "kanban";
+type WorkspaceViewScope = "project" | "local";
 
 export interface MoveTabArgs {
   tabId: string;
@@ -249,8 +386,6 @@ interface AppStateModel {
    * never on an interval, so the batched probe stays cheap.
    */
   liveInWorktree: Record<string, boolean>;
-  /** Session ids whose tab should be removed once the active agent finishes a turn. */
-  autoCloseSessionIds: Record<string, true>;
   /** Session ids currently waiting for an AI-generated tab title. Ephemeral. */
   generatingSessionTitleIds: Record<string, true>;
   loadInitialStatus: () => Promise<void>;
@@ -316,10 +451,10 @@ interface AppStateModel {
     force?: boolean,
   ) => Promise<SessionTitleGenerationStatus>;
   adoptSessionWorktree: (id: string, worktreePath: string) => Promise<void>;
-  toggleSessionAutoClose: (id: string) => void;
   requestRemoveSession: (id: string) => void;
   clearPendingRemove: () => void;
   cycleTab: (direction: 1 | -1) => void;
+  selectLatestNeedsInputSession: () => boolean;
   cycleProject: (direction: 1 | -1) => void;
   addProject: (title?: string) => Promise<void>;
   createNewProject: (
@@ -505,6 +640,7 @@ function emptyWorkspace(
 }
 
 type PersistedWorkspaceState = Partial<ProjectWorkspace> & {
+  localViewMode?: unknown;
   rightTab?: unknown;
   rightTabByGroup?: Partial<Record<RightGroup, unknown>>;
 };
@@ -542,6 +678,17 @@ function normalizeWorkspaceViewMode(
   return readWorkspaceViewMode(value) ?? fallback;
 }
 
+function scopedWorkspaceViewMode(
+  ws: ProjectWorkspace,
+  scope: WorkspaceViewScope,
+): WorkspaceViewMode {
+  const projectMode = normalizeWorkspaceViewMode(ws.viewMode);
+  if (scope === "local") {
+    return readWorkspaceViewMode(ws.localViewMode) ?? projectMode;
+  }
+  return projectMode;
+}
+
 let indexedSessions: Session[] | null = null;
 let indexedSessionsById: ReadonlyMap<string, Session> = new Map();
 
@@ -572,22 +719,62 @@ function fallbackEmptyMirror() {
   };
 }
 
+type WorkspaceViewContext = Pick<
+  AppStateModel,
+  "sessions" | "projects" | "projectFolders" | "activeProject"
+>;
+
+function workspaceViewScopeForActiveWorkspace(
+  workspaces: Record<string, ProjectWorkspace>,
+  activeWorkspaceId: string | null,
+  context?: WorkspaceViewContext,
+): WorkspaceViewScope {
+  if (!context) return "project";
+  const ws = activeWorkspaceId ? workspaces[activeWorkspaceId] : null;
+  const activeTabId = ws?.panes[ws.focusedPaneId]?.activeTabId ?? null;
+  const activeSessionId = activeSessionIdFromTabId(activeTabId);
+  const activeSession = activeSessionId
+    ? context.sessions.find((session) => session.id === activeSessionId)
+    : null;
+  if (activeSession?.project_scoped === false) return "local";
+
+  const repoPath = activeWorkspaceId
+    ? (repoPathForProjectFolderId(context, activeWorkspaceId) ??
+      context.activeProject)
+    : context.activeProject;
+  if (!repoPath) return "project";
+
+  const hasProjectIdentity =
+    context.projects.some((project) => project.repo_path === repoPath) ||
+    context.sessions.some(
+      (session) =>
+        session.repo_path === repoPath && session.project_scoped !== false,
+    );
+  return hasProjectIdentity ? "project" : "local";
+}
+
 function mirrorActive(
   workspaces: Record<string, ProjectWorkspace>,
   activeWorkspaceId: string | null,
+  context?: WorkspaceViewContext,
 ) {
   if (!activeWorkspaceId) return fallbackEmptyMirror();
   const ws = workspaces[activeWorkspaceId];
   if (!ws) return fallbackEmptyMirror();
   const activeTabId = ws.panes[ws.focusedPaneId]?.activeTabId ?? null;
   const rightPanel = normalizeRightPanelState(ws.rightTab, ws.rightTabByGroup);
+  const viewScope = workspaceViewScopeForActiveWorkspace(
+    workspaces,
+    activeWorkspaceId,
+    context,
+  );
   return {
     layout: ws.layout,
     panes: ws.panes,
     focusedPaneId: ws.focusedPaneId,
     activeTabId,
     activeSessionId: activeSessionIdFromTabId(activeTabId),
-    workspaceViewMode: normalizeWorkspaceViewMode(ws.viewMode),
+    workspaceViewMode: scopedWorkspaceViewMode(ws, viewScope),
     ...rightPanel,
   };
 }
@@ -917,6 +1104,22 @@ function setProjectWorkspaceViewMode(
   return next;
 }
 
+function setLocalWorkspaceViewMode(
+  workspaces: Record<string, ProjectWorkspace>,
+  projectFolders: ProjectFoldersByRepo,
+  repoPath: string,
+  mode: WorkspaceViewMode,
+): Record<string, ProjectWorkspace> {
+  let next = workspaces;
+  for (const workspaceId of projectWorkspaceIds(projectFolders, repoPath)) {
+    const ws = next[workspaceId];
+    if (!ws || readWorkspaceViewMode(ws.localViewMode) === mode) continue;
+    if (next === workspaces) next = { ...workspaces };
+    next[workspaceId] = { ...ws, localViewMode: mode };
+  }
+  return next;
+}
+
 function repoPathForProjectFolderId(
   state: Pick<AppStateModel, "projectFolders">,
   folderId: string,
@@ -939,6 +1142,24 @@ function findProjectFolder(
   return null;
 }
 
+function latestNeedsInputSessionId(
+  state: Pick<AppStateModel, "sessions" | "sessionNotifications">,
+): string | null {
+  const sessionsById = new Map(
+    state.sessions.map((session) => [session.id, session]),
+  );
+  for (const notification of state.sessionNotifications) {
+    if (notification.kind !== "waiting_for_input") continue;
+    const session = sessionsById.get(notification.sessionId);
+    if (session?.status === "waiting_for_input") return session.id;
+  }
+  for (let index = state.sessions.length - 1; index >= 0; index -= 1) {
+    const session = state.sessions[index];
+    if (session.status === "waiting_for_input") return session.id;
+  }
+  return null;
+}
+
 function normalizeWorkspacePath(path: string): string {
   return path.replace(/[\\/]+$/, "");
 }
@@ -956,15 +1177,6 @@ function sessionMatchesProjectFolderCwd(
   folder: ProjectFolder,
 ): boolean {
   return sameWorkspacePath(session.worktree_path, folder.cwdPath);
-}
-
-function keepTrueRecordIds(
-  record: Record<string, true>,
-  ids: ReadonlySet<string>,
-): Record<string, true> {
-  return Object.fromEntries(
-    Object.entries(record).filter(([id]) => ids.has(id)),
-  ) as Record<string, true>;
 }
 
 function canAssignSessionToProjectFolder(
@@ -1085,7 +1297,12 @@ function applySessionWorkspaceHint(
     sessionFolderIds: reconciled.sessionFolderIds,
     activeProject: reconciled.activeProject,
     activeProjectFolderId: reconciled.activeProjectFolderId,
-    ...mirrorActive(reconciled.workspaces, reconciled.activeProjectFolderId),
+    ...mirrorActive(reconciled.workspaces, reconciled.activeProjectFolderId, {
+      sessions: state.sessions,
+      projects: state.projects,
+      projectFolders: reconciled.projectFolders,
+      activeProject: reconciled.activeProject,
+    }),
   };
 }
 
@@ -1102,7 +1319,7 @@ function updateActiveWorkspace(
   const workspaces = { ...s.workspaces, [workspaceId]: next };
   return {
     workspaces,
-    ...mirrorActive(workspaces, workspaceId),
+    ...mirrorActive(workspaces, workspaceId, s),
   };
 }
 
@@ -1261,7 +1478,7 @@ function applySessionPlacementIntent(
   return {
     workspaces,
     ...(activeWorkspaceId(s) === placement.projectFolderId
-      ? mirrorActive(workspaces, placement.projectFolderId)
+      ? mirrorActive(workspaces, placement.projectFolderId, s)
       : {}),
   };
 }
@@ -1342,7 +1559,6 @@ export const useAppStore = create<AppStateModel>()(
   pendingRemoveProject: null,
   sessionsLoadedCleanly: true,
   liveInWorktree: {},
-  autoCloseSessionIds: {},
   generatingSessionTitleIds: {},
 
   async loadInitialStatus() {
@@ -1399,9 +1615,6 @@ export const useAppStore = create<AppStateModel>()(
                 sessionIds.has(notification.sessionId),
               )
             : s.sessionNotifications,
-          autoCloseSessionIds: shouldPruneActivity
-            ? keepTrueRecordIds(s.autoCloseSessionIds, sessionIds)
-            : s.autoCloseSessionIds,
           workspaces: reconciled.workspaces,
           projectFolders: reconciled.projectFolders,
           sessionFolderIds: reconciled.sessionFolderIds,
@@ -1410,6 +1623,12 @@ export const useAppStore = create<AppStateModel>()(
           ...mirrorActive(
             reconciled.workspaces,
             reconciled.activeProjectFolderId,
+            {
+              sessions,
+              projects: s.projects,
+              projectFolders: reconciled.projectFolders,
+              activeProject: reconciled.activeProject,
+            },
           ),
         };
         return applyKnownSessionPlacementIntents(nextState);
@@ -1459,6 +1678,12 @@ export const useAppStore = create<AppStateModel>()(
           ...mirrorActive(
             reconciled.workspaces,
             reconciled.activeProjectFolderId,
+            {
+              sessions: s.sessions,
+              projects,
+              projectFolders: reconciled.projectFolders,
+              activeProject: reconciled.activeProject,
+            },
           ),
         };
       });
@@ -1529,9 +1754,6 @@ export const useAppStore = create<AppStateModel>()(
               sessionIds.has(notification.sessionId),
             )
           : s.sessionNotifications,
-        autoCloseSessionIds: shouldPruneActivity
-          ? keepTrueRecordIds(s.autoCloseSessionIds, sessionIds)
-          : s.autoCloseSessionIds,
         workspaces: reconciled.workspaces,
         projectFolders: reconciled.projectFolders,
         sessionFolderIds: reconciled.sessionFolderIds,
@@ -1540,6 +1762,12 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(
           reconciled.workspaces,
           reconciled.activeProjectFolderId,
+          {
+            sessions,
+            projects,
+            projectFolders: reconciled.projectFolders,
+            activeProject: reconciled.activeProject,
+          },
         ),
       };
       return applyKnownSessionPlacementIntents(nextState);
@@ -1595,6 +1823,7 @@ export const useAppStore = create<AppStateModel>()(
           try {
             const updates = await api.detectSessionStatuses(idsToPoll);
             const map = new Map(updates.map((u) => [u.id, u]));
+            const pollObservedAt = new Date().toISOString();
             set((s) => {
               let changed = false;
               const nextSessions = s.sessions.map((sess) => {
@@ -1607,6 +1836,16 @@ export const useAppStore = create<AppStateModel>()(
                 )
                   ? (update.status_reason ?? null)
                   : (sess.status_reason ?? null);
+                const nextStatusStartedAt = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "status_started_at",
+                )
+                  ? (update.status_started_at ?? null)
+                  : nextStatus !== sess.status
+                    ? pollObservedAt
+                    : nextStatus !== "ready" && !sess.status_started_at
+                      ? pollObservedAt
+                      : (sess.status_started_at ?? null);
                 const nextBranch = update.branch ?? sess.branch;
                 const nextLastMessage = Object.prototype.hasOwnProperty.call(
                   update,
@@ -1630,12 +1869,39 @@ export const useAppStore = create<AppStateModel>()(
                   Object.prototype.hasOwnProperty.call(update, "agent_provider")
                     ? (update.agent_provider ?? null)
                     : (sess.agent_provider ?? null);
+                const nextAgentTranscriptProvider =
+                  Object.prototype.hasOwnProperty.call(
+                    update,
+                    "agent_transcript_provider",
+                  )
+                    ? (update.agent_transcript_provider ?? null)
+                    : (sess.agent_transcript_provider ?? null);
                 const nextAgentTranscriptId = Object.prototype.hasOwnProperty.call(
                   update,
                   "agent_transcript_id",
                 )
                   ? (update.agent_transcript_id ?? null)
                   : (sess.agent_transcript_id ?? null);
+                const nextAgentTranscriptPath =
+                  Object.prototype.hasOwnProperty.call(
+                    update,
+                    "agent_transcript_path",
+                  )
+                    ? (update.agent_transcript_path ?? null)
+                    : (sess.agent_transcript_path ?? null);
+                const currentActiveProcesses = sess.active_processes ?? [];
+                const nextActiveProcesses = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "active_processes",
+                )
+                  ? (update.active_processes ?? [])
+                  : currentActiveProcesses;
+                const nextGitContextPath = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "git_context_path",
+                )
+                  ? (update.git_context_path ?? null)
+                  : (sess.git_context_path ?? null);
                 // Carries the backend's auto-title promotion (terminal
                 // session that started an agent) so the title planner sees
                 // eligibility on the next poll instead of waiting for a
@@ -1645,12 +1911,22 @@ export const useAppStore = create<AppStateModel>()(
                 if (
                   nextStatus !== sess.status ||
                   nextStatusReason !== (sess.status_reason ?? null) ||
+                  nextStatusStartedAt !== (sess.status_started_at ?? null) ||
                   nextBranch !== sess.branch ||
                   nextLastMessage !== sess.last_message ||
                   nextLastUserMessage !== (sess.last_user_message ?? null) ||
                   nextLastAgentMessage !== (sess.last_agent_message ?? null) ||
                   nextAgentProvider !== (sess.agent_provider ?? null) ||
+                  nextAgentTranscriptProvider !==
+                    (sess.agent_transcript_provider ?? null) ||
                   nextAgentTranscriptId !== (sess.agent_transcript_id ?? null) ||
+                  nextAgentTranscriptPath !==
+                    (sess.agent_transcript_path ?? null) ||
+                  !sessionProcessSummariesEqual(
+                    nextActiveProcesses,
+                    currentActiveProcesses,
+                  ) ||
+                  nextGitContextPath !== (sess.git_context_path ?? null) ||
                   nextAutoTitleEnabled !== (sess.auto_title_enabled ?? null)
                 ) {
                   changed = true;
@@ -1658,12 +1934,17 @@ export const useAppStore = create<AppStateModel>()(
                     ...sess,
                     status: nextStatus,
                     status_reason: nextStatusReason,
+                    status_started_at: nextStatusStartedAt,
                     branch: nextBranch,
                     last_message: nextLastMessage,
                     last_user_message: nextLastUserMessage,
                     last_agent_message: nextLastAgentMessage,
                     agent_provider: nextAgentProvider,
+                    agent_transcript_provider: nextAgentTranscriptProvider,
                     agent_transcript_id: nextAgentTranscriptId,
+                    agent_transcript_path: nextAgentTranscriptPath,
+                    active_processes: nextActiveProcesses,
+                    git_context_path: nextGitContextPath,
                     auto_title_enabled: nextAutoTitleEnabled,
                   };
                 }
@@ -1730,7 +2011,10 @@ export const useAppStore = create<AppStateModel>()(
           workspaces,
           activeProject,
           activeProjectFolderId: owner.projectFolderId,
-          ...mirrorActive(workspaces, owner.projectFolderId),
+          ...mirrorActive(workspaces, owner.projectFolderId, {
+            ...s,
+            activeProject,
+          }),
         };
       }
 
@@ -1775,7 +2059,10 @@ export const useAppStore = create<AppStateModel>()(
         workspaces,
         activeProject: session.repo_path,
         activeProjectFolderId: workspaceId,
-        ...mirrorActive(workspaces, workspaceId),
+        ...mirrorActive(workspaces, workspaceId, {
+          ...s,
+          activeProject: session.repo_path,
+        }),
       };
     });
   },
@@ -1859,7 +2146,11 @@ export const useAppStore = create<AppStateModel>()(
         projectFolders,
         activeProject: repoPath,
         activeProjectFolderId: folderId,
-        ...mirrorActive(workspaces, folderId),
+        ...mirrorActive(workspaces, folderId, {
+          ...s,
+          projectFolders,
+          activeProject: repoPath,
+        }),
       };
     });
   },
@@ -1887,7 +2178,10 @@ export const useAppStore = create<AppStateModel>()(
         workspaces,
         activeProject: folder.repoPath,
         activeProjectFolderId: folder.id,
-        ...mirrorActive(workspaces, folder.id),
+        ...mirrorActive(workspaces, folder.id, {
+          ...s,
+          activeProject: folder.repoPath,
+        }),
       };
     });
   },
@@ -1960,6 +2254,12 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(
           reconciled.workspaces,
           reconciled.activeProjectFolderId,
+          {
+            sessions: s.sessions,
+            projects: s.projects,
+            projectFolders: reconciled.projectFolders,
+            activeProject: reconciled.activeProject,
+          },
         ),
       };
     });
@@ -2028,6 +2328,12 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(
           reconciled.workspaces,
           reconciled.activeProjectFolderId,
+          {
+            sessions: s.sessions,
+            projects: s.projects,
+            projectFolders: reconciled.projectFolders,
+            activeProject: reconciled.activeProject,
+          },
         ),
       };
     });
@@ -2068,6 +2374,12 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(
           reconciled.workspaces,
           reconciled.activeProjectFolderId,
+          {
+            sessions: s.sessions,
+            projects: s.projects,
+            projectFolders: reconciled.projectFolders,
+            activeProject: reconciled.activeProject,
+          },
         ),
       };
     });
@@ -2087,17 +2399,32 @@ export const useAppStore = create<AppStateModel>()(
   setWorkspaceViewMode(mode) {
     set((s) => {
       const workspaceId = activeWorkspaceId(s);
-      if (!s.activeProject || !workspaceId) return s;
-      const workspaces = setProjectWorkspaceViewMode(
+      if (!s.activeProject || !workspaceId) {
+        return s.workspaceViewMode === mode ? s : { workspaceViewMode: mode };
+      }
+      const viewScope = workspaceViewScopeForActiveWorkspace(
         s.workspaces,
-        s.projectFolders,
-        s.activeProject,
-        mode,
+        workspaceId,
+        s,
       );
+      const workspaces =
+        viewScope === "local"
+          ? setLocalWorkspaceViewMode(
+              s.workspaces,
+              s.projectFolders,
+              s.activeProject,
+              mode,
+            )
+          : setProjectWorkspaceViewMode(
+              s.workspaces,
+              s.projectFolders,
+              s.activeProject,
+              mode,
+            );
       if (workspaces === s.workspaces) return s;
       return {
         workspaces,
-        ...mirrorActive(workspaces, workspaceId),
+        ...mirrorActive(workspaces, workspaceId, s),
       };
     });
   },
@@ -2188,6 +2515,14 @@ export const useAppStore = create<AppStateModel>()(
       });
       return patch ?? s;
     });
+  },
+
+  selectLatestNeedsInputSession() {
+    const sessionId = latestNeedsInputSessionId(get());
+    if (!sessionId) return false;
+    get().selectSession(sessionId);
+    get().setWorkspaceViewMode("panes");
+    return get().activeSessionId === sessionId;
   },
 
   cycleProject(direction) {
@@ -2469,6 +2804,12 @@ export const useAppStore = create<AppStateModel>()(
             ...mirrorActive(
               reconciled.workspaces,
               reconciled.activeProjectFolderId,
+              {
+                sessions: s.sessions,
+                projects: s.projects,
+                projectFolders: reconciled.projectFolders,
+                activeProject: reconciled.activeProject,
+              },
             ),
           };
         });
@@ -2486,6 +2827,14 @@ export const useAppStore = create<AppStateModel>()(
       // through the store) immediately surfaces it in its pane instead of
       // silently appending behind the existing active tab.
       get().selectSession(created.id);
+      if (
+        mode === "terminal" &&
+        get().workspaceViewMode === "kanban" &&
+        useSettings.getState().settings.interface
+          .openKanbanTerminalOnSessionCreate
+      ) {
+        get().openTerminalPopup(created.id);
+      }
       // Grab keyboard focus for the new session's xterm. rAF defers past the
       // portal reattach in `TerminalHost` so the slot is mounted in its pane
       // body by the time `Terminal` calls `term.focus()`.
@@ -2575,10 +2924,6 @@ export const useAppStore = create<AppStateModel>()(
       for (const removalId of removalIds) {
         delete pendingTerminalInput[removalId];
       }
-      const autoCloseSessionIds = { ...s.autoCloseSessionIds };
-      for (const removalId of removalIds) {
-        delete autoCloseSessionIds[removalId];
-      }
       const terminalPopupSessionId =
         s.terminalPopupSessionId && removalIds.has(s.terminalPopupSessionId)
           ? null
@@ -2590,7 +2935,6 @@ export const useAppStore = create<AppStateModel>()(
         error: null,
         liveInWorktree,
         pendingTerminalInput,
-        autoCloseSessionIds,
         terminalPopupSessionId,
         sessionNotifications: s.sessionNotifications.filter(
           (notification) => !removalIds.has(notification.sessionId),
@@ -2603,6 +2947,12 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(
           reconciled.workspaces,
           reconciled.activeProjectFolderId,
+          {
+            sessions,
+            projects: s.projects,
+            projectFolders: reconciled.projectFolders,
+            activeProject: reconciled.activeProject,
+          },
         ),
       };
     });
@@ -2651,8 +3001,6 @@ export const useAppStore = create<AppStateModel>()(
     if (force) {
       const session = get().sessions.find((candidate) => candidate.id === id);
       if (!session || !canRegenerateSessionTitle(session)) return "skipped";
-    } else if (get().autoCloseSessionIds[id]) {
-      return "skipped";
     }
 
     const startedAt = Date.now();
@@ -2668,17 +3016,11 @@ export const useAppStore = create<AppStateModel>()(
       resultStatus = result.status;
       const updated = result.session;
       if (result.status === "generated" && updated?.id) {
-        let applied = false;
-        set((s) => {
-          if (!force && s.autoCloseSessionIds[updated.id]) return s;
-          applied = true;
-          return {
-            sessions: s.sessions.map((session) =>
-              session.id === updated.id ? updated : session,
-            ),
-          };
-        });
-        if (!applied) resultStatus = "skipped";
+        set((s) => ({
+          sessions: s.sessions.map((session) =>
+            session.id === updated.id ? updated : session,
+          ),
+        }));
       }
     } catch (e) {
       console.warn("[acorn] generateSessionTitle failed", e);
@@ -2707,21 +3049,6 @@ export const useAppStore = create<AppStateModel>()(
     } catch (e) {
       set({ error: errorMessage(e) });
     }
-  },
-
-  toggleSessionAutoClose(id) {
-    set((s) => {
-      const session = s.sessions.find((candidate) => candidate.id === id);
-      if (!session || session.kind !== "regular") return s;
-      const autoCloseSessionIds = { ...s.autoCloseSessionIds };
-      if (autoCloseSessionIds[id]) {
-        delete autoCloseSessionIds[id];
-      } else {
-        if (!canConfigureSessionAutoClose(session)) return s;
-        autoCloseSessionIds[id] = true;
-      }
-      return { autoCloseSessionIds };
-    });
   },
 
   requestRemoveSession(id) {
@@ -2807,7 +3134,14 @@ export const useAppStore = create<AppStateModel>()(
           sessionFolderIds,
           activeProject: nextActive,
           activeProjectFolderId: nextActiveFolderId,
-          ...mirrorActive(rest, nextActiveFolderId),
+          ...mirrorActive(rest, nextActiveFolderId, {
+            sessions: s.sessions,
+            projects: s.projects.filter(
+              (project) => project.repo_path !== repoPath,
+            ),
+            projectFolders,
+            activeProject: nextActive,
+          }),
         };
       });
       await get().refreshAll();
@@ -2929,6 +3263,12 @@ export const useAppStore = create<AppStateModel>()(
           ...mirrorActive(
             reconciled.workspaces,
             reconciled.activeProjectFolderId,
+            {
+              sessions,
+              projects: s.projects,
+              projectFolders: reconciled.projectFolders,
+              activeProject: reconciled.activeProject,
+            },
           ),
         };
       });
@@ -3134,12 +3474,17 @@ export const useAppStore = create<AppStateModel>()(
 
   addSessionNotification(notification) {
     const maxHistory = useSettings.getState().settings.notifications.maxHistory;
-    set((s) => ({
-      sessionNotifications: [
-        notification,
-        ...s.sessionNotifications.filter((n) => n.id !== notification.id),
-      ].slice(0, maxHistory),
-    }));
+    set((s) => {
+      const existing = s.sessionNotifications.filter(
+        (n) => n.id !== notification.id,
+      );
+      return {
+        sessionNotifications: normalizeSessionNotifications(
+          [notification, ...existing],
+          maxHistory,
+        ),
+      };
+    });
   },
 
   markSessionNotificationRead(id) {
@@ -3307,7 +3652,7 @@ export const useAppStore = create<AppStateModel>()(
           ? { ...s.workspaceTabs, [existing.id]: tab }
           : { ...s.workspaceTabs, [tab.id]: tab },
         workspaces: newWorkspaces,
-        ...mirrorActive(newWorkspaces, workspaceId),
+        ...mirrorActive(newWorkspaces, workspaceId, s),
       };
     });
   },
@@ -3409,7 +3754,7 @@ export const useAppStore = create<AppStateModel>()(
           ? s.workspaceTabs
           : { ...s.workspaceTabs, [tab.id]: tab },
         workspaces: newWorkspaces,
-        ...mirrorActive(newWorkspaces, workspaceId),
+        ...mirrorActive(newWorkspaces, workspaceId, s),
       };
     });
 
@@ -3467,7 +3812,7 @@ export const useAppStore = create<AppStateModel>()(
       return {
         workspaceTabs: rest,
         workspaces: newWorkspaces,
-        ...mirrorActive(newWorkspaces, activeWorkspaceId(s)),
+        ...mirrorActive(newWorkspaces, activeWorkspaceId(s), s),
       };
     });
   },
@@ -3486,7 +3831,6 @@ export const useAppStore = create<AppStateModel>()(
         rightTab: state.rightTab,
         rightTabByGroup: state.rightTabByGroup,
         sessionNotifications: state.sessionNotifications,
-        autoCloseSessionIds: state.autoCloseSessionIds,
         workspaceTabs: Object.fromEntries(
           Object.entries(state.workspaceTabs).filter(([, tab]) =>
             isRestorableWorkspaceTab(tab),
@@ -3584,6 +3928,9 @@ export const useAppStore = create<AppStateModel>()(
           const explicitViewMode = readWorkspaceViewMode(
             (ws as PersistedWorkspaceState).viewMode,
           );
+          const explicitLocalViewMode = readWorkspaceViewMode(
+            (ws as PersistedWorkspaceState).localViewMode,
+          );
           const newPanes: Record<PaneId, PaneState> = {};
           for (const [pid, pane] of Object.entries(ws.panes ?? {})) {
             const normalized = normalizePaneState(
@@ -3620,6 +3967,11 @@ export const useAppStore = create<AppStateModel>()(
           } else {
             delete normalizedWorkspace.viewMode;
           }
+          if (explicitLocalViewMode) {
+            normalizedWorkspace.localViewMode = explicitLocalViewMode;
+          } else {
+            delete normalizedWorkspace.localViewMode;
+          }
           sanitized[key] = normalizedWorkspace;
         }
         const projectFolders = normalizePersistedProjectFolders(
@@ -3634,8 +3986,9 @@ export const useAppStore = create<AppStateModel>()(
           state.activeProjectFolderId,
         );
         state.sessionFolderIds = normalizeStringRecord(state.sessionFolderIds);
-        state.autoCloseSessionIds = normalizeTrueRecord(
-          state.autoCloseSessionIds,
+        state.sessionNotifications = normalizeSessionNotifications(
+          state.sessionNotifications ?? [],
+          useSettings.getState().settings.notifications.maxHistory,
         );
         state.activeProjectFolderId =
           state.activeProjectFolderId ??
@@ -3645,7 +3998,7 @@ export const useAppStore = create<AppStateModel>()(
         state.workspaceTabs = restoredTabs;
         Object.assign(
           state,
-          mirrorActive(state.workspaces, activeWorkspaceId(state)),
+          mirrorActive(state.workspaces, activeWorkspaceId(state), state),
         );
       },
     },
@@ -3729,15 +4082,6 @@ function normalizeStringRecord(value: unknown): Record<string, string> {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
-}
-
-function normalizeTrueRecord(value: unknown): Record<string, true> {
-  if (!value || typeof value !== "object") return {};
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).filter(
-      (entry): entry is [string, true] => entry[1] === true,
     ),
   );
 }

@@ -12,7 +12,6 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
-  GitFork,
   MessageSquareText,
   Pencil,
   PencilLine,
@@ -39,6 +38,10 @@ import { ChatPane } from "./ChatPane";
 import { WorkSummaryView } from "./WorkSummaryView";
 import { api } from "../lib/api";
 import {
+  buildAgentContextMenuItems,
+  createEmptySessionAgentDetection,
+} from "../lib/agentContextMenu";
+import {
   AgentProviderIcon,
   buildAgentForkCommand,
   providerRequiresForkTranscriptPrep,
@@ -62,7 +65,6 @@ import {
   canRegenerateSessionTitle,
   canRenameSession,
 } from "../lib/sessionTitle";
-import { canConfigureSessionAutoClose } from "../lib/sessionAgentState";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
@@ -89,6 +91,7 @@ import { StatusDot, type StatusTone } from "./ui";
 import type {
   Project,
   Session,
+  SessionAgentDetection,
   SessionAgentProvider,
   SessionKind,
   SessionStatus,
@@ -110,19 +113,17 @@ import {
 } from "../lib/workspaceTabDrag";
 
 const SESSION_STATUS_TONE: Record<SessionStatus, StatusTone> = {
-  idle: "neutral",
-  running: "accent",
-  needs_input: "warning",
-  failed: "danger",
-  completed: "accent",
+  ready: "neutral",
+  working: "accent",
+  waiting_for_input: "warning",
+  errored: "danger",
 };
 
 const STATUS_ICON: Record<SessionStatus, string> = {
-  idle: "text-fg-muted",
-  running: "text-accent animate-pulse",
-  needs_input: "text-warning",
-  failed: "text-danger",
-  completed: "text-accent/60",
+  ready: "text-fg-muted",
+  working: "text-accent animate-pulse",
+  waiting_for_input: "text-warning",
+  errored: "text-danger",
 };
 
 const EMPTY_PANE_DOUBLE_SPACE_MS = 500;
@@ -198,6 +199,7 @@ export function Pane({ paneId }: PaneProps) {
   const splitFocusedPane = useAppStore((s) => s.splitFocusedPane);
   const closePane = useAppStore((s) => s.closePane);
   const sessionsById = useAppStore(selectSessionsById);
+  const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const shortcuts = useSettings((s) => s.settings.shortcuts);
   const [paneMenu, setPaneMenu] = useState<{ x: number; y: number } | null>(
     null,
@@ -588,7 +590,7 @@ export function Pane({ paneId }: PaneProps) {
             session={activeSession}
           />
         ) : null}
-        {active?.kind === "code" ? (
+        {active?.kind === "code" && workspaceViewMode === "panes" ? (
           <FileViewer
             key={active.id}
             path={active.path}
@@ -1016,14 +1018,6 @@ function TabItem({
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
   const session = tab.kind === "session" ? tab.session : null;
-  const autoCloseEnabled = useAppStore((s) =>
-    session ? Boolean(s.autoCloseSessionIds[session.id]) : false,
-  );
-  const canConfigureAutoClose =
-    session != null && canConfigureSessionAutoClose(session);
-  const toggleSessionAutoClose = useAppStore(
-    (s) => s.toggleSessionAutoClose,
-  );
   const isGeneratingTitle = useAppStore((s) =>
     session ? Boolean(s.generatingSessionTitleIds[session.id]) : false,
   );
@@ -1069,11 +1063,7 @@ function TabItem({
   // Per-session agent detection result, refreshed each time the context
   // menu opens. Null while loading; the menu rebuilds when this resolves
   // so the Fork item gets the right label / enabled state.
-  const [agent, setAgent] = useState<{
-    claude: string | null;
-    codex: string | null;
-    antigravity: string | null;
-  } | null>(null);
+  const [agent, setAgent] = useState<SessionAgentDetection | null>(null);
 
   useEffect(() => {
     if (!menu || !session) return;
@@ -1090,7 +1080,7 @@ function TabItem({
           err,
         });
         if (!cancelled) {
-          setAgent({ claude: null, codex: null, antigravity: null });
+          setAgent(createEmptySessionAgentDetection());
         }
       });
     return () => {
@@ -1239,60 +1229,13 @@ function TabItem({
 
   const forkItems: ContextMenuItem[] = (() => {
     if (!agent || !onFork) return [];
-    const items: ContextMenuItem[] = [];
-    const providerCount = [agent.claude, agent.codex, agent.antigravity].filter(
-      Boolean,
-    ).length;
-    const multiple = providerCount > 1;
-    if (agent.claude) {
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkClaudeSession")
-          : paneT(t, "pane.menu.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () => onFork("claude", agent.claude!, false),
-      });
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkClaudeInNewWorktree")
-          : paneT(t, "pane.menu.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () => onFork("claude", agent.claude!, true),
-      });
-    }
-    if (agent.codex) {
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkCodexSession")
-          : paneT(t, "pane.menu.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () => onFork("codex", agent.codex!, false),
-      });
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkCodexInNewWorktree")
-          : paneT(t, "pane.menu.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () => onFork("codex", agent.codex!, true),
-      });
-    }
-    if (agent.antigravity) {
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkAntigravitySession")
-          : paneT(t, "pane.menu.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () => onFork("antigravity", agent.antigravity!, false),
-      });
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkAntigravityInNewWorktree")
-          : paneT(t, "pane.menu.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () => onFork("antigravity", agent.antigravity!, true),
-      });
-    }
-    return items;
+    return buildAgentContextMenuItems({
+      mode: "fork",
+      surface: "pane",
+      detection: agent,
+      t,
+      onFork,
+    });
   })();
 
   const menuItems: ContextMenuItem[] = [
@@ -1316,16 +1259,6 @@ function TabItem({
             icon: <BarChart3 size={12} />,
             onClick: () => void openWorkSummaryTab({ sessionId: session.id }),
           },
-          ...(canConfigureAutoClose
-            ? [
-                {
-                  type: "checkbox",
-                  label: paneT(t, "pane.menu.autoCloseWhenFinished"),
-                  checked: autoCloseEnabled,
-                  onChange: () => toggleSessionAutoClose(session.id),
-                } satisfies ContextMenuItem,
-              ]
-            : []),
         ] satisfies ContextMenuItem[])
       : []),
     ...(forkItems.length > 0
@@ -1499,13 +1432,9 @@ function TabItem({
         className={cn(
           "group relative flex h-7 min-w-[96px] shrink-0 cursor-pointer select-none items-center rounded-md pr-0.5 text-[13px] leading-5 transition",
           isDraggingThisTab && "opacity-40",
-          autoCloseEnabled
-            ? active
-              ? "bg-warning/15 text-fg ring-1 ring-warning/25"
-              : "bg-warning/10 text-fg hover:bg-warning/15"
-            : active
-              ? "acorn-tab-active-bg text-fg"
-              : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
+          active
+            ? "acorn-tab-active-bg text-fg"
+            : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
         )}
       >
         <div
@@ -1559,11 +1488,10 @@ function TabItem({
             <StatusDot
               tone={session ? SESSION_STATUS_TONE[session.status] : "neutral"}
               size="sm"
-              pulse={session?.status === "running"}
+              pulse={session?.status === "working"}
               className={cn(
                 "pointer-events-none",
                 !session && "opacity-70",
-                session?.status === "completed" && "opacity-60",
               )}
             />
           )}
@@ -1646,7 +1574,6 @@ function TabItem({
             isGeneratingTitle={isGeneratingTitle}
             generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
             showWorktreeIcon={showWorktreeIcon}
-            autoCloseEnabled={autoCloseEnabled}
           />
         ) : null}
       </div>
@@ -1669,7 +1596,6 @@ function WorkspaceTabDragGhost({
   isGeneratingTitle,
   generatingLabel,
   showWorktreeIcon,
-  autoCloseEnabled,
 }: {
   drag: WorkspaceTabDragSession;
   tab: PaneTab;
@@ -1678,16 +1604,13 @@ function WorkspaceTabDragGhost({
   isGeneratingTitle: boolean;
   generatingLabel: string;
   showWorktreeIcon: boolean;
-  autoCloseEnabled: boolean;
 }) {
   return createPortal(
     <div
       aria-hidden
       className={cn(
         "pointer-events-none fixed z-[9999] flex items-center gap-1.5 border px-3 text-[13px] leading-5 text-fg opacity-95 shadow-2xl",
-        autoCloseEnabled
-          ? "border-warning/30 bg-warning/15"
-          : "border-border bg-bg-elevated",
+        "border-border bg-bg-elevated",
       )}
       style={{
         left: drag.pointer.x - drag.offset.x,
@@ -1728,11 +1651,10 @@ function WorkspaceTabDragGhost({
         <StatusDot
           tone={session ? SESSION_STATUS_TONE[session.status] : "neutral"}
           size="sm"
-          pulse={session?.status === "running"}
+          pulse={session?.status === "working"}
           className={cn(
             "pointer-events-none",
             !session && "opacity-70",
-            session?.status === "completed" && "opacity-60",
           )}
         />
       )}

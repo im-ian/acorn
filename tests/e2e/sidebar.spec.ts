@@ -47,6 +47,16 @@ async function dragBetween(
   await page.mouse.up();
 }
 
+async function sessionPairOrder(
+  first: Locator,
+  second: Locator,
+): Promise<"alpha-beta" | "beta-alpha" | "missing"> {
+  const firstBox = await first.boundingBox();
+  const secondBox = await second.boundingBox();
+  if (!firstBox || !secondBox) return "missing";
+  return firstBox.y < secondBox.y ? "alpha-beta" : "beta-alpha";
+}
+
 async function clickMoveToTarget(
   page: Page,
   targetName: string,
@@ -160,7 +170,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "needs_input",
+          status: "waiting_for_input",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -190,7 +200,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "needs_input",
+        status: "waiting_for_input",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -267,7 +277,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "needs_input",
+          status: "waiting_for_input",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -297,7 +307,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "needs_input",
+        status: "waiting_for_input",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -361,7 +371,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -419,7 +429,8 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "feature/readable-tooltip",
         isolated: true,
         project_scoped: true,
-        status: "needs_input",
+        status: "waiting_for_input",
+        status_reason: "turn_complete",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -452,11 +463,203 @@ test.describe("sidebar: project lifecycle", () => {
       "/tmp/demo/.acorn/worktrees/detail-session",
     );
     await expect(tooltip).toContainText("Status");
-    await expect(tooltip).toContainText("Needs input");
+    await expect(tooltip).toContainText("Waiting for input");
+    await expect(tooltip).toContainText("Agent turn complete");
     await expect(tooltip).toContainText("Kind");
     await expect(tooltip).toContainText("Control session");
     await expect(tooltip).toContainText("Isolated worktree");
     await expect(tooltip.locator("svg")).toHaveCount(6);
+  });
+
+  test("session context menu copies the paired transcript path", async ({
+    page,
+    tauri,
+  }) => {
+    const transcriptPath = "/Users/me/.codex/sessions/copyable.jsonl";
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async (text: string) => {
+            (window as unknown as { __copiedText?: string }).__copiedText =
+              text;
+          },
+        },
+      });
+    });
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "copyable-session",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "waiting_for_input",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+        agent_provider: "codex",
+        agent_transcript_id: "codex-1",
+        agent_transcript_path: transcriptPath,
+      },
+    ]);
+
+    await page.goto("/");
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /copyable-session/ })
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Copy" }).hover();
+    await page.getByRole("menuitem", { name: "Transcript Path" }).click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __copiedText?: string }).__copiedText,
+        ),
+      )
+      .toBe(transcriptPath);
+  });
+
+  test("session rows surface open PR and active process context", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "context-session",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "feature/session-context",
+        isolated: false,
+        project_scoped: true,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+        active_processes: [
+          { pid: 11, name: "codex", depth: 2 },
+          { pid: 12, name: "rg", depth: 3 },
+          { pid: 13, name: "node", depth: 3 },
+          { pid: 14, name: "cargo", depth: 3 },
+        ],
+      },
+    ]);
+    await tauri.handle("detect_session_statuses", () => [
+      {
+        id: "session-1",
+        status: "working",
+        branch: "feature/session-context",
+        git_context_path: "/tmp/demo-live-worktree",
+        active_processes: [
+          { pid: 11, name: "codex", depth: 2 },
+          { pid: 12, name: "rg", depth: 3 },
+          { pid: 13, name: "node", depth: 3 },
+          { pid: 14, name: "cargo", depth: 3 },
+        ],
+      },
+    ]);
+    await tauri.handle("list_pull_requests", (args) => {
+      if (
+        args?.repoPath !== "/tmp/demo-live-worktree" ||
+        args?.query !== "head:feature/session-context"
+      ) {
+        return { kind: "ok", items: [], account: "test" };
+      }
+      return {
+        kind: "ok",
+        account: "test",
+        items: [
+          {
+            number: 99,
+            title: "Show session context",
+            state: "OPEN",
+            author: "ian",
+            head_branch: "feature/session-context",
+            base_branch: "main",
+            url: "https://github.com/im-ian/acorn/pull/99",
+            updated_at: "2026-01-01T00:00:00Z",
+            is_draft: false,
+            checks: null,
+            labels: [],
+          },
+        ],
+      };
+    });
+    await tauri.handle("plugin:opener|open_url", (args) => {
+      const w = window as unknown as {
+        __openUrlCalls?: Array<{ url?: string }>;
+      };
+      w.__openUrlCalls = w.__openUrlCalls ?? [];
+      w.__openUrlCalls.push(args as { url?: string });
+      return null;
+    });
+
+    await page.goto("/");
+
+    const row = page
+      .locator("aside")
+      .getByRole("button", { name: /context-session/ });
+    const contextLine = row.locator(
+      '[data-session-context-metadata="true"]',
+    );
+    await expect(contextLine).toHaveText(/PR #99\s*·\s*codex, rg \+2/);
+    const prButton = contextLine.getByRole("button", {
+      name: "Open PR #99",
+    });
+    await expect(prButton).toBeVisible();
+    await expect(prButton).toHaveClass(/text-emerald-400/);
+    await prButton.click();
+    const openedUrls = await page.evaluate(
+      () =>
+        (
+          (window as unknown as {
+            __openUrlCalls?: Array<{ url?: string }>;
+          }).__openUrlCalls ?? []
+        ).map((call) => call.url),
+    );
+    expect(openedUrls).toEqual([
+      "https://github.com/im-ian/acorn/pull/99",
+    ]);
+
+    await row.hover();
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("Open PR");
+    await expect(tooltip).toContainText("#99 Show session context");
+    await expect(tooltip).toContainText("Processes");
+    await expect(tooltip).toContainText("codex, rg, node, cargo");
   });
 
   test("clears agent provider icon after the agent process exits", async ({
@@ -480,7 +683,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "needs_input",
+        status: "waiting_for_input",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -497,7 +700,7 @@ test.describe("sidebar: project lifecycle", () => {
     await tauri.handle("detect_session_statuses", () => [
       {
         id: "session-1",
-        status: "idle",
+        status: "ready",
         branch: null,
         agent_provider: null,
         agent_transcript_id: "codex-1",
@@ -526,7 +729,7 @@ test.describe("sidebar: project lifecycle", () => {
       branch: "feature/alpha",
       isolated: true,
       project_scoped: true,
-      status: "needs_input",
+      status: "waiting_for_input",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
       last_message: null,
@@ -557,7 +760,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "feature/beta",
           isolated: true,
           project_scoped: true,
-          status: "needs_input",
+          status: "waiting_for_input",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -681,7 +884,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -709,7 +912,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -754,7 +957,7 @@ test.describe("sidebar: project lifecycle", () => {
       page.locator("aside").getByRole("button", { name: /Frontend/ }),
     ).toBeVisible();
     await expect(
-      page.locator("aside").getByRole("button", { name: /root main · Idle/ }),
+      page.locator("aside").getByRole("button", { name: /root main · Ready/ }),
     ).toBeVisible();
     await expect(
       page.locator("aside").getByRole("button", { name: /^Default\b/ }),
@@ -762,7 +965,7 @@ test.describe("sidebar: project lifecycle", () => {
 
     await page
       .locator("aside")
-      .getByRole("button", { name: /root main · Idle/ })
+      .getByRole("button", { name: /root main · Ready/ })
       .click({ button: "right" });
     await clickMoveToTarget(page, "Frontend");
     const frontendFolder = page
@@ -773,7 +976,7 @@ test.describe("sidebar: project lifecycle", () => {
     await expectRootWorkspaceMetadataHidden(frontendFolder);
     await page
       .locator("aside")
-      .getByRole("button", { name: /root main · Idle/ })
+      .getByRole("button", { name: /root main · Ready/ })
       .click({ button: "right" });
     await expectMoveToTarget(page, "Project root");
     await page.keyboard.press("Escape");
@@ -788,32 +991,32 @@ test.describe("sidebar: project lifecycle", () => {
 
     await page
       .locator("aside")
-      .getByRole("button", { name: /root main · Idle/ })
+      .getByRole("button", { name: /root main · Ready/ })
       .click();
     await page.getByRole("button", { name: "Project demo" }).hover();
     await page
       .getByRole("button", { name: "New session in this project" })
       .click();
     await expect(
-      page.locator("aside").getByRole("button", { name: /web main · Idle/ }),
+      page.locator("aside").getByRole("button", { name: /web main · Ready/ }),
     ).toBeVisible();
     await page
       .locator("aside")
-      .getByRole("button", { name: /web main · Idle/ })
+      .getByRole("button", { name: /web main · Ready/ })
       .click({ button: "right" });
     await expectNoMoveToTarget(page, "Project root");
     await page.keyboard.press("Escape");
 
     await page
       .locator("aside")
-      .getByRole("button", { name: /root main · Idle/ })
+      .getByRole("button", { name: /root main · Ready/ })
       .click({ button: "right" });
     await clickMoveToTarget(page, "Project root");
     await expect(frontendFolder).toBeVisible();
     await expectRootWorkspaceMetadataHidden(frontendFolder);
     await page
       .locator("aside")
-      .getByRole("button", { name: /root main · Idle/ })
+      .getByRole("button", { name: /root main · Ready/ })
       .click({ button: "right" });
     await expectNoMoveToTarget(page, "Project root");
     await page.keyboard.press("Escape");
@@ -872,7 +1075,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: Boolean(input.isolated),
         project_scoped: input.projectScoped ?? true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -923,7 +1126,7 @@ test.describe("sidebar: project lifecycle", () => {
 
     const createdRow = page
       .locator("aside")
-      .getByRole("button", { name: /^new session main · Idle/ })
+      .getByRole("button", { name: /^new session main · Ready/ })
       .first();
     await expect(createdRow).toBeVisible();
     await expectRootWorkspaceMetadataHidden(folderRow);
@@ -944,7 +1147,7 @@ test.describe("sidebar: project lifecycle", () => {
 
     const createdFromButtonRow = page
       .locator("aside")
-      .getByRole("button", { name: /^new session-1 main · Idle/ })
+      .getByRole("button", { name: /^new session-1 main · Ready/ })
       .first();
     await expect(createdFromButtonRow).toBeVisible();
     await expectRootWorkspaceMetadataHidden(folderRow);
@@ -984,7 +1187,7 @@ test.describe("sidebar: project lifecycle", () => {
     const createdFromMenuRow = page
       .locator("aside")
       .getByRole("button", {
-        name: /^demo-worktree-[a-z]+(?:-[a-z]+)* worktree main · Idle/,
+        name: /^demo-worktree-[a-z]+(?:-[a-z]+)* worktree main · Ready/,
       })
       .first();
     await expect(createdFromMenuRow).toBeVisible();
@@ -1050,7 +1253,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -1068,7 +1271,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:01Z",
           updated_at: "2026-01-01T00:00:01Z",
           last_message: null,
@@ -1112,10 +1315,10 @@ test.describe("sidebar: project lifecycle", () => {
 
     const frontend = sidebar.getByRole("button", { name: /Frontend/ }).first();
     const root = sidebar
-      .getByRole("button", { name: /^root main · Idle/ })
+      .getByRole("button", { name: /^root main · Ready/ })
       .first();
     const child = sidebar
-      .getByRole("button", { name: /^child main · Idle/ })
+      .getByRole("button", { name: /^child main · Ready/ })
       .first();
     await child.click({ button: "right" });
     await clickMoveToTarget(page, "Frontend");
@@ -1223,7 +1426,7 @@ test.describe("sidebar: project lifecycle", () => {
               branch: "main",
               isolated: true,
               project_scoped: true,
-              status: "idle",
+              status: "ready",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:00Z",
               last_message: null,
@@ -1623,7 +1826,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -1668,7 +1871,7 @@ test.describe("sidebar: project lifecycle", () => {
     });
     const rootSession = page
       .locator("aside")
-      .getByRole("button", { name: /root main · Idle/ });
+      .getByRole("button", { name: /root main · Ready/ });
     await dragBetween(page, frontend, backend);
     await expect.poll(async () => {
       const frontendBox = await frontend.boundingBox();
@@ -1728,7 +1931,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -1746,7 +1949,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:01Z",
           updated_at: "2026-01-01T00:00:01Z",
           last_message: null,
@@ -1791,33 +1994,61 @@ test.describe("sidebar: project lifecycle", () => {
     const frontend = sidebar.getByRole("button", { name: /Frontend/ }).first();
 
     const alpha = sidebar
-      .getByRole("button", { name: /^alpha main · Idle/ })
+      .getByRole("button", { name: /^alpha main · Ready/ })
       .first();
     const beta = sidebar
-      .getByRole("button", { name: /^beta main · Idle/ })
+      .getByRole("button", { name: /^beta main · Ready/ })
       .first();
     await dragBetween(page, alpha, frontend);
     await dragBetween(page, beta, frontend);
-
-    await dragBetween(page, beta, alpha);
-
     await expect
       .poll(async () => {
+        const frontendBox = await frontend.boundingBox();
         const alphaBox = await alpha.boundingBox();
         const betaBox = await beta.boundingBox();
-        if (!alphaBox || !betaBox) return "missing";
-        return betaBox.y < alphaBox.y ? "reordered" : "not-reordered";
+        if (!frontendBox || !alphaBox || !betaBox) return "missing";
+        const indentedUnderWorkspace =
+          alphaBox.x > frontendBox.x && betaBox.x > frontendBox.x;
+        const listedBelowWorkspace =
+          frontendBox.y < alphaBox.y && frontendBox.y < betaBox.y;
+        return indentedUnderWorkspace && listedBelowWorkspace
+          ? "ready"
+          : "not-ready";
       })
-      .toBe("reordered");
+      .toBe("ready");
+
+    const orderBefore = await sessionPairOrder(alpha, beta);
+    expect(orderBefore).not.toBe("missing");
+    const moveBetaAboveAlpha = orderBefore === "alpha-beta";
+    await dragBetween(
+      page,
+      moveBetaAboveAlpha ? beta : alpha,
+      moveBetaAboveAlpha ? alpha : beta,
+    );
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __reorderSessionCalls?: unknown[] })
+              .__reorderSessionCalls?.length ?? 0,
+        ),
+      )
+      .toBeGreaterThanOrEqual(1);
+
+    const expectedOrder = moveBetaAboveAlpha ? "beta-alpha" : "alpha-beta";
+    await expect
+      .poll(() => sessionPairOrder(alpha, beta))
+      .toBe(expectedOrder);
     const calls = (await page.evaluate(
       () =>
         (window as unknown as { __reorderSessionCalls?: unknown[] })
           .__reorderSessionCalls,
     )) as Array<{ repoPath: string; order: string[] }>;
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual({
+    expect(calls.at(-1)).toEqual({
       repoPath: "/tmp/demo",
-      order: ["beta-session", "alpha-session"],
+      order: moveBetaAboveAlpha
+        ? ["beta-session", "alpha-session"]
+        : ["alpha-session", "beta-session"],
     });
   });
 
@@ -1844,7 +2075,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -1862,7 +2093,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:01Z",
           updated_at: "2026-01-01T00:00:01Z",
           last_message: null,
@@ -1906,10 +2137,10 @@ test.describe("sidebar: project lifecycle", () => {
     await sidebar.getByRole("textbox").press("Enter");
     const frontend = sidebar.getByRole("button", { name: /Frontend/ }).first();
     const root = sidebar
-      .getByRole("button", { name: /^root main · Idle/ })
+      .getByRole("button", { name: /^root main · Ready/ })
       .first();
     const child = sidebar
-      .getByRole("button", { name: /^child main · Idle/ })
+      .getByRole("button", { name: /^child main · Ready/ })
       .first();
 
     await dragBetween(page, child, frontend);
@@ -1966,7 +2197,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -2005,7 +2236,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: Boolean(input.isolated),
         project_scoped: input.projectScoped ?? true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:01Z",
         updated_at: "2026-01-01T00:00:01Z",
         last_message: null,
@@ -2039,14 +2270,14 @@ test.describe("sidebar: project lifecycle", () => {
       .click();
 
     const root = sidebar
-      .getByRole("button", { name: /^root main · Idle/ })
+      .getByRole("button", { name: /^root main · Ready/ })
       .first();
     const worktreeWorkspace = sidebar
       .getByRole("button", { name: /created-1/ })
       .first();
     const worktreeSession = sidebar
       .getByRole("button", {
-        name: /^demo-worktree-[a-z]+(?:-[a-z]+)* main · Idle/,
+        name: /^demo-worktree-[a-z]+(?:-[a-z]+)* main · Ready/,
       })
       .first();
     await expect(root).toBeVisible();
@@ -2119,7 +2350,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "feature/branch",
         isolated: true,
         project_scoped: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -2143,7 +2374,7 @@ test.describe("sidebar: project lifecycle", () => {
 
     const sidebar = page.locator("aside");
     const worker = sidebar
-      .getByRole("button", { name: /^worker worktree feature\/branch · Idle/ })
+      .getByRole("button", { name: /^worker worktree feature\/branch · Ready/ })
       .first();
     await expect(worker).toBeVisible();
 
@@ -2164,7 +2395,7 @@ test.describe("sidebar: project lifecycle", () => {
     const nestedWorker = workspace
       .locator("xpath=following-sibling::ul")
       .getByRole("button", {
-        name: /^worker feature\/branch · Idle/,
+        name: /^worker feature\/branch · Ready/,
       })
       .first();
     await expect(nestedWorker).toBeVisible();
@@ -2199,7 +2430,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -2231,7 +2462,7 @@ test.describe("sidebar: project lifecycle", () => {
       .first();
     const rootSession = page
       .locator("aside")
-      .getByRole("button", { name: /root main · Idle/ });
+      .getByRole("button", { name: /root main · Ready/ });
     await rootSession.click({ button: "right" });
     await clickMoveToTarget(page, "Frontend");
     await expect(rootSession).toBeVisible();
@@ -2245,7 +2476,7 @@ test.describe("sidebar: project lifecycle", () => {
       .getByRole("button", { name: "Expand workspace", exact: true })
       .click();
     await expect(
-      page.locator("aside").getByRole("button", { name: /root main · Idle/ }),
+      page.locator("aside").getByRole("button", { name: /root main · Ready/ }),
     ).toBeVisible();
   });
 
@@ -2349,7 +2580,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: Boolean(input.isolated),
         project_scoped: input.projectScoped ?? true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -2456,7 +2687,7 @@ test.describe("sidebar: project lifecycle", () => {
     const worktreeSession = page
       .locator("aside")
       .getByRole("button", {
-        name: /^demo-worktree-[a-z]+(?:-[a-z]+)* main · Idle/,
+        name: /^demo-worktree-[a-z]+(?:-[a-z]+)* main · Ready/,
       })
       .last();
     await expect(worktreeSession).toBeVisible();
@@ -2469,7 +2700,7 @@ test.describe("sidebar: project lifecycle", () => {
 
     const projectRootSession = page
       .locator("aside")
-      .getByRole("button", { name: /^new session-1 main · Idle/ })
+      .getByRole("button", { name: /^new session-1 main · Ready/ })
       .first();
     await expect(projectRootSession).toBeVisible();
     await projectRootSession.click({ button: "right" });
@@ -2531,7 +2762,7 @@ test.describe("sidebar: project lifecycle", () => {
               branch: "HEAD",
               isolated: false,
               project_scoped: false,
-              status: "idle",
+              status: "ready",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:00Z",
               last_message: null,
@@ -2559,7 +2790,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "HEAD",
         isolated: false,
         project_scoped: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -2621,7 +2852,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -2638,7 +2869,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "HEAD",
         isolated: false,
         project_scoped: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -2655,7 +2886,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "HEAD",
         isolated: false,
         project_scoped: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:01Z",
         updated_at: "2026-01-01T00:00:01Z",
         last_message: null,
@@ -2681,7 +2912,7 @@ test.describe("sidebar: project lifecycle", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("button", { name: /^project main · Idle$/ }).click();
+    await page.getByRole("button", { name: /^project main · Ready$/ }).click();
 
     const instant = page.getByRole("region", {
       name: "Local terminal sessions",
@@ -2742,7 +2973,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "HEAD",
         isolated: false,
         project_scoped: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -2781,7 +3012,7 @@ test.describe("sidebar: project lifecycle", () => {
               branch: "HEAD",
               isolated: false,
               project_scoped: false,
-              status: "idle",
+              status: "ready",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:00Z",
               last_message: null,
@@ -2809,7 +3040,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "HEAD",
         isolated: false,
         project_scoped: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -2893,7 +3124,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "HEAD",
         isolated: false,
         project_scoped: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -2977,7 +3208,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "HEAD",
           isolated: false,
           project_scoped: false,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -3014,7 +3245,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "HEAD",
         isolated: false,
         project_scoped: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -3062,7 +3293,7 @@ test.describe("sidebar: project lifecycle", () => {
       const baseSession = {
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -3113,7 +3344,7 @@ test.describe("sidebar: project lifecycle", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -3126,7 +3357,7 @@ test.describe("sidebar: project lifecycle", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^worker worktree main · Idle/ })
+      .getByRole("button", { name: /^worker worktree main · Ready/ })
       .click();
     await pressHotkey(page, { mod: true, key: "t" });
 
@@ -3173,7 +3404,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "HEAD",
         isolated: false,
         project_scoped: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -3511,7 +3742,7 @@ test.describe("sidebar: project lifecycle", () => {
               worktree_path: "/tmp/demo",
               branch: "main",
               isolated: false,
-              status: "idle",
+              status: "ready",
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:05Z",
               last_message: null,
@@ -3582,5 +3813,199 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(projects).toHaveCount(2);
     await expect(projects.first()).toHaveAccessibleName("Project alpha");
     await expect(projects.last()).toHaveAccessibleName("Project beta");
+  });
+
+  test("settings can move waiting and error project tabs to the top", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "idle-session",
+        name: "ready",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "failed-session",
+        name: "errored",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "errored",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+      {
+        id: "needs-session",
+        name: "needs",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "waiting_for_input",
+        created_at: "2026-01-01T00:00:02Z",
+        updated_at: "2026-01-01T00:00:02Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 2,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.handle("reorder_sessions", (args) => {
+      const order = Array.isArray(args?.order) ? args.order : [];
+      const indexById = new Map(order.map((id, index) => [id, index]));
+      return [
+        {
+          id: "idle-session",
+          name: "ready",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: indexById.get("idle-session") ?? 0,
+          in_worktree: false,
+        },
+        {
+          id: "failed-session",
+          name: "errored",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "errored",
+          created_at: "2026-01-01T00:00:01Z",
+          updated_at: "2026-01-01T00:00:01Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: indexById.get("failed-session") ?? 1,
+          in_worktree: false,
+        },
+        {
+          id: "needs-session",
+          name: "needs",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "waiting_for_input",
+          created_at: "2026-01-01T00:00:02Z",
+          updated_at: "2026-01-01T00:00:02Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: indexById.get("needs-session") ?? 2,
+          in_worktree: false,
+        },
+      ];
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const ready = sidebar.getByRole("button", { name: /^ready main · Ready/ });
+    const errored = sidebar.getByRole("button", {
+      name: /^errored main · Error/,
+    });
+    const needs = sidebar.getByRole("button", {
+      name: /^needs main · Waiting for input/,
+    });
+
+    await expect
+      .poll(async () => {
+        const readyBox = await ready.boundingBox();
+        const erroredBox = await errored.boundingBox();
+        const needsBox = await needs.boundingBox();
+        if (!readyBox || !erroredBox || !needsBox) return "missing";
+        return readyBox.y < erroredBox.y && erroredBox.y < needsBox.y
+          ? "saved-order"
+          : "different";
+      })
+      .toBe("saved-order");
+
+    await pressHotkey(page, { mod: true, key: "," });
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings
+      .getByRole("checkbox", {
+        name: /Move waiting and error tabs to the top/,
+      })
+      .click();
+    await page.keyboard.press("Escape");
+
+    await expect
+      .poll(async () => {
+        const readyBox = await ready.boundingBox();
+        const erroredBox = await errored.boundingBox();
+        const needsBox = await needs.boundingBox();
+        if (!readyBox || !erroredBox || !needsBox) return "missing";
+        return erroredBox.y < needsBox.y && needsBox.y < readyBox.y
+          ? "priority-order"
+          : "different";
+      })
+      .toBe("priority-order");
+
+    await pressHotkey(page, { mod: true, key: "," });
+    await settings
+      .getByRole("checkbox", {
+        name: /Move waiting and error tabs to the top/,
+      })
+      .click();
+    await page.keyboard.press("Escape");
+
+    await expect
+      .poll(async () => {
+        const readyBox = await ready.boundingBox();
+        const erroredBox = await errored.boundingBox();
+        const needsBox = await needs.boundingBox();
+        if (!readyBox || !erroredBox || !needsBox) return "missing";
+        return readyBox.y < erroredBox.y && erroredBox.y < needsBox.y
+          ? "manual-order"
+          : "different";
+      })
+      .toBe("manual-order");
   });
 });
