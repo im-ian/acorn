@@ -1,38 +1,27 @@
 import { basename } from "./pathUtils";
-import type { Session, SessionStatus } from "./types";
+import {
+  KANBAN_LIFECYCLE_STAGES,
+  type KanbanLifecycleStage,
+} from "./kanbanLifecycle";
+import type { Session } from "./types";
 
 export type KanbanSortMode = "updated-desc" | "created-desc" | "name-asc";
-
-/**
- * Column order is the single source of truth for the kanban board. The board
- * component pairs each status with a UI tone; the pure board logic here only
- * needs the order and identity of each column.
- */
-export const KANBAN_COLUMN_STATUSES: readonly SessionStatus[] = [
-  "ready",
-  "waiting_for_input",
-  "working",
-  "errored",
-];
 
 export const KANBAN_COLUMN_DEFAULT_WIDTH = 240;
 export const KANBAN_COLUMN_MIN_WIDTH = 180;
 export const DEFAULT_KANBAN_SORT_MODE: KanbanSortMode = "updated-desc";
 
-const KANBAN_STATUS_STORAGE_KEYS: Record<SessionStatus, readonly string[]> = {
-  ready: ["ready", "idle", "completed"],
-  waiting_for_input: ["waiting_for_input", "needs_input"],
-  working: ["working", "running"],
-  errored: ["errored", "failed"],
-};
-
-const BOARD_PREFS_STORAGE_KEY = "acorn:workspace-kanban:board-prefs:v1";
+// v1 stored widths were keyed by raw SessionStatus columns. The lifecycle
+// board stores widths by derived stage so status renames never shuffle columns.
+const BOARD_PREFS_STORAGE_KEY = "acorn:workspace-kanban:board-prefs:v2";
 
 /** Persisted, per-project board view state. */
 export interface KanbanBoardPrefs {
   columnWidths: number[];
   sortMode: KanbanSortMode;
   filterQuery: string;
+  /** Sessions the user pinned to the Done column from the card menu. */
+  manualDoneSessionIds: string[];
 }
 
 export function clampKanbanColumnWidth(width: number): number {
@@ -40,7 +29,7 @@ export function clampKanbanColumnWidth(width: number): number {
 }
 
 export function defaultKanbanColumnWidths(): number[] {
-  return KANBAN_COLUMN_STATUSES.map(() => KANBAN_COLUMN_DEFAULT_WIDTH);
+  return KANBAN_LIFECYCLE_STAGES.map(() => KANBAN_COLUMN_DEFAULT_WIDTH);
 }
 
 export function defaultKanbanBoardPrefs(): KanbanBoardPrefs {
@@ -48,6 +37,7 @@ export function defaultKanbanBoardPrefs(): KanbanBoardPrefs {
     columnWidths: defaultKanbanColumnWidths(),
     sortMode: DEFAULT_KANBAN_SORT_MODE,
     filterQuery: "",
+    manualDoneSessionIds: [],
   };
 }
 
@@ -65,7 +55,7 @@ export function toKanbanSortMode(value: unknown): KanbanSortMode {
 /**
  * Equalize sets every column to the mean of the current widths (clamped to the
  * minimum). This is deliberately distinct from reset, which restores the fixed
- * default width — so the two toolbar actions never collapse into the same
+ * default width, so the two toolbar actions never collapse into the same
  * result.
  */
 export function equalizeKanbanColumnWidths(
@@ -127,9 +117,10 @@ export function sessionMatchesKanbanFilter(
 }
 
 interface StoredBoardPrefs {
-  columnWidths?: Partial<Record<SessionStatus, number>>;
+  columnWidths?: Partial<Record<KanbanLifecycleStage, number>>;
   sortMode?: string;
   filterQuery?: string;
+  manualDoneSessionIds?: string[];
 }
 
 type StoredBoardPrefsMap = Record<string, StoredBoardPrefs>;
@@ -152,21 +143,26 @@ function columnWidthsFromStored(
 ): number[] {
   const fallback = defaultKanbanColumnWidths();
   if (!stored || typeof stored !== "object") return fallback;
-  const byStatus = stored as Record<string, unknown>;
-  return KANBAN_COLUMN_STATUSES.map((status, index) => {
-    const value = KANBAN_STATUS_STORAGE_KEYS[status]
-      .map((key) => byStatus[key])
-      .find((candidate) => candidate !== undefined);
+  const byStage = stored as Partial<Record<KanbanLifecycleStage, unknown>>;
+  return KANBAN_LIFECYCLE_STAGES.map((stage, index) => {
+    const value = byStage[stage];
     return typeof value === "number" && Number.isFinite(value)
       ? clampKanbanColumnWidth(value)
       : (fallback[index] ?? KANBAN_COLUMN_DEFAULT_WIDTH);
   });
 }
 
+function manualDoneFromStored(stored: StoredBoardPrefs): string[] {
+  if (!Array.isArray(stored.manualDoneSessionIds)) return [];
+  return stored.manualDoneSessionIds.filter(
+    (id): id is string => typeof id === "string",
+  );
+}
+
 /**
  * Read the stored board prefs for a project. Returns defaults for an unknown or
  * absent project, or when persisted state is missing/corrupt. Column widths are
- * stored keyed by status so reordering columns never shuffles saved widths.
+ * stored keyed by stage so reordering columns never shuffles saved widths.
  */
 export function readKanbanBoardPrefs(
   projectId: string | null,
@@ -179,6 +175,7 @@ export function readKanbanBoardPrefs(
     sortMode: toKanbanSortMode(stored.sortMode),
     filterQuery:
       typeof stored.filterQuery === "string" ? stored.filterQuery : "",
+    manualDoneSessionIds: manualDoneFromStored(stored),
   };
 }
 
@@ -191,18 +188,19 @@ export function writeKanbanBoardPrefs(
   prefs: KanbanBoardPrefs,
 ): void {
   if (!projectId || typeof window === "undefined") return;
-  const byStatus: Partial<Record<SessionStatus, number>> = {};
-  KANBAN_COLUMN_STATUSES.forEach((status, index) => {
-    byStatus[status] = clampKanbanColumnWidth(
+  const byStage: Partial<Record<KanbanLifecycleStage, number>> = {};
+  KANBAN_LIFECYCLE_STAGES.forEach((stage, index) => {
+    byStage[stage] = clampKanbanColumnWidth(
       prefs.columnWidths[index] ?? KANBAN_COLUMN_DEFAULT_WIDTH,
     );
   });
   try {
     const map = readStoredMap();
     map[projectId] = {
-      columnWidths: byStatus,
+      columnWidths: byStage,
       sortMode: toKanbanSortMode(prefs.sortMode),
       filterQuery: prefs.filterQuery,
+      manualDoneSessionIds: prefs.manualDoneSessionIds,
     };
     window.localStorage.setItem(BOARD_PREFS_STORAGE_KEY, JSON.stringify(map));
   } catch {

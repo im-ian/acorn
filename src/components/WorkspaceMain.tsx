@@ -19,9 +19,13 @@ import {
   Activity,
   BarChart3,
   Bot,
+  CheckCircle2,
   ChevronDown,
+  CircleDashed,
+  Clock,
   Columns3,
   Copy,
+  CornerDownLeft,
   ExternalLink,
   FolderOpen,
   GitBranch,
@@ -40,6 +44,7 @@ import {
   Terminal as TerminalIcon,
   Trash2,
   X,
+  XCircle,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -57,6 +62,7 @@ import {
   canRenameSession,
 } from "../lib/sessionTitle";
 import type {
+  PullRequestInfo,
   Session,
   SessionPullRequestSummary,
   SessionStatus,
@@ -79,7 +85,6 @@ import {
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
-  KANBAN_COLUMN_STATUSES,
   KANBAN_COLUMN_DEFAULT_WIDTH,
   clampKanbanColumnWidth,
   defaultKanbanColumnWidths,
@@ -93,6 +98,21 @@ import {
   type KanbanSortMode,
 } from "../lib/kanbanBoard";
 import {
+  EMPTY_KANBAN_STAGE_CONTEXT,
+  KANBAN_LIFECYCLE_STAGES,
+  deriveKanbanStage,
+  formatKanbanDwell,
+  isKanbanSessionStalled,
+  updateKanbanStageDwell,
+  type KanbanLifecycleStage,
+  type KanbanStageContext,
+  type KanbanStageDwell,
+} from "../lib/kanbanLifecycle";
+import {
+  useKanbanBoardData,
+  type KanbanSessionBoardData,
+} from "../lib/useKanbanBoardData";
+import {
   selectSessionsById,
   useAppStore,
   type WorkspaceViewMode,
@@ -102,6 +122,7 @@ import { ChatPane } from "./ChatPane";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { FileViewer } from "./FileViewer";
 import { LayoutRenderer } from "./LayoutRenderer";
+import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
 
@@ -112,15 +133,26 @@ const STATUS_TONE: Record<SessionStatus, StatusTone> = {
   errored: "danger",
 };
 
-// Pair each column status (ordered by the board library) with its UI tone, so
-// the column order has a single source of truth in `kanbanBoard.ts`.
+const KANBAN_STAGE_TONE: Record<KanbanLifecycleStage, StatusTone> = {
+  idle: "neutral",
+  working: "accent",
+  waiting: "warning",
+  review: "success",
+  done: "neutral",
+};
+
+// Pair each lifecycle stage (ordered by `kanbanLifecycle.ts`, the single
+// source of truth for column order) with its UI tone.
 const KANBAN_COLUMNS: ReadonlyArray<{
-  status: SessionStatus;
+  stage: KanbanLifecycleStage;
   tone: StatusTone;
-}> = KANBAN_COLUMN_STATUSES.map((status) => ({
-  status,
-  tone: STATUS_TONE[status],
+}> = KANBAN_LIFECYCLE_STAGES.map((stage) => ({
+  stage,
+  tone: KANBAN_STAGE_TONE[stage],
 }));
+
+/** Re-render cadence for dwell labels and stall detection. */
+const KANBAN_CLOCK_TICK_MS = 30_000;
 
 interface KanbanConversationPreview {
   userMessage?: string;
@@ -128,7 +160,9 @@ interface KanbanConversationPreview {
   fallbackMessage?: string;
 }
 
-function trimPreviewMessage(value: string | null | undefined): string | undefined {
+function trimPreviewMessage(
+  value: string | null | undefined,
+): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 }
@@ -325,14 +359,94 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
     [filterQuery, sessions, sortMode],
   );
 
-  const sessionsByStatus = useMemo(() => {
-    const grouped = new Map<SessionStatus, Session[]>();
-    for (const { status } of KANBAN_COLUMNS) grouped.set(status, []);
+  // Clock for dwell labels and stall badges. Coarse on purpose — nothing on
+  // the board needs sub-30s freshness.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const handle = window.setInterval(
+      () => setNow(Date.now()),
+      KANBAN_CLOCK_TICK_MS,
+    );
+    return () => window.clearInterval(handle);
+  }, []);
+
+  const [prRefreshKey, setPrRefreshKey] = useState(0);
+  const boardData = useKanbanBoardData(sessions, prRefreshKey);
+  const [prDetail, setPrDetail] = useState<{
+    repoPath: string;
+    number: number;
+  } | null>(null);
+
+  const openPullRequestDetail = useCallback(
+    (repoPath: string, number: number) => {
+      setPrDetail({ repoPath, number });
+    },
+    [],
+  );
+
+  const manualDoneSessionIds = prefs.manualDoneSessionIds;
+  const manualDoneSet = useMemo(
+    () => new Set(manualDoneSessionIds),
+    [manualDoneSessionIds],
+  );
+  const toggleManualDone = useCallback((sessionId: string) => {
+    setPrefs((current) => {
+      const ids = new Set(current.manualDoneSessionIds);
+      if (ids.has(sessionId)) ids.delete(sessionId);
+      else ids.add(sessionId);
+      return { ...current, manualDoneSessionIds: [...ids] };
+    });
+  }, []);
+
+  const stageContextBySession = useMemo(() => {
+    const contexts = new Map<string, KanbanStageContext>();
+    for (const session of sessions) {
+      const data = boardData.get(session.id);
+      contexts.set(session.id, {
+        pr: data?.pr ?? null,
+        hasDiff: data?.hasDiff ?? false,
+        manualDone: manualDoneSet.has(session.id),
+      });
+    }
+    return contexts;
+  }, [boardData, manualDoneSet, sessions]);
+
+  // Stages derive from every session (not just visible ones) so filtering the
+  // board never resets a session's dwell clock.
+  const stageBySession = useMemo(() => {
+    const stages = new Map<string, KanbanLifecycleStage>();
+    for (const session of sessions) {
+      stages.set(
+        session.id,
+        deriveKanbanStage(
+          session,
+          stageContextBySession.get(session.id) ?? EMPTY_KANBAN_STAGE_CONTEXT,
+        ),
+      );
+    }
+    return stages;
+  }, [sessions, stageContextBySession]);
+
+  const dwellRef = useRef<Map<string, KanbanStageDwell>>(new Map());
+  const dwellBySession = useMemo(() => {
+    const next = updateKanbanStageDwell(
+      dwellRef.current,
+      stageBySession,
+      Date.now(),
+    );
+    dwellRef.current = next;
+    return next;
+  }, [stageBySession]);
+
+  const sessionsByStage = useMemo(() => {
+    const grouped = new Map<KanbanLifecycleStage, Session[]>();
+    for (const { stage } of KANBAN_COLUMNS) grouped.set(stage, []);
     for (const session of visibleSessions) {
-      grouped.get(session.status)?.push(session);
+      const stage = stageBySession.get(session.id);
+      if (stage) grouped.get(stage)?.push(session);
     }
     return grouped;
-  }, [visibleSessions]);
+  }, [stageBySession, visibleSessions]);
 
   const boardWidth = useMemo(
     () =>
@@ -459,13 +573,13 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
   const focusAdjacentSessionCard = useCallback(
     (sessionId: string, direction: KanbanCardFocusDirection) => {
       const nextSessionId = nextKanbanSessionId(
-        sessionsByStatus,
+        sessionsByStage,
         sessionId,
         direction,
       );
       if (nextSessionId) focusKanbanSessionCard(nextSessionId);
     },
-    [focusKanbanSessionCard, sessionsByStatus],
+    [focusKanbanSessionCard, sessionsByStage],
   );
 
   function closeTerminalPopover() {
@@ -586,10 +700,12 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
           }}
         >
           {KANBAN_COLUMNS.map((column, columnIndex) => {
-            const columnSessions = sessionsByStatus.get(column.status) ?? [];
-            const label = statusLabel(t, column.status);
+            const columnSessions = sessionsByStage.get(column.stage) ?? [];
+            const label = stageLabel(t, column.stage);
+            const needsAttention =
+              column.stage === "waiting" && columnSessions.length > 0;
             return (
-              <Fragment key={column.status}>
+              <Fragment key={column.stage}>
                 <div
                   className="h-full min-w-0 grow shrink-0"
                   style={{
@@ -599,19 +715,37 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                   }}
                 >
                   <section
-                    className="flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg"
+                    className={cn(
+                      "flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border bg-bg",
+                      needsAttention ? "border-warning/50" : "border-border",
+                    )}
                     aria-label={label}
-                    data-kanban-column-status={column.status}
+                    data-kanban-column-stage={column.stage}
                   >
-                    <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2.5">
+                    <header
+                      className={cn(
+                        "flex h-9 shrink-0 items-center gap-2 border-b px-2.5",
+                        needsAttention
+                          ? "border-warning/40 bg-warning/10"
+                          : "border-border",
+                      )}
+                    >
                       <StatusDot
                         tone={column.tone}
-                        pulse={column.status === "working"}
+                        pulse={column.stage === "working"}
                       />
                       <h2 className="min-w-0 flex-1 truncate text-[12px] font-medium text-fg">
                         {label}
                       </h2>
-                      <span className="rounded bg-fg-muted/10 px-1.5 py-px text-[10px] tabular-nums text-fg-muted">
+                      <span
+                        className={cn(
+                          "rounded px-1.5 py-px text-[10px] tabular-nums",
+                          needsAttention
+                            ? "bg-warning/20 font-semibold text-warning"
+                            : "bg-fg-muted/10 text-fg-muted",
+                        )}
+                        data-testid={`workspace-kanban-count-${column.stage}`}
+                      >
                         {columnSessions.length}
                       </span>
                     </header>
@@ -621,7 +755,14 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                           <KanbanSessionCard
                             key={session.id}
                             session={session}
+                            stage={column.stage}
+                            dwell={dwellBySession.get(session.id) ?? null}
+                            data={boardData.get(session.id) ?? null}
+                            now={now}
+                            manualDone={manualDoneSet.has(session.id)}
                             onOpen={openSessionTerminal}
+                            onOpenPullRequest={openPullRequestDetail}
+                            onToggleManualDone={toggleManualDone}
                             onFocusAdjacent={focusAdjacentSessionCard}
                           />
                         ))
@@ -644,7 +785,7 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                       label,
                     )}
                     data-testid="workspace-kanban-column-resize-handle"
-                    data-kanban-resize-status={column.status}
+                    data-kanban-resize-stage={column.stage}
                     onPointerDown={(event) =>
                       startColumnResize(columnIndex, event)
                     }
@@ -685,6 +826,12 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
           onClose={closeTerminalPopover}
         />
       ) : null}
+      <PullRequestDetailModal
+        open={prDetail}
+        cwd={prDetail?.repoPath}
+        onClose={() => setPrDetail(null)}
+        onMutated={() => setPrRefreshKey((key) => key + 1)}
+      />
     </div>
   );
 }
@@ -878,12 +1025,12 @@ function KanbanCreateSessionDropdown({ t }: { t: Translator }) {
 type KanbanCardFocusDirection = "up" | "down" | "left" | "right";
 
 function nextKanbanSessionId(
-  sessionsByStatus: ReadonlyMap<SessionStatus, readonly Session[]>,
+  sessionsByStage: ReadonlyMap<KanbanLifecycleStage, readonly Session[]>,
   sessionId: string,
   direction: KanbanCardFocusDirection,
 ): string | null {
   const columns = KANBAN_COLUMNS.map(
-    ({ status }) => sessionsByStatus.get(status) ?? [],
+    ({ stage }) => sessionsByStage.get(stage) ?? [],
   );
   let currentColumnIndex = -1;
   let currentSessionIndex = -1;
@@ -940,11 +1087,25 @@ function kanbanCardFocusDirection(
 
 const KanbanSessionCard = memo(function KanbanSessionCard({
   session,
+  stage,
+  dwell,
+  data,
+  now,
+  manualDone,
   onOpen,
+  onOpenPullRequest,
+  onToggleManualDone,
   onFocusAdjacent,
 }: {
   session: Session;
+  stage: KanbanLifecycleStage;
+  dwell: KanbanStageDwell | null;
+  data: KanbanSessionBoardData | null;
+  now: number;
+  manualDone: boolean;
   onOpen: (sessionId: string, anchor: HTMLElement) => void;
+  onOpenPullRequest: (repoPath: string, number: number) => void;
+  onToggleManualDone: (sessionId: string) => void;
   onFocusAdjacent: (
     sessionId: string,
     direction: KanbanCardFocusDirection,
@@ -955,6 +1116,8 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   const worktreeName = basename(session.worktree_path);
   const transcriptPath = session.agent_transcript_path?.trim() || null;
   const branchName = session.branch?.trim();
+  const stalled = isKanbanSessionStalled(session, stage, now);
+  const dwellLabel = dwell ? formatKanbanDwell(now - dwell.since) : null;
   const conversationPreview = kanbanConversationPreview(session);
   const lastMessage =
     conversationPreview.agentMessage ?? conversationPreview.fallbackMessage;
@@ -1100,6 +1263,13 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
             });
         },
       },
+      {
+        label: manualDone
+          ? t("workspace.kanban.actions.restoreFromDone")
+          : t("workspace.kanban.actions.markAsDone"),
+        icon: <CheckCircle2 size={12} />,
+        onClick: () => onToggleManualDone(session.id),
+      },
       workspaceContextMenuGroupTitle(t, "open"),
       {
         label: sidebarText(t, "sidebar.actions.openWorktreeInEditor"),
@@ -1173,7 +1343,9 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
       editorConfigured,
       generateSessionTitle,
       isGeneratingTitle,
+      manualDone,
       onOpen,
+      onToggleManualDone,
       openLabel,
       openWorkSummaryTab,
       renameSession,
@@ -1214,6 +1386,10 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
         multiline
         className="flex w-full"
       >
+        {/*
+          Not a <button>: the waiting-stage quick-reply nests a real <input>,
+          and interactive content inside a button is invalid and breaks focus.
+        */}
         <div
           role="button"
           tabIndex={0}
@@ -1223,7 +1399,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
           onPointerDown={handlePointerDown}
           onContextMenu={handleContextMenu}
           onKeyDown={handleKeyDown}
-          className="group flex w-full flex-col gap-2 rounded-md border border-border bg-bg-elevated/45 p-2 text-left transition hover:border-accent/45 hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="group flex w-full cursor-pointer flex-col gap-2 rounded-md border border-border bg-bg-elevated/45 p-2 text-left transition hover:border-accent/45 hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           aria-label={openLabel}
         >
           <span className="flex min-w-0 items-start gap-1.5">
@@ -1241,6 +1417,14 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
                 </span>
               )}
             </span>
+            {stalled ? (
+              <span
+                className="shrink-0 rounded bg-danger/15 px-1 py-px text-[9px] font-semibold uppercase leading-4 tracking-wide text-danger"
+                data-testid="workspace-kanban-card-stalled"
+              >
+                {t("workspace.kanban.card.stalled")}
+              </span>
+            ) : null}
           </span>
           {hasStructuredPreview ? (
             <span
@@ -1280,6 +1464,31 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
               data-testid="workspace-kanban-card-last-message"
             >
               {lastMessage}
+            </span>
+          ) : null}
+          {data && (data.pr || data.hasDiff) ? (
+            <span
+              className="flex min-w-0 flex-wrap items-center gap-1.5"
+              data-testid="workspace-kanban-card-chips"
+            >
+              {data.pr ? (
+                <KanbanPullRequestChip
+                  t={t}
+                  pr={data.pr}
+                  onOpen={(number) =>
+                    onOpenPullRequest(data.repoPath, number)
+                  }
+                />
+              ) : null}
+              {data.hasDiff ? (
+                <span
+                  className="inline-flex items-center gap-1 rounded border border-border bg-bg px-1 py-px text-[10px] leading-4 tabular-nums"
+                  data-testid="workspace-kanban-card-diff"
+                >
+                  <span className="text-success">+{data.additions}</span>
+                  <span className="text-danger">-{data.deletions}</span>
+                </span>
+              ) : null}
             </span>
           ) : null}
           {hasContextMetadata ? (
@@ -1359,7 +1568,23 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
                 <Bot size={10} className="shrink-0 text-accent" />
               </>
             ) : null}
+            {dwellLabel ? (
+              <span
+                className="ml-auto flex shrink-0 items-center gap-1 pl-1"
+                title={t("workspace.kanban.card.dwellTitle").replace(
+                  "{duration}",
+                  dwellLabel,
+                )}
+                data-testid="workspace-kanban-card-dwell"
+              >
+                <Clock size={10} className="shrink-0" />
+                <span className="tabular-nums">{dwellLabel}</span>
+              </span>
+            ) : null}
           </span>
+          {stage === "waiting" && session.mode !== "chat" ? (
+            <KanbanQuickReply t={t} sessionId={session.id} />
+          ) : null}
         </div>
       </Tooltip>
       <ContextMenu
@@ -1372,6 +1597,151 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
     </>
   );
 });
+
+/**
+ * Compact PR pill on a kanban card: state-tinted PR icon, number, and a CI
+ * rollup glyph. Rendered inside the card's clickable root, so it stops
+ * pointer/click propagation and acts as its own keyboard target.
+ */
+function KanbanPullRequestChip({
+  t,
+  pr,
+  onOpen,
+}: {
+  t: Translator;
+  pr: PullRequestInfo;
+  onOpen: (number: number) => void;
+}) {
+  const state = pr.state.toUpperCase();
+  const stateClass =
+    state === "OPEN"
+      ? pr.is_draft
+        ? "text-fg-muted"
+        : "text-emerald-400"
+      : state === "MERGED"
+        ? "text-purple-400"
+        : "text-danger";
+  const checks = pr.checks;
+  const label = t("workspace.kanban.card.openPullRequest").replace(
+    "{number}",
+    String(pr.number),
+  );
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-label={label}
+      title={pr.title}
+      data-testid="workspace-kanban-card-pr"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen(pr.number);
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen(pr.number);
+      }}
+      className="inline-flex items-center gap-1 rounded border border-border bg-bg px-1 py-px text-[10px] leading-4 transition hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+    >
+      <GitPullRequest size={10} className={cn("shrink-0", stateClass)} />
+      <span className="tabular-nums text-fg-muted">#{pr.number}</span>
+      {checks ? (
+        checks.failed > 0 ? (
+          <XCircle size={10} className="shrink-0 text-danger" />
+        ) : checks.pending > 0 ? (
+          <CircleDashed size={10} className="shrink-0 text-warning" />
+        ) : (
+          <CheckCircle2 size={10} className="shrink-0 text-success" />
+        )
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Inline reply box on Waiting cards. Writes straight to the session PTY with
+ * a trailing `\r` (what xterm sends for Enter — `\n` would land as a literal
+ * LF in the line buffer instead of submitting). Terminal-mode sessions only;
+ * the caller hides this for chat sessions.
+ */
+function KanbanQuickReply({
+  t,
+  sessionId,
+}: {
+  t: Translator;
+  sessionId: string;
+}) {
+  const [value, setValue] = useState("");
+  const [sending, setSending] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  async function send() {
+    const text = value.trim();
+    if (!text || sending) return;
+    setSending(true);
+    setFailed(false);
+    try {
+      await api.ptyWrite(sessionId, `${text}\r`);
+      setValue("");
+    } catch (err) {
+      console.error("[WorkspaceMain] kanban quick reply failed", err);
+      setFailed(true);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <span
+      className="flex items-center gap-1"
+      data-testid="workspace-kanban-card-quick-reply"
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+    >
+      <input
+        value={value}
+        onChange={(event) => {
+          setValue(event.currentTarget.value);
+          if (failed) setFailed(false);
+        }}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            void send();
+          }
+        }}
+        disabled={sending}
+        aria-label={t("workspace.kanban.quickReply.label")}
+        aria-invalid={failed || undefined}
+        placeholder={
+          failed
+            ? t("workspace.kanban.quickReply.error")
+            : t("workspace.kanban.quickReply.placeholder")
+        }
+        className={cn(
+          "h-6 min-w-0 flex-1 rounded border bg-bg px-1.5 text-[11px] text-fg outline-none transition placeholder:text-fg-muted/60 focus:border-warning/60 focus:ring-1 focus:ring-warning/40",
+          failed
+            ? "border-danger/60 placeholder:text-danger/80"
+            : "border-border",
+        )}
+      />
+      <button
+        type="button"
+        onClick={() => void send()}
+        disabled={sending || value.trim().length === 0}
+        aria-label={t("workspace.kanban.quickReply.send")}
+        className="inline-flex h-6 shrink-0 items-center justify-center rounded border border-border bg-bg px-1.5 text-fg-muted transition hover:border-warning/50 hover:text-fg disabled:cursor-default disabled:opacity-45"
+      >
+        <CornerDownLeft size={11} />
+      </button>
+    </span>
+  );
+}
 
 function KanbanCardRenameInput({
   initial,
@@ -2536,6 +2906,21 @@ function statusLabel(t: Translator, status: SessionStatus): string {
       return t("sidebar.status.waiting_for_input");
     case "errored":
       return t("sidebar.status.errored");
+  }
+}
+
+function stageLabel(t: Translator, stage: KanbanLifecycleStage): string {
+  switch (stage) {
+    case "idle":
+      return t("workspace.kanban.stage.idle");
+    case "working":
+      return t("workspace.kanban.stage.working");
+    case "waiting":
+      return t("workspace.kanban.stage.waiting");
+    case "review":
+      return t("workspace.kanban.stage.review");
+    case "done":
+      return t("workspace.kanban.stage.done");
   }
 }
 
