@@ -1008,12 +1008,6 @@
         "stalled": "Stalled",
         "dwellTitle": "In this column for {duration}",
         "openPullRequest": "Open pull request #{number}"
-      },
-      "quickReply": {
-        "label": "Quick reply",
-        "placeholder": "Reply and press Enter…",
-        "send": "Send reply",
-        "error": "Send failed — try again"
       }
     }
   },
