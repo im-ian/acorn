@@ -360,12 +360,20 @@ test.describe("workspace kanban mode", () => {
     await expect(
       brokenCard.getByTestId("workspace-kanban-card-last-message"),
     ).toContainText("Updated from status polling.");
+    await expect(
+      brokenCard.getByTestId("workspace-kanban-card-user-message"),
+    ).toContainText("Please check the failed tests.");
+    await expect(
+      brokenCard.getByTestId("workspace-kanban-card-agent-message"),
+    ).toContainText("Updated from status polling.");
     await brokenCard.hover();
     const cardTooltip = page.getByRole("tooltip");
     await expect(cardTooltip).toBeVisible();
     await expect(cardTooltip).toContainText("Title");
     await expect(cardTooltip).toContainText("broken");
-    await expect(cardTooltip).toContainText("Last message");
+    await expect(cardTooltip).toContainText("Last user message");
+    await expect(cardTooltip).toContainText("Please check the failed tests.");
+    await expect(cardTooltip).toContainText("Last agent message");
     await expect(cardTooltip).toContainText("Updated from status polling.");
     await expect(cardTooltip).toContainText("Branch");
     await expect(cardTooltip).toContainText("feat/broken");
