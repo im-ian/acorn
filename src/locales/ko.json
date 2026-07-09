@@ -938,8 +938,14 @@
         "nameAsc": "이름"
       },
       "openSession": "{name} 열기",
+      "preview": {
+        "user": "사용자",
+        "agent": "에이전트"
+      },
       "tooltip": {
         "title": "제목",
+        "lastUserMessage": "마지막 사용자 메시지",
+        "lastAgentMessage": "마지막 에이전트 메시지",
         "lastMessage": "마지막 메시지",
         "noLastMessage": "마지막 메시지 없음",
         "branch": "브랜치",
