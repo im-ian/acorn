@@ -2732,6 +2732,7 @@ function SessionRow({
       normalizeWorkspacePath(currentWorkspaceCwd);
   const currentPullRequest = useCurrentPullRequest(session);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
+  const transcriptPath = session.agent_transcript_path?.trim() || null;
   const metadataText = composeSessionMetadata(
     t,
     session,
@@ -3005,6 +3006,15 @@ function SessionRow({
           icon: <Copy size={12} />,
           onClick: () => void copyToClipboard(session.worktree_path),
         },
+        ...(transcriptPath
+          ? [
+              {
+                label: sidebarText(t, "sidebar.actions.transcriptPath"),
+                icon: <Copy size={12} />,
+                onClick: () => void copyToClipboard(transcriptPath),
+              } satisfies ContextMenuItem,
+            ]
+          : []),
         {
           label: sidebarText(t, "sidebar.actions.worktreeName"),
           icon: <Copy size={12} />,
@@ -4288,6 +4298,7 @@ function LocalSessionRow({
     onSelect();
   }
 
+  const transcriptPath = session.agent_transcript_path?.trim() || null;
   const menuItems: ContextMenuItem[] = [
     {
       label: sidebarText(t, "sidebar.actions.rename"),
@@ -4326,6 +4337,15 @@ function LocalSessionRow({
       icon: <Copy size={12} />,
       onClick: () => void copyToClipboard(session.worktree_path),
     },
+    ...(transcriptPath
+      ? [
+          {
+            label: sidebarText(t, "sidebar.actions.copyTranscriptPath"),
+            icon: <Copy size={12} />,
+            onClick: () => void copyToClipboard(transcriptPath),
+          } satisfies ContextMenuItem,
+        ]
+      : []),
     { type: "separator" },
     {
       label: sidebarText(t, "sidebar.actions.removeSessionMenu"),
