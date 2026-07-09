@@ -1639,6 +1639,73 @@ mod tests {
     }
 
     #[test]
+    fn codex_history_infers_roles_from_event_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let id = "019e4818-7c15-7e60-9b3b-898a1c7803d6";
+        let transcript = dir
+            .path()
+            .join(format!("rollout-2026-06-09T00-00-00-{id}.jsonl"));
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "timestamp": "t",
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "id": id,
+                    "cwd": repo.display().to_string(),
+                    "message": "Review transcript parsing",
+                },
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "timestamp": "t",
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "phase": "final_answer",
+                    "message": "Parsed provider events.",
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let scope_repo = normalize_path(&repo);
+        let item = parse_codex_file(&transcript, HistoryScope::Project(&scope_repo)).unwrap();
+        assert_eq!(item.id, id);
+        assert_eq!(item.title, "Review transcript parsing");
+        assert_eq!(item.preview.as_deref(), Some("Parsed provider events."));
+
+        let summary =
+            summarize_agent_transcript(AgentHistoryProvider::Codex, id.to_string(), &transcript)
+                .unwrap();
+        assert_eq!(summary.message_count, 2);
+        assert_eq!(summary.user_messages, 1);
+        assert_eq!(summary.assistant_messages, 1);
+        assert_eq!(summary.complete_turns, 1);
+        assert_eq!(
+            summary
+                .recent_messages
+                .iter()
+                .map(|message| (message.role.as_str(), message.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("user", "Review transcript parsing"),
+                ("assistant", "Parsed provider events."),
+            ]
+        );
+    }
+
+    #[test]
     fn codex_history_skips_marked_acorn_title_generation_prompt() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
