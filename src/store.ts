@@ -1829,6 +1829,14 @@ export const useAppStore = create<AppStateModel>()(
                 )
                   ? (update.status_reason ?? null)
                   : (sess.status_reason ?? null);
+                const nextStatusStartedAt = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "status_started_at",
+                )
+                  ? (update.status_started_at ?? null)
+                  : nextStatus !== sess.status
+                    ? new Date().toISOString()
+                    : (sess.status_started_at ?? null);
                 const nextBranch = update.branch ?? sess.branch;
                 const nextLastMessage = Object.prototype.hasOwnProperty.call(
                   update,
@@ -1887,6 +1895,7 @@ export const useAppStore = create<AppStateModel>()(
                 if (
                   nextStatus !== sess.status ||
                   nextStatusReason !== (sess.status_reason ?? null) ||
+                  nextStatusStartedAt !== (sess.status_started_at ?? null) ||
                   nextBranch !== sess.branch ||
                   nextLastMessage !== sess.last_message ||
                   nextLastUserMessage !== (sess.last_user_message ?? null) ||
@@ -1907,6 +1916,7 @@ export const useAppStore = create<AppStateModel>()(
                     ...sess,
                     status: nextStatus,
                     status_reason: nextStatusReason,
+                    status_started_at: nextStatusStartedAt,
                     branch: nextBranch,
                     last_message: nextLastMessage,
                     last_user_message: nextLastUserMessage,

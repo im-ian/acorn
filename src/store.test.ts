@@ -2522,6 +2522,72 @@ describe("pollSessionStatuses", () => {
     );
   });
 
+  it("records when a polled session status starts", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T12:34:56.000Z"));
+      await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+      mockApi.detectSessionStatuses.mockResolvedValueOnce([
+        {
+          id: "a1",
+          status: "waiting_for_input",
+          branch: null,
+        },
+      ]);
+
+      await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+      expect(useAppStore.getState().sessions[0]?.status_started_at).toBe(
+        "2026-01-01T12:34:56.000Z",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves status start time while the polled status is unchanged", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          status: "working",
+          status_started_at: "2026-01-01T00:00:00.000Z",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "working",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.status_started_at).toBe(
+      "2026-01-01T00:00:00.000Z",
+    );
+  });
+
+  it("uses backend status start time when status polling provides one", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "working",
+        status_started_at: "2026-01-01T01:02:03.000Z",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.status_started_at).toBe(
+      "2026-01-01T01:02:03.000Z",
+    );
+  });
+
   it("clears the live agent provider when status polling reports null", async () => {
     await seed(
       [project(REPO_A, 0)],

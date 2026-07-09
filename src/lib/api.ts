@@ -640,6 +640,7 @@ export const api = {
       id: string;
       status: SessionStatus;
       status_reason?: SessionStatusReason | null;
+      status_started_at?: string | null;
       last_message?: string | null;
       last_user_message?: string | null;
       last_agent_message?: string | null;
@@ -657,6 +658,7 @@ export const api = {
         id: string;
         status: SessionStatus;
         status_reason?: SessionStatusReason | null;
+        status_started_at?: string | null;
         last_message?: string | null;
         last_user_message?: string | null;
         last_agent_message?: string | null;

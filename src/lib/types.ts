@@ -125,6 +125,8 @@ export interface Session {
   status: SessionStatus;
   /** Ephemeral status-poll detail. Not persisted in backend sessions. */
   status_reason?: SessionStatusReason | null;
+  /** Ephemeral time when the current status started. */
+  status_started_at?: string | null;
   created_at: string;
   updated_at: string;
   last_message: string | null;
