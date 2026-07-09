@@ -1950,6 +1950,7 @@
     "groups": {
       "sessions": "Sessions",
       "switchSession": "Switch session",
+      "activity": "Unread activity",
       "view": "View",
       "terminal": "Terminal",
       "ipc": "IPC",
@@ -1980,6 +1981,13 @@
       "shellEnvReloadFailed": "Failed to reload shell environment.",
       "ipcRestarted": "IPC server restarted.",
       "ipcRestartFailedPrefix": "Failed to restart IPC server:"
+    },
+    "activity": {
+      "kind": {
+        "waitingForInput": "Waiting for input",
+        "errored": "Error",
+        "becameReady": "Ready"
+      }
     }
   },
   "backgroundSessions": {

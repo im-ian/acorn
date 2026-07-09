@@ -1,7 +1,10 @@
 import { useMemo } from "react";
 import { Command, useCommandState } from "cmdk";
 import {
+  AlertCircle,
+  Bell,
   Bot,
+  CheckCircle2,
   Columns3,
   FolderOpen,
   FolderPlus,
@@ -32,6 +35,7 @@ import {
 import { suggestDefaultSessionName } from "../lib/sessionName";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
+import type { SessionNotificationKind } from "../lib/types";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -53,8 +57,35 @@ function workspaceModeLabel(t: Translator, mode: WorkspaceViewMode): string {
     : t("workspace.mode.panes");
 }
 
+const ACTIVITY_KIND_KEYS: Record<
+  SessionNotificationKind,
+  CommandPaletteTranslationKey
+> = {
+  waiting_for_input: "commandPalette.activity.kind.waitingForInput",
+  errored: "commandPalette.activity.kind.errored",
+  became_ready: "commandPalette.activity.kind.becameReady",
+};
+
+function activityKindLabel(
+  t: Translator,
+  kind: SessionNotificationKind,
+): string {
+  return cpt(t, ACTIVITY_KIND_KEYS[kind]);
+}
+
+function ActivityKindIcon({ kind }: { kind: SessionNotificationKind }) {
+  if (kind === "errored") {
+    return <AlertCircle size={14} className="text-danger" />;
+  }
+  if (kind === "became_ready") {
+    return <CheckCircle2 size={14} className="text-fg-muted" />;
+  }
+  return <Bell size={14} className="text-warning" />;
+}
+
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const sessions = useAppStore((s) => s.sessions);
+  const notifications = useAppStore((s) => s.sessionNotifications);
   const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const t = useTranslation();
   const nextWorkspaceViewMode: WorkspaceViewMode =
@@ -65,6 +96,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // Derived once per render — sessions array identity is stable from zustand
   // until the underlying list actually changes.
   const sessionItems = useMemo(() => sessions, [sessions]);
+  const unreadNotifications = useMemo(
+    () => notifications.filter((notification) => !notification.readAt),
+    [notifications],
+  );
 
   function close() {
     onOpenChange(false);
@@ -175,6 +210,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   function handleSelectSession(id: string) {
     useAppStore.getState().selectSession(id);
+    close();
+  }
+
+  function handleOpenActivity(notificationId: string, sessionId: string) {
+    const state = useAppStore.getState();
+    state.markSessionNotificationRead(notificationId);
+    state.selectSession(sessionId);
+    if (state.workspaceViewMode === "kanban") {
+      state.openTerminalPopup(sessionId);
+    }
     close();
   }
 
@@ -361,6 +406,39 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 </span>
                 <span className="ml-auto truncate text-xs text-fg-muted/80">
                   {session.branch}
+                </span>
+              </Command.Item>
+            ))}
+          </Command.Group>
+        ) : null}
+
+        {unreadNotifications.length > 0 ? (
+          <Command.Group heading={cpt(t, "commandPalette.groups.activity")}>
+            {unreadNotifications.map((notification) => (
+              <Command.Item
+                key={`activity-${notification.id}`}
+                value={`activity ${notification.projectName} ${notification.sessionName} ${notification.kind}`}
+                onSelect={() =>
+                  handleOpenActivity(notification.id, notification.sessionId)
+                }
+                keywords={[
+                  notification.projectName,
+                  notification.sessionName,
+                  notification.repoPath,
+                  notification.kind,
+                  activityKindLabel(t, notification.kind),
+                  "unread",
+                  "activity",
+                  "notification",
+                ]}
+              >
+                <ActivityKindIcon kind={notification.kind} />
+                <span className="truncate">
+                  {activityKindLabel(t, notification.kind)} ·{" "}
+                  {notification.sessionName}
+                </span>
+                <span className="ml-auto truncate text-xs text-fg-muted/80">
+                  {notification.projectName}
                 </span>
               </Command.Item>
             ))}

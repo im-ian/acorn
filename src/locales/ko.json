@@ -1950,6 +1950,7 @@
     "groups": {
       "sessions": "세션",
       "switchSession": "세션 전환",
+      "activity": "새 활동",
       "view": "보기",
       "terminal": "터미널",
       "ipc": "IPC",
@@ -1980,6 +1981,13 @@
       "shellEnvReloadFailed": "셸 환경을 다시 불러오지 못했습니다.",
       "ipcRestarted": "IPC 서버를 다시 시작했습니다.",
       "ipcRestartFailedPrefix": "IPC 서버를 다시 시작하지 못했습니다:"
+    },
+    "activity": {
+      "kind": {
+        "waitingForInput": "입력 대기",
+        "errored": "오류",
+        "becameReady": "준비됨"
+      }
     }
   },
   "backgroundSessions": {
