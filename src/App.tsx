@@ -244,10 +244,7 @@ function updateUiScalePercent(delta: number) {
 }
 
 function focusPaneTerminal(paneId: string) {
-  const escaped =
-    typeof CSS !== "undefined" && typeof CSS.escape === "function"
-      ? CSS.escape(paneId)
-      : paneId.replace(/(["\\\]\[])/g, "\\$1");
+  const escaped = cssAttributeEscape(paneId);
   const pane = document.querySelector(
     `[data-pane-body="${escaped}"]`,
   ) as HTMLElement | null;
@@ -255,6 +252,28 @@ function focusPaneTerminal(paneId: string) {
     (pane?.querySelector(".xterm-helper-textarea") as HTMLElement | null) ??
     (pane?.querySelector(FOCUSABLE_SELECTOR) as HTMLElement | null);
   target?.focus();
+}
+
+function focusKanbanSessionCard(sessionId: string) {
+  const card = document.querySelector(
+    `[data-kanban-session-id="${cssAttributeEscape(sessionId)}"]`,
+  ) as HTMLElement | null;
+  card?.focus();
+}
+
+function closeTerminalPopoverFromHotkey(): boolean {
+  const state = useAppStore.getState();
+  const sessionId = state.terminalPopupSessionId;
+  if (!sessionId) return false;
+  state.closeTerminalPopup();
+  requestAnimationFrame(() => focusKanbanSessionCard(sessionId));
+  return true;
+}
+
+function cssAttributeEscape(value: string): string {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function"
+    ? CSS.escape(value)
+    : value.replace(/(["\\\]\[])/g, "\\$1");
 }
 
 function dispatchFocusedTerminalConversationNav(
@@ -1651,6 +1670,7 @@ function App() {
       },
       [shortcuts.closeTab]: (e: KeyboardEvent) => {
         e.preventDefault();
+        if (closeTerminalPopoverFromHotkey()) return;
         useAppStore.getState().closeFocusedTab();
       },
       [shortcuts.nextTab]: (e: KeyboardEvent) => {
