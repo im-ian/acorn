@@ -955,6 +955,8 @@
         "ariaLabel": "Session terminal",
         "expand": "Expand terminal",
         "restore": "Restore terminal size",
+        "resetPosition": "Reset terminal position",
+        "resetSize": "Reset terminal size",
         "resize": "Resize terminal"
       },
       "popover": {

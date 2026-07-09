@@ -261,6 +261,7 @@ function ContextMenuPanel({
         else if (outerPanelRef) outerPanelRef.current = node;
       }}
       role="menu"
+      data-acorn-context-menu
       style={{
         position: "fixed",
         left: position.left,
