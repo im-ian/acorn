@@ -29,6 +29,7 @@ import {
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
 import { cn } from "../lib/cn";
+import { createInFlightCoalescer } from "../lib/inFlightCoalescer";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
@@ -122,6 +123,10 @@ interface MemorySnapshot {
   processes: MemoryProcess[];
 }
 
+const getCoalescedMemoryUsage = createInFlightCoalescer(() =>
+  api.getMemoryUsage(),
+);
+
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -147,7 +152,7 @@ function useMemoryUsage(
     let cancelled = false;
     const tick = async () => {
       try {
-        const usage = await api.getMemoryUsage();
+        const usage = await getCoalescedMemoryUsage();
         if (!cancelled) {
           setSnapshot({ bytes: usage.bytes, processes: usage.processes });
         }

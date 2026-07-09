@@ -151,10 +151,19 @@ export function WorkSummaryView({
 
     const transcriptId = session.agent_transcript_id;
     if (transcriptId) {
+      const pairedLocation =
+        session.agent_transcript_provider && session.agent_transcript_path
+          ? {
+              provider: session.agent_transcript_provider,
+              id: transcriptId,
+              transcriptPath: session.agent_transcript_path,
+            }
+          : null;
       const transcript = await fetchAgentTranscriptSummary(
         tab.repoPath,
         transcriptId,
         transcriptLocationRef,
+        pairedLocation,
       );
       return {
         chat: transcript ? chatMetricsFromTranscript(transcript) : null,
@@ -164,6 +173,8 @@ export function WorkSummaryView({
 
     return { chat: null, tokens: null };
   }, [
+    session?.agent_transcript_path,
+    session?.agent_transcript_provider,
     session?.agent_transcript_id,
     session?.id,
     session?.mode,
@@ -697,8 +708,10 @@ async function fetchAgentTranscriptSummary(
   repoPath: string,
   transcriptId: string,
   locationRef: { current: AgentTranscriptLocation | null },
+  initialLocation: AgentTranscriptLocation | null = null,
 ): Promise<AgentTranscriptSummary | null> {
-  const cached = locationRef.current;
+  const cached =
+    initialLocation?.id === transcriptId ? initialLocation : locationRef.current;
   let transcript: AgentTranscriptSummary | null = null;
 
   if (cached?.id === transcriptId) {

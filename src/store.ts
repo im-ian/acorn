@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { api, type AiExecutionRequest, type WorktreeRemoval } from "./lib/api";
 import type {
+  AgentTranscriptSummary,
   Project,
   Session,
   SessionAgentProvider,
@@ -238,7 +239,20 @@ async function loadWorkSummaryTokenBaseline(
       };
     }
     if (!session.agent_transcript_id) return undefined;
-    const transcript = await api.agentTranscriptSummary(
+    let transcript: AgentTranscriptSummary | null = null;
+    if (session.agent_transcript_provider && session.agent_transcript_path) {
+      try {
+        transcript = await api.agentTranscriptSummaryAtPath(
+          session.repo_path,
+          session.agent_transcript_provider,
+          session.agent_transcript_id,
+          session.agent_transcript_path,
+        );
+      } catch {
+        transcript = null;
+      }
+    }
+    transcript ??= await api.agentTranscriptSummary(
       session.repo_path,
       session.agent_transcript_id,
     );
@@ -1809,6 +1823,7 @@ export const useAppStore = create<AppStateModel>()(
           try {
             const updates = await api.detectSessionStatuses(idsToPoll);
             const map = new Map(updates.map((u) => [u.id, u]));
+            const pollObservedAt = new Date().toISOString();
             set((s) => {
               let changed = false;
               const nextSessions = s.sessions.map((sess) => {
@@ -1821,6 +1836,16 @@ export const useAppStore = create<AppStateModel>()(
                 )
                   ? (update.status_reason ?? null)
                   : (sess.status_reason ?? null);
+                const nextStatusStartedAt = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "status_started_at",
+                )
+                  ? (update.status_started_at ?? null)
+                  : nextStatus !== sess.status
+                    ? pollObservedAt
+                    : nextStatus !== "ready" && !sess.status_started_at
+                      ? pollObservedAt
+                      : (sess.status_started_at ?? null);
                 const nextBranch = update.branch ?? sess.branch;
                 const nextLastMessage = Object.prototype.hasOwnProperty.call(
                   update,
@@ -1844,12 +1869,26 @@ export const useAppStore = create<AppStateModel>()(
                   Object.prototype.hasOwnProperty.call(update, "agent_provider")
                     ? (update.agent_provider ?? null)
                     : (sess.agent_provider ?? null);
+                const nextAgentTranscriptProvider =
+                  Object.prototype.hasOwnProperty.call(
+                    update,
+                    "agent_transcript_provider",
+                  )
+                    ? (update.agent_transcript_provider ?? null)
+                    : (sess.agent_transcript_provider ?? null);
                 const nextAgentTranscriptId = Object.prototype.hasOwnProperty.call(
                   update,
                   "agent_transcript_id",
                 )
                   ? (update.agent_transcript_id ?? null)
                   : (sess.agent_transcript_id ?? null);
+                const nextAgentTranscriptPath =
+                  Object.prototype.hasOwnProperty.call(
+                    update,
+                    "agent_transcript_path",
+                  )
+                    ? (update.agent_transcript_path ?? null)
+                    : (sess.agent_transcript_path ?? null);
                 const currentActiveProcesses = sess.active_processes ?? [];
                 const nextActiveProcesses = Object.prototype.hasOwnProperty.call(
                   update,
@@ -1872,12 +1911,17 @@ export const useAppStore = create<AppStateModel>()(
                 if (
                   nextStatus !== sess.status ||
                   nextStatusReason !== (sess.status_reason ?? null) ||
+                  nextStatusStartedAt !== (sess.status_started_at ?? null) ||
                   nextBranch !== sess.branch ||
                   nextLastMessage !== sess.last_message ||
                   nextLastUserMessage !== (sess.last_user_message ?? null) ||
                   nextLastAgentMessage !== (sess.last_agent_message ?? null) ||
                   nextAgentProvider !== (sess.agent_provider ?? null) ||
+                  nextAgentTranscriptProvider !==
+                    (sess.agent_transcript_provider ?? null) ||
                   nextAgentTranscriptId !== (sess.agent_transcript_id ?? null) ||
+                  nextAgentTranscriptPath !==
+                    (sess.agent_transcript_path ?? null) ||
                   !sessionProcessSummariesEqual(
                     nextActiveProcesses,
                     currentActiveProcesses,
@@ -1890,12 +1934,15 @@ export const useAppStore = create<AppStateModel>()(
                     ...sess,
                     status: nextStatus,
                     status_reason: nextStatusReason,
+                    status_started_at: nextStatusStartedAt,
                     branch: nextBranch,
                     last_message: nextLastMessage,
                     last_user_message: nextLastUserMessage,
                     last_agent_message: nextLastAgentMessage,
                     agent_provider: nextAgentProvider,
+                    agent_transcript_provider: nextAgentTranscriptProvider,
                     agent_transcript_id: nextAgentTranscriptId,
+                    agent_transcript_path: nextAgentTranscriptPath,
                     active_processes: nextActiveProcesses,
                     git_context_path: nextGitContextPath,
                     auto_title_enabled: nextAutoTitleEnabled,

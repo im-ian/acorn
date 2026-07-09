@@ -4892,7 +4892,9 @@ pub struct SessionStatusEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_agent_message: Option<String>,
     pub agent_provider: Option<SessionAgentProvider>,
+    pub agent_transcript_provider: Option<SessionAgentProvider>,
     pub agent_transcript_id: Option<String>,
+    pub agent_transcript_path: Option<String>,
     pub active_processes: Vec<SessionProcessSummary>,
     /// Current branch read live from the session's worktree on each poll.
     /// `None` when the worktree has no readable HEAD (e.g. detached, or
@@ -5116,9 +5118,11 @@ fn detect_session_statuses_blocking(
                         .as_ref()
                         .and_then(|p| p.last_agent_message.clone()),
                     agent_provider: session.as_ref().and_then(|s| s.agent_provider),
+                    agent_transcript_provider: None,
                     agent_transcript_id: session
                         .as_ref()
                         .and_then(|s| s.agent_transcript_id.clone()),
+                    agent_transcript_path: None,
                     active_processes: Vec::new(),
                     branch,
                     git_context_path,
@@ -5195,6 +5199,10 @@ fn detect_session_statuses_blocking(
             let conversation_preview = transcript.as_ref().and_then(|(path, kind)| {
                 agent_resume::extract_conversation_preview(*kind, path).ok()
             });
+            let agent_transcript_path = transcript
+                .as_ref()
+                .map(|(path, _)| path.to_string_lossy().into_owned());
+            let agent_transcript_provider = transcript.as_ref().map(|(_, kind)| *kind);
             let transcript_preview = conversation_preview
                 .as_ref()
                 .and_then(|p| p.last_agent_message.clone());
@@ -5312,7 +5320,9 @@ fn detect_session_statuses_blocking(
                     .as_ref()
                     .and_then(|p| p.last_agent_message.clone()),
                 agent_provider,
+                agent_transcript_provider,
                 agent_transcript_id,
+                agent_transcript_path,
                 active_processes,
                 branch,
                 git_context_path,
