@@ -810,20 +810,53 @@ fn codex_provider_thread_cursor(state: &persistence::ChatSessionState) -> Option
 fn latest_codex_agent_message_from_transcript(path: &Path) -> io::Result<Option<String>> {
     let file = std::fs::File::open(path)?;
     let reader = io::BufReader::new(file);
-    let mut parser = ChatCliOutputParser::new(ChatCliOutputMode::CodexJson);
-    let mut ignore_chunk = ignore_chat_streaming_chunk;
+    let lines = reader.lines().collect::<io::Result<Vec<_>>>()?;
+    let mut latest_agent_message = None;
 
-    for line in reader.lines() {
-        parser.push_chunk(&line?, &mut ignore_chunk);
-        parser.push_chunk("\n", &mut ignore_chunk);
+    for line in lines.iter().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(event) = extract_codex_stream_text(&value) {
+            let text = event.text.trim();
+            if event.is_final {
+                return Ok(if text.is_empty() {
+                    None
+                } else {
+                    Some(text.to_string())
+                });
+            }
+            if latest_agent_message.is_none()
+                && event.boundary != ChatStreamTextBoundary::Delta
+                && !text.is_empty()
+            {
+                latest_agent_message = Some(text.to_string());
+            }
+        }
+        if is_codex_user_message_event(&value) {
+            return Ok(latest_agent_message);
+        }
     }
 
-    let content = parser.finish("");
-    if content.trim().is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(content))
-    }
+    Ok(latest_agent_message)
+}
+
+fn is_codex_user_message_event(value: &serde_json::Value) -> bool {
+    codex_event_type(value) == Some("user_message")
+        || value
+            .get("msg")
+            .is_some_and(|event| codex_event_type(event) == Some("user_message"))
+        || value
+            .get("payload")
+            .is_some_and(|event| codex_event_type(event) == Some("user_message"))
+}
+
+fn codex_event_type(value: &serde_json::Value) -> Option<&str> {
+    value.get("type").and_then(serde_json::Value::as_str)
 }
 
 fn backfill_latest_empty_codex_assistant_message_from_path(
@@ -6991,6 +7024,35 @@ mod tests {
             state.messages.last().unwrap().content,
             "안녕하세요. 무엇을 도와드릴까요?"
         );
+    }
+
+    #[test]
+    fn backfill_empty_codex_assistant_message_stops_at_latest_user_boundary() {
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "다시 봐줘"),
+            chat_message("a1", crate::persistence::ChatRole::Assistant, ""),
+        ]);
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("rollout.jsonl");
+        std::fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"이전 답변"}}"#,
+                "\n",
+                r#"{"type":"event_msg","payload":{"type":"user_message","message":"다시 봐줘"}}"#,
+                "\n",
+                r#"{"type":"event_msg","payload":{"type":"token_count","info":{}}}"#,
+            ),
+        )
+        .unwrap();
+
+        assert!(
+            !super::backfill_latest_empty_codex_assistant_message_from_path(
+                &mut state,
+                &transcript
+            )
+        );
+        assert_eq!(state.messages.last().unwrap().content, "");
     }
 
     #[test]
