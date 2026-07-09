@@ -1276,6 +1276,9 @@
       "status": "Status",
       "mode": "Mode",
       "transcript": "Transcript",
+      "transcriptProvider": "Transcript provider",
+      "transcriptPath": "Transcript path",
+      "copyTranscriptPath": "Copy transcript path",
       "updated": "Updated"
     },
     "files": {
