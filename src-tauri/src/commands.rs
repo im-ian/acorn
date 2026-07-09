@@ -812,6 +812,7 @@ fn latest_codex_agent_message_from_transcript(path: &Path) -> io::Result<Option<
     let reader = io::BufReader::new(file);
     let lines = reader.lines().collect::<io::Result<Vec<_>>>()?;
     let mut latest_agent_message = None;
+    let mut saw_empty_final = false;
 
     for line in lines.iter().rev() {
         let line = line.trim();
@@ -824,11 +825,14 @@ fn latest_codex_agent_message_from_transcript(path: &Path) -> io::Result<Option<
         if let Some(event) = extract_codex_stream_text(&value) {
             let text = event.text.trim();
             if event.is_final {
-                return Ok(if text.is_empty() {
-                    None
-                } else {
-                    Some(text.to_string())
-                });
+                if text.is_empty() {
+                    saw_empty_final = true;
+                    continue;
+                }
+                if saw_empty_final {
+                    return Ok(latest_agent_message);
+                }
+                return Ok(Some(text.to_string()));
             }
             if latest_agent_message.is_none()
                 && event.boundary != ChatStreamTextBoundary::Delta
@@ -846,13 +850,31 @@ fn latest_codex_agent_message_from_transcript(path: &Path) -> io::Result<Option<
 }
 
 fn is_codex_user_message_event(value: &serde_json::Value) -> bool {
-    codex_event_type(value) == Some("user_message")
+    is_codex_user_message_event_value(value)
         || value
             .get("msg")
-            .is_some_and(|event| codex_event_type(event) == Some("user_message"))
+            .is_some_and(is_codex_user_message_event_value)
         || value
             .get("payload")
-            .is_some_and(|event| codex_event_type(event) == Some("user_message"))
+            .is_some_and(is_codex_user_message_event_value)
+}
+
+fn is_codex_user_message_event_value(value: &serde_json::Value) -> bool {
+    match codex_event_type(value) {
+        Some("user_message") => true,
+        Some("response_item") | Some("raw_response_item") => value
+            .get("payload")
+            .is_some_and(is_codex_user_response_payload),
+        _ => false,
+    }
+}
+
+fn is_codex_user_response_payload(value: &serde_json::Value) -> bool {
+    codex_event_type(value) == Some("message")
+        && value
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|role| role == "user")
 }
 
 fn codex_event_type(value: &serde_json::Value) -> Option<&str> {
@@ -7042,6 +7064,88 @@ mod tests {
                 r#"{"type":"event_msg","payload":{"type":"user_message","message":"다시 봐줘"}}"#,
                 "\n",
                 r#"{"type":"event_msg","payload":{"type":"token_count","info":{}}}"#,
+            ),
+        )
+        .unwrap();
+
+        assert!(
+            !super::backfill_latest_empty_codex_assistant_message_from_path(
+                &mut state,
+                &transcript
+            )
+        );
+        assert_eq!(state.messages.last().unwrap().content, "");
+    }
+
+    #[test]
+    fn backfill_empty_codex_assistant_message_stops_at_response_item_user_boundary() {
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "다시 봐줘"),
+            chat_message("a1", crate::persistence::ChatRole::Assistant, ""),
+        ]);
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("rollout.jsonl");
+        std::fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"이전 답변"}}"#,
+                "\n",
+                r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"다시 봐줘"}]}}"#,
+                "\n",
+                r#"{"type":"event_msg","payload":{"type":"token_count","info":{}}}"#
+            ),
+        )
+        .unwrap();
+
+        assert!(
+            !super::backfill_latest_empty_codex_assistant_message_from_path(
+                &mut state,
+                &transcript
+            )
+        );
+        assert_eq!(state.messages.last().unwrap().content, "");
+    }
+
+    #[test]
+    fn backfill_empty_codex_assistant_message_uses_agent_message_after_empty_final() {
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "다시 봐줘"),
+            chat_message("a1", crate::persistence::ChatRole::Assistant, ""),
+        ]);
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("rollout.jsonl");
+        std::fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"event_msg","payload":{"type":"user_message","message":"다시 봐줘"}}"#,
+                "\n",
+                r#"{"type":"event_msg","payload":{"type":"agent_message","message":"새 답변"}}"#,
+                "\n",
+                r#"{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"   "}}"#
+            ),
+        )
+        .unwrap();
+
+        assert!(
+            super::backfill_latest_empty_codex_assistant_message_from_path(&mut state, &transcript)
+        );
+        assert_eq!(state.messages.last().unwrap().content, "새 답변");
+    }
+
+    #[test]
+    fn backfill_empty_codex_assistant_message_ignores_previous_final_after_empty_final() {
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "다시 봐줘"),
+            chat_message("a1", crate::persistence::ChatRole::Assistant, ""),
+        ]);
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("rollout.jsonl");
+        std::fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"이전 답변"}}"#,
+                "\n",
+                r#"{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":""}}"#
             ),
         )
         .unwrap();
