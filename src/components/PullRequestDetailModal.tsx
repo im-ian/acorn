@@ -27,6 +27,7 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { emitPullRequestMutation } from "../lib/pullRequestEvents";
 import { useSettings } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
 import { ResizeHandle } from "./ResizeHandle";
@@ -259,6 +260,11 @@ export function PullRequestDetailModal({
     async (body: string) => {
       if (!open) return;
       await api.addPullRequestComment(open.repoPath, open.number, body);
+      emitPullRequestMutation({
+        kind: "commented",
+        repoPath: open.repoPath,
+        number: open.number,
+      });
       setCommentDraft("");
       handleMutated();
     },
@@ -274,6 +280,11 @@ export function PullRequestDetailModal({
         commentId,
         body,
       );
+      emitPullRequestMutation({
+        kind: "commented",
+        repoPath: open.repoPath,
+        number: open.number,
+      });
       handleMutated();
     },
     [open, listing, handleMutated],
@@ -283,6 +294,11 @@ export function PullRequestDetailModal({
     async (commentId: number) => {
       if (!open || listing?.kind !== "ok") return;
       await api.deleteGithubComment(open.repoPath, listing.account, commentId);
+      emitPullRequestMutation({
+        kind: "commented",
+        repoPath: open.repoPath,
+        number: open.number,
+      });
       handleMutated();
     },
     [open, listing, handleMutated],
@@ -323,6 +339,15 @@ export function PullRequestDetailModal({
         .updatePullRequestBody(open.repoPath, open.number, next)
         .then(() => {
           if (seq !== bodyWriteSeqRef.current) return;
+          emitPullRequestMutation({
+            kind: "edited",
+            repoPath: open.repoPath,
+            number: open.number,
+            headBranch: detail.head_branch,
+            baseBranch: detail.base_branch,
+            title: detail.title,
+            isDraft: detail.is_draft,
+          });
           setReloadKey((k) => k + 1);
         })
         .catch((e) => {

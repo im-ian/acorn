@@ -211,6 +211,60 @@ describe("rightPanelCache", () => {
     expect(rightPanelCache.getPullRequests(REPO, "open", 50)).toBeNull();
   });
 
+  it("invalidates PR listings and ignores stale in-flight PR requests for one repo", async () => {
+    const cached: PullRequestListing = {
+      kind: "ok",
+      items: [],
+      account: "tester",
+    };
+    const pending = deferred<PullRequestListing>();
+    mockApi.listPullRequests
+      .mockResolvedValueOnce(cached)
+      .mockReturnValueOnce(pending.promise);
+
+    await rightPanelCache.fetchPullRequests(REPO, "open", 50);
+    expect(rightPanelCache.getPullRequests(REPO, "open", 50)).toBe(cached);
+    const staleRequest = rightPanelCache.fetchPullRequests(REPO, "merged", 50);
+
+    rightPanelCache.invalidatePullRequests(REPO);
+
+    expect(rightPanelCache.getPullRequests(REPO, "open", 50)).toBeNull();
+    pending.resolve(cached);
+    await expect(staleRequest).resolves.toBe(cached);
+    expect(rightPanelCache.getPullRequests(REPO, "merged", 50)).toBeNull();
+  });
+
+  it("keeps a fresh PR in-flight request when a stale invalidated request settles", async () => {
+    const listing: PullRequestListing = {
+      kind: "ok",
+      items: [],
+      account: "tester",
+    };
+    const stale = deferred<PullRequestListing>();
+    const fresh = deferred<PullRequestListing>();
+    mockApi.listPullRequests
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(fresh.promise);
+
+    const staleRequest = rightPanelCache.fetchPullRequests(REPO, "open", 50);
+    rightPanelCache.invalidatePullRequests(REPO);
+    const freshRequest = rightPanelCache.fetchPullRequests(REPO, "open", 50);
+
+    expect(freshRequest).not.toBe(staleRequest);
+    expect(mockApi.listPullRequests).toHaveBeenCalledTimes(2);
+
+    stale.resolve(listing);
+    await staleRequest;
+
+    expect(rightPanelCache.fetchPullRequests(REPO, "open", 50)).toBe(
+      freshRequest,
+    );
+    expect(mockApi.listPullRequests).toHaveBeenCalledTimes(2);
+
+    fresh.resolve(listing);
+    await freshRequest;
+  });
+
   it("does not repopulate pruned issue data from a stale in-flight request", async () => {
     const listing: IssueListing = {
       kind: "ok",
