@@ -1115,6 +1115,10 @@ export interface ResumeCandidate {
   lastActivityUnix: number;
   /** Single-line preview of the last assistant text, truncated. */
   preview: string | null;
+  /** Single-line preview of the last user text, truncated. */
+  lastUserMessage: string | null;
+  /** Single-line preview of the last assistant text, truncated. */
+  lastAgentMessage: string | null;
 }
 
 export interface DaemonStatus {

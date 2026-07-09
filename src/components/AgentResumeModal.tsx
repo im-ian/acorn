@@ -76,6 +76,9 @@ export function AgentResumeModal({
     () => formatRelativeTime(candidate?.lastActivityUnix ?? 0, t),
     [candidate?.lastActivityUnix, t],
   );
+  const lastUserMessage = candidate?.lastUserMessage?.trim() || null;
+  const lastAgentMessage =
+    candidate?.lastAgentMessage?.trim() || candidate?.preview?.trim() || null;
 
   if (!candidate) return null;
 
@@ -149,10 +152,21 @@ export function AgentResumeModal({
       />
       <div className="space-y-3 px-4 py-4 text-xs">
         <p className="text-fg-muted">{dt(t, copy.bodyKey)}</p>
-        {candidate.preview ? (
-          <blockquote className="border-l-2 border-border-emphasis bg-bg-elevated/60 px-3 py-2 italic text-fg-muted">
-            “{candidate.preview}”
-          </blockquote>
+        {lastUserMessage || lastAgentMessage ? (
+          <div className="space-y-2 border-l-2 border-border-emphasis bg-bg-elevated/60 px-3 py-2 text-fg-muted">
+            {lastUserMessage ? (
+              <ConversationPreviewLine
+                label={dt(t, "dialogs.agentResume.lastUser")}
+                text={lastUserMessage}
+              />
+            ) : null}
+            {lastAgentMessage ? (
+              <ConversationPreviewLine
+                label={dt(t, "dialogs.agentResume.lastAgent")}
+                text={lastAgentMessage}
+              />
+            ) : null}
+          </div>
         ) : null}
         <CodeValue surface="elevated" tone="muted">
           {candidate.uuid}
@@ -181,6 +195,23 @@ export function AgentResumeModal({
         </Button>
       </ModalFooter>
     </Modal>
+  );
+}
+
+function ConversationPreviewLine({
+  label,
+  text,
+}: {
+  label: string;
+  text: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="text-[10px] font-medium uppercase text-fg-muted/70">
+        {label}
+      </div>
+      <div className="line-clamp-2 leading-4 text-fg-muted">{text}</div>
+    </div>
   );
 }
 
