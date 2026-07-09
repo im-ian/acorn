@@ -67,6 +67,8 @@ pub struct AgentHistoryItem {
     pub id: String,
     pub title: String,
     pub preview: Option<String>,
+    pub queued_message_count: u64,
+    pub subagent_transcript_count: u64,
     pub cwd: Option<String>,
     pub worktree: Option<AgentHistoryWorktree>,
     pub transcript_path: String,
@@ -563,6 +565,8 @@ fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistory
         preview: state
             .preview
             .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
+        queued_message_count: state.queued_message_count,
+        subagent_transcript_count: state.subagent_transcript_count,
         cwd: Some(cwd),
         worktree,
         transcript_path: path.display().to_string(),
@@ -573,6 +577,12 @@ fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistory
 fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
     let state = parse_agent_state(AgentKind::Claude, path)?;
     if state.internal_title_generation {
+        return None;
+    }
+    if state.conversation_message_count == 0
+        && state.queued_message_count == 0
+        && state.subagent_transcript_count == 0
+    {
         return None;
     }
     let cwd = state.cwd.clone()?;
@@ -598,6 +608,8 @@ fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistor
         preview: state
             .preview
             .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
+        queued_message_count: state.queued_message_count,
+        subagent_transcript_count: state.subagent_transcript_count,
         cwd: Some(cwd),
         worktree,
         transcript_path: path.display().to_string(),
@@ -640,6 +652,8 @@ fn parse_antigravity_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentH
         preview: state
             .preview
             .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
+        queued_message_count: state.queued_message_count,
+        subagent_transcript_count: state.subagent_transcript_count,
         cwd,
         worktree,
         transcript_path: path.display().to_string(),
@@ -1006,6 +1020,14 @@ fn parse_agent_state(kind: AgentKind, path: &Path) -> Option<ParsedAgentFile> {
         ..ParsedAgentFile::default()
     };
     for line in sample_lines(path).ok()? {
+        let value = if kind == AgentKind::Claude {
+            serde_json::from_str::<Value>(&line).ok()
+        } else {
+            None
+        };
+        if let Some(value) = value.as_ref() {
+            update_claude_recoverable_signals(&mut state, value);
+        }
         let Some(parsed) = parse_transcript_line(kind, line.trim()) else {
             continue;
         };
@@ -1017,6 +1039,7 @@ fn parse_agent_state(kind: AgentKind, path: &Path) -> Option<ParsedAgentFile> {
         }
         match parsed.state_role {
             TranscriptRole::User => {
+                state.conversation_message_count += 1;
                 if let Some(user_text) = parsed.state_text {
                     if looks_like_acorn_title_generation_prompt(&user_text) {
                         state.internal_title_generation = true;
@@ -1027,6 +1050,7 @@ fn parse_agent_state(kind: AgentKind, path: &Path) -> Option<ParsedAgentFile> {
                 }
             }
             TranscriptRole::Assistant => {
+                state.conversation_message_count += 1;
                 if let Some(text) = parsed.state_text {
                     state.preview = Some(text);
                 }
@@ -1037,8 +1061,75 @@ fn parse_agent_state(kind: AgentKind, path: &Path) -> Option<ParsedAgentFile> {
             state.preview = parsed.response_text;
         }
     }
+    if kind == AgentKind::Claude && state.conversation_message_count == 0 {
+        state.subagent_transcript_count = count_claude_subagent_transcripts(path);
+    }
 
     Some(state)
+}
+
+fn update_claude_recoverable_signals(state: &mut ParsedAgentFile, value: &Value) {
+    if value.get("type").and_then(Value::as_str) != Some("queue-operation") {
+        return;
+    }
+    if state.id.is_none() {
+        state.id = first_nonempty_string(value, &["sessionId", "session_id"]);
+    }
+    if state.cwd.is_none() {
+        state.cwd = first_nonempty_string(value, &["cwd"]);
+    }
+    match value.get("operation").and_then(Value::as_str) {
+        Some("enqueue") => {
+            if value.get("content").is_some_and(has_recoverable_json_text) {
+                state.queued_message_count += 1;
+            }
+        }
+        Some("remove") | Some("dequeue") => {
+            state.queued_message_count = state.queued_message_count.saturating_sub(1);
+        }
+        _ => {}
+    }
+}
+
+fn first_nonempty_string(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .filter_map(|key| value.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn has_recoverable_json_text(value: &Value) -> bool {
+    match value {
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(items) => items.iter().any(has_recoverable_json_text),
+        Value::Object(map) => ["text", "content", "message", "prompt"]
+            .iter()
+            .filter_map(|key| map.get(*key))
+            .any(has_recoverable_json_text),
+        _ => false,
+    }
+}
+
+fn count_claude_subagent_transcripts(path: &Path) -> u64 {
+    let Some(dir) = claude_subagent_transcripts_dir(path) else {
+        return 0;
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry.file_type().map(|ty| ty.is_file()).unwrap_or(false)
+                && entry.path().extension().and_then(|s| s.to_str()) == Some("jsonl")
+        })
+        .count() as u64
+}
+
+fn claude_subagent_transcripts_dir(path: &Path) -> Option<PathBuf> {
+    let stem = path.file_stem()?.to_str()?;
+    Some(path.parent()?.join(stem).join("subagents"))
 }
 
 struct TitleContextEntry {
@@ -1142,6 +1233,9 @@ struct ParsedAgentFile {
     title: Option<String>,
     preview: Option<String>,
     cwd: Option<String>,
+    conversation_message_count: u64,
+    queued_message_count: u64,
+    subagent_transcript_count: u64,
     internal_title_generation: bool,
 }
 
@@ -2053,6 +2147,129 @@ mod tests {
     }
 
     #[test]
+    fn claude_history_surfaces_recoverable_empty_signals() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let repo = normalize_path(&repo);
+        let id = "019e4818-7c15-7e60-9b3b-898a1c7803d6";
+        let transcript = dir.path().join(format!("{id}.jsonl"));
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "sessionId": id,
+                "cwd": repo.display().to_string(),
+                "content": "Ask a subagent to inspect failing tests",
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "sessionId": id,
+                "cwd": repo.display().to_string(),
+                "content": "   ",
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let subagents = dir.path().join(id).join("subagents");
+        fs::create_dir_all(&subagents).unwrap();
+        fs::write(subagents.join("child.jsonl"), "{}\n").unwrap();
+        fs::write(subagents.join("child.meta.json"), "{}\n").unwrap();
+
+        let item = parse_claude_file(&transcript, HistoryScope::Project(&repo)).unwrap();
+
+        assert_eq!(item.id, id);
+        assert_eq!(item.title, "Claude session");
+        assert_eq!(item.preview, None);
+        assert_eq!(item.queued_message_count, 1);
+        assert_eq!(item.subagent_transcript_count, 1);
+        assert_eq!(item.cwd.as_deref(), Some(repo.to_str().unwrap()));
+    }
+
+    #[test]
+    fn claude_history_skips_empty_queue_after_dequeue() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let repo = normalize_path(&repo);
+        let id = "019e4818-7c15-7e60-9b3b-898a1c7803d6";
+        let transcript = dir.path().join(format!("{id}.jsonl"));
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "sessionId": id,
+                "cwd": repo.display().to_string(),
+                "content": { "text": "Draft a follow-up" },
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "queue-operation",
+                "operation": "dequeue",
+                "sessionId": id,
+                "cwd": repo.display().to_string(),
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        assert!(parse_claude_file(&transcript, HistoryScope::Project(&repo)).is_none());
+    }
+
+    #[test]
+    fn claude_history_does_not_count_subagents_for_conversation_transcripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let repo = normalize_path(&repo);
+        let id = "019e4818-7c15-7e60-9b3b-898a1c7803d6";
+        let transcript = dir.path().join(format!("{id}.jsonl"));
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "user",
+                "sessionId": id,
+                "cwd": repo.display().to_string(),
+                "message": {
+                    "role": "user",
+                    "content": "Summarize this project",
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let subagents = dir.path().join(id).join("subagents");
+        fs::create_dir_all(&subagents).unwrap();
+        fs::write(subagents.join("child.jsonl"), "{}\n").unwrap();
+
+        let item = parse_claude_file(&transcript, HistoryScope::Project(&repo)).unwrap();
+
+        assert_eq!(item.title, "Summarize this project");
+        assert_eq!(item.queued_message_count, 0);
+        assert_eq!(item.subagent_transcript_count, 0);
+    }
+
+    #[test]
     fn transcript_first_user_message_preserves_first_request_structure() {
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir
@@ -2347,6 +2564,8 @@ mod tests {
             id: "019e4818-7c15-7e60-9b3b-898a1c7803d6".to_string(),
             title: "Do it".to_string(),
             preview: Some("Done".to_string()),
+            queued_message_count: 0,
+            subagent_transcript_count: 0,
             cwd: Some("/tmp/demo".to_string()),
             worktree: None,
             transcript_path: transcript.display().to_string(),
@@ -2474,6 +2693,8 @@ mod tests {
             id: "019e4818-7c15-7e60-9b3b-898a1c7803d6".to_string(),
             title: "message 0".to_string(),
             preview: Some("message 7".to_string()),
+            queued_message_count: 0,
+            subagent_transcript_count: 0,
             cwd: Some("/tmp/demo".to_string()),
             worktree: None,
             transcript_path: transcript.display().to_string(),

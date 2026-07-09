@@ -1446,6 +1446,9 @@
       "trashTranscriptCancel": "Cancel",
       "trashTranscriptConfirm": "Move to Trash",
       "resumeSessionName": "resume",
+      "recoverableSignal": "Recoverable content: {items}",
+      "recoverableQueued": "{count} queued message(s)",
+      "recoverableSubagents": "{count} subagent transcript(s)",
       "createFailed": "Failed to create terminal session"
     },
     "staged": {

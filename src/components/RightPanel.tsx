@@ -1289,6 +1289,31 @@ type AgentHistoryProviderFilter =
   | typeof ALL_AGENT_HISTORY_PROVIDERS
   | AgentHistoryProvider;
 
+function agentHistoryRecoverableSignalLabel(
+  t: Translator,
+  item: AgentHistoryItem,
+): string | null {
+  const parts: string[] = [];
+  if (item.queued_message_count > 0) {
+    parts.push(
+      rtf(t, "rightPanel.history.recoverableQueued", {
+        count: item.queued_message_count,
+      }),
+    );
+  }
+  if (item.subagent_transcript_count > 0) {
+    parts.push(
+      rtf(t, "rightPanel.history.recoverableSubagents", {
+        count: item.subagent_transcript_count,
+      }),
+    );
+  }
+  if (parts.length === 0) return null;
+  return rtf(t, "rightPanel.history.recoverableSignal", {
+    items: parts.join(" + "),
+  });
+}
+
 function AgentHistoryTab({
   scope,
   repoPath,
@@ -1544,6 +1569,10 @@ function AgentHistoryTab({
               if (!isSessionAgentProvider(item.provider)) return null;
               const providerTone =
                 getAgentProviderDefinition(item.provider).brandToneClassName;
+              const recoverableSignal = agentHistoryRecoverableSignalLabel(
+                t,
+                item,
+              );
               return (
                 <div
                   key={`${item.provider}:${item.id}:${item.transcript_path}`}
@@ -1589,6 +1618,11 @@ function AgentHistoryTab({
                       {item.preview ? (
                         <div className="mt-1 max-h-8 overflow-hidden text-[11px] leading-4 text-fg-muted">
                           {item.preview}
+                        </div>
+                      ) : null}
+                      {recoverableSignal ? (
+                        <div className="mt-1 text-[10.5px] leading-4 text-warning">
+                          {recoverableSignal}
                         </div>
                       ) : null}
                       {item.worktree ? (
