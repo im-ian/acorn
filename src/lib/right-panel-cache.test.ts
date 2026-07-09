@@ -211,6 +211,29 @@ describe("rightPanelCache", () => {
     expect(rightPanelCache.getPullRequests(REPO, "open", 50)).toBeNull();
   });
 
+  it("invalidates PR listings and ignores stale in-flight PR requests for one repo", async () => {
+    const cached: PullRequestListing = {
+      kind: "ok",
+      items: [],
+      account: "tester",
+    };
+    const pending = deferred<PullRequestListing>();
+    mockApi.listPullRequests
+      .mockResolvedValueOnce(cached)
+      .mockReturnValueOnce(pending.promise);
+
+    await rightPanelCache.fetchPullRequests(REPO, "open", 50);
+    expect(rightPanelCache.getPullRequests(REPO, "open", 50)).toBe(cached);
+    const staleRequest = rightPanelCache.fetchPullRequests(REPO, "merged", 50);
+
+    rightPanelCache.invalidatePullRequests(REPO);
+
+    expect(rightPanelCache.getPullRequests(REPO, "open", 50)).toBeNull();
+    pending.resolve(cached);
+    await expect(staleRequest).resolves.toBe(cached);
+    expect(rightPanelCache.getPullRequests(REPO, "merged", 50)).toBeNull();
+  });
+
   it("does not repopulate pruned issue data from a stale in-flight request", async () => {
     const listing: IssueListing = {
       kind: "ok",

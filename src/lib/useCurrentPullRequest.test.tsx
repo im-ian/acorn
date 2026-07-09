@@ -10,7 +10,9 @@ vi.mock("./api", () => ({
 }));
 
 import { api } from "./api";
+import { emitPullRequestMutation } from "./pullRequestEvents";
 import {
+  resetCurrentPullRequestCacheForTests,
   primeCurrentPullRequestCacheFromListing,
   useCurrentPullRequest,
 } from "./useCurrentPullRequest";
@@ -81,6 +83,7 @@ describe("useCurrentPullRequest", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     mockApi.listPullRequests.mockReset();
+    resetCurrentPullRequestCacheForTests();
   });
 
   afterEach(() => {
@@ -119,5 +122,42 @@ describe("useCurrentPullRequest", () => {
     });
 
     expect(container.textContent).toBe("PR #77");
+  });
+
+  it("clears and retries current PR context when a lifecycle mutation lands", async () => {
+    mockApi.listPullRequests
+      .mockResolvedValueOnce({
+        kind: "ok",
+        account: "test",
+        items: [pullRequest()],
+      })
+      .mockResolvedValueOnce({ kind: "ok", account: "test", items: [] });
+
+    await act(async () => {
+      root.render(<Probe value={session()} />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(container.textContent).toBe("PR #77");
+
+    await act(async () => {
+      emitPullRequestMutation({
+        kind: "merged",
+        repoPath: "/tmp/demo",
+        number: 77,
+        headBranch: "feat/runner",
+      });
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toBe("none");
+    expect(mockApi.listPullRequests).toHaveBeenCalledTimes(2);
+    expect(mockApi.listPullRequests).toHaveBeenLastCalledWith(
+      "/tmp/demo/.worktrees/runner",
+      "open",
+      10,
+      "head:feat/runner",
+    );
   });
 });
