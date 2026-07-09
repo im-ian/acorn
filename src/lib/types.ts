@@ -147,6 +147,8 @@ export interface Session {
   agent_provider?: SessionAgentProvider | null;
   /** Most recently paired agent transcript id, if Acorn has paired this tab to one. */
   agent_transcript_id?: string | null;
+  /** Ephemeral path to the transcript currently used for status/preview reads. */
+  agent_transcript_path?: string | null;
   /** Ephemeral live process names observed under the session PTY. */
   active_processes?: SessionProcessSummary[];
   /** Ephemeral git workdir that produced the current live branch. */

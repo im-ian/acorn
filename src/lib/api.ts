@@ -645,6 +645,7 @@ export const api = {
       last_agent_message?: string | null;
       agent_provider?: SessionAgentProvider | null;
       agent_transcript_id?: string | null;
+      agent_transcript_path?: string | null;
       active_processes?: SessionProcessSummary[];
       git_context_path?: string | null;
       branch: string | null;
@@ -661,6 +662,7 @@ export const api = {
         last_agent_message?: string | null;
         agent_provider?: SessionAgentProvider | null;
         agent_transcript_id?: string | null;
+        agent_transcript_path?: string | null;
         active_processes?: SessionProcessSummary[];
         git_context_path?: string | null;
         branch: string | null;
