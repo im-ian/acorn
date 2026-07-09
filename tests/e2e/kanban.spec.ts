@@ -207,6 +207,27 @@ test.describe("workspace kanban mode", () => {
       });
     });
     await tauri.handle("list_pull_requests", (args) => {
+      if (args?.query === "head:shell") {
+        return {
+          kind: "ok",
+          account: "test",
+          items: [
+            {
+              number: 42,
+              title: "Add kanban overlay header affordances",
+              state: "OPEN",
+              author: "ian",
+              head_branch: "shell",
+              base_branch: "main",
+              url: "https://github.com/im-ian/acorn/pull/42",
+              updated_at: "2026-01-01T00:00:00Z",
+              is_draft: false,
+              checks: null,
+              labels: [],
+            },
+          ],
+        };
+      }
       if (args?.query !== "head:feat/runner") {
         return { kind: "ok", items: [], account: "test" };
       }
@@ -594,6 +615,10 @@ test.describe("workspace kanban mode", () => {
     await expect(
       shellPopover.getByRole("heading", { name: "shell" }),
     ).toBeVisible();
+    const shellPopoverPrButton = shellPopover.getByRole("button", {
+      name: /Open PR #42: Add kanban overlay header affordances/,
+    });
+    await expect(shellPopoverPrButton).toBeVisible();
     await expect(page.getByTestId("terminal-popover-body")).toBeVisible();
     await expect(
       page
@@ -605,6 +630,57 @@ test.describe("workspace kanban mode", () => {
         .getByTestId("terminal-popover-body")
         .locator(".xterm-helper-textarea"),
     ).toBeFocused();
+    await shellPopoverPrButton.click();
+    const openedUrlsAfterPopoverPr = await page.evaluate(
+      () =>
+        (
+          (window as unknown as {
+            __openUrlCalls?: Array<{ url?: string }>;
+          }).__openUrlCalls ?? []
+        ).map((call) => call.url),
+    );
+    expect(openedUrlsAfterPopoverPr).toEqual([
+      "https://github.com/im-ian/acorn/pull/77",
+      "https://github.com/im-ian/acorn/pull/42",
+    ]);
+    const headerHandle = page.getByTestId(
+      "kanban-terminal-popover-drag-handle",
+    );
+    const headerBox = await headerHandle.boundingBox();
+    expect(headerBox).not.toBeNull();
+    if (!headerBox) throw new Error("missing popover header");
+    await headerHandle.dispatchEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: headerBox.x + headerBox.width / 2,
+      clientY: headerBox.y + headerBox.height / 2,
+    });
+    await expect(page.getByRole("menuitem", { name: "Rename" })).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Regenerate Name" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Open Work Summary" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Reveal in Finder" }),
+    ).toBeVisible();
+    await page.getByRole("menuitem", { name: "Rename" }).click();
+    const titleInput = page.getByTestId(
+      "kanban-terminal-popover-title-input",
+    );
+    await expect(titleInput).toBeVisible();
+    await titleInput.press("Escape");
+    await expect(
+      shellPopover.getByRole("heading", { name: "shell" }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("kanban-terminal-popover-reset-position"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("kanban-terminal-popover-reset-size"),
+    ).toBeVisible();
     const shellPopoverBoxBefore = await shellPopover.boundingBox();
     expect(shellPopoverBoxBefore).not.toBeNull();
     if (!shellPopoverBoxBefore) throw new Error("missing shell popover");
@@ -703,6 +779,24 @@ test.describe("workspace kanban mode", () => {
       Math.abs((popoverBoxAfterDrag?.y ?? 0) - popoverBoxBeforeDrag.y),
     ).toBeGreaterThan(16);
 
+    await page.getByTestId("kanban-terminal-popover-reset-position").click();
+    const popoverBoxAfterPositionReset = await shellPopover.boundingBox();
+    expect(
+      Math.abs((popoverBoxAfterPositionReset?.x ?? 0) - popoverBoxBeforeDrag.x),
+    ).toBeLessThan(4);
+    expect(
+      Math.abs((popoverBoxAfterPositionReset?.y ?? 0) - popoverBoxBeforeDrag.y),
+    ).toBeLessThan(4);
+
+    await page.getByTestId("kanban-terminal-popover-reset-size").click();
+    const popoverBoxAfterSizeReset = await shellPopover.boundingBox();
+    expect(
+      Math.abs((popoverBoxAfterSizeReset?.width ?? 0) - 560),
+    ).toBeLessThan(2);
+    expect(
+      Math.abs((popoverBoxAfterSizeReset?.height ?? 0) - 420),
+    ).toBeLessThan(2);
+
     await board.getByRole("button", { name: "Open broken" }).click();
 
     await expect(page.getByTestId("workspace-kanban")).toBeVisible();
@@ -792,7 +886,10 @@ test.describe("workspace kanban mode", () => {
     await expect(runner).toBeFocused();
   });
 
-  test("card context menu can rename a session", async ({ page, tauri }) => {
+  test("card context menu and terminal popover header can rename a session", async ({
+    page,
+    tauri,
+  }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.handle("list_sessions", () => {
       const w = window as unknown as {
@@ -870,6 +967,34 @@ test.describe("workspace kanban mode", () => {
     });
     await expect(
       board.getByRole("button", { name: "Open renamed from kanban" }),
+    ).toBeVisible();
+
+    await board
+      .getByRole("button", { name: "Open renamed from kanban" })
+      .click();
+    const popover = page.getByTestId("kanban-terminal-popover");
+    const heading = popover.getByRole("heading", {
+      name: "renamed from kanban",
+    });
+    await heading.dblclick();
+    const popoverTitleInput = page.getByTestId(
+      "kanban-terminal-popover-title-input",
+    );
+    await expect(popoverTitleInput).toBeFocused();
+    await popoverTitleInput.fill("renamed from popover");
+    await popoverTitleInput.press("Enter");
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __renameCalls?: unknown[] })
+              .__renameCalls?.length ?? 0,
+        ),
+      )
+      .toBe(2);
+    await expect(
+      popover.getByRole("heading", { name: "renamed from popover" }),
     ).toBeVisible();
   });
 
