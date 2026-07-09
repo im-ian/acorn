@@ -1,5 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::io;
+use std::io::{self, BufRead};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -759,6 +759,97 @@ fn string_field(value: &serde_json::Value, path: &[&str]) -> Option<String> {
         cursor = cursor.get(*key)?;
     }
     cursor.as_str().map(str::to_string)
+}
+
+fn chat_message_metadata_provider(message: &persistence::ChatMessage) -> Option<&str> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("provider"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+}
+
+fn latest_empty_codex_assistant_message_index(
+    state: &persistence::ChatSessionState,
+) -> Option<usize> {
+    let index = state.messages.len().checked_sub(1)?;
+    let message = &state.messages[index];
+    if message.role != persistence::ChatRole::Assistant || !message.content.trim().is_empty() {
+        return None;
+    }
+    if message.status != Some(persistence::ChatMessageStatus::Complete) {
+        return None;
+    }
+    let provider = chat_message_metadata_provider(message).or(state.provider.as_deref());
+    if provider != Some("codex") {
+        return None;
+    }
+    Some(index)
+}
+
+fn codex_provider_thread_cursor(state: &persistence::ChatSessionState) -> Option<String> {
+    state
+        .provider_threads
+        .iter()
+        .rev()
+        .filter(|thread| thread.provider == "codex")
+        .find_map(|thread| {
+            thread
+                .resume_token
+                .as_deref()
+                .or(thread.native_thread_id.as_deref())
+                .or(thread.last_response_id.as_deref())
+                .map(str::trim)
+                .filter(|cursor| !cursor.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn latest_codex_agent_message_from_transcript(path: &Path) -> io::Result<Option<String>> {
+    let file = std::fs::File::open(path)?;
+    let reader = io::BufReader::new(file);
+    let mut parser = ChatCliOutputParser::new(ChatCliOutputMode::CodexJson);
+    let mut ignore_chunk = ignore_chat_streaming_chunk;
+
+    for line in reader.lines() {
+        parser.push_chunk(&line?, &mut ignore_chunk);
+        parser.push_chunk("\n", &mut ignore_chunk);
+    }
+
+    let content = parser.finish("");
+    if content.trim().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(content))
+    }
+}
+
+fn backfill_latest_empty_codex_assistant_message_from_path(
+    state: &mut persistence::ChatSessionState,
+    path: &Path,
+) -> bool {
+    let Some(index) = latest_empty_codex_assistant_message_index(state) else {
+        return false;
+    };
+    let Ok(Some(content)) = latest_codex_agent_message_from_transcript(path) else {
+        return false;
+    };
+    state.messages[index].content = content;
+    true
+}
+
+fn backfill_latest_empty_codex_assistant_message(
+    state: &mut persistence::ChatSessionState,
+) -> bool {
+    let Some(cursor) = codex_provider_thread_cursor(state) else {
+        return false;
+    };
+    let Some(path) = acorn_transcript::locate_codex_transcript(&cursor) else {
+        return false;
+    };
+    backfill_latest_empty_codex_assistant_message_from_path(state, &path)
 }
 
 struct CliChatProviderAdapter {
@@ -2850,6 +2941,26 @@ pub async fn load_chat_session_state(
     })
     .await?;
     apply_acorn_session_metadata(&mut chat_state, &session);
+    if backfill_latest_empty_codex_assistant_message(&mut chat_state) {
+        let repaired_state = chat_state.clone();
+        match run_blocking("save repaired chat session state", move || {
+            persistence::save_chat_session_state(repaired_state)
+        })
+        .await
+        {
+            Ok(saved) => {
+                chat_state = saved;
+                apply_acorn_session_metadata(&mut chat_state, &session);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    session_id = %chat_state.session_id,
+                    "failed to persist repaired chat session state"
+                );
+            }
+        }
+    }
     Ok(chat_state)
 }
 
@@ -6828,6 +6939,58 @@ mod tests {
 
         assert_eq!(chunks.concat(), "hello");
         assert_eq!(parser.finish(""), "hello");
+    }
+
+    #[test]
+    fn chat_stream_parser_extracts_codex_task_complete_payload_message() {
+        let mut parser = super::ChatCliOutputParser::new(super::ChatCliOutputMode::CodexJson);
+        let mut chunks = Vec::new();
+
+        {
+            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            parser.push_chunk(
+                r#"{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"안녕하세요. 무엇을 도와드릴까요?"}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+        }
+
+        assert_eq!(chunks.concat(), "안녕하세요. 무엇을 도와드릴까요?");
+        assert_eq!(parser.finish(""), "안녕하세요. 무엇을 도와드릴까요?");
+    }
+
+    #[test]
+    fn backfill_empty_codex_assistant_message_reads_transcript_final_message() {
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "안녕"),
+            chat_message("a1", crate::persistence::ChatRole::Assistant, ""),
+        ]);
+        state
+            .provider_threads
+            .push(crate::persistence::ProviderThread {
+                session_id: state.session_id.clone(),
+                provider: "codex".to_string(),
+                model: None,
+                native_thread_id: Some("019f4595-6b86-7183-878f-6fb1f523abf9".to_string()),
+                resume_token: Some("019f4595-6b86-7183-878f-6fb1f523abf9".to_string()),
+                last_response_id: None,
+                updated_at: chrono::Utc::now(),
+            });
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("rollout.jsonl");
+        std::fs::write(
+            &transcript,
+            r#"{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"안녕하세요. 무엇을 도와드릴까요?"}}"#,
+        )
+        .unwrap();
+
+        assert!(
+            super::backfill_latest_empty_codex_assistant_message_from_path(&mut state, &transcript)
+        );
+        assert_eq!(
+            state.messages.last().unwrap().content,
+            "안녕하세요. 무엇을 도와드릴까요?"
+        );
     }
 
     #[test]
