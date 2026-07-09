@@ -262,6 +262,29 @@ test.describe("settings modal", () => {
     await expect(modal.getByText(/⌘=|Ctrl\+=/).first()).toBeVisible();
   });
 
+  test("records a custom pane focus shortcut", async ({ page }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Shortcuts|단축키)$/ }).click();
+
+    await expect(modal.getByText("Focus pane to the left")).toBeVisible();
+    await expect(modal.getByText("Focus pane to the right")).toBeVisible();
+    await expect(modal.getByText("Focus pane above")).toBeVisible();
+    await expect(modal.getByText("Focus pane below")).toBeVisible();
+
+    await modal
+      .getByRole("button", {
+        name: "Record shortcut for Focus pane to the left",
+      })
+      .click();
+    await expect(modal.getByText("Press keys")).toBeVisible();
+
+    await pressHotkey(page, { mod: true, alt: true, key: "u" });
+    await expect(modal.getByText(/⌥⌘U|Ctrl\+Alt\+U/)).toBeVisible();
+  });
+
   test("syncs the keep-awake toggle with the backend and local settings", async ({
     page,
     tauri,

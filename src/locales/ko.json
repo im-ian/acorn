@@ -536,6 +536,18 @@
         "toggleRightPanel": {
           "label": "오른쪽 패널 열기/닫기"
         },
+        "focusPaneLeft": {
+          "label": "왼쪽 Pane으로 포커스 이동"
+        },
+        "focusPaneRight": {
+          "label": "오른쪽 Pane으로 포커스 이동"
+        },
+        "focusPaneUp": {
+          "label": "위쪽 Pane으로 포커스 이동"
+        },
+        "focusPaneDown": {
+          "label": "아래쪽 Pane으로 포커스 이동"
+        },
         "splitVertical": {
           "label": "Pane 세로 분할"
         },
