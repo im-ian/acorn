@@ -158,18 +158,8 @@ pub fn assistant_message_text(value: &Value) -> Option<String> {
 
 fn parse_codex_value(value: &Value) -> ParsedTranscriptLine {
     let event = codex_event_value(value);
-    let event_role = role_from_str(
-        event
-            .get("role")
-            .and_then(Value::as_str)
-            .or_else(|| value.get("role").and_then(Value::as_str)),
-    );
-    let role = role_from_str(
-        event
-            .get("role")
-            .and_then(Value::as_str)
-            .or_else(|| value.get("role").and_then(Value::as_str)),
-    );
+    let event_role = codex_role_from_event(value, event);
+    let role = event_role;
     let texts = codex_event_texts(value, event);
     let response_text = codex_response_text(value, event);
     let state_text = match event_role {
@@ -325,6 +315,24 @@ fn codex_event_value(value: &Value) -> &Value {
         .filter(|v| v.is_object())
         .or_else(|| value.get("msg").filter(|v| v.is_object()))
         .unwrap_or(value)
+}
+
+fn codex_role_from_event(value: &Value, event: &Value) -> TranscriptRole {
+    let explicit_role = role_from_str(
+        event
+            .get("role")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("role").and_then(Value::as_str)),
+    );
+    if explicit_role != TranscriptRole::Other {
+        return explicit_role;
+    }
+
+    match event.get("type").and_then(Value::as_str) {
+        Some("user_message") => TranscriptRole::User,
+        Some("agent_message") => TranscriptRole::Assistant,
+        _ => TranscriptRole::Other,
+    }
 }
 
 fn antigravity_turn_state(value: &Value) -> Option<TurnState> {
@@ -771,6 +779,42 @@ mod tests {
         assert_eq!(parsed.preview_text.as_deref(), Some("hello codex"));
         assert_eq!(parsed.session_id.as_deref(), Some("inner-session"));
         assert_eq!(parsed.cwd.as_deref(), Some("/tmp/project"));
+    }
+
+    #[test]
+    fn codex_payload_user_message_infers_user_role_from_type() {
+        let value: Value = serde_json::from_str(
+            r#"{"timestamp":"t","type":"event_msg","payload":{"type":"user_message","message":"hello codex","cwd":"/tmp/project","id":"payload-session"}}"#,
+        )
+        .unwrap();
+        let parsed = parse_transcript_value(AgentKind::Codex, &value);
+
+        assert_eq!(parsed.turn_state, Some(TurnState::Working));
+        assert_eq!(parsed.role, TranscriptRole::User);
+        assert_eq!(parsed.text.as_deref(), Some("hello codex"));
+        assert_eq!(parsed.state_role, TranscriptRole::User);
+        assert_eq!(parsed.state_text.as_deref(), Some("hello codex"));
+        assert_eq!(parsed.preview_role, TranscriptRole::User);
+        assert_eq!(parsed.preview_text.as_deref(), Some("hello codex"));
+        assert_eq!(parsed.session_id.as_deref(), Some("payload-session"));
+        assert_eq!(parsed.cwd.as_deref(), Some("/tmp/project"));
+    }
+
+    #[test]
+    fn codex_payload_agent_message_infers_assistant_role_from_type() {
+        let value: Value = serde_json::from_str(
+            r#"{"timestamp":"t","type":"event_msg","payload":{"type":"agent_message","message":"all done","phase":"final_answer"}}"#,
+        )
+        .unwrap();
+        let parsed = parse_transcript_value(AgentKind::Codex, &value);
+
+        assert_eq!(parsed.turn_state, Some(TurnState::WaitingForInput));
+        assert_eq!(parsed.role, TranscriptRole::Assistant);
+        assert_eq!(parsed.text.as_deref(), Some("all done"));
+        assert_eq!(parsed.state_role, TranscriptRole::Assistant);
+        assert_eq!(parsed.state_text.as_deref(), Some("all done"));
+        assert_eq!(parsed.preview_role, TranscriptRole::Assistant);
+        assert_eq!(parsed.preview_text.as_deref(), Some("all done"));
     }
 
     #[test]
