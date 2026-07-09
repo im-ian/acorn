@@ -1381,6 +1381,7 @@
       "runSession": "Run in new terminal",
       "runInWorktree": "Run in worktree",
       "copyResume": "Copy resume command",
+      "copyTranscriptPath": "Copy transcript path",
       "copyWorktreePath": "Copy worktree path",
       "moveTranscriptToTrash": "Move transcript to Trash...",
       "worktreeMissing": "missing",

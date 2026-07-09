@@ -1661,6 +1661,11 @@ function AgentHistoryTab({
                   onClick: () => void copy(menu.item.resume_command ?? ""),
                 },
                 {
+                  label: rt(t, "rightPanel.history.copyTranscriptPath"),
+                  icon: <Copy size={12} />,
+                  onClick: () => void copy(menu.item.transcript_path),
+                },
+                {
                   label: rt(t, "rightPanel.history.copyWorktreePath"),
                   icon: <GitBranch size={12} />,
                   disabled: !menu.item.worktree,
