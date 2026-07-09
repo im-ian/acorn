@@ -74,6 +74,15 @@ describe("deriveKanbanStage", () => {
     ).toBe("review");
   });
 
+  it("puts a needs-input session with a dirty worktree in review", () => {
+    expect(
+      deriveKanbanStage(
+        makeSession({ status: "needs_input" }),
+        ctx({ hasDiff: true }),
+      ),
+    ).toBe("review");
+  });
+
   it("keeps a completed session with a clean worktree in idle", () => {
     expect(
       deriveKanbanStage(makeSession({ status: "completed" }), ctx()),

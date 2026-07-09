@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { pickPullRequestForBranch } from "./useKanbanBoardData";
+import {
+  diffStatsEntries,
+  pickPullRequestForBranch,
+  summarizeDiffStats,
+} from "./useKanbanBoardData";
 import type { PullRequestInfo } from "./types";
 
 function makePr(overrides: Partial<PullRequestInfo>): PullRequestInfo {
@@ -50,5 +54,41 @@ describe("pickPullRequestForBranch", () => {
     });
     expect(pickPullRequestForBranch([older, newer])?.number).toBe(2);
     expect(pickPullRequestForBranch([newer, older])?.number).toBe(2);
+  });
+});
+
+describe("kanban diff summaries", () => {
+  it("requests diff stats only for changed paths", () => {
+    expect(
+      diffStatsEntries({
+        "src/App.tsx": { kind: "modified", additions: 0, deletions: 0 },
+        "README.md": { kind: "added", additions: 0, deletions: 0 },
+        "src/clean.ts": { kind: "clean", additions: 0, deletions: 0 },
+      }),
+    ).toEqual([
+      { path: "src/App.tsx", kind: "modified" },
+      { path: "README.md", kind: "added" },
+    ]);
+  });
+
+  it("uses fs_git_diff_stats line counts while preserving dirty status", () => {
+    expect(
+      summarizeDiffStats(
+        [
+          { path: "src/App.tsx", kind: "modified" },
+          { path: "README.md", kind: "added" },
+        ],
+        {
+          "src/App.tsx": { additions: 12, deletions: 3 },
+          "README.md": { additions: 4, deletions: 0 },
+        },
+      ),
+    ).toEqual({ hasDiff: true, additions: 16, deletions: 3 });
+  });
+
+  it("still reports a dirty tree when diff stats omit a changed path", () => {
+    expect(
+      summarizeDiffStats([{ path: "renamed.ts", kind: "renamed" }], {}),
+    ).toEqual({ hasDiff: true, additions: 0, deletions: 0 });
   });
 });

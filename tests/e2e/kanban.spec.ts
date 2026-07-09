@@ -42,7 +42,7 @@ function session(
 }
 
 test.describe("workspace kanban mode", () => {
-  test("groups active workspace sessions by status and opens a card terminal popover", async ({
+  test("groups active workspace sessions by lifecycle and opens a card terminal popover", async ({
     page,
     tauri,
   }) => {
@@ -139,17 +139,17 @@ test.describe("workspace kanban mode", () => {
     await page.keyboard.press("Escape");
 
     await expect(
-      board.getByRole("heading", { name: "Needs input" }),
+      board.getByRole("heading", { name: "Waiting" }),
     ).toBeVisible();
-    await expect(board.getByRole("heading", { name: "Failed" })).toBeVisible();
-    await expect(board.getByRole("heading", { name: "Running" })).toBeVisible();
+    await expect(board.getByRole("heading", { name: "Review" })).toBeVisible();
+    await expect(board.getByRole("heading", { name: "Working" })).toBeVisible();
     await expect(board.getByRole("heading", { name: "Idle" })).toBeVisible();
     await expect(
-      board.getByRole("heading", { name: "Completed" }),
+      board.getByRole("heading", { name: "Done" }),
     ).toBeVisible();
     await expect(
       board.locator("section > header h2"),
-    ).toHaveText(["Idle", "Needs input", "Running", "Failed", "Completed"]);
+    ).toHaveText(["Idle", "Working", "Waiting", "Review", "Done"]);
 
     const filterInput = board.getByLabel("Filter sessions");
     await expect(filterInput).toBeVisible();
@@ -166,12 +166,16 @@ test.describe("workspace kanban mode", () => {
     const idleCards = board.locator(
       'section[aria-label="Idle"] [data-testid="workspace-kanban-card"]',
     );
-    await expect(idleCards).toHaveCount(2);
+    await expect(idleCards).toHaveCount(3);
     await expect(idleCards.nth(0)).toHaveAttribute(
       "data-kanban-session-id",
       "alpha",
     );
     await expect(idleCards.nth(1)).toHaveAttribute(
+      "data-kanban-session-id",
+      "done",
+    );
+    await expect(idleCards.nth(2)).toHaveAttribute(
       "data-kanban-session-id",
       "shell",
     );
@@ -285,21 +289,21 @@ test.describe("workspace kanban mode", () => {
     const kanbanScroll = page.getByTestId("workspace-kanban-scroll");
     const kanbanColumnWidths = () =>
       board
-        .locator("[data-kanban-column-status]")
+        .locator("[data-kanban-column-stage]")
         .evaluateAll((columns) =>
           columns.map((column) => column.getBoundingClientRect().width),
         );
-    const idleColumn = board.locator('[data-kanban-column-status="idle"]');
-    const needsInputColumn = board.locator(
-      '[data-kanban-column-status="needs_input"]',
+    const idleColumn = board.locator('[data-kanban-column-stage="idle"]');
+    const waitingColumn = board.locator(
+      '[data-kanban-column-stage="waiting"]',
     );
     const idleResizeHandle = board
-      .locator('[data-kanban-resize-status="idle"]');
+      .locator('[data-kanban-resize-stage="idle"]');
     await expect(idleResizeHandle).toBeVisible();
-    const [idleWidthBefore, needsInputWidthBefore, scrollWidthBefore] =
+    const [idleWidthBefore, waitingWidthBefore, scrollWidthBefore] =
       await Promise.all([
         idleColumn.evaluate((column) => column.getBoundingClientRect().width),
-        needsInputColumn.evaluate((column) =>
+        waitingColumn.evaluate((column) =>
           column.getBoundingClientRect().width,
         ),
         kanbanScroll.evaluate((scroll) => scroll.scrollWidth),
@@ -322,16 +326,16 @@ test.describe("workspace kanban mode", () => {
         idleColumn.evaluate((column) => column.getBoundingClientRect().width),
       )
       .toBeGreaterThan(idleWidthBefore + 300);
-    const [idleWidthAfter, needsInputWidthAfter, scrollWidthAfter] =
+    const [idleWidthAfter, waitingWidthAfter, scrollWidthAfter] =
       await Promise.all([
         idleColumn.evaluate((column) => column.getBoundingClientRect().width),
-        needsInputColumn.evaluate((column) =>
+        waitingColumn.evaluate((column) =>
           column.getBoundingClientRect().width,
         ),
         kanbanScroll.evaluate((scroll) => scroll.scrollWidth),
       ]);
     expect(
-      Math.abs(needsInputWidthAfter - needsInputWidthBefore),
+      Math.abs(waitingWidthAfter - waitingWidthBefore),
     ).toBeLessThan(1);
     expect(scrollWidthAfter).toBeGreaterThan(scrollWidthBefore + 40);
 
@@ -348,7 +352,7 @@ test.describe("workspace kanban mode", () => {
     const equalizedWidths = await kanbanColumnWidths();
     const equalizedWidth = equalizedWidths[0] ?? 0;
     expect(equalizedWidth).toBeLessThan(idleWidthAfter);
-    expect(equalizedWidth).toBeGreaterThan(needsInputWidthAfter);
+    expect(equalizedWidth).toBeGreaterThan(waitingWidthAfter);
 
     await board.getByRole("button", { name: "Reset sizes" }).click();
     await expect
