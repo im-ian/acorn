@@ -955,6 +955,8 @@
         "ariaLabel": "세션 터미널",
         "expand": "터미널 크게 보기",
         "restore": "터미널 원래 크기로",
+        "resetPosition": "터미널 원위치",
+        "resetSize": "터미널 크기 초기화",
         "resize": "터미널 크기 조절"
       },
       "popover": {

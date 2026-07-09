@@ -26,6 +26,7 @@ import {
   FolderOpen,
   GitBranch,
   GitPullRequest,
+  LocateFixed,
   Maximize2,
   MessageSquareText,
   Minimize2,
@@ -1356,11 +1357,23 @@ function KanbanTerminalPopover({
   onClose: () => void;
 }) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const popoverPlacement = useSettings(
     (s) => s.settings.interface.kanbanTerminalPopoverPlacement,
   );
   const popoverDefaultSize = useSettings(
     (s) => s.settings.interface.kanbanTerminalPopoverDefaultSize,
+  );
+  const renameSession = useAppStore((s) => s.renameSession);
+  const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
+  const selectSession = useAppStore((s) => s.selectSession);
+  const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
+  const setWorkspaceViewMode = useAppStore((s) => s.setWorkspaceViewMode);
+  const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
+  const editorCommand = useSettings((s) => s.settings.editor.command);
+  const editorConfigured = editorCommand.trim().length > 0;
+  const isGeneratingTitle = useAppStore((s) =>
+    Boolean(s.generatingSessionTitleIds[session.id]),
   );
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] =
@@ -1371,6 +1384,11 @@ function KanbanTerminalPopover({
   const [isExpanded, setIsExpanded] = useState(
     () => popoverDefaultSize === "fullscreen",
   );
+  const [headerMenu, setHeaderMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
   const positionRef = useRef<KanbanTerminalPopoverPosition | null>(null);
   const sizeRef = useRef(size);
   const hasManualPositionRef = useRef(false);
@@ -1379,6 +1397,10 @@ function KanbanTerminalPopover({
   const title = cleanWorkspaceSessionTerminalPopoverTitle(session.name);
   const statusTone = STATUS_TONE[session.status];
   const isChat = session.mode === "chat";
+  const canRename = canRenameSession(session, { isGeneratingTitle });
+  const canRegenerateTitle =
+    canRegenerateSessionTitle(session) && !isGeneratingTitle;
+  const currentPullRequest = useCurrentPullRequest(session);
 
   const updatePosition = useCallback(() => {
     const margin = KANBAN_TERMINAL_POPOVER_MARGIN_PX;
@@ -1444,6 +1466,143 @@ function KanbanTerminalPopover({
     sizeRef.current = size;
   }, [size]);
 
+  useEffect(() => {
+    setEditingTitle(false);
+    setHeaderMenu(null);
+  }, [session.id]);
+
+  useEffect(() => {
+    if (isGeneratingTitle && editingTitle) setEditingTitle(false);
+  }, [editingTitle, isGeneratingTitle]);
+
+  async function submitTitleRename(next: string) {
+    setEditingTitle(false);
+    if (!canRename || !next || next === session.name) return;
+    await renameSession(session.id, next);
+    const error = useAppStore.getState().consumeError();
+    if (error) showToast(`${t("toasts.session.renameFailed")} ${error}`);
+  }
+
+  async function regenerateTitle() {
+    const settings = useSettings.getState().settings;
+    const status = await generateSessionTitle(
+      session.id,
+      resolveAiExecutionRequest(settings),
+      resolveSessionTitlePrompt(settings),
+      true,
+    );
+    if (status === "not_ready") {
+      showToast(t("toasts.session.titleNotReady"));
+    } else if (status !== "generated") {
+      showToast(t("toasts.session.titleRegenerateSkipped"));
+    }
+  }
+
+  const headerMenuItems = useMemo<ContextMenuItem[]>(
+    () => [
+      workspaceContextMenuGroupTitle(t, "session"),
+      {
+        label: sidebarText(t, "sidebar.actions.rename"),
+        icon: <Pencil size={12} />,
+        onClick: () => setEditingTitle(true),
+        disabled: !canRename,
+      },
+      {
+        label: sidebarText(t, "sidebar.actions.regenerateName"),
+        icon: <Sparkles size={12} />,
+        onClick: () => void regenerateTitle(),
+        disabled: !canRegenerateTitle,
+      },
+      {
+        label: sidebarText(t, "sidebar.actions.openWorkSummary"),
+        icon: <BarChart3 size={12} />,
+        onClick: () => {
+          selectSession(session.id);
+          void openWorkSummaryTab({ sessionId: session.id })
+            .then(() => setWorkspaceViewMode("panes"))
+            .catch((err: unknown) => {
+              console.error("[WorkspaceMain] open work summary failed", err);
+            });
+        },
+      },
+      workspaceContextMenuGroupTitle(t, "open"),
+      {
+        label: sidebarText(t, "sidebar.actions.openWorktreeInEditor"),
+        icon: <PencilLine size={12} />,
+        disabled: !editorConfigured,
+        onClick: () => {
+          void openInConfiguredEditor(session.worktree_path).catch(
+            (err: unknown) => {
+              console.error("[WorkspaceMain] open in editor failed", err);
+            },
+          );
+        },
+      },
+      {
+        label: sidebarText(t, "sidebar.actions.revealInFinder"),
+        icon: <FolderOpen size={12} />,
+        onClick: () => {
+          void api.fsReveal(session.worktree_path).catch((err: unknown) => {
+            console.error("[WorkspaceMain] reveal failed", err);
+          });
+        },
+      },
+      workspaceContextMenuGroupTitle(t, "copy"),
+      {
+        type: "submenu",
+        label: sidebarText(t, "sidebar.actions.copy"),
+        icon: <Copy size={12} />,
+        children: [
+          {
+            label: sidebarText(t, "sidebar.actions.worktreePath"),
+            icon: <Copy size={12} />,
+            onClick: () => void copyToClipboard(session.worktree_path),
+          },
+          {
+            label: sidebarText(t, "sidebar.actions.worktreeName"),
+            icon: <Copy size={12} />,
+            onClick: () => void copyToClipboard(worktreeName),
+          },
+          {
+            label: sidebarText(t, "sidebar.actions.branchName"),
+            icon: <Copy size={12} />,
+            onClick: () => void copyToClipboard(session.branch),
+            disabled: !session.branch,
+          },
+          {
+            label: sidebarText(t, "sidebar.actions.sessionId"),
+            icon: <Copy size={12} />,
+            onClick: () => void copyToClipboard(session.id),
+          },
+        ],
+      },
+      workspaceContextMenuGroupTitle(t, "danger"),
+      {
+        label: sidebarText(t, "sidebar.actions.removeSessionMenu"),
+        icon: <Trash2 size={12} />,
+        onClick: () => requestRemoveSession(session.id),
+      },
+    ],
+    [
+      canRegenerateTitle,
+      canRename,
+      editorConfigured,
+      generateSessionTitle,
+      isGeneratingTitle,
+      openWorkSummaryTab,
+      requestRemoveSession,
+      selectSession,
+      session.branch,
+      session.id,
+      session.name,
+      session.worktree_path,
+      showToast,
+      setWorkspaceViewMode,
+      t,
+      worktreeName,
+    ],
+  );
+
   useLayoutEffect(() => {
     hasManualPositionRef.current = false;
   }, [anchor, session.id]);
@@ -1480,6 +1639,12 @@ function KanbanTerminalPopover({
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
+      if (
+        target instanceof Element &&
+        target.closest("[data-acorn-context-menu]")
+      ) {
+        return;
+      }
       if (popoverRef.current?.contains(target)) return;
       if (anchor.contains(target)) return;
       if (isModalDialogOpen()) return;
@@ -1496,7 +1661,9 @@ function KanbanTerminalPopover({
     const target = event.target;
     if (
       target instanceof Element &&
-      target.closest("button,a,input,textarea,select")
+      target.closest(
+        "button,a,input,textarea,select,[data-kanban-title-edit-trigger]",
+      )
     ) {
       return;
     }
@@ -1601,6 +1768,46 @@ function KanbanTerminalPopover({
     window.addEventListener("pointercancel", stopResize);
   }
 
+  function openHeaderContextMenu(x: number, y: number) {
+    setHeaderMenu({ x, y });
+  }
+
+  function handleHeaderContextMenu(event: ReactMouseEvent<HTMLElement>) {
+    const target = event.target;
+    if (
+      target instanceof Element &&
+      target.closest("input,textarea,select")
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    openHeaderContextMenu(event.clientX, event.clientY);
+  }
+
+  function resetPopoverPosition() {
+    hasManualPositionRef.current = false;
+    if (isExpanded) {
+      setIsExpanded(false);
+      return;
+    }
+    updatePosition();
+  }
+
+  function resetPopoverSize() {
+    const nextSize = clampKanbanTerminalPopoverSize(
+      defaultKanbanTerminalPopoverSize(),
+    );
+    sizeRef.current = nextSize;
+    setSize(nextSize);
+    writeKanbanTerminalPopoverSize(nextSize);
+    if (isExpanded) {
+      setIsExpanded(false);
+      return;
+    }
+    updatePosition();
+  }
+
   function handlePopoverKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key !== "Escape") return;
     event.preventDefault();
@@ -1639,6 +1846,7 @@ function KanbanTerminalPopover({
       <header
         data-testid="kanban-terminal-popover-drag-handle"
         onPointerDown={startDrag}
+        onContextMenu={handleHeaderContextMenu}
         className={cn(
           "shrink-0 border-b border-border px-3 py-2.5",
           !isExpanded && "cursor-move select-none",
@@ -1649,7 +1857,43 @@ function KanbanTerminalPopover({
             <WorkspaceSessionIcon session={session} scope="console" size="md" />
           </span>
           <div className="min-w-0 flex-1">
-            <h3 className="truncate text-sm font-semibold text-fg">{title}</h3>
+            {editingTitle ? (
+              <KanbanTerminalPopoverTitleInput
+                initial={session.name}
+                onSubmit={(next) => void submitTitleRename(next)}
+                onCancel={() => setEditingTitle(false)}
+              />
+            ) : (
+              <h3
+                tabIndex={canRename ? 0 : undefined}
+                data-kanban-title-edit-trigger
+                onDoubleClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (canRename) setEditingTitle(true);
+                }}
+                onKeyDown={(event) => {
+                  if (!canRename) return;
+                  if (
+                    event.key !== "F2" &&
+                    event.key !== "Enter" &&
+                    event.key !== " "
+                  ) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setEditingTitle(true);
+                }}
+                className={cn(
+                  "truncate rounded-sm text-sm font-semibold text-fg",
+                  canRename &&
+                    "cursor-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                )}
+              >
+                {title}
+              </h3>
+            )}
             <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-[11px] font-medium leading-4 text-fg-muted">
               <WorkspaceSessionTerminalPopoverMetaItem
                 icon={
@@ -1662,8 +1906,16 @@ function KanbanTerminalPopover({
               >
                 {statusLabel(t, session.status)}
               </WorkspaceSessionTerminalPopoverMetaItem>
+              {currentPullRequest ? (
+                <KanbanTerminalPopoverPullRequestMetaItem
+                  pullRequest={currentPullRequest}
+                  t={t}
+                />
+              ) : null}
               {session.branch ? (
-                <WorkspaceSessionTerminalPopoverMetaItem icon={<GitBranch size={11} />}>
+                <WorkspaceSessionTerminalPopoverMetaItem
+                  icon={<GitBranch size={11} />}
+                >
                   {session.branch}
                 </WorkspaceSessionTerminalPopoverMetaItem>
               ) : null}
@@ -1675,6 +1927,34 @@ function KanbanTerminalPopover({
               </WorkspaceSessionTerminalPopoverMetaItem>
             </div>
           </div>
+          <Tooltip
+            label={t("workspace.kanban.terminalPopover.resetPosition")}
+            side="bottom"
+          >
+            <IconButton
+              aria-label={t("workspace.kanban.terminalPopover.resetPosition")}
+              data-testid="kanban-terminal-popover-reset-position"
+              onClick={resetPopoverPosition}
+              size="sm"
+              surface="panel"
+            >
+              <LocateFixed size={14} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip
+            label={t("workspace.kanban.terminalPopover.resetSize")}
+            side="bottom"
+          >
+            <IconButton
+              aria-label={t("workspace.kanban.terminalPopover.resetSize")}
+              data-testid="kanban-terminal-popover-reset-size"
+              onClick={resetPopoverSize}
+              size="sm"
+              surface="panel"
+            >
+              <RotateCcw size={14} />
+            </IconButton>
+          </Tooltip>
           <IconButton
             aria-label={t(
               isExpanded
@@ -1698,6 +1978,13 @@ function KanbanTerminalPopover({
           </IconButton>
         </div>
       </header>
+      <ContextMenu
+        open={headerMenu !== null}
+        x={headerMenu?.x ?? 0}
+        y={headerMenu?.y ?? 0}
+        onClose={() => setHeaderMenu(null)}
+        items={headerMenuItems}
+      />
       <div className="min-h-0 flex-1 bg-bg p-2">
         {isChat ? (
           <div
@@ -1737,6 +2024,100 @@ function KanbanTerminalPopover({
   );
 
   return createPortal(popover, document.body);
+}
+
+function KanbanTerminalPopoverTitleInput({
+  initial,
+  onSubmit,
+  onCancel,
+}: {
+  initial: string;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.select();
+  }, []);
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      data-testid="kanban-terminal-popover-title-input"
+      autoFocus
+      draggable={false}
+      value={value}
+      onChange={(event) => setValue(event.currentTarget.value)}
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+      onDragStart={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          onSubmit(value.trim());
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+      onBlur={() => onSubmit(value.trim())}
+      className="h-6 w-full min-w-0 rounded border border-accent/50 bg-input px-1.5 text-sm font-semibold text-fg outline-none focus:border-accent focus:bg-input-hover"
+    />
+  );
+}
+
+function KanbanTerminalPopoverPullRequestMetaItem({
+  pullRequest,
+  t,
+}: {
+  pullRequest: SessionPullRequestSummary;
+  t: Translator;
+}) {
+  const draftLabel = t("rightPanel.prStates.draft");
+  const tooltip = `${pullRequest.is_draft ? `${draftLabel} ` : ""}#${pullRequest.number} ${pullRequest.title}\n${pullRequest.head_branch} -> ${pullRequest.base_branch}`;
+  return (
+    <Tooltip label={tooltip} side="bottom" delay={350} multiline>
+      <button
+        type="button"
+        aria-label={`${sidebarText(t, "sidebar.metadata.openPullRequest")} #${pullRequest.number}: ${pullRequest.title}`}
+        onMouseDown={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+        onKeyUp={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          void openUrl(pullRequest.url).catch((err: unknown) => {
+            console.error("[WorkspaceMain] open PR URL failed", err);
+          });
+        }}
+        className={cn(
+          "inline-flex min-w-0 max-w-[18rem] shrink items-center gap-1.5 rounded-sm underline-offset-2 transition hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60",
+          pullRequestNumberClassName(pullRequest),
+        )}
+        title={pullRequest.title}
+      >
+        <GitPullRequest size={11} aria-hidden className="shrink-0" />
+        <span className="shrink-0">{`PR #${pullRequest.number}`}</span>
+        <span aria-hidden className="shrink-0 text-fg-muted/55">
+          ·
+        </span>
+        <span className="min-w-0 truncate">{pullRequest.title}</span>
+        {pullRequest.is_draft ? (
+          <span className="shrink-0 rounded-[2px] border border-current/30 px-0.5 text-[9px] font-semibold leading-3 no-underline">
+            {draftLabel}
+          </span>
+        ) : null}
+        <ExternalLink size={10} aria-hidden className="shrink-0 opacity-80" />
+      </button>
+    </Tooltip>
+  );
 }
 
 function isModalDialogOpen(): boolean {
