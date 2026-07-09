@@ -430,6 +430,7 @@ test.describe("sidebar: project lifecycle", () => {
         isolated: true,
         project_scoped: true,
         status: "waiting_for_input",
+        status_reason: "turn_complete",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -463,6 +464,7 @@ test.describe("sidebar: project lifecycle", () => {
     );
     await expect(tooltip).toContainText("Status");
     await expect(tooltip).toContainText("Waiting for input");
+    await expect(tooltip).toContainText("Agent turn complete");
     await expect(tooltip).toContainText("Kind");
     await expect(tooltip).toContainText("Control session");
     await expect(tooltip).toContainText("Isolated worktree");
