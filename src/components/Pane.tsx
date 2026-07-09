@@ -199,6 +199,7 @@ export function Pane({ paneId }: PaneProps) {
   const splitFocusedPane = useAppStore((s) => s.splitFocusedPane);
   const closePane = useAppStore((s) => s.closePane);
   const sessionsById = useAppStore(selectSessionsById);
+  const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const shortcuts = useSettings((s) => s.settings.shortcuts);
   const [paneMenu, setPaneMenu] = useState<{ x: number; y: number } | null>(
     null,
@@ -589,7 +590,7 @@ export function Pane({ paneId }: PaneProps) {
             session={activeSession}
           />
         ) : null}
-        {active?.kind === "code" ? (
+        {active?.kind === "code" && workspaceViewMode === "panes" ? (
           <FileViewer
             key={active.id}
             path={active.path}

@@ -319,6 +319,95 @@ test.describe("file explorer", () => {
     await expect(page.getByText("export const util = true;")).toBeVisible();
   });
 
+  test("opens a right-panel file in an overlay while staying in kanban", async ({
+    page,
+    tauri,
+  }) => {
+    const repo = "/tmp/demo";
+
+    await tauri.respond("list_projects", [
+      {
+        repo_path: repo,
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-1",
+        name: "alpha",
+        repo_path: repo,
+        worktree_path: repo,
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.handle("pty_repo_root", () => "/tmp/demo");
+    await tauri.handle("fs_list_dir", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/demo") {
+        return { repo_root: "/tmp/demo", entries: [] };
+      }
+      return {
+        repo_root: "/tmp/demo",
+        entries: [
+          {
+            name: "README.md",
+            path: "/tmp/demo/README.md",
+            is_dir: false,
+            is_symlink: false,
+            size: 32,
+            modified_ms: 0,
+            gitignored: false,
+          },
+        ],
+      };
+    });
+    await tauri.handle("fs_read_file", () => ({
+      content: "# Demo\n\nOpened from kanban.\n",
+      size: 28,
+      truncated: false,
+      binary: false,
+    }));
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+    await expect(page.getByTestId("workspace-kanban")).toBeVisible();
+
+    await page.getByRole("button", { name: "Code" }).click();
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+    await page.getByRole("button", { name: "README.md" }).dblclick();
+
+    await expect(page.getByTestId("workspace-kanban")).toBeVisible();
+    await expect(page.getByTestId("kanban-file-preview-overlay")).toBeVisible();
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Kanban",
+    );
+    await expect(
+      page.getByRole("dialog", { name: "README.md" }),
+    ).toBeVisible();
+    await expect(page.getByText("Opened from kanban.")).toBeVisible();
+
+    await page
+      .getByRole("dialog", { name: "README.md" })
+      .getByRole("button", { name: "Close" })
+      .click();
+    await expect(page.getByTestId("kanban-file-preview-overlay")).toHaveCount(
+      0,
+    );
+    await expect(page.getByTestId("workspace-kanban")).toBeVisible();
+  });
+
   test("keeps expanded worktree folders after opening and closing a file", async ({
     page,
     tauri,

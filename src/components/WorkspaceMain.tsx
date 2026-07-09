@@ -97,6 +97,7 @@ import {
 import { IconButton, StatusDot, type StatusTone } from "./ui";
 import { ChatPane } from "./ChatPane";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { FileViewer } from "./FileViewer";
 import { LayoutRenderer } from "./LayoutRenderer";
 import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
@@ -166,10 +167,11 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
   return (
     <div className="h-full min-w-0 overflow-hidden" data-workspace-main>
       {isKanban ? (
-        <div className="flex h-full min-w-0 flex-col overflow-hidden">
+        <div className="relative flex h-full min-w-0 flex-col overflow-hidden">
           <div className="min-h-0 min-w-0 flex-1">
             <WorkspaceKanbanBoard />
           </div>
+          <KanbanFilePreviewOverlay />
         </div>
       ) : null}
       {/*
@@ -182,6 +184,65 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
       <div className={cn("h-full min-w-0", isKanban && "hidden")}>
         <LayoutRenderer node={layout} />
       </div>
+    </div>
+  );
+}
+
+function KanbanFilePreviewOverlay() {
+  const t = useTranslation();
+  const activeTabId = useAppStore((s) => s.activeTabId);
+  const workspaceTabs = useAppStore((s) => s.workspaceTabs);
+  const closeWorkspaceTab = useAppStore((s) => s.closeWorkspaceTab);
+  const closeTerminalPopup = useAppStore((s) => s.closeTerminalPopup);
+  const updateCodeViewerTabViewState = useAppStore(
+    (s) => s.updateCodeViewerTabViewState,
+  );
+  const tab = activeTabId ? workspaceTabs[activeTabId] : undefined;
+
+  useEffect(() => {
+    if (tab?.kind === "code") closeTerminalPopup();
+  }, [closeTerminalPopup, tab?.id, tab?.kind]);
+
+  if (!tab || tab.kind !== "code") return null;
+
+  return (
+    <div
+      className="absolute inset-0 z-20 flex items-center justify-center bg-bg/45 p-4 backdrop-blur-[1px]"
+      data-testid="kanban-file-preview-overlay"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) closeWorkspaceTab(tab.id);
+      }}
+    >
+      <section
+        role="dialog"
+        aria-label={tab.title}
+        className="flex h-[min(760px,calc(100%-2rem))] w-[min(980px,calc(100%-2rem))] min-w-0 flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-bg-sidebar/70 px-3">
+          <div className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
+            {tab.title}
+          </div>
+          <IconButton
+            aria-label={t("dialogs.common.close")}
+            onClick={() => closeWorkspaceTab(tab.id)}
+          >
+            <X size={13} />
+          </IconButton>
+        </header>
+        <div className="min-h-0 flex-1">
+          <FileViewer
+            key={tab.id}
+            path={tab.path}
+            target={tab.target}
+            viewState={tab.viewState}
+            onViewStateChange={(patch) =>
+              updateCodeViewerTabViewState(tab.id, patch)
+            }
+            isActive
+          />
+        </div>
+      </section>
     </div>
   );
 }
