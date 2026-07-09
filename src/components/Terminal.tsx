@@ -2447,18 +2447,8 @@ export function Terminal({
       isActive: () => isActiveRef.current,
     });
     outputWriterRef.current = outputWriter;
-    const OUTPUT_WRITER_IDLE_SAVE_TIMEOUT_MS = 200;
     const waitForOutputWriterIdleBeforeSave = async () => {
-      let timer: number | null = null;
-      await Promise.race([
-        outputWriter.whenIdle(),
-        new Promise<void>((resolve) => {
-          timer = window.setTimeout(resolve, OUTPUT_WRITER_IDLE_SAVE_TIMEOUT_MS);
-        }),
-      ]);
-      if (timer !== null) {
-        window.clearTimeout(timer);
-      }
+      await outputWriter.whenIdle();
     };
 
     // React StrictMode in dev runs effects twice (mount → cleanup → mount).
@@ -2770,14 +2760,17 @@ export function Terminal({
     // ~1s debounce window of unsaved output; that is the cost we accept
     // in exchange for not constantly serialising idle buffers.
     const SCROLLBACK_MAX_ROWS = 2000;
-    const persistScrollbackAsync = async (options?: { force?: boolean }) => {
+    const persistScrollbackAsync = async (options?: {
+      force?: boolean;
+      skipOutputDrain?: boolean;
+    }) => {
       // `savesAllowed` flips true only after the initial scrollback_load
       // settles. Skipping the save until then prevents a still-empty
       // buffer from clobbering the persisted scrollback during the
       // StrictMode mount → cleanup → mount cycle.
       if ((!options?.force && disposed) || !savesAllowed) return;
       try {
-        if (!disposed) {
+        if (!options?.skipOutputDrain) {
           await waitForOutputWriterIdleBeforeSave();
         }
         if ((!options?.force && disposed) || !savesAllowed) return;
@@ -2797,6 +2790,25 @@ export function Terminal({
       sessionId,
       persistScrollbackAsync,
     );
+    let terminalResourcesDisposed = false;
+    const disposeTerminalResources = () => {
+      if (terminalResourcesDisposed) return;
+      terminalResourcesDisposed = true;
+      if (outputWriterRef.current === outputWriter) {
+        outputWriterRef.current = null;
+      }
+      unpatchMouseCoordinateScale();
+      try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
+      webLinksDisposable = null;
+      try { fileLinksDisposable?.dispose(); } catch { /* ignore */ }
+      fileLinksDisposable = null;
+      try { fitAddon.dispose(); } catch { /* ignore */ }
+      try { serializeAddon.dispose(); } catch { /* ignore */ }
+      term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
+      fitTerminalRef.current = null;
+    };
 
     return () => {
       disposed = true;
@@ -2812,17 +2824,9 @@ export function Terminal({
         window.clearTimeout(scrollbackSaveTimer);
         scrollbackSaveTimer = null;
       }
-      if (detachingForReuse) {
-        // A resident-limit eviction can unmount the terminal less than one
-        // debounce window after the latest output. Persist once from cleanup so
-        // the next mount cannot fall back to an older disk snapshot if daemon
-        // reattach is unavailable or delayed. `savesAllowed` still protects
-        // StrictMode's pre-load cleanup from writing an empty buffer.
-        void persistScrollbackAsync({ force: true });
-      }
-      outputWriter.dispose();
-      if (outputWriterRef.current === outputWriter) {
-        outputWriterRef.current = null;
+      const drainAndPersistBeforeDispose = detachingForReuse;
+      if (!drainAndPersistBeforeDispose) {
+        outputWriter.dispose();
       }
       if (viewportRepaintTimer !== null) {
         window.clearTimeout(viewportRepaintTimer);
@@ -2916,17 +2920,25 @@ export function Terminal({
           });
         }
       });
-      unpatchMouseCoordinateScale();
-      try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
-      webLinksDisposable = null;
-      try { fileLinksDisposable?.dispose(); } catch { /* ignore */ }
-      fileLinksDisposable = null;
-      try { fitAddon.dispose(); } catch { /* ignore */ }
-      try { serializeAddon.dispose(); } catch { /* ignore */ }
-      term.dispose();
-      termRef.current = null;
-      fitRef.current = null;
-      fitTerminalRef.current = null;
+      if (drainAndPersistBeforeDispose) {
+        // A resident-limit eviction can unmount the terminal less than one
+        // debounce window after the latest output. Keep xterm and the
+        // serializer alive long enough to parse queued bytes, then persist the
+        // resulting buffer before releasing the frontend terminal resources.
+        void (async () => {
+          try {
+            await outputWriter.drainAndDispose();
+            await persistScrollbackAsync({
+              force: true,
+              skipOutputDrain: true,
+            });
+          } finally {
+            disposeTerminalResources();
+          }
+        })();
+      } else {
+        disposeTerminalResources();
+      }
     };
   }, [sessionId, repoPath, cwd]);
 

@@ -130,9 +130,36 @@ describe("createTerminalOutputWriter", () => {
     expect(written).toEqual(["hidden"]);
   });
 
-  it("resolves whenIdle after queued output has been parsed", async () => {
+  it("drains inactive output urgently when the queue crosses the high-water mark", async () => {
     vi.useFakeTimers();
-    const frames = createFrameScheduler();
+    const written: string[] = [];
+    const writer = createTerminalOutputWriter({
+      write: (chunk, onParsed) => {
+        written.push(text(chunk));
+        onParsed();
+      },
+      afterWrite: vi.fn(),
+      isActive: () => false,
+      activeBatchBytes: 6,
+      inactiveBatchBytes: 2,
+      maxQueuedBytes: 5,
+      inactiveDelayMs: 80,
+      setTimeoutFn: window.setTimeout.bind(window),
+      clearTimeoutFn: window.clearTimeout.bind(window),
+    });
+
+    writer.enqueue(bytes("abc"));
+    writer.enqueue(bytes("def"));
+
+    vi.advanceTimersByTime(80);
+    expect(written).toEqual([]);
+
+    await Promise.resolve();
+    expect(written).toEqual(["abcdef"]);
+    expect(writer.pendingBytes()).toBe(0);
+  });
+
+  it("resolves whenIdle after queued output has been parsed", async () => {
     const parseCallbacks: Array<() => void> = [];
     const writer = createTerminalOutputWriter({
       write: (_chunk, onParsed) => {
@@ -140,8 +167,6 @@ describe("createTerminalOutputWriter", () => {
       },
       afterWrite: vi.fn(),
       isActive: () => true,
-      requestFrame: frames.requestFrame,
-      cancelFrame: frames.cancelFrame,
     });
 
     writer.enqueue(bytes("pending"));
@@ -151,7 +176,6 @@ describe("createTerminalOutputWriter", () => {
       resolved = true;
     });
 
-    frames.runFrame();
     await Promise.resolve();
     expect(resolved).toBe(false);
 
@@ -159,5 +183,44 @@ describe("createTerminalOutputWriter", () => {
     parseCallbacks[0]();
     await idle;
     expect(resolved).toBe(true);
+  });
+
+  it("drains queued output before disposing", async () => {
+    vi.useFakeTimers();
+    const parseCallbacks: Array<() => void> = [];
+    const written: string[] = [];
+    const writer = createTerminalOutputWriter({
+      write: (chunk, onParsed) => {
+        written.push(text(chunk));
+        parseCallbacks.push(onParsed);
+      },
+      afterWrite: vi.fn(),
+      isActive: () => false,
+      inactiveDelayMs: 80,
+      setTimeoutFn: window.setTimeout.bind(window),
+      clearTimeoutFn: window.clearTimeout.bind(window),
+    });
+
+    writer.enqueue(bytes("tail"));
+    const drained = writer.drainAndDispose();
+    let resolved = false;
+    void drained.then(() => {
+      resolved = true;
+    });
+
+    vi.advanceTimersByTime(80);
+    expect(written).toEqual([]);
+
+    await Promise.resolve();
+    expect(written).toEqual(["tail"]);
+    expect(resolved).toBe(false);
+
+    parseCallbacks[0]();
+    await drained;
+    expect(resolved).toBe(true);
+
+    writer.enqueue(bytes("ignored"));
+    await Promise.resolve();
+    expect(written).toEqual(["tail"]);
   });
 });
