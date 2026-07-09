@@ -125,6 +125,8 @@ export interface Session {
   status: SessionStatus;
   /** Ephemeral status-poll detail. Not persisted in backend sessions. */
   status_reason?: SessionStatusReason | null;
+  /** Ephemeral time when the current status started. */
+  status_started_at?: string | null;
   created_at: string;
   updated_at: string;
   last_message: string | null;
@@ -145,8 +147,12 @@ export interface Session {
   in_worktree: boolean;
   /** Current live agent provider, if a known agent process is under the PTY. */
   agent_provider?: SessionAgentProvider | null;
+  /** Provider for the paired transcript path/id, independent from live process state. */
+  agent_transcript_provider?: SessionAgentProvider | null;
   /** Most recently paired agent transcript id, if Acorn has paired this tab to one. */
   agent_transcript_id?: string | null;
+  /** Ephemeral path to the transcript currently used for status/preview reads. */
+  agent_transcript_path?: string | null;
   /** Ephemeral live process names observed under the session PTY. */
   active_processes?: SessionProcessSummary[];
   /** Ephemeral git workdir that produced the current live branch. */
