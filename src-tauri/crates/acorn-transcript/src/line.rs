@@ -295,7 +295,7 @@ fn codex_turn_state(value: &Value) -> Option<TurnState> {
         .and_then(Value::as_str)
         .unwrap_or("");
     match payload_type {
-        "task_complete" => Some(TurnState::WaitingForInput),
+        "task_complete" | "turn_complete" => Some(TurnState::WaitingForInput),
         "user_message" => Some(TurnState::Working),
         "function_call" | "function_call_output" | "reasoning" => Some(TurnState::Working),
         "agent_message" => {
@@ -713,6 +713,15 @@ mod tests {
     #[test]
     fn codex_task_complete_maps_to_waiting_for_input() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
+        assert_eq!(
+            classify(AgentKind::Codex, tail, true),
+            Some(TurnState::WaitingForInput),
+        );
+    }
+
+    #[test]
+    fn codex_turn_complete_maps_to_waiting_for_input() {
+        let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"turn_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
             Some(TurnState::WaitingForInput),
