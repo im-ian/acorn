@@ -1312,6 +1312,7 @@
       "title": "Conversation",
       "user": "User",
       "assistant": "Assistant",
+      "recentMessages": "Recent messages",
       "turns": "Turns",
       "completeTurns": "Complete turns",
       "runningTurns": "Running",
