@@ -1391,6 +1391,7 @@
       "runSession": "새 터미널에서 실행",
       "runInWorktree": "워크트리에서 실행",
       "copyResume": "resume 명령 복사",
+      "copyTranscriptPath": "transcript 경로 복사",
       "copyWorktreePath": "워크트리 경로 복사",
       "moveTranscriptToTrash": "transcript를 휴지통으로 이동...",
       "worktreeMissing": "없음",
