@@ -719,6 +719,27 @@ mod tests {
     }
 
     #[test]
+    fn claude_queue_operation_is_status_meta() {
+        let tail = format!(
+            "{}\n{}\n",
+            assistant("end_turn"),
+            r#"{"type":"queue-operation","operation":"enqueue","content":"follow up"}"#
+        );
+        assert_eq!(
+            classify(AgentKind::Claude, &tail, true),
+            Some(TurnState::WaitingForInput),
+        );
+        assert_eq!(
+            classify(
+                AgentKind::Claude,
+                r#"{"type":"queue-operation","operation":"enqueue","content":"follow up"}"#,
+                true,
+            ),
+            None,
+        );
+    }
+
+    #[test]
     fn claude_unknown_stop_reason_treated_as_working() {
         assert_eq!(
             classify(AgentKind::Claude, &assistant("max_tokens"), true),

@@ -24,11 +24,11 @@
 //! - last `type=USER_INPUT` or any non-DONE model/tool line -> Working.
 //!
 //! Meta-only lines (claude: `last-prompt` / `permission-mode` /
-//! `attachment` / `file-history-snapshot` / `system`; codex: `token_count`
-//! and other event_msg telemetry) are ignored when picking the last
-//! message. The transcript line itself is the source of truth; we
-//! deliberately do not gate on mtime, otherwise the moment after a turn
-//! ends (file still warm) gets misreported as Working.
+//! `attachment` / `file-history-snapshot` / `queue-operation` / `system`;
+//! codex: `token_count` and other event_msg telemetry) are ignored when
+//! picking the last message. The transcript line itself is the source of truth;
+//! we deliberately do not gate on mtime, otherwise the moment after a turn ends
+//! (file still warm) gets misreported as Working.
 //!
 //! Transcript resolution lives in the host `acorn` crate (it consults
 //! `agent_resume`'s persister markers + the legacy `~/.claude/projects/`
@@ -167,6 +167,7 @@ mod tests {
             r#"{"type":"permission-mode","mode":"acceptEdits"}"#,
             r#"{"type":"attachment"}"#,
             r#"{"type":"file-history-snapshot"}"#,
+            r#"{"type":"queue-operation","operation":"enqueue","content":"follow up"}"#,
             // System lines (turn_duration, away_summary) get appended after the
             // assistant's `end_turn`. The walker must skip past them and still
             // classify the trailing assistant turn, otherwise the sidebar dot
