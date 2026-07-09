@@ -1332,6 +1332,7 @@
       "title": "대화",
       "user": "사용자",
       "assistant": "Assistant",
+      "recentMessages": "최근 메시지",
       "turns": "턴",
       "completeTurns": "완료 턴",
       "runningTurns": "진행 중",

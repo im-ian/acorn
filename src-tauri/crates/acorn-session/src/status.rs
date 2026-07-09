@@ -11,8 +11,9 @@
 //! - no transcript yet -> Ready (session has not produced any conversation)
 //!
 //! Codex transcripts:
-//! - last `payload.type=task_complete` (or `agent_message` with
-//!   `phase=final_answer`) -> WaitingForInput (codex finished a turn).
+//! - last `payload.type=task_complete` / `turn_complete` (also accepted
+//!   `msg`-wrapped or top-level; or `agent_message` with `phase=final_answer`)
+//!   -> WaitingForInput (codex finished a turn).
 //! - last `payload.type=user_message` -> Working (the user just sent a
 //!   prompt and codex is composing the response).
 //! - everything else with content -> Working (function calls, intermediate
@@ -284,6 +285,33 @@ mod tests {
     #[test]
     fn codex_task_complete_maps_to_waiting_for_input() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
+        assert_eq!(
+            classify_tail(AgentKind::Codex, tail, true),
+            Some(TurnState::WaitingForInput),
+        );
+    }
+
+    #[test]
+    fn codex_turn_complete_maps_to_waiting_for_input() {
+        let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"turn_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
+        assert_eq!(
+            classify_tail(AgentKind::Codex, tail, true),
+            Some(TurnState::WaitingForInput),
+        );
+    }
+
+    #[test]
+    fn codex_msg_wrapped_turn_complete_maps_to_waiting_for_input() {
+        let tail = r#"{"msg":{"type":"turn_complete","last_agent_message":"done"}}"#;
+        assert_eq!(
+            classify_tail(AgentKind::Codex, tail, true),
+            Some(TurnState::WaitingForInput),
+        );
+    }
+
+    #[test]
+    fn codex_top_level_turn_complete_maps_to_waiting_for_input() {
+        let tail = r#"{"type":"turn_complete","last_agent_message":"done"}"#;
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
             Some(TurnState::WaitingForInput),

@@ -40,6 +40,10 @@ import {
   repaintTerminalViewport,
 } from "../lib/terminalRepaint";
 import {
+  createTerminalOutputWriter,
+  type TerminalOutputWriter,
+} from "../lib/terminalOutputWriter";
+import {
   findConversationPromptTarget,
   scanForContextPrompt,
   TERMINAL_CONVERSATION_NAV_EVENT,
@@ -577,6 +581,8 @@ export function Terminal({
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
+  const isActiveRef = useRef(isActive);
+  const outputWriterRef = useRef<TerminalOutputWriter | null>(null);
   const pasteAgentProviderRef =
     useRef<SessionAgentProvider | null>(pasteAgentProvider);
   const agentProviderRef = useRef<SessionAgentProvider | null>(agentProvider);
@@ -589,6 +595,12 @@ export function Terminal({
   const fontSmoothing = useSettings(
     (s) => s.settings.terminal.fontSmoothing,
   );
+
+  isActiveRef.current = isActive;
+
+  useEffect(() => {
+    if (isActive) outputWriterRef.current?.flushSoon();
+  }, [isActive]);
 
   useEffect(() => {
     pasteAgentProviderRef.current = pasteAgentProvider;
@@ -2416,6 +2428,29 @@ export function Terminal({
       }
     }
 
+    const outputWriter = createTerminalOutputWriter({
+      write: (bytes, onParsed) => {
+        term.write(bytes, onParsed);
+      },
+      afterWrite: () => {
+        if (disposed) return;
+        if (isActiveRef.current) {
+          // Hidden portal targets keep their xterm buffer current but do not
+          // need DOM repaint work until TerminalHost moves them on-screen.
+          scheduleViewportFrameRepaint();
+          scheduleViewportIdleRepaint();
+        }
+        // The sticky prompt is buffer-derived; keep it in sync with parsed
+        // output even when the terminal was hidden during the write.
+        scheduleContextDispatch();
+      },
+      isActive: () => isActiveRef.current,
+    });
+    outputWriterRef.current = outputWriter;
+    const waitForOutputWriterIdleBeforeSave = async () => {
+      await outputWriter.whenIdle();
+    };
+
     // React StrictMode in dev runs effects twice (mount → cleanup → mount).
     // Without per-await `disposed` guards, the first IIFE keeps progressing
     // after its cleanup has run, and ends up issuing `pty_spawn` for a
@@ -2426,23 +2461,9 @@ export function Terminal({
     // PTY to also exit (zsh prints "Saving session..." twice). Guard every
     // await resumption point so a disposed mount short-circuits cleanly.
     const handlePtyOutput = (bytes: Uint8Array) => {
-      term.write(bytes, () => {
-        if (disposed) return;
-        // The parser has drained this chunk. Force a frame-bound
-        // refresh so fast cursor-move/erase TUIs do not leave stale
-        // DOM cursor blocks or cells behind.
-        scheduleViewportFrameRepaint();
-        // Also schedule a viewport repaint once the burst goes quiet,
-        // so a TUI redraw interrupted mid-stream doesn't leave stale
-        // glyphs from a wider previous line painted on screen.
-        scheduleViewportIdleRepaint();
-        // A new prompt row may have just been rendered. Rescan the
-        // buffer so the sticky banner picks it up in the same frame
-        // instead of waiting for the user's next scroll.
-        scheduleContextDispatch();
-      });
-      // Output will land in the buffer — schedule a debounced save so the
-      // new content reaches disk ~1s after activity ends.
+      outputWriter.enqueue(bytes);
+      // Output is queued for the buffer — schedule a debounced save so the new
+      // content reaches disk ~1s after activity ends.
       scheduleScrollbackSave();
       // Agents can create a worktree and chdir a descendant process without
       // triggering our shell's OSC 7 prompt hook. Probe the live descendant
@@ -2739,13 +2760,20 @@ export function Terminal({
     // ~1s debounce window of unsaved output; that is the cost we accept
     // in exchange for not constantly serialising idle buffers.
     const SCROLLBACK_MAX_ROWS = 2000;
-    const persistScrollbackAsync = async (options?: { force?: boolean }) => {
+    const persistScrollbackAsync = async (options?: {
+      force?: boolean;
+      skipOutputDrain?: boolean;
+    }) => {
       // `savesAllowed` flips true only after the initial scrollback_load
       // settles. Skipping the save until then prevents a still-empty
       // buffer from clobbering the persisted scrollback during the
       // StrictMode mount → cleanup → mount cycle.
       if ((!options?.force && disposed) || !savesAllowed) return;
       try {
+        if (!options?.skipOutputDrain) {
+          await waitForOutputWriterIdleBeforeSave();
+        }
+        if ((!options?.force && disposed) || !savesAllowed) return;
         const data = serializeAddon.serialize({
           scrollback: SCROLLBACK_MAX_ROWS,
         });
@@ -2762,6 +2790,25 @@ export function Terminal({
       sessionId,
       persistScrollbackAsync,
     );
+    let terminalResourcesDisposed = false;
+    const disposeTerminalResources = () => {
+      if (terminalResourcesDisposed) return;
+      terminalResourcesDisposed = true;
+      if (outputWriterRef.current === outputWriter) {
+        outputWriterRef.current = null;
+      }
+      unpatchMouseCoordinateScale();
+      try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
+      webLinksDisposable = null;
+      try { fileLinksDisposable?.dispose(); } catch { /* ignore */ }
+      fileLinksDisposable = null;
+      try { fitAddon.dispose(); } catch { /* ignore */ }
+      try { serializeAddon.dispose(); } catch { /* ignore */ }
+      term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
+      fitTerminalRef.current = null;
+    };
 
     return () => {
       disposed = true;
@@ -2777,13 +2824,9 @@ export function Terminal({
         window.clearTimeout(scrollbackSaveTimer);
         scrollbackSaveTimer = null;
       }
-      if (detachingForReuse) {
-        // A resident-limit eviction can unmount the terminal less than one
-        // debounce window after the latest output. Persist once from cleanup so
-        // the next mount cannot fall back to an older disk snapshot if daemon
-        // reattach is unavailable or delayed. `savesAllowed` still protects
-        // StrictMode's pre-load cleanup from writing an empty buffer.
-        void persistScrollbackAsync({ force: true });
+      const drainAndPersistBeforeDispose = detachingForReuse;
+      if (!drainAndPersistBeforeDispose) {
+        outputWriter.dispose();
       }
       if (viewportRepaintTimer !== null) {
         window.clearTimeout(viewportRepaintTimer);
@@ -2877,17 +2920,25 @@ export function Terminal({
           });
         }
       });
-      unpatchMouseCoordinateScale();
-      try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
-      webLinksDisposable = null;
-      try { fileLinksDisposable?.dispose(); } catch { /* ignore */ }
-      fileLinksDisposable = null;
-      try { fitAddon.dispose(); } catch { /* ignore */ }
-      try { serializeAddon.dispose(); } catch { /* ignore */ }
-      term.dispose();
-      termRef.current = null;
-      fitRef.current = null;
-      fitTerminalRef.current = null;
+      if (drainAndPersistBeforeDispose) {
+        // A resident-limit eviction can unmount the terminal less than one
+        // debounce window after the latest output. Keep xterm and the
+        // serializer alive long enough to parse queued bytes, then persist the
+        // resulting buffer before releasing the frontend terminal resources.
+        void (async () => {
+          try {
+            await outputWriter.drainAndDispose();
+            await persistScrollbackAsync({
+              force: true,
+              skipOutputDrain: true,
+            });
+          } finally {
+            disposeTerminalResources();
+          }
+        })();
+      } else {
+        disposeTerminalResources();
+      }
     };
   }, [sessionId, repoPath, cwd]);
 

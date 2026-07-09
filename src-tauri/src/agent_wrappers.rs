@@ -144,7 +144,8 @@ case "$event" in
   *)
     event=""
     hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
-    # Codex's turn-completion events (Stop / agent-turn-complete / task_complete)
+    # Codex's turn-completion events (Stop / agent-turn-complete /
+    # task_complete / turn_complete)
     # mean the agent finished the turn and is awaiting the user, so they map to
     # needs_input. Codex emits no "process exited" event here — that shows up as
     # the status poll observing an idle shell.
@@ -158,7 +159,7 @@ case "$event" in
       codex_type=$(printf '%s\n' "$input" | grep -oE '"type"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
       case "$codex_type" in
         task_started) event="start" ;;
-        agent-turn-complete|task_complete) event="needs_input" ;;
+        agent-turn-complete|task_complete|turn_complete) event="needs_input" ;;
         exec_approval_request|apply_patch_approval_request|request_user_input) event="needs_input" ;;
       esac
     fi
@@ -661,7 +662,8 @@ mod tests {
         assert!(notify.contains("\"provider\":\"codex\""));
         // Turn-completion events map to needs_input (awaiting the user), not a
         // per-turn "completed"; Codex emits no process-exit hook here.
-        assert!(notify.contains("agent-turn-complete|task_complete) event=\"needs_input\""));
+        assert!(notify
+            .contains("agent-turn-complete|task_complete|turn_complete) event=\"needs_input\""));
         assert!(notify.contains("Stop) event=\"needs_input\""));
         assert!(!notify.contains("event=\"stop\""));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
