@@ -934,6 +934,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const worktreeName = basename(session.worktree_path);
+  const transcriptPath = session.agent_transcript_path?.trim() || null;
   const branchName = session.branch?.trim();
   const lastMessage =
     session.last_agent_message?.trim() || session.last_message?.trim();
@@ -1109,6 +1110,15 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
             icon: <Copy size={12} />,
             onClick: () => void copyToClipboard(session.worktree_path),
           },
+          ...(transcriptPath
+            ? [
+                {
+                  label: sidebarText(t, "sidebar.actions.transcriptPath"),
+                  icon: <Copy size={12} />,
+                  onClick: () => void copyToClipboard(transcriptPath),
+                } satisfies ContextMenuItem,
+              ]
+            : []),
           {
             label: sidebarText(t, "sidebar.actions.worktreeName"),
             icon: <Copy size={12} />,
@@ -1154,6 +1164,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
       showToast,
       setWorkspaceViewMode,
       t,
+      transcriptPath,
       worktreeName,
     ],
   );
@@ -1395,6 +1406,7 @@ function KanbanTerminalPopover({
   const hasManualPositionRef = useRef(false);
 
   const worktreeName = basename(session.worktree_path);
+  const transcriptPath = session.agent_transcript_path?.trim() || null;
   const title = cleanWorkspaceSessionTerminalPopoverTitle(session.name);
   const statusTone = STATUS_TONE[session.status];
   const isChat = session.mode === "chat";
@@ -1559,6 +1571,15 @@ function KanbanTerminalPopover({
             icon: <Copy size={12} />,
             onClick: () => void copyToClipboard(session.worktree_path),
           },
+          ...(transcriptPath
+            ? [
+                {
+                  label: sidebarText(t, "sidebar.actions.transcriptPath"),
+                  icon: <Copy size={12} />,
+                  onClick: () => void copyToClipboard(transcriptPath),
+                } satisfies ContextMenuItem,
+              ]
+            : []),
           {
             label: sidebarText(t, "sidebar.actions.worktreeName"),
             icon: <Copy size={12} />,
@@ -1600,6 +1621,7 @@ function KanbanTerminalPopover({
       showToast,
       setWorkspaceViewMode,
       t,
+      transcriptPath,
       worktreeName,
     ],
   );

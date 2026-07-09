@@ -471,6 +471,73 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(tooltip.locator("svg")).toHaveCount(6);
   });
 
+  test("session context menu copies the paired transcript path", async ({
+    page,
+    tauri,
+  }) => {
+    const transcriptPath = "/Users/me/.codex/sessions/copyable.jsonl";
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async (text: string) => {
+            (window as unknown as { __copiedText?: string }).__copiedText =
+              text;
+          },
+        },
+      });
+    });
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "copyable-session",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "waiting_for_input",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+        agent_provider: "codex",
+        agent_transcript_id: "codex-1",
+        agent_transcript_path: transcriptPath,
+      },
+    ]);
+
+    await page.goto("/");
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /copyable-session/ })
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Copy" }).hover();
+    await page.getByRole("menuitem", { name: "Transcript Path" }).click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __copiedText?: string }).__copiedText,
+        ),
+      )
+      .toBe(transcriptPath);
+  });
+
   test("session rows surface open PR and active process context", async ({
     page,
     tauri,
