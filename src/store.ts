@@ -238,10 +238,18 @@ async function loadWorkSummaryTokenBaseline(
       };
     }
     if (!session.agent_transcript_id) return undefined;
-    const transcript = await api.agentTranscriptSummary(
-      session.repo_path,
-      session.agent_transcript_id,
-    );
+    const transcript =
+      session.agent_provider && session.agent_transcript_path
+        ? await api.agentTranscriptSummaryAtPath(
+            session.repo_path,
+            session.agent_provider,
+            session.agent_transcript_id,
+            session.agent_transcript_path,
+          )
+        : await api.agentTranscriptSummary(
+            session.repo_path,
+            session.agent_transcript_id,
+          );
     if (!transcript) return undefined;
     return {
       inputTokens: transcript.token_usage.input_tokens,

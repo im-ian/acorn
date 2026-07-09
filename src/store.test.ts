@@ -1218,6 +1218,61 @@ describe("workspace tabs", () => {
     });
   });
 
+  it("loads terminal work summary token baseline from the paired transcript path", async () => {
+    const active = session("a1", REPO_A, {
+      name: "Feature runner",
+      worktree_path: `${REPO_A}/.worktrees/a1`,
+      mode: "terminal",
+      agent_provider: "codex",
+      agent_transcript_id: "transcript-1",
+      agent_transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
+    });
+    await seed([project(REPO_A, 0)], [active]);
+    mockApi.agentTranscriptSummaryAtPath.mockResolvedValueOnce({
+      provider: "codex",
+      id: "transcript-1",
+      transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
+      updated_at: 1_766_000_000,
+      message_count: 4,
+      user_messages: 2,
+      assistant_messages: 2,
+      turn_count: 2,
+      complete_turns: 2,
+      running_turns: 0,
+      token_usage: {
+        input_tokens: 320,
+        output_tokens: 90,
+        cache_read_tokens: 12,
+        cache_creation_tokens: 3,
+        reasoning_tokens: 21,
+        total_tokens: 426,
+        messages_with_usage: 2,
+      },
+    });
+
+    await useAppStore.getState().openWorkSummaryTab();
+    await flushPromises();
+
+    expect(mockApi.agentTranscriptSummaryAtPath).toHaveBeenCalledWith(
+      REPO_A,
+      "codex",
+      "transcript-1",
+      "/Users/me/.codex/sessions/transcript-1.jsonl",
+    );
+    expect(mockApi.agentTranscriptSummary).not.toHaveBeenCalled();
+    expect(useAppStore.getState().workspaceTabs[useAppStore.getState().activeTabId!])
+      .toMatchObject({
+        kind: "work-summary",
+        sessionId: "a1",
+        tokenBaseline: expect.objectContaining({
+          inputTokens: 320,
+          outputTokens: 90,
+          totalTokens: 426,
+          messagesWithUsage: 2,
+        }),
+      });
+  });
+
   it("opens a work summary tab before terminal token baseline loading finishes", async () => {
     const active = session("a1", REPO_A, {
       name: "Feature runner",
