@@ -730,6 +730,68 @@ test.describe("workspace kanban mode", () => {
     ).toBeVisible();
   });
 
+  test("moves between cards with arrow keys and closes the popover from the keyboard", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("alpha", "alpha", "ready", {
+        updated_at: "2026-01-01T00:00:01Z",
+      }),
+      session("shell", "shell", "ready"),
+      session("needs-review", "needs-review", "waiting_for_input"),
+      session("runner", "runner", "working"),
+      session("broken", "broken", "errored"),
+    ]);
+
+    await page.goto("/");
+
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    await expect(board).toBeVisible();
+    await board.getByLabel("Sort sessions").selectOption("name-asc");
+
+    const alpha = board.getByRole("button", { name: "Open alpha" });
+    const shell = board.getByRole("button", { name: "Open shell" });
+    const needsReview = board.getByRole("button", {
+      name: "Open needs-review",
+    });
+    const runner = board.getByRole("button", { name: "Open runner" });
+    const broken = board.getByRole("button", { name: "Open broken" });
+
+    await alpha.focus();
+    await expect(alpha).toBeFocused();
+
+    await alpha.press("ArrowDown");
+    await expect(shell).toBeFocused();
+
+    await shell.press("ArrowRight");
+    await expect(needsReview).toBeFocused();
+
+    await needsReview.press("ArrowRight");
+    await expect(runner).toBeFocused();
+
+    await runner.press("ArrowRight");
+    await expect(broken).toBeFocused();
+
+    await broken.press("ArrowLeft");
+    await expect(runner).toBeFocused();
+
+    await runner.press("Enter");
+    const popover = page.getByTestId("kanban-terminal-popover");
+    await expect(popover).toBeVisible();
+    await expect(
+      popover.getByRole("heading", { name: "runner" }),
+    ).toBeVisible();
+
+    await pressHotkey(page, { mod: true, key: "w" });
+    await expect(popover).toHaveCount(0);
+    await expect(runner).toBeFocused();
+  });
+
   test("card context menu can rename a session", async ({ page, tauri }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.handle("list_sessions", () => {
