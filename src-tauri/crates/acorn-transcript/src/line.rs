@@ -290,19 +290,14 @@ fn claude_turn_state(value: &Value) -> Option<TurnState> {
 }
 
 fn codex_turn_state(value: &Value) -> Option<TurnState> {
-    let payload_type = value
-        .pointer("/payload/type")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let event = codex_event_value(value);
+    let payload_type = event.get("type").and_then(Value::as_str).unwrap_or("");
     match payload_type {
         "task_complete" | "turn_complete" => Some(TurnState::WaitingForInput),
         "user_message" => Some(TurnState::Working),
         "function_call" | "function_call_output" | "reasoning" => Some(TurnState::Working),
         "agent_message" => {
-            let phase = value
-                .pointer("/payload/phase")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let phase = event.get("phase").and_then(Value::as_str).unwrap_or("");
             Some(if phase == "final_answer" {
                 TurnState::WaitingForInput
             } else {
@@ -310,7 +305,7 @@ fn codex_turn_state(value: &Value) -> Option<TurnState> {
             })
         }
         "message" => {
-            if value.pointer("/payload/role").and_then(Value::as_str) == Some("assistant") {
+            if event.get("role").and_then(Value::as_str) == Some("assistant") {
                 Some(TurnState::Working)
             } else {
                 None
@@ -318,6 +313,14 @@ fn codex_turn_state(value: &Value) -> Option<TurnState> {
         }
         _ => None,
     }
+}
+
+fn codex_event_value(value: &Value) -> &Value {
+    value
+        .get("payload")
+        .filter(|v| v.is_object())
+        .or_else(|| value.get("msg").filter(|v| v.is_object()))
+        .unwrap_or(value)
 }
 
 fn antigravity_turn_state(value: &Value) -> Option<TurnState> {
@@ -722,6 +725,24 @@ mod tests {
     #[test]
     fn codex_turn_complete_maps_to_waiting_for_input() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"turn_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
+        assert_eq!(
+            classify(AgentKind::Codex, tail, true),
+            Some(TurnState::WaitingForInput),
+        );
+    }
+
+    #[test]
+    fn codex_msg_wrapped_turn_complete_maps_to_waiting_for_input() {
+        let tail = r#"{"msg":{"type":"turn_complete","last_agent_message":"done"}}"#;
+        assert_eq!(
+            classify(AgentKind::Codex, tail, true),
+            Some(TurnState::WaitingForInput),
+        );
+    }
+
+    #[test]
+    fn codex_top_level_turn_complete_maps_to_waiting_for_input() {
+        let tail = r#"{"type":"turn_complete","last_agent_message":"done"}"#;
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
             Some(TurnState::WaitingForInput),
