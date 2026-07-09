@@ -1446,6 +1446,9 @@
       "trashTranscriptCancel": "취소",
       "trashTranscriptConfirm": "휴지통으로 이동",
       "resumeSessionName": "resume",
+      "recoverableSignal": "복구 가능한 내용: {items}",
+      "recoverableQueued": "대기 메시지 {count}개",
+      "recoverableSubagents": "subagent transcript {count}개",
       "createFailed": "터미널 세션을 만들지 못했습니다"
     },
     "staged": {

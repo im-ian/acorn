@@ -467,6 +467,8 @@ describe("RightPanel background tab loading", () => {
         id: "codex-local",
         title: "Local Codex session",
         preview: null,
+        queued_message_count: 0,
+        subagent_transcript_count: 0,
         cwd: "/Users/tester",
         worktree: null,
         transcript_path: "/Users/tester/.codex/session.jsonl",
@@ -497,6 +499,8 @@ describe("RightPanel background tab loading", () => {
         id: "codex-session",
         title: "Codex patch",
         preview: null,
+        queued_message_count: 0,
+        subagent_transcript_count: 0,
         cwd: REPO,
         worktree: null,
         transcript_path: "/tmp/codex-session.jsonl",
@@ -508,6 +512,8 @@ describe("RightPanel background tab loading", () => {
         id: "claude-session",
         title: "Claude plan",
         preview: null,
+        queued_message_count: 0,
+        subagent_transcript_count: 0,
         cwd: REPO,
         worktree: null,
         transcript_path: "/tmp/claude-session.jsonl",
@@ -543,6 +549,35 @@ describe("RightPanel background tab loading", () => {
 
     expect(container.textContent).not.toContain("Codex patch");
     expect(container.textContent).toContain("Claude plan");
+  });
+
+  it("shows recoverable agent history signals", async () => {
+    useAppStore.setState({ rightTab: "history" });
+    mockApi.listAgentHistory.mockResolvedValue([
+      {
+        provider: "claude",
+        id: "claude-recoverable",
+        title: "Claude session",
+        preview: null,
+        queued_message_count: 1,
+        subagent_transcript_count: 2,
+        cwd: REPO,
+        worktree: null,
+        transcript_path: "/tmp/claude-recoverable.jsonl",
+        updated_at: 1770000001,
+        resume_command: "claude --resume claude-recoverable",
+      },
+    ]);
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("Claude session");
+    expect(container.textContent).toContain(
+      "Recoverable content: 1 queued message(s) + 2 subagent transcript(s)",
+    );
   });
 
   it("does not show native chat sessions in agent history", async () => {
