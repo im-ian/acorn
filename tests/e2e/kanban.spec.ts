@@ -1465,6 +1465,107 @@ test.describe("workspace kanban mode", () => {
     });
   });
 
+  test("keeps a chat popover open when choosing a provider", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__sessions = w.__sessions ?? [
+        {
+          id: "seed",
+          name: "seed",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          mode: "terminal",
+          owner: { kind: "user" },
+          position: null,
+          in_worktree: false,
+        },
+      ];
+      return w.__sessions;
+    });
+    await tauri.handle("create_session", (args) => {
+      const input = args as Record<string, unknown>;
+      const w = window as unknown as {
+        __createSessionCalls?: Array<Record<string, unknown>>;
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(input);
+      const id = `created-${w.__createSessionCalls.length}`;
+      const repoPath =
+        typeof input.repoPath === "string" ? input.repoPath : "/tmp/demo";
+      const session = {
+        id,
+        name: typeof input.name === "string" ? input.name : id,
+        repo_path: repoPath,
+        worktree_path:
+          typeof input.cwdPath === "string" ? input.cwdPath : repoPath,
+        branch: "main",
+        isolated: input.isolated === true,
+        project_scoped: input.projectScoped !== false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: typeof input.kind === "string" ? input.kind : "regular",
+        mode: typeof input.mode === "string" ? input.mode : "terminal",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      };
+      w.__sessions = [...(w.__sessions ?? []), session];
+      return session;
+    });
+
+    await page.goto("/");
+
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    await board.getByRole("button", { name: "Create session" }).click();
+    await page.getByRole("menuitem", { name: "New chat session" }).click();
+
+    const chatCard = board.locator('[data-kanban-session-id="created-1"]');
+    await expect(chatCard).toBeVisible();
+    await expect(page.getByTestId("kanban-terminal-popover")).toHaveCount(0);
+
+    await chatCard.click();
+
+    const popover = page.getByTestId("kanban-terminal-popover");
+    await expect(popover).toBeVisible();
+    await expect(page.getByTestId("chat-popover-body")).toBeVisible();
+
+    const providerSelect = popover.getByRole("combobox", {
+      name: "Chat provider",
+    });
+    await expect(providerSelect).toBeVisible();
+    await providerSelect.click();
+    await expect(
+      page.locator('[data-acorn-floating-layer="select"]'),
+    ).toBeVisible();
+
+    await page.getByRole("option", { name: "Codex" }).click();
+
+    await expect(popover).toBeVisible();
+    await expect(providerSelect).toContainText("Codex");
+  });
+
   test("opens a terminal popover when selecting a project session from the sidebar in kanban mode", async ({
     page,
     tauri,
