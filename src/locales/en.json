@@ -536,6 +536,18 @@
         "toggleRightPanel": {
           "label": "Toggle right panel"
         },
+        "focusPaneLeft": {
+          "label": "Focus pane to the left"
+        },
+        "focusPaneRight": {
+          "label": "Focus pane to the right"
+        },
+        "focusPaneUp": {
+          "label": "Focus pane above"
+        },
+        "focusPaneDown": {
+          "label": "Focus pane below"
+        },
         "splitVertical": {
           "label": "Split pane vertically"
         },

@@ -132,8 +132,9 @@ import {
   SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
   useSettings,
 } from "../lib/settings";
+import { HOTKEY_IDS } from "../lib/hotkeys";
 import { useAppStore } from "../store";
-import { SettingsModal } from "./SettingsModal";
+import { SettingsModal, SHORTCUT_GROUPS } from "./SettingsModal";
 
 const mockApi = vi.mocked(api);
 
@@ -1028,9 +1029,22 @@ describe("SettingsModal font controls", () => {
     expect(bodyText).toContain("Open command palette");
     expect(bodyText).toContain("New control session");
     expect(bodyText).toContain("Latest needs-input tab");
+    expect(bodyText).toContain("Focus pane to the left");
+    expect(bodyText).toContain("Focus pane to the right");
+    expect(bodyText).toContain("Focus pane above");
+    expect(bodyText).toContain("Focus pane below");
     expect(bodyText).toContain("Right panel");
     expect(bodyText).toContain("Record");
     expect(bodyText).toMatch(/⌘P|Ctrl\+P/);
+  });
+
+  it("keeps every configurable hotkey visible in shortcut settings", () => {
+    const listedIds = SHORTCUT_GROUPS.flatMap((group) =>
+      group.items.map((item) => item.id),
+    );
+
+    expect(new Set(listedIds)).toEqual(new Set(HOTKEY_IDS));
+    expect(listedIds).toHaveLength(new Set(listedIds).size);
   });
 
   it("records and resets a shortcut binding", async () => {
