@@ -22,6 +22,9 @@ const MAX_DISCOVERED_FILES_PER_PROVIDER: usize = 5_000;
 const MIN_PARSED_FILES_PER_PROVIDER: usize = 100;
 const MAX_PARSED_FILES_PER_PROVIDER: usize = 500;
 const PARSED_FILES_PER_RESULT: usize = 5;
+const CODEX_SCAN_MAX_DIR_DEPTH: usize = 3;
+const CLAUDE_SCAN_MAX_DIR_DEPTH: usize = 1;
+const ANTIGRAVITY_SCAN_MAX_DIR_DEPTH: usize = 3;
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
 const READ_HEAD_INITIAL_BYTES: u64 = 256 * 1024;
@@ -346,7 +349,9 @@ fn scan_codex(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
     let Some(root) = codex_sessions_root() else {
         return Vec::new();
     };
-    let files = collect_files(&root, |path| is_codex_transcript_path(path, &root));
+    let files = collect_files(&root, CODEX_SCAN_MAX_DIR_DEPTH, |path| {
+        is_codex_transcript_path(path, &root)
+    });
     parse_recent_files(files, limit, |path| parse_codex_file(path, scope))
 }
 
@@ -354,14 +359,20 @@ fn scan_claude(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
     let Some(root) = claude_projects_root() else {
         return Vec::new();
     };
-    let files = collect_files(&root, |path| is_claude_transcript_path(path, &root));
+    let files = collect_files(&root, CLAUDE_SCAN_MAX_DIR_DEPTH, |path| {
+        is_claude_transcript_path(path, &root)
+    });
     parse_recent_files(files, limit, |path| parse_claude_file(path, scope))
 }
 
 fn scan_antigravity(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
     let mut files = Vec::new();
     for root in antigravity_brain_roots() {
-        files.extend(collect_files(&root, is_antigravity_transcript_path));
+        files.extend(collect_files(
+            &root,
+            ANTIGRAVITY_SCAN_MAX_DIR_DEPTH,
+            is_antigravity_transcript_path,
+        ));
     }
     files.sort_by(|a, b| file_updated_at(b).cmp(&file_updated_at(a)));
     files.truncate(MAX_DISCOVERED_FILES_PER_PROVIDER);
@@ -383,7 +394,9 @@ fn find_codex_history_item_by_filename_id(
     transcript_id: &str,
 ) -> Option<AgentHistoryItem> {
     let root = codex_sessions_root()?;
-    let files = collect_files(&root, |path| is_codex_transcript_path(path, &root));
+    let files = collect_files(&root, CODEX_SCAN_MAX_DIR_DEPTH, |path| {
+        is_codex_transcript_path(path, &root)
+    });
     find_history_item_in_files(
         files
             .iter()
@@ -399,7 +412,9 @@ fn find_claude_history_item_by_stem_id(
     transcript_id: &str,
 ) -> Option<AgentHistoryItem> {
     let root = claude_projects_root()?;
-    let files = collect_files(&root, |path| is_claude_transcript_path(path, &root));
+    let files = collect_files(&root, CLAUDE_SCAN_MAX_DIR_DEPTH, |path| {
+        is_claude_transcript_path(path, &root)
+    });
     find_history_item_in_files(
         files
             .into_iter()
@@ -437,7 +452,9 @@ fn find_codex_history_item_by_parsed_id(
     transcript_id: &str,
 ) -> Option<AgentHistoryItem> {
     let root = codex_sessions_root()?;
-    let files = collect_files(&root, |path| is_codex_transcript_path(path, &root));
+    let files = collect_files(&root, CODEX_SCAN_MAX_DIR_DEPTH, |path| {
+        is_codex_transcript_path(path, &root)
+    });
     find_history_item_in_files(parse_budget_files(files), transcript_id, |path| {
         parse_codex_file(path, scope)
     })
@@ -448,7 +465,9 @@ fn find_claude_history_item_by_parsed_id(
     transcript_id: &str,
 ) -> Option<AgentHistoryItem> {
     let root = claude_projects_root()?;
-    let files = collect_files(&root, |path| is_claude_transcript_path(path, &root));
+    let files = collect_files(&root, CLAUDE_SCAN_MAX_DIR_DEPTH, |path| {
+        is_claude_transcript_path(path, &root)
+    });
     find_history_item_in_files(parse_budget_files(files), transcript_id, |path| {
         parse_claude_file(path, scope)
     })
@@ -459,7 +478,11 @@ fn find_antigravity_history_item_by_parsed_id(
     transcript_id: &str,
 ) -> Option<AgentHistoryItem> {
     for root in antigravity_brain_roots() {
-        let files = collect_files(&root, is_antigravity_transcript_path);
+        let files = collect_files(
+            &root,
+            ANTIGRAVITY_SCAN_MAX_DIR_DEPTH,
+            is_antigravity_transcript_path,
+        );
         if let Some(item) =
             find_history_item_in_files(parse_budget_files(files), transcript_id, |path| {
                 parse_antigravity_file(path, scope)
@@ -486,14 +509,18 @@ fn find_history_item_in_files(
         .find(|item| item.id == transcript_id)
 }
 
-fn collect_files(root: &Path, accept: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+fn collect_files(
+    root: &Path,
+    max_dir_depth: usize,
+    accept: impl Fn(&Path) -> bool,
+) -> Vec<PathBuf> {
     if !root.is_dir() {
         return Vec::new();
     }
     let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
+    let mut stack = vec![(root.to_path_buf(), 0_usize)];
 
-    while let Some(dir) = stack.pop() {
+    while let Some((dir, depth)) = stack.pop() {
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
@@ -503,7 +530,9 @@ fn collect_files(root: &Path, accept: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
                 continue;
             };
             if file_type.is_dir() {
-                stack.push(path);
+                if depth < max_dir_depth {
+                    stack.push((path, depth + 1));
+                }
             } else if file_type.is_file() && accept(&path) {
                 out.push(path);
             }
@@ -2064,6 +2093,27 @@ mod tests {
 
         assert!(items.is_empty());
         assert_eq!(attempted, parse_file_budget(2));
+    }
+
+    #[test]
+    fn collect_files_respects_max_dir_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let slug = root.join("-Users-tester-demo");
+        let parent = slug.join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        let nested = slug
+            .join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+            .join("subagents")
+            .join("bbbbbbbb-cccc-dddd-eeee-ffffffffffff.jsonl");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::write(&parent, "{}\n").unwrap();
+        fs::write(&nested, "{}\n").unwrap();
+
+        let files = collect_files(root, 1, |path| {
+            path.extension().and_then(|s| s.to_str()) == Some("jsonl")
+        });
+
+        assert_eq!(files, vec![parent]);
     }
 
     #[test]
