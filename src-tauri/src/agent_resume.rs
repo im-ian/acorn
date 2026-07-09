@@ -80,6 +80,8 @@ pub struct ResumeCandidate {
     pub uuid: String,
     pub last_activity_unix: u64,
     pub preview: Option<String>,
+    pub last_user_message: Option<String>,
+    pub last_agent_message: Option<String>,
 }
 
 /// Surface the modal candidate for `session_id` and `kind`, or `Ok(None)`
@@ -233,14 +235,23 @@ fn candidate_at(
         .and_then(|mt| mt.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let preview = transcript
+    let conversation_preview = transcript
         .as_ref()
-        .and_then(|p| extract_preview(kind, p).ok().flatten());
+        .and_then(|p| extract_conversation_preview(kind, p).ok());
+    let last_user_message = conversation_preview
+        .as_ref()
+        .and_then(|preview| preview.last_user_message.clone());
+    let last_agent_message = conversation_preview
+        .as_ref()
+        .and_then(|preview| preview.last_agent_message.clone());
+    let preview = last_agent_message.clone();
 
     Ok(Some(ResumeCandidate {
         uuid,
         last_activity_unix,
         preview,
+        last_user_message,
+        last_agent_message,
     }))
 }
 
@@ -319,10 +330,6 @@ fn antigravity_brain_roots() -> Vec<PathBuf> {
 pub(crate) struct ConversationPreview {
     pub last_user_message: Option<String>,
     pub last_agent_message: Option<String>,
-}
-
-pub(crate) fn extract_preview(kind: AgentKind, path: &Path) -> io::Result<Option<String>> {
-    Ok(extract_conversation_preview(kind, path)?.last_agent_message)
 }
 
 pub(crate) fn extract_conversation_preview(
@@ -462,7 +469,9 @@ mod tests {
         )
         .unwrap();
 
-        let preview = extract_preview(AgentKind::Codex, &path).unwrap();
+        let preview = extract_conversation_preview(AgentKind::Codex, &path)
+            .unwrap()
+            .last_agent_message;
 
         assert_eq!(preview.as_deref(), Some("Here is the latest Codex answer."));
     }
@@ -547,7 +556,9 @@ mod tests {
         )
         .unwrap();
 
-        let preview = extract_preview(AgentKind::Antigravity, &path).unwrap();
+        let preview = extract_conversation_preview(AgentKind::Antigravity, &path)
+            .unwrap()
+            .last_agent_message;
 
         assert_eq!(
             preview.as_deref(),
