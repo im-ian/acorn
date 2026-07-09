@@ -1778,6 +1778,8 @@
       "copyFailed": "세션 ID를 복사하지 못했습니다.",
       "copyId": "ID 복사",
       "resume": "재개",
+      "lastUser": "사용자",
+      "lastAgent": "에이전트",
       "lastActivityUnknown": "마지막 활동 알 수 없음",
       "justNow": "방금 전",
       "minutesAgo": "분 전",

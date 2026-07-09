@@ -24,12 +24,14 @@ vi.mock("../lib/toasts", () => ({
 }));
 
 import { AgentResumeModal } from "./AgentResumeModal";
-import type { AgentKind } from "../lib/api";
+import type { AgentKind, ResumeCandidate } from "../lib/api";
 
-const CANDIDATE = {
+const CANDIDATE: ResumeCandidate = {
   uuid: "deadbeef-1234-5678-9abc-def012345678",
   lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
   preview: "Preview of the previous conversation",
+  lastUserMessage: "Please inspect the transcript watcher.",
+  lastAgentMessage: "The watcher is paired to this session.",
 };
 const SESSION_ID = "11111111-2222-3333-4444-555555555555";
 
@@ -56,7 +58,7 @@ describe("AgentResumeModal", () => {
     vi.clearAllMocks();
   });
 
-  function render(agent: AgentKind, candidate: typeof CANDIDATE | null) {
+  function render(agent: AgentKind, candidate: ResumeCandidate | null) {
     const onDismiss = vi.fn();
     act(() => {
       root.render(
@@ -84,9 +86,19 @@ describe("AgentResumeModal", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("renders the UUID and preview when candidate is set", () => {
+  it("renders the UUID and conversation preview when candidate is set", () => {
     render("claude", CANDIDATE);
     expect(document.body.textContent).toContain(CANDIDATE.uuid);
+    expect(document.body.textContent).toContain(CANDIDATE.lastUserMessage);
+    expect(document.body.textContent).toContain(CANDIDATE.lastAgentMessage);
+  });
+
+  it("falls back to the legacy assistant preview when conversation fields are absent", () => {
+    render("claude", {
+      ...CANDIDATE,
+      lastUserMessage: null,
+      lastAgentMessage: null,
+    });
     expect(document.body.textContent).toContain(CANDIDATE.preview);
   });
 

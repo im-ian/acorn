@@ -1778,6 +1778,8 @@
       "copyFailed": "Failed to copy session ID.",
       "copyId": "Copy ID",
       "resume": "Resume",
+      "lastUser": "User",
+      "lastAgent": "Agent",
       "lastActivityUnknown": "Last activity unknown",
       "justNow": "Just now",
       "minutesAgo": "min ago",
