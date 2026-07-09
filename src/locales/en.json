@@ -1113,10 +1113,12 @@
       "equalizePaneSizes": "Equalize Pane Sizes",
       "openWorktreeInEditor": "Open Worktree in Editor",
       "worktreePath": "Worktree Path",
+      "transcriptPath": "Transcript Path",
       "worktreeName": "Worktree Name",
       "branchName": "Branch Name",
       "sessionId": "Session ID",
       "copyWorktreePath": "Copy Worktree Path",
+      "copyTranscriptPath": "Copy Transcript Path",
       "remove": "Remove",
       "removeSession": "Remove session",
       "removeSessionMenu": "Remove Session"
