@@ -1862,4 +1862,57 @@ test.describe("right panel: groups", () => {
     });
     await expect(page.getByText("Disposable transcript")).toHaveCount(0);
   });
+
+  test("History context menu copies the transcript path", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (text: string) => {
+            const w = window as unknown as { __clipboardWrites?: string[] };
+            w.__clipboardWrites = w.__clipboardWrites ?? [];
+            w.__clipboardWrites.push(text);
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    await seedActiveSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "codex",
+        id: "codex-copy-path",
+        title: "Copy path transcript",
+        preview: null,
+        cwd: "/tmp/demo",
+        worktree: null,
+        transcript_path: "/tmp/codex-copy-path.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-copy-path",
+      },
+    ]);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    await page.getByText("Copy path transcript").click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Copy transcript path" })
+      .click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __clipboardWrites?: string[] })
+                .__clipboardWrites?.at(-1) ?? null,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe("/tmp/codex-copy-path.jsonl");
+  });
 });

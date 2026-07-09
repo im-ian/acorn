@@ -536,6 +536,18 @@
         "toggleRightPanel": {
           "label": "오른쪽 패널 열기/닫기"
         },
+        "focusPaneLeft": {
+          "label": "왼쪽 Pane으로 포커스 이동"
+        },
+        "focusPaneRight": {
+          "label": "오른쪽 Pane으로 포커스 이동"
+        },
+        "focusPaneUp": {
+          "label": "위쪽 Pane으로 포커스 이동"
+        },
+        "focusPaneDown": {
+          "label": "아래쪽 Pane으로 포커스 이동"
+        },
         "splitVertical": {
           "label": "Pane 세로 분할"
         },
@@ -854,6 +866,10 @@
       "waitingForInput": "입력 대기",
       "errored": "오류"
     },
+    "sessionStatusReason": {
+      "turn_complete": "에이전트 응답 완료",
+      "shell_prompt": "셸 프롬프트 감지"
+    },
     "notifications": {
       "ariaLabel": "세션 알림",
       "tooltipEmpty": "읽지 않은 세션 알림 없음",
@@ -938,8 +954,14 @@
         "nameAsc": "이름"
       },
       "openSession": "{name} 열기",
+      "preview": {
+        "user": "사용자",
+        "agent": "에이전트"
+      },
       "tooltip": {
         "title": "제목",
+        "lastUserMessage": "마지막 사용자 메시지",
+        "lastAgentMessage": "마지막 에이전트 메시지",
         "lastMessage": "마지막 메시지",
         "noLastMessage": "마지막 메시지 없음",
         "branch": "브랜치",
@@ -1057,6 +1079,10 @@
       "waiting_for_input": "입력 대기",
       "errored": "오류"
     },
+    "statusReason": {
+      "turn_complete": "에이전트 응답 완료",
+      "shell_prompt": "셸 프롬프트 감지"
+    },
     "dialog": {
       "selectExistingProject": "기존 프로젝트 선택",
       "selectIsolatedRepository": "격리된 워크트리용 Git 저장소 선택",
@@ -1105,10 +1131,12 @@
       "equalizePaneSizes": "Pane 크기 균등화",
       "openWorktreeInEditor": "편집기에서 워크트리 열기",
       "worktreePath": "워크트리 경로",
+      "transcriptPath": "트랜스크립트 경로",
       "worktreeName": "워크트리 이름",
       "branchName": "브랜치 이름",
       "sessionId": "세션 ID",
       "copyWorktreePath": "워크트리 경로 복사",
+      "copyTranscriptPath": "트랜스크립트 경로 복사",
       "remove": "제거",
       "removeSession": "세션 제거",
       "removeSessionMenu": "세션 제거"
@@ -1266,6 +1294,9 @@
       "status": "상태",
       "mode": "모드",
       "transcript": "Transcript",
+      "transcriptProvider": "Transcript 제공자",
+      "transcriptPath": "Transcript 경로",
+      "copyTranscriptPath": "Transcript 경로 복사",
       "updated": "업데이트"
     },
     "files": {
@@ -1382,6 +1413,7 @@
       "runSession": "새 터미널에서 실행",
       "runInWorktree": "워크트리에서 실행",
       "copyResume": "resume 명령 복사",
+      "copyTranscriptPath": "transcript 경로 복사",
       "copyWorktreePath": "워크트리 경로 복사",
       "moveTranscriptToTrash": "transcript를 휴지통으로 이동...",
       "worktreeMissing": "없음",

@@ -536,6 +536,18 @@
         "toggleRightPanel": {
           "label": "Toggle right panel"
         },
+        "focusPaneLeft": {
+          "label": "Focus pane to the left"
+        },
+        "focusPaneRight": {
+          "label": "Focus pane to the right"
+        },
+        "focusPaneUp": {
+          "label": "Focus pane above"
+        },
+        "focusPaneDown": {
+          "label": "Focus pane below"
+        },
         "splitVertical": {
           "label": "Split pane vertically"
         },
@@ -854,6 +866,10 @@
       "waitingForInput": "waiting for input",
       "errored": "error"
     },
+    "sessionStatusReason": {
+      "turn_complete": "agent turn complete",
+      "shell_prompt": "shell prompt detected"
+    },
     "notifications": {
       "ariaLabel": "Session notifications",
       "tooltipEmpty": "No unread session notifications",
@@ -938,8 +954,14 @@
         "nameAsc": "Name"
       },
       "openSession": "Open {name}",
+      "preview": {
+        "user": "User",
+        "agent": "Agent"
+      },
       "tooltip": {
         "title": "Title",
+        "lastUserMessage": "Last user message",
+        "lastAgentMessage": "Last agent message",
         "lastMessage": "Last message",
         "noLastMessage": "No last message",
         "branch": "Branch",
@@ -1057,6 +1079,10 @@
       "waiting_for_input": "Waiting for input",
       "errored": "Error"
     },
+    "statusReason": {
+      "turn_complete": "Agent turn complete",
+      "shell_prompt": "Shell prompt detected"
+    },
     "dialog": {
       "selectExistingProject": "Select an existing project",
       "selectIsolatedRepository": "Select a git repository (isolated worktree)",
@@ -1105,10 +1131,12 @@
       "equalizePaneSizes": "Equalize Pane Sizes",
       "openWorktreeInEditor": "Open Worktree in Editor",
       "worktreePath": "Worktree Path",
+      "transcriptPath": "Transcript Path",
       "worktreeName": "Worktree Name",
       "branchName": "Branch Name",
       "sessionId": "Session ID",
       "copyWorktreePath": "Copy Worktree Path",
+      "copyTranscriptPath": "Copy Transcript Path",
       "remove": "Remove",
       "removeSession": "Remove session",
       "removeSessionMenu": "Remove Session"
@@ -1266,6 +1294,9 @@
       "status": "Status",
       "mode": "Mode",
       "transcript": "Transcript",
+      "transcriptProvider": "Transcript provider",
+      "transcriptPath": "Transcript path",
+      "copyTranscriptPath": "Copy transcript path",
       "updated": "Updated"
     },
     "files": {
@@ -1382,6 +1413,7 @@
       "runSession": "Run in new terminal",
       "runInWorktree": "Run in worktree",
       "copyResume": "Copy resume command",
+      "copyTranscriptPath": "Copy transcript path",
       "copyWorktreePath": "Copy worktree path",
       "moveTranscriptToTrash": "Move transcript to Trash...",
       "worktreeMissing": "missing",

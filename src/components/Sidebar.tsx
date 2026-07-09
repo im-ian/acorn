@@ -149,6 +149,7 @@ import type {
   SessionNotificationKind,
   SessionPullRequestSummary,
   SessionStatus,
+  SessionStatusReason,
 } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
@@ -234,6 +235,26 @@ function contextMenuGroupTitle(
 
 function statusLabel(t: Translator, status: SessionStatus): string {
   return sidebarText(t, `sidebar.status.${status}`);
+}
+
+function statusReasonLabel(
+  t: Translator,
+  reason: SessionStatusReason | null | undefined,
+): string | null {
+  switch (reason) {
+    case "turn_complete":
+      return sidebarText(t, "sidebar.statusReason.turn_complete");
+    case "shell_prompt":
+      return sidebarText(t, "sidebar.statusReason.shell_prompt");
+    default:
+      return null;
+  }
+}
+
+function statusDetailLabel(t: Translator, session: Session): string {
+  const label = statusLabel(t, session.status);
+  const reason = statusReasonLabel(t, session.status_reason);
+  return reason ? `${label} · ${reason}` : label;
 }
 
 function isLocalTerminalAreaFocused(): boolean {
@@ -2732,6 +2753,7 @@ function SessionRow({
       normalizeWorkspacePath(currentWorkspaceCwd);
   const currentPullRequest = useCurrentPullRequest(session);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
+  const transcriptPath = session.agent_transcript_path?.trim() || null;
   const metadataText = composeSessionMetadata(
     t,
     session,
@@ -3005,6 +3027,15 @@ function SessionRow({
           icon: <Copy size={12} />,
           onClick: () => void copyToClipboard(session.worktree_path),
         },
+        ...(transcriptPath
+          ? [
+              {
+                label: sidebarText(t, "sidebar.actions.transcriptPath"),
+                icon: <Copy size={12} />,
+                onClick: () => void copyToClipboard(transcriptPath),
+              } satisfies ContextMenuItem,
+            ]
+          : []),
         {
           label: sidebarText(t, "sidebar.actions.worktreeName"),
           icon: <Copy size={12} />,
@@ -4288,6 +4319,7 @@ function LocalSessionRow({
     onSelect();
   }
 
+  const transcriptPath = session.agent_transcript_path?.trim() || null;
   const menuItems: ContextMenuItem[] = [
     {
       label: sidebarText(t, "sidebar.actions.rename"),
@@ -4326,6 +4358,15 @@ function LocalSessionRow({
       icon: <Copy size={12} />,
       onClick: () => void copyToClipboard(session.worktree_path),
     },
+    ...(transcriptPath
+      ? [
+          {
+            label: sidebarText(t, "sidebar.actions.copyTranscriptPath"),
+            icon: <Copy size={12} />,
+            onClick: () => void copyToClipboard(transcriptPath),
+          } satisfies ContextMenuItem,
+        ]
+      : []),
     { type: "separator" },
     {
       label: sidebarText(t, "sidebar.actions.removeSessionMenu"),
@@ -4545,7 +4586,7 @@ function buildSessionHoverDetails(
         icon={<Activity size={12} />}
         iconClassName={STATUS_ICON[session.status]}
         label={sidebarText(t, "sidebar.metadata.status")}
-        value={statusLabel(t, session.status)}
+        value={statusDetailLabel(t, session)}
         valueClassName={STATUS_ICON[session.status]}
       />
       {session.kind === "control" ? (

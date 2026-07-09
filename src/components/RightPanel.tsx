@@ -50,6 +50,10 @@ import { cn } from "../lib/cn";
 import { openFileInEditor } from "../lib/editor";
 import { joinPath } from "../lib/paths";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
+import {
+  onPullRequestMutation,
+  pullRequestMutationAffectsOpenContext,
+} from "../lib/pullRequestEvents";
 import { rightPanelCache } from "../lib/right-panel-cache";
 import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
@@ -448,6 +452,16 @@ export function RightPanel() {
   useEffect(() => {
     rightPanelCache.retainRepos(retainedRepoPaths);
   }, [retainedRepoPaths]);
+
+  useEffect(() => {
+    return onPullRequestMutation((event) => {
+      if (!pullRequestMutationAffectsOpenContext(event.kind)) return;
+      const eventRepoPath = normalizeRepoPath(event.repoPath);
+      if (!eventRepoPath || eventRepoPath !== projectRootRepoPath) return;
+      rightPanelCache.invalidatePullRequests(eventRepoPath);
+      setPrListVersion((version) => version + 1);
+    });
+  }, [projectRootRepoPath]);
 
   return (
     <aside className="flex h-full w-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar">
@@ -1659,6 +1673,11 @@ function AgentHistoryTab({
                   icon: <Copy size={12} />,
                   disabled: !menu.item.resume_command,
                   onClick: () => void copy(menu.item.resume_command ?? ""),
+                },
+                {
+                  label: rt(t, "rightPanel.history.copyTranscriptPath"),
+                  icon: <Copy size={12} />,
+                  onClick: () => void copy(menu.item.transcript_path),
                 },
                 {
                   label: rt(t, "rightPanel.history.copyWorktreePath"),
