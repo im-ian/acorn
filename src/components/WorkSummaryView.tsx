@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   Clock,
+  Copy,
   FileText,
   Files,
   Hash,
@@ -52,6 +53,7 @@ import {
   MetricValueSkeleton,
   TokenUsageSkeleton,
 } from "./work-summary/WorkSummarySkeletons";
+import { Tooltip } from "./Tooltip";
 
 const GIT_STATUS_FILE_LIMIT = 500;
 const SUMMARY_REFRESH_DEBOUNCE_MS = 500;
@@ -107,6 +109,14 @@ interface AgentTranscriptLocation {
   provider: AgentTranscriptSummary["provider"];
   id: string;
   transcriptPath: string;
+}
+
+interface MetadataRow {
+  key: string;
+  label: string;
+  value: string | null | undefined;
+  copyValue?: string;
+  copyLabel?: string;
 }
 
 export function WorkSummaryView({
@@ -192,6 +202,14 @@ export function WorkSummaryView({
     },
     [],
   );
+
+  const copyText = useCallback(async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      console.warn("[WorkSummaryView] clipboard write failed", err);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setSummaryLoading(true);
@@ -347,23 +365,54 @@ export function WorkSummaryView({
   ]);
 
   const metadata = useMemo(() => {
-    const rows: Array<{ label: string; value: string | null | undefined }> = [
-      { label: wt(t, "workSummary.metadata.scope"), value: tab.cwdPath },
+    const rows: MetadataRow[] = [
+      {
+        key: "scope",
+        label: wt(t, "workSummary.metadata.scope"),
+        value: tab.cwdPath,
+      },
     ];
     if (session) {
       rows.push(
-        { label: wt(t, "workSummary.metadata.session"), value: session.name },
-        { label: wt(t, "workSummary.metadata.branch"), value: session.branch },
-        { label: wt(t, "workSummary.metadata.status"), value: session.status },
         {
+          key: "session",
+          label: wt(t, "workSummary.metadata.session"),
+          value: session.name,
+        },
+        {
+          key: "branch",
+          label: wt(t, "workSummary.metadata.branch"),
+          value: session.branch,
+        },
+        {
+          key: "status",
+          label: wt(t, "workSummary.metadata.status"),
+          value: session.status,
+        },
+        {
+          key: "mode",
           label: wt(t, "workSummary.metadata.mode"),
           value: session.mode ?? "terminal",
         },
         {
+          key: "transcript",
           label: wt(t, "workSummary.metadata.transcript"),
           value: session.agent_transcript_id,
         },
         {
+          key: "transcriptProvider",
+          label: wt(t, "workSummary.metadata.transcriptProvider"),
+          value: session.agent_transcript_provider,
+        },
+        {
+          key: "transcriptPath",
+          label: wt(t, "workSummary.metadata.transcriptPath"),
+          value: session.agent_transcript_path,
+          copyValue: session.agent_transcript_path ?? undefined,
+          copyLabel: wt(t, "workSummary.metadata.copyTranscriptPath"),
+        },
+        {
+          key: "updated",
           label: wt(t, "workSummary.metadata.updated"),
           value: formatDateTime(session.updated_at),
         },
@@ -543,12 +592,26 @@ export function WorkSummaryView({
             <SectionHeader title={wt(t, "workSummary.details.title")} />
             <dl className="space-y-2 px-4 py-3">
               {metadata.map((row) => (
-                <div key={row.label}>
+                <div key={row.key} data-work-summary-metadata-key={row.key}>
                   <dt className="text-[10px] uppercase text-fg-muted">
                     {row.label}
                   </dt>
-                  <dd className="mt-1 truncate font-mono text-[11px]">
-                    {row.value}
+                  <dd className="mt-1 flex min-w-0 items-center gap-1">
+                    <span className="min-w-0 truncate font-mono text-[11px]">
+                      {row.value}
+                    </span>
+                    {row.copyValue && row.copyLabel ? (
+                      <Tooltip label={row.copyLabel} side="left">
+                        <button
+                          type="button"
+                          aria-label={row.copyLabel}
+                          onClick={() => void copyText(row.copyValue!)}
+                          className="inline-flex size-5 shrink-0 items-center justify-center rounded border border-transparent text-fg-muted hover:border-border hover:bg-bg-elevated hover:text-fg"
+                        >
+                          <Copy size={11} />
+                        </button>
+                      </Tooltip>
+                    ) : null}
                   </dd>
                 </div>
               ))}

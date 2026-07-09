@@ -1266,6 +1266,9 @@
       "status": "상태",
       "mode": "모드",
       "transcript": "Transcript",
+      "transcriptProvider": "Transcript 제공자",
+      "transcriptPath": "Transcript 경로",
+      "copyTranscriptPath": "Transcript 경로 복사",
       "updated": "업데이트"
     },
     "files": {
