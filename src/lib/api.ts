@@ -645,6 +645,7 @@ export const api = {
       last_user_message?: string | null;
       last_agent_message?: string | null;
       agent_provider?: SessionAgentProvider | null;
+      agent_transcript_provider?: SessionAgentProvider | null;
       agent_transcript_id?: string | null;
       agent_transcript_path?: string | null;
       active_processes?: SessionProcessSummary[];
@@ -663,6 +664,7 @@ export const api = {
         last_user_message?: string | null;
         last_agent_message?: string | null;
         agent_provider?: SessionAgentProvider | null;
+        agent_transcript_provider?: SessionAgentProvider | null;
         agent_transcript_id?: string | null;
         agent_transcript_path?: string | null;
         active_processes?: SessionProcessSummary[];

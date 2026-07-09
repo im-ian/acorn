@@ -1223,7 +1223,8 @@ describe("workspace tabs", () => {
       name: "Feature runner",
       worktree_path: `${REPO_A}/.worktrees/a1`,
       mode: "terminal",
-      agent_provider: "codex",
+      agent_provider: null,
+      agent_transcript_provider: "codex",
       agent_transcript_id: "transcript-1",
       agent_transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
     });
@@ -2379,6 +2380,36 @@ describe("pollSessionStatuses", () => {
     );
   });
 
+  it("merges paired agent transcript providers from status polling", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          agent_provider: "codex",
+          agent_transcript_id: "codex-old",
+          agent_transcript_path: "/Users/me/.codex/sessions/old.jsonl",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "ready",
+        agent_provider: null,
+        agent_transcript_provider: "codex",
+        agent_transcript_id: "codex-old",
+        agent_transcript_path: "/Users/me/.codex/sessions/old.jsonl",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    const stored = useAppStore.getState().sessions[0];
+    expect(stored?.agent_provider).toBeNull();
+    expect(stored?.agent_transcript_provider).toBe("codex");
+  });
+
   it("merges active process summaries from status polling", async () => {
     await seed(
       [project(REPO_A, 0)],
@@ -2568,6 +2599,36 @@ describe("pollSessionStatuses", () => {
     expect(useAppStore.getState().sessions[0]?.status_started_at).toBe(
       "2026-01-01T00:00:00.000Z",
     );
+  });
+
+  it("records first observed active status time when polling starts mid-status", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T12:34:56.000Z"));
+      await seed(
+        [project(REPO_A, 0)],
+        [
+          session("a1", REPO_A, {
+            status: "working",
+          }),
+        ],
+      );
+      mockApi.detectSessionStatuses.mockResolvedValueOnce([
+        {
+          id: "a1",
+          status: "working",
+          branch: null,
+        },
+      ]);
+
+      await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+      expect(useAppStore.getState().sessions[0]?.status_started_at).toBe(
+        "2026-01-01T12:34:56.000Z",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses backend status start time when status polling provides one", async () => {

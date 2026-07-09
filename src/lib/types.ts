@@ -147,6 +147,8 @@ export interface Session {
   in_worktree: boolean;
   /** Current live agent provider, if a known agent process is under the PTY. */
   agent_provider?: SessionAgentProvider | null;
+  /** Provider for the paired transcript path/id, independent from live process state. */
+  agent_transcript_provider?: SessionAgentProvider | null;
   /** Most recently paired agent transcript id, if Acorn has paired this tab to one. */
   agent_transcript_id?: string | null;
   /** Ephemeral path to the transcript currently used for status/preview reads. */
