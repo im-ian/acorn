@@ -854,6 +854,10 @@
       "waitingForInput": "입력 대기",
       "errored": "오류"
     },
+    "sessionStatusReason": {
+      "turn_complete": "에이전트 응답 완료",
+      "shell_prompt": "셸 프롬프트 감지"
+    },
     "notifications": {
       "ariaLabel": "세션 알림",
       "tooltipEmpty": "읽지 않은 세션 알림 없음",
@@ -1056,6 +1060,10 @@
       "working": "작업 중",
       "waiting_for_input": "입력 대기",
       "errored": "오류"
+    },
+    "statusReason": {
+      "turn_complete": "에이전트 응답 완료",
+      "shell_prompt": "셸 프롬프트 감지"
     },
     "dialog": {
       "selectExistingProject": "기존 프로젝트 선택",
