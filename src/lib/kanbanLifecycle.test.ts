@@ -198,40 +198,71 @@ describe("updateKanbanStageDwell", () => {
 });
 
 describe("isKanbanSessionStalled", () => {
-  const updatedAt = "2026-01-01T00:00:00.000Z";
-  const updatedMs = Date.parse(updatedAt);
+  const startedAt = "2026-01-01T00:00:00.000Z";
+  const startedMs = Date.parse(startedAt);
 
-  it("flags a working session past the threshold", () => {
+  it("flags a working session with no live processes past the threshold", () => {
     expect(
       isKanbanSessionStalled(
-        makeSession({ status: "working", updated_at: updatedAt }),
+        makeSession({
+          status: "working",
+          status_started_at: startedAt,
+          active_processes: [],
+        }),
         "working",
-        updatedMs + KANBAN_STALL_THRESHOLD_MS,
+        startedMs + KANBAN_STALL_THRESHOLD_MS,
       ),
     ).toBe(true);
+  });
+
+  it("does not use updated_at as a heartbeat", () => {
+    expect(
+      isKanbanSessionStalled(
+        makeSession({
+          status: "working",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        }),
+        "working",
+        Number.MAX_SAFE_INTEGER,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag working sessions with live processes", () => {
+    expect(
+      isKanbanSessionStalled(
+        makeSession({
+          status: "working",
+          status_started_at: startedAt,
+          active_processes: [{ pid: 12, name: "codex", depth: 1 }],
+        }),
+        "working",
+        startedMs + KANBAN_STALL_THRESHOLD_MS * 10,
+      ),
+    ).toBe(false);
   });
 
   it("does not flag fresh working sessions or other stages", () => {
     expect(
       isKanbanSessionStalled(
-        makeSession({ status: "working", updated_at: updatedAt }),
+        makeSession({ status: "working", status_started_at: startedAt }),
         "working",
-        updatedMs + KANBAN_STALL_THRESHOLD_MS - 1,
+        startedMs + KANBAN_STALL_THRESHOLD_MS - 1,
       ),
     ).toBe(false);
     expect(
       isKanbanSessionStalled(
-        makeSession({ updated_at: updatedAt }),
+        makeSession({ status_started_at: startedAt }),
         "waiting",
-        updatedMs + KANBAN_STALL_THRESHOLD_MS * 10,
+        startedMs + KANBAN_STALL_THRESHOLD_MS * 10,
       ),
     ).toBe(false);
   });
 
-  it("never flags an unparseable timestamp", () => {
+  it("never flags an unparseable status start", () => {
     expect(
       isKanbanSessionStalled(
-        makeSession({ status: "working", updated_at: "not-a-date" }),
+        makeSession({ status: "working", status_started_at: "not-a-date" }),
         "working",
         Number.MAX_SAFE_INTEGER,
       ),

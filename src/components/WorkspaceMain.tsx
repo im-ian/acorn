@@ -1476,7 +1476,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
                   t={t}
                   pr={data.pr}
                   onOpen={(number) =>
-                    onOpenPullRequest(session.repo_path, number)
+                    onOpenPullRequest(data.repoPath, number)
                   }
                 />
               ) : null}

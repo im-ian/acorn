@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   diffStatsEntries,
+  kanbanSessionBoardLookupPath,
   pickPullRequestForBranch,
   summarizeDiffStats,
 } from "./useKanbanBoardData";
-import type { PullRequestInfo } from "./types";
+import type { PullRequestInfo, Session } from "./types";
 
 function makePr(overrides: Partial<PullRequestInfo>): PullRequestInfo {
   return {
@@ -90,5 +91,35 @@ describe("kanban diff summaries", () => {
     expect(
       summarizeDiffStats([{ path: "renamed.ts", kind: "renamed" }], {}),
     ).toEqual({ hasDiff: true, additions: 0, deletions: 0 });
+  });
+});
+
+describe("kanbanSessionBoardLookupPath", () => {
+  function session(overrides: Partial<Session> = {}): Session {
+    return {
+      repo_path: "/repo/project",
+      worktree_path: "/repo/project/.worktrees/session",
+      git_context_path: null,
+      ...overrides,
+    } as Session;
+  }
+
+  it("prefers the live git context path when present", () => {
+    expect(
+      kanbanSessionBoardLookupPath(
+        session({ git_context_path: " /repo/other-worktree " }),
+      ),
+    ).toBe("/repo/other-worktree");
+  });
+
+  it("falls back to the recorded worktree before the project repo", () => {
+    expect(kanbanSessionBoardLookupPath(session())).toBe(
+      "/repo/project/.worktrees/session",
+    );
+    expect(
+      kanbanSessionBoardLookupPath(
+        session({ git_context_path: "   ", worktree_path: "" }),
+      ),
+    ).toBe("/repo/project");
   });
 });

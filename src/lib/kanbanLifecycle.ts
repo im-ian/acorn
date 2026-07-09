@@ -22,7 +22,7 @@ export const KANBAN_LIFECYCLE_STAGES: readonly KanbanLifecycleStage[] = [
   "done",
 ];
 
-/** A Working session with no update for this long is flagged as stalled. */
+/** A Working session with no live process for this long is flagged as stalled. */
 export const KANBAN_STALL_THRESHOLD_MS = 5 * 60_000;
 
 export interface KanbanStageContext {
@@ -108,9 +108,9 @@ export function updateKanbanStageDwell(
 }
 
 /**
- * A Working session whose backend `updated_at` has not moved for the stall
- * threshold is likely wedged (agent spinning or output stuck). Unparseable
- * timestamps never count as stalled.
+ * A Working session that has stayed in that state without any observed live
+ * process is likely stale. `updated_at` is intentionally ignored because
+ * lightweight status polling does not bump persisted session recency.
  */
 export function isKanbanSessionStalled(
   session: Session,
@@ -118,9 +118,10 @@ export function isKanbanSessionStalled(
   now: number,
 ): boolean {
   if (stage !== "working") return false;
-  const updatedAt = Date.parse(session.updated_at);
-  if (!Number.isFinite(updatedAt)) return false;
-  return now - updatedAt >= KANBAN_STALL_THRESHOLD_MS;
+  if ((session.active_processes ?? []).length > 0) return false;
+  const statusStartedAt = Date.parse(session.status_started_at ?? "");
+  if (!Number.isFinite(statusStartedAt)) return false;
+  return now - statusStartedAt >= KANBAN_STALL_THRESHOLD_MS;
 }
 
 /**

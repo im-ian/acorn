@@ -5,6 +5,7 @@ import type { PullRequestInfo, PullRequestListing, Session } from "./types";
 
 /** Per-session board context assembled from PR listings and worktree diffs. */
 export interface KanbanSessionBoardData {
+  repoPath: string;
   pr: PullRequestInfo | null;
   hasDiff: boolean;
   additions: number;
@@ -79,7 +80,19 @@ export function summarizeDiffStats(
     additions += stat?.additions ?? 0;
     deletions += stat?.deletions ?? 0;
   }
-  return entries.length > 0 ? { hasDiff: true, additions, deletions } : CLEAN_DIFF;
+  return entries.length > 0
+    ? { hasDiff: true, additions, deletions }
+    : CLEAN_DIFF;
+}
+
+export function kanbanSessionBoardLookupPath(
+  session: Pick<Session, "git_context_path" | "worktree_path" | "repo_path">,
+): string {
+  return (
+    session.git_context_path?.trim() ||
+    session.worktree_path ||
+    session.repo_path
+  );
 }
 
 /**
@@ -106,7 +119,7 @@ export function useKanbanBoardData(
   // repo and worktree paths may contain spaces, never newlines.
   const repoPaths = useMemo(
     () =>
-      [...new Set(sessions.map((session) => session.repo_path))].sort(),
+      [...new Set(sessions.map(kanbanSessionBoardLookupPath))].sort(),
     [sessions],
   );
   const repoKey = repoPaths.join("\n");
@@ -115,13 +128,13 @@ export function useKanbanBoardData(
       sessions
         .map((session) => ({
           sessionId: session.id,
-          worktreePath: session.worktree_path,
+          repoPath: kanbanSessionBoardLookupPath(session),
         }))
         .sort((a, b) => a.sessionId.localeCompare(b.sessionId)),
     [sessions],
   );
   const worktreeKey = worktreeEntries
-    .map((entry) => `${entry.sessionId}:${entry.worktreePath}`)
+    .map((entry) => `${entry.sessionId}:${entry.repoPath}`)
     .join("\n");
 
   useEffect(() => {
@@ -207,13 +220,13 @@ export function useKanbanBoardData(
       const requestSeq = ++diffRefreshSeqRef.current;
       const entries = worktreeEntriesRef.current;
       const summaries = await Promise.all(
-        entries.map(async ({ sessionId, worktreePath }) => {
+        entries.map(async ({ sessionId, repoPath }) => {
           try {
-            const status = await api.fsGitStatus(worktreePath);
+            const status = await api.fsGitStatus(repoPath);
             const entries = diffStatsEntries(status.statuses);
             const stats =
               entries.length > 0
-                ? await api.fsGitDiffStats(worktreePath, entries)
+                ? await api.fsGitDiffStats(repoPath, entries)
                 : {};
             return {
               kind: "ok" as const,
@@ -266,11 +279,13 @@ export function useKanbanBoardData(
     const data = new Map<string, KanbanSessionBoardData>();
     for (const session of sessions) {
       const branch = session.branch?.trim();
+      const repoPath = kanbanSessionBoardLookupPath(session);
       const candidates = branch
-        ? (prIndexByRepo.get(session.repo_path)?.get(branch) ?? [])
+        ? (prIndexByRepo.get(repoPath)?.get(branch) ?? [])
         : [];
       const diff = diffBySession.get(session.id) ?? CLEAN_DIFF;
       data.set(session.id, {
+        repoPath,
         pr: pickPullRequestForBranch(candidates),
         hasDiff: diff.hasDiff,
         additions: diff.additions,
