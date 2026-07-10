@@ -1,6 +1,8 @@
 import {
   Bot,
   BarChart3,
+  Bell,
+  BellOff,
   CircleX,
   Columns2,
   Copy,
@@ -1018,6 +1020,10 @@ function TabItem({
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
   const session = tab.kind === "session" ? tab.session : null;
+  const sessionSilenced = useAppStore((s) =>
+    session ? Boolean(s.silencedSessionIds[session.id]) : false,
+  );
+  const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
   const isGeneratingTitle = useAppStore((s) =>
     session ? Boolean(s.generatingSessionTitleIds[session.id]) : false,
   );
@@ -1258,6 +1264,17 @@ function TabItem({
             label: paneT(t, "pane.menu.openWorkSummary"),
             icon: <BarChart3 size={12} />,
             onClick: () => void openWorkSummaryTab({ sessionId: session.id }),
+          },
+          {
+            label: paneT(
+              t,
+              sessionSilenced
+                ? "pane.menu.resumeNotifications"
+                : "pane.menu.silenceNotifications",
+            ),
+            icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
+            onClick: () =>
+              setSessionSilenced(session.id, !sessionSilenced),
           },
         ] satisfies ContextMenuItem[])
       : []),
@@ -1530,6 +1547,15 @@ function TabItem({
               className="pointer-events-none shrink-0 text-accent"
               aria-label={paneT(t, "pane.aria.controlSession")}
             />
+          ) : null}
+          {sessionSilenced ? (
+            <span
+              className="pointer-events-none inline-flex shrink-0 text-fg-muted"
+              aria-label={paneT(t, "pane.aria.notificationsSilenced")}
+              title={paneT(t, "pane.aria.notificationsSilenced")}
+            >
+              <BellOff size={10} aria-hidden />
+            </span>
           ) : null}
         </div>
         <button

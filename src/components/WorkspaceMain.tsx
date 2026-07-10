@@ -18,6 +18,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Activity,
   BarChart3,
+  Bell,
+  BellOff,
   Bot,
   CheckCircle2,
   ChevronDown,
@@ -1130,6 +1132,10 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
   const setWorkspaceViewMode = useAppStore((s) => s.setWorkspaceViewMode);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
+  const sessionSilenced = useAppStore((s) =>
+    Boolean(s.silencedSessionIds[session.id]),
+  );
+  const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
   const isGeneratingTitle = useAppStore((s) =>
@@ -1264,6 +1270,16 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
         },
       },
       {
+        label: sidebarText(
+          t,
+          sessionSilenced
+            ? "sidebar.actions.resumeNotifications"
+            : "sidebar.actions.silenceNotifications",
+        ),
+        icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
+        onClick: () => setSessionSilenced(session.id, !sessionSilenced),
+      },
+      {
         label: manualDone
           ? t("workspace.kanban.actions.restoreFromDone")
           : t("workspace.kanban.actions.markAsDone"),
@@ -1351,12 +1367,14 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
       renameSession,
       requestRemoveSession,
       selectSession,
+      sessionSilenced,
       session.branch,
       session.id,
       session.mode,
       session.name,
       session.worktree_path,
       showToast,
+      setSessionSilenced,
       setWorkspaceViewMode,
       t,
       transcriptPath,
@@ -1417,6 +1435,18 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
                 </span>
               )}
             </span>
+            {sessionSilenced ? (
+              <span
+                className="inline-flex shrink-0 text-fg-muted"
+                aria-label={sidebarText(
+                  t,
+                  "sidebar.aria.notificationsSilenced",
+                )}
+                title={sidebarText(t, "sidebar.aria.notificationsSilenced")}
+              >
+                <BellOff size={11} aria-hidden />
+              </span>
+            ) : null}
             {stalled ? (
               <span
                 className="shrink-0 rounded bg-danger/15 px-1 py-px text-[9px] font-semibold uppercase leading-4 tracking-wide text-danger"
@@ -1724,6 +1754,10 @@ function KanbanTerminalPopover({
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
   const setWorkspaceViewMode = useAppStore((s) => s.setWorkspaceViewMode);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
+  const sessionSilenced = useAppStore((s) =>
+    Boolean(s.silencedSessionIds[session.id]),
+  );
+  const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
   const isGeneratingTitle = useAppStore((s) =>
@@ -1880,6 +1914,16 @@ function KanbanTerminalPopover({
             });
         },
       },
+      {
+        label: sidebarText(
+          t,
+          sessionSilenced
+            ? "sidebar.actions.resumeNotifications"
+            : "sidebar.actions.silenceNotifications",
+        ),
+        icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
+        onClick: () => setSessionSilenced(session.id, !sessionSilenced),
+      },
       workspaceContextMenuGroupTitle(t, "open"),
       {
         label: sidebarText(t, "sidebar.actions.openWorktreeInEditor"),
@@ -1956,11 +2000,13 @@ function KanbanTerminalPopover({
       openWorkSummaryTab,
       requestRemoveSession,
       selectSession,
+      sessionSilenced,
       session.branch,
       session.id,
       session.name,
       session.worktree_path,
       showToast,
+      setSessionSilenced,
       setWorkspaceViewMode,
       t,
       transcriptPath,
@@ -2217,43 +2263,60 @@ function KanbanTerminalPopover({
             <WorkspaceSessionIcon session={session} scope="console" size="md" />
           </span>
           <div className="min-w-0 flex-1">
-            {editingTitle ? (
-              <KanbanTerminalPopoverTitleInput
-                initial={session.name}
-                onSubmit={(next) => void submitTitleRename(next)}
-                onCancel={() => setEditingTitle(false)}
-              />
-            ) : (
-              <h3
-                tabIndex={canRename ? 0 : undefined}
-                data-kanban-title-edit-trigger
-                onDoubleClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  if (canRename) setEditingTitle(true);
-                }}
-                onKeyDown={(event) => {
-                  if (!canRename) return;
-                  if (
-                    event.key !== "F2" &&
-                    event.key !== "Enter" &&
-                    event.key !== " "
-                  ) {
-                    return;
-                  }
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setEditingTitle(true);
-                }}
-                className={cn(
-                  "truncate rounded-sm text-sm font-semibold text-fg",
-                  canRename &&
-                    "cursor-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-                )}
-              >
-                {title}
-              </h3>
-            )}
+            <div className="flex min-w-0 items-center gap-1.5">
+              {editingTitle ? (
+                <KanbanTerminalPopoverTitleInput
+                  initial={session.name}
+                  onSubmit={(next) => void submitTitleRename(next)}
+                  onCancel={() => setEditingTitle(false)}
+                />
+              ) : (
+                <h3
+                  tabIndex={canRename ? 0 : undefined}
+                  data-kanban-title-edit-trigger
+                  onDoubleClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (canRename) setEditingTitle(true);
+                  }}
+                  onKeyDown={(event) => {
+                    if (!canRename) return;
+                    if (
+                      event.key !== "F2" &&
+                      event.key !== "Enter" &&
+                      event.key !== " "
+                    ) {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setEditingTitle(true);
+                  }}
+                  className={cn(
+                    "min-w-0 flex-1 truncate rounded-sm text-sm font-semibold text-fg",
+                    canRename &&
+                      "cursor-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                  )}
+                >
+                  {title}
+                </h3>
+              )}
+              {sessionSilenced ? (
+                <span
+                  className="inline-flex shrink-0 text-fg-muted"
+                  aria-label={sidebarText(
+                    t,
+                    "sidebar.aria.notificationsSilenced",
+                  )}
+                  title={sidebarText(
+                    t,
+                    "sidebar.aria.notificationsSilenced",
+                  )}
+                >
+                  <BellOff size={12} aria-hidden />
+                </span>
+              ) : null}
+            </div>
             <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-[11px] font-medium leading-4 text-fg-muted">
               <WorkspaceSessionTerminalPopoverMetaItem
                 icon={

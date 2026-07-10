@@ -1,6 +1,8 @@
 import {
   Activity,
   BarChart3,
+  Bell,
+  BellOff,
   Bot,
   CheckCheck,
   ChevronRight,
@@ -2724,6 +2726,10 @@ function SessionRow({
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
+  const sessionSilenced = useAppStore((s) =>
+    Boolean(s.silencedSessionIds[session.id]),
+  );
+  const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
   const createSession = useAppStore((s) => s.createSession);
   const selectSession = useAppStore((s) => s.selectSession);
   const setPendingTerminalInput = useAppStore(
@@ -2988,6 +2994,16 @@ function SessionRow({
         void openWorkSummaryTab({ sessionId: session.id });
       },
     },
+    {
+      label: sidebarText(
+        t,
+        sessionSilenced
+          ? "sidebar.actions.resumeNotifications"
+          : "sidebar.actions.silenceNotifications",
+      ),
+      icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
+      onClick: () => setSessionSilenced(session.id, !sessionSilenced),
+    },
     ...(forkItems.length > 0
       ? [contextMenuGroupTitle(t, "fork"), ...forkItems]
       : []),
@@ -3208,6 +3224,9 @@ function SessionRowLabel({
   // `in_worktree`) only apply as fallback when the session has no live PTY,
   // in which case `liveInWorktree[id]` is `undefined`.
   const liveInWorktree = useAppStore((s) => s.liveInWorktree[session.id]);
+  const notificationsSilenced = useAppStore((s) =>
+    Boolean(s.silencedSessionIds[session.id]),
+  );
   const inWorktree = liveInWorktree ?? hasRecordedWorktree(session);
   const processSummary = summarizeSessionProcesses(session.active_processes);
   const hasContextMetadata = Boolean(currentPullRequest || processSummary);
@@ -3241,6 +3260,15 @@ function SessionRowLabel({
             className="shrink-0 text-accent"
             aria-label={sidebarText(t, "sidebar.aria.controlSession")}
           />
+        ) : null}
+        {notificationsSilenced ? (
+          <span
+            className="inline-flex shrink-0 text-fg-muted"
+            aria-label={sidebarText(t, "sidebar.aria.notificationsSilenced")}
+            title={sidebarText(t, "sidebar.aria.notificationsSilenced")}
+          >
+            <BellOff size={10} aria-hidden />
+          </span>
         ) : null}
       </span>
       {metadataText ? (

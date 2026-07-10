@@ -1134,6 +1134,8 @@
       "rename": "이름 변경",
       "regenerateName": "이름 다시 생성",
       "openWorkSummary": "작업 요약 열기",
+      "silenceNotifications": "알림 끄기",
+      "resumeNotifications": "알림 다시 켜기",
       "forkClaudeSession": "Claude 세션 포크",
       "forkSession": "세션 포크",
       "forkClaudeInNewWorktree": "새 워크트리에 Claude 포크",
@@ -1179,7 +1181,8 @@
       "worktree": "워크트리",
       "controlSession": "컨트롤 세션",
       "chatSession": "채팅 세션",
-      "generatingSessionTitle": "세션 제목 생성 중"
+      "generatingSessionTitle": "세션 제목 생성 중",
+      "notificationsSilenced": "알림 꺼짐"
     },
     "localTerminals": {
       "title": "인스턴트 세션",
@@ -1239,6 +1242,7 @@
       "chatSession": "채팅 세션",
       "workSummary": "작업 요약",
       "generatingSessionTitle": "세션 제목 생성 중",
+      "notificationsSilenced": "알림 꺼짐",
       "closeSession": "세션 닫기",
       "closeTab": "탭 닫기"
     },
@@ -1254,6 +1258,8 @@
       "rename": "이름 변경",
       "regenerateName": "이름 다시 생성",
       "openWorkSummary": "작업 요약 열기",
+      "silenceNotifications": "알림 끄기",
+      "resumeNotifications": "알림 다시 켜기",
       "forkClaudeSession": "Claude 세션 포크",
       "forkSession": "세션 포크",
       "forkClaudeInNewWorktree": "새 워크트리에 Claude 포크",
