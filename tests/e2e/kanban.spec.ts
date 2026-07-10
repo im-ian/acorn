@@ -914,7 +914,9 @@ test.describe("workspace kanban mode", () => {
       }),
       session("shell", "shell", "ready"),
       session("needs-review", "needs-review", "waiting_for_input"),
-      session("runner", "runner", "working"),
+      session("runner", "runner", "working", {
+        agent_provider: "codex",
+      }),
       session("broken", "broken", "errored"),
     ]);
 
