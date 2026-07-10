@@ -4650,9 +4650,16 @@ pub fn pty_unsubscribe_output(
 }
 
 #[tauri::command]
-pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -> AppResult<()> {
+pub fn pty_write<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+    data: String,
+) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let bytes = decode_b64(&data)?;
+    let submit_revision =
+        is_terminal_submit_frame(&bytes).then(|| state.sessions.hook_revision(&id));
     // Daemon-managed sessions route stdin through the control socket.
     // Keystrokes are small; one RPC round-trip per keystroke is well
     // under the typing-feedback threshold and avoids managing a second
@@ -4660,15 +4667,43 @@ pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -
     // fast-path signal, but detached/re-attaching sessions can be alive in
     // the daemon without an app-side output pump for a short window.
     if daemon_session_alive_or_attached(&state, id) {
-        return state
+        state
             .daemon_bridge
             .send_input(id, &bytes)
-            .map_err(|e| AppError::Pty(e.to_string()));
+            .map_err(|e| AppError::Pty(e.to_string()))?;
+    } else {
+        state
+            .pty
+            .write(&id, &bytes)
+            .map_err(|e| AppError::Pty(e.to_string()))?;
     }
-    state
-        .pty
-        .write(&id, &bytes)
-        .map_err(|e| AppError::Pty(e.to_string()))
+
+    if let Some(revision) = submit_revision {
+        match state.sessions.refresh_status_if_hook_revision(
+            &id,
+            SessionStatus::WaitingForInput,
+            revision,
+            SessionStatus::Working,
+        ) {
+            Ok(true) => {
+                persist(&state);
+                if let Err(err) =
+                    app.emit(crate::agent_hooks::AGENT_HOOK_STATUS_EVENT, id.to_string())
+                {
+                    tracing::warn!(%id, error = %err, "terminal submit status emit failed");
+                }
+            }
+            Ok(false) => {}
+            Err(err) => {
+                tracing::warn!(%id, error = %err, "terminal submit status refresh failed");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_terminal_submit_frame(bytes: &[u8]) -> bool {
+    matches!(bytes, b"\r" | b"\n" | b"\r\n")
 }
 
 #[tauri::command]
@@ -5248,7 +5283,6 @@ fn detect_session_statuses_blocking(
     };
 
     let mut promoted_auto_title = false;
-    let mut reconciled_hook_status = false;
     let entries: Vec<SessionStatusEntry> = ids
         .into_iter()
         .map(|id| {
@@ -5332,11 +5366,10 @@ fn detect_session_statuses_blocking(
             let live_agent = root_pid_value
                 .and_then(|pid| live_agent_in_descendants(&sys, &children, Pid::from_u32(pid)));
             let live_agent_kind = live_agent.map(|(kind, _)| kind);
-            let live_agent_tool_child = live_agent.is_some_and(|agent| {
-                root_pid_value.is_some_and(|pid| {
-                    live_agent_has_tool_descendant(&sys, &children, Pid::from_u32(pid), agent)
-                })
-            });
+            let live_codex_tool_child = matches!(live_agent_kind, Some(AgentKind::Codex))
+                && root_pid_value.is_some_and(|pid| {
+                    live_codex_has_tool_descendant(&sys, &children, Pid::from_u32(pid))
+                });
             // Resolve the live transcript via the persister's resume markers
             // first (covers claude/codex/antigravity run inside a shell session — JSONL
             // is named after the agent's own UUID, not Acorn's). When the PTY
@@ -5422,26 +5455,37 @@ fn detect_session_statuses_blocking(
                 // here — after the poll's I/O — so an event landing during
                 // that window disables the recovery before it can clobber
                 // the fresher hook write.
+                let hook_revision = parsed_id
+                    .map(|uuid| state.sessions.hook_revision(&uuid))
+                    .unwrap_or(0);
                 let reconciled = parsed_id.and_then(|uuid| {
-                    hook_boot_reconciled_status(
-                        stored,
-                        state.sessions.is_hook_confirmed_this_run(&uuid),
-                        detection,
+                    hook_boot_reconciled_status(stored, hook_revision > 0, detection).and_then(
+                        |reconciled| {
+                            state
+                                .sessions
+                                .refresh_status_if_hook_revision(
+                                    &uuid,
+                                    stored,
+                                    hook_revision,
+                                    reconciled,
+                                )
+                                .ok()
+                                .filter(|applied| *applied)
+                                .map(|_| reconciled)
+                        },
                     )
                 });
-                if let (Some(uuid), Some(reconciled)) = (parsed_id, reconciled) {
-                    reconciled_hook_status |=
-                        state.sessions.refresh_status(&uuid, reconciled).is_ok();
-                }
-                let hook_status = reconciled.unwrap_or(stored);
-                // A permission request is resolved before Claude launches the
-                // approved tool, and Codex can finish its main turn while a
-                // background command remains alive. In both cases the live
-                // child process is stronger evidence than the resting hook.
+                let hook_status = parsed_id
+                    .and_then(|uuid| state.sessions.get(&uuid).ok())
+                    .map(|session| session.status)
+                    .or(reconciled)
+                    .unwrap_or(stored);
+                // Codex can finish its main turn while a background command
+                // remains alive. Its persistent helpers are filtered below.
                 hook_status_with_live_tool_activity(
                     hook_status,
                     live_agent_kind,
-                    live_agent_tool_child,
+                    live_codex_tool_child,
                 )
             } else {
                 detection.status
@@ -5503,7 +5547,7 @@ fn detect_session_statuses_blocking(
         .collect();
     // Promotion must survive an app restart — without the save a session
     // would silently fall back to ineligible until the agent runs again.
-    if promoted_auto_title || reconciled_hook_status {
+    if promoted_auto_title {
         persist(&state);
     }
     Ok(entries)
@@ -5698,21 +5742,21 @@ fn live_agent_in_descendants(
     Some((kind, found_pid?))
 }
 
-fn live_agent_has_tool_descendant(
+fn live_codex_has_tool_descendant(
     sys: &System,
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
-    agent: (AgentKind, Pid),
 ) -> bool {
     has_unignored_descendant_below_nearest_matching(
         children,
         root,
-        |pid| pid == agent.1,
         |pid| {
-            agent.0 == AgentKind::Codex
-                && sys
-                    .process(pid)
-                    .is_some_and(is_codex_persistent_helper_process)
+            sys.process(pid)
+                .is_some_and(|proc| process_primary_basename_matches(proc, "codex"))
+        },
+        |pid| {
+            sys.process(pid)
+                .is_some_and(is_codex_persistent_helper_process)
         },
     )
 }
@@ -5723,7 +5767,7 @@ fn hook_status_with_live_tool_activity(
     live_tool_child: bool,
 ) -> SessionStatus {
     if live_tool_child
-        && matches!(live_agent_kind, Some(AgentKind::Claude | AgentKind::Codex))
+        && matches!(live_agent_kind, Some(AgentKind::Codex))
         && matches!(
             hook_status,
             SessionStatus::Ready | SessionStatus::WaitingForInput

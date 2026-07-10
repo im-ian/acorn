@@ -259,10 +259,10 @@ hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]
 event=""
 # Claude fires Stop after every assistant turn, including ordinary completed
 # work that needs no response. Notification and PermissionRequest are the
-# attention-bearing events. Tool completion and SubagentStop both occur
-# mid-turn, so they re-assert Working.
+# attention-bearing events. SubagentStop fires mid-turn, so it re-asserts
+# Working.
 case "$hook_event_name" in
-  SessionStart|UserPromptSubmit|PostToolUse|PostToolUseFailure|SubagentStop) event="start" ;;
+  SessionStart|UserPromptSubmit|SubagentStop) event="start" ;;
   Stop) event="stop" ;;
   Notification|PermissionRequest) event="needs_input" ;;
   Error) event="error" ;;
@@ -526,8 +526,6 @@ fn write_claude_settings(dir: &Path) -> io::Result<()> {
   "hooks": {{
     "SessionStart": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "UserPromptSubmit": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
-    "PostToolUse": [{{"matcher":"*","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
-    "PostToolUseFailure": [{{"matcher":"*","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Stop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "SubagentStop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Notification": [{{"matcher":"permission_prompt|elicitation_dialog|agent_needs_input","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
