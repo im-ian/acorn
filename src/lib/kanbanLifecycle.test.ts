@@ -13,16 +13,7 @@ import {
 } from "./kanbanLifecycle";
 import type { PullRequestInfo, Session, SessionStatus } from "./types";
 
-type LifecycleSession = Session & {
-  agent_activity_at?: string | null;
-};
-
-type LifecyclePullRequest = PullRequestInfo & {
-  closed_at?: string | null;
-  merged_at?: string | null;
-};
-
-function makeSession(overrides: Partial<LifecycleSession> = {}): Session {
+function makeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: "s",
     name: "session",
@@ -37,7 +28,7 @@ function makeSession(overrides: Partial<LifecycleSession> = {}): Session {
 
 function makePr(
   state: string,
-  overrides: Partial<LifecyclePullRequest> = {},
+  overrides: Partial<PullRequestInfo> = {},
 ): PullRequestInfo {
   return {
     number: 7,
@@ -159,19 +150,20 @@ describe("deriveKanbanStage", () => {
   });
 
   it("moves completed work to done only when the PR finished after agent activity", () => {
-    expect(
-      deriveKanbanStage(
-        makeSession({
-          last_agent_message: "Ready for review",
-          agent_activity_at: "2026-01-02T00:00:00.000Z",
-        }),
-        ctx({
-          pr: makePr("merged", {
-            merged_at: "2026-01-03T00:00:00.000Z",
+    for (const [state, timestamps] of [
+      ["merged", { merged_at: "2026-01-03T00:00:00.000Z" }],
+      ["closed", { closed_at: "2026-01-03T00:00:00.000Z" }],
+    ] as const) {
+      expect(
+        deriveKanbanStage(
+          makeSession({
+            last_agent_message: "Ready for review",
+            agent_activity_at: "2026-01-02T00:00:00.000Z",
           }),
-        }),
-      ),
-    ).toBe("done");
+          ctx({ pr: makePr(state, timestamps) }),
+        ),
+      ).toBe("done");
+    }
   });
 
   it("keeps newer agent work in review when the matching PR was already finished", () => {
@@ -188,6 +180,19 @@ describe("deriveKanbanStage", () => {
         }),
       ),
     ).toBe("review");
+  });
+
+  it("keeps completed work in review when PR timing cannot be verified", () => {
+    const session = makeSession({
+      last_agent_message: "Ready for review",
+      agent_activity_at: "2026-01-02T00:00:00.000Z",
+    });
+    for (const pr of [
+      makePr("MERGED"),
+      makePr("CLOSED", { closed_at: "not-a-date" }),
+    ]) {
+      expect(deriveKanbanStage(session, ctx({ pr }))).toBe("review");
+    }
   });
 
   it("keeps running and waiting sessions live even with a completed PR", () => {
