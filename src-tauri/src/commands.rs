@@ -5283,6 +5283,7 @@ fn detect_session_statuses_blocking(
     };
 
     let mut promoted_auto_title = false;
+    let mut reconciled_hook_status = false;
     let entries: Vec<SessionStatusEntry> = ids
         .into_iter()
         .map(|id| {
@@ -5475,6 +5476,7 @@ fn detect_session_statuses_blocking(
                         },
                     )
                 });
+                reconciled_hook_status |= reconciled.is_some();
                 let hook_status = parsed_id
                     .and_then(|uuid| state.sessions.get(&uuid).ok())
                     .map(|session| session.status)
@@ -5547,10 +5549,14 @@ fn detect_session_statuses_blocking(
         .collect();
     // Promotion must survive an app restart — without the save a session
     // would silently fall back to ineligible until the agent runs again.
-    if promoted_auto_title {
+    if status_poll_needs_persist(promoted_auto_title, reconciled_hook_status) {
         persist(&state);
     }
     Ok(entries)
+}
+
+fn status_poll_needs_persist(promoted_auto_title: bool, reconciled_hook_status: bool) -> bool {
+    promoted_auto_title || reconciled_hook_status
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
