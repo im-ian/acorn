@@ -6781,6 +6781,22 @@ mod tests {
     }
 
     #[test]
+    fn terminal_submit_frame_requires_a_standalone_line_ending() {
+        assert!(super::is_terminal_submit_frame(b"\r"));
+        assert!(super::is_terminal_submit_frame(b"\n"));
+        assert!(super::is_terminal_submit_frame(b"\r\n"));
+
+        for input in [
+            b"answer".as_slice(),
+            b"\x1b[A".as_slice(),
+            b"answer\r".as_slice(),
+            b"\x1b[200~line one\nline two\x1b[201~".as_slice(),
+        ] {
+            assert!(!super::is_terminal_submit_frame(input));
+        }
+    }
+
+    #[test]
     fn boot_reconciliation_recovers_turn_end_lost_while_app_was_closed() {
         // Persisted hook status says Working, no event has confirmed the
         // channel this run, and the transcript holds a real turn-complete

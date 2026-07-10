@@ -724,6 +724,51 @@ mod tests {
     }
 
     #[test]
+    fn hook_revision_guards_conditional_status_refresh() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        store
+            .refresh_status(&session.id, SessionStatus::WaitingForInput)
+            .expect("session exists");
+
+        let waiting_revision = store.hook_revision(&session.id);
+        store.mark_hook_active(&session.id);
+
+        assert!(!store
+            .refresh_status_if_hook_revision(
+                &session.id,
+                SessionStatus::WaitingForInput,
+                waiting_revision,
+                SessionStatus::Working,
+            )
+            .expect("session exists"));
+        assert_eq!(
+            store.get(&session.id).expect("session exists").status,
+            SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
+    fn conditional_status_refresh_requires_the_expected_status() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        let revision = store.hook_revision(&session.id);
+
+        assert!(!store
+            .refresh_status_if_hook_revision(
+                &session.id,
+                SessionStatus::WaitingForInput,
+                revision,
+                SessionStatus::Working,
+            )
+            .expect("session exists"));
+        assert_eq!(
+            store.get(&session.id).expect("session exists").status,
+            SessionStatus::Ready
+        );
+    }
+
+    #[test]
     fn hook_activity_persists_on_session_and_survives_reload() {
         let store = SessionStore::new();
         let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
