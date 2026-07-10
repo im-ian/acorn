@@ -42,6 +42,47 @@ function session(
 }
 
 test.describe("workspace kanban mode", () => {
+  test("keeps an unstarted session with pre-existing changes in Idle", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("new-session", "new session", "ready"),
+      session("worked-session", "worked session", "ready", {
+        agent_transcript_id: "codex-turn-1",
+        last_user_message: "Implement the requested change",
+      }),
+    ]);
+    await tauri.respond("fs_git_status", {
+      statuses: {
+        "src/App.tsx": { kind: "modified", additions: 0, deletions: 0 },
+      },
+      huge: false,
+      limit: 10_000,
+    });
+    await tauri.respond("fs_git_diff_stats", {
+      "src/App.tsx": { additions: 19, deletions: 3 },
+    });
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    const newSessionCard = board.locator(
+      'section[aria-label="Idle"] [data-kanban-session-id="new-session"]',
+    );
+    const workedSessionCard = board.locator(
+      'section[aria-label="Review"] [data-kanban-session-id="worked-session"]',
+    );
+    await expect(newSessionCard).toBeVisible();
+    await expect(workedSessionCard).toBeVisible();
+    await expect(
+      newSessionCard.getByTestId("workspace-kanban-card-diff"),
+    ).toContainText("+19-3");
+  });
+
   test("updates card PR metadata when the PR list refresh discovers a new PR", async ({
     page,
     tauri,

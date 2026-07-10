@@ -64,10 +64,43 @@ describe("deriveKanbanStage", () => {
     }
   });
 
-  it("puts a ready session with a dirty worktree in review", () => {
+  it("keeps a ready session with a pre-existing dirty worktree in idle", () => {
     expect(
       deriveKanbanStage(
         makeSession({ status: "ready" }),
+        ctx({ hasDiff: true }),
+      ),
+    ).toBe("idle");
+  });
+
+  it("puts a ready session with a dirty worktree and agent transcript in review", () => {
+    expect(
+      deriveKanbanStage(
+        makeSession({
+          status: "ready",
+          agent_transcript_id: "codex-turn-1",
+        }),
+        ctx({ hasDiff: true }),
+      ),
+    ).toBe("review");
+  });
+
+  it("uses agent conversation previews when transcript metadata is unavailable", () => {
+    expect(
+      deriveKanbanStage(
+        makeSession({
+          status: "ready",
+          last_user_message: "Implement the requested change",
+        }),
+        ctx({ hasDiff: true }),
+      ),
+    ).toBe("review");
+  });
+
+  it("uses a detected completed turn when transcript previews are unavailable", () => {
+    expect(
+      deriveKanbanStage(
+        makeSession({ status: "ready", status_reason: "turn_complete" }),
         ctx({ hasDiff: true }),
       ),
     ).toBe("review");
