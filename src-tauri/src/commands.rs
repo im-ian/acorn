@@ -6741,6 +6741,54 @@ mod tests {
     }
 
     #[test]
+    fn boot_reconciliation_upgrades_legacy_completed_waiting_status() {
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::Ready,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::WaitingForInput,
+                false,
+                detection
+            ),
+            Some(acorn_session::SessionStatus::Ready)
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_preserves_real_waiting_status_without_completion_marker() {
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::Working,
+            reason: None,
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::WaitingForInput,
+                false,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_does_not_upgrade_waiting_after_hook_confirmation() {
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::Ready,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::WaitingForInput,
+                true,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn boot_reconciliation_is_off_once_a_hook_event_confirms_the_channel() {
         // An event reached this run's hook server — hooks own both directions
         // again; re-opening the transcript passthrough would recreate the
@@ -6825,6 +6873,22 @@ mod tests {
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Cancelled
             ),
+            acorn_session::SessionStatus::Ready
+        );
+
+        let completed = chat_state_for_runtime(vec![chat_message(
+            "a1",
+            crate::persistence::ChatRole::Assistant,
+            "done",
+        )]);
+        assert_eq!(
+            super::chat_session_status_for_state(&completed),
+            acorn_session::SessionStatus::Ready
+        );
+
+        let empty = chat_state_for_runtime(Vec::new());
+        assert_eq!(
+            super::chat_session_status_for_state(&empty),
             acorn_session::SessionStatus::Ready
         );
     }

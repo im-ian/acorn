@@ -762,7 +762,9 @@ mod tests {
         assert!(notify.contains("\"provider\":\"claude\""));
         // SubagentStop re-asserts Running (grouped with start); a main-agent
         // Stop is ready, while notifications and permissions require input.
-        assert!(notify.contains("SessionStart|UserPromptSubmit|SubagentStop"));
+        assert!(notify.contains(
+            "SessionStart|UserPromptSubmit|PostToolUse|PostToolUseFailure|SubagentStop"
+        ));
         assert!(notify.contains("Stop) event=\"stop\""));
         assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
@@ -772,6 +774,8 @@ mod tests {
         let notify_path = dir.join("acorn-claude-notify").display().to_string();
         assert!(settings.contains("\"SessionStart\""));
         assert!(settings.contains("\"UserPromptSubmit\""));
+        assert!(settings.contains("\"PostToolUse\""));
+        assert!(settings.contains("\"PostToolUseFailure\""));
         assert!(settings.contains("\"Stop\""));
         assert!(settings.contains("\"SubagentStop\""));
         assert!(settings.contains("\"Notification\""));
@@ -944,6 +948,10 @@ mod tests {
         assert!(wrapper.contains("acorn-antigravity-notify"));
         assert!(wrapper.contains("PLANNER_RESPONSE"));
         assert!(wrapper.contains("USER_INPUT"));
+        assert!(wrapper.contains(
+            r#"*'\"type\":\"PLANNER_RESPONSE\"'*'\"status\":\"DONE\"'*)
+          \"$_acorn_notify\" stop"#
+        ));
 
         let notify = fs::read_to_string(dir.join("acorn-antigravity-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"antigravity\""));
