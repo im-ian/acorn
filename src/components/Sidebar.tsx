@@ -4276,6 +4276,10 @@ function LocalSessionRow({
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
+  const sessionSilenced = useAppStore((s) =>
+    Boolean(s.silencedSessionIds[session.id]),
+  );
+  const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
   const currentPullRequest = useCurrentPullRequest(session);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
@@ -4360,6 +4364,16 @@ function LocalSessionRow({
       icon: <Sparkles size={12} />,
       onClick: () => void regenerateTitle(),
       disabled: !canRegenerateTitle,
+    },
+    {
+      label: sidebarText(
+        t,
+        sessionSilenced
+          ? "sidebar.actions.resumeNotifications"
+          : "sidebar.actions.silenceNotifications",
+      ),
+      icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
+      onClick: () => setSessionSilenced(session.id, !sessionSilenced),
     },
     ...(canCreateWorktreeWorkspace
       ? [

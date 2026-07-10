@@ -276,6 +276,10 @@ export function Pane({ paneId }: PaneProps) {
   const isFocused = focusedPaneId === paneId;
   const lastEmptyPaneSpaceKeyDownAtRef = useRef<number | null>(null);
   const activeSession = active?.kind === "session" ? active.session : null;
+  const activeSessionSilenced = useAppStore((s) =>
+    activeSession ? Boolean(s.silencedSessionIds[activeSession.id]) : false,
+  );
+  const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
 
   useEffect(() => {
     const node = bodyRef.current;
@@ -646,6 +650,8 @@ export function Pane({ paneId }: PaneProps) {
           onClose: () => closePane(paneId),
           activeProjectFallback: useAppStore.getState().activeProject,
           shortcuts,
+          activeSessionSilenced,
+          setSessionSilenced,
           onOpenWorkSummary: activeSession
             ? () => void openWorkSummaryTab({ sessionId: activeSession.id })
             : undefined,
@@ -1757,6 +1763,8 @@ function buildPaneMenuItems({
   onClose,
   activeProjectFallback,
   shortcuts,
+  activeSessionSilenced,
+  setSessionSilenced,
   onOpenWorkSummary,
 }: {
   t: Translator;
@@ -1768,6 +1776,8 @@ function buildPaneMenuItems({
   onClose: () => void;
   activeProjectFallback: string | null;
   shortcuts: Record<HotkeyId, string>;
+  activeSessionSilenced: boolean;
+  setSessionSilenced: (sessionId: string, silenced: boolean) => void;
   onOpenWorkSummary?: () => void;
 }): ContextMenuItem[] {
   const editorReady = hasConfiguredEditor();
@@ -1783,6 +1793,21 @@ function buildPaneMenuItems({
               },
             ]
           : []),
+        {
+          label: paneT(
+            t,
+            activeSessionSilenced
+              ? "pane.menu.resumeNotifications"
+              : "pane.menu.silenceNotifications",
+          ),
+          icon: activeSessionSilenced ? (
+            <Bell size={12} />
+          ) : (
+            <BellOff size={12} />
+          ),
+          onClick: () =>
+            setSessionSilenced(activeSession.id, !activeSessionSilenced),
+        },
         {
           label: paneT(t, "pane.menu.openWorktreeInEditor"),
           icon: <PencilLine size={12} />,

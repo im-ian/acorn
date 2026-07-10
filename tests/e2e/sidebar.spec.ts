@@ -474,11 +474,11 @@ test.describe("sidebar: project lifecycle", () => {
       clientY: 300,
     });
     await page
-      .getByRole("menuitem", { name: "Silence Notifications", exact: true })
+      .getByRole("menuitem", { name: "Resume Notifications", exact: true })
       .click();
     await expect(
-      sessionTab.getByLabel("Notifications silenced", { exact: true }),
-    ).toBeVisible();
+      localSession.getByLabel("Notifications silenced", { exact: true }),
+    ).toHaveCount(0);
   });
 
   test("ordinary terminal sessions cannot regenerate a session name", async ({
