@@ -525,6 +525,25 @@ mod tests {
     }
 
     #[test]
+    fn codex_conversation_preview_skips_injected_skill_content() {
+        let base = ScratchDir::new("codex-skill-preview");
+        let path = base.path().join("rollout.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"$merge-pr"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<skill>\n<name>merge-pr</name>\n<path>/tmp/merge-pr/SKILL.md</path>\nInternal skill instructions\n</skill>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Preflight passed."}]}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Codex, &path).unwrap();
+
+        assert_eq!(preview.last_user_message.as_deref(), Some("$merge-pr"));
+        assert_eq!(preview.last_agent_message.as_deref(), Some("Preflight passed."));
+    }
+
+    #[test]
     fn codex_conversation_preview_does_not_treat_user_message_as_agent() {
         let base = ScratchDir::new("codex-user-message-preview");
         let path = base.path().join("rollout.jsonl");
