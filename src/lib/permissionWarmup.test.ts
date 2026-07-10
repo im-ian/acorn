@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  createFolderPermissionOutputDetector,
   hasDeniedFolderPermission,
   isMacPlatform,
 } from "./permissionWarmup";
+
+function bytes(text: string): Uint8Array {
+  return new TextEncoder().encode(text);
+}
 
 describe("permission warmup gate", () => {
   it("only targets macOS-like platforms", () => {
@@ -38,5 +43,39 @@ describe("permission warmup gate", () => {
         },
       ]),
     ).toBe(true);
+  });
+
+  it("detects Homebrew's unreadable current-directory failure", () => {
+    const detector = createFolderPermissionOutputDetector();
+
+    expect(
+      detector.push(
+        bytes(
+          "Error: The current working directory must be readable to jthefloor to run brew.\r\n",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("detects a Codex permission failure split across output chunks", () => {
+    const detector = createFolderPermissionOutputDetector();
+
+    expect(detector.push(bytes("\u001b[31mError: Operation not per"))).toBe(
+      false,
+    );
+    expect(
+      detector.push(bytes("mitted (os error 1)\u001b[0m\r\n")),
+    ).toBe(true);
+  });
+
+  it("ignores unrelated permission errors", () => {
+    const detector = createFolderPermissionOutputDetector();
+
+    expect(
+      detector.push(bytes("rm: cache.db: Operation not permitted\r\n")),
+    ).toBe(false);
+    expect(
+      detector.push(bytes("Error: current directory is unavailable\r\n")),
+    ).toBe(false);
   });
 });
