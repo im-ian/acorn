@@ -406,7 +406,6 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
       const data = boardData.get(session.id);
       contexts.set(session.id, {
         pr: data?.pr ?? null,
-        hasDiff: data?.hasDiff ?? false,
         manualDone: manualDoneSet.has(session.id),
       });
     }

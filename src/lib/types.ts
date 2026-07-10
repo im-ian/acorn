@@ -153,6 +153,8 @@ export interface Session {
   agent_transcript_id?: string | null;
   /** Ephemeral path to the transcript currently used for status/preview reads. */
   agent_transcript_path?: string | null;
+  /** Ephemeral mtime of the transcript/chat state backing the latest agent work. */
+  agent_activity_at?: string | null;
   /** Ephemeral live process names observed under the session PTY. */
   active_processes?: SessionProcessSummary[];
   /** Ephemeral git workdir that produced the current live branch. */
@@ -454,6 +456,8 @@ export interface PullRequestInfo {
   base_branch: string;
   url: string;
   updated_at: string;
+  closed_at: string | null;
+  merged_at: string | null;
   is_draft: boolean;
   /** Aggregate of head-sha checks. null when gh returned no rollup entries. */
   checks: PullRequestChecksSummary | null;

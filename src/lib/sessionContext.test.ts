@@ -17,6 +17,8 @@ function pr(overrides: Partial<PullRequestInfo>): PullRequestInfo {
     base_branch: "main",
     url: "https://github.com/im-ian/acorn/pull/1",
     updated_at: "2026-01-01T00:00:00Z",
+    closed_at: null,
+    merged_at: null,
     is_draft: false,
     checks: null,
     labels: [],
