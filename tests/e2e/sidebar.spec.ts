@@ -350,7 +350,7 @@ test.describe("sidebar: project lifecycle", () => {
     expect(calls[0]).toMatchObject({ id: "session-1", force: true });
   });
 
-  test("session notification silence is shared by sidebar and tab menus", async ({
+  test("session notification silence is shared by every session menu", async ({
     page,
     tauri,
   }) => {
@@ -362,6 +362,7 @@ test.describe("sidebar: project lifecycle", () => {
         position: 0,
       },
     ]);
+    await tauri.handle("detect_session_statuses", () => []);
     await tauri.respond("list_sessions", [
       {
         id: "session-1",
@@ -379,6 +380,24 @@ test.describe("sidebar: project lifecycle", () => {
         kind: "regular",
         owner: { kind: "user" },
         position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "local-1",
+        name: "local-quiet",
+        repo_path: "/Users/tester",
+        worktree_path: "/Users/tester",
+        branch: "HEAD",
+        isolated: false,
+        project_scoped: false,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
         in_worktree: false,
       },
     ]);
@@ -430,6 +449,35 @@ test.describe("sidebar: project lifecycle", () => {
         name: "Silence Notifications",
         exact: true,
       }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    const localSession = page
+      .getByRole("region", { name: "Local terminal sessions" })
+      .getByRole("button", { name: /local-quiet/ });
+    await localSession.click({ button: "right" });
+    const localSilenceAction = page.getByRole("menuitem", {
+      name: "Silence Notifications",
+      exact: true,
+    });
+    await expect(localSilenceAction).toBeVisible();
+    await localSilenceAction.click();
+    await expect(
+      localSession.getByLabel("Notifications silenced", { exact: true }),
+    ).toBeVisible();
+
+    await page.locator("[data-pane-body]").first().dispatchEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: 400,
+      clientY: 300,
+    });
+    await page
+      .getByRole("menuitem", { name: "Silence Notifications", exact: true })
+      .click();
+    await expect(
+      sessionTab.getByLabel("Notifications silenced", { exact: true }),
     ).toBeVisible();
   });
 
