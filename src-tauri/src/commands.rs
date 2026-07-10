@@ -6876,6 +6876,13 @@ mod tests {
     }
 
     #[test]
+    fn status_poll_persists_successful_boot_reconciliation() {
+        assert!(!super::status_poll_needs_persist(false, false));
+        assert!(super::status_poll_needs_persist(true, false));
+        assert!(super::status_poll_needs_persist(false, true));
+    }
+
+    #[test]
     fn boot_reconciliation_preserves_real_waiting_status_without_completion_marker() {
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Working,
