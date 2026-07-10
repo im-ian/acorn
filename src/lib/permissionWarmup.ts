@@ -46,19 +46,19 @@ export function createFolderPermissionOutputDetector(): {
 } {
   const decoder = new TextDecoder();
   let tail = "";
-  let detected = false;
 
   return {
     push(bytes) {
-      if (detected || bytes.byteLength === 0) return false;
+      if (bytes.byteLength === 0) return false;
       const output = (tail + decoder.decode(bytes, { stream: true })).replace(
         ANSI_CSI_SEQUENCE,
         "",
       );
       tail = output.slice(-MAX_PERMISSION_OUTPUT_TAIL);
-      detected =
+      const detected =
         BREW_UNREADABLE_CWD.test(output) ||
         CODEX_PERMISSION_FAILURE.test(output);
+      if (detected) tail = "";
       return detected;
     },
   };
