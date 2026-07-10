@@ -760,9 +760,8 @@ mod tests {
 
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"claude\""));
-        // SubagentStop re-asserts Running (grouped with start); a main-agent
-        // Stop is ready, while notifications and permissions require input.
-        assert!(notify.contains("SessionStart|UserPromptSubmit|SubagentStop"));
+        assert!(notify.contains("SessionStart|UserPromptSubmit) event=\"start\""));
+        assert!(!notify.contains("SubagentStop"));
         assert!(notify.contains("Stop) event=\"stop\""));
         assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
@@ -775,7 +774,7 @@ mod tests {
         assert!(!settings.contains("\"PostToolUse\""));
         assert!(!settings.contains("\"PostToolUseFailure\""));
         assert!(settings.contains("\"Stop\""));
-        assert!(settings.contains("\"SubagentStop\""));
+        assert!(!settings.contains("\"SubagentStop\""));
         assert!(settings.contains("\"Notification\""));
         assert!(settings
             .contains("\"matcher\":\"permission_prompt|elicitation_dialog|agent_needs_input\""));
@@ -849,7 +848,8 @@ mod tests {
         let base = ScratchDir::new("events");
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
-        assert!(notify.contains("SessionStart|UserPromptSubmit|SubagentStop) event=\"start\""));
+        assert!(notify.contains("SessionStart|UserPromptSubmit) event=\"start\""));
+        assert!(!notify.contains("SubagentStop"));
         assert!(notify.contains("Stop) event=\"stop\""));
         assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
         assert!(notify.contains("Error) event=\"error\""));
