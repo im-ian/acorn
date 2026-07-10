@@ -145,6 +145,8 @@ const labeledPullRequest = {
   base_branch: "main",
   url: "https://github.com/im-ian/acorn/pull/247",
   updated_at: "2026-05-19T00:00:00Z",
+  closed_at: null,
+  merged_at: null,
   is_draft: false,
   checks: null,
   labels: [

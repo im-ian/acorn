@@ -456,8 +456,8 @@ export interface PullRequestInfo {
   base_branch: string;
   url: string;
   updated_at: string;
-  closed_at?: string | null;
-  merged_at?: string | null;
+  closed_at: string | null;
+  merged_at: string | null;
   is_draft: boolean;
   /** Aggregate of head-sha checks. null when gh returned no rollup entries. */
   checks: PullRequestChecksSummary | null;
