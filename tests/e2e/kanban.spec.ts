@@ -42,6 +42,68 @@ function session(
 }
 
 test.describe("workspace kanban mode", () => {
+  test("derives lifecycle from agent work instead of shared Git state", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("new-session", "new session", "ready"),
+      session("worked-session", "worked session", "ready", {
+        last_user_message: "Implement the requested change",
+        last_agent_message: "Implemented and committed the change",
+      }),
+      session("shell-process", "shell process", "working"),
+      session("agent-process", "agent process", "working", {
+        agent_provider: "codex",
+      }),
+    ]);
+    await tauri.handle("fs_git_status", (args) => {
+      const repoRoot = (args as { repoRoot?: string }).repoRoot ?? "";
+      return {
+        statuses: repoRoot.endsWith("/new-session")
+          ? {
+              "src/App.tsx": {
+                kind: "modified",
+                additions: 0,
+                deletions: 0,
+              },
+            }
+          : {},
+        huge: false,
+        limit: 10_000,
+      };
+    });
+    await tauri.respond("fs_git_diff_stats", {
+      "src/App.tsx": { additions: 19, deletions: 3 },
+    });
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    const newSessionCard = board.locator(
+      'section[aria-label="Idle"] [data-kanban-session-id="new-session"]',
+    );
+    const workedSessionCard = board.locator(
+      'section[aria-label="Review"] [data-kanban-session-id="worked-session"]',
+    );
+    const shellProcessCard = board.locator(
+      'section[aria-label="Idle"] [data-kanban-session-id="shell-process"]',
+    );
+    const agentProcessCard = board.locator(
+      'section[aria-label="Working"] [data-kanban-session-id="agent-process"]',
+    );
+    await expect(newSessionCard).toBeVisible();
+    await expect(workedSessionCard).toBeVisible();
+    await expect(shellProcessCard).toBeVisible();
+    await expect(agentProcessCard).toBeVisible();
+    await expect(
+      newSessionCard.getByTestId("workspace-kanban-card-diff"),
+    ).toContainText("+19-3");
+  });
+
   test("updates card PR metadata when the PR list refresh discovers a new PR", async ({
     page,
     tauri,
@@ -852,7 +914,9 @@ test.describe("workspace kanban mode", () => {
       }),
       session("shell", "shell", "ready"),
       session("needs-review", "needs-review", "waiting_for_input"),
-      session("runner", "runner", "working"),
+      session("runner", "runner", "working", {
+        agent_provider: "codex",
+      }),
       session("broken", "broken", "errored"),
     ]);
 

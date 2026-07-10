@@ -2520,6 +2520,7 @@ describe("pollSessionStatuses", () => {
         status: "working",
         last_user_message: "New user prompt",
         last_agent_message: "New agent response",
+        agent_activity_at: "2026-01-02T03:04:05.000Z",
         branch: null,
       },
     ]);
@@ -2531,6 +2532,9 @@ describe("pollSessionStatuses", () => {
     );
     expect(useAppStore.getState().sessions[0]?.last_agent_message).toBe(
       "New agent response",
+    );
+    expect(useAppStore.getState().sessions[0]?.agent_activity_at).toBe(
+      "2026-01-02T03:04:05.000Z",
     );
   });
 

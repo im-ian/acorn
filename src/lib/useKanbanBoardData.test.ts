@@ -17,6 +17,8 @@ function makePr(overrides: Partial<PullRequestInfo>): PullRequestInfo {
     base_branch: "main",
     url: "https://example.test/pr/1",
     updated_at: "2026-01-01T00:00:00.000Z",
+    closed_at: null,
+    merged_at: null,
     is_draft: false,
     checks: null,
     labels: [],
