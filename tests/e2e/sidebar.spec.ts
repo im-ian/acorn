@@ -350,6 +350,137 @@ test.describe("sidebar: project lifecycle", () => {
     expect(calls[0]).toMatchObject({ id: "session-1", force: true });
   });
 
+  test("session notification silence is shared by every session menu", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("detect_session_statuses", () => []);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "quiet-me",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "local-1",
+        name: "local-quiet",
+        repo_path: "/Users/tester",
+        worktree_path: "/Users/tester",
+        branch: "HEAD",
+        isolated: false,
+        project_scoped: false,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+
+    const sidebarSession = page
+      .locator("aside")
+      .getByRole("button", { name: /quiet-me/ });
+    await sidebarSession.click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Silence Notifications", exact: true })
+      .click();
+    await expect(
+      sidebarSession.getByLabel("Notifications silenced", { exact: true }),
+    ).toBeVisible();
+
+    await page.reload();
+
+    const sessionTab = page.locator('[data-tab-drag-handle="session-1"]');
+    await expect(
+      sessionTab.getByLabel("Notifications silenced", { exact: true }),
+    ).toBeVisible();
+    await sessionTab.click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", {
+        name: "Resume Notifications",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page
+      .getByRole("menuitem", {
+        name: "Resume Notifications",
+        exact: true,
+      })
+      .click();
+
+    const resumedSidebarSession = page
+      .locator("aside")
+      .getByRole("button", { name: /quiet-me/ });
+    await expect(
+      resumedSidebarSession.getByLabel("Notifications silenced", {
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await resumedSidebarSession.click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", {
+        name: "Silence Notifications",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    const localSession = page
+      .getByRole("region", { name: "Local terminal sessions" })
+      .getByRole("button", { name: /local-quiet/ });
+    await localSession.click({ button: "right" });
+    const localSilenceAction = page.getByRole("menuitem", {
+      name: "Silence Notifications",
+      exact: true,
+    });
+    await expect(localSilenceAction).toBeVisible();
+    await localSilenceAction.click();
+    await expect(
+      localSession.getByLabel("Notifications silenced", { exact: true }),
+    ).toBeVisible();
+
+    await page.locator("[data-pane-body]").first().dispatchEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: 400,
+      clientY: 300,
+    });
+    await page
+      .getByRole("menuitem", { name: "Resume Notifications", exact: true })
+      .click();
+    await expect(
+      localSession.getByLabel("Notifications silenced", { exact: true }),
+    ).toHaveCount(0);
+  });
+
   test("ordinary terminal sessions cannot regenerate a session name", async ({
     page,
     tauri,

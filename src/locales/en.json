@@ -1134,6 +1134,8 @@
       "rename": "Rename",
       "regenerateName": "Regenerate Name",
       "openWorkSummary": "Open Work Summary",
+      "silenceNotifications": "Silence Notifications",
+      "resumeNotifications": "Resume Notifications",
       "forkClaudeSession": "Fork Claude Session",
       "forkSession": "Fork Session",
       "forkClaudeInNewWorktree": "Fork Claude in New Worktree",
@@ -1179,7 +1181,8 @@
       "worktree": "worktree",
       "controlSession": "control session",
       "chatSession": "chat session",
-      "generatingSessionTitle": "Generating session title"
+      "generatingSessionTitle": "Generating session title",
+      "notificationsSilenced": "Notifications silenced"
     },
     "localTerminals": {
       "title": "Instant Sessions",
@@ -1239,6 +1242,7 @@
       "chatSession": "chat session",
       "workSummary": "work summary",
       "generatingSessionTitle": "Generating session title",
+      "notificationsSilenced": "Notifications silenced",
       "closeSession": "Close session",
       "closeTab": "Close tab"
     },
@@ -1254,6 +1258,8 @@
       "rename": "Rename",
       "regenerateName": "Regenerate Name",
       "openWorkSummary": "Open Work Summary",
+      "silenceNotifications": "Silence Notifications",
+      "resumeNotifications": "Resume Notifications",
       "forkClaudeSession": "Fork Claude Session",
       "forkSession": "Fork Session",
       "forkClaudeInNewWorktree": "Fork Claude in New Worktree",
