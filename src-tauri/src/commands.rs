@@ -6745,14 +6745,14 @@ mod tests {
     }
 
     #[test]
-    fn approved_claude_tool_activity_clears_waiting_until_the_tool_finishes() {
+    fn persistent_claude_children_do_not_clear_waiting() {
         assert_eq!(
             super::hook_status_with_live_tool_activity(
                 acorn_session::SessionStatus::WaitingForInput,
                 Some(super::AgentKind::Claude),
                 true,
             ),
-            acorn_session::SessionStatus::Working
+            acorn_session::SessionStatus::WaitingForInput
         );
         assert_eq!(
             super::hook_status_with_live_tool_activity(
