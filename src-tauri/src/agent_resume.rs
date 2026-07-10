@@ -540,7 +540,10 @@ mod tests {
         let preview = extract_conversation_preview(AgentKind::Codex, &path).unwrap();
 
         assert_eq!(preview.last_user_message.as_deref(), Some("$merge-pr"));
-        assert_eq!(preview.last_agent_message.as_deref(), Some("Preflight passed."));
+        assert_eq!(
+            preview.last_agent_message.as_deref(),
+            Some("Preflight passed.")
+        );
     }
 
     #[test]

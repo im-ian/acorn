@@ -356,7 +356,15 @@ fn codex_preview_role_and_text(
     event_role: TranscriptRole,
 ) -> (TranscriptRole, Option<String>) {
     match event_role {
-        TranscriptRole::User => (TranscriptRole::User, codex_message_preview_text(event)),
+        TranscriptRole::User => {
+            let text =
+                codex_message_preview_text(event).filter(|text| !looks_like_context_block(text));
+            if text.is_some() {
+                (TranscriptRole::User, text)
+            } else {
+                (TranscriptRole::Other, None)
+            }
+        }
         TranscriptRole::Assistant => (
             TranscriptRole::Assistant,
             codex_message_preview_text(event)
@@ -619,6 +627,9 @@ fn looks_like_context_block(text: &str) -> bool {
         || lower.contains("<cwd>")
         || lower.contains("# agents.md")
         || lower.contains("<instructions>")
+        || (lower.trim_start().starts_with("<skill>")
+            && lower.contains("<name>")
+            && lower.contains("<path>"))
 }
 
 fn extract_cwd_from_text(texts: &[String]) -> Option<String> {
