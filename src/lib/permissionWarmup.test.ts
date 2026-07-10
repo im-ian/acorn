@@ -78,4 +78,13 @@ describe("permission warmup gate", () => {
       detector.push(bytes("Error: current directory is unavailable\r\n")),
     ).toBe(false);
   });
+
+  it("reports a permission failure only once per terminal detector", () => {
+    const detector = createFolderPermissionOutputDetector();
+    const failure = bytes("Error: Operation not permitted (os error 1)\r\n");
+
+    expect(detector.push(new Uint8Array())).toBe(false);
+    expect(detector.push(failure)).toBe(true);
+    expect(detector.push(failure)).toBe(false);
+  });
 });
