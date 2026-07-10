@@ -86,12 +86,21 @@ describe("deriveKanbanStage", () => {
     ).toBe("working");
   });
 
-  it("keeps a ready session with a pre-existing dirty worktree in idle", () => {
+  it("keeps completed work in review while a non-agent shell command runs", () => {
     expect(
       deriveKanbanStage(
-        makeSession({ status: "ready" }),
-        ctx({ hasDiff: true }),
+        makeSession({
+          status: "working",
+          last_agent_message: "Completed agent work",
+        }),
+        ctx(),
       ),
+    ).toBe("review");
+  });
+
+  it("keeps a ready session without agent work in idle", () => {
+    expect(
+      deriveKanbanStage(makeSession({ status: "ready" }), ctx()),
     ).toBe("idle");
   });
 
@@ -210,7 +219,7 @@ describe("deriveKanbanStage", () => {
     expect(
       deriveKanbanStage(
         makeSession({ status: "waiting_for_input" }),
-        ctx({ pr: makePr("OPEN"), hasDiff: true, manualDone: true }),
+        ctx({ pr: makePr("OPEN"), manualDone: true }),
       ),
     ).toBe("waiting");
     expect(
