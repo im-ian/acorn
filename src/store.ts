@@ -361,6 +361,7 @@ interface AppStateModel {
    */
   pendingTerminalInput: Record<string, PendingTerminalInput>;
   sessionNotifications: SessionNotification[];
+  silencedSessionIds: Record<string, true>;
   multiInputEnabled: boolean;
   loading: boolean;
   error: string | null;
@@ -498,6 +499,7 @@ interface AppStateModel {
   markAllSessionNotificationsRead: () => void;
   dismissSessionNotification: (id: string) => void;
   clearReadSessionNotifications: () => void;
+  setSessionSilenced: (sessionId: string, silenced: boolean) => void;
   toggleMultiInput: () => boolean;
   /** Open a readonly code viewer tab for `path` in the focused pane. */
   openCodeViewerTab: (
@@ -1547,6 +1549,7 @@ export const useAppStore = create<AppStateModel>()(
   prAccountByRepo: {},
   pendingTerminalInput: {},
   sessionNotifications: [],
+  silencedSessionIds: {},
   multiInputEnabled: false,
   loading: false,
   error: null,
@@ -1615,6 +1618,9 @@ export const useAppStore = create<AppStateModel>()(
                 sessionIds.has(notification.sessionId),
               )
             : s.sessionNotifications,
+          silencedSessionIds: shouldPruneActivity
+            ? retainSessionIds(s.silencedSessionIds, sessionIds)
+            : s.silencedSessionIds,
           workspaces: reconciled.workspaces,
           projectFolders: reconciled.projectFolders,
           sessionFolderIds: reconciled.sessionFolderIds,
@@ -1754,6 +1760,9 @@ export const useAppStore = create<AppStateModel>()(
               sessionIds.has(notification.sessionId),
             )
           : s.sessionNotifications,
+        silencedSessionIds: shouldPruneActivity
+          ? retainSessionIds(s.silencedSessionIds, sessionIds)
+          : s.silencedSessionIds,
         workspaces: reconciled.workspaces,
         projectFolders: reconciled.projectFolders,
         sessionFolderIds: reconciled.sessionFolderIds,
@@ -2928,6 +2937,9 @@ export const useAppStore = create<AppStateModel>()(
         s.terminalPopupSessionId && removalIds.has(s.terminalPopupSessionId)
           ? null
           : s.terminalPopupSessionId;
+      const remainingSessionIds = new Set(
+        sessions.map((session) => session.id),
+      );
 
       return {
         sessions,
@@ -2938,6 +2950,10 @@ export const useAppStore = create<AppStateModel>()(
         terminalPopupSessionId,
         sessionNotifications: s.sessionNotifications.filter(
           (notification) => !removalIds.has(notification.sessionId),
+        ),
+        silencedSessionIds: retainSessionIds(
+          s.silencedSessionIds,
+          remainingSessionIds,
         ),
         workspaces: reconciled.workspaces,
         projectFolders: reconciled.projectFolders,
@@ -3237,6 +3253,9 @@ export const useAppStore = create<AppStateModel>()(
         )
           ? defaultProjectFolderId(repoPath)
           : s.activeProjectFolderId;
+        const remainingSessionIds = new Set(
+          sessions.map((session) => session.id),
+        );
         const reconciled = reconcileWorkspaces(
           sessions,
           s.projects,
@@ -3254,6 +3273,10 @@ export const useAppStore = create<AppStateModel>()(
           pendingTerminalInput,
           sessionNotifications: s.sessionNotifications.filter(
             (notification) => !removedSessionIds.has(notification.sessionId),
+          ),
+          silencedSessionIds: retainSessionIds(
+            s.silencedSessionIds,
+            remainingSessionIds,
           ),
           workspaces: reconciled.workspaces,
           projectFolders: reconciled.projectFolders,
@@ -3475,6 +3498,7 @@ export const useAppStore = create<AppStateModel>()(
   addSessionNotification(notification) {
     const maxHistory = useSettings.getState().settings.notifications.maxHistory;
     set((s) => {
+      if (s.silencedSessionIds[notification.sessionId]) return s;
       const existing = s.sessionNotifications.filter(
         (n) => n.id !== notification.id,
       );
@@ -3575,6 +3599,20 @@ export const useAppStore = create<AppStateModel>()(
         (notification) => !notification.readAt,
       ),
     }));
+  },
+
+  setSessionSilenced(sessionId, silenced) {
+    set((s) => {
+      const currentlySilenced = s.silencedSessionIds[sessionId] === true;
+      if (currentlySilenced === silenced) return s;
+      const silencedSessionIds = { ...s.silencedSessionIds };
+      if (silenced) {
+        silencedSessionIds[sessionId] = true;
+      } else {
+        delete silencedSessionIds[sessionId];
+      }
+      return { silencedSessionIds };
+    });
   },
 
   toggleMultiInput() {
@@ -3831,6 +3869,7 @@ export const useAppStore = create<AppStateModel>()(
         rightTab: state.rightTab,
         rightTabByGroup: state.rightTabByGroup,
         sessionNotifications: state.sessionNotifications,
+        silencedSessionIds: state.silencedSessionIds,
         workspaceTabs: Object.fromEntries(
           Object.entries(state.workspaceTabs).filter(([, tab]) =>
             isRestorableWorkspaceTab(tab),
@@ -3990,6 +4029,9 @@ export const useAppStore = create<AppStateModel>()(
           state.sessionNotifications ?? [],
           useSettings.getState().settings.notifications.maxHistory,
         );
+        state.silencedSessionIds = normalizeSilencedSessionIds(
+          state.silencedSessionIds,
+        );
         state.activeProjectFolderId =
           state.activeProjectFolderId ??
           (state.activeProject
@@ -4083,5 +4125,24 @@ function normalizeStringRecord(value: unknown): Record<string, string> {
     Object.entries(value as Record<string, unknown>).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
+  );
+}
+
+function normalizeSilencedSessionIds(value: unknown): Record<string, true> {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, true] =>
+        entry[0].trim().length > 0 && entry[1] === true,
+    ),
+  );
+}
+
+function retainSessionIds(
+  value: Record<string, true>,
+  sessionIds: ReadonlySet<string>,
+): Record<string, true> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([sessionId]) => sessionIds.has(sessionId)),
   );
 }

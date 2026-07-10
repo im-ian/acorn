@@ -1,6 +1,8 @@
 import {
   Bot,
   BarChart3,
+  Bell,
+  BellOff,
   CircleX,
   Columns2,
   Copy,
@@ -274,6 +276,10 @@ export function Pane({ paneId }: PaneProps) {
   const isFocused = focusedPaneId === paneId;
   const lastEmptyPaneSpaceKeyDownAtRef = useRef<number | null>(null);
   const activeSession = active?.kind === "session" ? active.session : null;
+  const activeSessionSilenced = useAppStore((s) =>
+    activeSession ? Boolean(s.silencedSessionIds[activeSession.id]) : false,
+  );
+  const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
 
   useEffect(() => {
     const node = bodyRef.current;
@@ -644,6 +650,8 @@ export function Pane({ paneId }: PaneProps) {
           onClose: () => closePane(paneId),
           activeProjectFallback: useAppStore.getState().activeProject,
           shortcuts,
+          activeSessionSilenced,
+          setSessionSilenced,
           onOpenWorkSummary: activeSession
             ? () => void openWorkSummaryTab({ sessionId: activeSession.id })
             : undefined,
@@ -1018,6 +1026,10 @@ function TabItem({
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
   const session = tab.kind === "session" ? tab.session : null;
+  const sessionSilenced = useAppStore((s) =>
+    session ? Boolean(s.silencedSessionIds[session.id]) : false,
+  );
+  const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
   const isGeneratingTitle = useAppStore((s) =>
     session ? Boolean(s.generatingSessionTitleIds[session.id]) : false,
   );
@@ -1258,6 +1270,17 @@ function TabItem({
             label: paneT(t, "pane.menu.openWorkSummary"),
             icon: <BarChart3 size={12} />,
             onClick: () => void openWorkSummaryTab({ sessionId: session.id }),
+          },
+          {
+            label: paneT(
+              t,
+              sessionSilenced
+                ? "pane.menu.resumeNotifications"
+                : "pane.menu.silenceNotifications",
+            ),
+            icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
+            onClick: () =>
+              setSessionSilenced(session.id, !sessionSilenced),
           },
         ] satisfies ContextMenuItem[])
       : []),
@@ -1531,6 +1554,15 @@ function TabItem({
               aria-label={paneT(t, "pane.aria.controlSession")}
             />
           ) : null}
+          {sessionSilenced ? (
+            <span
+              className="pointer-events-none inline-flex shrink-0 text-fg-muted"
+              aria-label={paneT(t, "pane.aria.notificationsSilenced")}
+              title={paneT(t, "pane.aria.notificationsSilenced")}
+            >
+              <BellOff size={10} aria-hidden />
+            </span>
+          ) : null}
         </div>
         <button
           type="button"
@@ -1731,6 +1763,8 @@ function buildPaneMenuItems({
   onClose,
   activeProjectFallback,
   shortcuts,
+  activeSessionSilenced,
+  setSessionSilenced,
   onOpenWorkSummary,
 }: {
   t: Translator;
@@ -1742,6 +1776,8 @@ function buildPaneMenuItems({
   onClose: () => void;
   activeProjectFallback: string | null;
   shortcuts: Record<HotkeyId, string>;
+  activeSessionSilenced: boolean;
+  setSessionSilenced: (sessionId: string, silenced: boolean) => void;
   onOpenWorkSummary?: () => void;
 }): ContextMenuItem[] {
   const editorReady = hasConfiguredEditor();
@@ -1757,6 +1793,21 @@ function buildPaneMenuItems({
               },
             ]
           : []),
+        {
+          label: paneT(
+            t,
+            activeSessionSilenced
+              ? "pane.menu.resumeNotifications"
+              : "pane.menu.silenceNotifications",
+          ),
+          icon: activeSessionSilenced ? (
+            <Bell size={12} />
+          ) : (
+            <BellOff size={12} />
+          ),
+          onClick: () =>
+            setSessionSilenced(activeSession.id, !activeSessionSilenced),
+        },
         {
           label: paneT(t, "pane.menu.openWorktreeInEditor"),
           icon: <PencilLine size={12} />,

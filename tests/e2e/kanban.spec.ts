@@ -613,6 +613,9 @@ test.describe("workspace kanban mode", () => {
       page.getByRole("menuitem", { name: "Open Work Summary" }),
     ).toBeVisible();
     await expect(
+      page.getByRole("menuitem", { name: "Silence Notifications" }),
+    ).toBeVisible();
+    await expect(
       page.getByRole("menuitem", { name: "Reveal in Finder" }),
     ).toBeVisible();
     await expect(
@@ -673,6 +676,9 @@ test.describe("workspace kanban mode", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "Open Work Summary" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Silence Notifications" }),
     ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "Reveal in Finder" }),

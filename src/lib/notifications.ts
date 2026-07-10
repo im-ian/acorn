@@ -169,6 +169,7 @@ export function startSessionNotificationWatcher(): () => void {
       const prev = lastStatus.get(s.id);
       lastStatus.set(s.id, s.status);
       if (prev === undefined) continue;
+      if (state.silencedSessionIds[s.id]) continue;
       const { notify, key } = shouldNotifyTransition(prev, s.status);
       if (!notify || !key || !settings.events[key]) continue;
       if (isSessionFocused(s.id, state.activeSessionId)) {
@@ -205,6 +206,7 @@ export function startSessionActivityInboxWatcher(): () => void {
       const prev = lastStatus.get(s.id);
       lastStatus.set(s.id, s.status);
       if (prev === undefined) continue;
+      if (state.silencedSessionIds[s.id]) continue;
 
       const kind = notificationKindForTransition(prev, s.status);
       if (!kind) continue;
@@ -253,8 +255,9 @@ async function fire(
   session: Session,
   next: SessionStatus,
 ): Promise<void> {
+  if (useAppStore.getState().silencedSessionIds[session.id]) return;
   const ok = await ensurePermission();
-  if (!ok) return;
+  if (!ok || useAppStore.getState().silencedSessionIds[session.id]) return;
   try {
     sendNotification({
       title: `${projectNameFor(session)} — ${session.name}`,
