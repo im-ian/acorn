@@ -32,6 +32,10 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Ollam
   <br/>
   <sub>메인 워크스페이스 — 사이드바 + 분할 Pane + 우측 패널</sub>
   <br/><br/>
+  <img width="1600" height="1000" alt="Acorn Kanban 워크스페이스" src="./assets/screenshots/kanban.png" />
+  <br/>
+  <sub>Kanban 워크스페이스 — Idle부터 Done까지 세션 lifecycle 추적</sub>
+  <br/><br/>
   <img width="1392" height="912" alt="Acorn PR 상세 모달" src="./assets/screenshots/pr-modal.png" />
   <br/>
   <sub>PR 상세 모달 — 체크 상태 + 변경 사항 + 머지 옵션</sub>

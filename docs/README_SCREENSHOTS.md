@@ -15,7 +15,7 @@ Useful variants:
 
 ```sh
 pnpm run capture:readme -- --list
-pnpm run capture:readme -- workspace pr-modal chat-session staged-diff
+pnpm run capture:readme -- workspace kanban pr-modal chat-session staged-diff
 pnpm run capture:readme -- --out /tmp/acorn-captures --headed
 pnpm run capture:readme -- --port 1425
 ```
@@ -23,6 +23,7 @@ pnpm run capture:readme -- --port 1425
 Available scenes:
 
 - `workspace` -> `workspace.png`
+- `kanban` -> `kanban.png`
 - `pr-modal` -> `pr-modal.png`
 - `chat-session` -> `chat-session.png`
 - `control-session` -> `control-session.png`

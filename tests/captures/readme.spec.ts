@@ -2,10 +2,12 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { test, expect, type Page } from "@playwright/test";
 import { tauriMockSource } from "../e2e/fixtures/tauriMock";
+import { pressHotkey } from "../e2e/support";
 
 const CAPTURE_DIR = process.env.ACORN_CAPTURE_DIR ?? "assets/screenshots";
 const DEFAULT_SCENES = [
   "workspace",
+  "kanban",
   "pr-modal",
   "chat-session",
   "control-session",
@@ -52,6 +54,37 @@ const scenes: CaptureScene[] = [
       ).toBeVisible();
       await expect(
         page.locator("aside").getByRole("button", { name: /workspace-polish/ }),
+      ).toBeVisible();
+    },
+  },
+  {
+    name: "kanban",
+    file: "kanban.png",
+    prepare: async (page) => {
+      const board = page.getByTestId("workspace-kanban");
+      await expect(board).toBeVisible();
+      await pressHotkey(page, { mod: true, key: "j" });
+      await expect(
+        page.locator('[data-kanban-session-id="kanban-capture"]'),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("workspace-kanban-count-idle"),
+      ).toHaveText("1");
+      await expect(
+        page.getByTestId("workspace-kanban-count-working"),
+      ).toHaveText("1");
+      await expect(
+        page.getByTestId("workspace-kanban-count-waiting"),
+      ).toHaveText("1");
+      await expect(
+        page.getByTestId("workspace-kanban-count-review"),
+      ).toHaveText("1");
+      await expect(
+        page.getByTestId("workspace-kanban-count-done"),
+      ).toHaveText("1");
+      await expect(
+        page.locator('[data-kanban-session-id="file-explorer-review"]')
+          .getByTestId("workspace-kanban-card-pr"),
       ).toBeVisible();
     },
   },
@@ -234,6 +267,23 @@ async function bootCapturePage(page: Page, sceneName: SceneName) {
         "acorn:sidebar:collapsed-project-folders",
         JSON.stringify(["${folderId(REPOS.website, "release")}"])
       );
+      window.localStorage.setItem(
+        "acorn:workspace-kanban:board-prefs:v2",
+        JSON.stringify(${JSON.stringify({
+          [REPOS.app]: {
+            columnWidths: {
+              idle: 180,
+              working: 180,
+              waiting: 180,
+              review: 180,
+              done: 180,
+            },
+            sortMode: "updated-desc",
+            filterQuery: "",
+            manualDoneSessionIds: [],
+          },
+        })})
+      );
       window.localStorage.setItem("acorn-workspaces", JSON.stringify(${JSON.stringify(
         persistedWorkspace(sceneName),
       )}));
@@ -248,11 +298,13 @@ async function bootCapturePage(page: Page, sceneName: SceneName) {
       ? /Chat handoff review/
       : sceneName === "control-session"
         ? /control-orchestrator/
+        : sceneName === "kanban"
+          ? /kanban-capture/
         : /workspace-polish/;
   await expect(
     page.locator("aside").getByRole("button", {
       name: expectedSidebarSession,
-    }),
+    }).first(),
   ).toBeVisible();
 }
 
@@ -316,6 +368,29 @@ function persistedWorkspace(sceneName: SceneName) {
 }
 
 function appWorkspace(sceneName: SceneName) {
+  if (sceneName === "kanban") {
+    const sessionIds = [
+      "plan-next-release",
+      "kanban-capture",
+      "release-copy",
+      "file-explorer-review",
+      "release-v1.25",
+    ];
+    return {
+      layout: { kind: "pane", id: "kanban-root" },
+      panes: {
+        "kanban-root": paneState(
+          "kanban-root",
+          sessionIds,
+          "kanban-capture",
+        ),
+      },
+      focusedPaneId: "kanban-root",
+      viewMode: "kanban",
+      ...rightPanelWorkspaceState(),
+    };
+  }
+
   if (sceneName === "chat-session") {
     return {
       layout: { kind: "pane", id: "chat-root" },
@@ -788,6 +863,7 @@ function captureMockHandlersSource(sceneName: SceneName) {
   return `(() => {
     const repos = ${JSON.stringify(REPOS)};
     const now = ${JSON.stringify(NOW)};
+    const sceneName = ${JSON.stringify(sceneName)};
     const handlers = window.__ACORN_MOCK_HANDLERS__ =
       window.__ACORN_MOCK_HANDLERS__ || {};
     const projectFolders = ${JSON.stringify(projectFolders())};
@@ -939,20 +1015,46 @@ function captureMockHandlersSource(sceneName: SceneName) {
       }
       return { repo_root: repos.app, entries: [] };
     };
-    handlers.fs_git_status = () => ({
-      statuses: {
-        [repos.app + "/README.md"]: { kind: "modified", additions: 8, deletions: 2 },
-        [repos.app + "/tests"]: { kind: "added", additions: 360, deletions: 0 },
-        [repos.app + "/playwright.capture.config.ts"]: { kind: "added", additions: 35, deletions: 0 },
-      },
-      huge: false,
-      limit: 10000,
-    });
-    handlers.fs_git_diff_stats = () => ({
-      [repos.app + "/README.md"]: { additions: 8, deletions: 2 },
-      [repos.app + "/tests"]: { additions: 360, deletions: 0 },
-      [repos.app + "/playwright.capture.config.ts"]: { additions: 35, deletions: 0 },
-    });
+    handlers.fs_git_status = (args) => {
+      if (sceneName === "kanban") {
+        const reviewRoot = repos.app + "/.acorn/worktrees/file-explorer-review";
+        return {
+          statuses: args?.repoRoot === reviewRoot
+            ? {
+                [reviewRoot + "/src/components/FileExplorer.tsx"]: { kind: "modified" },
+                [reviewRoot + "/tests/e2e/file-explorer.spec.ts"]: { kind: "modified" },
+              }
+            : {},
+          huge: false,
+          limit: 10000,
+        };
+      }
+      return {
+        statuses: {
+          [repos.app + "/README.md"]: { kind: "modified", additions: 8, deletions: 2 },
+          [repos.app + "/tests"]: { kind: "added", additions: 360, deletions: 0 },
+          [repos.app + "/playwright.capture.config.ts"]: { kind: "added", additions: 35, deletions: 0 },
+        },
+        huge: false,
+        limit: 10000,
+      };
+    };
+    handlers.fs_git_diff_stats = (args) => {
+      if (sceneName === "kanban") {
+        const reviewRoot = repos.app + "/.acorn/worktrees/file-explorer-review";
+        return args?.repoRoot === reviewRoot
+          ? {
+              [reviewRoot + "/src/components/FileExplorer.tsx"]: { additions: 84, deletions: 19 },
+              [reviewRoot + "/tests/e2e/file-explorer.spec.ts"]: { additions: 46, deletions: 4 },
+            }
+          : {};
+      }
+      return {
+        [repos.app + "/README.md"]: { additions: 8, deletions: 2 },
+        [repos.app + "/tests"]: { additions: 360, deletions: 0 },
+        [repos.app + "/playwright.capture.config.ts"]: { additions: 35, deletions: 0 },
+      };
+    };
     handlers.fs_git_branch = () => "main";
     handlers.fs_read_file = () => ({
       content: "# Acorn\\n\\nDeterministic screenshots for README assets.\\n",
@@ -985,7 +1087,34 @@ function captureMockHandlersSource(sceneName: SceneName) {
     handlers.staged_diff = () => diffPayload();
     handlers.commit_diff = () => diffPayload();
 
-    const prs = [
+    const prs = sceneName === "kanban" ? [
+      {
+        number: 592,
+        title: "Polish File Explorer search and media previews",
+        state: "OPEN",
+        author: "im-ian",
+        head_branch: "feat/file-explorer-review",
+        base_branch: "main",
+        url: "https://github.com/im-ian/acorn/pull/592",
+        updated_at: now,
+        is_draft: false,
+        checks: { passed: 12, failed: 0, pending: 0 },
+        labels: [{ name: "enhancement", color: "84b6eb" }],
+      },
+      {
+        number: 589,
+        title: "Prepare the v1.25 release",
+        state: "MERGED",
+        author: "im-ian",
+        head_branch: "release/v1.25.0",
+        base_branch: "main",
+        url: "https://github.com/im-ian/acorn/pull/589",
+        updated_at: now,
+        is_draft: false,
+        checks: { passed: 14, failed: 0, pending: 0 },
+        labels: [{ name: "build", color: "5319e7" }],
+      },
+    ] : [
       {
         number: 278,
         title: "Polish README capture workflow",
@@ -1365,6 +1494,69 @@ function seedSessions(sceneName: SceneName) {
       ),
     ),
   ];
+
+  if (sceneName === "kanban") {
+    return [
+      {
+        ...session("plan-next-release", "plan-next-release", REPOS.app, "main", {
+          status: "ready",
+          agent: "claude",
+          position: 0,
+        }),
+        last_user_message: "Plan the next release milestone",
+        last_agent_message: "Reviewing open issues and recent feedback",
+      },
+      {
+        ...session("kanban-capture", "kanban-capture", REPOS.app, "feat/kanban-capture", {
+          status: "working",
+          agent: "codex",
+          position: 1,
+        }),
+        last_user_message: "Add a deterministic Kanban screenshot",
+        last_agent_message: "Seeding lifecycle cards and PR metadata",
+      },
+      {
+        ...session("release-copy", "release-copy", REPOS.app, "docs/release-copy", {
+          status: "errored",
+          agent: "claude",
+          position: 2,
+        }),
+        last_user_message: "Refresh the Korean release copy",
+        last_agent_message: "Waiting for a headline decision",
+      },
+      {
+        ...session(
+          "file-explorer-review",
+          "file-explorer-review",
+          REPOS.app,
+          "feat/file-explorer-review",
+          {
+            status: "waiting_for_input",
+            agent: "codex",
+            position: 3,
+            isolated: true,
+            inWorktree: true,
+            cwd: `${REPOS.app}/.acorn/worktrees/file-explorer-review`,
+          },
+        ),
+        last_user_message: "Polish search and media previews",
+        last_agent_message: "Implementation is ready for review",
+      },
+      {
+        ...session("release-v1.25", "release-v1.25", REPOS.app, "release/v1.25.0", {
+          status: "ready",
+          agent: "claude",
+          position: 4,
+          isolated: true,
+          inWorktree: true,
+          cwd: `${REPOS.app}/.acorn/worktrees/release-v1.25`,
+        }),
+        last_user_message: "Prepare the v1.25 release",
+        last_agent_message: "PR merged and release notes published",
+      },
+      ...baseSessions.filter((candidate) => candidate.repo_path !== REPOS.app),
+    ];
+  }
 
   if (sceneName === "chat-session") {
     return [
