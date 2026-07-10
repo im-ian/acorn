@@ -44,6 +44,16 @@ function prStateUpper(pr: PullRequestInfo | null): string | null {
   return pr ? pr.state.toUpperCase() : null;
 }
 
+function hasAgentWork(session: Session): boolean {
+  if (session.status_reason === "turn_complete") return true;
+  return [
+    session.agent_transcript_id,
+    session.last_user_message,
+    session.last_agent_message,
+    session.last_message,
+  ].some((value) => Boolean(value?.trim()));
+}
+
 /**
  * Map a session plus its board context onto a lifecycle stage. Precedence
  * (first match wins):
@@ -51,7 +61,7 @@ function prStateUpper(pr: PullRequestInfo | null): string | null {
  * 1. manual done pin        → done
  * 2. PR merged/closed       → done
  * 3. agent running          → working
- * 4. ready + dirty tree     → review
+ * 4. ready + agent work + dirty tree → review
  * 5. waiting/error          → waiting
  * 6. open PR                → review
  * 7. otherwise              → idle
@@ -69,7 +79,11 @@ export function deriveKanbanStage(
   const prState = prStateUpper(context.pr);
   if (prState === "MERGED" || prState === "CLOSED") return "done";
   if (session.status === "working") return "working";
-  if (session.status === "ready" && context.hasDiff) {
+  if (
+    session.status === "ready" &&
+    context.hasDiff &&
+    hasAgentWork(session)
+  ) {
     return "review";
   }
   if (session.status === "waiting_for_input" || session.status === "errored") {
