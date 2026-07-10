@@ -6722,6 +6722,42 @@ mod tests {
     }
 
     #[test]
+    fn approved_claude_tool_activity_clears_waiting_until_the_tool_finishes() {
+        assert_eq!(
+            super::hook_status_with_live_tool_activity(
+                acorn_session::SessionStatus::WaitingForInput,
+                Some(super::AgentKind::Claude),
+                true,
+            ),
+            acorn_session::SessionStatus::Working
+        );
+        assert_eq!(
+            super::hook_status_with_live_tool_activity(
+                acorn_session::SessionStatus::WaitingForInput,
+                Some(super::AgentKind::Claude),
+                false,
+            ),
+            acorn_session::SessionStatus::WaitingForInput
+        );
+        assert_eq!(
+            super::hook_status_with_live_tool_activity(
+                acorn_session::SessionStatus::Ready,
+                Some(super::AgentKind::Codex),
+                true,
+            ),
+            acorn_session::SessionStatus::Working
+        );
+        assert_eq!(
+            super::hook_status_with_live_tool_activity(
+                acorn_session::SessionStatus::WaitingForInput,
+                Some(super::AgentKind::Antigravity),
+                true,
+            ),
+            acorn_session::SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
     fn boot_reconciliation_recovers_turn_end_lost_while_app_was_closed() {
         // Persisted hook status says Working, no event has confirmed the
         // channel this run, and the transcript holds a real turn-complete
