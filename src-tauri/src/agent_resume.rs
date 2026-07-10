@@ -501,6 +501,48 @@ mod tests {
     }
 
     #[test]
+    fn claude_conversation_preview_skips_meta_messages() {
+        let base = ScratchDir::new("claude-meta-preview");
+        let path = base.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"user","message":{"content":"Please review the pull request."}}
+{"type":"assistant","message":{"content":"The pull request is ready."}}
+{"type":"user","isMeta":true,"message":{"content":"Synthetic session metadata."}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Claude, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Please review the pull request.")
+        );
+    }
+
+    #[test]
+    fn claude_conversation_preview_skips_control_messages() {
+        let base = ScratchDir::new("claude-control-preview");
+        let path = base.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"user","message":{"content":"Please review the pull request."}}
+{"type":"assistant","message":{"content":"The pull request is ready."}}
+{"type":"user","message":{"content":"<command-name>/exit</command-name>\n<command-message>exit</command-message>"}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Claude, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Please review the pull request.")
+        );
+    }
+
+    #[test]
     fn codex_conversation_preview_reads_payload_roles() {
         let base = ScratchDir::new("codex-conversation-preview");
         let path = base.path().join("rollout.jsonl");
