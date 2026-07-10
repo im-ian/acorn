@@ -35,10 +35,8 @@ const READ_BUFFER_SIZE: usize = 4096;
 /// user sees in the terminal. The frontend already persists its own
 /// scrollback to disk on a debounce; this ring lives purely in RAM.
 const TAIL_BUFFER_CAP: usize = 4 * 1024 * 1024;
-/// How long a "just-finished a command" cue lingers as `NeedsInput` on the
-/// Sidebar dot before we let it fall back to `Idle`. Long enough to actually
-/// catch the user's eye after a transient command (`ls`, `git status`),
-/// short enough that an abandoned shell does not look perpetually pending.
+/// How long a just-finished command remains distinguishable as a shell prompt
+/// before falling back to `Idle`.
 pub const NEEDS_INPUT_STICKY: Duration = Duration::from_secs(5);
 
 /// Errors surfaced by [`PtyManager`]. The host crate maps these into its
@@ -55,10 +53,9 @@ pub type PtyOutputSink = Arc<dyn Fn(&str, &Uuid, &[u8]) + Send + Sync + 'static>
 
 /// Coarse classification of a shell-mode session's liveness, derived purely
 /// from "does the PTY child have any descendant processes right now?".
-/// Mirrors the `SessionStatus` variants the Sidebar dot already knows how to
-/// render — we keep this enum private to the backend so the
-/// transcript-driven detector can map it without leaking shell-specific
-/// vocabulary into the public session status type.
+/// This stays private to the backend so the transcript-driven detector can map
+/// shell prompt cues without leaking shell-specific vocabulary into the public
+/// session status type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellHint {
     Running,
@@ -342,8 +339,8 @@ impl PtyManager {
 
     /// Per-poll state machine for shell-mode liveness. The caller has just
     /// computed `has_child_now` from a process-table snapshot; we fold it
-    /// against the previous observation and the sticky NeedsInput deadline
-    /// to produce the hint the Sidebar dot should show.
+    /// against the previous observation and the sticky prompt deadline to
+    /// produce the backend status hint.
     ///
     /// Returns `None` when the session has no live PTY (e.g. exited between
     /// the snapshot and this call) — the caller should treat that as Idle.

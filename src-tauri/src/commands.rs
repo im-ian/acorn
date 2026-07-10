@@ -1806,7 +1806,7 @@ fn chat_session_status_for_message_status(status: persistence::ChatMessageStatus
             SessionStatus::Working
         }
         persistence::ChatMessageStatus::Complete | persistence::ChatMessageStatus::Cancelled => {
-            SessionStatus::WaitingForInput
+            SessionStatus::Ready
         }
         persistence::ChatMessageStatus::Error => SessionStatus::Errored,
     }
@@ -5154,28 +5154,24 @@ pub async fn detect_session_statuses(
 ///
 /// Agent lifecycle hooks are the authoritative turn-boundary signal. While an
 /// agent process is alive under a hooked session the poll defers the entire
-/// Working/WaitingForInput distinction to the hook-set store value and does not
-/// consult the transcript tail at all, because the tail is stale in *both*
-/// directions around a turn boundary:
+/// Working/Ready/WaitingForInput distinction to the hook-set store value and
+/// does not consult the transcript tail at all, because the tail is stale in
+/// *both* directions around a turn boundary:
 /// - just after a turn ends, a long/tool-heavy turn's `end_turn` line may be
 ///   outside the 256 KiB window (or absent entirely), so the tail still reads
 ///   Working;
 /// - just after the next prompt is submitted (UserPromptSubmit already fired
 ///   Working), the tail still shows the *previous* turn's `end_turn` and reads
-///   WaitingForInput until the agent flushes the new turn's line.
+///   Ready until the agent flushes the new turn's line.
 ///
-/// Letting either through races the independent ~1s poll against the hook. The
-/// WaitingForInput direction is the dangerous one: it mislabels a just-started
-/// turn as `waiting_for_input`+`turn_complete`, which the opt-in auto-close
-/// acts on to kill a live agent mid-turn. So the poll trusts the hook, not the
-/// tail, whenever an agent is live.
+/// Letting either through races the independent ~1s poll against the hook and
+/// can mislabel a just-started turn as Ready. The poll therefore trusts the
+/// hook whenever an agent is live.
 ///
-/// The poll keeps ownership only of the Ready edge: once no agent process is
-/// live (`live_agent` false — the agent exited, or an unrelated command now
-/// owns the PTY) it drives status again. Trade-off: a *dropped* terminating
-/// hook (fire-and-forget transport) can leave status lagging at the last hook
-/// value until the next hook or the agent exits; the synchronous hook path
-/// makes that rare, and it self-heals rather than losing data.
+/// Once no agent process is live (`live_agent` false — the agent exited, or an
+/// unrelated command now owns the PTY), the poll drives status again.
+/// Trade-off: a dropped terminating hook can leave status lagging at the last
+/// hook value until the next hook or the agent exits.
 fn poll_defers_to_hook(hook_active: bool, live_agent: bool) -> bool {
     hook_active && live_agent
 }
@@ -5188,11 +5184,11 @@ fn poll_defers_to_hook(hook_active: bool, live_agent: bool) -> bool {
 /// forever — the store still says Working and, since a resting agent emits no
 /// further events, nothing would ever correct it. Until the first hook event
 /// of this run confirms the channel, allow exactly the one transition hooks
-/// can no longer report: Working -> WaitingForInput backed by a real turn-complete
+/// can no longer report: Working -> Ready backed by a real turn-complete
 /// marker in the transcript.
 ///
 /// One-directional on purpose: while the app is closed nobody can submit a
-/// prompt to the session, so WaitingForInput -> Working cannot happen offline
+/// prompt to the session, so Ready -> Working cannot happen offline
 /// and a stale-tail Working must never demote a persisted resting status. Once an
 /// event lands this run (`hook_confirmed_this_run`), hooks own both
 /// directions again and this reconciliation switches off — leaving it open
@@ -5205,9 +5201,9 @@ fn hook_boot_reconciled_status(
 ) -> Option<SessionStatus> {
     (!hook_confirmed_this_run
         && stored == SessionStatus::Working
-        && detection.status == SessionStatus::WaitingForInput
+        && detection.status == SessionStatus::Ready
         && detection.reason == Some(SessionStatusReason::TurnComplete))
-    .then_some(SessionStatus::WaitingForInput)
+    .then_some(SessionStatus::Ready)
 }
 
 fn detect_session_statuses_blocking(
@@ -5299,7 +5295,7 @@ fn detect_session_statuses_blocking(
             // in `stream_registry` (their root pid was captured from
             // the daemon at spawn / attach); legacy in-process sessions
             // live in `state.pty`. Each side keeps separate liveness storage
-            // because the sticky WaitingForInput deadline is per attachment.
+            // because the sticky shell-prompt deadline is per attachment.
             let daemon_pid = session
                 .as_ref()
                 .and_then(|s| s.daemon_session_id)
@@ -5431,9 +5427,13 @@ fn detect_session_statuses_blocking(
                     let _ = state.sessions.refresh_status(&uuid, reconciled);
                 }
                 let hook_status = reconciled.unwrap_or(stored);
-                // Codex can report turn-complete while a background terminal
+                // Codex can report a resting status while a background terminal
                 // command is still alive. Keep the UI Working until it exits.
-                if hook_status == SessionStatus::WaitingForInput && live_codex_tool_child {
+                if matches!(
+                    hook_status,
+                    SessionStatus::Ready | SessionStatus::WaitingForInput
+                ) && live_codex_tool_child
+                {
                     SessionStatus::Working
                 } else {
                     hook_status
@@ -6702,14 +6702,14 @@ mod tests {
     fn poll_defers_while_a_hooked_agent_is_live() {
         // While the agent process is alive the hook owns the turn boundary and
         // the transcript tail is ignored in both directions (stale Working just
-        // after a turn ends, stale WaitingForInput just after the next prompt).
+        // after a turn ends, stale Ready just after the next prompt).
         assert!(poll_defers_to_hook(true, true));
     }
 
     #[test]
     fn poll_owns_status_once_the_agent_is_gone() {
         // Agent exited, or an unrelated command now owns the PTY — the poll
-        // drives liveness again, including the Ready edge that no hook reports.
+        // drives liveness again from the current process tree.
         assert!(!poll_defers_to_hook(true, false));
     }
 

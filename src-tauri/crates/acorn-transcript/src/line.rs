@@ -24,7 +24,7 @@ impl TranscriptRole {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnState {
-    WaitingForInput,
+    Ready,
     Working,
 }
 
@@ -277,7 +277,7 @@ fn claude_turn_state(value: &Value) -> Option<TurnState> {
     }
     let stop_reason = msg.get("stop_reason").and_then(Value::as_str).unwrap_or("");
     Some(match stop_reason {
-        "end_turn" | "stop_sequence" => TurnState::WaitingForInput,
+        "end_turn" | "stop_sequence" => TurnState::Ready,
         "tool_use" => TurnState::Working,
         _ => TurnState::Working,
     })
@@ -287,13 +287,13 @@ fn codex_turn_state(value: &Value) -> Option<TurnState> {
     let event = codex_event_value(value);
     let payload_type = event.get("type").and_then(Value::as_str).unwrap_or("");
     match payload_type {
-        "task_complete" | "turn_complete" => Some(TurnState::WaitingForInput),
+        "task_complete" | "turn_complete" => Some(TurnState::Ready),
         "user_message" => Some(TurnState::Working),
         "function_call" | "function_call_output" | "reasoning" => Some(TurnState::Working),
         "agent_message" => {
             let phase = event.get("phase").and_then(Value::as_str).unwrap_or("");
             Some(if phase == "final_answer" {
-                TurnState::WaitingForInput
+                TurnState::Ready
             } else {
                 TurnState::Working
             })
@@ -341,7 +341,7 @@ fn antigravity_turn_state(value: &Value) -> Option<TurnState> {
     match line_type {
         "USER_INPUT" => Some(TurnState::Working),
         "PLANNER_RESPONSE" => Some(if status == "DONE" {
-            TurnState::WaitingForInput
+            TurnState::Ready
         } else {
             TurnState::Working
         }),

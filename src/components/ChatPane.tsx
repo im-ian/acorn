@@ -136,7 +136,7 @@ function sessionStatusFromChatState(state: ChatSessionState): SessionStatus {
   if (lastMessage?.status === "error" || lastTurn?.status === "error") {
     return "errored";
   }
-  return "waiting_for_input";
+  return "ready";
 }
 
 function isChatScrolledBack(element: HTMLElement): boolean {

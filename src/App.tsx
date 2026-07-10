@@ -114,7 +114,7 @@ import {
 } from "./lib/sessionStatusPolling";
 import { useAppStore } from "./store";
 import type { TranslationKey, Translator } from "./lib/i18n";
-import type { SessionStatus } from "./lib/types";
+import type { Session } from "./lib/types";
 import { useTranslation } from "./lib/useTranslation";
 import { showStoreWorktreeRemovalToast } from "./lib/operationToasts";
 
@@ -557,8 +557,8 @@ function App() {
     ) {
       return;
     }
-    const activeSessions = effectiveSessions.filter((s) =>
-      shouldSkipResumeProbeForStatus(s.status),
+    const activeSessions = effectiveSessions.filter((session) =>
+      shouldSkipResumeProbeForSession(session),
     );
     if (activeSessions.length > 0) {
       for (const session of activeSessions) {
@@ -576,7 +576,7 @@ function App() {
     const toProbe = effectiveSessions
       .filter(
         (session) =>
-          !shouldSkipResumeProbeForStatus(session.status) &&
+          !shouldSkipResumeProbeForSession(session) &&
           !probedSessionsRef.current.has(session.id),
       )
       .map((session) => session.id);
@@ -604,10 +604,20 @@ function App() {
       }),
     )
       .then((entries) => {
-        const additions = entries.filter(
-          (e): e is readonly [string, { agent: AgentKind; candidate: ResumeCandidate }] =>
-            e !== null,
+        const latestSessions = new Map(
+          useAppStore.getState().sessions.map((session) => [session.id, session]),
         );
+        const additions = entries
+          .filter(
+            (e): e is readonly [
+              string,
+              { agent: AgentKind; candidate: ResumeCandidate },
+            ] => e !== null,
+          )
+          .filter(([sessionId]) => {
+            const latest = latestSessions.get(sessionId);
+            return latest != null && !shouldSkipResumeProbeForSession(latest);
+          });
         if (additions.length === 0) return;
         setResumeCandidates((prev) => {
           const next = new Map(prev);
@@ -1970,8 +1980,14 @@ function pickResumeCandidate(
   return candidates[0] ?? null;
 }
 
-function shouldSkipResumeProbeForStatus(status: SessionStatus): boolean {
-  return status === "working" || status === "waiting_for_input";
+function shouldSkipResumeProbeForSession(
+  session: Pick<Session, "status" | "agent_provider">,
+): boolean {
+  return (
+    session.agent_provider != null ||
+    session.status === "working" ||
+    session.status === "waiting_for_input"
+  );
 }
 
 export default App;

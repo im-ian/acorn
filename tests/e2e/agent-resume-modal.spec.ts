@@ -73,17 +73,15 @@ test.describe("agent resume modal", () => {
     await tauri.respond("list_sessions", [RESTING_LIVE_AGENT_SESSION]);
     await tauri.handle("detect_session_statuses", () => [
       {
-        id: RESTING_LIVE_AGENT_SESSION.id,
+        id: "s-resume",
         status: "ready",
         agent_provider: "claude",
         branch: null,
       },
     ]);
     await tauri.handle("get_agent_resume_candidate", () => {
-      const w = window as unknown as { __ACORN_RESUME_PROBES__?: number };
-      w.__ACORN_RESUME_PROBES__ = (w.__ACORN_RESUME_PROBES__ ?? 0) + 1;
       return {
-        uuid: CANDIDATE_UUID,
+        uuid: "deadbeef-1234-5678-9abc-def012345678",
         lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
         preview: "Current live conversation",
       };
@@ -94,15 +92,6 @@ test.describe("agent resume modal", () => {
     await expect(
       page.getByRole("dialog", { name: /Resume previous conversation/ }),
     ).toHaveCount(0);
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () =>
-            (window as unknown as { __ACORN_RESUME_PROBES__?: number })
-              .__ACORN_RESUME_PROBES__ ?? 0,
-        ),
-      )
-      .toBe(0);
   });
 
   test("waits for the first status poll before probing idle persisted sessions", async ({

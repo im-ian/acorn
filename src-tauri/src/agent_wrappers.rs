@@ -144,14 +144,11 @@ case "$event" in
   *)
     event=""
     hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
-    # Codex's turn-completion events (Stop / agent-turn-complete /
-    # task_complete / turn_complete)
-    # mean the agent finished the turn and is awaiting the user, so they map to
-    # needs_input. Codex emits no "process exited" event here — that shows up as
-    # the status poll observing an idle shell.
+    # Turn completion means Codex is ready for optional follow-up. Approval and
+    # question events are the only signals that require user attention.
     case "$hook_event_name" in
       Start|UserPromptSubmit) event="start" ;;
-      Stop) event="needs_input" ;;
+      Stop) event="stop" ;;
       PermissionRequest) event="needs_input" ;;
       Error) event="error" ;;
     esac
@@ -159,7 +156,7 @@ case "$event" in
       codex_type=$(printf '%s\n' "$input" | grep -oE '"type"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
       case "$codex_type" in
         task_started) event="start" ;;
-        agent-turn-complete|task_complete|turn_complete) event="needs_input" ;;
+        agent-turn-complete|task_complete|turn_complete) event="stop" ;;
         exec_approval_request|apply_patch_approval_request|request_user_input) event="needs_input" ;;
       esac
     fi
@@ -260,15 +257,14 @@ input=$(cat 2>/dev/null || true)
 hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
 
 event=""
-# Claude fires Stop at the end of every assistant turn — it has finished
-# responding and is awaiting the user's next prompt — so Stop maps to
-# needs_input, matching the transcript classifier's end_turn semantics.
-# SubagentStop fires mid-turn (a Task subagent finished) so it re-asserts
-# Running. Claude has no "process exited" hook; that shows up as the status
-# poll observing an idle shell.
+# Claude fires Stop after every assistant turn, including ordinary completed
+# work that needs no response. Notification and PermissionRequest are the
+# attention-bearing events. SubagentStop fires mid-turn, so it re-asserts
+# Working.
 case "$hook_event_name" in
   SessionStart|UserPromptSubmit|SubagentStop) event="start" ;;
-  Stop|Notification|PermissionRequest) event="needs_input" ;;
+  Stop) event="stop" ;;
+  Notification|PermissionRequest) event="needs_input" ;;
   Error) event="error" ;;
 esac
 [ -n "$event" ] || exit 0
@@ -532,7 +528,7 @@ fn write_claude_settings(dir: &Path) -> io::Result<()> {
     "UserPromptSubmit": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Stop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "SubagentStop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
-    "Notification": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
+    "Notification": [{{"matcher":"permission_prompt|elicitation_dialog|agent_needs_input","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "PermissionRequest": [{{"matcher":"*","hooks":[{{"type":"command","command":"{cmd}"}}]}}]
   }}
 }}
@@ -662,8 +658,7 @@ mod tests {
         assert!(notify.contains("\"provider\":\"codex\""));
         // A completed turn is ready for optional follow-up. Only explicit
         // approval or question events require user input.
-        assert!(notify
-            .contains("agent-turn-complete|task_complete|turn_complete) event=\"stop\""));
+        assert!(notify.contains("agent-turn-complete|task_complete|turn_complete) event=\"stop\""));
         assert!(notify.contains("Stop) event=\"stop\""));
         assert!(notify.contains(
             "exec_approval_request|apply_patch_approval_request|request_user_input) event=\"needs_input\""
@@ -780,6 +775,8 @@ mod tests {
         assert!(settings.contains("\"Stop\""));
         assert!(settings.contains("\"SubagentStop\""));
         assert!(settings.contains("\"Notification\""));
+        assert!(settings
+            .contains("\"matcher\":\"permission_prompt|elicitation_dialog|agent_needs_input\""));
         assert!(settings.contains("\"PermissionRequest\""));
         assert!(
             settings.contains(&format!(
@@ -850,24 +847,10 @@ mod tests {
         let base = ScratchDir::new("events");
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
-        for (claude_event, acorn_event) in [
-            ("SessionStart", "start"),
-            ("UserPromptSubmit", "start"),
-            ("Stop", "needs_input"),
-            ("SubagentStop", "start"),
-            ("Notification", "needs_input"),
-            ("PermissionRequest", "needs_input"),
-            ("Error", "error"),
-        ] {
-            assert!(
-                notify.contains(claude_event),
-                "notify missing claude event {claude_event}"
-            );
-            assert!(
-                notify.contains(&format!("event=\"{acorn_event}\"")),
-                "notify missing acorn event mapping {acorn_event}"
-            );
-        }
+        assert!(notify.contains("SessionStart|UserPromptSubmit|SubagentStop) event=\"start\""));
+        assert!(notify.contains("Stop) event=\"stop\""));
+        assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
+        assert!(notify.contains("Error) event=\"error\""));
     }
 
     #[test]

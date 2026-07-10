@@ -345,12 +345,12 @@ pub struct SessionStore {
     /// Sessions that reported at least one agent lifecycle hook event
     /// (Start/Stop/NeedsInput/Error) *this run*. Runtime-only. The status
     /// poll consults hook activity to decide whether hooks own the
-    /// Working/WaitingForInput classification: once a session proves its
-    /// hook channel is live, the transcript-tail poll stops second-guessing
+    /// Working/Ready/WaitingForInput classification: once a session proves
+    /// its hook channel is live, the transcript-tail poll stops second-guessing
     /// turn completion (a long or tool-heavy Claude turn often leaves no
     /// `end_turn` line inside the tail window, so the tail keeps reading
     /// Working long after the turn ended) and only keeps ownership of the
-    /// Ready (process-gone) edge, which no hook reports.
+    /// process-liveness edge after no agent remains.
     ///
     /// Hook activity itself also persists across restarts via the session's
     /// `hook_active` field; this set distinguishes "confirmed live this run"
