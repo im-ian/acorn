@@ -385,17 +385,24 @@ test.describe("sidebar: project lifecycle", () => {
 
     await page.goto("/");
 
-    await page
+    const sidebarSession = page
       .locator("aside")
-      .getByRole("button", { name: /quiet-me/ })
-      .click({ button: "right" });
+      .getByRole("button", { name: /quiet-me/ });
+    await sidebarSession.click({ button: "right" });
     await page
       .getByRole("menuitem", { name: "Silence Notifications", exact: true })
       .click();
+    await expect(
+      sidebarSession.getByLabel("Notifications silenced", { exact: true }),
+    ).toBeVisible();
 
-    await page
-      .locator('[data-tab-drag-handle="session-1"]')
-      .click({ button: "right" });
+    await page.reload();
+
+    const sessionTab = page.locator('[data-tab-drag-handle="session-1"]');
+    await expect(
+      sessionTab.getByLabel("Notifications silenced", { exact: true }),
+    ).toBeVisible();
+    await sessionTab.click({ button: "right" });
     await expect(
       page.getByRole("menuitem", {
         name: "Resume Notifications",
@@ -409,10 +416,15 @@ test.describe("sidebar: project lifecycle", () => {
       })
       .click();
 
-    await page
+    const resumedSidebarSession = page
       .locator("aside")
-      .getByRole("button", { name: /quiet-me/ })
-      .click({ button: "right" });
+      .getByRole("button", { name: /quiet-me/ });
+    await expect(
+      resumedSidebarSession.getByLabel("Notifications silenced", {
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await resumedSidebarSession.click({ button: "right" });
     await expect(
       page.getByRole("menuitem", {
         name: "Silence Notifications",

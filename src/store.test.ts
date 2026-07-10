@@ -1559,7 +1559,7 @@ describe("removeSession", () => {
     expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual(["a2"]);
   });
 
-  it("removes session activity locally before the backend delete finishes", async () => {
+  it("removes session activity and silence state locally before backend deletion finishes", async () => {
     const a1 = session("a1", REPO_A);
     const a2 = session("a2", REPO_A);
     await seed([project(REPO_A, 0)], [a1, a2]);
@@ -1569,6 +1569,8 @@ describe("removeSession", () => {
     useAppStore.getState().addSessionNotification(
       notification("n2", { sessionId: "a2" }),
     );
+    useAppStore.getState().setSessionSilenced("a1", true);
+    useAppStore.getState().setSessionSilenced("a2", true);
 
     const pending = deferred<null>();
     mockApi.removeSession.mockReturnValueOnce(pending.promise);
@@ -1580,6 +1582,7 @@ describe("removeSession", () => {
     expect(
       useAppStore.getState().sessionNotifications.map((item) => item.id),
     ).toEqual(["n2"]);
+    expect(useAppStore.getState().silencedSessionIds).toEqual({ a2: true });
 
     pending.resolve(null);
     await removal;
@@ -2198,7 +2201,7 @@ describe("reconcile via refreshSessions", () => {
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
   });
 
-  it("drops activity for sessions removed by backend refresh", async () => {
+  it("drops activity and silence state for sessions removed by backend refresh", async () => {
     await seed(
       [project(REPO_A, 0)],
       [session("a1", REPO_A), session("a2", REPO_A)],
@@ -2209,6 +2212,8 @@ describe("reconcile via refreshSessions", () => {
     useAppStore.getState().addSessionNotification(
       notification("n2", { sessionId: "a2" }),
     );
+    useAppStore.getState().setSessionSilenced("a1", true);
+    useAppStore.getState().setSessionSilenced("a2", true);
 
     mockApi.listSessions.mockResolvedValueOnce([session("a1", REPO_A)]);
     await useAppStore.getState().refreshSessions();
@@ -2216,6 +2221,7 @@ describe("reconcile via refreshSessions", () => {
     expect(
       useAppStore.getState().sessionNotifications.map((item) => item.id),
     ).toEqual(["n1"]);
+    expect(useAppStore.getState().silencedSessionIds).toEqual({ a1: true });
   });
 
   it("keeps activity when an unclean empty session load may be transient", async () => {
