@@ -290,7 +290,13 @@ export async function startNotificationClickHandler(): Promise<() => void> {
     void win.show();
     void win.unminimize();
     void win.setFocus();
-    useAppStore.getState().selectSession(sessionId);
+    const store = useAppStore.getState();
+    store.selectSession(sessionId);
+    // Kanban has no persistent terminal pane, so mirror the in-app inbox and
+    // pop the session's terminal overlay open (StatusBar NotificationRow).
+    if (store.workspaceViewMode === "kanban") {
+      store.openTerminalPopup(sessionId);
+    }
     markSessionNotificationsRead(sessionId);
   });
   return () => {
