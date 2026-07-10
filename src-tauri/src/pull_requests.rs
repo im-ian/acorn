@@ -2895,6 +2895,8 @@ mod tests {
             base_branch: "main".to_string(),
             url: "https://github.com/im-ian/acorn/pull/42".to_string(),
             updated_at: "2026-06-22T00:00:00Z".to_string(),
+            closed_at: None,
+            merged_at: None,
             is_draft: false,
             checks: None,
             labels: vec![PullRequestLabel {
@@ -2902,6 +2904,32 @@ mod tests {
                 color: "a2eeef".to_string(),
             }],
         }
+    }
+
+    #[test]
+    fn pr_list_payload_preserves_completion_timestamps() {
+        let raw: GhPullRequest = serde_json::from_str(
+            r##"{
+                "number": 42,
+                "title": "Complete lifecycle work",
+                "state": "MERGED",
+                "author": {"login": "jtf-ian"},
+                "headRefName": "feat/lifecycle",
+                "baseRefName": "main",
+                "url": "https://github.com/im-ian/acorn/pull/42",
+                "updatedAt": "2026-07-10T01:00:00Z",
+                "closedAt": "2026-07-10T00:59:00Z",
+                "mergedAt": "2026-07-10T00:58:00Z",
+                "isDraft": false,
+                "labels": []
+            }"##,
+        )
+        .expect("PR list payload should parse");
+
+        let pr = pull_request_info_from_gh(raw);
+
+        assert_eq!(pr.closed_at.as_deref(), Some("2026-07-10T00:59:00Z"));
+        assert_eq!(pr.merged_at.as_deref(), Some("2026-07-10T00:58:00Z"));
     }
 
     #[test]

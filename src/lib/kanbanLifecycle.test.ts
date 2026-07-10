@@ -13,7 +13,16 @@ import {
 } from "./kanbanLifecycle";
 import type { PullRequestInfo, Session, SessionStatus } from "./types";
 
-function makeSession(overrides: Partial<Session> = {}): Session {
+type LifecycleSession = Session & {
+  agent_activity_at?: string | null;
+};
+
+type LifecyclePullRequest = PullRequestInfo & {
+  closed_at?: string | null;
+  merged_at?: string | null;
+};
+
+function makeSession(overrides: Partial<LifecycleSession> = {}): Session {
   return {
     id: "s",
     name: "session",
@@ -26,7 +35,10 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   } as unknown as Session;
 }
 
-function makePr(state: string): PullRequestInfo {
+function makePr(
+  state: string,
+  overrides: Partial<LifecyclePullRequest> = {},
+): PullRequestInfo {
   return {
     number: 7,
     title: "PR",
@@ -39,6 +51,7 @@ function makePr(state: string): PullRequestInfo {
     is_draft: false,
     checks: null,
     labels: [],
+    ...overrides,
   };
 }
 
@@ -50,7 +63,7 @@ describe("deriveKanbanStage", () => {
   it("maps bare statuses without board context", () => {
     const expected: Record<SessionStatus, KanbanLifecycleStage> = {
       ready: "idle",
-      working: "working",
+      working: "idle",
       waiting_for_input: "waiting",
       errored: "waiting",
     };
@@ -64,6 +77,15 @@ describe("deriveKanbanStage", () => {
     }
   });
 
+  it("puts only agent-backed working sessions in working", () => {
+    expect(
+      deriveKanbanStage(
+        makeSession({ status: "working", agent_provider: "codex" }),
+        ctx(),
+      ),
+    ).toBe("working");
+  });
+
   it("keeps a ready session with a pre-existing dirty worktree in idle", () => {
     expect(
       deriveKanbanStage(
@@ -73,26 +95,26 @@ describe("deriveKanbanStage", () => {
     ).toBe("idle");
   });
 
-  it("puts a ready session with a dirty worktree and agent transcript in review", () => {
+  it("puts a completed agent turn in review even with a clean worktree", () => {
     expect(
       deriveKanbanStage(
         makeSession({
           status: "ready",
-          agent_transcript_id: "codex-turn-1",
+          last_agent_message: "Implemented and committed the change",
         }),
-        ctx({ hasDiff: true }),
+        ctx(),
       ),
     ).toBe("review");
   });
 
-  it("uses agent conversation previews when transcript metadata is unavailable", () => {
+  it("uses a completed user turn when the agent preview is unavailable", () => {
     expect(
       deriveKanbanStage(
         makeSession({
           status: "ready",
           last_user_message: "Implement the requested change",
         }),
-        ctx({ hasDiff: true }),
+        ctx(),
       ),
     ).toBe("review");
   });
@@ -101,7 +123,7 @@ describe("deriveKanbanStage", () => {
     expect(
       deriveKanbanStage(
         makeSession({ status: "ready", status_reason: "turn_complete" }),
-        ctx({ hasDiff: true }),
+        ctx(),
       ),
     ).toBe("review");
   });
@@ -112,59 +134,96 @@ describe("deriveKanbanStage", () => {
     ).toBe("idle");
   });
 
-  it("puts an idle session with an open PR in review", () => {
+  it("keeps an unstarted session with a branch-matching open PR in idle", () => {
     expect(
       deriveKanbanStage(makeSession(), ctx({ pr: makePr("OPEN") })),
+    ).toBe("idle");
+  });
+
+  it("uses a branch-matching open PR only after agent work", () => {
+    expect(
+      deriveKanbanStage(
+        makeSession({ last_agent_message: "Ready for review" }),
+        ctx({ pr: makePr("open") }),
+      ),
     ).toBe("review");
   });
 
-  it("normalizes PR state casing", () => {
+  it("moves completed work to done only when the PR finished after agent activity", () => {
     expect(
-      deriveKanbanStage(makeSession(), ctx({ pr: makePr("open") })),
-    ).toBe("review");
-    expect(
-      deriveKanbanStage(makeSession(), ctx({ pr: makePr("merged") })),
+      deriveKanbanStage(
+        makeSession({
+          last_agent_message: "Ready for review",
+          agent_activity_at: "2026-01-02T00:00:00.000Z",
+        }),
+        ctx({
+          pr: makePr("merged", {
+            merged_at: "2026-01-03T00:00:00.000Z",
+          }),
+        }),
+      ),
     ).toBe("done");
   });
 
-  it("keeps running and waiting sessions live even with an open PR", () => {
+  it("keeps newer agent work in review when the matching PR was already finished", () => {
     expect(
       deriveKanbanStage(
-        makeSession({ status: "working" }),
-        ctx({ pr: makePr("OPEN") }),
+        makeSession({
+          last_agent_message: "Started follow-up work",
+          agent_activity_at: "2026-01-04T00:00:00.000Z",
+        }),
+        ctx({
+          pr: makePr("MERGED", {
+            merged_at: "2026-01-03T00:00:00.000Z",
+          }),
+        }),
+      ),
+    ).toBe("review");
+  });
+
+  it("keeps running and waiting sessions live even with a completed PR", () => {
+    expect(
+      deriveKanbanStage(
+        makeSession({ status: "working", agent_provider: "codex" }),
+        ctx({
+          pr: makePr("MERGED", {
+            merged_at: "2026-01-03T00:00:00.000Z",
+          }),
+        }),
       ),
     ).toBe("working");
     expect(
       deriveKanbanStage(
         makeSession({ status: "waiting_for_input" }),
-        ctx({ pr: makePr("OPEN") }),
+        ctx({ pr: makePr("CLOSED", { closed_at: "2026-01-03T00:00:00.000Z" }) }),
       ),
     ).toBe("waiting");
     expect(
       deriveKanbanStage(
         makeSession({ status: "errored" }),
-        ctx({ pr: makePr("OPEN") }),
+        ctx({ pr: makePr("MERGED", { merged_at: "2026-01-03T00:00:00.000Z" }) }),
       ),
     ).toBe("waiting");
   });
 
-  it("moves merged and closed PRs to done regardless of status", () => {
-    for (const state of ["MERGED", "CLOSED"]) {
-      expect(
-        deriveKanbanStage(
-          makeSession({ status: "working" }),
-          ctx({ pr: makePr(state) }),
-        ),
-      ).toBe("done");
-    }
-  });
-
-  it("lets a manual done pin outrank everything", () => {
+  it("lets active agent attention outrank a manual done pin", () => {
     expect(
       deriveKanbanStage(
         makeSession({ status: "waiting_for_input" }),
         ctx({ pr: makePr("OPEN"), hasDiff: true, manualDone: true }),
       ),
+    ).toBe("waiting");
+    expect(
+      deriveKanbanStage(
+        makeSession({ status: "working", agent_provider: "codex" }),
+        ctx({ manualDone: true }),
+      ),
+    ).toBe("working");
+  });
+
+  it("keeps an inactive manually completed session in done", () => {
+    expect(
+      deriveKanbanStage(makeSession(), ctx({ manualDone: true })),
     ).toBe("done");
   });
 
@@ -268,6 +327,21 @@ describe("isKanbanSessionStalled", () => {
           status: "working",
           status_started_at: startedAt,
           active_processes: [{ pid: 12, name: "codex", depth: 1 }],
+        }),
+        "working",
+        startedMs + KANBAN_STALL_THRESHOLD_MS * 10,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not use PTY process absence to flag chat work as stalled", () => {
+    expect(
+      isKanbanSessionStalled(
+        makeSession({
+          mode: "chat",
+          status: "working",
+          status_started_at: startedAt,
+          active_processes: [],
         }),
         "working",
         startedMs + KANBAN_STALL_THRESHOLD_MS * 10,
