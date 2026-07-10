@@ -5096,6 +5096,7 @@ pub struct SessionStatusEntry {
     pub agent_transcript_provider: Option<SessionAgentProvider>,
     pub agent_transcript_id: Option<String>,
     pub agent_transcript_path: Option<String>,
+    pub agent_activity_at: Option<String>,
     pub active_processes: Vec<SessionProcessSummary>,
     /// Current branch read live from the session's worktree on each poll.
     /// `None` when the worktree has no readable HEAD (e.g. detached, or
@@ -5156,6 +5157,11 @@ fn chat_conversation_preview(
         }
     }
     preview
+}
+
+fn transcript_activity_at(path: &Path) -> Option<String> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    Some(chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339())
 }
 
 fn git_context_for_path(path: &std::path::Path) -> Option<(String, String)> {
@@ -5303,9 +5309,12 @@ fn detect_session_statuses_blocking(
                     .and_then(|s| git_context_for_path(&s.worktree_path));
                 let branch = git_context.as_ref().map(|(branch, _)| branch.clone());
                 let git_context_path = git_context.map(|(_, path)| path);
-                let conversation_preview = persistence::load_chat_session_state(&id)
-                    .ok()
-                    .map(|state| chat_conversation_preview(&state));
+                let chat_state = persistence::load_chat_session_state(&id).ok();
+                let conversation_preview = chat_state.as_ref().map(chat_conversation_preview);
+                let agent_activity_at = chat_state
+                    .as_ref()
+                    .filter(|state| !state.messages.is_empty())
+                    .map(|state| state.updated_at.to_rfc3339());
                 return SessionStatusEntry {
                     id,
                     status: previous,
@@ -5325,6 +5334,7 @@ fn detect_session_statuses_blocking(
                         .as_ref()
                         .and_then(|s| s.agent_transcript_id.clone()),
                     agent_transcript_path: None,
+                    agent_activity_at,
                     active_processes: Vec::new(),
                     branch,
                     git_context_path,
@@ -5404,6 +5414,9 @@ fn detect_session_statuses_blocking(
             let agent_transcript_path = transcript
                 .as_ref()
                 .map(|(path, _)| path.to_string_lossy().into_owned());
+            let agent_activity_at = transcript
+                .as_ref()
+                .and_then(|(path, _)| transcript_activity_at(path));
             let agent_transcript_provider = transcript.as_ref().map(|(_, kind)| *kind);
             let transcript_preview = conversation_preview
                 .as_ref()
@@ -5540,6 +5553,7 @@ fn detect_session_statuses_blocking(
                 agent_transcript_provider,
                 agent_transcript_id,
                 agent_transcript_path,
+                agent_activity_at,
                 active_processes,
                 branch,
                 git_context_path,

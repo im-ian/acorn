@@ -28,15 +28,12 @@ export const KANBAN_STALL_THRESHOLD_MS = 5 * 60_000;
 export interface KanbanStageContext {
   /** PR whose head branch matches the session branch, if any. */
   pr: PullRequestInfo | null;
-  /** Whether the session worktree has uncommitted changes. */
-  hasDiff: boolean;
   /** User pinned the card to Done via the card menu. */
   manualDone: boolean;
 }
 
 export const EMPTY_KANBAN_STAGE_CONTEXT: KanbanStageContext = {
   pr: null,
-  hasDiff: false,
   manualDone: false,
 };
 
@@ -44,53 +41,70 @@ function prStateUpper(pr: PullRequestInfo | null): string | null {
   return pr ? pr.state.toUpperCase() : null;
 }
 
-function hasAgentWork(session: Session): boolean {
+function hasCompletedAgentWork(session: Session): boolean {
   if (session.status_reason === "turn_complete") return true;
   return [
-    session.agent_transcript_id,
     session.last_user_message,
     session.last_agent_message,
     session.last_message,
   ].some((value) => Boolean(value?.trim()));
 }
 
+function isAgentWorking(session: Session): boolean {
+  return (
+    session.status === "working" &&
+    (session.mode === "chat" || session.agent_provider != null)
+  );
+}
+
+function completedPullRequestAt(pr: PullRequestInfo | null): string | null {
+  if (!pr) return null;
+  const state = prStateUpper(pr);
+  if (state === "MERGED") return pr.merged_at?.trim() || null;
+  if (state === "CLOSED") return pr.closed_at?.trim() || null;
+  return null;
+}
+
+function pullRequestCompletedAfterAgentWork(
+  session: Session,
+  pr: PullRequestInfo | null,
+): boolean {
+  const activityAt = Date.parse(session.agent_activity_at ?? "");
+  const completedAt = Date.parse(completedPullRequestAt(pr) ?? "");
+  return (
+    Number.isFinite(activityAt) &&
+    Number.isFinite(completedAt) &&
+    completedAt >= activityAt
+  );
+}
+
 /**
  * Map a session plus its board context onto a lifecycle stage. Precedence
  * (first match wins):
  *
- * 1. manual done pin        → done
- * 2. PR merged/closed       → done
- * 3. agent running          → working
- * 4. ready + agent work + dirty tree → review
- * 5. waiting/error          → waiting
- * 6. open PR                → review
- * 7. otherwise              → idle
+ * 1. waiting/error                         → waiting
+ * 2. live agent work                       → working
+ * 3. manual done pin                       → done
+ * 4. PR completed after latest agent work  → done
+ * 5. completed agent work                  → review
+ * 6. otherwise                             → idle
  *
- * Running/waiting outrank the open-PR rule on purpose: a session that is
- * actively working (or blocked on the user) stays in its live column even
- * while its PR is open, and only settles into Review when the agent goes
- * quiet.
+ * Git diffs and branch-matching PRs remain card telemetry until the session
+ * itself has agent lifecycle evidence. Attention states outrank completion so
+ * follow-up work cannot disappear into Done behind an older PR or manual pin.
  */
 export function deriveKanbanStage(
   session: Session,
   context: KanbanStageContext,
 ): KanbanLifecycleStage {
-  if (context.manualDone) return "done";
-  const prState = prStateUpper(context.pr);
-  if (prState === "MERGED" || prState === "CLOSED") return "done";
-  if (session.status === "working") return "working";
-  if (
-    session.status === "ready" &&
-    context.hasDiff &&
-    hasAgentWork(session)
-  ) {
-    return "review";
-  }
   if (session.status === "waiting_for_input" || session.status === "errored") {
     return "waiting";
   }
-  if (prState === "OPEN") return "review";
-  return "idle";
+  if (isAgentWorking(session)) return "working";
+  if (context.manualDone) return "done";
+  if (!hasCompletedAgentWork(session)) return "idle";
+  if (pullRequestCompletedAfterAgentWork(session, context.pr)) return "done";
+  return "review";
 }
 
 /** When a session entered its current stage. */
@@ -132,6 +146,7 @@ export function isKanbanSessionStalled(
   now: number,
 ): boolean {
   if (stage !== "working") return false;
+  if (session.mode === "chat") return false;
   if ((session.active_processes ?? []).length > 0) return false;
   const statusStartedAt = Date.parse(session.status_started_at ?? "");
   if (!Number.isFinite(statusStartedAt)) return false;

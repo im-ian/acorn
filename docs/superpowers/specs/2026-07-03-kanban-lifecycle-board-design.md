@@ -27,47 +27,51 @@ columns, queueing/backlog of unstarted prompts, token/cost metrics.
 
 ## Card unit
 
-A card remains **one session**. Acorn already equates session = worktree =
-branch, so the session is the natural work item. No backend schema changes.
+A card remains **one session**. Regular sessions can share a worktree and
+branch, so repository telemetry describes card context but does not establish
+that a particular session performed the work.
 
 ## Columns (derived, not stored)
 
 | Column | Tone | Membership |
 |---|---|---|
-| Idle | neutral | live session, no agent activity, nothing to review |
-| Working | accent (pulse) | `status === "running"` |
+| Idle | neutral | live session, no agent lifecycle activity |
+| Working | accent (pulse) | a known agent or chat run is working |
 | Waiting | warning (amber highlight) | `status === "needs_input"` or `status === "failed"` (failed cards keep a red accent) |
-| Review | success | open PR on the session branch, or turn completed with a dirty worktree |
-| Done | neutral | PR merged/closed, or manually pinned done |
+| Review | success | an agent turn completed and still needs acknowledgement |
+| Done | neutral | a matching PR completed after the latest agent activity, or manually pinned done |
 
 Derivation precedence (first match wins):
 
-1. manual done pin → **Done**
-2. PR state `MERGED`/`CLOSED` → **Done**
-3. `running` → **Working**
-4. `needs_input` | `failed` → **Waiting**
-5. open PR → **Review**
-6. `completed` and worktree has uncommitted diff → **Review**
-7. otherwise → **Idle**
+1. `needs_input` | `failed` → **Waiting**
+2. known agent/chat `running` → **Working**
+3. manual done pin → **Done**
+4. PR completion timestamp ≥ latest agent activity → **Done**
+5. completed agent turn → **Review**
+6. otherwise → **Idle**
 
-The stage is a pure function `deriveKanbanStage(session, {pr, hasDiff,
-manualDone})` in `src/lib/kanbanLifecycle.ts`. Column order/count lives there as
+The stage is a pure function `deriveKanbanStage(session, {pr, manualDone})` in
+`src/lib/kanbanLifecycle.ts`. Column order/count lives there as
 the single source of truth (mirrors the existing `kanbanBoard.ts` pattern).
 
 ## Data plumbing
 
 - **PRs:** reuse `rightPanelCache.fetchPullRequests(repoPath, "all", 50)`,
   polled every 60 s per distinct `repo_path`, matched to sessions via
-  `head_branch === session.branch`. Non-GitHub repos degrade gracefully
-  (listing kind `not_github` → no PR context).
+  `head_branch === session.branch`. `closedAt` / `mergedAt` must not predate
+  the session's latest transcript/chat activity before the PR can move the
+  card to Done. Non-GitHub repos degrade gracefully (listing kind
+  `not_github` → no PR context).
 - **Diff:** `api.fsGitStatus(worktree_path)` per board-visible session, polled
   every 20 s, paused while `document.hidden`. Produces `hasDiff` and summed
-  `+additions/−deletions` for the card chip.
+  `+additions/−deletions` for the card chip without moving the card between
+  lifecycle columns.
 - **Dwell time:** client-side tracker maps sessionId → {stage, since}. Resets
   when the derived stage changes. In-memory only (v1); survives project
   switches within the session, not app restarts.
-- **Stall:** Working card with no `updated_at` change for ≥ 5 minutes shows a
-  stall badge.
+- **Stall:** terminal Working cards with no live process for ≥ 5 minutes show a
+  stall badge. Chat runs do not expose their provider process through the PTY
+  process list and are excluded.
 
 ## Card additions
 

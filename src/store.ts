@@ -1898,6 +1898,12 @@ export const useAppStore = create<AppStateModel>()(
                   )
                     ? (update.agent_transcript_path ?? null)
                     : (sess.agent_transcript_path ?? null);
+                const nextAgentActivityAt = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "agent_activity_at",
+                )
+                  ? (update.agent_activity_at ?? null)
+                  : (sess.agent_activity_at ?? null);
                 const currentActiveProcesses = sess.active_processes ?? [];
                 const nextActiveProcesses = Object.prototype.hasOwnProperty.call(
                   update,
@@ -1931,6 +1937,7 @@ export const useAppStore = create<AppStateModel>()(
                   nextAgentTranscriptId !== (sess.agent_transcript_id ?? null) ||
                   nextAgentTranscriptPath !==
                     (sess.agent_transcript_path ?? null) ||
+                  nextAgentActivityAt !== (sess.agent_activity_at ?? null) ||
                   !sessionProcessSummariesEqual(
                     nextActiveProcesses,
                     currentActiveProcesses,
@@ -1952,6 +1959,7 @@ export const useAppStore = create<AppStateModel>()(
                     agent_transcript_provider: nextAgentTranscriptProvider,
                     agent_transcript_id: nextAgentTranscriptId,
                     agent_transcript_path: nextAgentTranscriptPath,
+                    agent_activity_at: nextAgentActivityAt,
                     active_processes: nextActiveProcesses,
                     git_context_path: nextGitContextPath,
                     auto_title_enabled: nextAutoTitleEnabled,

@@ -97,6 +97,8 @@ pub struct PullRequestInfo {
     pub url: String,
     /// ISO-8601 timestamp from gh; the frontend formats it for display.
     pub updated_at: String,
+    pub closed_at: Option<String>,
+    pub merged_at: Option<String>,
     pub is_draft: bool,
     /// Aggregate of status checks on the head sha, mirroring the detail
     /// modal's badge logic. `None` when gh returned no rollup entries.
@@ -138,6 +140,10 @@ struct GhPullRequest {
     url: String,
     #[serde(rename = "updatedAt")]
     updated_at: String,
+    #[serde(rename = "closedAt", default)]
+    closed_at: Option<String>,
+    #[serde(rename = "mergedAt", default)]
+    merged_at: Option<String>,
     #[serde(rename = "isDraft", default)]
     is_draft: bool,
     #[serde(rename = "statusCheckRollup", default)]
@@ -587,7 +593,7 @@ fn run_pr_list_page(
                 &limit_s,
                 "--json",
                 "number,title,state,author,headRefName,baseRefName,url,updatedAt,\
-                 isDraft,statusCheckRollup,labels",
+                 closedAt,mergedAt,isDraft,statusCheckRollup,labels",
             ]);
         if let Some(q) = query {
             cmd.args(["--search", q]);
@@ -627,6 +633,8 @@ fn pull_request_info_from_gh(pr: GhPullRequest) -> PullRequestInfo {
         base_branch: pr.base_ref_name,
         url: pr.url,
         updated_at: pr.updated_at,
+        closed_at: normalize_github_timestamp(pr.closed_at),
+        merged_at: normalize_github_timestamp(pr.merged_at),
         is_draft: pr.is_draft,
         checks,
         labels: pr
