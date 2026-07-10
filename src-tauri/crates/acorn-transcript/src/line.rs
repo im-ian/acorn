@@ -734,7 +734,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_assistant_end_turn_wins_over_trailing_meta() {
+    fn claude_assistant_end_turn_maps_to_ready_over_trailing_meta() {
         let tail = format!(
             "{}\n{}\n{}\n",
             assistant("end_turn"),
@@ -743,7 +743,7 @@ mod tests {
         );
         assert_eq!(
             classify(AgentKind::Claude, &tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
@@ -756,7 +756,7 @@ mod tests {
         );
         assert_eq!(
             classify(AgentKind::Claude, &tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
         assert_eq!(
             classify(
@@ -786,29 +786,29 @@ mod tests {
     }
 
     #[test]
-    fn codex_task_complete_maps_to_waiting_for_input() {
+    fn codex_task_complete_maps_to_ready() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn codex_turn_complete_maps_to_waiting_for_input() {
+    fn codex_turn_complete_maps_to_ready() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"turn_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn codex_msg_wrapped_turn_complete_maps_to_waiting_for_input() {
+    fn codex_msg_wrapped_turn_complete_maps_to_ready() {
         let tail = r#"{"msg":{"type":"turn_complete","last_agent_message":"done"}}"#;
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
@@ -858,7 +858,7 @@ mod tests {
         .unwrap();
         let parsed = parse_transcript_value(AgentKind::Codex, &value);
 
-        assert_eq!(parsed.turn_state, Some(TurnState::WaitingForInput));
+        assert_eq!(parsed.turn_state, Some(TurnState::Ready));
         assert_eq!(parsed.role, TranscriptRole::Assistant);
         assert_eq!(parsed.text.as_deref(), Some("all done"));
         assert_eq!(parsed.state_role, TranscriptRole::Assistant);
@@ -889,20 +889,20 @@ mod tests {
     }
 
     #[test]
-    fn codex_top_level_turn_complete_maps_to_waiting_for_input() {
+    fn codex_top_level_turn_complete_maps_to_ready() {
         let tail = r#"{"type":"turn_complete","last_agent_message":"done"}"#;
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn codex_final_answer_agent_message_maps_to_waiting_for_input() {
+    fn codex_final_answer_agent_message_maps_to_ready() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"agent_message","message":"all done","phase":"final_answer","memory_citation":null}}"#;
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
@@ -915,16 +915,16 @@ mod tests {
         );
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn antigravity_done_planner_maps_to_waiting_for_input() {
+    fn antigravity_done_planner_maps_to_ready() {
         let tail = r#"{"type":"PLANNER_RESPONSE","status":"DONE","content":"done"}"#;
         assert_eq!(
             classify(AgentKind::Antigravity, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 

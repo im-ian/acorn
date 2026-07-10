@@ -660,12 +660,14 @@ mod tests {
 
         let notify = fs::read_to_string(dir.join("acorn-codex-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"codex\""));
-        // Turn-completion events map to needs_input (awaiting the user), not a
-        // per-turn "completed"; Codex emits no process-exit hook here.
+        // A completed turn is ready for optional follow-up. Only explicit
+        // approval or question events require user input.
         assert!(notify
-            .contains("agent-turn-complete|task_complete|turn_complete) event=\"needs_input\""));
-        assert!(notify.contains("Stop) event=\"needs_input\""));
-        assert!(!notify.contains("event=\"stop\""));
+            .contains("agent-turn-complete|task_complete|turn_complete) event=\"stop\""));
+        assert!(notify.contains("Stop) event=\"stop\""));
+        assert!(notify.contains(
+            "exec_approval_request|apply_patch_approval_request|request_user_input) event=\"needs_input\""
+        ));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
     }
@@ -763,12 +765,11 @@ mod tests {
 
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"claude\""));
-        // SubagentStop re-asserts Running (grouped with start); per-turn Stop
-        // maps to needs_input (awaiting the user), and Claude emits no "stop"
-        // (Completed) event at all — process exit is observed as idle.
+        // SubagentStop re-asserts Running (grouped with start); a main-agent
+        // Stop is ready, while notifications and permissions require input.
         assert!(notify.contains("SessionStart|UserPromptSubmit|SubagentStop"));
-        assert!(notify.contains("Stop|Notification|PermissionRequest) event=\"needs_input\""));
-        assert!(!notify.contains("event=\"stop\""));
+        assert!(notify.contains("Stop) event=\"stop\""));
+        assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
 

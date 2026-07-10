@@ -205,7 +205,7 @@ mod tests {
         }
         assert_eq!(
             classify_tail(AgentKind::Claude, &tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
@@ -257,10 +257,10 @@ mod tests {
     }
 
     #[test]
-    fn shell_hint_needs_input_maps_to_waiting_for_input() {
+    fn shell_prompt_maps_to_ready() {
         assert_eq!(
             map_shell_hint(Some(ShellHint::NeedsInput)),
-            SessionStatus::WaitingForInput,
+            SessionStatus::Ready,
         );
     }
 
@@ -284,47 +284,47 @@ mod tests {
     }
 
     #[test]
-    fn codex_task_complete_maps_to_waiting_for_input() {
+    fn codex_task_complete_maps_to_ready() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn codex_turn_complete_maps_to_waiting_for_input() {
+    fn codex_turn_complete_maps_to_ready() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"turn_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn codex_msg_wrapped_turn_complete_maps_to_waiting_for_input() {
+    fn codex_msg_wrapped_turn_complete_maps_to_ready() {
         let tail = r#"{"msg":{"type":"turn_complete","last_agent_message":"done"}}"#;
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn codex_top_level_turn_complete_maps_to_waiting_for_input() {
+    fn codex_top_level_turn_complete_maps_to_ready() {
         let tail = r#"{"type":"turn_complete","last_agent_message":"done"}"#;
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn codex_final_answer_agent_message_maps_to_waiting_for_input() {
+    fn codex_final_answer_agent_message_maps_to_ready() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"agent_message","message":"all done","phase":"final_answer","memory_citation":null}}"#;
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
@@ -364,7 +364,7 @@ mod tests {
         );
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
@@ -374,11 +374,11 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_done_planner_maps_to_waiting_for_input() {
+    fn antigravity_done_planner_maps_to_ready() {
         let tail = r#"{"type":"PLANNER_RESPONSE","status":"DONE","content":"done"}"#;
         assert_eq!(
             classify_tail(AgentKind::Antigravity, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
@@ -445,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn detect_uses_waiting_for_input_transcript_while_shell_has_live_child() {
+    fn detect_uses_ready_transcript_while_shell_has_live_child() {
         let path = write_status_transcript(&assistant("end_turn"));
 
         assert_eq!(
@@ -454,7 +454,7 @@ mod tests {
                 SessionStatus::Working,
                 Some(ShellHint::Running),
             ),
-            SessionStatus::WaitingForInput,
+            SessionStatus::Ready,
         );
     }
 
@@ -471,18 +471,18 @@ mod tests {
                 Some(ShellHint::Running),
             ),
             StatusDetection::new(
-                SessionStatus::WaitingForInput,
+                SessionStatus::Ready,
                 Some(StatusReason::TurnComplete)
             ),
         );
     }
 
     #[test]
-    fn detect_reports_shell_prompt_reason_for_shell_needs_input() {
+    fn detect_reports_ready_with_shell_prompt_reason() {
         assert_eq!(
             detect_with_reason(None, SessionStatus::Working, Some(ShellHint::NeedsInput)),
             StatusDetection::new(
-                SessionStatus::WaitingForInput,
+                SessionStatus::Ready,
                 Some(StatusReason::ShellPrompt)
             ),
         );

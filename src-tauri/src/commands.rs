@@ -6727,7 +6727,7 @@ mod tests {
         // channel this run, and the transcript holds a real turn-complete
         // marker — the turn ended while nobody was listening.
         let detection = super::session_status::StatusDetection {
-            status: acorn_session::SessionStatus::WaitingForInput,
+            status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
         };
         assert_eq!(
@@ -6736,7 +6736,7 @@ mod tests {
                 false,
                 detection
             ),
-            Some(acorn_session::SessionStatus::WaitingForInput)
+            Some(acorn_session::SessionStatus::Ready)
         );
     }
 
@@ -6746,7 +6746,7 @@ mod tests {
         // again; re-opening the transcript passthrough would recreate the
         // UserPromptSubmit-vs-stale-tail race.
         let detection = super::session_status::StatusDetection {
-            status: acorn_session::SessionStatus::WaitingForInput,
+            status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
         };
         assert_eq!(
@@ -6762,15 +6762,14 @@ mod tests {
     #[test]
     fn boot_reconciliation_never_demotes_a_resting_status() {
         // Nobody can submit a prompt while the app is closed, so a persisted
-        // WaitingForInput can only be stale in the direction hooks will
-        // re-report; a stale-tail reading must not touch it.
+        // resting status must not be overwritten by a stale working line.
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Working,
             reason: None,
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
-                acorn_session::SessionStatus::WaitingForInput,
+                acorn_session::SessionStatus::Ready,
                 false,
                 detection
             ),
@@ -6780,10 +6779,10 @@ mod tests {
 
     #[test]
     fn boot_reconciliation_requires_a_turn_complete_marker() {
-        // A shell-prompt WaitingForInput hint is not evidence the agent's turn
+        // A shell-prompt Ready hint is not evidence the agent's turn
         // ended — only a transcript turn-complete marker flips Working.
         let detection = super::session_status::StatusDetection {
-            status: acorn_session::SessionStatus::WaitingForInput,
+            status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::ShellPrompt),
         };
         assert_eq!(
@@ -6814,7 +6813,7 @@ mod tests {
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Complete
             ),
-            acorn_session::SessionStatus::WaitingForInput
+            acorn_session::SessionStatus::Ready
         );
         assert_eq!(
             super::chat_session_status_for_message_status(
@@ -6826,7 +6825,7 @@ mod tests {
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Cancelled
             ),
-            acorn_session::SessionStatus::WaitingForInput
+            acorn_session::SessionStatus::Ready
         );
     }
 
