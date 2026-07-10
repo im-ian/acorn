@@ -543,6 +543,26 @@ mod tests {
     }
 
     #[test]
+    fn claude_conversation_preview_keeps_inline_context_tag_mentions() {
+        let base = ScratchDir::new("claude-inline-context-preview");
+        let path = base.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"user","message":{"content":"Why does <cwd> appear in the preview?"}}
+{"type":"assistant","message":{"content":"I will inspect the preview parser."}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Claude, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Why does <cwd> appear in the preview?")
+        );
+    }
+
+    #[test]
     fn codex_conversation_preview_reads_payload_roles() {
         let base = ScratchDir::new("codex-conversation-preview");
         let path = base.path().join("rollout.jsonl");
@@ -585,6 +605,26 @@ mod tests {
         assert_eq!(
             preview.last_agent_message.as_deref(),
             Some("Preflight passed.")
+        );
+    }
+
+    #[test]
+    fn codex_conversation_preview_keeps_inline_context_tag_mentions() {
+        let base = ScratchDir::new("codex-inline-context-preview");
+        let path = base.path().join("rollout.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Why does <cwd> appear in the preview?"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect the preview parser."}]}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Codex, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Why does <cwd> appear in the preview?")
         );
     }
 
