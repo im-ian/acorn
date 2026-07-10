@@ -655,7 +655,7 @@ describe("ChatPane", () => {
     });
     await settle();
 
-    expect(useAppStore.getState().sessions[0]?.status).toBe("waiting_for_input");
+    expect(useAppStore.getState().sessions[0]?.status).toBe("ready");
   });
 
   it("rolls back the optimistic first message when sending fails", async () => {
@@ -827,7 +827,7 @@ describe("ChatPane", () => {
     expect(textarea!.value).toBe("");
     expect(container.textContent).toContain("Error: late transport failure");
     expect(container.textContent).not.toContain("Running Claude");
-    expect(useAppStore.getState().sessions[0]?.status).toBe("waiting_for_input");
+    expect(useAppStore.getState().sessions[0]?.status).toBe("ready");
   });
 
   it("shows a scroll-to-bottom button when the chat is scrolled up", async () => {

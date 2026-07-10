@@ -163,6 +163,20 @@ describe("session title helpers", () => {
           mode: "chat",
           status: "ready",
           agent_provider: null,
+          last_user_message: "Question",
+          last_agent_message: "Answer",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      canRegenerateSessionTitle(
+        session({
+          title_source: "manual",
+          mode: "chat",
+          status: "ready",
+          agent_provider: null,
+          last_user_message: null,
+          last_agent_message: null,
         }),
       ),
     ).toBe(false);

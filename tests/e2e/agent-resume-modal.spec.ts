@@ -24,6 +24,10 @@ const RUNNING_SESSION = {
   ...SESSION,
   status: "working",
 };
+const RESTING_LIVE_AGENT_SESSION = {
+  ...SESSION,
+  agent_provider: "claude",
+};
 const CANDIDATE_UUID = "deadbeef-1234-5678-9abc-def012345678";
 
 test.describe("agent resume modal", () => {
@@ -59,6 +63,35 @@ test.describe("agent resume modal", () => {
         ),
       )
       .toBe(0);
+  });
+
+  test("does not pop for a ready session whose agent process is still live", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [RESTING_LIVE_AGENT_SESSION]);
+    await tauri.handle("detect_session_statuses", () => [
+      {
+        id: "s-resume",
+        status: "ready",
+        agent_provider: "claude",
+        branch: null,
+      },
+    ]);
+    await tauri.handle("get_agent_resume_candidate", () => {
+      return {
+        uuid: "deadbeef-1234-5678-9abc-def012345678",
+        lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
+        preview: "Current live conversation",
+      };
+    });
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("dialog", { name: /Resume previous conversation/ }),
+    ).toHaveCount(0);
   });
 
   test("waits for the first status poll before probing idle persisted sessions", async ({

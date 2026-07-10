@@ -1806,7 +1806,7 @@ fn chat_session_status_for_message_status(status: persistence::ChatMessageStatus
             SessionStatus::Working
         }
         persistence::ChatMessageStatus::Complete | persistence::ChatMessageStatus::Cancelled => {
-            SessionStatus::WaitingForInput
+            SessionStatus::Ready
         }
         persistence::ChatMessageStatus::Error => SessionStatus::Errored,
     }
@@ -1825,7 +1825,7 @@ fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> 
     {
         SessionStatus::Errored
     } else {
-        SessionStatus::WaitingForInput
+        SessionStatus::Ready
     }
 }
 
@@ -4650,9 +4650,16 @@ pub fn pty_unsubscribe_output(
 }
 
 #[tauri::command]
-pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -> AppResult<()> {
+pub fn pty_write<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+    data: String,
+) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let bytes = decode_b64(&data)?;
+    let submit_revision =
+        is_terminal_submit_frame(&bytes).then(|| state.sessions.hook_revision(&id));
     // Daemon-managed sessions route stdin through the control socket.
     // Keystrokes are small; one RPC round-trip per keystroke is well
     // under the typing-feedback threshold and avoids managing a second
@@ -4660,15 +4667,43 @@ pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -
     // fast-path signal, but detached/re-attaching sessions can be alive in
     // the daemon without an app-side output pump for a short window.
     if daemon_session_alive_or_attached(&state, id) {
-        return state
+        state
             .daemon_bridge
             .send_input(id, &bytes)
-            .map_err(|e| AppError::Pty(e.to_string()));
+            .map_err(|e| AppError::Pty(e.to_string()))?;
+    } else {
+        state
+            .pty
+            .write(&id, &bytes)
+            .map_err(|e| AppError::Pty(e.to_string()))?;
     }
-    state
-        .pty
-        .write(&id, &bytes)
-        .map_err(|e| AppError::Pty(e.to_string()))
+
+    if let Some(revision) = submit_revision {
+        match state.sessions.refresh_status_if_hook_revision(
+            &id,
+            SessionStatus::WaitingForInput,
+            revision,
+            SessionStatus::Working,
+        ) {
+            Ok(true) => {
+                persist(&state);
+                if let Err(err) =
+                    app.emit(crate::agent_hooks::AGENT_HOOK_STATUS_EVENT, id.to_string())
+                {
+                    tracing::warn!(%id, error = %err, "terminal submit status emit failed");
+                }
+            }
+            Ok(false) => {}
+            Err(err) => {
+                tracing::warn!(%id, error = %err, "terminal submit status refresh failed");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_terminal_submit_frame(bytes: &[u8]) -> bool {
+    matches!(bytes, b"\r" | b"\n" | b"\r\n")
 }
 
 #[tauri::command]
@@ -5154,28 +5189,24 @@ pub async fn detect_session_statuses(
 ///
 /// Agent lifecycle hooks are the authoritative turn-boundary signal. While an
 /// agent process is alive under a hooked session the poll defers the entire
-/// Working/WaitingForInput distinction to the hook-set store value and does not
-/// consult the transcript tail at all, because the tail is stale in *both*
-/// directions around a turn boundary:
+/// Working/Ready/WaitingForInput distinction to the hook-set store value and
+/// does not consult the transcript tail at all, because the tail is stale in
+/// *both* directions around a turn boundary:
 /// - just after a turn ends, a long/tool-heavy turn's `end_turn` line may be
 ///   outside the 256 KiB window (or absent entirely), so the tail still reads
 ///   Working;
 /// - just after the next prompt is submitted (UserPromptSubmit already fired
 ///   Working), the tail still shows the *previous* turn's `end_turn` and reads
-///   WaitingForInput until the agent flushes the new turn's line.
+///   Ready until the agent flushes the new turn's line.
 ///
-/// Letting either through races the independent ~1s poll against the hook. The
-/// WaitingForInput direction is the dangerous one: it mislabels a just-started
-/// turn as `waiting_for_input`+`turn_complete`, which the opt-in auto-close
-/// acts on to kill a live agent mid-turn. So the poll trusts the hook, not the
-/// tail, whenever an agent is live.
+/// Letting either through races the independent ~1s poll against the hook and
+/// can mislabel a just-started turn as Ready. The poll therefore trusts the
+/// hook whenever an agent is live.
 ///
-/// The poll keeps ownership only of the Ready edge: once no agent process is
-/// live (`live_agent` false — the agent exited, or an unrelated command now
-/// owns the PTY) it drives status again. Trade-off: a *dropped* terminating
-/// hook (fire-and-forget transport) can leave status lagging at the last hook
-/// value until the next hook or the agent exits; the synchronous hook path
-/// makes that rare, and it self-heals rather than losing data.
+/// Once no agent process is live (`live_agent` false — the agent exited, or an
+/// unrelated command now owns the PTY), the poll drives status again.
+/// Trade-off: a dropped terminating hook can leave status lagging at the last
+/// hook value until the next hook or the agent exits.
 fn poll_defers_to_hook(hook_active: bool, live_agent: bool) -> bool {
     hook_active && live_agent
 }
@@ -5188,12 +5219,13 @@ fn poll_defers_to_hook(hook_active: bool, live_agent: bool) -> bool {
 /// forever — the store still says Working and, since a resting agent emits no
 /// further events, nothing would ever correct it. Until the first hook event
 /// of this run confirms the channel, allow exactly the one transition hooks
-/// can no longer report: Working -> WaitingForInput backed by a real turn-complete
-/// marker in the transcript.
+/// can no longer report: Working -> Ready backed by a real turn-complete
+/// marker in the transcript. The Waiting case also upgrades status persisted
+/// by releases that treated every normal turn completion as input-required.
 ///
 /// One-directional on purpose: while the app is closed nobody can submit a
-/// prompt to the session, so WaitingForInput -> Working cannot happen offline
-/// and a stale-tail Working must never demote a persisted resting status. Once an
+/// prompt to the session, so Ready -> Working cannot happen offline and a
+/// stale-tail Working must never demote a persisted resting status. Once an
 /// event lands this run (`hook_confirmed_this_run`), hooks own both
 /// directions again and this reconciliation switches off — leaving it open
 /// in-run would recreate the UserPromptSubmit-vs-stale-tail race the full
@@ -5204,10 +5236,13 @@ fn hook_boot_reconciled_status(
     detection: session_status::StatusDetection,
 ) -> Option<SessionStatus> {
     (!hook_confirmed_this_run
-        && stored == SessionStatus::Working
-        && detection.status == SessionStatus::WaitingForInput
+        && matches!(
+            stored,
+            SessionStatus::Working | SessionStatus::WaitingForInput
+        )
+        && detection.status == SessionStatus::Ready
         && detection.reason == Some(SessionStatusReason::TurnComplete))
-    .then_some(SessionStatus::WaitingForInput)
+    .then_some(SessionStatus::Ready)
 }
 
 fn detect_session_statuses_blocking(
@@ -5248,6 +5283,7 @@ fn detect_session_statuses_blocking(
     };
 
     let mut promoted_auto_title = false;
+    let mut reconciled_hook_status = false;
     let entries: Vec<SessionStatusEntry> = ids
         .into_iter()
         .map(|id| {
@@ -5299,7 +5335,7 @@ fn detect_session_statuses_blocking(
             // in `stream_registry` (their root pid was captured from
             // the daemon at spawn / attach); legacy in-process sessions
             // live in `state.pty`. Each side keeps separate liveness storage
-            // because the sticky WaitingForInput deadline is per attachment.
+            // because the sticky shell-prompt deadline is per attachment.
             let daemon_pid = session
                 .as_ref()
                 .and_then(|s| s.daemon_session_id)
@@ -5420,24 +5456,39 @@ fn detect_session_statuses_blocking(
                 // here — after the poll's I/O — so an event landing during
                 // that window disables the recovery before it can clobber
                 // the fresher hook write.
+                let hook_revision = parsed_id
+                    .map(|uuid| state.sessions.hook_revision(&uuid))
+                    .unwrap_or(0);
                 let reconciled = parsed_id.and_then(|uuid| {
-                    hook_boot_reconciled_status(
-                        stored,
-                        state.sessions.is_hook_confirmed_this_run(&uuid),
-                        detection,
+                    hook_boot_reconciled_status(stored, hook_revision > 0, detection).and_then(
+                        |reconciled| {
+                            state
+                                .sessions
+                                .refresh_status_if_hook_revision(
+                                    &uuid,
+                                    stored,
+                                    hook_revision,
+                                    reconciled,
+                                )
+                                .ok()
+                                .filter(|applied| *applied)
+                                .map(|_| reconciled)
+                        },
                     )
                 });
-                if let (Some(uuid), Some(reconciled)) = (parsed_id, reconciled) {
-                    let _ = state.sessions.refresh_status(&uuid, reconciled);
-                }
-                let hook_status = reconciled.unwrap_or(stored);
-                // Codex can report turn-complete while a background terminal
-                // command is still alive. Keep the UI Working until it exits.
-                if hook_status == SessionStatus::WaitingForInput && live_codex_tool_child {
-                    SessionStatus::Working
-                } else {
-                    hook_status
-                }
+                reconciled_hook_status |= reconciled.is_some();
+                let hook_status = parsed_id
+                    .and_then(|uuid| state.sessions.get(&uuid).ok())
+                    .map(|session| session.status)
+                    .or(reconciled)
+                    .unwrap_or(stored);
+                // Codex can finish its main turn while a background command
+                // remains alive. Its persistent helpers are filtered below.
+                hook_status_with_live_tool_activity(
+                    hook_status,
+                    live_agent_kind,
+                    live_codex_tool_child,
+                )
             } else {
                 detection.status
             };
@@ -5498,10 +5549,14 @@ fn detect_session_statuses_blocking(
         .collect();
     // Promotion must survive an app restart — without the save a session
     // would silently fall back to ineligible until the agent runs again.
-    if promoted_auto_title {
+    if status_poll_needs_persist(promoted_auto_title, reconciled_hook_status) {
         persist(&state);
     }
     Ok(entries)
+}
+
+fn status_poll_needs_persist(promoted_auto_title: bool, reconciled_hook_status: bool) -> bool {
+    promoted_auto_title || reconciled_hook_status
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5710,6 +5765,24 @@ fn live_codex_has_tool_descendant(
                 .is_some_and(is_codex_persistent_helper_process)
         },
     )
+}
+
+fn hook_status_with_live_tool_activity(
+    hook_status: SessionStatus,
+    live_agent_kind: Option<AgentKind>,
+    live_tool_child: bool,
+) -> SessionStatus {
+    if live_tool_child
+        && matches!(live_agent_kind, Some(AgentKind::Codex))
+        && matches!(
+            hook_status,
+            SessionStatus::Ready | SessionStatus::WaitingForInput
+        )
+    {
+        SessionStatus::Working
+    } else {
+        hook_status
+    }
 }
 
 fn is_codex_persistent_helper_process(proc: &sysinfo::Process) -> bool {
@@ -6702,14 +6775,14 @@ mod tests {
     fn poll_defers_while_a_hooked_agent_is_live() {
         // While the agent process is alive the hook owns the turn boundary and
         // the transcript tail is ignored in both directions (stale Working just
-        // after a turn ends, stale WaitingForInput just after the next prompt).
+        // after a turn ends, stale Ready just after the next prompt).
         assert!(poll_defers_to_hook(true, true));
     }
 
     #[test]
     fn poll_owns_status_once_the_agent_is_gone() {
         // Agent exited, or an unrelated command now owns the PTY — the poll
-        // drives liveness again, including the Ready edge that no hook reports.
+        // drives liveness again from the current process tree.
         assert!(!poll_defers_to_hook(true, false));
     }
 
@@ -6722,12 +6795,64 @@ mod tests {
     }
 
     #[test]
+    fn persistent_claude_children_do_not_clear_waiting() {
+        assert_eq!(
+            super::hook_status_with_live_tool_activity(
+                acorn_session::SessionStatus::WaitingForInput,
+                Some(super::AgentKind::Claude),
+                true,
+            ),
+            acorn_session::SessionStatus::WaitingForInput
+        );
+        assert_eq!(
+            super::hook_status_with_live_tool_activity(
+                acorn_session::SessionStatus::WaitingForInput,
+                Some(super::AgentKind::Claude),
+                false,
+            ),
+            acorn_session::SessionStatus::WaitingForInput
+        );
+        assert_eq!(
+            super::hook_status_with_live_tool_activity(
+                acorn_session::SessionStatus::Ready,
+                Some(super::AgentKind::Codex),
+                true,
+            ),
+            acorn_session::SessionStatus::Working
+        );
+        assert_eq!(
+            super::hook_status_with_live_tool_activity(
+                acorn_session::SessionStatus::WaitingForInput,
+                Some(super::AgentKind::Antigravity),
+                true,
+            ),
+            acorn_session::SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
+    fn terminal_submit_frame_requires_a_standalone_line_ending() {
+        assert!(super::is_terminal_submit_frame(b"\r"));
+        assert!(super::is_terminal_submit_frame(b"\n"));
+        assert!(super::is_terminal_submit_frame(b"\r\n"));
+
+        for input in [
+            b"answer".as_slice(),
+            b"\x1b[A".as_slice(),
+            b"answer\r".as_slice(),
+            b"\x1b[200~line one\nline two\x1b[201~".as_slice(),
+        ] {
+            assert!(!super::is_terminal_submit_frame(input));
+        }
+    }
+
+    #[test]
     fn boot_reconciliation_recovers_turn_end_lost_while_app_was_closed() {
         // Persisted hook status says Working, no event has confirmed the
         // channel this run, and the transcript holds a real turn-complete
         // marker — the turn ended while nobody was listening.
         let detection = super::session_status::StatusDetection {
-            status: acorn_session::SessionStatus::WaitingForInput,
+            status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
         };
         assert_eq!(
@@ -6736,34 +6861,35 @@ mod tests {
                 false,
                 detection
             ),
-            Some(acorn_session::SessionStatus::WaitingForInput)
+            Some(acorn_session::SessionStatus::Ready)
         );
     }
 
     #[test]
-    fn boot_reconciliation_is_off_once_a_hook_event_confirms_the_channel() {
-        // An event reached this run's hook server — hooks own both directions
-        // again; re-opening the transcript passthrough would recreate the
-        // UserPromptSubmit-vs-stale-tail race.
+    fn boot_reconciliation_upgrades_legacy_completed_waiting_status() {
         let detection = super::session_status::StatusDetection {
-            status: acorn_session::SessionStatus::WaitingForInput,
+            status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
-                acorn_session::SessionStatus::Working,
-                true,
+                acorn_session::SessionStatus::WaitingForInput,
+                false,
                 detection
             ),
-            None
+            Some(acorn_session::SessionStatus::Ready)
         );
     }
 
     #[test]
-    fn boot_reconciliation_never_demotes_a_resting_status() {
-        // Nobody can submit a prompt while the app is closed, so a persisted
-        // WaitingForInput can only be stale in the direction hooks will
-        // re-report; a stale-tail reading must not touch it.
+    fn status_poll_persists_successful_boot_reconciliation() {
+        assert!(!super::status_poll_needs_persist(false, false));
+        assert!(super::status_poll_needs_persist(true, false));
+        assert!(super::status_poll_needs_persist(false, true));
+    }
+
+    #[test]
+    fn boot_reconciliation_preserves_real_waiting_status_without_completion_marker() {
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Working,
             reason: None,
@@ -6779,11 +6905,64 @@ mod tests {
     }
 
     #[test]
+    fn boot_reconciliation_does_not_upgrade_waiting_after_hook_confirmation() {
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::Ready,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::WaitingForInput,
+                true,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_is_off_once_a_hook_event_confirms_the_channel() {
+        // An event reached this run's hook server — hooks own both directions
+        // again; re-opening the transcript passthrough would recreate the
+        // UserPromptSubmit-vs-stale-tail race.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::Ready,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::Working,
+                true,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_never_demotes_a_resting_status() {
+        // Nobody can submit a prompt while the app is closed, so a persisted
+        // resting status must not be overwritten by a stale working line.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::Working,
+            reason: None,
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::Ready,
+                false,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn boot_reconciliation_requires_a_turn_complete_marker() {
-        // A shell-prompt WaitingForInput hint is not evidence the agent's turn
+        // A shell-prompt Ready hint is not evidence the agent's turn
         // ended — only a transcript turn-complete marker flips Working.
         let detection = super::session_status::StatusDetection {
-            status: acorn_session::SessionStatus::WaitingForInput,
+            status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::ShellPrompt),
         };
         assert_eq!(
@@ -6814,7 +6993,7 @@ mod tests {
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Complete
             ),
-            acorn_session::SessionStatus::WaitingForInput
+            acorn_session::SessionStatus::Ready
         );
         assert_eq!(
             super::chat_session_status_for_message_status(
@@ -6826,7 +7005,23 @@ mod tests {
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Cancelled
             ),
-            acorn_session::SessionStatus::WaitingForInput
+            acorn_session::SessionStatus::Ready
+        );
+
+        let completed = chat_state_for_runtime(vec![chat_message(
+            "a1",
+            crate::persistence::ChatRole::Assistant,
+            "done",
+        )]);
+        assert_eq!(
+            super::chat_session_status_for_state(&completed),
+            acorn_session::SessionStatus::Ready
+        );
+
+        let empty = chat_state_for_runtime(Vec::new());
+        assert_eq!(
+            super::chat_session_status_for_state(&empty),
+            acorn_session::SessionStatus::Ready
         );
     }
 

@@ -19,14 +19,22 @@ export function isVolatileSessionStatus(status: SessionStatus): boolean {
   return status === "working" || status === "waiting_for_input";
 }
 
+function isVolatileSession(
+  session: Pick<Session, "status" | "agent_provider">,
+): boolean {
+  return (
+    session.agent_provider != null || isVolatileSessionStatus(session.status)
+  );
+}
+
 export function sessionStatusPollIntervalMs(
-  session: Pick<Session, "id" | "status">,
+  session: Pick<Session, "id" | "status" | "agent_provider">,
   activeSessionId: string | null,
 ): number {
   if (session.id === activeSessionId) {
     return ACTIVE_SESSION_STATUS_POLL_INTERVAL_MS;
   }
-  if (isVolatileSessionStatus(session.status)) {
+  if (isVolatileSession(session)) {
     return VOLATILE_SESSION_STATUS_POLL_INTERVAL_MS;
   }
   return STABLE_SESSION_STATUS_POLL_INTERVAL_MS;
@@ -59,7 +67,7 @@ export function selectImmediateSessionStatusPollIds({
       (session) =>
         session.id === activeSessionId ||
         !lastPolledAt.has(session.id) ||
-        (includeVolatile && isVolatileSessionStatus(session.status)),
+        (includeVolatile && isVolatileSession(session)),
     )
     .map((session) => session.id);
 }

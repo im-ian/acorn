@@ -64,10 +64,10 @@ describe("deriveKanbanStage", () => {
     }
   });
 
-  it("puts a waiting-for-input session with a dirty worktree in review", () => {
+  it("puts a ready session with a dirty worktree in review", () => {
     expect(
       deriveKanbanStage(
-        makeSession({ status: "waiting_for_input" }),
+        makeSession({ status: "ready" }),
         ctx({ hasDiff: true }),
       ),
     ).toBe("review");

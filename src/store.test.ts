@@ -2564,7 +2564,7 @@ describe("pollSessionStatuses", () => {
       [project(REPO_A, 0)],
       [
         session("a1", REPO_A, {
-          status: "waiting_for_input",
+          status: "ready",
           agent_provider: "codex",
         }),
       ],
@@ -2572,7 +2572,7 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
       {
         id: "a1",
-        status: "waiting_for_input",
+        status: "ready",
         status_reason: "turn_complete",
         agent_provider: "codex",
         branch: null,

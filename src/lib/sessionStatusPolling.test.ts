@@ -12,7 +12,11 @@ import {
 
 const REPO = "/Users/me/repo";
 
-function session(id: string, status: SessionStatus): Session {
+function session(
+  id: string,
+  status: SessionStatus,
+  overrides: Partial<Session> = {},
+): Session {
   return {
     id,
     name: id,
@@ -29,6 +33,7 @@ function session(id: string, status: SessionStatus): Session {
     owner: { kind: "user" },
     position: null,
     in_worktree: false,
+    ...overrides,
   };
 }
 
@@ -46,6 +51,12 @@ describe("session status polling schedule", () => {
     expect(sessionStatusPollIntervalMs(session("d", "ready"), "a")).toBe(
       STABLE_SESSION_STATUS_POLL_INTERVAL_MS,
     );
+    expect(
+      sessionStatusPollIntervalMs(
+        session("e", "ready", { agent_provider: "claude" }),
+        "a",
+      ),
+    ).toBe(VOLATILE_SESSION_STATUS_POLL_INTERVAL_MS);
   });
 
   it("selects only sessions whose adaptive interval has elapsed", () => {
