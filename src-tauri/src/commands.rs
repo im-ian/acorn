@@ -8578,6 +8578,16 @@ mod tests {
     }
 
     #[test]
+    fn transcript_activity_uses_the_transcript_mtime() {
+        let transcript = tempfile::NamedTempFile::new().expect("temporary transcript");
+
+        let activity_at = super::transcript_activity_at(transcript.path())
+            .expect("transcript activity timestamp");
+
+        assert!(chrono::DateTime::parse_from_rfc3339(&activity_at).is_ok());
+    }
+
+    #[test]
     fn memory_usage_walks_app_and_daemon_roots_once() {
         let snapshots = [
             ProcessMemorySnapshot::new(10, None, "acorn", 100),
