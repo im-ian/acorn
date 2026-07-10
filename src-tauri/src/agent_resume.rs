@@ -501,6 +501,68 @@ mod tests {
     }
 
     #[test]
+    fn claude_conversation_preview_skips_meta_messages() {
+        let base = ScratchDir::new("claude-meta-preview");
+        let path = base.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"user","message":{"content":"Please review the pull request."}}
+{"type":"assistant","message":{"content":"The pull request is ready."}}
+{"type":"user","isMeta":true,"message":{"content":"Synthetic session metadata."}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Claude, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Please review the pull request.")
+        );
+    }
+
+    #[test]
+    fn claude_conversation_preview_skips_control_messages() {
+        let base = ScratchDir::new("claude-control-preview");
+        let path = base.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"user","message":{"content":"Please review the pull request."}}
+{"type":"assistant","message":{"content":"The pull request is ready."}}
+{"type":"user","message":{"content":"<command-name>/exit</command-name>\n<command-message>exit</command-message>"}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Claude, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Please review the pull request.")
+        );
+    }
+
+    #[test]
+    fn claude_conversation_preview_keeps_inline_context_tag_mentions() {
+        let base = ScratchDir::new("claude-inline-context-preview");
+        let path = base.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"user","message":{"content":"Why does <cwd> appear in the preview?"}}
+{"type":"assistant","message":{"content":"I will inspect the preview parser."}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Claude, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Why does <cwd> appear in the preview?")
+        );
+    }
+
+    #[test]
     fn codex_conversation_preview_reads_payload_roles() {
         let base = ScratchDir::new("codex-conversation-preview");
         let path = base.path().join("rollout.jsonl");
@@ -521,6 +583,48 @@ mod tests {
         assert_eq!(
             preview.last_agent_message.as_deref(),
             Some("The regression is in the popover target.")
+        );
+    }
+
+    #[test]
+    fn codex_conversation_preview_skips_injected_skill_content() {
+        let base = ScratchDir::new("codex-skill-preview");
+        let path = base.path().join("rollout.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"$merge-pr"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<skill>\n<name>merge-pr</name>\n<path>/tmp/merge-pr/SKILL.md</path>\nInternal skill instructions\n</skill>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Preflight passed."}]}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Codex, &path).unwrap();
+
+        assert_eq!(preview.last_user_message.as_deref(), Some("$merge-pr"));
+        assert_eq!(
+            preview.last_agent_message.as_deref(),
+            Some("Preflight passed.")
+        );
+    }
+
+    #[test]
+    fn codex_conversation_preview_keeps_inline_context_tag_mentions() {
+        let base = ScratchDir::new("codex-inline-context-preview");
+        let path = base.path().join("rollout.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Why does <cwd> appear in the preview?"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect the preview parser."}]}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Codex, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Why does <cwd> appear in the preview?")
         );
     }
 
@@ -572,7 +676,7 @@ mod tests {
         let path = base.path().join("transcript.jsonl");
         fs::write(
             &path,
-            r#"{"type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>Make the board calmer.</USER_REQUEST>"}
+            r#"{"type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>Make the board calmer.</USER_REQUEST><ADDITIONAL_METADATA>Internal model settings.</ADDITIONAL_METADATA>"}
 {"type":"PLANNER_RESPONSE","status":"DONE","content":"I will reduce the terminal surface."}
 "#,
         )
