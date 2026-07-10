@@ -187,6 +187,7 @@ function resetStore(): void {
       prAccountByRepo: {},
       pendingTerminalInput: {},
       sessionNotifications: [],
+      silencedSessionIds: {},
       multiInputEnabled: false,
       loading: false,
       error: null,
@@ -328,6 +329,29 @@ describe("needs-input navigation", () => {
 });
 
 describe("sessionNotifications", () => {
+  it("ignores new activity for silenced sessions", () => {
+    useAppStore.getState().setSessionSilenced("s1", true);
+
+    useAppStore
+      .getState()
+      .addSessionNotification(notification("n1", { sessionId: "s1" }));
+    useAppStore
+      .getState()
+      .addSessionNotification(notification("n2", { sessionId: "s2" }));
+
+    expect(
+      useAppStore.getState().sessionNotifications.map((item) => item.id),
+    ).toEqual(["n2"]);
+    expect(useAppStore.getState().silencedSessionIds).toEqual({ s1: true });
+  });
+
+  it("removes a session from the silence set when notifications resume", () => {
+    useAppStore.getState().setSessionSilenced("s1", true);
+    useAppStore.getState().setSessionSilenced("s1", false);
+
+    expect(useAppStore.getState().silencedSessionIds).toEqual({});
+  });
+
   it("adds newest notifications first and caps the in-memory list", () => {
     for (let i = 0; i < 105; i += 1) {
       useAppStore.getState().addSessionNotification(

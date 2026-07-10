@@ -84,6 +84,7 @@ describe("notifications", () => {
       ],
       activeSessionId: null,
       sessionNotifications: [],
+      silencedSessionIds: {},
       sessionsLoadedCleanly: true,
     });
     useSettings.setState({
@@ -154,6 +155,56 @@ describe("notifications", () => {
     ]);
     expect(useAppStore.getState().sessionNotifications[0]?.readAt).toBeUndefined();
     dispose();
+  });
+
+  it("suppresses system notifications and activity while a session is silenced", async () => {
+    useAppStore.setState({
+      silencedSessionIds: { "session-1": true },
+    });
+    const disposeSystem = startSessionNotificationWatcher();
+    const disposeActivity = startSessionActivityInboxWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "waiting_for_input",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+    await flushPromises();
+
+    expect(mocks.sendNotification).not.toHaveBeenCalled();
+    expect(useAppStore.getState().sessionNotifications).toEqual([]);
+
+    useAppStore.getState().setSessionSilenced("session-1", false);
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "working",
+          updated_at: "2026-01-01T00:02:00Z",
+        }),
+      ],
+    });
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "errored",
+          updated_at: "2026-01-01T00:03:00Z",
+        }),
+      ],
+    });
+    await flushPromises();
+
+    expect(mocks.sendNotification).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().sessionNotifications).toMatchObject([
+      {
+        sessionId: "session-1",
+        kind: "errored",
+      },
+    ]);
+    disposeSystem();
+    disposeActivity();
   });
 
   it("does not record in-app activity for the focused session transition", () => {

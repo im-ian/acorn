@@ -350,6 +350,77 @@ test.describe("sidebar: project lifecycle", () => {
     expect(calls[0]).toMatchObject({ id: "session-1", force: true });
   });
 
+  test("session notification silence is shared by sidebar and tab menus", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "quiet-me",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /quiet-me/ })
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Silence Notifications", exact: true })
+      .click();
+
+    await page
+      .locator('[data-tab-drag-handle="session-1"]')
+      .click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", {
+        name: "Resume Notifications",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page
+      .getByRole("menuitem", {
+        name: "Resume Notifications",
+        exact: true,
+      })
+      .click();
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /quiet-me/ })
+      .click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", {
+        name: "Silence Notifications",
+        exact: true,
+      }),
+    ).toBeVisible();
+  });
+
   test("ordinary terminal sessions cannot regenerate a session name", async ({
     page,
     tauri,
