@@ -205,7 +205,7 @@ fn parse_claude_value(value: &Value) -> ParsedTranscriptLine {
         TranscriptRole::Assistant => first_claude_display_text(&texts),
         TranscriptRole::Other => None,
     };
-    let preview_text = match raw_role {
+    let preview_text = match role {
         TranscriptRole::User | TranscriptRole::Assistant => claude_message_preview_text(value),
         TranscriptRole::Other => None,
     };
@@ -215,7 +215,7 @@ fn parse_claude_value(value: &Value) -> ParsedTranscriptLine {
         state_text: text.clone(),
         text,
         state_role: role,
-        preview_role: raw_role,
+        preview_role: role,
         preview_text,
         turn_state: claude_turn_state(value),
         session_id: string_at(Some(value), "sessionId"),
@@ -390,7 +390,7 @@ fn claude_message_preview_text(value: &Value) -> Option<String> {
 
 fn preview_from_content_value(content: &Value) -> Option<String> {
     if let Some(text) = content.as_str() {
-        return collapsible_text(text);
+        return claude_preview_text(text);
     }
     let items = content.as_array()?;
     for item in items {
@@ -400,11 +400,16 @@ fn preview_from_content_value(content: &Value) -> Option<String> {
         let Some(text) = item.get("text").and_then(Value::as_str) else {
             continue;
         };
-        if let Some(text) = collapsible_text(text) {
+        if let Some(text) = claude_preview_text(text) {
             return Some(text);
         }
     }
     None
+}
+
+fn claude_preview_text(text: &str) -> Option<String> {
+    collapsible_text(text)
+        .filter(|text| !looks_like_context_block(text) && !looks_like_claude_control_text(text))
 }
 
 fn codex_event_texts(value: &Value, event: &Value) -> Vec<String> {

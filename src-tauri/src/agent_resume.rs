@@ -636,7 +636,7 @@ mod tests {
         let path = base.path().join("transcript.jsonl");
         fs::write(
             &path,
-            r#"{"type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>Make the board calmer.</USER_REQUEST>"}
+            r#"{"type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>Make the board calmer.</USER_REQUEST><ADDITIONAL_METADATA>Internal model settings.</ADDITIONAL_METADATA>"}
 {"type":"PLANNER_RESPONSE","status":"DONE","content":"I will reduce the terminal surface."}
 "#,
         )
