@@ -284,8 +284,8 @@ pub struct Session {
     /// Whether this session has ever reported an agent lifecycle hook event.
     /// Persisted so hook ownership of the status survives an app restart: a
     /// daemon-managed PTY outlives the app, and its resting hook-set status
-    /// (`waiting_for_input`) must not be clobbered back to Working by the
-    /// transcript-tail poll before the agent emits its first event to the
+    /// (`ready` or `waiting_for_input`) must not be clobbered back to Working
+    /// by the transcript-tail poll before the agent emits its first event to the
     /// new app instance (a resting agent may never emit one).
     #[serde(default)]
     pub hook_active: bool,
@@ -345,12 +345,12 @@ pub struct SessionStore {
     /// Sessions that reported at least one agent lifecycle hook event
     /// (Start/Stop/NeedsInput/Error) *this run*. Runtime-only. The status
     /// poll consults hook activity to decide whether hooks own the
-    /// Working/WaitingForInput classification: once a session proves its
-    /// hook channel is live, the transcript-tail poll stops second-guessing
+    /// Working/Ready/WaitingForInput classification: once a session proves
+    /// its hook channel is live, the transcript-tail poll stops second-guessing
     /// turn completion (a long or tool-heavy Claude turn often leaves no
     /// `end_turn` line inside the tail window, so the tail keeps reading
     /// Working long after the turn ended) and only keeps ownership of the
-    /// Ready (process-gone) edge, which no hook reports.
+    /// process-liveness edge after no agent remains.
     ///
     /// Hook activity itself also persists across restarts via the session's
     /// `hook_active` field; this set distinguishes "confirmed live this run"
@@ -360,6 +360,10 @@ pub struct SessionStore {
     /// lost its turn-end event forever and must be recovered from the
     /// transcript exactly once.
     hook_confirmed: DashSet<Uuid>,
+    /// Per-session lifecycle generation for this app run. Every hook event
+    /// advances the revision before touching the session row so conditional
+    /// status writes can reject observations made before a newer event.
+    hook_revisions: DashMap<Uuid, u64>,
 }
 
 impl SessionStore {
@@ -429,12 +433,46 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
+    pub fn hook_revision(&self, id: &Uuid) -> u64 {
+        self.hook_revisions
+            .get(id)
+            .map(|revision| *revision)
+            .unwrap_or(0)
+    }
+
+    /// Refresh status only when both the stored state and hook generation
+    /// still match the caller's observation. Hook handlers advance the
+    /// generation before waiting on the session row, so a concurrent event
+    /// either rejects this write or overwrites it afterward.
+    pub fn refresh_status_if_hook_revision(
+        &self,
+        id: &Uuid,
+        expected_status: SessionStatus,
+        expected_hook_revision: u64,
+        status: SessionStatus,
+    ) -> SessionResult<bool> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        if entry.status != expected_status || self.hook_revision(id) != expected_hook_revision {
+            return Ok(false);
+        }
+        entry.status = status;
+        Ok(true)
+    }
+
     /// Record that `id` reported an agent lifecycle hook event, marking its
     /// hook channel live so the status poll defers turn-boundary
     /// classification to hooks (see the `hook_confirmed` field). Also stamps
     /// the session's persisted `hook_active` flag so hook ownership survives
-    /// an app restart. Idempotent.
+    /// an app restart. The persisted flag is idempotent; the runtime revision
+    /// advances for every event.
     pub fn mark_hook_active(&self, id: &Uuid) {
+        {
+            let mut revision = self.hook_revisions.entry(*id).or_default();
+            *revision = revision.saturating_add(1);
+        }
         self.hook_confirmed.insert(*id);
         if let Some(mut entry) = self.inner.get_mut(id) {
             if !entry.hook_active {
@@ -615,6 +653,7 @@ impl SessionStore {
 
     pub fn remove(&self, id: &Uuid) -> SessionResult<Session> {
         self.hook_confirmed.remove(id);
+        self.hook_revisions.remove(id);
         self.inner
             .remove(id)
             .map(|(_, v)| v)
@@ -714,13 +753,71 @@ mod tests {
         store.mark_hook_active(&session.id);
         assert!(store.is_hook_active(&session.id));
         assert!(store.is_hook_confirmed_this_run(&session.id));
-        // Idempotent.
+        assert_eq!(store.hook_revision(&session.id), 1);
         store.mark_hook_active(&session.id);
         assert!(store.is_hook_active(&session.id));
+        assert_eq!(store.hook_revision(&session.id), 2);
 
         store.remove(&session.id).expect("session exists");
         assert!(!store.is_hook_active(&session.id));
         assert!(!store.is_hook_confirmed_this_run(&session.id));
+        assert_eq!(store.hook_revision(&session.id), 0);
+    }
+
+    #[test]
+    fn hook_revision_guards_conditional_status_refresh() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        store
+            .refresh_status(&session.id, SessionStatus::WaitingForInput)
+            .expect("session exists");
+
+        let waiting_revision = store.hook_revision(&session.id);
+        assert!(store
+            .refresh_status_if_hook_revision(
+                &session.id,
+                SessionStatus::WaitingForInput,
+                waiting_revision,
+                SessionStatus::Working,
+            )
+            .expect("session exists"));
+        store
+            .refresh_status(&session.id, SessionStatus::WaitingForInput)
+            .expect("session exists");
+        store.mark_hook_active(&session.id);
+
+        assert!(!store
+            .refresh_status_if_hook_revision(
+                &session.id,
+                SessionStatus::WaitingForInput,
+                waiting_revision,
+                SessionStatus::Working,
+            )
+            .expect("session exists"));
+        assert_eq!(
+            store.get(&session.id).expect("session exists").status,
+            SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
+    fn conditional_status_refresh_requires_the_expected_status() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        let revision = store.hook_revision(&session.id);
+
+        assert!(!store
+            .refresh_status_if_hook_revision(
+                &session.id,
+                SessionStatus::WaitingForInput,
+                revision,
+                SessionStatus::Working,
+            )
+            .expect("session exists"));
+        assert_eq!(
+            store.get(&session.id).expect("session exists").status,
+            SessionStatus::Ready
+        );
     }
 
     #[test]

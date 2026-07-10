@@ -2,10 +2,8 @@
 //! transcript the in-flight agent is writing. Status mapping:
 //!
 //! Claude transcripts:
-//! - last assistant turn with `stop_reason=end_turn` -> WaitingForInput
-//!   (claude has finished its turn and is awaiting the user's next prompt).
-//!   Surfaces the warning-tone status dot in the Sidebar and triggers the
-//!   `waitingForInput` system notification when the user has it enabled.
+//! - last assistant turn with `stop_reason=end_turn` -> Ready
+//!   (claude finished its turn and accepts an optional follow-up).
 //! - last assistant turn with `stop_reason=tool_use` -> Working (tool pending)
 //! - last user turn (new prompt or tool_result) -> Working (assistant pending)
 //! - no transcript yet -> Ready (session has not produced any conversation)
@@ -13,14 +11,14 @@
 //! Codex transcripts:
 //! - last `payload.type=task_complete` / `turn_complete` (also accepted
 //!   `msg`-wrapped or top-level; or `agent_message` with `phase=final_answer`)
-//!   -> WaitingForInput (codex finished a turn).
+//!   -> Ready (codex finished a turn).
 //! - last `payload.type=user_message` -> Working (the user just sent a
 //!   prompt and codex is composing the response).
 //! - everything else with content -> Working (function calls, intermediate
 //!   `agent_message phase=commentary`, reasoning, etc.).
 //!
 //! Antigravity transcripts:
-//! - last `type=PLANNER_RESPONSE` with `status=DONE` -> WaitingForInput.
+//! - last `type=PLANNER_RESPONSE` with `status=DONE` -> Ready.
 //! - last `type=USER_INPUT` or any non-DONE model/tool line -> Working.
 //!
 //! Meta-only lines (claude: `last-prompt` / `permission-mode` /
@@ -86,11 +84,12 @@ impl StatusDetection {
 ///
 /// `shell_hint` carries the descendant-process snapshot for the session's
 /// PTY. It also guards transcript markers from becoming sticky state:
-/// resume markers are durable, so an old transcript can still end in
-/// `waiting_for_input` long after the agent process exited. When the PTY is
-/// idle (or gone), the durable marker is stale for status purposes and the
-/// session should be Ready. When a live descendant exists, the transcript
-/// tail refines that live process into Working vs WaitingForInput.
+/// resume markers are durable, so an old transcript can still end in a
+/// completed turn long after the agent process exited. When the PTY is idle
+/// (or gone), the durable marker is stale for status purposes and the session
+/// should be Ready. When a live descendant exists, the transcript tail refines
+/// that live process into Working or Ready; explicit input requests arrive
+/// through agent lifecycle hooks.
 pub fn detect(
     transcript: Option<(PathBuf, AgentKind)>,
     previous: SessionStatus,
@@ -118,10 +117,9 @@ pub fn detect_with_reason(
         .and_then(|tail| latest_turn_state(kind, &tail.text, tail.read_full));
 
     match classified {
-        Some(TurnState::WaitingForInput) => StatusDetection::new(
-            SessionStatus::WaitingForInput,
-            Some(StatusReason::TurnComplete),
-        ),
+        Some(TurnState::Ready) => {
+            StatusDetection::new(SessionStatus::Ready, Some(StatusReason::TurnComplete))
+        }
         Some(TurnState::Working) => StatusDetection::new(SessionStatus::Working, None),
         // Transcript exists but the tail held no turn lines; keep
         // whatever the caller previously observed instead of regressing
@@ -139,10 +137,9 @@ fn map_shell_hint(hint: Option<ShellHint>) -> SessionStatus {
 fn detect_shell_hint(hint: Option<ShellHint>) -> StatusDetection {
     match hint {
         Some(ShellHint::Running) => StatusDetection::new(SessionStatus::Working, None),
-        Some(ShellHint::NeedsInput) => StatusDetection::new(
-            SessionStatus::WaitingForInput,
-            Some(StatusReason::ShellPrompt),
-        ),
+        Some(ShellHint::NeedsInput) => {
+            StatusDetection::new(SessionStatus::Ready, Some(StatusReason::ShellPrompt))
+        }
         Some(ShellHint::Idle) | None => StatusDetection::new(SessionStatus::Ready, None),
     }
 }
@@ -205,7 +202,7 @@ mod tests {
         }
         assert_eq!(
             classify_tail(AgentKind::Claude, &tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
@@ -257,10 +254,10 @@ mod tests {
     }
 
     #[test]
-    fn shell_hint_needs_input_maps_to_waiting_for_input() {
+    fn shell_prompt_maps_to_ready() {
         assert_eq!(
             map_shell_hint(Some(ShellHint::NeedsInput)),
-            SessionStatus::WaitingForInput,
+            SessionStatus::Ready,
         );
     }
 
@@ -284,47 +281,47 @@ mod tests {
     }
 
     #[test]
-    fn codex_task_complete_maps_to_waiting_for_input() {
+    fn codex_task_complete_maps_to_ready() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn codex_turn_complete_maps_to_waiting_for_input() {
+    fn codex_turn_complete_maps_to_ready() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"turn_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn codex_msg_wrapped_turn_complete_maps_to_waiting_for_input() {
+    fn codex_msg_wrapped_turn_complete_maps_to_ready() {
         let tail = r#"{"msg":{"type":"turn_complete","last_agent_message":"done"}}"#;
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn codex_top_level_turn_complete_maps_to_waiting_for_input() {
+    fn codex_top_level_turn_complete_maps_to_ready() {
         let tail = r#"{"type":"turn_complete","last_agent_message":"done"}"#;
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
     #[test]
-    fn codex_final_answer_agent_message_maps_to_waiting_for_input() {
+    fn codex_final_answer_agent_message_maps_to_ready() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"agent_message","message":"all done","phase":"final_answer","memory_citation":null}}"#;
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
@@ -364,7 +361,7 @@ mod tests {
         );
         assert_eq!(
             classify_tail(AgentKind::Codex, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
@@ -374,11 +371,11 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_done_planner_maps_to_waiting_for_input() {
+    fn antigravity_done_planner_maps_to_ready() {
         let tail = r#"{"type":"PLANNER_RESPONSE","status":"DONE","content":"done"}"#;
         assert_eq!(
             classify_tail(AgentKind::Antigravity, tail, true),
-            Some(TurnState::WaitingForInput),
+            Some(TurnState::Ready),
         );
     }
 
@@ -417,13 +414,13 @@ mod tests {
     }
 
     #[test]
-    fn detect_ignores_stale_waiting_for_input_transcript_when_shell_is_idle() {
+    fn detect_ignores_durable_completed_transcript_when_shell_is_idle() {
         let path = write_status_transcript(&assistant("end_turn"));
 
         assert_eq!(
             detect(
                 Some((path, AgentKind::Claude)),
-                SessionStatus::WaitingForInput,
+                SessionStatus::Ready,
                 Some(ShellHint::Idle),
             ),
             SessionStatus::Ready,
@@ -431,21 +428,17 @@ mod tests {
     }
 
     #[test]
-    fn detect_ignores_stale_waiting_for_input_transcript_without_live_pty() {
+    fn detect_ignores_durable_completed_transcript_without_live_pty() {
         let path = write_status_transcript(&assistant("end_turn"));
 
         assert_eq!(
-            detect(
-                Some((path, AgentKind::Claude)),
-                SessionStatus::WaitingForInput,
-                None,
-            ),
+            detect(Some((path, AgentKind::Claude)), SessionStatus::Ready, None,),
             SessionStatus::Ready,
         );
     }
 
     #[test]
-    fn detect_uses_waiting_for_input_transcript_while_shell_has_live_child() {
+    fn detect_uses_ready_transcript_while_shell_has_live_child() {
         let path = write_status_transcript(&assistant("end_turn"));
 
         assert_eq!(
@@ -454,7 +447,7 @@ mod tests {
                 SessionStatus::Working,
                 Some(ShellHint::Running),
             ),
-            SessionStatus::WaitingForInput,
+            SessionStatus::Ready,
         );
     }
 
@@ -470,21 +463,15 @@ mod tests {
                 SessionStatus::Working,
                 Some(ShellHint::Running),
             ),
-            StatusDetection::new(
-                SessionStatus::WaitingForInput,
-                Some(StatusReason::TurnComplete)
-            ),
+            StatusDetection::new(SessionStatus::Ready, Some(StatusReason::TurnComplete)),
         );
     }
 
     #[test]
-    fn detect_reports_shell_prompt_reason_for_shell_needs_input() {
+    fn detect_reports_ready_with_shell_prompt_reason() {
         assert_eq!(
             detect_with_reason(None, SessionStatus::Working, Some(ShellHint::NeedsInput)),
-            StatusDetection::new(
-                SessionStatus::WaitingForInput,
-                Some(StatusReason::ShellPrompt)
-            ),
+            StatusDetection::new(SessionStatus::Ready, Some(StatusReason::ShellPrompt)),
         );
     }
 
