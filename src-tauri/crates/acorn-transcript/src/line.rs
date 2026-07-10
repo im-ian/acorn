@@ -357,8 +357,8 @@ fn codex_preview_role_and_text(
 ) -> (TranscriptRole, Option<String>) {
     match event_role {
         TranscriptRole::User => {
-            let text =
-                codex_message_preview_text(event).filter(|text| !looks_like_context_block(text));
+            let text = codex_message_preview_text(event)
+                .filter(|text| !looks_like_preview_context_block(text));
             if text.is_some() {
                 (TranscriptRole::User, text)
             } else {
@@ -408,8 +408,9 @@ fn preview_from_content_value(content: &Value) -> Option<String> {
 }
 
 fn claude_preview_text(text: &str) -> Option<String> {
-    collapsible_text(text)
-        .filter(|text| !looks_like_context_block(text) && !looks_like_claude_control_text(text))
+    collapsible_text(text).filter(|text| {
+        !looks_like_preview_context_block(text) && !looks_like_claude_control_text(text)
+    })
 }
 
 fn codex_event_texts(value: &Value, event: &Value) -> Vec<String> {
@@ -632,9 +633,21 @@ fn looks_like_context_block(text: &str) -> bool {
         || lower.contains("<cwd>")
         || lower.contains("# agents.md")
         || lower.contains("<instructions>")
-        || (lower.trim_start().starts_with("<skill>")
-            && lower.contains("<name>")
-            && lower.contains("<path>"))
+        || looks_like_skill_context_block(text)
+}
+
+fn looks_like_preview_context_block(text: &str) -> bool {
+    let lower = text.trim_start().to_ascii_lowercase();
+    lower.starts_with("<environment_context>")
+        || lower.starts_with("<cwd>")
+        || lower.starts_with("# agents.md instructions for ")
+        || lower.starts_with("<instructions>")
+        || looks_like_skill_context_block(text)
+}
+
+fn looks_like_skill_context_block(text: &str) -> bool {
+    let lower = text.trim_start().to_ascii_lowercase();
+    lower.starts_with("<skill>") && lower.contains("<name>") && lower.contains("<path>")
 }
 
 fn extract_cwd_from_text(texts: &[String]) -> Option<String> {
