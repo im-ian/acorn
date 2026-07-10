@@ -79,9 +79,17 @@ function hasAgentChatWork(session: Session): boolean {
     session.status === "working" ||
     session.status === "waiting_for_input" ||
     session.status === "errored";
-  if (!hasWorkStatus) return false;
 
-  return session.mode === "chat" || session.agent_provider != null;
+  if (session.mode === "chat") {
+    const hasConversationPreview = [
+      session.last_user_message,
+      session.last_agent_message,
+      session.last_message,
+    ].some((message) => message?.trim());
+    return hasWorkStatus || hasConversationPreview;
+  }
+
+  return hasWorkStatus && session.agent_provider != null;
 }
 
 function hasSessionTitleAgentSignal(session: Session): boolean {

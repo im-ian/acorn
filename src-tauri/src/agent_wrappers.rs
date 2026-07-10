@@ -259,10 +259,10 @@ hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]
 event=""
 # Claude fires Stop after every assistant turn, including ordinary completed
 # work that needs no response. Notification and PermissionRequest are the
-# attention-bearing events. SubagentStop fires mid-turn, so it re-asserts
-# Working.
+# attention-bearing events. Tool completion and SubagentStop both occur
+# mid-turn, so they re-assert Working.
 case "$hook_event_name" in
-  SessionStart|UserPromptSubmit|SubagentStop) event="start" ;;
+  SessionStart|UserPromptSubmit|PostToolUse|PostToolUseFailure|SubagentStop) event="start" ;;
   Stop) event="stop" ;;
   Notification|PermissionRequest) event="needs_input" ;;
   Error) event="error" ;;
@@ -383,7 +383,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
           "$_acorn_notify" start >/dev/null 2>&1 || true
           ;;
         *'"type":"PLANNER_RESPONSE"'*'"status":"DONE"'*)
-          "$_acorn_notify" needs_input >/dev/null 2>&1 || true
+          "$_acorn_notify" stop >/dev/null 2>&1 || true
           ;;
         *'"status":"ERROR"'*)
           "$_acorn_notify" error >/dev/null 2>&1 || true
@@ -526,6 +526,8 @@ fn write_claude_settings(dir: &Path) -> io::Result<()> {
   "hooks": {{
     "SessionStart": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "UserPromptSubmit": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
+    "PostToolUse": [{{"matcher":"*","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
+    "PostToolUseFailure": [{{"matcher":"*","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Stop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "SubagentStop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Notification": [{{"matcher":"permission_prompt|elicitation_dialog|agent_needs_input","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
@@ -762,9 +764,8 @@ mod tests {
         assert!(notify.contains("\"provider\":\"claude\""));
         // SubagentStop re-asserts Running (grouped with start); a main-agent
         // Stop is ready, while notifications and permissions require input.
-        assert!(notify.contains(
-            "SessionStart|UserPromptSubmit|PostToolUse|PostToolUseFailure|SubagentStop"
-        ));
+        assert!(notify
+            .contains("SessionStart|UserPromptSubmit|PostToolUse|PostToolUseFailure|SubagentStop"));
         assert!(notify.contains("Stop) event=\"stop\""));
         assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
@@ -851,7 +852,9 @@ mod tests {
         let base = ScratchDir::new("events");
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
-        assert!(notify.contains("SessionStart|UserPromptSubmit|SubagentStop) event=\"start\""));
+        assert!(notify.contains(
+            "SessionStart|UserPromptSubmit|PostToolUse|PostToolUseFailure|SubagentStop) event=\"start\""
+        ));
         assert!(notify.contains("Stop) event=\"stop\""));
         assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
         assert!(notify.contains("Error) event=\"error\""));
@@ -949,8 +952,8 @@ mod tests {
         assert!(wrapper.contains("PLANNER_RESPONSE"));
         assert!(wrapper.contains("USER_INPUT"));
         assert!(wrapper.contains(
-            r#"*'\"type\":\"PLANNER_RESPONSE\"'*'\"status\":\"DONE\"'*)
-          \"$_acorn_notify\" stop"#
+            r#"*'"type":"PLANNER_RESPONSE"'*'"status":"DONE"'*)
+          "$_acorn_notify" stop"#
         ));
 
         let notify = fs::read_to_string(dir.join("acorn-antigravity-notify")).unwrap();

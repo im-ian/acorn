@@ -284,8 +284,8 @@ pub struct Session {
     /// Whether this session has ever reported an agent lifecycle hook event.
     /// Persisted so hook ownership of the status survives an app restart: a
     /// daemon-managed PTY outlives the app, and its resting hook-set status
-    /// (`waiting_for_input`) must not be clobbered back to Working by the
-    /// transcript-tail poll before the agent emits its first event to the
+    /// (`ready` or `waiting_for_input`) must not be clobbered back to Working
+    /// by the transcript-tail poll before the agent emits its first event to the
     /// new app instance (a resting agent may never emit one).
     #[serde(default)]
     pub hook_active: bool,

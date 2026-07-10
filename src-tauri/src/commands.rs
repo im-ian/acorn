@@ -1825,7 +1825,7 @@ fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> 
     {
         SessionStatus::Errored
     } else {
-        SessionStatus::WaitingForInput
+        SessionStatus::Ready
     }
 }
 
@@ -5185,11 +5185,12 @@ fn poll_defers_to_hook(hook_active: bool, live_agent: bool) -> bool {
 /// further events, nothing would ever correct it. Until the first hook event
 /// of this run confirms the channel, allow exactly the one transition hooks
 /// can no longer report: Working -> Ready backed by a real turn-complete
-/// marker in the transcript.
+/// marker in the transcript. The Waiting case also upgrades status persisted
+/// by releases that treated every normal turn completion as input-required.
 ///
 /// One-directional on purpose: while the app is closed nobody can submit a
-/// prompt to the session, so Ready -> Working cannot happen offline
-/// and a stale-tail Working must never demote a persisted resting status. Once an
+/// prompt to the session, so Ready -> Working cannot happen offline and a
+/// stale-tail Working must never demote a persisted resting status. Once an
 /// event lands this run (`hook_confirmed_this_run`), hooks own both
 /// directions again and this reconciliation switches off — leaving it open
 /// in-run would recreate the UserPromptSubmit-vs-stale-tail race the full
@@ -5200,7 +5201,10 @@ fn hook_boot_reconciled_status(
     detection: session_status::StatusDetection,
 ) -> Option<SessionStatus> {
     (!hook_confirmed_this_run
-        && stored == SessionStatus::Working
+        && matches!(
+            stored,
+            SessionStatus::Working | SessionStatus::WaitingForInput
+        )
         && detection.status == SessionStatus::Ready
         && detection.reason == Some(SessionStatusReason::TurnComplete))
     .then_some(SessionStatus::Ready)
@@ -5244,6 +5248,7 @@ fn detect_session_statuses_blocking(
     };
 
     let mut promoted_auto_title = false;
+    let mut reconciled_hook_status = false;
     let entries: Vec<SessionStatusEntry> = ids
         .into_iter()
         .map(|id| {
@@ -5327,10 +5332,11 @@ fn detect_session_statuses_blocking(
             let live_agent = root_pid_value
                 .and_then(|pid| live_agent_in_descendants(&sys, &children, Pid::from_u32(pid)));
             let live_agent_kind = live_agent.map(|(kind, _)| kind);
-            let live_codex_tool_child = matches!(live_agent_kind, Some(AgentKind::Codex))
-                && root_pid_value.is_some_and(|pid| {
-                    live_codex_has_tool_descendant(&sys, &children, Pid::from_u32(pid))
-                });
+            let live_agent_tool_child = live_agent.is_some_and(|agent| {
+                root_pid_value.is_some_and(|pid| {
+                    live_agent_has_tool_descendant(&sys, &children, Pid::from_u32(pid), agent)
+                })
+            });
             // Resolve the live transcript via the persister's resume markers
             // first (covers claude/codex/antigravity run inside a shell session — JSONL
             // is named after the agent's own UUID, not Acorn's). When the PTY
@@ -5424,20 +5430,19 @@ fn detect_session_statuses_blocking(
                     )
                 });
                 if let (Some(uuid), Some(reconciled)) = (parsed_id, reconciled) {
-                    let _ = state.sessions.refresh_status(&uuid, reconciled);
+                    reconciled_hook_status |=
+                        state.sessions.refresh_status(&uuid, reconciled).is_ok();
                 }
                 let hook_status = reconciled.unwrap_or(stored);
-                // Codex can report a resting status while a background terminal
-                // command is still alive. Keep the UI Working until it exits.
-                if matches!(
+                // A permission request is resolved before Claude launches the
+                // approved tool, and Codex can finish its main turn while a
+                // background command remains alive. In both cases the live
+                // child process is stronger evidence than the resting hook.
+                hook_status_with_live_tool_activity(
                     hook_status,
-                    SessionStatus::Ready | SessionStatus::WaitingForInput
-                ) && live_codex_tool_child
-                {
-                    SessionStatus::Working
-                } else {
-                    hook_status
-                }
+                    live_agent_kind,
+                    live_agent_tool_child,
+                )
             } else {
                 detection.status
             };
@@ -5498,7 +5503,7 @@ fn detect_session_statuses_blocking(
         .collect();
     // Promotion must survive an app restart — without the save a session
     // would silently fall back to ineligible until the agent runs again.
-    if promoted_auto_title {
+    if promoted_auto_title || reconciled_hook_status {
         persist(&state);
     }
     Ok(entries)
@@ -5693,23 +5698,41 @@ fn live_agent_in_descendants(
     Some((kind, found_pid?))
 }
 
-fn live_codex_has_tool_descendant(
+fn live_agent_has_tool_descendant(
     sys: &System,
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
+    agent: (AgentKind, Pid),
 ) -> bool {
     has_unignored_descendant_below_nearest_matching(
         children,
         root,
+        |pid| pid == agent.1,
         |pid| {
-            sys.process(pid)
-                .is_some_and(|proc| process_primary_basename_matches(proc, "codex"))
-        },
-        |pid| {
-            sys.process(pid)
-                .is_some_and(is_codex_persistent_helper_process)
+            agent.0 == AgentKind::Codex
+                && sys
+                    .process(pid)
+                    .is_some_and(is_codex_persistent_helper_process)
         },
     )
+}
+
+fn hook_status_with_live_tool_activity(
+    hook_status: SessionStatus,
+    live_agent_kind: Option<AgentKind>,
+    live_tool_child: bool,
+) -> SessionStatus {
+    if live_tool_child
+        && matches!(live_agent_kind, Some(AgentKind::Claude | AgentKind::Codex))
+        && matches!(
+            hook_status,
+            SessionStatus::Ready | SessionStatus::WaitingForInput
+        )
+    {
+        SessionStatus::Working
+    } else {
+        hook_status
+    }
 }
 
 fn is_codex_persistent_helper_process(proc: &sysinfo::Process) -> bool {
