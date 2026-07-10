@@ -76,6 +76,7 @@ import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
 import {
+  FOLDER_PERMISSION_RECHECK_EVENT,
   hasDeniedFolderPermission,
   isMacPlatform,
   type FolderPermissionWarmupResult,
@@ -832,28 +833,44 @@ function App() {
     const platform = navigator.platform;
     if (!isMacPlatform(platform)) return;
 
-    const auditKey = platform;
-    let audit = permissionWarmupAuditRef.current;
-    if (!audit || audit.key !== auditKey) {
-      audit = {
-        key: auditKey,
-        promise: api.warmMacosFolderPermissions(),
-      };
-      permissionWarmupAuditRef.current = audit;
-    }
-
     let cancelled = false;
-    void audit.promise
-      .then((results) => {
-        if (cancelled || !hasDeniedFolderPermission(results)) return;
-        setPermissionWarmupInitialResults(results);
-        setPermissionWarmupOpen(true);
-      })
-      .catch((err) => {
-        console.warn("[App] folder permission audit failed", err);
-      });
+    const auditKey = platform;
+    const runAudit = () => {
+      let audit = permissionWarmupAuditRef.current;
+      if (!audit || audit.key !== auditKey) {
+        const promise = api.warmMacosFolderPermissions();
+        audit = { key: auditKey, promise };
+        permissionWarmupAuditRef.current = audit;
+        const clearAudit = () => {
+          if (permissionWarmupAuditRef.current?.promise === promise) {
+            permissionWarmupAuditRef.current = null;
+          }
+        };
+        void promise.then(clearAudit, clearAudit);
+      }
+
+      void audit.promise
+        .then((results) => {
+          if (cancelled || !hasDeniedFolderPermission(results)) return;
+          setPermissionWarmupInitialResults(results);
+          setPermissionWarmupOpen(true);
+        })
+        .catch((err) => {
+          console.warn("[App] folder permission audit failed", err);
+        });
+    };
+    const onPermissionRecheck = () => runAudit();
+    window.addEventListener(
+      FOLDER_PERMISSION_RECHECK_EVENT,
+      onPermissionRecheck,
+    );
+    runAudit();
     return () => {
       cancelled = true;
+      window.removeEventListener(
+        FOLDER_PERMISSION_RECHECK_EVENT,
+        onPermissionRecheck,
+      );
     };
   }, []);
 

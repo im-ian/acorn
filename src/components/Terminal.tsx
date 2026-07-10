@@ -88,6 +88,10 @@ import {
   useSettings,
   type TerminalLinkActivation,
 } from "../lib/settings";
+import {
+  createFolderPermissionOutputDetector,
+  FOLDER_PERMISSION_RECHECK_EVENT,
+} from "../lib/permissionWarmup";
 import { buildXtermTheme } from "../lib/terminalTheme";
 import { useThemes, type ThemeMode } from "../lib/themes";
 import type { SessionAgentDetection, SessionAgentProvider } from "../lib/types";
@@ -2460,8 +2464,13 @@ export function Terminal({
     // collision then orphans one PTY, which exits and triggers the second
     // PTY to also exit (zsh prints "Saving session..." twice). Guard every
     // await resumption point so a disposed mount short-circuits cleanly.
+    const folderPermissionOutputDetector =
+      createFolderPermissionOutputDetector();
     const handlePtyOutput = (bytes: Uint8Array) => {
       outputWriter.enqueue(bytes);
+      if (folderPermissionOutputDetector.push(bytes)) {
+        window.dispatchEvent(new Event(FOLDER_PERMISSION_RECHECK_EVENT));
+      }
       // Output is queued for the buffer — schedule a debounced save so the new
       // content reaches disk ~1s after activity ends.
       scheduleScrollbackSave();
