@@ -300,6 +300,109 @@ test.describe("workspace kanban mode", () => {
     );
   });
 
+  test("tracks a PR in Panes before Kanban is opened after merge", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("pane-merge-runner", "pane merge runner", "ready", {
+        branch: "feat/pane-merge-runner",
+        status_reason: "turn_complete",
+        last_user_message: "Merge from the pane view",
+        last_user_message_at: "2026-01-02T00:00:00Z",
+        last_agent_message: "Merged and returned to main",
+        agent_activity_at: "2026-01-02T00:10:40Z",
+      }),
+    ]);
+    await tauri.handle("detect_session_statuses", (args) => {
+      const ids = Array.isArray((args as { ids?: unknown }).ids)
+        ? ((args as { ids: string[] }).ids)
+        : [];
+      const merged = (
+        window as unknown as { __paneMergeCompleted?: boolean }
+      ).__paneMergeCompleted;
+      return ids.map((id) => ({
+        id,
+        status: "ready",
+        status_reason: "turn_complete",
+        branch: merged ? "main" : "feat/pane-merge-runner",
+        last_user_message: "Merge from the pane view",
+        last_user_message_at: "2026-01-02T00:00:00Z",
+        last_agent_message: "Merged and returned to main",
+        agent_activity_at: "2026-01-02T00:10:40Z",
+      }));
+    });
+    await tauri.handle("list_pull_requests", () => {
+      const w = window as unknown as {
+        __paneMergeCompleted?: boolean;
+        __panePrQueries?: number;
+      };
+      w.__panePrQueries = (w.__panePrQueries ?? 0) + 1;
+      const merged = w.__paneMergeCompleted === true;
+      return {
+        kind: "ok",
+        account: "test",
+        items: [
+          {
+            number: 605,
+            title: "Track PRs outside Kanban",
+            state: merged ? "MERGED" : "OPEN",
+            author: "ian",
+            head_branch: "feat/pane-merge-runner",
+            base_branch: "main",
+            url: "https://github.com/im-ian/acorn/pull/605",
+            updated_at: "2026-01-02T00:10:13Z",
+            closed_at: merged ? "2026-01-02T00:10:13Z" : null,
+            merged_at: merged ? "2026-01-02T00:10:13Z" : null,
+            is_draft: false,
+            checks: null,
+            labels: [],
+          },
+        ],
+      };
+    });
+
+    await page.goto("/");
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Panes",
+    );
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (
+                window as unknown as { __panePrQueries?: number }
+              ).__panePrQueries ?? 0,
+          ),
+        { timeout: 5_000 },
+      )
+      .toBeGreaterThan(0);
+
+    await page.evaluate(() => {
+      (
+        window as unknown as { __paneMergeCompleted?: boolean }
+      ).__paneMergeCompleted = true;
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect(
+      page.getByRole("button", { name: /pane merge runner main/ }),
+    ).toBeVisible({ timeout: 5_000 });
+
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    const card = board.locator(
+      'section[aria-label="Done"] [data-kanban-session-id="pane-merge-runner"]',
+    );
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId("workspace-kanban-card-pr")).toContainText(
+      "#605",
+    );
+  });
+
   test("groups active workspace sessions by lifecycle and opens a card terminal popover", async ({
     page,
     tauri,
