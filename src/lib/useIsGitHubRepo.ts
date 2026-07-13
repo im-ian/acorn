@@ -5,31 +5,55 @@ import { api } from "./api";
  * Per-repo caches for the git-repo + GitHub origin probes. The results rarely
  * change during a session (only when the user runs `git init` or edits git
  * metadata), so we resolve once per repoPath and reuse across mounts.
- * Concurrent callers for the same repoPath share one in-flight promise.
+ * Concurrent callers for the same repoPath share one in-flight promise. The
+ * shared path registry evicts every cache layer together so removed worktrees
+ * cannot accumulate indefinitely or be restored by a stale promise.
  */
+const REPO_PROBE_CACHE_MAX_PATHS = 256;
 const gitRepoCache = new Map<string, boolean>();
 const gitRepoInFlight = new Map<string, Promise<boolean>>();
 const githubRepoCache = new Map<string, boolean>();
 const githubRepoInFlight = new Map<string, Promise<boolean>>();
-const generations = new Map<string, number>();
+const repoTokens = new Map<string, symbol>();
 
-function generationOf(repoPath: string): number {
-  return generations.get(repoPath) ?? 0;
+function removeRepoPath(repoPath: string): void {
+  repoTokens.delete(repoPath);
+  gitRepoCache.delete(repoPath);
+  gitRepoInFlight.delete(repoPath);
+  githubRepoCache.delete(repoPath);
+  githubRepoInFlight.delete(repoPath);
+}
+
+function trackRepoPath(repoPath: string): symbol {
+  const existing = repoTokens.get(repoPath);
+  if (existing) return existing;
+  while (repoTokens.size >= REPO_PROBE_CACHE_MAX_PATHS) {
+    const oldest = repoTokens.keys().next();
+    if (oldest.done) break;
+    removeRepoPath(oldest.value);
+  }
+  const token = Symbol(repoPath);
+  repoTokens.set(repoPath, token);
+  return token;
+}
+
+function isCurrentRepoToken(repoPath: string, token: symbol): boolean {
+  return repoTokens.get(repoPath) === token;
 }
 
 async function probeGitRepository(repoPath: string): Promise<boolean> {
+  const token = trackRepoPath(repoPath);
   const cached = gitRepoCache.get(repoPath);
   if (cached !== undefined) return cached;
   const existing = gitRepoInFlight.get(repoPath);
   if (existing) return existing;
-  const generation = generationOf(repoPath);
   const promise = api
     .isGitRepository(repoPath)
     .then((isGitRepo) => {
-      if (generationOf(repoPath) === generation) {
+      if (isCurrentRepoToken(repoPath, token)) {
         gitRepoCache.set(repoPath, isGitRepo);
       }
-      if (generationOf(repoPath) !== generation) return false;
+      if (!isCurrentRepoToken(repoPath, token)) return false;
       return isGitRepo;
     })
     .catch((error) => {
@@ -48,25 +72,25 @@ async function probeGitRepository(repoPath: string): Promise<boolean> {
 }
 
 async function probeGitHubRepo(repoPath: string): Promise<boolean> {
+  const token = trackRepoPath(repoPath);
   const cached = githubRepoCache.get(repoPath);
   if (cached !== undefined) return cached;
   const existing = githubRepoInFlight.get(repoPath);
   if (existing) return existing;
-  const generation = generationOf(repoPath);
   const promise = probeGitRepository(repoPath)
     .then(async (isGitRepo) => {
       if (!isGitRepo) {
-        if (generationOf(repoPath) === generation) {
+        if (isCurrentRepoToken(repoPath, token)) {
           githubRepoCache.set(repoPath, false);
         }
         return false;
       }
       const slug = await api.githubOriginSlug(repoPath);
       const value = slug !== null;
-      if (generationOf(repoPath) === generation) {
+      if (isCurrentRepoToken(repoPath, token)) {
         githubRepoCache.set(repoPath, value);
       }
-      if (generationOf(repoPath) !== generation) return false;
+      if (!isCurrentRepoToken(repoPath, token)) return false;
       return value;
     })
     .catch((error) => {
@@ -93,11 +117,7 @@ export function prefetchGitHubRepoStatus(repoPath: string): Promise<boolean> {
 }
 
 export function invalidateGitRepositoryStatus(repoPath: string): void {
-  gitRepoCache.delete(repoPath);
-  gitRepoInFlight.delete(repoPath);
-  githubRepoCache.delete(repoPath);
-  githubRepoInFlight.delete(repoPath);
-  generations.set(repoPath, generationOf(repoPath) + 1);
+  removeRepoPath(repoPath);
 }
 
 export function invalidateGitHubRepoStatus(repoPath: string): void {
@@ -182,5 +202,5 @@ export function __resetIsGitHubRepoCacheForTests(): void {
   gitRepoInFlight.clear();
   githubRepoCache.clear();
   githubRepoInFlight.clear();
-  generations.clear();
+  repoTokens.clear();
 }
