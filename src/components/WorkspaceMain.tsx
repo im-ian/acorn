@@ -2435,19 +2435,28 @@ function KanbanTerminalPopover({
               <RotateCcw size={14} />
             </IconButton>
           </Tooltip>
-          <IconButton
-            aria-label={t(
+          <Tooltip
+            label={t(
               isExpanded
                 ? "workspace.kanban.terminalPopover.restore"
                 : "workspace.kanban.terminalPopover.expand",
             )}
-            data-testid="kanban-terminal-popover-expand"
-            onClick={() => setIsExpanded((current) => !current)}
-            size="sm"
-            surface="panel"
+            side="bottom"
           >
-            {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-          </IconButton>
+            <IconButton
+              aria-label={t(
+                isExpanded
+                  ? "workspace.kanban.terminalPopover.restore"
+                  : "workspace.kanban.terminalPopover.expand",
+              )}
+              data-testid="kanban-terminal-popover-expand"
+              onClick={() => setIsExpanded((current) => !current)}
+              size="sm"
+              surface="panel"
+            >
+              {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </IconButton>
+          </Tooltip>
           <Tooltip
             label={t("dialogs.common.close")}
             shortcut={closeShortcut}

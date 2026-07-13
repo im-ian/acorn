@@ -165,6 +165,10 @@ test.describe("right panel: tab switching", () => {
     });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByLabel("loading diff...")).toBeVisible();
+    await dialog.getByRole("button", { name: "Close" }).hover();
+    await expect(
+      page.getByRole("tooltip", { name: "Close" }),
+    ).toBeVisible();
 
     await page.evaluate(() => {
       (window as unknown as { __releaseCommitDiff?: boolean })
@@ -205,7 +209,8 @@ test.describe("right panel: tab switching", () => {
       detail: {
         number: 42,
         title: "Render issue detail in app",
-        body: "Loaded issue body from gh.",
+        body:
+          "Loaded issue body from gh.\n\n![Issue screenshot](https://example.com/issue.png)",
         state: "OPEN",
         author: "im-ian",
         url: "https://github.com/im-ian/acorn/issues/42",
@@ -251,6 +256,27 @@ test.describe("right panel: tab switching", () => {
     const comments = dialog.locator("section ul > li");
     await expect(comments.nth(0)).toContainText("Older in-app issue comment.");
     await expect(comments.nth(1)).toContainText("Newer in-app issue comment.");
+
+    await dialog.getByRole("img", { name: "Issue screenshot" }).click();
+    const imagePreview = page.getByRole("dialog", { name: "Image preview" });
+    await expect(imagePreview).toBeVisible();
+    await imagePreview
+      .getByRole("button", { name: "Open in browser" })
+      .hover();
+    await expect(
+      page.getByRole("tooltip", { name: "Open in browser" }),
+    ).toBeVisible();
+    await imagePreview.getByRole("button", { name: "Close" }).hover();
+    await expect(
+      page.getByRole("tooltip", { name: "Close" }),
+    ).toBeVisible();
+    await imagePreview.getByRole("button", { name: "Close" }).click();
+    await expect(imagePreview).toHaveCount(0);
+
+    await dialog.getByRole("button", { name: "Close" }).hover();
+    await expect(
+      page.getByRole("tooltip", { name: "Close" }),
+    ).toBeVisible();
 
     await dialog.getByRole("button", { name: "Oldest first" }).click();
     await expect(comments.nth(0)).toContainText("Newer in-app issue comment.");
