@@ -219,6 +219,11 @@ describe("RightPanel background tab loading", () => {
   let root: Root;
 
   beforeEach(() => {
+    (
+      globalThis as typeof globalThis & {
+        IS_REACT_ACT_ENVIRONMENT?: boolean;
+      }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
     vi.useFakeTimers();
     rightPanelCache.resetForTests();
     __resetIsGitHubRepoCacheForTests();
@@ -883,6 +888,41 @@ describe("RightPanel background tab loading", () => {
 
     expect(container.textContent).toContain("6s");
     expect(mockApi.listWorkflowRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not tick running Actions durations while the tab is hidden", async () => {
+    useAppStore.setState({ rightTab: "prs" });
+    mockApi.listWorkflowRuns.mockResolvedValue({
+      kind: "ok",
+      account: "tester",
+      items: [
+        {
+          id: 42,
+          display_title: "Run CI",
+          workflow_name: "CI",
+          status: "in_progress",
+          conclusion: null,
+          event: "pull_request",
+          head_branch: "feature",
+          head_sha: "abc1234",
+          url: "https://github.com/im-ian/acorn/actions/runs/42",
+          created_at: "2026-05-19T11:59:50Z",
+          updated_at: "2026-05-19T12:00:05Z",
+          started_at: "2026-05-19T12:00:00Z",
+          attempt: 1,
+        },
+      ],
+    });
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(
+      setIntervalSpy.mock.calls.filter(([, intervalMs]) => intervalMs === 1_000),
+    ).toHaveLength(0);
   });
 
   it("ignores GitHub zero completedAt sentinels for running Actions jobs", async () => {
