@@ -609,14 +609,19 @@ mod tests {
     }
 
     #[test]
-    fn codex_conversation_preview_skips_goal_internal_context() {
-        let base = ScratchDir::new("codex-goal-preview");
+    fn codex_conversation_preview_skips_internal_control_messages() {
+        let base = ScratchDir::new("codex-control-preview");
         let path = base.path().join("rollout.jsonl");
         fs::write(
             &path,
             r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Implement the kanban preview fix."}]}}
 {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect the transcript parser."}]}}
 {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<codex_internal_context source=\"goal\">\nThe user set an active goal.\n</codex_internal_context>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<turn_aborted>\nThe user intentionally interrupted the previous turn.\n</turn_aborted>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<subagent_notification>\nA background task completed.\n</subagent_notification>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>\nInternal plugin recommendations.\n</recommended_plugins>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<user_shell_command>\nShell command metadata.\n</user_shell_command>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<user_action>\nInternal action metadata.\n</user_action>"}]}}
 "#,
         )
         .unwrap();
