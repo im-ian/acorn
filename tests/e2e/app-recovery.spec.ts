@@ -7,6 +7,14 @@ test.describe("app recovery", () => {
   }) => {
     errorTracker.allow(/cannot read properties of undefined/i);
     await page.addInitScript(() => {
+      if (window.sessionStorage.getItem("acorn:test:legacy-state-seeded")) {
+        return;
+      }
+      window.sessionStorage.setItem("acorn:test:legacy-state-seeded", "1");
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ language: "ko" }),
+      );
       window.localStorage.setItem(
         "acorn-workspaces",
         JSON.stringify({
@@ -30,18 +38,35 @@ test.describe("app recovery", () => {
     await expect(
       page.getByRole("heading", { name: "Acorn을 열지 못했습니다" }),
     ).toBeVisible();
-    await expect(page.getByText("저장된 세션과 프로젝트는 삭제되지 않습니다"))
-      .toBeVisible();
+    await expect(
+      page.getByText(
+        "터미널 세션과 프로젝트 자체는 삭제되지 않고, 화면 배치와 폴더 구성만 초기화됩니다.",
+      ),
+    ).toBeVisible();
 
     await page
       .getByRole("button", { name: "화면 설정 초기화 후 다시 열기" })
       .click();
 
-    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: /^(Projects|프로젝트)$/ }),
+    ).toBeVisible();
     await expect
       .poll(() =>
-        page.evaluate(() => window.localStorage.getItem("acorn-workspaces")),
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn-workspaces");
+          if (!raw) return null;
+          const parsed = JSON.parse(raw) as {
+            state?: { workspaces?: Record<string, unknown> };
+          };
+          return parsed.state?.workspaces ?? null;
+        }),
       )
-      .toBeNull();
+      .toEqual({});
+    await expect
+      .poll(() =>
+        page.evaluate(() => window.localStorage.getItem("acorn:settings:v1")),
+      )
+      .not.toBeNull();
   });
 });
