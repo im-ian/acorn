@@ -54,12 +54,31 @@ pub fn apply_agent_hook_event(
     let session = sessions
         .get(&event.session_id)
         .map_err(|_| format!("session not found: {}", event.session_id))?;
+    // A terminal can carry stale live-provider metadata from a resting agent.
+    // Accept a provider switch only from a resting session; while the owner is
+    // Working, mismatched provider events are nested agent activity.
     if let Some(provider) = session.agent_provider {
         if provider != event.provider {
-            return Err(format!(
-                "provider mismatch for {}: expected {:?}, got {:?}",
-                event.session_id, provider, event.provider
-            ));
+            let provider_switch_from_resting_session = event.event == AgentHookEventKind::Start
+                && session.status != SessionStatus::Working;
+            if !provider_switch_from_resting_session {
+                return Err(format!(
+                    "provider mismatch for {}: expected {:?}, got {:?}",
+                    event.session_id, provider, event.provider
+                ));
+            }
+        }
+    }
+    if let Some(provider) = session.hook_provider {
+        if provider != event.provider {
+            let provider_switch_from_resting_session = event.event == AgentHookEventKind::Start
+                && session.status != SessionStatus::Working;
+            if !provider_switch_from_resting_session {
+                return Err(format!(
+                    "hook provider mismatch for {}: expected {:?}, got {:?}",
+                    event.session_id, provider, event.provider
+                ));
+            }
         }
     }
 
@@ -67,7 +86,7 @@ pub fn apply_agent_hook_event(
     // turn-boundary classification to these events instead of clobbering a
     // just-set resting status (Ready/WaitingForInput) back to Working on its
     // next tick. See `poll_defers_to_hook` in `commands`.
-    sessions.mark_hook_active(&event.session_id);
+    sessions.mark_hook_active(&event.session_id, event.provider);
 
     // The Codex JSONL watcher tags task and exec starts separately. This
     // runtime-only turn evidence lets the process poll distinguish a real
@@ -462,6 +481,88 @@ mod tests {
             sessions.get(&session_id).expect("session").status,
             SessionStatus::WaitingForInput
         );
+        assert_eq!(
+            sessions.hook_provider(&session_id),
+            Some(SessionAgentProvider::Codex)
+        );
+        assert_eq!(
+            sessions.get(&session_id).expect("session").agent_provider,
+            Some(SessionAgentProvider::Codex)
+        );
+    }
+
+    #[test]
+    fn apply_agent_hook_event_accepts_provider_switch_from_resting_session() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Agent".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.status = SessionStatus::Ready;
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.hook_provider = Some(SessionAgentProvider::Codex);
+        let session_id = session.id;
+        sessions.insert(session);
+
+        let status = apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Claude,
+                event: AgentHookEventKind::Start,
+                message: None,
+                source: Some("hook".to_string()),
+            },
+        )
+        .expect("resting provider switch applies");
+
+        let stored = sessions.get(&session_id).expect("session");
+        assert_eq!(status, SessionStatus::Working);
+        assert_eq!(stored.status, SessionStatus::Working);
+        assert_eq!(stored.agent_provider, Some(SessionAgentProvider::Claude));
+        assert_eq!(
+            sessions.hook_provider(&session_id),
+            Some(SessionAgentProvider::Claude)
+        );
+    }
+
+    #[test]
+    fn apply_agent_hook_event_rejects_nested_provider_while_owner_is_working() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Agent".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.status = SessionStatus::Working;
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.hook_provider = Some(SessionAgentProvider::Codex);
+        let session_id = session.id;
+        sessions.insert(session);
+
+        let err = apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Claude,
+                event: AgentHookEventKind::Start,
+                message: None,
+                source: Some("hook".to_string()),
+            },
+        )
+        .expect_err("nested provider event is rejected");
+
+        assert!(err.contains("provider mismatch"));
+        let stored = sessions.get(&session_id).expect("session");
+        assert_eq!(stored.status, SessionStatus::Working);
+        assert_eq!(stored.agent_provider, Some(SessionAgentProvider::Codex));
     }
 
     #[test]

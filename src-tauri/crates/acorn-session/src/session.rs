@@ -290,6 +290,11 @@ pub struct Session {
     /// new app instance (a resting agent may never emit one).
     #[serde(default)]
     pub hook_active: bool,
+    /// Provider whose lifecycle hooks own the session status. Kept with
+    /// `hook_active` so one provider's hook state does not mask a different
+    /// Claude/Codex/Antigravity run in the same terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_provider: Option<SessionAgentProvider>,
     /// Derived from status polling. This reflects the currently live
     /// Claude/Codex/Antigravity process under the session PTY and is not
     /// persisted in sessions.json.
@@ -333,6 +338,7 @@ impl Session {
             daemon_session_id: None,
             agent_resume_token: None,
             hook_active: false,
+            hook_provider: None,
             in_worktree: false,
             agent_provider: None,
             agent_transcript_id: None,
@@ -473,7 +479,7 @@ impl SessionStore {
     /// the session's persisted `hook_active` flag so hook ownership survives
     /// an app restart. The persisted flag is idempotent; the runtime revision
     /// advances for every event.
-    pub fn mark_hook_active(&self, id: &Uuid) {
+    pub fn mark_hook_active(&self, id: &Uuid, provider: SessionAgentProvider) {
         {
             let mut revision = self.hook_revisions.entry(*id).or_default();
             *revision = revision.saturating_add(1);
@@ -485,6 +491,8 @@ impl SessionStore {
                 // not reshuffle the sidebar's most-recent-first ordering.
                 entry.hook_active = true;
             }
+            entry.hook_provider = Some(provider);
+            entry.agent_provider = Some(provider);
         }
     }
 
@@ -516,6 +524,10 @@ impl SessionStore {
                 .get(id)
                 .map(|entry| entry.hook_active)
                 .unwrap_or(false)
+    }
+
+    pub fn hook_provider(&self, id: &Uuid) -> Option<SessionAgentProvider> {
+        self.inner.get(id).and_then(|entry| entry.hook_provider)
     }
 
     /// Whether `id` reported an agent lifecycle hook event *this run* — an
@@ -774,17 +786,26 @@ mod tests {
         assert!(!store.is_hook_active(&session.id));
         assert!(!store.is_hook_confirmed_this_run(&session.id));
 
-        store.mark_hook_active(&session.id);
+        store.mark_hook_active(&session.id, SessionAgentProvider::Codex);
         assert!(store.is_hook_active(&session.id));
         assert!(store.is_hook_confirmed_this_run(&session.id));
+        assert_eq!(
+            store.hook_provider(&session.id),
+            Some(SessionAgentProvider::Codex)
+        );
         assert_eq!(store.hook_revision(&session.id), 1);
-        store.mark_hook_active(&session.id);
+        store.mark_hook_active(&session.id, SessionAgentProvider::Claude);
         assert!(store.is_hook_active(&session.id));
+        assert_eq!(
+            store.hook_provider(&session.id),
+            Some(SessionAgentProvider::Claude)
+        );
         assert_eq!(store.hook_revision(&session.id), 2);
 
         store.remove(&session.id).expect("session exists");
         assert!(!store.is_hook_active(&session.id));
         assert!(!store.is_hook_confirmed_this_run(&session.id));
+        assert_eq!(store.hook_provider(&session.id), None);
         assert_eq!(store.hook_revision(&session.id), 0);
     }
 
@@ -826,7 +847,7 @@ mod tests {
         store
             .refresh_status(&session.id, SessionStatus::WaitingForInput)
             .expect("session exists");
-        store.mark_hook_active(&session.id);
+        store.mark_hook_active(&session.id, SessionAgentProvider::Codex);
 
         assert!(!store
             .refresh_status_if_hook_revision(
@@ -867,9 +888,10 @@ mod tests {
         let store = SessionStore::new();
         let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
 
-        store.mark_hook_active(&session.id);
+        store.mark_hook_active(&session.id, SessionAgentProvider::Claude);
         let marked = store.get(&session.id).expect("session exists");
         assert!(marked.hook_active);
+        assert_eq!(marked.hook_provider, Some(SessionAgentProvider::Claude));
 
         // Simulate an app restart: serialize, load into a fresh store.
         let json = serde_json::to_string(&marked).expect("session serializes");
@@ -881,6 +903,10 @@ mod tests {
         // confirmed against the new run's hook server yet.
         assert!(fresh.is_hook_active(&session.id));
         assert!(!fresh.is_hook_confirmed_this_run(&session.id));
+        assert_eq!(
+            fresh.hook_provider(&session.id),
+            Some(SessionAgentProvider::Claude)
+        );
     }
 
     #[test]
@@ -893,6 +919,7 @@ mod tests {
             .remove("hook_active");
         let reloaded: Session = serde_json::from_value(value).expect("legacy session deserializes");
         assert!(!reloaded.hook_active);
+        assert_eq!(reloaded.hook_provider, None);
     }
 
     #[test]
