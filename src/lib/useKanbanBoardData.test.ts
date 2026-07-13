@@ -165,7 +165,6 @@ describe("kanbanSessionBoardLookupPath", () => {
   });
 });
 
-<<<<<<< HEAD
 describe("kanbanSessionPullRequestLookupPath", () => {
   function session(overrides: Partial<Session> = {}): Session {
     return {
