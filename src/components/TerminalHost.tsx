@@ -70,6 +70,9 @@ export function TerminalHost() {
   // Mounted session ids ordered least-recently-visible → most-recent. Drives
   // which terminals the eviction policy sheds first when over the mount cap.
   const recencyRef = useRef<string[]>([]);
+  const daemonEvictionProbeRef = useRef<
+    ReturnType<typeof api.daemonListSessions> | null
+  >(null);
   useEffect(() => {
     const next = recencyRef.current.filter((id) => terminalSessionIds.has(id));
     for (const id of visibleSessionIds) {
@@ -95,7 +98,17 @@ export function TerminalHost() {
     void (async () => {
       let daemonAlive: Set<string>;
       try {
-        const summaries = await api.daemonListSessions();
+        let probe = daemonEvictionProbeRef.current;
+        if (!probe) {
+          const promise = api.daemonListSessions().finally(() => {
+            if (daemonEvictionProbeRef.current === promise) {
+              daemonEvictionProbeRef.current = null;
+            }
+          });
+          daemonEvictionProbeRef.current = promise;
+          probe = promise;
+        }
+        const summaries = await probe;
         daemonAlive = new Set(
           summaries.filter((s) => s.alive).map((s) => s.id),
         );
