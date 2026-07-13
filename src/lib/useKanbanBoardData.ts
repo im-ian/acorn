@@ -220,6 +220,10 @@ export function useKanbanBoardData(
   );
   const prRequestSeqRef = useRef(new Map<string, number>());
   const diffRefreshSeqRef = useRef(0);
+  const diffRefreshInFlightRef = useRef<{
+    key: string;
+    promise: Promise<void>;
+  } | null>(null);
 
   // Key effects off stable string identities so a store-driven sessions array
   // with unchanged membership does not restart the polls. Newline separator:
@@ -324,48 +328,61 @@ export function useKanbanBoardData(
       return;
     }
 
-    const refresh = async () => {
-      const requestSeq = ++diffRefreshSeqRef.current;
-      const entries = worktreeEntriesRef.current;
-      const summaries = await Promise.all(
-        entries.map(async ({ sessionId, repoPath }) => {
-          try {
-            const status = await api.fsGitStatus(repoPath);
-            const entries = diffStatsEntries(status.statuses);
-            const stats =
-              entries.length > 0
-                ? await api.fsGitDiffStats(repoPath, entries)
-                : {};
-            return {
-              kind: "ok" as const,
-              sessionId,
-              summary: summarizeDiffStats(entries, stats),
-            };
-          } catch {
-            // Deleted worktree, non-git path, or transient backend failure.
-            // Preserve any previous successful summary instead of marking the
-            // session clean from missing data.
-            return { kind: "error" as const, sessionId };
-          }
-        }),
-      );
-      if (cancelled || diffRefreshSeqRef.current !== requestSeq) return;
-      setDiffBySession((previous) => {
-        const next = new Map<string, DiffSummary>();
-        const summaryBySession = new Map(
-          summaries.map((summary) => [summary.sessionId, summary]),
+    const refresh = (): Promise<void> => {
+      const existing = diffRefreshInFlightRef.current;
+      if (existing?.key === worktreeKey) return existing.promise;
+
+      const run = async () => {
+        const requestSeq = ++diffRefreshSeqRef.current;
+        const entries = worktreeEntriesRef.current;
+        const summaries = await Promise.all(
+          entries.map(async ({ sessionId, repoPath }) => {
+            try {
+              const status = await api.fsGitStatus(repoPath);
+              const entries = diffStatsEntries(status.statuses);
+              const stats =
+                entries.length > 0
+                  ? await api.fsGitDiffStats(repoPath, entries)
+                  : {};
+              return {
+                kind: "ok" as const,
+                sessionId,
+                summary: summarizeDiffStats(entries, stats),
+              };
+            } catch {
+              // Deleted worktree, non-git path, or transient backend failure.
+              // Preserve any previous successful summary instead of marking the
+              // session clean from missing data.
+              return { kind: "error" as const, sessionId };
+            }
+          }),
         );
-        for (const { sessionId } of entries) {
-          const result = summaryBySession.get(sessionId);
-          if (!result) continue;
-          if (result.kind === "ok") {
-            next.set(sessionId, result.summary);
-          } else if (previous.has(sessionId)) {
-            next.set(sessionId, previous.get(sessionId)!);
+        if (cancelled || diffRefreshSeqRef.current !== requestSeq) return;
+        setDiffBySession((previous) => {
+          const next = new Map<string, DiffSummary>();
+          const summaryBySession = new Map(
+            summaries.map((summary) => [summary.sessionId, summary]),
+          );
+          for (const { sessionId } of entries) {
+            const result = summaryBySession.get(sessionId);
+            if (!result) continue;
+            if (result.kind === "ok") {
+              next.set(sessionId, result.summary);
+            } else if (previous.has(sessionId)) {
+              next.set(sessionId, previous.get(sessionId)!);
+            }
           }
+          return next;
+        });
+      };
+
+      const promise = run().finally(() => {
+        if (diffRefreshInFlightRef.current?.promise === promise) {
+          diffRefreshInFlightRef.current = null;
         }
-        return next;
       });
+      diffRefreshInFlightRef.current = { key: worktreeKey, promise };
+      return promise;
     };
 
     void refresh();
