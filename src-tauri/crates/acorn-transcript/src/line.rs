@@ -640,6 +640,7 @@ fn looks_like_preview_context_block(text: &str) -> bool {
     let lower = text.trim_start().to_ascii_lowercase();
     lower.starts_with("<environment_context>")
         || lower.starts_with("<cwd>")
+        || lower.starts_with("<codex_internal_context")
         || lower.starts_with("# agents.md instructions for ")
         || lower.starts_with("<instructions>")
         || looks_like_skill_context_block(text)
