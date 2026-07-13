@@ -26,7 +26,7 @@ const COMMIT_DIFF_CACHE_MAX_ENTRIES = 16;
 
 class RightPanelCacheManager {
   private retainedRepos: Set<string> | null = null;
-  private repoVersions = new Map<string, number>();
+  private repoTokens = new Map<string, symbol>();
   private prefetchedProjectRepos = new Set<string>();
   private agentHistoryCache = new Map<string, AgentHistoryItem[]>();
   private agentHistoryInFlight = new Map<string, Promise<AgentHistoryItem[]>>();
@@ -55,29 +55,8 @@ class RightPanelCacheManager {
 
   retainRepos(repoPaths: Iterable<string>): void {
     const next = new Set(repoPaths);
-    const removed = new Set<string>();
-    if (this.retainedRepos) {
-      for (const repoPath of this.retainedRepos) {
-        if (!next.has(repoPath)) removed.add(repoPath);
-      }
-    }
-    this.collectRemovedStringKeys(this.agentHistoryCache, next, removed);
-    this.collectRemovedStringKeys(this.agentHistoryInFlight, next, removed);
-    this.collectRemovedStringKeys(this.commitsCache, next, removed);
-    this.collectRemovedStringKeys(this.stagedCache, next, removed);
-    this.collectRemovedStringKeys(this.fileExplorerExpanded, next, removed);
-    this.collectRemovedStringValues(this.prefetchedProjectRepos, next, removed);
-    this.collectRemovedJsonKeys(this.prListCache, next, removed);
-    this.collectRemovedJsonKeys(this.prListInFlight, next, removed);
-    this.collectRemovedJsonKeys(this.issueListCache, next, removed);
-    this.collectRemovedJsonKeys(this.issueListInFlight, next, removed);
-    this.collectRemovedJsonKeys(this.workflowRunsCache, next, removed);
-    this.collectRemovedJsonKeys(this.workflowRunsInFlight, next, removed);
-    this.collectRemovedJsonKeys(this.commitDiffCache, next, removed);
-    this.collectRemovedJsonKeys(this.commitDiffInFlight, next, removed);
-    for (const repoPath of removed) this.bumpRepoVersion(repoPath);
-
     this.retainedRepos = next;
+    this.pruneStringKeyedMap(this.repoTokens, next);
     this.pruneStringKeyedMap(this.agentHistoryCache, next);
     this.pruneStringKeyedMap(this.agentHistoryInFlight, next);
     this.pruneStringKeyedMap(this.commitsCache, next);
@@ -111,11 +90,11 @@ class RightPanelCacheManager {
     if (cached && !options.force) return Promise.resolve(cached);
     const existing = this.agentHistoryInFlight.get(repoPath);
     if (existing) return existing;
-    const version = this.repoVersion(repoPath);
+    const version = this.repoToken(repoPath);
     const promise = api
       .listAgentHistory(repoPath, 100)
       .then((items) => {
-        if (this.isCurrentRepoVersion(repoPath, version)) {
+        if (this.isCurrentRepoToken(repoPath, version)) {
           this.agentHistoryCache.set(repoPath, items);
         }
         return items;
@@ -179,11 +158,11 @@ class RightPanelCacheManager {
     if (cached) return Promise.resolve(cached);
     const existing = this.commitDiffInFlight.get(key);
     if (existing) return existing;
-    const version = this.repoVersion(repoPath);
+    const version = this.repoToken(repoPath);
     const promise = api
       .commitDiff(repoPath, sha)
       .then((payload) => {
-        if (this.isCurrentRepoVersion(repoPath, version)) {
+        if (this.isCurrentRepoToken(repoPath, version)) {
           this.storeCommitDiff(key, payload);
         }
         return payload;
@@ -234,15 +213,15 @@ class RightPanelCacheManager {
     if (cached && !options.force) return Promise.resolve(cached);
     if (options.force) {
       this.prListCache.delete(key);
-      this.bumpRepoVersion(repoPath);
+      this.bumpRepoToken(repoPath);
     }
     const existing = this.prListInFlight.get(key);
     if (existing && !options.force) return existing;
-    const version = this.repoVersion(repoPath);
+    const version = this.repoToken(repoPath);
     const promise = api
       .listPullRequests(repoPath, filter, limit)
       .then((result) => {
-        if (this.isCurrentRepoVersion(repoPath, version)) {
+        if (this.isCurrentRepoToken(repoPath, version)) {
           this.prListCache.set(key, result);
         }
         return result;
@@ -257,7 +236,7 @@ class RightPanelCacheManager {
   }
 
   invalidatePullRequests(repoPath: string): void {
-    this.bumpRepoVersion(repoPath);
+    this.bumpRepoToken(repoPath);
     this.deleteJsonKeysForRepo(this.prListCache, repoPath);
     this.deleteJsonKeysForRepo(this.prListInFlight, repoPath);
   }
@@ -281,11 +260,11 @@ class RightPanelCacheManager {
     if (cached && !options.force) return Promise.resolve(cached);
     const existing = this.issueListInFlight.get(key);
     if (existing) return existing;
-    const version = this.repoVersion(repoPath);
+    const version = this.repoToken(repoPath);
     const promise = api
       .listIssues(repoPath, filter, limit)
       .then((result) => {
-        if (this.isCurrentRepoVersion(repoPath, version)) {
+        if (this.isCurrentRepoToken(repoPath, version)) {
           this.issueListCache.set(key, result);
         }
         return result;
@@ -313,11 +292,11 @@ class RightPanelCacheManager {
     if (cached && !options.force) return Promise.resolve(cached);
     const existing = this.workflowRunsInFlight.get(key);
     if (existing) return existing;
-    const version = this.repoVersion(repoPath);
+    const version = this.repoToken(repoPath);
     const promise = api
       .listWorkflowRuns(repoPath, limit)
       .then((result) => {
-        if (this.isCurrentRepoVersion(repoPath, version)) {
+        if (this.isCurrentRepoToken(repoPath, version)) {
           this.workflowRunsCache.set(key, result);
         }
         return result;
@@ -333,7 +312,7 @@ class RightPanelCacheManager {
 
   resetForTests(): void {
     this.retainedRepos = null;
-    this.repoVersions.clear();
+    this.repoTokens.clear();
     this.prefetchedProjectRepos.clear();
     this.agentHistoryCache.clear();
     this.agentHistoryInFlight.clear();
@@ -352,20 +331,32 @@ class RightPanelCacheManager {
     this.commitDiffInFlight.clear();
   }
 
+  repoInvalidationEntryCountForTests(): number {
+    return this.repoTokens.size;
+  }
+
   private canStore(repoPath: string): boolean {
     return this.retainedRepos === null || this.retainedRepos.has(repoPath);
   }
 
-  private repoVersion(repoPath: string): number {
-    return this.repoVersions.get(repoPath) ?? 0;
+  private repoToken(repoPath: string): symbol {
+    const existing = this.repoTokens.get(repoPath);
+    if (existing) return existing;
+    const token = Symbol();
+    if (this.canStore(repoPath)) this.repoTokens.set(repoPath, token);
+    return token;
   }
 
-  private isCurrentRepoVersion(repoPath: string, version: number): boolean {
-    return this.repoVersion(repoPath) === version;
+  private isCurrentRepoToken(repoPath: string, token: symbol): boolean {
+    return this.canStore(repoPath) && this.repoTokens.get(repoPath) === token;
   }
 
-  private bumpRepoVersion(repoPath: string): void {
-    this.repoVersions.set(repoPath, this.repoVersion(repoPath) + 1);
+  private bumpRepoToken(repoPath: string): void {
+    if (this.canStore(repoPath)) {
+      this.repoTokens.set(repoPath, Symbol());
+    } else {
+      this.repoTokens.delete(repoPath);
+    }
   }
 
   private prListKey(
@@ -409,29 +400,9 @@ class RightPanelCacheManager {
     }
   }
 
-  private collectRemovedStringKeys<T>(
-    map: Map<string, T>,
-    retained: Set<string>,
-    removed: Set<string>,
-  ): void {
-    for (const key of map.keys()) {
-      if (!retained.has(key)) removed.add(key);
-    }
-  }
-
   private pruneStringKeyedSet(set: Set<string>, retained: Set<string>): void {
     for (const value of set) {
       if (!retained.has(value)) set.delete(value);
-    }
-  }
-
-  private collectRemovedStringValues(
-    set: Set<string>,
-    retained: Set<string>,
-    removed: Set<string>,
-  ): void {
-    for (const value of set) {
-      if (!retained.has(value)) removed.add(value);
     }
   }
 
@@ -440,18 +411,6 @@ class RightPanelCacheManager {
       if (!retained.has(this.repoFromJsonKey(key))) map.delete(key);
     }
   }
-
-  private collectRemovedJsonKeys<T>(
-    map: Map<string, T>,
-    retained: Set<string>,
-    removed: Set<string>,
-  ): void {
-    for (const key of map.keys()) {
-      const repoPath = this.repoFromJsonKey(key);
-      if (repoPath && !retained.has(repoPath)) removed.add(repoPath);
-    }
-  }
-
   private deleteJsonKeysForRepo<T>(map: Map<string, T>, repoPath: string): void {
     for (const key of map.keys()) {
       if (this.repoFromJsonKey(key) === repoPath) map.delete(key);

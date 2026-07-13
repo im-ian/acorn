@@ -255,6 +255,17 @@ describe("rightPanelCache", () => {
     expect(rightPanelCache.claimProjectPrefetch(REPO)).toBe(true);
   });
 
+  it("releases invalidation metadata when repositories are pruned", () => {
+    for (let index = 0; index < 300; index += 1) {
+      const repoPath = `/tmp/transient-repo-${index}`;
+      rightPanelCache.retainRepos([repoPath]);
+      rightPanelCache.invalidatePullRequests(repoPath);
+      rightPanelCache.retainRepos([]);
+    }
+
+    expect(rightPanelCache.repoInvalidationEntryCountForTests()).toBe(0);
+  });
+
   it("drops cached repo data when the repo is no longer retained", async () => {
     const history: AgentHistoryItem[] = [];
     const workflows: WorkflowRunsListing = {
