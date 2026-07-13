@@ -1,4 +1,36 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { act, createElement, StrictMode } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+
+const apiMocks = vi.hoisted(() => ({
+  fsGitDiffStats: vi.fn(),
+  fsGitStatus: vi.fn(),
+}));
+
+const cacheMocks = vi.hoisted(() => ({
+  fetchPullRequests: vi.fn(),
+}));
+
+vi.mock("./api", () => ({
+  api: {
+    fsGitDiffStats: apiMocks.fsGitDiffStats,
+    fsGitStatus: apiMocks.fsGitStatus,
+  },
+}));
+
+vi.mock("./right-panel-cache", () => ({
+  rightPanelCache: {
+    fetchPullRequests: cacheMocks.fetchPullRequests,
+  },
+}));
+
 import {
   diffStatsEntries,
   kanbanSessionBoardLookupPath,
@@ -8,9 +40,33 @@ import {
   pruneKanbanRepoRequestSequences,
   readKanbanPrBranchLinks,
   summarizeDiffStats,
+  useKanbanBoardData,
   writeKanbanPrBranchLinks,
 } from "./useKanbanBoardData";
 import type { PullRequestInfo, Session } from "./types";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function boardSession(id: string, repoPath: string): Session {
+  return {
+    id,
+    repo_path: repoPath,
+    worktree_path: repoPath,
+    git_context_path: null,
+    branch: "main",
+  } as Session;
+}
+
+function BoardDataHarness({ sessions }: { sessions: readonly Session[] }) {
+  useKanbanBoardData(sessions);
+  return null;
+}
 
 function makePr(overrides: Partial<PullRequestInfo>): PullRequestInfo {
   return {
@@ -222,5 +278,128 @@ describe("kanban request tracking cleanup", () => {
     pruneKanbanRepoRequestSequences(sequences, new Set());
 
     expect(sequences.size).toBe(0);
+  });
+});
+
+describe("kanban diff polling", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    (
+      globalThis as typeof globalThis & {
+        IS_REACT_ACT_ENVIRONMENT?: boolean;
+      }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.useFakeTimers();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    apiMocks.fsGitDiffStats.mockResolvedValue({});
+    cacheMocks.fetchPullRequests.mockResolvedValue({
+      kind: "ok",
+      items: [],
+      account: "tester",
+    });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("does not overlap diff polls for the same session set", async () => {
+    const pending = deferred<{
+      statuses: Record<string, never>;
+      huge: boolean;
+      limit: number;
+    }>();
+    apiMocks.fsGitStatus.mockReturnValue(pending.promise);
+
+    await act(async () => {
+      root.render(
+        createElement(BoardDataHarness, {
+          sessions: [boardSession("session-a", "/repo/a")],
+        }),
+      );
+    });
+    expect(apiMocks.fsGitStatus).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      vi.advanceTimersByTime(20_000);
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.fsGitStatus).toHaveBeenCalledOnce();
+  });
+
+  it("starts a live refresh after StrictMode cancels the first effect", async () => {
+    const first = deferred<{
+      statuses: Record<string, never>;
+      huge: boolean;
+      limit: number;
+    }>();
+    apiMocks.fsGitStatus
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue({ statuses: {}, huge: false, limit: 5_000 });
+
+    await act(async () => {
+      root.render(
+        createElement(
+          StrictMode,
+          null,
+          createElement(BoardDataHarness, {
+            sessions: [boardSession("session-a", "/repo/a")],
+          }),
+        ),
+      );
+    });
+
+    expect(apiMocks.fsGitStatus).toHaveBeenCalledTimes(2);
+    first.resolve({ statuses: {}, huge: false, limit: 5_000 });
+  });
+
+  it("does not let an old poll completion clear a newer session set poll", async () => {
+    const first = deferred<{
+      statuses: Record<string, never>;
+      huge: boolean;
+      limit: number;
+    }>();
+    const second = deferred<{
+      statuses: Record<string, never>;
+      huge: boolean;
+      limit: number;
+    }>();
+    apiMocks.fsGitStatus.mockImplementation((repoPath: string) =>
+      repoPath === "/repo/a" ? first.promise : second.promise,
+    );
+
+    await act(async () => {
+      root.render(
+        createElement(BoardDataHarness, {
+          sessions: [boardSession("session-a", "/repo/a")],
+        }),
+      );
+    });
+    await act(async () => {
+      root.render(
+        createElement(BoardDataHarness, {
+          sessions: [boardSession("session-b", "/repo/b")],
+        }),
+      );
+    });
+    expect(apiMocks.fsGitStatus).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      first.resolve({ statuses: {}, huge: false, limit: 5_000 });
+      await Promise.resolve();
+      await Promise.resolve();
+      vi.advanceTimersByTime(20_000);
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.fsGitStatus).toHaveBeenCalledTimes(2);
   });
 });
