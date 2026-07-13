@@ -5710,23 +5710,80 @@ fn codex_live_transcript_fallback(
 /// Sessions whose codex marker fallback already warned about a write
 /// failure this streak. Guards the poll-frequency `warn!` from repeating
 /// every tick while the failure persists.
-fn codex_bind_failure_registry() -> std::sync::MutexGuard<'static, HashSet<Uuid>> {
-    static WARNED: std::sync::OnceLock<Mutex<HashSet<Uuid>>> = std::sync::OnceLock::new();
+const CODEX_BIND_FAILURE_REGISTRY_CAPACITY: usize = 256;
+
+struct CodexBindFailureRegistry {
+    warned: HashSet<Uuid>,
+    insertion_order: VecDeque<Uuid>,
+    capacity: usize,
+}
+
+impl CodexBindFailureRegistry {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            warned: HashSet::with_capacity(capacity),
+            insertion_order: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn note_failure(&mut self, session_id: Uuid) -> bool {
+        if self.warned.contains(&session_id) {
+            return false;
+        }
+        if self.capacity == 0 {
+            return true;
+        }
+        while self.warned.len() >= self.capacity {
+            let Some(oldest) = self.insertion_order.pop_front() else {
+                break;
+            };
+            self.warned.remove(&oldest);
+        }
+        self.insertion_order.push_back(session_id);
+        self.warned.insert(session_id);
+        true
+    }
+
+    fn note_recovered(&mut self, session_id: Uuid) {
+        if self.warned.remove(&session_id) {
+            self.insertion_order.retain(|id| *id != session_id);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.warned.len()
+    }
+
+    #[cfg(test)]
+    fn contains(&self, session_id: &Uuid) -> bool {
+        self.warned.contains(session_id)
+    }
+}
+
+fn codex_bind_failure_registry() -> std::sync::MutexGuard<'static, CodexBindFailureRegistry> {
+    static WARNED: std::sync::OnceLock<Mutex<CodexBindFailureRegistry>> =
+        std::sync::OnceLock::new();
     WARNED
-        .get_or_init(Default::default)
+        .get_or_init(|| {
+            Mutex::new(CodexBindFailureRegistry::with_capacity(
+                CODEX_BIND_FAILURE_REGISTRY_CAPACITY,
+            ))
+        })
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Record a fallback write failure; `true` when this is the first failure
 /// of the current streak (i.e. the caller should warn, not just debug).
-fn note_codex_bind_failure(warned: &mut HashSet<Uuid>, session_id: Uuid) -> bool {
-    warned.insert(session_id)
+fn note_codex_bind_failure(warned: &mut CodexBindFailureRegistry, session_id: Uuid) -> bool {
+    warned.note_failure(session_id)
 }
 
 /// A successful bind ends the failure streak so the next failure warns again.
-fn note_codex_bind_recovered(warned: &mut HashSet<Uuid>, session_id: Uuid) {
-    warned.remove(&session_id);
+fn note_codex_bind_recovered(warned: &mut CodexBindFailureRegistry, session_id: Uuid) {
+    warned.note_recovered(session_id);
 }
 
 /// Resolve the nearest live agent process under `root`, with its pid.
@@ -8569,7 +8626,7 @@ mod tests {
     /// re-arms the warning for the next streak.
     #[test]
     fn codex_bind_failure_warns_once_per_streak() {
-        let mut warned = std::collections::HashSet::new();
+        let mut warned = super::CodexBindFailureRegistry::with_capacity(2);
         let session_id = Uuid::from_u128(7);
 
         assert!(super::note_codex_bind_failure(&mut warned, session_id));
@@ -8577,6 +8634,23 @@ mod tests {
 
         super::note_codex_bind_recovered(&mut warned, session_id);
         assert!(super::note_codex_bind_failure(&mut warned, session_id));
+    }
+
+    #[test]
+    fn codex_bind_failure_registry_evicts_oldest_session_at_capacity() {
+        let mut warned = super::CodexBindFailureRegistry::with_capacity(2);
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        let third = Uuid::from_u128(3);
+
+        assert!(super::note_codex_bind_failure(&mut warned, first));
+        assert!(super::note_codex_bind_failure(&mut warned, second));
+        assert!(super::note_codex_bind_failure(&mut warned, third));
+
+        assert_eq!(warned.len(), 2);
+        assert!(!warned.contains(&first));
+        assert!(warned.contains(&second));
+        assert!(warned.contains(&third));
     }
 
     #[test]
