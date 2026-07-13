@@ -55,7 +55,11 @@ import {
   hasConfiguredEditor,
   openInConfiguredEditor,
 } from "../lib/editor";
-import { formatHotkey, type HotkeyId } from "../lib/hotkeys";
+import {
+  formatHotkey,
+  matchesHotkeyEvent,
+  type HotkeyId,
+} from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { basename } from "../lib/pathUtils";
 import {
@@ -1444,12 +1448,12 @@ function TabItem({
         }}
         onKeyDown={(e) => {
           if (editing) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onSelect();
-          } else if (e.key === "F2") {
+          if (matchesHotkeyEvent(shortcuts.renameItem, e)) {
             e.preventDefault();
             if (canRename) setEditing(true);
+          } else if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect();
           }
         }}
         className={cn(

@@ -253,7 +253,7 @@ describe("virtualized code and diff rendering", () => {
       window.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "f",
-          metaKey: true,
+          ctrlKey: true,
           bubbles: true,
           cancelable: true,
         }),

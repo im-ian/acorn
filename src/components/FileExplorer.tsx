@@ -36,6 +36,7 @@ import {
   hasDetectedAgent,
 } from "../lib/agentContextMenu";
 import { cn } from "../lib/cn";
+import { matchesHotkeyEvent } from "../lib/hotkeys";
 import { planGitRefresh } from "../lib/git-refresh-scheduler";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { rightPanelCache } from "../lib/right-panel-cache";
@@ -57,6 +58,7 @@ import {
   scopeWithProjectRootLaunch,
 } from "../lib/sessionCreation";
 import { findProjectFolderById } from "../lib/projectFolders";
+import { useSettings } from "../lib/settings";
 import type { SessionAgentDetection } from "../lib/types";
 
 const SHOW_HIDDEN_KEY = "acorn:fs-show-hidden";
@@ -306,6 +308,8 @@ function setLocalBool(key: string, value: boolean) {
 
 export function FileExplorer({ rootPath }: FileExplorerProps) {
   const t = useTranslation();
+  const findShortcut = useSettings((s) => s.settings.shortcuts.findInView);
+  const renameShortcut = useSettings((s) => s.settings.shortcuts.renameItem);
   const showToast = useToasts((s) => s.show);
   const [cache, setCache] = useState<Cache>({});
   const [expanded, setExpanded] = useState<Set<string>>(() =>
@@ -328,7 +332,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   // Selection — Cmd-click toggle, Shift-click range. When non-empty
   // the context menu offers bulk actions across `selection`.
   const [selection, setSelection] = useState<Set<string>>(new Set());
-  // VSCode-style search panel. Toggled via Cmd+F when the Files tab is
+  // VSCode-style search panel. Toggled via the configured shortcut when the Files tab is
   // active. Three composable filters: free-form query, include globs,
   // exclude globs. Case-sensitivity + regex are per-query toggles.
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
@@ -1073,12 +1077,12 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
 
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // Cmd+F toggles the VSCode-style search panel. Window-level so it
+  // The configured find shortcut toggles the VSCode-style search panel. Window-level so it
   // works even when focus is inside the tree (which doesn't bubble to
   // the container otherwise). Esc closes the panel when it is open.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+      if (matchesHotkeyEvent(findShortcut, e)) {
         e.preventDefault();
         setSearchOpen((open) => {
           const next = !open;
@@ -1095,15 +1099,15 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [searchOpen]);
+  }, [findShortcut, searchOpen]);
 
-  // F2 to rename the focused / single-selected entry. Scoped to the
+  // The rename shortcut targets the focused / single-selected entry. Scoped to the
   // FileExplorer container so it does not collide with terminal input.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== "F2") return;
+      if (!matchesHotkeyEvent(renameShortcut, e)) return;
       if (selection.size === 1) {
         const path = Array.from(selection)[0];
         const name = path.split("/").pop() ?? "";
@@ -1119,7 +1123,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     };
     el.addEventListener("keydown", handler);
     return () => el.removeEventListener("keydown", handler);
-  }, [selection, activePath]);
+  }, [selection, activePath, renameShortcut]);
 
   const openMenu = useCallback(
     (e: React.MouseEvent, entry: FsEntry | null) => {

@@ -10,6 +10,7 @@ import {
   type FsReadFileResult,
 } from "../lib/api";
 import { highlightCode, langFromPath } from "../lib/highlight";
+import { matchesHotkeyEvent } from "../lib/hotkeys";
 import { cn } from "../lib/cn";
 import { useSettings } from "../lib/settings";
 import { resolveThemeMode, useThemes } from "../lib/themes";
@@ -144,6 +145,7 @@ export function CodeViewer({
 }: CodeViewerProps) {
   const t = useTranslation();
   const themeId = useSettings((s) => s.settings.appearance.themeId);
+  const findShortcut = useSettings((s) => s.settings.shortcuts.findInView);
   const themes = useThemes((s) => s.themes);
   const [state, setState] = useState<ViewerState>(EMPTY_STATE);
   const [diffLines, setDiffLines] = useState<FsLineDiffEntry[]>([]);
@@ -414,13 +416,13 @@ export function CodeViewer({
   useEffect(() => {
     if (!isActive) return;
     function onKeyDown(event: KeyboardEvent) {
-      if (!isFindShortcut(event)) return;
+      if (!matchesHotkeyEvent(findShortcut, event)) return;
       event.preventDefault();
       openSearch();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isActive, openSearch]);
+  }, [findShortcut, isActive, openSearch]);
 
   if (state.loading) {
     return (
@@ -772,16 +774,6 @@ function findTextRanges(text: string, query: string): { start: number; end: numb
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function isFindShortcut(event: KeyboardEvent): boolean {
-  const primary = event.metaKey || event.ctrlKey;
-  return (
-    primary &&
-    !event.altKey &&
-    !event.shiftKey &&
-    event.key.toLocaleLowerCase() === "f"
-  );
 }
 
 function Notice({ title, body }: { title: string; body: string }) {
