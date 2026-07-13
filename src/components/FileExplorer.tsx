@@ -580,6 +580,11 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
 
   useEffect(() => {
     scheduleGitDiffStatsRef.current = scheduleGitDiffStats;
+    return () => {
+      if (scheduleGitDiffStatsRef.current === scheduleGitDiffStats) {
+        scheduleGitDiffStatsRef.current = null;
+      }
+    };
   }, [scheduleGitDiffStats]);
 
   const gitStatusKindFingerprint = useMemo(
