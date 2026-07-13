@@ -5,6 +5,7 @@ import {
   kanbanSessionPullRequestLookupPath,
   pickPullRequestForBranch,
   pickPullRequestForBranches,
+  pruneKanbanRepoRequestSequences,
   readKanbanPrBranchLinks,
   summarizeDiffStats,
   writeKanbanPrBranchLinks,
@@ -164,6 +165,7 @@ describe("kanbanSessionBoardLookupPath", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("kanbanSessionPullRequestLookupPath", () => {
   function session(overrides: Partial<Session> = {}): Session {
     return {
@@ -193,5 +195,33 @@ describe("kanbanSessionPullRequestLookupPath", () => {
         session({ git_context_path: " /repo/other-project " }),
       ),
     ).toBe("/repo/other-project");
+  });
+});
+
+describe("kanban request tracking cleanup", () => {
+  it("releases request sequences for repositories no longer on the board", () => {
+    const sequences = new Map([
+      ["/repo/live-a", 3],
+      ["/repo/removed", 8],
+      ["/repo/live-b", 2],
+    ]);
+
+    pruneKanbanRepoRequestSequences(
+      sequences,
+      new Set(["/repo/live-a", "/repo/live-b"]),
+    );
+
+    expect([...sequences]).toEqual([
+      ["/repo/live-a", 3],
+      ["/repo/live-b", 2],
+    ]);
+  });
+
+  it("clears request sequences when the board has no repositories", () => {
+    const sequences = new Map([["/repo/removed", 8]]);
+
+    pruneKanbanRepoRequestSequences(sequences, new Set());
+
+    expect(sequences.size).toBe(0);
   });
 });
