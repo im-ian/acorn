@@ -349,9 +349,11 @@ test.describe("workspace kanban mode", () => {
       board.getByRole("button", { name: "Equalize sizes" }),
     ).toBeVisible();
     await createSessionButton.click();
-    await expect(
-      page.getByRole("menuitem", { name: "New session" }),
-    ).toBeVisible();
+    const newSessionMenuItem = page.getByRole("menuitem", {
+      name: "New session",
+    });
+    await expect(newSessionMenuItem).toBeVisible();
+    await expect(newSessionMenuItem.locator("kbd")).not.toBeEmpty();
     await expect(
       page.getByRole("menuitem", { name: "New worktree session" }),
     ).toBeVisible();
@@ -361,6 +363,15 @@ test.describe("workspace kanban mode", () => {
     await expect(
       page.getByRole("menuitem", { name: "New control session" }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "New worktree session" }).locator("kbd"),
+    ).not.toBeEmpty();
+    await expect(
+      page.getByRole("menuitem", { name: "New chat session" }).locator("kbd"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("menuitem", { name: "New control session" }).locator("kbd"),
+    ).not.toBeEmpty();
     await page.keyboard.press("Escape");
 
     await expect(
@@ -754,6 +765,14 @@ test.describe("workspace kanban mode", () => {
     await expect(
       shellPopover.getByRole("heading", { name: "shell" }),
     ).toBeVisible();
+    const closePopoverButton = shellPopover.getByRole("button", {
+      name: "Close",
+    });
+    await closePopoverButton.hover();
+    const closePopoverTooltip = page.getByRole("tooltip");
+    await expect(closePopoverTooltip).toContainText("Close");
+    await expect(closePopoverTooltip.locator("kbd")).not.toBeEmpty();
+    await page.mouse.move(0, 0);
     await expect(
       page.getByTestId("kanban-terminal-popover-reset-position"),
     ).toBeVisible();
