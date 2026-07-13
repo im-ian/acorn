@@ -8569,7 +8569,7 @@ mod tests {
     /// re-arms the warning for the next streak.
     #[test]
     fn codex_bind_failure_warns_once_per_streak() {
-        let mut warned = std::collections::HashSet::new();
+        let mut warned = super::CodexBindFailureRegistry::with_capacity(2);
         let session_id = Uuid::from_u128(7);
 
         assert!(super::note_codex_bind_failure(&mut warned, session_id));
@@ -8577,6 +8577,23 @@ mod tests {
 
         super::note_codex_bind_recovered(&mut warned, session_id);
         assert!(super::note_codex_bind_failure(&mut warned, session_id));
+    }
+
+    #[test]
+    fn codex_bind_failure_registry_evicts_oldest_session_at_capacity() {
+        let mut warned = super::CodexBindFailureRegistry::with_capacity(2);
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        let third = Uuid::from_u128(3);
+
+        assert!(super::note_codex_bind_failure(&mut warned, first));
+        assert!(super::note_codex_bind_failure(&mut warned, second));
+        assert!(super::note_codex_bind_failure(&mut warned, third));
+
+        assert_eq!(warned.len(), 2);
+        assert!(!warned.contains(&first));
+        assert!(warned.contains(&second));
+        assert!(warned.contains(&third));
     }
 
     #[test]
