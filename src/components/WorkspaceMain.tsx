@@ -51,7 +51,7 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { isInAcornFloatingLayer } from "../lib/floatingLayer";
-import { formatHotkey } from "../lib/hotkeys";
+import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
 import type { LayoutNode } from "../lib/layout";
 import { basename } from "../lib/pathUtils";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
@@ -1200,14 +1200,19 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
     if (editing) return;
+    if (
+      matchesHotkeyEvent(
+        useSettings.getState().settings.shortcuts.renameItem,
+        event,
+      )
+    ) {
+      event.preventDefault();
+      if (canRename) setEditing(true);
+      return;
+    }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onOpen(session.id, event.currentTarget);
-      return;
-    }
-    if (event.key === "F2") {
-      event.preventDefault();
-      if (canRename) setEditing(true);
       return;
     }
     const direction = kanbanCardFocusDirection(event.key);
@@ -2298,7 +2303,10 @@ function KanbanTerminalPopover({
                   onKeyDown={(event) => {
                     if (!canRename) return;
                     if (
-                      event.key !== "F2" &&
+                      !matchesHotkeyEvent(
+                        useSettings.getState().settings.shortcuts.renameItem,
+                        event,
+                      ) &&
                       event.key !== "Enter" &&
                       event.key !== " "
                     ) {

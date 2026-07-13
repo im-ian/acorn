@@ -506,6 +506,12 @@
         "addProject": {
           "label": "프로젝트 추가"
         },
+        "findInView": {
+          "label": "현재 보기에서 찾기"
+        },
+        "renameItem": {
+          "label": "선택한 항목 이름 변경"
+        },
         "focusSidebar": {
           "label": "사이드바로 포커스 이동"
         },

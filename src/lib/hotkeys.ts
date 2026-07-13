@@ -40,6 +40,8 @@ export const DEFAULT_HOTKEYS = {
   // hotkey lives next to the other terminal-creation bindings for symmetry.
   newControlSession: "$mod+Alt+Shift+KeyT",
   addProject: "$mod+Shift+n",
+  findInView: "$mod+f",
+  renameItem: "F2",
   focusSidebar: "$mod+1",
   focusMain: "$mod+2",
   focusRight: "$mod+3",
@@ -341,7 +343,17 @@ export function hotkeyBindingsFor(
   return Array.from(new Set(bindings));
 }
 
-function keyTokenFromEvent(event: KeyboardEvent): string | null {
+interface HotkeyEvent {
+  altKey: boolean;
+  code: string;
+  ctrlKey: boolean;
+  isComposing?: boolean;
+  key: string;
+  metaKey: boolean;
+  shiftKey: boolean;
+}
+
+function keyTokenFromEvent(event: HotkeyEvent): string | null {
   if (
     event.isComposing ||
     MODIFIER_EVENT_KEYS.has(event.key) ||
@@ -366,7 +378,7 @@ function keyTokenFromEvent(event: KeyboardEvent): string | null {
   return normalizeKeyToken(event.key);
 }
 
-export function recordHotkeyFromEvent(event: KeyboardEvent): string | null {
+export function recordHotkeyFromEvent(event: HotkeyEvent): string | null {
   const key = keyTokenFromEvent(event);
   if (!key) return null;
 
@@ -378,6 +390,14 @@ export function recordHotkeyFromEvent(event: KeyboardEvent): string | null {
   if (event.shiftKey) modifiers.push("Shift");
 
   return canonicalizeHotkeyBinding([...modifiers, key].join("+"));
+}
+
+export function matchesHotkeyEvent(
+  binding: string,
+  event: HotkeyEvent,
+): boolean {
+  const recorded = recordHotkeyFromEvent(event);
+  return recorded !== null && recorded === canonicalizeHotkeyBinding(binding);
 }
 
 export function setShortcutRecordingActive(active: boolean): void {
