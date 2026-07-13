@@ -1564,39 +1564,49 @@ function TabItem({
             </span>
           ) : null}
         </div>
-        <button
-          type="button"
-          aria-label={
+        <Tooltip
+          label={
             session
               ? paneT(t, "pane.aria.closeSession")
               : paneT(t, "pane.aria.closeTab")
           }
-          data-tab-close-button={tab.id}
-          draggable={false}
-          onPointerDown={(e) => {
-            e.stopPropagation();
-          }}
-          onMouseDown={(e) => {
-            e.stopPropagation();
-          }}
-          onDragStart={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onClose();
-          }}
-          onKeyDown={(e) => e.stopPropagation()}
-          className={cn(
-            "ml-0.5 flex size-6 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
-            active
-              ? "opacity-70 hover:opacity-100"
-              : "opacity-0 group-hover:opacity-70 hover:opacity-100",
-          )}
+          shortcut={shortcutLabel(shortcuts, "closeTab")}
+          side="bottom"
         >
-          <X size={11} />
-        </button>
+          <button
+            type="button"
+            aria-label={
+              session
+                ? paneT(t, "pane.aria.closeSession")
+                : paneT(t, "pane.aria.closeTab")
+            }
+            data-tab-close-button={tab.id}
+            draggable={false}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+            }}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+            }}
+            onDragStart={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            className={cn(
+              "ml-0.5 flex size-6 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
+              active
+                ? "opacity-70 hover:opacity-100"
+                : "opacity-0 group-hover:opacity-70 hover:opacity-100",
+            )}
+          >
+            <X size={11} />
+          </button>
+        </Tooltip>
         {isDraggingThisTab ? (
           <WorkspaceTabDragGhost
             drag={tabDrag}

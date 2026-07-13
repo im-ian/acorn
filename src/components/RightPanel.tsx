@@ -48,6 +48,11 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, FS_CHANGED_EVENT, type FsChangePayload } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openFileInEditor } from "../lib/editor";
+import {
+  formatHotkey,
+  type HotkeyConfig,
+  type HotkeyId,
+} from "../lib/hotkeys";
 import { joinPath } from "../lib/paths";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import {
@@ -232,6 +237,7 @@ async function prefetchProjectPanelData(repoPath: string): Promise<void> {
 
 export function RightPanel() {
   const t = useTranslation();
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -495,6 +501,7 @@ export function RightPanel() {
               key={tab}
               icon={tabIcon(tab)}
               label={rt(t, tabLabelKey(tab))}
+              shortcut={rightTabShortcut(shortcuts, tab)}
               badge={tab === "todos" ? todosState.todos.length : undefined}
               active={tab === rightTab}
               onClick={() => setRightTab(tab)}
@@ -655,6 +662,7 @@ interface TabButtonProps {
   onClick: () => void;
   badge?: number;
   className?: string;
+  shortcut?: string;
 }
 
 function TabButton({ icon, label, active, onClick, badge, className }: TabButtonProps) {
@@ -690,8 +698,15 @@ function TabButton({ icon, label, active, onClick, badge, className }: TabButton
 
 // Sub-tabs sit under the group bar with denser padding and a lighter inactive
 // state, so the eye registers "group is primary, sub-tab is secondary".
-function SubTabButton({ icon, label, active, onClick, badge }: TabButtonProps) {
-  return (
+function SubTabButton({
+  icon,
+  label,
+  active,
+  onClick,
+  badge,
+  shortcut,
+}: TabButtonProps) {
+  const button = (
     <button
       type="button"
       onClick={onClick}
@@ -718,6 +733,29 @@ function SubTabButton({ icon, label, active, onClick, badge }: TabButtonProps) {
       ) : null}
     </button>
   );
+  return shortcut ? (
+    <Tooltip label={label} shortcut={shortcut} side="bottom">
+      {button}
+    </Tooltip>
+  ) : (
+    button
+  );
+}
+
+const RIGHT_TAB_HOTKEY: Partial<Record<RightTab, HotkeyId>> = {
+  todos: "toggleTodos",
+  commits: "toggleCommits",
+  staged: "toggleStaged",
+  prs: "togglePrs",
+  files: "toggleFiles",
+};
+
+function rightTabShortcut(
+  shortcuts: HotkeyConfig,
+  tab: RightTab,
+): string | undefined {
+  const id = RIGHT_TAB_HOTKEY[tab];
+  return id ? formatHotkey(shortcuts[id]) : undefined;
 }
 
 function groupIcon(group: RightGroup): ReactNode {

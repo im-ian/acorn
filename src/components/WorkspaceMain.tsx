@@ -51,6 +51,7 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { isInAcornFloatingLayer } from "../lib/floatingLayer";
+import { formatHotkey } from "../lib/hotkeys";
 import type { LayoutNode } from "../lib/layout";
 import { basename } from "../lib/pathUtils";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
@@ -248,6 +249,9 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
 
 function KanbanFilePreviewOverlay() {
   const t = useTranslation();
+  const closeShortcut = useSettings((s) =>
+    formatHotkey(s.settings.shortcuts.closeTab),
+  );
   const activeTabId = useAppStore((s) => s.activeTabId);
   const workspaceTabs = useAppStore((s) => s.workspaceTabs);
   const closeWorkspaceTab = useAppStore((s) => s.closeWorkspaceTab);
@@ -281,12 +285,18 @@ function KanbanFilePreviewOverlay() {
           <div className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
             {tab.title}
           </div>
-          <IconButton
-            aria-label={t("dialogs.common.close")}
-            onClick={() => closeWorkspaceTab(tab.id)}
+          <Tooltip
+            label={t("dialogs.common.close")}
+            shortcut={closeShortcut}
+            side="bottom"
           >
-            <X size={13} />
-          </IconButton>
+            <IconButton
+              aria-label={t("dialogs.common.close")}
+              onClick={() => closeWorkspaceTab(tab.id)}
+            >
+              <X size={13} />
+            </IconButton>
+          </Tooltip>
         </header>
         <div className="min-h-0 flex-1">
           <FileViewer
@@ -973,6 +983,7 @@ function KanbanToolbarButton({
 
 function KanbanCreateSessionDropdown({ t }: { t: Translator }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
   const menuItems = useMemo<ContextMenuItem[]>(
     () => [
       workspaceContextMenuGroupTitle(t, "session"),
@@ -982,12 +993,15 @@ function KanbanCreateSessionDropdown({ t }: { t: Translator }) {
         return {
           label: sidebarText(t, action.labelKey),
           icon: kanbanSessionCreateIcon(action.id),
+          shortcut: action.hotkeyId
+            ? formatHotkey(shortcuts[action.hotkeyId])
+            : undefined,
           onClick: () =>
             dispatchKanbanAction(KANBAN_CREATE_ACTION_EVENTS[action.id]),
         };
       }),
     ],
-    [t],
+    [shortcuts, t],
   );
   const label = t("workspace.kanban.actions.createSession");
 
@@ -1747,6 +1761,9 @@ function KanbanTerminalPopover({
   const popoverDefaultSize = useSettings(
     (s) => s.settings.interface.kanbanTerminalPopoverDefaultSize,
   );
+  const closeShortcut = useSettings((s) =>
+    formatHotkey(s.settings.shortcuts.closeTab),
+  );
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const selectSession = useAppStore((s) => s.selectSession);
@@ -2391,14 +2408,20 @@ function KanbanTerminalPopover({
           >
             {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </IconButton>
-          <IconButton
-            aria-label={t("dialogs.common.close")}
-            onClick={onClose}
-            size="sm"
-            surface="panel"
+          <Tooltip
+            label={t("dialogs.common.close")}
+            shortcut={closeShortcut}
+            side="bottom"
           >
-            <X size={14} />
-          </IconButton>
+            <IconButton
+              aria-label={t("dialogs.common.close")}
+              onClick={onClose}
+              size="sm"
+              surface="panel"
+            >
+              <X size={14} />
+            </IconButton>
+          </Tooltip>
         </div>
       </header>
       <ContextMenu

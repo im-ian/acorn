@@ -76,7 +76,12 @@ test.describe("right panel: tab switching", () => {
     // Default tab is Commits — placeholder is "Select a commit to see diff".
     await expect(page.getByText(/Select a commit to see diff/i)).toBeVisible();
 
-    await page.getByRole("button", { name: "Staged" }).click();
+    const stagedButton = page.getByRole("button", { name: "Staged" });
+    await stagedButton.hover();
+    await expect(page.getByRole("tooltip").locator("kbd")).toHaveText(
+      /^(⇧⌘S|Ctrl\+Shift\+S)$/,
+    );
+    await stagedButton.click();
     await expect(
       page.getByText(/No staged or modified files/i),
     ).toBeVisible();
