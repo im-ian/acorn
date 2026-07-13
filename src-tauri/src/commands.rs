@@ -5215,12 +5215,23 @@ pub async fn detect_session_statuses(
 /// can mislabel a just-started turn as Ready. The poll therefore trusts the
 /// hook whenever an agent is live.
 ///
-/// Once no agent process is live (`live_agent` false — the agent exited, or an
-/// unrelated command now owns the PTY), the poll drives status again.
+/// Once no matching agent process is live (the agent exited, another provider
+/// now owns the PTY, or an unrelated command owns the PTY), the poll drives
+/// status again.
 /// Trade-off: a dropped terminating hook can leave status lagging at the last
 /// hook value until the next hook or the agent exits.
-fn poll_defers_to_hook(hook_active: bool, live_agent: bool) -> bool {
-    hook_active && live_agent
+fn poll_defers_to_hook(
+    hook_active: bool,
+    hook_provider: Option<AgentKind>,
+    live_agent_kind: Option<AgentKind>,
+) -> bool {
+    if !hook_active {
+        return false;
+    }
+    let Some(live_agent_kind) = live_agent_kind else {
+        return false;
+    };
+    hook_provider.map_or(true, |provider| provider == live_agent_kind)
 }
 
 /// Recover a turn boundary that was crossed while the app was closed.
@@ -5462,11 +5473,13 @@ fn detect_session_statuses_blocking(
                 }
             };
             let detection = session_status::detect_with_reason(transcript, previous, shell_hint);
+            let hook_provider = parsed_id.and_then(|uuid| state.sessions.hook_provider(&uuid));
             let defer_to_hook = poll_defers_to_hook(
                 parsed_id
                     .map(|uuid| state.sessions.is_hook_active(&uuid))
                     .unwrap_or(false),
-                live_agent_kind.is_some(),
+                hook_provider,
+                live_agent_kind,
             );
             // When a live hooked agent owns the status, keep the hook-set value
             // instead of the stale transcript reading. Re-read it fresh: a hook
@@ -6985,22 +6998,52 @@ mod tests {
         // While the agent process is alive the hook owns the turn boundary and
         // the transcript tail is ignored in both directions (stale Working just
         // after a turn ends, stale Ready just after the next prompt).
-        assert!(poll_defers_to_hook(true, true));
+        assert!(poll_defers_to_hook(
+            true,
+            Some(super::AgentKind::Codex),
+            Some(super::AgentKind::Codex)
+        ));
+    }
+
+    #[test]
+    fn poll_does_not_defer_to_a_different_provider_hook() {
+        assert!(!poll_defers_to_hook(
+            true,
+            Some(super::AgentKind::Codex),
+            Some(super::AgentKind::Claude)
+        ));
+    }
+
+    #[test]
+    fn poll_defers_when_hook_provider_is_unknown() {
+        assert!(poll_defers_to_hook(
+            true,
+            None,
+            Some(super::AgentKind::Antigravity)
+        ));
     }
 
     #[test]
     fn poll_owns_status_once_the_agent_is_gone() {
         // Agent exited, or an unrelated command now owns the PTY — the poll
         // drives liveness again from the current process tree.
-        assert!(!poll_defers_to_hook(true, false));
+        assert!(!poll_defers_to_hook(
+            true,
+            Some(super::AgentKind::Codex),
+            None
+        ));
     }
 
     #[test]
     fn poll_drives_status_without_a_hook_channel() {
         // No observed hook events (e.g. `claude` typed straight into a terminal
         // before hooks registered) — the transcript poll is the only signal.
-        assert!(!poll_defers_to_hook(false, true));
-        assert!(!poll_defers_to_hook(false, false));
+        assert!(!poll_defers_to_hook(
+            false,
+            None,
+            Some(super::AgentKind::Claude)
+        ));
+        assert!(!poll_defers_to_hook(false, None, None));
     }
 
     #[test]
