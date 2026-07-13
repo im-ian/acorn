@@ -643,6 +643,7 @@ export const api = {
       status_started_at?: string | null;
       last_message?: string | null;
       last_user_message?: string | null;
+      last_user_message_at?: string | null;
       last_agent_message?: string | null;
       agent_provider?: SessionAgentProvider | null;
       agent_transcript_provider?: SessionAgentProvider | null;
@@ -663,6 +664,7 @@ export const api = {
         status_started_at?: string | null;
         last_message?: string | null;
         last_user_message?: string | null;
+        last_user_message_at?: string | null;
         last_agent_message?: string | null;
         agent_provider?: SessionAgentProvider | null;
         agent_transcript_provider?: SessionAgentProvider | null;

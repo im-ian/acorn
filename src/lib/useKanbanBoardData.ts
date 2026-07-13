@@ -18,11 +18,65 @@ export interface DiffSummary {
   deletions: number;
 }
 
+export interface KanbanBoardDataOptions {
+  pollDiffs?: boolean;
+}
+
 const CLEAN_DIFF: DiffSummary = { hasDiff: false, additions: 0, deletions: 0 };
 
 const PR_POLL_INTERVAL_MS = 60_000;
 const DIFF_POLL_INTERVAL_MS = 20_000;
 const PR_LIST_LIMIT = 50;
+const PR_BRANCH_LINKS_STORAGE_KEY =
+  "acorn:workspace-kanban:pr-branch-links:v1";
+
+export interface KanbanPrBranchLink {
+  repoPath: string;
+  headBranch: string;
+}
+
+export type KanbanPrBranchLinks = Record<string, KanbanPrBranchLink>;
+
+function isKanbanPrBranchLink(value: unknown): value is KanbanPrBranchLink {
+  if (!value || typeof value !== "object") return false;
+  const link = value as Partial<KanbanPrBranchLink>;
+  return (
+    typeof link.repoPath === "string" &&
+    link.repoPath.trim().length > 0 &&
+    typeof link.headBranch === "string" &&
+    link.headBranch.trim().length > 0
+  );
+}
+
+export function readKanbanPrBranchLinks(): KanbanPrBranchLinks {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(PR_BRANCH_LINKS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, KanbanPrBranchLink] =>
+          isKanbanPrBranchLink(entry[1]),
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function writeKanbanPrBranchLinks(links: KanbanPrBranchLinks): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      PR_BRANCH_LINKS_STORAGE_KEY,
+      JSON.stringify(links),
+    );
+  } catch {
+    // Current-branch PR matching still works when storage is unavailable.
+  }
+}
 
 /**
  * Pick the PR that best represents a branch when several share a head branch:
@@ -46,6 +100,18 @@ export function pickPullRequestForBranch(
     if (Date.parse(pr.updated_at) > Date.parse(best.updated_at)) best = pr;
   }
   return best;
+}
+
+export function pickPullRequestForBranches(
+  prs: readonly PullRequestInfo[],
+  branches: readonly string[],
+): PullRequestInfo | null {
+  const branchSet = new Set(
+    branches.map((branch) => branch.trim()).filter(Boolean),
+  );
+  return pickPullRequestForBranch(
+    prs.filter((pr) => branchSet.has(pr.head_branch)),
+  );
 }
 
 function indexListingByBranch(
@@ -95,15 +161,44 @@ export function kanbanSessionBoardLookupPath(
   );
 }
 
+function comparableRepoPath(path: string): string {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized || "/";
+}
+
 /**
- * Poll PR listings (per distinct repo) and worktree diff summaries (per
- * session) for the workspace kanban. Both polls pause while the document is
- * hidden and refresh immediately when it becomes visible again. `refreshKey`
- * forces an immediate PR re-fetch (bump it after a PR mutation).
+ * Resolve the repository used for PR listings. A session's live git context
+ * normally resolves to its own worktree, but PRs belong to the shared project
+ * repository and should be fetched once from that root. Preserve a genuinely
+ * different live repository so terminal `cd` workflows still follow it.
+ */
+export function kanbanSessionPullRequestLookupPath(
+  session: Pick<Session, "git_context_path" | "worktree_path" | "repo_path">,
+): string {
+  const livePath = session.git_context_path?.trim();
+  const worktreePath = session.worktree_path.trim();
+  const projectPath = session.repo_path.trim();
+  if (
+    livePath &&
+    comparableRepoPath(livePath) !== comparableRepoPath(worktreePath) &&
+    comparableRepoPath(livePath) !== comparableRepoPath(projectPath)
+  ) {
+    return livePath;
+  }
+  return projectPath || worktreePath || livePath || session.repo_path;
+}
+
+/**
+ * Poll PR listings (per distinct repo) for the workspace lifecycle and,
+ * optionally, worktree diff summaries per session for the visible Kanban.
+ * Both polls pause while the document is hidden and refresh immediately when
+ * it becomes visible again. `refreshKey` forces an immediate PR re-fetch
+ * (bump it after a PR mutation).
  */
 export function useKanbanBoardData(
   sessions: readonly Session[],
   refreshKey = 0,
+  { pollDiffs = true }: KanbanBoardDataOptions = {},
 ): Map<string, KanbanSessionBoardData> {
   const [prIndexByRepo, setPrIndexByRepo] = useState<
     ReadonlyMap<string, Map<string, PullRequestInfo[]>>
@@ -111,6 +206,9 @@ export function useKanbanBoardData(
   const [diffBySession, setDiffBySession] = useState<
     ReadonlyMap<string, DiffSummary>
   >(new Map());
+  const [prBranchLinks, setPrBranchLinks] = useState<KanbanPrBranchLinks>(
+    readKanbanPrBranchLinks,
+  );
   const prRequestSeqRef = useRef(new Map<string, number>());
   const diffRefreshSeqRef = useRef(0);
 
@@ -119,7 +217,7 @@ export function useKanbanBoardData(
   // repo and worktree paths may contain spaces, never newlines.
   const repoPaths = useMemo(
     () =>
-      [...new Set(sessions.map(kanbanSessionBoardLookupPath))].sort(),
+      [...new Set(sessions.map(kanbanSessionPullRequestLookupPath))].sort(),
     [sessions],
   );
   const repoKey = repoPaths.join("\n");
@@ -211,7 +309,7 @@ export function useKanbanBoardData(
 
   useEffect(() => {
     let cancelled = false;
-    if (!worktreeKey) {
+    if (!pollDiffs || !worktreeKey) {
       setDiffBySession(new Map());
       return;
     }
@@ -273,16 +371,55 @@ export function useKanbanBoardData(
       window.clearInterval(handle);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [worktreeKey]);
+  }, [pollDiffs, worktreeKey]);
+
+  useEffect(() => {
+    setPrBranchLinks((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const session of sessions) {
+        const branch = session.branch?.trim();
+        if (!branch) continue;
+        const repoPath = kanbanSessionPullRequestLookupPath(session);
+        const direct = pickPullRequestForBranch(
+          prIndexByRepo.get(repoPath)?.get(branch) ?? [],
+        );
+        if (!direct) continue;
+        const current = next[session.id];
+        if (
+          current?.repoPath === repoPath &&
+          current.headBranch === direct.head_branch
+        ) {
+          continue;
+        }
+        next[session.id] = {
+          repoPath,
+          headBranch: direct.head_branch,
+        };
+        changed = true;
+      }
+      if (!changed) return previous;
+      writeKanbanPrBranchLinks(next);
+      return next;
+    });
+  }, [prIndexByRepo, sessions]);
 
   return useMemo(() => {
     const data = new Map<string, KanbanSessionBoardData>();
     for (const session of sessions) {
       const branch = session.branch?.trim();
-      const repoPath = kanbanSessionBoardLookupPath(session);
-      const candidates = branch
-        ? (prIndexByRepo.get(repoPath)?.get(branch) ?? [])
-        : [];
+      const repoPath = kanbanSessionPullRequestLookupPath(session);
+      const linkedBranch =
+        prBranchLinks[session.id]?.repoPath === repoPath
+          ? prBranchLinks[session.id]?.headBranch
+          : undefined;
+      const branches = [branch, linkedBranch].filter(
+        (candidate): candidate is string => Boolean(candidate),
+      );
+      const candidates = [...branches].flatMap(
+        (candidateBranch) =>
+          prIndexByRepo.get(repoPath)?.get(candidateBranch) ?? [],
+      );
       const diff = diffBySession.get(session.id) ?? CLEAN_DIFF;
       data.set(session.id, {
         repoPath,
@@ -293,5 +430,5 @@ export function useKanbanBoardData(
       });
     }
     return data;
-  }, [diffBySession, prIndexByRepo, sessions]);
+  }, [diffBySession, prBranchLinks, prIndexByRepo, sessions]);
 }

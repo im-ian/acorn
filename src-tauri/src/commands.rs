@@ -5091,6 +5091,8 @@ pub struct SessionStatusEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_user_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_user_message_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_agent_message: Option<String>,
     pub agent_provider: Option<SessionAgentProvider>,
     pub agent_transcript_provider: Option<SessionAgentProvider>,
@@ -5145,6 +5147,9 @@ fn chat_conversation_preview(
             persistence::ChatRole::User if preview.last_user_message.is_none() => {
                 preview.last_user_message =
                     collapse_preview(&message.content, STATUS_PREVIEW_CHARS);
+                if preview.last_user_message.is_some() {
+                    preview.last_user_message_at = Some(message.created_at.to_rfc3339());
+                }
             }
             persistence::ChatRole::Assistant if preview.last_agent_message.is_none() => {
                 preview.last_agent_message =
@@ -5325,6 +5330,9 @@ fn detect_session_statuses_blocking(
                     last_user_message: conversation_preview
                         .as_ref()
                         .and_then(|p| p.last_user_message.clone()),
+                    last_user_message_at: conversation_preview
+                        .as_ref()
+                        .and_then(|p| p.last_user_message_at.clone()),
                     last_agent_message: conversation_preview
                         .as_ref()
                         .and_then(|p| p.last_agent_message.clone()),
@@ -5546,6 +5554,9 @@ fn detect_session_statuses_blocking(
                 last_user_message: conversation_preview
                     .as_ref()
                     .and_then(|p| p.last_user_message.clone()),
+                last_user_message_at: conversation_preview
+                    .as_ref()
+                    .and_then(|p| p.last_user_message_at.clone()),
                 last_agent_message: conversation_preview
                     .as_ref()
                     .and_then(|p| p.last_agent_message.clone()),

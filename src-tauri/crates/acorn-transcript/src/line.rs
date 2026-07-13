@@ -30,6 +30,8 @@ pub enum TurnState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedTranscriptLine {
+    /// Source timestamp for this transcript event, when the provider emits one.
+    pub timestamp: Option<String>,
     /// Role used by title-context and message-count consumers.
     pub role: TranscriptRole,
     /// Text used by history list titles and title-context consumers.
@@ -54,6 +56,7 @@ pub struct ParsedTranscriptLine {
 impl Default for ParsedTranscriptLine {
     fn default() -> Self {
         Self {
+            timestamp: None,
             role: TranscriptRole::Other,
             text: None,
             state_text: None,
@@ -175,6 +178,8 @@ fn parse_codex_value(value: &Value) -> ParsedTranscriptLine {
     let (preview_role, preview_text) = codex_preview_role_and_text(value, event, event_role);
 
     ParsedTranscriptLine {
+        timestamp: string_at(Some(value), "timestamp")
+            .or_else(|| string_at(Some(event), "timestamp")),
         role,
         text,
         state_text,
@@ -211,6 +216,7 @@ fn parse_claude_value(value: &Value) -> ParsedTranscriptLine {
     };
 
     ParsedTranscriptLine {
+        timestamp: string_at(Some(value), "timestamp"),
         role,
         state_text: text.clone(),
         text,
@@ -252,6 +258,9 @@ fn parse_antigravity_value(value: &Value) -> ParsedTranscriptLine {
     };
 
     ParsedTranscriptLine {
+        timestamp: string_at(Some(value), "timestamp")
+            .or_else(|| string_at(Some(value), "created_at"))
+            .or_else(|| string_at(Some(value), "createdAt")),
         role,
         state_text: text.clone(),
         text,
@@ -852,6 +861,7 @@ mod tests {
         assert_eq!(parsed.state_text.as_deref(), Some("hello codex"));
         assert_eq!(parsed.preview_role, TranscriptRole::User);
         assert_eq!(parsed.preview_text.as_deref(), Some("hello codex"));
+        assert_eq!(parsed.timestamp.as_deref(), Some("t"));
         assert_eq!(parsed.session_id.as_deref(), Some("payload-session"));
         assert_eq!(parsed.cwd.as_deref(), Some("/tmp/project"));
     }
