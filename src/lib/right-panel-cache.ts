@@ -23,6 +23,31 @@ interface FetchOptions {
 }
 
 const COMMIT_DIFF_CACHE_MAX_ENTRIES = 16;
+const STAGED_DIFF_CACHE_MAX_ENTRIES = 16;
+
+function limitRecentStagedDiffs(
+  diffByPath: Record<string, DiffPayload>,
+): Record<string, DiffPayload> {
+  const paths = Object.keys(diffByPath);
+  if (paths.length <= STAGED_DIFF_CACHE_MAX_ENTRIES) return diffByPath;
+
+  return Object.fromEntries(
+    paths
+      .slice(-STAGED_DIFF_CACHE_MAX_ENTRIES)
+      .map((path) => [path, diffByPath[path]]),
+  );
+}
+
+export function rememberRecentStagedDiff(
+  diffByPath: Record<string, DiffPayload>,
+  path: string,
+  payload: DiffPayload,
+): Record<string, DiffPayload> {
+  const next = { ...diffByPath };
+  delete next[path];
+  next[path] = payload;
+  return limitRecentStagedDiffs(next);
+}
 
 class RightPanelCacheManager {
   private retainedRepos: Set<string> | null = null;
@@ -182,7 +207,11 @@ class RightPanelCacheManager {
 
   setStaged(repoPath: string, entry: StagedCacheEntry): void {
     if (!this.canStore(repoPath)) return;
-    this.stagedCache.set(repoPath, entry);
+    const diffByPath = limitRecentStagedDiffs(entry.diffByPath);
+    this.stagedCache.set(
+      repoPath,
+      diffByPath === entry.diffByPath ? entry : { ...entry, diffByPath },
+    );
   }
 
   getFileExplorerExpanded(repoPath: string): Set<string> {
