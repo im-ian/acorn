@@ -552,6 +552,26 @@ mod tests {
     }
 
     #[test]
+    fn ssh_hostname_cache_bounds_successes_and_failures() {
+        let mut cache = SshHostnameCache::with_capacity(2);
+
+        cache.insert("first".to_string(), Some("github.com".to_string()));
+        cache.insert("second".to_string(), None);
+        cache.insert("third".to_string(), Some("example.com".to_string()));
+
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get("first"), None);
+        assert_eq!(cache.get("second"), Some(&None));
+        assert_eq!(cache.get("third"), Some(&Some("example.com".to_string())));
+    }
+
+    #[test]
+    fn ssh_hostname_validation_rejects_oversized_cache_keys() {
+        assert!(is_plain_hostname(&"a".repeat(255)));
+        assert!(!is_plain_hostname(&"a".repeat(256)));
+    }
+
+    #[test]
     fn diff_for_commit_includes_hunk_headers() {
         let root = unique_temp_dir("hunk-headers");
         let repo = git2::Repository::init(&root).expect("init repo");
