@@ -26,7 +26,7 @@
 //! The picked token is passed to `gh pr list` via `GH_TOKEN`, overriding
 //! whichever account `gh` would otherwise pick.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -1772,10 +1772,54 @@ fn build_commit_login_query(count: usize) -> String {
     query
 }
 
-fn commit_login_cache() -> &'static Mutex<HashMap<(String, String), Option<String>>> {
+const COMMIT_LOGIN_CACHE_CAPACITY: usize = 4096;
+
+struct CommitLoginCache {
+    entries: HashMap<(String, String), Option<String>>,
+    insertion_order: VecDeque<(String, String)>,
+    capacity: usize,
+}
+
+impl CommitLoginCache {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(capacity),
+            insertion_order: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn get(&self, key: &(String, String)) -> Option<&Option<String>> {
+        self.entries.get(key)
+    }
+
+    fn insert(&mut self, key: (String, String), login: Option<String>) {
+        if self.entries.contains_key(&key) {
+            self.entries.insert(key, login);
+            return;
+        }
+        if self.capacity == 0 {
+            return;
+        }
+        while self.entries.len() >= self.capacity {
+            let Some(oldest) = self.insertion_order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+        self.insertion_order.push_back(key.clone());
+        self.entries.insert(key, login);
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+fn commit_login_cache() -> &'static Mutex<CommitLoginCache> {
     use std::sync::OnceLock;
-    static CELL: OnceLock<Mutex<HashMap<(String, String), Option<String>>>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+    static CELL: OnceLock<Mutex<CommitLoginCache>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(CommitLoginCache::with_capacity(COMMIT_LOGIN_CACHE_CAPACITY)))
 }
 
 /// For every image file in `payload`, fetch the actual blob bytes from
@@ -3077,10 +3121,7 @@ mod tests {
         cache.insert(first.clone(), Some("alice-updated".to_string()));
 
         assert_eq!(cache.len(), 2);
-        assert_eq!(
-            cache.get(&first),
-            Some(&Some("alice-updated".to_string()))
-        );
+        assert_eq!(cache.get(&first), Some(&Some("alice-updated".to_string())));
         assert_eq!(cache.get(&second), Some(&Some("bob".to_string())));
     }
 
