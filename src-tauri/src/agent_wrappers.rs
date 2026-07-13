@@ -86,7 +86,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
           [ -n "$_acorn_turn_id" ] || _acorn_turn_id="task_started"
           if [ "$_acorn_turn_id" != "$_acorn_last_turn_id" ]; then
             _acorn_last_turn_id="$_acorn_turn_id"
-            "$_acorn_notify" start >/dev/null 2>&1 || true
+            "$_acorn_notify" start turn >/dev/null 2>&1 || true
           fi
           ;;
         *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)
@@ -107,10 +107,10 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
           if [ -n "$_acorn_exec_call_id" ]; then
             if [ "$_acorn_exec_call_id" != "$_acorn_last_exec_call_id" ]; then
               _acorn_last_exec_call_id="$_acorn_exec_call_id"
-              "$_acorn_notify" start >/dev/null 2>&1 || true
+              "$_acorn_notify" start tool >/dev/null 2>&1 || true
             fi
           else
-            "$_acorn_notify" start >/dev/null 2>&1 || true
+            "$_acorn_notify" start tool >/dev/null 2>&1 || true
           fi
           ;;
       esac
@@ -133,6 +133,11 @@ exec "$REAL_BIN" "$@"
 
 const CODEX_NOTIFY_BODY: &str = r#"#!/bin/sh
 input="${1-}"
+source="${2-hook}"
+case "$source" in
+  hook|turn|tool) ;;
+  *) source="hook" ;;
+esac
 if [ -z "$input" ]; then
   input=$(cat 2>/dev/null || true)
 fi
@@ -183,7 +188,7 @@ fi
 [ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
-payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"hook"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event")
+payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source")
 curl -sf -X POST \
   -H 'Content-Type: application/json' \
   -H "X-Acorn-Agent-Hook-Token: $hook_token" \
@@ -652,9 +657,13 @@ mod tests {
             .contains("notify=[\\\"bash\\\",\\\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\\\"]"));
         assert!(wrapper.contains("CODEX_TUI_RECORD_SESSION=1"));
         assert!(wrapper.contains("ACORN_AGENT_HOOK_URL"));
+        assert!(wrapper.contains("\"$_acorn_notify\" start turn"));
+        assert!(wrapper.contains("\"$_acorn_notify\" start tool"));
 
         let notify = fs::read_to_string(dir.join("acorn-codex-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"codex\""));
+        assert!(notify.contains("source=\"${2-hook}\""));
+        assert!(notify.contains("\"source\":\"%s\""));
         // A completed turn is ready for optional follow-up. Only explicit
         // approval or question events require user input.
         assert!(notify.contains("agent-turn-complete|task_complete|turn_complete) event=\"stop\""));

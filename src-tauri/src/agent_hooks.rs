@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use acorn_session::{SessionAgentProvider, SessionStatus, SessionStore};
 use serde::Deserialize;
@@ -68,6 +68,21 @@ pub fn apply_agent_hook_event(
     // just-set resting status (Ready/WaitingForInput) back to Working on its
     // next tick. See `poll_defers_to_hook` in `commands`.
     sessions.mark_hook_active(&event.session_id);
+
+    // The Codex JSONL watcher tags task and exec starts separately. This
+    // runtime-only turn evidence lets the process poll distinguish a real
+    // background command from helpers that live for the whole Codex session.
+    // Generic native hook events intentionally do not reset this marker: they
+    // arrive through a separate channel and can race the ordered JSONL tail.
+    if event.provider == SessionAgentProvider::Codex && event.event == AgentHookEventKind::Start {
+        match event.source.as_deref() {
+            Some("turn") => sessions.begin_hook_turn(&event.session_id),
+            Some("tool") => {
+                sessions.mark_hook_tool_started_at(&event.session_id, SystemTime::now())
+            }
+            _ => {}
+        }
+    }
 
     let status = event.event.session_status();
     sessions
@@ -447,6 +462,48 @@ mod tests {
             sessions.get(&session_id).expect("session").status,
             SessionStatus::WaitingForInput
         );
+    }
+
+    #[test]
+    fn codex_hook_sources_scope_tool_activity_to_the_current_turn() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        let session_id = session.id;
+        sessions.insert(session);
+
+        let apply = |source: &str, event| {
+            apply_agent_hook_event(
+                &sessions,
+                AgentHookEvent {
+                    session_id,
+                    provider: SessionAgentProvider::Codex,
+                    event,
+                    message: None,
+                    source: Some(source.to_string()),
+                },
+            )
+            .expect("event applies")
+        };
+
+        apply("turn", AgentHookEventKind::Start);
+        assert_eq!(sessions.hook_tool_started_at(&session_id), None);
+
+        apply("tool", AgentHookEventKind::Start);
+        assert!(sessions.hook_tool_started_at(&session_id).is_some());
+
+        apply("hook", AgentHookEventKind::Stop);
+        assert!(sessions.hook_tool_started_at(&session_id).is_some());
+
+        apply("turn", AgentHookEventKind::Start);
+        assert_eq!(sessions.hook_tool_started_at(&session_id), None);
     }
 
     fn post(hooks: &AgentHookServer, token: &str, body: &str) -> String {

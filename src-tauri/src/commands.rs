@@ -37,6 +37,7 @@ use tauri_plugin_dialog::DialogExt;
 const CHAT_SESSION_STATE_CHANGED_EVENT: &str = "acorn:chat-session-state-changed";
 const WORKTREE_IN_USE_BY_OTHER_SESSIONS: &str =
     "Close other sessions using this worktree before removing it.";
+const CODEX_TOOL_PROCESS_START_TOLERANCE: std::time::Duration = std::time::Duration::from_secs(1);
 
 async fn run_blocking<T, F>(label: &'static str, f: F) -> AppResult<T>
 where
@@ -5385,9 +5386,16 @@ fn detect_session_statuses_blocking(
             let live_agent = root_pid_value
                 .and_then(|pid| live_agent_in_descendants(&sys, &children, Pid::from_u32(pid)));
             let live_agent_kind = live_agent.map(|(kind, _)| kind);
+            let codex_tool_started_at =
+                parsed_id.and_then(|uuid| state.sessions.hook_tool_started_at(&uuid));
             let live_codex_tool_child = matches!(live_agent_kind, Some(AgentKind::Codex))
                 && root_pid_value.is_some_and(|pid| {
-                    live_codex_has_tool_descendant(&sys, &children, Pid::from_u32(pid))
+                    live_codex_has_tool_descendant(
+                        &sys,
+                        &children,
+                        Pid::from_u32(pid),
+                        codex_tool_started_at,
+                    )
                 });
             // Resolve the live transcript via the persister's resume markers
             // first (covers claude/codex/antigravity run inside a shell session — JSONL
@@ -5834,8 +5842,16 @@ fn live_codex_has_tool_descendant(
     sys: &System,
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
+    tool_started_at: Option<SystemTime>,
 ) -> bool {
-    has_unignored_descendant_below_nearest_matching(
+    let Some(tool_started_at) = tool_started_at else {
+        return false;
+    };
+    let activity_cutoff = tool_started_at
+        .checked_sub(CODEX_TOOL_PROCESS_START_TOLERANCE)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    has_current_activity_descendant_below_nearest_matching(
         children,
         root,
         |pid| {
@@ -5845,6 +5861,13 @@ fn live_codex_has_tool_descendant(
         |pid| {
             sys.process(pid)
                 .is_some_and(is_codex_persistent_helper_process)
+        },
+        |pid| {
+            sys.process(pid).is_some_and(|proc| {
+                let process_started_at =
+                    SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(proc.start_time());
+                process_started_at >= activity_cutoff
+            })
         },
     )
 }
@@ -5856,10 +5879,7 @@ fn hook_status_with_live_tool_activity(
 ) -> SessionStatus {
     if live_tool_child
         && matches!(live_agent_kind, Some(AgentKind::Codex))
-        && matches!(
-            hook_status,
-            SessionStatus::Ready | SessionStatus::WaitingForInput
-        )
+        && hook_status == SessionStatus::Ready
     {
         SessionStatus::Working
     } else {
@@ -5870,6 +5890,7 @@ fn hook_status_with_live_tool_activity(
 fn is_codex_persistent_helper_process(proc: &sysinfo::Process) -> bool {
     process_basename_matches(proc, "node_repl")
         || process_basename_matches(proc, "SkyComputerUseClient")
+        || process_basename_matches(proc, "codex-code-mode-host")
 }
 
 /// BFS from `root` that returns on the FIRST pid the callback classifies.
@@ -5930,15 +5951,17 @@ where
     None
 }
 
-fn has_unignored_descendant_below_nearest_matching<F, G>(
+fn has_current_activity_descendant_below_nearest_matching<F, G, H>(
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
     matches: F,
     mut ignore_subtree: G,
+    mut is_current_activity: H,
 ) -> bool
 where
     F: FnMut(Pid) -> bool,
     G: FnMut(Pid) -> bool,
+    H: FnMut(Pid) -> bool,
 {
     let Some(anchor) = nearest_descendant_matching(children, root, matches) else {
         return false;
@@ -5953,9 +5976,36 @@ where
         if ignore_subtree(pid) {
             continue;
         }
-        return true;
+        if is_current_activity(pid) {
+            return true;
+        }
+        if let Some(kids) = children.get(&pid) {
+            let mut kids = kids.clone();
+            kids.sort_by_key(|pid| pid.as_u32());
+            queue.extend(kids);
+        }
     }
     false
+}
+
+#[cfg(test)]
+fn has_unignored_descendant_below_nearest_matching<F, G>(
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+    matches: F,
+    ignore_subtree: G,
+) -> bool
+where
+    F: FnMut(Pid) -> bool,
+    G: FnMut(Pid) -> bool,
+{
+    has_current_activity_descendant_below_nearest_matching(
+        children,
+        root,
+        matches,
+        ignore_subtree,
+        |_| true,
+    )
 }
 
 /// `true` if any descendant of `root` exists in the children map. The root
@@ -6163,6 +6213,83 @@ mod status_hint_tests {
             root,
             |pid| pid == codex,
             |pid| pid == helper,
+        ));
+    }
+
+    #[test]
+    fn only_descendants_started_during_current_tool_activity_count_as_live_work() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let old_mcp = Pid::from_u32(3);
+        let current_tool = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![old_mcp, current_tool]);
+
+        assert!(has_current_activity_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |_| false,
+            |pid| pid == current_tool,
+        ));
+    }
+
+    #[test]
+    fn infrastructure_started_before_current_tool_activity_does_not_count() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let old_mcp = Pid::from_u32(3);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![old_mcp]);
+
+        assert!(!has_current_activity_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |_| false,
+            |_| false,
+        ));
+    }
+
+    #[test]
+    fn current_tool_below_older_intermediary_still_counts_as_live_work() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let old_intermediary = Pid::from_u32(3);
+        let current_tool = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![old_intermediary]);
+        children.insert(old_intermediary, vec![current_tool]);
+
+        assert!(has_current_activity_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |_| false,
+            |pid| pid == current_tool,
+        ));
+    }
+
+    #[test]
+    fn persistent_helper_subtrees_never_count_as_live_work() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let helper = Pid::from_u32(3);
+        let helper_child = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![helper]);
+        children.insert(helper, vec![helper_child]);
+
+        assert!(!has_current_activity_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |pid| pid == helper,
+            |pid| pid == helper_child,
         ));
     }
 
@@ -6877,7 +7004,7 @@ mod tests {
     }
 
     #[test]
-    fn persistent_claude_children_do_not_clear_waiting() {
+    fn live_tool_activity_preserves_explicit_waiting() {
         assert_eq!(
             super::hook_status_with_live_tool_activity(
                 acorn_session::SessionStatus::WaitingForInput,
@@ -6901,6 +7028,14 @@ mod tests {
                 true,
             ),
             acorn_session::SessionStatus::Working
+        );
+        assert_eq!(
+            super::hook_status_with_live_tool_activity(
+                acorn_session::SessionStatus::WaitingForInput,
+                Some(super::AgentKind::Codex),
+                true,
+            ),
+            acorn_session::SessionStatus::WaitingForInput
         );
         assert_eq!(
             super::hook_status_with_live_tool_activity(

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
 use uuid::Uuid;
 
 fn default_true() -> bool {
@@ -364,6 +365,10 @@ pub struct SessionStore {
     /// advances the revision before touching the session row so conditional
     /// status writes can reject observations made before a newer event.
     hook_revisions: DashMap<Uuid, u64>,
+    /// Start of the first Codex exec tool observed in the current turn.
+    /// Runtime-only: after an app restart, process-tree arbitration stays
+    /// conservative until a fresh tagged tool event arrives.
+    hook_tool_started_at: DashMap<Uuid, SystemTime>,
 }
 
 impl SessionStore {
@@ -481,6 +486,24 @@ impl SessionStore {
                 entry.hook_active = true;
             }
         }
+    }
+
+    /// Reset per-turn tool evidence when Codex reports a new task boundary.
+    pub fn begin_hook_turn(&self, id: &Uuid) {
+        self.hook_tool_started_at.remove(id);
+    }
+
+    /// Record the first exec tool observed in the current Codex turn. Keeping
+    /// the earliest timestamp ensures a background process launched by an
+    /// earlier tool still counts after later tools run in the same turn.
+    pub fn mark_hook_tool_started_at(&self, id: &Uuid, started_at: SystemTime) {
+        self.hook_tool_started_at.entry(*id).or_insert(started_at);
+    }
+
+    pub fn hook_tool_started_at(&self, id: &Uuid) -> Option<SystemTime> {
+        self.hook_tool_started_at
+            .get(id)
+            .map(|started_at| *started_at)
     }
 
     /// Whether `id` has ever reported an agent lifecycle hook event — either
@@ -654,6 +677,7 @@ impl SessionStore {
     pub fn remove(&self, id: &Uuid) -> SessionResult<Session> {
         self.hook_confirmed.remove(id);
         self.hook_revisions.remove(id);
+        self.hook_tool_started_at.remove(id);
         self.inner
             .remove(id)
             .map(|(_, v)| v)
@@ -762,6 +786,24 @@ mod tests {
         assert!(!store.is_hook_active(&session.id));
         assert!(!store.is_hook_confirmed_this_run(&session.id));
         assert_eq!(store.hook_revision(&session.id), 0);
+    }
+
+    #[test]
+    fn hook_tool_activity_is_scoped_to_a_turn_and_cleared_on_remove() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        let started_at =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(123_456);
+
+        store.mark_hook_tool_started_at(&session.id, started_at);
+        assert_eq!(store.hook_tool_started_at(&session.id), Some(started_at));
+
+        store.begin_hook_turn(&session.id);
+        assert_eq!(store.hook_tool_started_at(&session.id), None);
+
+        store.mark_hook_tool_started_at(&session.id, started_at);
+        store.remove(&session.id).expect("session exists");
+        assert_eq!(store.hook_tool_started_at(&session.id), None);
     }
 
     #[test]
