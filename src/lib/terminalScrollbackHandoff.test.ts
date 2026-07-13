@@ -42,5 +42,12 @@ describe("terminal scrollback handoff", () => {
       "keep this scrollback\n",
     );
     expect(rememberedTerminalScrollback("deleted")).toBeNull();
+
+    const lateSave = rememberTerminalScrollback(
+      "deleted",
+      "late async scrollback\n",
+    );
+    expect(lateSave).toBe("");
+    expect(rememberedTerminalScrollback("deleted")).toBeNull();
   });
 });
