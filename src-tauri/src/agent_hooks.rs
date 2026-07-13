@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use acorn_session::{SessionAgentProvider, SessionStatus, SessionStore};
 use serde::Deserialize;
@@ -68,6 +68,21 @@ pub fn apply_agent_hook_event(
     // just-set resting status (Ready/WaitingForInput) back to Working on its
     // next tick. See `poll_defers_to_hook` in `commands`.
     sessions.mark_hook_active(&event.session_id);
+
+    // The Codex JSONL watcher tags task and exec starts separately. This
+    // runtime-only turn evidence lets the process poll distinguish a real
+    // background command from helpers that live for the whole Codex session.
+    // Generic native hook events intentionally do not reset this marker: they
+    // arrive through a separate channel and can race the ordered JSONL tail.
+    if event.provider == SessionAgentProvider::Codex && event.event == AgentHookEventKind::Start {
+        match event.source.as_deref() {
+            Some("turn") => sessions.begin_hook_turn(&event.session_id),
+            Some("tool") => {
+                sessions.mark_hook_tool_started_at(&event.session_id, SystemTime::now())
+            }
+            _ => {}
+        }
+    }
 
     let status = event.event.session_status();
     sessions
