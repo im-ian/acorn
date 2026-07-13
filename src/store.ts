@@ -2091,6 +2091,20 @@ export const useAppStore = create<AppStateModel>()(
 
   selectSession(id) {
     get().selectTab(id);
+    // Move keyboard focus into the shown terminal. Without this, switching to
+    // an existing session tab leaves focus on the previous terminal, so a
+    // session parked on an input prompt (e.g. Claude's AskUserQuestion) takes
+    // no keyboard until the user clicks into it. rAF defers past TerminalHost's
+    // portal reattach, same as the session-create focus path above.
+    if (id !== null && typeof window !== "undefined") {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(
+          new CustomEvent("acorn:focus-session", {
+            detail: { sessionId: id },
+          }),
+        );
+      });
+    }
   },
 
   focusLocalSessions() {
@@ -2848,6 +2862,8 @@ export const useAppStore = create<AppStateModel>()(
       // Focus the new session so Cmd+T (and any other entry point that goes
       // through the store) immediately surfaces it in its pane instead of
       // silently appending behind the existing active tab.
+      // Focuses the new session's xterm via the focus-session dispatch in
+      // `selectSession` (rAF-deferred past TerminalHost's portal reattach).
       get().selectSession(created.id);
       if (
         mode === "terminal" &&
@@ -2856,18 +2872,6 @@ export const useAppStore = create<AppStateModel>()(
           .openKanbanTerminalOnSessionCreate
       ) {
         get().openTerminalPopup(created.id);
-      }
-      // Grab keyboard focus for the new session's xterm. rAF defers past the
-      // portal reattach in `TerminalHost` so the slot is mounted in its pane
-      // body by the time `Terminal` calls `term.focus()`.
-      if (typeof window !== "undefined") {
-        requestAnimationFrame(() => {
-          window.dispatchEvent(
-            new CustomEvent("acorn:focus-session", {
-              detail: { sessionId: created.id },
-            }),
-          );
-        });
       }
       // First-run guidance for control sessions. Gated on a localStorage
       // flag so power users only see it once. App.tsx hosts the modal.
