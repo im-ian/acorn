@@ -110,6 +110,46 @@ function sessionProcessSummariesEqual(
   );
 }
 
+function mergeRefreshedSessionRuntimeState(
+  refreshedSessions: Session[],
+  currentSessions: Session[],
+): Session[] {
+  const currentById = new Map(
+    currentSessions.map((session) => [session.id, session]),
+  );
+  return refreshedSessions.map((refreshed) => {
+    const current = currentById.get(refreshed.id);
+    if (!current) return refreshed;
+
+    const merged = { ...refreshed };
+    const preserve = <K extends keyof Session>(key: K) => {
+      if (Object.prototype.hasOwnProperty.call(current, key)) {
+        merged[key] = current[key];
+      }
+    };
+
+    if (current.status === refreshed.status) {
+      preserve("status_reason");
+      preserve("status_started_at");
+    }
+    if (refreshed.last_message === null && current.last_message !== null) {
+      merged.last_message = current.last_message;
+    }
+    preserve("last_user_message");
+    preserve("last_agent_message");
+    preserve("agent_provider");
+    preserve("agent_transcript_provider");
+    preserve("agent_transcript_path");
+    preserve("agent_activity_at");
+    preserve("active_processes");
+    preserve("git_context_path");
+    if (current.git_context_path?.trim()) {
+      merged.branch = current.branch;
+    }
+    return merged;
+  });
+}
+
 interface SessionPlacementIntent {
   projectFolderId: string;
   paneId: PaneId;
@@ -1582,9 +1622,13 @@ export const useAppStore = create<AppStateModel>()(
     const seq = ++refreshSessionsSeq;
     set({ loading: true, error: null });
     try {
-      const sessions = await api.listSessions();
+      const refreshedSessions = await api.listSessions();
       if (seq !== refreshSessionsSeq) return;
       set((s) => {
+        const sessions = mergeRefreshedSessionRuntimeState(
+          refreshedSessions,
+          s.sessions,
+        );
         const allowEmptyWipe = s.sessionsLoadedCleanly;
         const reconciled = reconcileWorkspaces(
           sessions,
@@ -1721,7 +1765,9 @@ export const useAppStore = create<AppStateModel>()(
             ? errorMessage(projectsResult.reason)
             : null;
       const sessions =
-        receivedSessions ? sessionsResult.value : s.sessions;
+        receivedSessions
+          ? mergeRefreshedSessionRuntimeState(sessionsResult.value, s.sessions)
+          : s.sessions;
       const projects =
         projectsResult.status === "fulfilled"
           ? projectsResult.value

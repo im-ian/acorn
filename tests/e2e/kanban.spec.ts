@@ -206,7 +206,9 @@ test.describe("workspace kanban mode", () => {
       .getByRole("button", { name: "Remove + delete worktree" })
       .click();
 
-    await expect(page.getByText(/Removing completed worktree in \d+s/)).toBeVisible();
+    await expect(
+      page.getByText(/Removing completed worktree in \d+s/),
+    ).toBeVisible();
     await expect(
       board.locator(
         'section[aria-label="Review"] [data-kanban-session-id="survivor"]',

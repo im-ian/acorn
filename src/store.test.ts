@@ -592,6 +592,7 @@ describe("refreshAll", () => {
   it("preserves runtime session metadata while applying refreshed persisted fields", async () => {
     const runtimeSession = session("a1", REPO_A, {
       name: "before refresh",
+      branch: "feat/live-branch",
       status_reason: "turn_complete",
       status_started_at: "2026-01-02T00:00:00.000Z",
       last_message: "Finished the requested change",
@@ -615,6 +616,7 @@ describe("refreshAll", () => {
 
     expect(useAppStore.getState().sessions[0]).toMatchObject({
       name: "after refresh",
+      branch: "feat/live-branch",
       status_reason: "turn_complete",
       status_started_at: "2026-01-02T00:00:00.000Z",
       last_message: "Finished the requested change",
