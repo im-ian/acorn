@@ -192,4 +192,85 @@ describe("FileExplorer filesystem listener", () => {
     });
     expect(apiMocks.fsGitDiffStats).toHaveBeenCalledTimes(2);
   });
+
+  it("does not schedule a queued diff-stat refresh after unmount", async () => {
+    vi.useFakeTimers();
+    const path = "/tmp/acorn/first.ts";
+    let fsListener:
+      | ((event: {
+          payload: {
+            paths: string[];
+            root: string;
+            cap: number;
+            dotgit_changed: boolean;
+          };
+        }) => void)
+      | null = null;
+    eventMocks.listen.mockImplementation((_event, handler) => {
+      fsListener = handler;
+      return Promise.resolve(() => {});
+    });
+    apiMocks.fsListDir.mockResolvedValue({
+      entries: [
+        {
+          name: "first.ts",
+          path,
+          is_dir: false,
+          is_symlink: false,
+          size: 1,
+          modified_ms: 1,
+          gitignored: false,
+        },
+      ],
+      repo_root: "/tmp/acorn",
+    });
+    apiMocks.fsGitStatus.mockResolvedValue({
+      statuses: {
+        [path]: { kind: "modified", additions: 0, deletions: 0 },
+      },
+      huge: false,
+      limit: 5_000,
+    });
+    let resolveFirst!: (stats: Record<string, never>) => void;
+    apiMocks.fsGitDiffStats.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirst = resolve;
+      }),
+    );
+
+    await act(async () => {
+      root?.render(<FileExplorer rootPath="/tmp/acorn" />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(1_200);
+      await Promise.resolve();
+    });
+    act(() => {
+      fsListener?.({
+        payload: {
+          paths: [path],
+          root: "/tmp/acorn",
+          cap: 256,
+          dotgit_changed: false,
+        },
+      });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(1_200);
+      await Promise.resolve();
+    });
+    expect(apiMocks.fsGitDiffStats).toHaveBeenCalledTimes(1);
+
+    act(() => root?.unmount());
+    root = null;
+    resolveFirst({});
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
