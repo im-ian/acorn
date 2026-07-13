@@ -161,6 +161,33 @@ export function kanbanSessionBoardLookupPath(
   );
 }
 
+function comparableRepoPath(path: string): string {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized || "/";
+}
+
+/**
+ * Resolve the repository used for PR listings. A session's live git context
+ * normally resolves to its own worktree, but PRs belong to the shared project
+ * repository and should be fetched once from that root. Preserve a genuinely
+ * different live repository so terminal `cd` workflows still follow it.
+ */
+export function kanbanSessionPullRequestLookupPath(
+  session: Pick<Session, "git_context_path" | "worktree_path" | "repo_path">,
+): string {
+  const livePath = session.git_context_path?.trim();
+  const worktreePath = session.worktree_path.trim();
+  const projectPath = session.repo_path.trim();
+  if (
+    livePath &&
+    comparableRepoPath(livePath) !== comparableRepoPath(worktreePath) &&
+    comparableRepoPath(livePath) !== comparableRepoPath(projectPath)
+  ) {
+    return livePath;
+  }
+  return projectPath || worktreePath || livePath || session.repo_path;
+}
+
 /**
  * Poll PR listings (per distinct repo) for the workspace lifecycle and,
  * optionally, worktree diff summaries per session for the visible Kanban.
@@ -190,7 +217,7 @@ export function useKanbanBoardData(
   // repo and worktree paths may contain spaces, never newlines.
   const repoPaths = useMemo(
     () =>
-      [...new Set(sessions.map(kanbanSessionBoardLookupPath))].sort(),
+      [...new Set(sessions.map(kanbanSessionPullRequestLookupPath))].sort(),
     [sessions],
   );
   const repoKey = repoPaths.join("\n");
@@ -353,7 +380,7 @@ export function useKanbanBoardData(
       for (const session of sessions) {
         const branch = session.branch?.trim();
         if (!branch) continue;
-        const repoPath = kanbanSessionBoardLookupPath(session);
+        const repoPath = kanbanSessionPullRequestLookupPath(session);
         const direct = pickPullRequestForBranch(
           prIndexByRepo.get(repoPath)?.get(branch) ?? [],
         );
@@ -381,7 +408,7 @@ export function useKanbanBoardData(
     const data = new Map<string, KanbanSessionBoardData>();
     for (const session of sessions) {
       const branch = session.branch?.trim();
-      const repoPath = kanbanSessionBoardLookupPath(session);
+      const repoPath = kanbanSessionPullRequestLookupPath(session);
       const linkedBranch =
         prBranchLinks[session.id]?.repoPath === repoPath
           ? prBranchLinks[session.id]?.headBranch

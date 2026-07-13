@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   diffStatsEntries,
   kanbanSessionBoardLookupPath,
+  kanbanSessionPullRequestLookupPath,
   pickPullRequestForBranch,
   pickPullRequestForBranches,
   readKanbanPrBranchLinks,
@@ -160,5 +161,37 @@ describe("kanbanSessionBoardLookupPath", () => {
         session({ git_context_path: "   ", worktree_path: "" }),
       ),
     ).toBe("/repo/project");
+  });
+});
+
+describe("kanbanSessionPullRequestLookupPath", () => {
+  function session(overrides: Partial<Session> = {}): Session {
+    return {
+      repo_path: "/repo/project",
+      worktree_path: "/repo/project/.worktrees/session",
+      git_context_path: null,
+      ...overrides,
+    } as Session;
+  }
+
+  it("shares the project repo lookup for its recorded worktree", () => {
+    expect(kanbanSessionPullRequestLookupPath(session())).toBe(
+      "/repo/project",
+    );
+    expect(
+      kanbanSessionPullRequestLookupPath(
+        session({
+          git_context_path: "/repo/project/.worktrees/session/",
+        }),
+      ),
+    ).toBe("/repo/project");
+  });
+
+  it("keeps a live git context that points outside the session worktree", () => {
+    expect(
+      kanbanSessionPullRequestLookupPath(
+        session({ git_context_path: " /repo/other-project " }),
+      ),
+    ).toBe("/repo/other-project");
   });
 });
