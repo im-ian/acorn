@@ -219,6 +219,9 @@ export function useKanbanBoardData(
     readKanbanPrBranchLinks,
   );
   const prRequestSeqRef = useRef(new Map<string, number>());
+  const prInFlightRef = useRef(
+    new Map<string, { generation: symbol; promise: Promise<void> }>(),
+  );
   const diffRefreshSeqRef = useRef(0);
   const diffRefreshInFlightRef = useRef<{
     key: string;
@@ -251,9 +254,13 @@ export function useKanbanBoardData(
 
   useEffect(() => {
     let cancelled = false;
+    const generation = Symbol();
     const repos = repoKey ? repoKey.split("\n") : [];
     const repoSet = new Set(repos);
     pruneKanbanRepoRequestSequences(prRequestSeqRef.current, repoSet);
+    for (const repoPath of prInFlightRef.current.keys()) {
+      if (!repoSet.has(repoPath)) prInFlightRef.current.delete(repoPath);
+    }
     if (repos.length === 0) {
       setPrIndexByRepo(new Map());
       return;
@@ -268,9 +275,11 @@ export function useKanbanBoardData(
 
     const refresh = (force: boolean) => {
       for (const repo of repos) {
+        const existing = prInFlightRef.current.get(repo);
+        if (existing?.generation === generation) continue;
         const requestSeq = (prRequestSeqRef.current.get(repo) ?? 0) + 1;
         prRequestSeqRef.current.set(repo, requestSeq);
-        rightPanelCache
+        const promise = rightPanelCache
           .fetchPullRequests(repo, "all", PR_LIST_LIMIT, { force })
           .then((listing) => {
             if (
@@ -300,7 +309,13 @@ export function useKanbanBoardData(
               next.delete(repo);
               return next;
             });
+          })
+          .finally(() => {
+            if (prInFlightRef.current.get(repo)?.promise === promise) {
+              prInFlightRef.current.delete(repo);
+            }
           });
+        prInFlightRef.current.set(repo, { generation, promise });
       }
     };
 
