@@ -6905,6 +6905,14 @@ mod tests {
         assert_eq!(
             super::hook_status_with_live_tool_activity(
                 acorn_session::SessionStatus::WaitingForInput,
+                Some(super::AgentKind::Codex),
+                true,
+            ),
+            acorn_session::SessionStatus::WaitingForInput
+        );
+        assert_eq!(
+            super::hook_status_with_live_tool_activity(
+                acorn_session::SessionStatus::WaitingForInput,
                 Some(super::AgentKind::Antigravity),
                 true,
             ),
