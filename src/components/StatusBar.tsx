@@ -151,6 +151,9 @@ interface MemorySnapshot {
 const getCoalescedMemoryUsage = createInFlightCoalescer(() =>
   api.getMemoryUsage(),
 );
+const getCoalescedAgentTokenUsage = createInFlightCoalescer(() =>
+  api.getAgentTokenUsage(),
+);
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -210,7 +213,7 @@ function useAgentTokenUsage(
     let cancelled = false;
     const tick = async () => {
       try {
-        const usage = await api.getAgentTokenUsage();
+        const usage = await getCoalescedAgentTokenUsage();
         if (!cancelled) setSnapshot(usage);
       } catch {
         if (!cancelled) setSnapshot(null);
