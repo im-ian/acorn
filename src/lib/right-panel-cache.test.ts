@@ -222,6 +222,31 @@ describe("rightPanelCache", () => {
     expect(mockApi.commitDiff).toHaveBeenCalledTimes(21);
   });
 
+  it("keeps a fresh commit diff request when a pruned stale request settles", async () => {
+    const diff: DiffPayload = { files: [] };
+    const stale = deferred<DiffPayload>();
+    const fresh = deferred<DiffPayload>();
+    const unexpectedThird = deferred<DiffPayload>();
+    mockApi.commitDiff
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(fresh.promise)
+      .mockReturnValue(unexpectedThird.promise);
+
+    const staleRequest = rightPanelCache.fetchCommitDiff(REPO, "abc123");
+    rightPanelCache.retainRepos([OTHER_REPO]);
+    rightPanelCache.retainRepos([REPO]);
+    const freshRequest = rightPanelCache.fetchCommitDiff(REPO, "abc123");
+
+    stale.resolve(diff);
+    await staleRequest;
+
+    expect(rightPanelCache.fetchCommitDiff(REPO, "abc123")).toBe(freshRequest);
+    expect(mockApi.commitDiff).toHaveBeenCalledTimes(2);
+
+    fresh.resolve(diff);
+    await freshRequest;
+  });
+
   it("tracks project prefetch once until the repo is pruned", () => {
     expect(rightPanelCache.claimProjectPrefetch(REPO)).toBe(true);
     expect(rightPanelCache.claimProjectPrefetch(REPO)).toBe(false);
