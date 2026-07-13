@@ -190,12 +190,42 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function transcriptSummary(id: string, transcriptPath: string) {
+  return {
+    provider: "codex" as const,
+    id,
+    transcript_path: transcriptPath,
+    updated_at: 1_766_000_000,
+    message_count: 4,
+    user_messages: 2,
+    assistant_messages: 2,
+    turn_count: 2,
+    complete_turns: 2,
+    running_turns: 0,
+    recent_messages: [],
+    token_usage: {
+      input_tokens: 220,
+      output_tokens: 80,
+      cache_read_tokens: 20,
+      cache_creation_tokens: 0,
+      reasoning_tokens: 12,
+      total_tokens: 320,
+      messages_with_usage: 1,
+    },
+  };
+}
+
 describe("WorkSummaryView", () => {
   let container: HTMLDivElement;
   let root: Root;
   let restoreClipboard: (() => void) | null = null;
 
   beforeEach(() => {
+    (
+      globalThis as typeof globalThis & {
+        IS_REACT_ACT_ENVIRONMENT?: boolean;
+      }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -786,6 +816,122 @@ describe("WorkSummaryView", () => {
     expect(mocks.agentTranscriptSummary).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain("6 messages");
     expect(container.textContent).toContain("452 tokens");
+  });
+
+  it("does not overlap a slow transcript poll for the same conversation", async () => {
+    vi.useFakeTimers();
+    mocks.agentTranscriptSummary.mockResolvedValueOnce(
+      transcriptSummary(
+        "transcript-1",
+        "/Users/me/.codex/sessions/transcript-1.jsonl",
+      ),
+    );
+    const pendingPoll = deferred<
+      Awaited<ReturnType<typeof mocks.agentTranscriptSummaryAtPath>>
+    >();
+    mocks.agentTranscriptSummaryAtPath.mockReturnValue(pendingPoll.promise);
+    const tab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: `${REPO}/.worktrees/s1`,
+      sessionId: "s1",
+      title: "Feature runner Summary",
+    });
+
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={tab}
+          session={session({
+            mode: "terminal",
+            agent_transcript_id: "transcript-1",
+          })}
+          isActive
+        />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(15_000);
+      await Promise.resolve();
+    });
+    expect(mocks.agentTranscriptSummaryAtPath).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      vi.advanceTimersByTime(15_000);
+      await Promise.resolve();
+    });
+
+    expect(mocks.agentTranscriptSummaryAtPath).toHaveBeenCalledOnce();
+  });
+
+  it("does not let an old conversation completion clear a newer request", async () => {
+    vi.useFakeTimers();
+    const first = deferred<
+      Awaited<ReturnType<typeof mocks.agentTranscriptSummary>>
+    >();
+    const second = deferred<
+      Awaited<ReturnType<typeof mocks.agentTranscriptSummary>>
+    >();
+    mocks.agentTranscriptSummary
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValue(second.promise);
+    const firstTab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: `${REPO}/.worktrees/s1`,
+      sessionId: "s1",
+      title: "Feature runner Summary",
+    });
+    const secondTab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: `${REPO}/.worktrees/s2`,
+      sessionId: "s2",
+      title: "Second runner Summary",
+    });
+
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={firstTab}
+          session={session({
+            mode: "terminal",
+            agent_transcript_id: "transcript-1",
+          })}
+          isActive
+        />,
+      );
+    });
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={secondTab}
+          session={session({
+            id: "s2",
+            worktree_path: `${REPO}/.worktrees/s2`,
+            mode: "terminal",
+            agent_transcript_id: "transcript-2",
+          })}
+          isActive
+        />,
+      );
+    });
+    expect(mocks.agentTranscriptSummary).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      first.resolve(
+        transcriptSummary(
+          "transcript-1",
+          "/Users/me/.codex/sessions/transcript-1.jsonl",
+        ),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      vi.advanceTimersByTime(15_000);
+      await Promise.resolve();
+    });
+
+    expect(mocks.agentTranscriptSummary).toHaveBeenCalledTimes(2);
   });
 
   it("opens a changed file when its row is double-clicked", async () => {
