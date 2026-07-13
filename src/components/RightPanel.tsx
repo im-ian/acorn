@@ -59,7 +59,10 @@ import {
   onPullRequestMutation,
   pullRequestMutationAffectsOpenContext,
 } from "../lib/pullRequestEvents";
-import { rightPanelCache } from "../lib/right-panel-cache";
+import {
+  rememberRecentStagedDiff,
+  rightPanelCache,
+} from "../lib/right-panel-cache";
 import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
 import { primeCurrentPullRequestCacheFromListing } from "../lib/useCurrentPullRequest";
@@ -2482,7 +2485,9 @@ function StagedTab({
       .stagedFileDiff(repoPath, selectedPath)
       .then((payload) => {
         if (diffGenerationRef.current !== token) return;
-        setDiffByPath((prev) => ({ ...prev, [selectedPath]: payload }));
+        setDiffByPath((prev) =>
+          rememberRecentStagedDiff(prev, selectedPath, payload),
+        );
       })
       .catch((e) => {
         if (diffGenerationRef.current !== token) return;
