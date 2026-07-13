@@ -2,17 +2,17 @@
 # Build the sidecar binaries (`acorn-ipc`, `acornd`) and stage them where
 # Tauri's externalBin expects: `src-tauri/binaries/<name>-<target-triple>`.
 #
-# Tauri 2's externalBin convention names the staged file after the *target*
-# triple — the one being built for, not the host the script is running on.
-# When `tauri build --target X` runs, every matching `<name>-X` file must
-# exist before the build script's existence check fires. For the release
-# matrix on Apple-Silicon `macos-latest` runners that means producing an
-# x86_64 binary alongside the aarch64 one, even though the host is aarch64.
+# Tauri 2's externalBin convention names the staged file after the target
+# triple. Native builds use Cargo's standard host output directory so the
+# following Tauri app build can reuse the same dependency artifacts. Cross
+# builds keep target-specific output directories. Callers that explicitly
+# pass the host triple to Tauri can set TAURI_SIDECAR_FORCE_TARGET=1 to make
+# the sidecar use the same target-specific directory as the app build.
 #
 # Tauri passes the active target through `TAURI_ENV_TARGET_TRIPLE` to
 # commands spawned via `beforeBuildCommand`. Standalone callers (local
-# `pnpm run build:sidecar`, manual runs) fall back to the host triple so
-# the script keeps working without extra setup.
+# `pnpm run build:sidecar`, manual runs) use Cargo's configured target or
+# fall back to the host triple so the script works without extra setup.
 #
 # Exits non-zero on any failure so the build surfaces the problem instead
 # of silently shipping a `.app` without one of the sidecars.
@@ -22,11 +22,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 profile="${TAURI_SIDECAR_PROFILE:-release}"
-target_triple="${TAURI_ENV_TARGET_TRIPLE:-$(rustc -vV | sed -n 's|host: ||p')}"
+host_triple="$(rustc -vV | sed -n 's|host: ||p')"
+target_triple="${TAURI_ENV_TARGET_TRIPLE:-${CARGO_BUILD_TARGET:-$host_triple}}"
 target_dir="${CARGO_TARGET_DIR:-target}"
 
-if [ -z "$target_triple" ]; then
-  echo "error: could not determine target triple (TAURI_ENV_TARGET_TRIPLE unset and \`rustc -vV\` produced no host line)" >&2
+if [ -z "$host_triple" ] || [ -z "$target_triple" ]; then
+  echo "error: could not determine host and target triples" >&2
   exit 1
 fi
 
@@ -37,11 +38,16 @@ fi
 # single-line change; `externalBin` in tauri.conf.json must match.
 sidecars=("acorn-ipc:acorn-ipc" "acornd:acorn")
 
-# Always cross-compile with `--target` so the output lands in
-# `target/<triple>/<profile>/` even when host == target. The uniform
-# layout removes a branching copy step below and matches how the rest of
-# the release workflow already invokes cargo for the main binary.
-cargo_flags=(--target "$target_triple")
+# Cargo separates explicit-target artifacts from native artifacts even when
+# both triples are identical. Keep native sidecars in target/<profile>/ so a
+# regular `tauri dev` or `tauri build` does not compile the dependency graph
+# again under target/<host-triple>/<profile>/.
+cargo_flags=()
+artifact_dir="$target_dir/$profile"
+if [ "$target_triple" != "$host_triple" ] || [ "${TAURI_SIDECAR_FORCE_TARGET:-0}" = "1" ] || [ -n "${CARGO_BUILD_TARGET:-}" ]; then
+  cargo_flags+=(--target "$target_triple")
+  artifact_dir="$target_dir/$target_triple/$profile"
+fi
 for entry in "${sidecars[@]}"; do
   bin="${entry%%:*}"
   pkg="${entry##*:}"
@@ -75,7 +81,7 @@ cargo build "${cargo_flags[@]}"
 
 for entry in "${sidecars[@]}"; do
   bin="${entry%%:*}"
-  src="$target_dir/$target_triple/$profile/$bin"
+  src="$artifact_dir/$bin"
   dest="$dest_dir/$bin-$target_triple"
   if [ ! -f "$src" ]; then
     echo "error: expected built binary at $src" >&2

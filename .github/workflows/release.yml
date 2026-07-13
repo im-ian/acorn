@@ -77,6 +77,8 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -102,7 +104,7 @@ jobs:
       # bumps). Wraps rustc to memoize per-crate compilation outputs.
       - name: Setup sccache
         continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.6
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       # Probe the GHA cache backend before trusting sccache. When the
       # Azure Edge layer behind `artifactcache.actions.githubusercontent.com`
@@ -167,7 +169,7 @@ jobs:
         # `frontend` job's artifact one step ago. The sidecar staging
         # script still runs per-target because it cross-compiles for each
         # apple triple.
-        run: pnpm run tauri build --target ${{ matrix.target }} --bundles app dmg --config '{"build":{"beforeBuildCommand":"TAURI_SIDECAR_PROFILE=release-ci pnpm run build:sidecar"}}' -- --profile release-ci
+        run: pnpm run tauri build --target ${{ matrix.target }} --bundles app dmg --config '{"build":{"beforeBuildCommand":"TAURI_SIDECAR_FORCE_TARGET=1 TAURI_SIDECAR_PROFILE=release-ci pnpm run build:sidecar"}}' -- --profile release-ci
 
       - name: Stage release artifacts
         id: stage
@@ -271,7 +273,7 @@ jobs:
         env:
           RUSTFLAGS: "-Z share-generics=y -Z threads=8"
           CARGO_INCREMENTAL: "0"
-        run: pnpm run tauri build --target aarch64-apple-darwin --bundles app --config '{"build":{"beforeBuildCommand":"TAURI_SIDECAR_PROFILE=release-ci pnpm run build:sidecar"}}' -- --profile release-ci
+        run: pnpm run tauri build --target aarch64-apple-darwin --bundles app --config '{"build":{"beforeBuildCommand":"TAURI_SIDECAR_FORCE_TARGET=1 TAURI_SIDECAR_PROFILE=release-ci pnpm run build:sidecar"}}' -- --profile release-ci
 
   release:
     name: Publish GitHub Release + latest.json
