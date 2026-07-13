@@ -18,6 +18,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -50,6 +51,7 @@ export function BackgroundSessionsSettings() {
   const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmShutdown, setConfirmShutdown] = useState(false);
+  const pollInFlightRef = useRef<Promise<void> | null>(null);
   const appSessions = useAppStore((s) => s.sessions);
   const showToast = useToasts((s) => s.show);
 
@@ -76,8 +78,18 @@ export function BackgroundSessionsSettings() {
   }, []);
 
   useEffect(() => {
-    void refresh();
-    const id = window.setInterval(() => void refresh(), 3_000);
+    const poll = () => {
+      if (pollInFlightRef.current) return;
+      const promise = refresh().finally(() => {
+        if (pollInFlightRef.current === promise) {
+          pollInFlightRef.current = null;
+        }
+      });
+      pollInFlightRef.current = promise;
+    };
+
+    poll();
+    const id = window.setInterval(poll, 3_000);
     return () => window.clearInterval(id);
   }, [refresh]);
 
