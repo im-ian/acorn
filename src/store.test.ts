@@ -419,7 +419,7 @@ describe("sessionNotifications", () => {
     ).toEqual(["latest", "other"]);
   });
 
-  it("migrates legacy persisted activity status names on rehydrate", async () => {
+  it("migrates supported legacy activity and drops obsolete ready activity on rehydrate", async () => {
     window.localStorage.clear();
     resetStore();
     window.localStorage.setItem(
@@ -450,8 +450,19 @@ describe("sessionNotifications", () => {
               createdAt: "2026-01-01T00:01:00Z",
             },
             {
-              id: "unknown",
+              id: "obsolete-ready",
               sessionId: "s3",
+              kind: "became_ready",
+              status: "ready",
+              previousStatus: "working",
+              sessionName: "s3",
+              projectName: "repo-c",
+              repoPath: "/repo-c",
+              createdAt: "2026-01-01T00:00:30Z",
+            },
+            {
+              id: "unknown",
+              sessionId: "s4",
               kind: "unknown",
               status: "idle",
               previousStatus: "running",
@@ -471,12 +482,6 @@ describe("sessionNotifications", () => {
         kind: "waiting_for_input",
         status: "waiting_for_input",
         previousStatus: "working",
-      },
-      {
-        id: "legacy-idle",
-        kind: "became_ready",
-        status: "ready",
-        previousStatus: "waiting_for_input",
       },
     ]);
   });

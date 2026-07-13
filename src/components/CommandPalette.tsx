@@ -4,7 +4,6 @@ import {
   AlertCircle,
   Bell,
   Bot,
-  CheckCircle2,
   Columns3,
   FolderOpen,
   FolderPlus,
@@ -63,7 +62,6 @@ const ACTIVITY_KIND_KEYS: Record<
 > = {
   waiting_for_input: "commandPalette.activity.kind.waitingForInput",
   errored: "commandPalette.activity.kind.errored",
-  became_ready: "commandPalette.activity.kind.becameReady",
 };
 
 function activityKindLabel(
@@ -76,9 +74,6 @@ function activityKindLabel(
 function ActivityKindIcon({ kind }: { kind: SessionNotificationKind }) {
   if (kind === "errored") {
     return <AlertCircle size={14} className="text-danger" />;
-  }
-  if (kind === "became_ready") {
-    return <CheckCircle2 size={14} className="text-fg-muted" />;
   }
   return <Bell size={14} className="text-warning" />;
 }

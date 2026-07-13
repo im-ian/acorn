@@ -6,10 +6,7 @@ export type SessionStatus =
 
 export type SessionStatusReason = "turn_complete" | "shell_prompt";
 
-export type SessionNotificationKind =
-  | "waiting_for_input"
-  | "errored"
-  | "became_ready";
+export type SessionNotificationKind = "waiting_for_input" | "errored";
 
 export interface SessionNotification {
   id: string;

@@ -775,7 +775,6 @@ const NOTIFICATION_KIND_KEYS: Record<
 > = {
   waiting_for_input: "statusBar.notifications.kind.waitingForInput",
   errored: "statusBar.notifications.kind.errored",
-  became_ready: "statusBar.notifications.kind.becameReady",
 };
 
 function SessionNotificationsButton() {
@@ -1053,7 +1052,6 @@ function NotificationRow({
 
 function notificationDotClass(kind: SessionNotificationKind): string {
   if (kind === "errored") return "bg-danger";
-  if (kind === "became_ready") return "bg-fg-muted";
   return "bg-warning";
 }
 
