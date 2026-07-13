@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   diffStatsEntries,
   kanbanSessionBoardLookupPath,
   pickPullRequestForBranch,
   pickPullRequestForBranches,
+  readKanbanPrBranchLinks,
   summarizeDiffStats,
+  writeKanbanPrBranchLinks,
 } from "./useKanbanBoardData";
 import type { PullRequestInfo, Session } from "./types";
 
@@ -73,6 +75,25 @@ describe("pickPullRequestForBranches", () => {
     expect(pickPullRequestForBranches([pr], ["main", "feat/x"])?.number).toBe(
       604,
     );
+  });
+});
+
+describe("kanban PR branch links", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("persists the PR branch independently from the live checkout", () => {
+    writeKanbanPrBranchLinks({
+      session: { repoPath: "/repo", headBranch: "feat/x" },
+    });
+
+    expect(readKanbanPrBranchLinks()).toEqual({
+      session: { repoPath: "/repo", headBranch: "feat/x" },
+    });
+  });
+
+  it("ignores corrupt persisted links", () => {
+    localStorage.setItem("acorn:workspace-kanban:pr-branch-links:v1", "{");
+    expect(readKanbanPrBranchLinks()).toEqual({});
   });
 });
 

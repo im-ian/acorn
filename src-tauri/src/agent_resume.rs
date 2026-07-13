@@ -568,7 +568,7 @@ mod tests {
         let path = base.path().join("rollout.jsonl");
         fs::write(
             &path,
-            r#"{"type":"message","payload":{"role":"user","content":[{"type":"input_text","text":"Check the drawer regression."}]}}
+            r#"{"timestamp":"2026-01-02T03:00:00.000Z","type":"message","payload":{"role":"user","content":[{"type":"input_text","text":"Check the drawer regression."}]}}
 {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The regression is in the popover target."}]}}
 "#,
         )
@@ -583,6 +583,10 @@ mod tests {
         assert_eq!(
             preview.last_agent_message.as_deref(),
             Some("The regression is in the popover target.")
+        );
+        assert_eq!(
+            preview.last_user_message_at.as_deref(),
+            Some("2026-01-02T03:00:00.000Z")
         );
     }
 
