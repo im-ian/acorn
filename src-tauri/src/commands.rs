@@ -6874,7 +6874,7 @@ mod tests {
     }
 
     #[test]
-    fn persistent_claude_children_do_not_clear_waiting() {
+    fn live_tool_activity_preserves_explicit_waiting() {
         assert_eq!(
             super::hook_status_with_live_tool_activity(
                 acorn_session::SessionStatus::WaitingForInput,
