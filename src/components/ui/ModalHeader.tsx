@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { type ReactNode } from "react";
 import type { TranslationKey, Translator } from "../../lib/i18n";
 import { useTranslation } from "../../lib/useTranslation";
+import { Tooltip } from "../Tooltip";
 import { IconButton } from "./Button";
 import { type ModalVariant } from "./Modal";
 
@@ -39,14 +40,19 @@ export function ModalHeader({
   const closeButton = (
     <div className="flex shrink-0 items-center gap-1">
       {actions}
-      <IconButton
-        aria-label={dt(t, "dialogs.common.close")}
-        onClick={onClose}
-        size="sm"
-        surface={variant}
+      <Tooltip
+        label={dt(t, "dialogs.common.close")}
+        side="bottom"
       >
-        <X size={14} />
-      </IconButton>
+        <IconButton
+          aria-label={dt(t, "dialogs.common.close")}
+          onClick={onClose}
+          size="sm"
+          surface={variant}
+        >
+          <X size={14} />
+        </IconButton>
+      </Tooltip>
     </div>
   );
 

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ExternalLink, X } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "../lib/useTranslation";
+import { Tooltip } from "./Tooltip";
 
 interface ImageLightboxProps {
   image: { src: string; alt?: string } | null;
@@ -58,25 +59,32 @@ export function ImageLightbox({ image, onClose }: ImageLightboxProps) {
       onClick={onClose}
     >
       <div className="absolute right-3 top-3 flex items-center gap-1">
-        <button
-          type="button"
-          aria-label={t("imageLightbox.openInBrowser")}
-          onClick={(e) => {
-            e.stopPropagation();
-            void openUrl(image.src);
-          }}
-          className="rounded p-1.5 text-white/70 transition hover:bg-white/10 hover:text-white"
+        <Tooltip
+          label={t("imageLightbox.openInBrowser")}
+          side="bottom"
         >
-          <ExternalLink size={16} />
-        </button>
-        <button
-          type="button"
-          aria-label={t("imageLightbox.close")}
-          onClick={onClose}
-          className="rounded p-1.5 text-white/70 transition hover:bg-white/10 hover:text-white"
-        >
-          <X size={18} />
-        </button>
+          <button
+            type="button"
+            aria-label={t("imageLightbox.openInBrowser")}
+            onClick={(e) => {
+              e.stopPropagation();
+              void openUrl(image.src);
+            }}
+            className="rounded p-1.5 text-white/70 transition hover:bg-white/10 hover:text-white"
+          >
+            <ExternalLink size={16} />
+          </button>
+        </Tooltip>
+        <Tooltip label={t("imageLightbox.close")} side="bottom">
+          <button
+            type="button"
+            aria-label={t("imageLightbox.close")}
+            onClick={onClose}
+            className="rounded p-1.5 text-white/70 transition hover:bg-white/10 hover:text-white"
+          >
+            <X size={18} />
+          </button>
+        </Tooltip>
       </div>
       <img
         src={image.src}
