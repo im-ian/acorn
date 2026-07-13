@@ -3126,6 +3126,45 @@ mod tests {
     }
 
     #[test]
+    fn resolution_cache_removes_expired_entries_on_read() {
+        let mut cache = ResolutionCache::with_capacity(2);
+        let repo = PathBuf::from("/tmp/expired-worktree");
+        let expired_at = Instant::now()
+            .checked_sub(RESOLUTION_TTL)
+            .expect("resolution TTL should fit before now");
+        cache.insert_at(repo.clone(), "alice".to_string(), expired_at);
+
+        assert!(cache.get(&repo).is_none());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn resolution_cache_evicts_oldest_fresh_repo_at_capacity() {
+        let mut cache = ResolutionCache::with_capacity(2);
+        let now = Instant::now();
+        let first = PathBuf::from("/tmp/first-worktree");
+        let second = PathBuf::from("/tmp/second-worktree");
+        let third = PathBuf::from("/tmp/third-worktree");
+
+        cache.insert_at(
+            first.clone(),
+            "alice".to_string(),
+            now.checked_sub(Duration::from_secs(2)).unwrap(),
+        );
+        cache.insert_at(
+            second.clone(),
+            "bob".to_string(),
+            now.checked_sub(Duration::from_secs(1)).unwrap(),
+        );
+        cache.insert_at(third.clone(), "carol".to_string(), now);
+
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get(&first).is_none());
+        assert_eq!(cache.get(&second).map(|entry| entry.login), Some("bob".into()));
+        assert_eq!(cache.get(&third).map(|entry| entry.login), Some("carol".into()));
+    }
+
+    #[test]
     fn commit_login_input_validation_rejects_graphql_fragments() {
         assert_eq!(
             validate_github_slug("acme/widgets").unwrap(),
