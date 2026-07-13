@@ -43,7 +43,7 @@ import {
   useKanbanBoardData,
   writeKanbanPrBranchLinks,
 } from "./useKanbanBoardData";
-import type { PullRequestInfo, Session } from "./types";
+import type { PullRequestInfo, PullRequestListing, Session } from "./types";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -296,6 +296,11 @@ describe("kanban diff polling", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     apiMocks.fsGitDiffStats.mockResolvedValue({});
+    apiMocks.fsGitStatus.mockResolvedValue({
+      statuses: {},
+      huge: false,
+      limit: 5_000,
+    });
     cacheMocks.fetchPullRequests.mockResolvedValue({
       kind: "ok",
       items: [],
@@ -401,5 +406,90 @@ describe("kanban diff polling", () => {
     });
 
     expect(apiMocks.fsGitStatus).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("kanban PR polling", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    (
+      globalThis as typeof globalThis & {
+        IS_REACT_ACT_ENVIRONMENT?: boolean;
+      }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.useFakeTimers();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    apiMocks.fsGitStatus.mockResolvedValue({
+      statuses: {},
+      huge: false,
+      limit: 5_000,
+    });
+    apiMocks.fsGitDiffStats.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("does not overlap PR polls for the same repository", async () => {
+    const pending = deferred<PullRequestListing>();
+    cacheMocks.fetchPullRequests.mockReturnValue(pending.promise);
+
+    await act(async () => {
+      root.render(
+        createElement(BoardDataHarness, {
+          sessions: [boardSession("session-a", "/repo/a")],
+        }),
+      );
+    });
+    expect(cacheMocks.fetchPullRequests).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+
+    expect(cacheMocks.fetchPullRequests).toHaveBeenCalledOnce();
+  });
+
+  it("does not let an old PR poll clear a newer repository poll", async () => {
+    const first = deferred<PullRequestListing>();
+    const second = deferred<PullRequestListing>();
+    cacheMocks.fetchPullRequests.mockImplementation((repoPath: string) =>
+      repoPath === "/repo/a" ? first.promise : second.promise,
+    );
+
+    await act(async () => {
+      root.render(
+        createElement(BoardDataHarness, {
+          sessions: [boardSession("session-a", "/repo/a")],
+        }),
+      );
+    });
+    await act(async () => {
+      root.render(
+        createElement(BoardDataHarness, {
+          sessions: [boardSession("session-b", "/repo/b")],
+        }),
+      );
+    });
+    expect(cacheMocks.fetchPullRequests).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      first.resolve({ kind: "ok", items: [], account: "tester" });
+      await Promise.resolve();
+      await Promise.resolve();
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+
+    expect(cacheMocks.fetchPullRequests).toHaveBeenCalledTimes(2);
   });
 });
