@@ -703,20 +703,29 @@ export function ChatPane({
   useEffect(() => {
     let cancelled = false;
     let unlisten: UnlistenFn | null = null;
+    let loadInFlight: Promise<void> | null = null;
     latestChatStateUpdatedAtRef.current = null;
 
-    async function loadState(showLoading: boolean) {
-      if (showLoading) setLoading(true);
-      if (showLoading) setDraft("");
-      setError(null);
-      try {
-        const loaded = await api.loadChatSessionState(sessionId);
-        if (!cancelled) applyChatState(loaded);
-      } catch (err) {
-        if (!cancelled) setError(String(err));
-      } finally {
-        if (!cancelled && showLoading) setLoading(false);
-      }
+    function loadState(showLoading: boolean): Promise<void> {
+      if (loadInFlight) return loadInFlight;
+
+      const promise = (async () => {
+        if (showLoading) setLoading(true);
+        if (showLoading) setDraft("");
+        setError(null);
+        try {
+          const loaded = await api.loadChatSessionState(sessionId);
+          if (!cancelled) applyChatState(loaded);
+        } catch (err) {
+          if (!cancelled) setError(String(err));
+        } finally {
+          if (!cancelled && showLoading) setLoading(false);
+        }
+      })().finally(() => {
+        if (loadInFlight === promise) loadInFlight = null;
+      });
+      loadInFlight = promise;
+      return promise;
     }
 
     void loadState(true);
