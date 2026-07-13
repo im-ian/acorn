@@ -151,6 +151,35 @@ describe("deriveKanbanStage", () => {
     ).toBe("review");
   });
 
+  it("keeps a worked session out of idle on a paired transcript when previews are empty", () => {
+    // Long, attachment-heavy claude sessions routinely lose every tail-derived
+    // preview: the real turn lines fall outside the 256 KiB status/preview
+    // window, so last_*_message and status_reason all come back empty. The
+    // paired transcript is the durable signal that this session's own agent has
+    // produced work, so the card must not regress to idle.
+    expect(
+      deriveKanbanStage(
+        makeSession({
+          status: "ready",
+          agent_transcript_id: "934c9bac-d8ea-4d46-aefa-659aca6f71db",
+        }),
+        ctx(),
+      ),
+    ).toBe("review");
+  });
+
+  it("uses transcript activity as completed-work evidence", () => {
+    expect(
+      deriveKanbanStage(
+        makeSession({
+          status: "ready",
+          agent_activity_at: "2026-01-02T00:00:00.000Z",
+        }),
+        ctx(),
+      ),
+    ).toBe("review");
+  });
+
   it("moves completed work to done only when the PR finished after agent activity", () => {
     for (const [state, timestamps] of [
       ["merged", { merged_at: "2026-01-03T00:00:00.000Z" }],

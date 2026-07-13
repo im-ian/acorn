@@ -43,6 +43,13 @@ function prStateUpper(pr: PullRequestInfo | null): string | null {
 
 function hasCompletedAgentWork(session: Session): boolean {
   if (session.status_reason === "turn_complete") return true;
+  // Durable own-agent evidence. The message previews and status_reason are
+  // derived from the last 256 KiB of the transcript; for long, attachment-heavy
+  // sessions the real turn lines fall outside that window and every tail signal
+  // comes back empty, which would otherwise regress a clearly-worked session to
+  // idle. A paired transcript (persisted) or observed transcript activity means
+  // this session's own agent has run, independent of the volatile tail preview.
+  if (session.agent_transcript_id || session.agent_activity_at) return true;
   return [
     session.last_user_message,
     session.last_agent_message,
