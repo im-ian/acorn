@@ -1,4 +1,4 @@
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   afterEach,
@@ -333,6 +333,32 @@ describe("kanban diff polling", () => {
     });
 
     expect(apiMocks.fsGitStatus).toHaveBeenCalledOnce();
+  });
+
+  it("starts a live refresh after StrictMode cancels the first effect", async () => {
+    const first = deferred<{
+      statuses: Record<string, never>;
+      huge: boolean;
+      limit: number;
+    }>();
+    apiMocks.fsGitStatus
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue({ statuses: {}, huge: false, limit: 5_000 });
+
+    await act(async () => {
+      root.render(
+        createElement(
+          StrictMode,
+          null,
+          createElement(BoardDataHarness, {
+            sessions: [boardSession("session-a", "/repo/a")],
+          }),
+        ),
+      );
+    });
+
+    expect(apiMocks.fsGitStatus).toHaveBeenCalledTimes(2);
+    first.resolve({ statuses: {}, huge: false, limit: 5_000 });
   });
 
   it("does not let an old poll completion clear a newer session set poll", async () => {
