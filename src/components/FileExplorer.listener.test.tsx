@@ -184,6 +184,9 @@ describe("FileExplorer filesystem listener", () => {
     resolveFirst({});
     await act(async () => {
       await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
       vi.advanceTimersByTime(1_200);
       await Promise.resolve();
     });
