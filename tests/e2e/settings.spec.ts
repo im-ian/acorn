@@ -2,6 +2,22 @@ import { test, expect, pressHotkey } from "./support";
 
 const SETTINGS_DIALOG_NAME = /^(Settings|설정)$/;
 
+const NOTE_CSS = `/* @mode light */
+:root[data-acorn-theme="note"] {
+  --color-bg: #f7f1e1;
+  --color-bg-elevated: #eee5cf;
+  --color-bg-sidebar: #e5dbc3;
+  --color-fg: #2c2922;
+  --color-fg-muted: #756e60;
+  --color-border: #c9bda4;
+  --color-accent: #244e8a;
+  --color-accent-hover: #183d70;
+  --color-danger: #a33f35;
+  --color-warning: #a56b20;
+  --color-terminal-bg: #f7f0df;
+  --color-terminal-fg: #29261f;
+}`;
+
 test.describe("settings modal", () => {
   test("opens with $mod+, and closes with Escape", async ({ page }) => {
     await page.goto("/");
@@ -33,134 +49,134 @@ test.describe("settings modal", () => {
     await expect(modal).toHaveCount(0);
   });
 
-  test("selects and persists the expanded built-in theme pack", async ({
+  test("downloads, selects, and removes a catalog theme", async ({
     page,
+    tauri,
   }) => {
+    await page.route(
+      "https://raw.githubusercontent.com/im-ian/acorn-themes/main/manifest.json",
+      (route) =>
+        route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({
+            schemaVersion: 1,
+            themes: [
+              {
+                id: "note",
+                label: "Note",
+                mode: "light",
+                version: 1,
+                file: "themes/note.css",
+              },
+            ],
+          }),
+        }),
+    );
+    await page.route(
+      "https://raw.githubusercontent.com/im-ian/acorn-themes/main/themes/note.css",
+      (route) => route.fulfill({ contentType: "text/css", body: NOTE_CSS }),
+    );
+    await tauri.handle("plugin:fs|exists", (args) => {
+      const path = String((args as { path?: string })?.path ?? "");
+      const state = window as unknown as {
+        __themeInstalled?: boolean;
+      };
+      if (path.endsWith("catalog.json") || path.endsWith("note.css")) {
+        return Boolean(state.__themeInstalled);
+      }
+      return true;
+    });
+    await tauri.handle("plugin:fs|read_dir", () => {
+      const state = window as unknown as { __themeInstalled?: boolean };
+      return state.__themeInstalled
+        ? [{ name: "note.css", isFile: true, isDirectory: false, isSymlink: false }]
+        : [];
+    });
+    await tauri.handle("plugin:fs|read_text_file", (args) => {
+      const path = String((args as { path?: string })?.path ?? "");
+      if (path.endsWith("catalog.json")) {
+        const metadata = JSON.stringify({
+          schemaVersion: 1,
+          installed: {
+            note: {
+              label: "Note",
+              mode: "light",
+              version: 1,
+              file: "note.css",
+            },
+          },
+        });
+        return Array.from(new TextEncoder().encode(metadata));
+      }
+      const css = `/* @mode light */
+:root[data-acorn-theme="note"] {
+  --color-bg: #f7f1e1;
+  --color-bg-elevated: #eee5cf;
+  --color-bg-sidebar: #e5dbc3;
+  --color-fg: #2c2922;
+  --color-fg-muted: #756e60;
+  --color-border: #c9bda4;
+  --color-accent: #244e8a;
+  --color-accent-hover: #183d70;
+  --color-danger: #a33f35;
+  --color-warning: #a56b20;
+  --color-terminal-bg: #f7f0df;
+  --color-terminal-fg: #29261f;
+}`;
+      return Array.from(new TextEncoder().encode(css));
+    });
+    await tauri.handle("plugin:fs|write_text_file", () => {
+      const state = window as unknown as {
+        __themeInstalled?: boolean;
+        __themeRemoving?: boolean;
+      };
+      if (!state.__themeRemoving) state.__themeInstalled = true;
+      return undefined;
+    });
+    await tauri.handle("plugin:fs|remove", () => {
+      const state = window as unknown as {
+        __themeInstalled?: boolean;
+        __themeRemoving?: boolean;
+      };
+      state.__themeInstalled = false;
+      state.__themeRemoving = true;
+      return undefined;
+    });
+
     await page.goto("/");
     await pressHotkey(page, { mod: true, key: "," });
 
     const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
-    await modal.getByRole("button", { name: /^(Appearance|모양)$/ }).click();
+    await modal.getByRole("button", { name: /^(Themes|테마)$/ }).click();
 
     const themeSelect = modal.getByRole("combobox", {
       name: /^(Theme|테마)$/,
     });
-    const themes = [
-      {
-        id: "retro-terminal",
-        label: "Retro Terminal",
-        accent: "#52f27b",
-        terminalBackground: "#020704",
-        paneRadius: "0.2rem",
-      },
-      {
-        id: "amber-terminal",
-        label: "Amber Terminal",
-        accent: "#ffb000",
-        terminalBackground: "#080400",
-        paneRadius: "0.2rem",
-      },
-      {
-        id: "oled-mono",
-        label: "OLED Mono",
-        accent: "#f5f5f5",
-        terminalBackground: "#000000",
-        paneRadius: "0.35rem",
-      },
-      {
-        id: "cobalt-circuit",
-        label: "Cobalt Circuit",
-        accent: "#38bdf8",
-        terminalBackground: "#030914",
-        paneRadius: "0.35rem",
-      },
-      {
-        id: "paper-ledger",
-        label: "Paper Ledger",
-        accent: "#9f3f2f",
-        terminalBackground: "#1f1b16",
-        paneRadius: "0.15rem",
-      },
-      {
-        id: "acorn-ink",
-        label: "Ink",
-        accent: "#244e8a",
-        terminalBackground: "#f7f0df",
-        paneRadius: "0.25rem",
-      },
-    ] as const;
+    await themeSelect.click();
+    await expect(page.getByRole("option")).toHaveCount(4);
+    await expect(page.getByRole("option", { name: "Note" })).toHaveCount(0);
+    await page
+      .getByRole("option", { name: "Acorn Dark Green", exact: true })
+      .click();
 
-    for (const theme of themes) {
-      await themeSelect.click();
-      await page
-        .getByRole("option", { name: theme.label, exact: true })
-        .click();
+    const noteRow = modal.getByRole("listitem").filter({ hasText: "Note" });
+    await expect(noteRow).toContainText(/Available to download|다운로드 가능/);
+    await noteRow.getByRole("button", { name: /^(Download|다운로드)$/ }).click();
+    await expect(noteRow).toContainText(/Downloaded|다운로드됨/);
 
-      await expect(themeSelect).toContainText(theme.label);
-      await expect
-        .poll(() =>
-          page.evaluate(() =>
-            document.documentElement.getAttribute("data-acorn-theme"),
-          ),
-        )
-        .toBe(theme.id);
-      await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const styles = getComputedStyle(document.documentElement);
-            return {
-              accent: styles.getPropertyValue("--color-accent").trim(),
-              terminalBackground: styles
-                .getPropertyValue("--color-terminal-bg")
-                .trim(),
-              paneRadius: styles.getPropertyValue("--acorn-pane-radius").trim(),
-            };
-          }),
-        )
-        .toEqual({
-          accent: theme.accent,
-          terminalBackground: theme.terminalBackground,
-          paneRadius: theme.paneRadius,
-        });
-      if (theme.id === "paper-ledger") {
-        await expect
-          .poll(() =>
-            page.evaluate(() => {
-              const radio = document.querySelector<HTMLElement>(
-                'input[name="acorn-session-title"]:not(:checked)',
-              )?.parentElement;
-              return radio ? getComputedStyle(radio).backgroundColor : null;
-            }),
-          )
-          .toBe("rgb(244, 236, 216)");
-      }
-      if (theme.id === "acorn-ink") {
-        const inkSurface = await page.evaluate(() => {
-          const appShell = document.querySelector<HTMLElement>(
-            ".acorn-app-shell",
-          );
-          const modalSurface = document.querySelector<HTMLElement>(
-            'body > [role="dialog"] > div',
-          );
-          const rootStyles = getComputedStyle(document.documentElement);
-          return {
-            font: rootStyles.getPropertyValue("--font-sans").trim(),
-            appBackground: appShell
-              ? getComputedStyle(appShell).backgroundImage
-              : "",
-            modalBackground: modalSurface
-              ? getComputedStyle(modalSurface).backgroundImage
-              : "",
-          };
-        });
-        expect(inkSurface.font).toContain("Iowan Old Style");
-        expect(inkSurface.appBackground).toContain("repeating-linear-gradient");
-        expect(inkSurface.appBackground).toContain("linear-gradient(90deg");
-        expect(inkSurface.modalBackground).toContain(
-          "repeating-linear-gradient",
-        );
-      }
-    }
+    await themeSelect.click();
+    await page.getByRole("option", { name: "Note", exact: true }).click();
+    await expect(themeSelect).toContainText("Note");
+    await expect
+      .poll(() =>
+        page.evaluate(() => ({
+          id: document.documentElement.getAttribute("data-acorn-theme"),
+          accent: getComputedStyle(document.documentElement)
+            .getPropertyValue("--color-accent")
+            .trim(),
+        })),
+      )
+      .toEqual({ id: "note", accent: "#244e8a" });
 
     await expect
       .poll(() =>
@@ -169,7 +185,17 @@ test.describe("settings modal", () => {
           return raw ? JSON.parse(raw).appearance?.themeId : null;
         }),
       )
-      .toBe("acorn-ink");
+      .toBe("note");
+
+    await noteRow.getByRole("button", { name: /^(Remove|삭제)$/ }).click();
+    await expect(noteRow).toContainText(/Available to download|다운로드 가능/);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          document.documentElement.getAttribute("data-acorn-theme"),
+        ),
+      )
+      .toBe("acorn-dark");
   });
 
   test("adjusts terminal letter spacing and persists it", async ({ page }) => {

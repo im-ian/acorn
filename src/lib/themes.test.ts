@@ -13,155 +13,34 @@ afterEach(() => {
 });
 
 describe("BUILT_IN_THEMES", () => {
-  it("ships an expanded set of built-in themes", () => {
+  it("bundles only the four core Acorn themes", () => {
     expect(BUILT_IN_THEMES.map((theme) => theme.id)).toEqual([
       "acorn-dark",
       "acorn-pink",
-      "retro-terminal",
-      "amber-terminal",
-      "oled-mono",
-      "cobalt-circuit",
-      "one-dark-pro",
-      "monokai-pro",
-      "kanagawa-wave",
-      "everforest-dark",
-      "github-dark",
-      "solarized-dark",
-      "flexoki-dark",
-      "high-contrast-dark",
-      "tokyo-night",
-      "dracula",
-      "catppuccin-mocha",
-      "gruvbox-dark",
-      "nord",
-      "rose-pine",
-      "ayu-dark",
       "acorn-light",
       "acorn-light-pink",
-      "acorn-ink",
-      "paper-ledger",
-      "github-light",
-      "high-contrast-light",
-      "flexoki-light",
-      "solarized-light",
-      "catppuccin-latte",
-      "one-light",
-      "gruvbox-light",
     ]);
-    expect(BUILT_IN_THEMES).toHaveLength(32);
-    expect(BUILT_IN_THEMES.filter((theme) => theme.mode === "dark")).toHaveLength(
-      21,
-    );
+    expect(BUILT_IN_THEMES).toHaveLength(4);
+    expect(
+      BUILT_IN_THEMES.filter((theme) => theme.mode === "dark"),
+    ).toHaveLength(2);
     expect(
       BUILT_IN_THEMES.filter((theme) => theme.mode === "light"),
-    ).toHaveLength(11);
+    ).toHaveLength(2);
   });
 
   it("keeps Acorn built-in theme ids and labels stable", () => {
     expect(
-      BUILT_IN_THEMES.slice(0, 2).map((theme) => ({
+      BUILT_IN_THEMES.map((theme) => ({
         id: theme.id,
         label: theme.label,
       })),
     ).toEqual([
       { id: "acorn-dark", label: "Acorn Dark Green" },
       { id: "acorn-pink", label: "Acorn Dark Pink" },
-    ]);
-    expect(
-      BUILT_IN_THEMES.filter((theme) => theme.id.startsWith("acorn-")).map(
-        (theme) => ({
-          id: theme.id,
-          label: theme.label,
-        }),
-      ),
-    ).toEqual([
-      { id: "acorn-dark", label: "Acorn Dark Green" },
-      { id: "acorn-pink", label: "Acorn Dark Pink" },
       { id: "acorn-light", label: "Acorn Light Green" },
       { id: "acorn-light-pink", label: "Acorn Light Pink" },
-      { id: "acorn-ink", label: "Ink" },
     ]);
-  });
-
-  it("ships Ink as a ruled-paper Acorn theme", () => {
-    const theme = BUILT_IN_THEMES.find(
-      (candidate) => candidate.id === "acorn-ink",
-    );
-
-    expect(theme).toMatchObject({
-      label: "Ink",
-      mode: "light",
-      source: "builtin",
-    });
-    expect(theme?.css).toContain("--color-terminal-bg: #f7f0df");
-    expect(theme?.css).toContain("--ink-rule:");
-    expect(theme?.css).toContain("repeating-linear-gradient");
-    expect(theme?.css).toContain(".acorn-terminal-shell");
-  });
-
-  it("ships the retro terminal palette as a built-in dark theme", () => {
-    const theme = BUILT_IN_THEMES.find(
-      (candidate) => candidate.id === "retro-terminal",
-    );
-
-    expect(theme).toMatchObject({
-      label: "Retro Terminal",
-      mode: "dark",
-      source: "builtin",
-    });
-    expect(theme?.css).toContain("--color-terminal-bg: #020704");
-    expect(theme?.css).toContain("--color-terminal-fg: #8cff9f");
-    expect(theme?.css).toContain("--color-term-green: #52f27b");
-    expect(theme?.css).toContain('--font-sans: "JetBrains Mono"');
-  });
-
-  it("ships the extended palette pack with stable identities", () => {
-    const expectedThemes = [
-      {
-        id: "amber-terminal",
-        label: "Amber Terminal",
-        mode: "dark",
-        accent: "#ffb000",
-        terminalBackground: "#080400",
-      },
-      {
-        id: "oled-mono",
-        label: "OLED Mono",
-        mode: "dark",
-        accent: "#f5f5f5",
-        terminalBackground: "#000000",
-      },
-      {
-        id: "cobalt-circuit",
-        label: "Cobalt Circuit",
-        mode: "dark",
-        accent: "#38bdf8",
-        terminalBackground: "#030914",
-      },
-      {
-        id: "paper-ledger",
-        label: "Paper Ledger",
-        mode: "light",
-        accent: "#9f3f2f",
-        terminalBackground: "#1f1b16",
-      },
-    ] as const;
-
-    for (const expected of expectedThemes) {
-      const theme = BUILT_IN_THEMES.find(
-        (candidate) => candidate.id === expected.id,
-      );
-      expect(theme).toMatchObject({
-        id: expected.id,
-        label: expected.label,
-        mode: expected.mode,
-        source: "builtin",
-      });
-      expect(theme?.css).toContain(`--color-accent: ${expected.accent}`);
-      expect(theme?.css).toContain(
-        `--color-terminal-bg: ${expected.terminalBackground}`,
-      );
-    }
   });
 
   it("every built-in css passes validation", () => {

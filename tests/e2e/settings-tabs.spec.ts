@@ -135,6 +135,7 @@ test.describe("settings modal: tab content", () => {
     for (const tab of [
       "인터페이스",
       "모양",
+      "테마",
       "터미널",
       "세션",
       "에이전트",
@@ -160,8 +161,8 @@ test.describe("settings modal: tab content", () => {
       modal.getByRole("button", { name: "기본값으로 재설정" }),
     ).toBeVisible();
 
-    await modal.getByRole("button", { name: "모양", exact: true }).click();
-    await expect(modal.getByText("테마", { exact: true })).toBeVisible();
+    await modal.getByRole("button", { name: "테마", exact: true }).click();
+    await expect(modal.getByRole("combobox", { name: "테마" })).toBeVisible();
 
     await modal.getByRole("button", { name: "터미널", exact: true }).click();
     await expect(modal.getByText("글꼴 패밀리")).toBeVisible();
