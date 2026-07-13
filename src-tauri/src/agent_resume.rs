@@ -337,8 +337,27 @@ pub(crate) fn extract_conversation_preview(
     path: &Path,
 ) -> io::Result<ConversationPreview> {
     let tail = read_tail(path, PREVIEW_TAIL_BYTES)?;
+    let mut preview = scan_conversation_preview(kind, &tail.text);
+    // A long agent turn (big review, many tool calls) can push the last user
+    // message past the small tail window, blanking the card's USER line. Only
+    // when the cheap tail missed it — and the file has more to read — pay for a
+    // wider read to recover it.
+    // ponytail: 32 MiB ceiling. Autonomous agents churn megabytes per turn
+    // (a live review session measured ~6.5 MiB and climbing), so the cap must
+    // clear realistic single-turn spans; a turn larger than this keeps no USER
+    // preview. Reads hit the OS page cache (~3 ms) and run off the UI thread.
+    if preview.last_user_message.is_none() && !tail.read_full {
+        let wider = read_tail(path, PREVIEW_MAX_TAIL_BYTES)?;
+        let recovered = scan_conversation_preview(kind, &wider.text);
+        preview.last_user_message = recovered.last_user_message;
+        preview.last_agent_message = preview.last_agent_message.or(recovered.last_agent_message);
+    }
+    Ok(preview)
+}
+
+fn scan_conversation_preview(kind: AgentKind, text: &str) -> ConversationPreview {
     let mut preview = ConversationPreview::default();
-    for line in tail.text.lines().rev() {
+    for line in text.lines().rev() {
         let Some(parsed) = parse_transcript_line(kind, line) else {
             continue;
         };
@@ -355,17 +374,17 @@ pub(crate) fn extract_conversation_preview(
                     .as_deref()
                     .and_then(|text| collapse_preview(text, PREVIEW_CHARS));
             }
-            TranscriptRole::Other => {}
             _ => {}
         }
         if preview.last_user_message.is_some() && preview.last_agent_message.is_some() {
             break;
         }
     }
-    Ok(preview)
+    preview
 }
 
 const PREVIEW_TAIL_BYTES: u64 = 262_144;
+const PREVIEW_MAX_TAIL_BYTES: u64 = 32 * 1024 * 1024;
 const PREVIEW_CHARS: usize = 90;
 
 #[cfg(test)]
@@ -518,6 +537,36 @@ mod tests {
         assert_eq!(
             preview.last_user_message.as_deref(),
             Some("Please review the pull request.")
+        );
+    }
+
+    #[test]
+    fn claude_conversation_preview_recovers_user_message_past_tail_window() {
+        let base = ScratchDir::new("claude-long-turn-preview");
+        let path = base.path().join("transcript.jsonl");
+        // One big assistant turn pushes the user message well past the 256 KiB
+        // tail window; the preview must still recover it.
+        let filler = "x".repeat((PREVIEW_TAIL_BYTES as usize) + 100_000);
+        let contents = format!(
+            "{}\n{}\n{}\n",
+            r#"{"type":"user","message":{"content":"Review PRs 638 to 603."}}"#,
+            format!(
+                r#"{{"type":"assistant","message":{{"content":"{}"}}}}"#,
+                filler
+            ),
+            r#"{"type":"assistant","message":{"content":"CI: nearly all CLEAN."}}"#,
+        );
+        fs::write(&path, contents).unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Claude, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Review PRs 638 to 603.")
+        );
+        assert_eq!(
+            preview.last_agent_message.as_deref(),
+            Some("CI: nearly all CLEAN.")
         );
     }
 
