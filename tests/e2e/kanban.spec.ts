@@ -42,6 +42,64 @@ function session(
 }
 
 test.describe("workspace kanban mode", () => {
+  test("keeps kanban placement and terminal status in sync after an input request", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("input-request", "input request", "working", {
+        agent_provider: "codex",
+      }),
+    ]);
+    await tauri.handle("detect_session_statuses", (args) => {
+      const ids = Array.isArray((args as { ids?: unknown }).ids)
+        ? ((args as { ids: string[] }).ids)
+        : [];
+      const waiting = (
+        window as unknown as { __kanbanInputRequested?: boolean }
+      ).__kanbanInputRequested;
+      return ids.map((id) => ({
+        id,
+        status: waiting ? "waiting_for_input" : "working",
+        agent_provider: "codex",
+        branch: `feat/${id}`,
+      }));
+    });
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    const workingCard = board.locator(
+      'section[aria-label="Working"] [data-kanban-session-id="input-request"]',
+    );
+    await expect(workingCard).toBeVisible();
+    await workingCard.click();
+
+    const popover = page.getByTestId("kanban-terminal-popover");
+    await expect(popover).toContainText("Working");
+
+    await page.evaluate(() => {
+      (
+        window as unknown as { __kanbanInputRequested?: boolean }
+      ).__kanbanInputRequested = true;
+    });
+
+    const waitingCard = board.locator(
+      'section[aria-label="Waiting"] [data-kanban-session-id="input-request"]',
+    );
+    await expect(waitingCard).toBeVisible({ timeout: 3_000 });
+    await expect(popover).toContainText("Waiting for input");
+    await expect(page.getByTestId("workspace-kanban-count-working")).toHaveText(
+      "0",
+    );
+    await expect(page.getByTestId("workspace-kanban-count-waiting")).toHaveText(
+      "1",
+    );
+  });
+
   test("derives lifecycle from agent work instead of shared Git state", async ({
     page,
     tauri,
