@@ -5856,10 +5856,7 @@ fn hook_status_with_live_tool_activity(
 ) -> SessionStatus {
     if live_tool_child
         && matches!(live_agent_kind, Some(AgentKind::Codex))
-        && matches!(
-            hook_status,
-            SessionStatus::Ready | SessionStatus::WaitingForInput
-        )
+        && hook_status == SessionStatus::Ready
     {
         SessionStatus::Working
     } else {
