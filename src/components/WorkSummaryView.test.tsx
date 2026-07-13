@@ -352,6 +352,108 @@ describe("WorkSummaryView", () => {
     expect(container.textContent).toContain("2 messages");
   });
 
+  it("does not overlap a slow git summary refresh for the same cwd", async () => {
+    vi.useFakeTimers();
+    const pendingStatus = deferred<
+      Awaited<ReturnType<typeof mocks.fsGitStatus>>
+    >();
+    mocks.fsGitStatus.mockReturnValue(pendingStatus.promise);
+    const tab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: `${REPO}/.worktrees/s1`,
+      sessionId: "s1",
+      title: "Feature runner Summary",
+    });
+
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={tab}
+          session={session({ mode: "chat" })}
+          isActive
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(mocks.fsGitStatus).toHaveBeenCalledOnce();
+
+    act(() => {
+      emitEvent("acorn:fs-changed", {
+        paths: [`${REPO}/.worktrees/s1/src/App.tsx`],
+        dotgit_changed: false,
+      });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+
+    expect(mocks.fsGitStatus).toHaveBeenCalledOnce();
+  });
+
+  it("does not let an old git summary completion clear a newer cwd request", async () => {
+    vi.useFakeTimers();
+    const first = deferred<Awaited<ReturnType<typeof mocks.fsGitStatus>>>();
+    const second = deferred<Awaited<ReturnType<typeof mocks.fsGitStatus>>>();
+    mocks.fsGitStatus.mockImplementation((cwdPath: string) =>
+      cwdPath.endsWith("/s1") ? first.promise : second.promise,
+    );
+    const firstTab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: `${REPO}/.worktrees/s1`,
+      sessionId: "s1",
+      title: "Feature runner Summary",
+    });
+    const secondTab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: `${REPO}/.worktrees/s2`,
+      sessionId: "s2",
+      title: "Second runner Summary",
+    });
+
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={firstTab}
+          session={session({ mode: "chat" })}
+          isActive
+        />,
+      );
+    });
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={secondTab}
+          session={session({
+            id: "s2",
+            worktree_path: `${REPO}/.worktrees/s2`,
+            mode: "chat",
+          })}
+          isActive
+        />,
+      );
+    });
+    expect(mocks.fsGitStatus).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      first.resolve({ statuses: {}, huge: false, limit: 500 });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    act(() => {
+      emitEvent("acorn:fs-changed", {
+        paths: [`${REPO}/.worktrees/s2/src/App.tsx`],
+        dotgit_changed: false,
+      });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+
+    expect(mocks.fsGitStatus).toHaveBeenCalledTimes(2);
+  });
+
   it("renders git and chat summary metrics for a chat session", async () => {
     const tab = makeWorkSummaryWorkspaceTab({
       repoPath: REPO,
