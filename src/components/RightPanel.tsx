@@ -589,6 +589,7 @@ export function RightPanel() {
               <ActionsTab
                 key={`actions:${projectRootRepoPath}`}
                 repoPath={projectRootRepoPath}
+                active={rightTab === "actions"}
               />
             </BackgroundLoadedTab>
           </>
@@ -3716,7 +3717,13 @@ function fetchWorkflowRunsCached(
   return rightPanelCache.fetchWorkflowRuns(repoPath, limit, options);
 }
 
-function ActionsTab({ repoPath }: { repoPath: string }) {
+function ActionsTab({
+  repoPath,
+  active,
+}: {
+  repoPath: string;
+  active: boolean;
+}) {
   const t = useTranslation();
   const refreshIntervalMs = useSettings(
     (s) => s.settings.github.refreshIntervalMs,
@@ -3781,9 +3788,10 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
         : listing.items.filter((r) => r.workflow_name === workflowFilter)
       : [];
   const nowUnix = useLiveUnixSeconds(
-    visibleItems.some(
-      (run) => run.status.toLowerCase() !== "completed" && !!run.started_at,
-    ),
+    active &&
+      visibleItems.some(
+        (run) => run.status.toLowerCase() !== "completed" && !!run.started_at,
+      ),
   );
 
   return (
