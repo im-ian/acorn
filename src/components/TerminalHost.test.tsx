@@ -388,6 +388,40 @@ describe("TerminalHost", () => {
     ]);
   });
 
+  it("coalesces daemon eviction probes while a previous probe is pending", async () => {
+    const ids = ["s1", "s2", "s3", "s4"];
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        terminal: {
+          ...DEFAULT_SETTINGS.terminal,
+          maxMountedTerminals: 2,
+        },
+      },
+    });
+    let resolveProbe!: (
+      sessions: Array<{ id: string; alive: boolean }>,
+    ) => void;
+    mocks.daemonListSessions.mockReturnValue(
+      new Promise((resolve) => {
+        resolveProbe = resolve;
+      }),
+    );
+    installWorkspaceSessions(ids);
+    render();
+    await flushEffects();
+
+    await focusSession("s2");
+    await focusSession("s3");
+    expect(mocks.daemonListSessions).toHaveBeenCalledTimes(1);
+
+    await focusSession("s4");
+    expect(mocks.daemonListSessions).toHaveBeenCalledTimes(1);
+
+    resolveProbe(ids.map((id) => ({ id, alive: true })));
+    await flushEffects();
+  });
+
   it("keeps off-screen terminals mounted when resident terminal eviction is disabled", async () => {
     const ids = ["s1", "s2", "s3"];
     useSettings.setState({
