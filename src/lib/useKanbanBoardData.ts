@@ -166,6 +166,15 @@ function comparableRepoPath(path: string): string {
   return normalized || "/";
 }
 
+export function pruneKanbanRepoRequestSequences(
+  sequences: Map<string, number>,
+  retainedRepos: ReadonlySet<string>,
+): void {
+  for (const repoPath of sequences.keys()) {
+    if (!retainedRepos.has(repoPath)) sequences.delete(repoPath);
+  }
+}
+
 /**
  * Resolve the repository used for PR listings. A session's live git context
  * normally resolves to its own worktree, but PRs belong to the shared project
@@ -238,11 +247,12 @@ export function useKanbanBoardData(
   useEffect(() => {
     let cancelled = false;
     const repos = repoKey ? repoKey.split("\n") : [];
+    const repoSet = new Set(repos);
+    pruneKanbanRepoRequestSequences(prRequestSeqRef.current, repoSet);
     if (repos.length === 0) {
       setPrIndexByRepo(new Map());
       return;
     }
-    const repoSet = new Set(repos);
     setPrIndexByRepo((previous) => {
       const next = new Map(previous);
       for (const repo of next.keys()) {
