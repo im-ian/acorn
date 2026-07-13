@@ -93,7 +93,7 @@ describe("parseThemeCatalog", () => {
 describe("catalog theme persistence", () => {
   it("downloads validated CSS and records the installed catalog version", async () => {
     tauriFsMock.exists.mockImplementation((path: string) =>
-      Promise.resolve(!path.endsWith(".catalog.json")),
+      Promise.resolve(!path.endsWith("catalog.json")),
     );
     vi.stubGlobal(
       "fetch",
@@ -154,7 +154,7 @@ describe("catalog theme persistence", () => {
       { isFile: true, name: "personal.css" },
     ]);
     tauriFsMock.readTextFile.mockImplementation((path: string) => {
-      if (path.endsWith(".catalog.json")) {
+      if (path.endsWith("catalog.json")) {
         return Promise.resolve(
           JSON.stringify({
             schemaVersion: 1,

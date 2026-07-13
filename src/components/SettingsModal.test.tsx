@@ -81,6 +81,7 @@ const mocks = vi.hoisted(() => ({
   ],
   loadThemeCatalog: vi.fn<() => Promise<void>>(),
   installTheme: vi.fn<() => Promise<void>>(),
+  openThemePreview: vi.fn<() => Promise<void>>(),
   uninstallTheme: vi.fn<() => Promise<void>>(),
   importBackgroundImage: vi.fn<
     (name: string, bytes: Uint8Array) => Promise<{ relativePath: string; fileName: string }>
@@ -132,6 +133,7 @@ vi.mock("../lib/releases", () => ({
 
 vi.mock("../lib/themes", () => ({
   BUILT_IN_THEMES: mocks.themes.filter((theme) => theme.source === "builtin"),
+  openThemePreview: mocks.openThemePreview,
   revealThemesFolder: vi.fn(),
   useThemes: (selector: (state: unknown) => unknown) =>
     selector({
@@ -942,6 +944,15 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).toContain("Update available");
     expect(document.body.textContent).toContain("Downloaded");
     expect(document.body.textContent).toContain("Available to download");
+
+    const previewButton = Array.from(document.querySelectorAll("button")).find(
+      (element) => element.textContent?.trim() === "Preview themes",
+    );
+    await act(async () => {
+      previewButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(mocks.openThemePreview).toHaveBeenCalledTimes(1);
 
     const noteRow = Array.from(document.querySelectorAll('[role="listitem"]')).find(
       (element) => element.textContent?.includes("Note"),

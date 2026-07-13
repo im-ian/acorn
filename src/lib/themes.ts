@@ -7,7 +7,7 @@ import {
   remove,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { create } from "zustand";
 
 import acornDarkCss from "../assets/themes/acorn-dark.css?raw";
@@ -49,6 +49,7 @@ interface InstalledThemeMetadata {
 
 export const THEME_CATALOG_URL =
   "https://raw.githubusercontent.com/im-ian/acorn-themes/main/manifest.json";
+export const THEME_PREVIEW_URL = "https://im-ian.github.io/acorn-themes/";
 
 export const THEME_CSS_VARS = [
   "--color-bg",
@@ -115,7 +116,7 @@ export function validateThemeCss(css: string): ValidateResult {
 
 const STYLE_ELEMENT_ID = "acorn-theme";
 const USER_THEMES_DIR = "themes";
-const INSTALLED_METADATA_FILE = ".catalog.json";
+const INSTALLED_METADATA_FILE = "catalog.json";
 const MAX_THEME_CSS_BYTES = 1_000_000;
 const THEME_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -397,6 +398,10 @@ export async function uninstallCatalogTheme(id: string): Promise<void> {
 export async function revealThemesFolder(): Promise<void> {
   const dir = await ensureThemesDir();
   await openPath(dir);
+}
+
+export async function openThemePreview(): Promise<void> {
+  await openUrl(THEME_PREVIEW_URL);
 }
 
 export function mergeThemes(

@@ -298,6 +298,7 @@
         "library": {
           "title": "Theme library",
           "description": "Download and update themes from the acorn-themes repository. Removing a downloaded theme does not affect custom CSS files.",
+          "preview": "Preview themes",
           "refresh": "Refresh library",
           "loading": "Loading the theme library…",
           "loadFailed": "Couldn't load the theme library.",

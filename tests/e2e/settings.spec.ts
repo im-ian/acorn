@@ -81,7 +81,7 @@ test.describe("settings modal", () => {
       const state = window as unknown as {
         __themeInstalled?: boolean;
       };
-      if (path.endsWith(".catalog.json") || path.endsWith("note.css")) {
+      if (path.endsWith("catalog.json") || path.endsWith("note.css")) {
         return Boolean(state.__themeInstalled);
       }
       return true;
@@ -94,7 +94,7 @@ test.describe("settings modal", () => {
     });
     await tauri.handle("plugin:fs|read_text_file", (args) => {
       const path = String((args as { path?: string })?.path ?? "");
-      if (path.endsWith(".catalog.json")) {
+      if (path.endsWith("catalog.json")) {
         const metadata = JSON.stringify({
           schemaVersion: 1,
           installed: {

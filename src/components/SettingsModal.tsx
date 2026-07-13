@@ -1,6 +1,7 @@
 import {
   Columns3,
   Download,
+  ExternalLink,
   FolderOpen,
   ImagePlus,
   Kanban,
@@ -95,6 +96,7 @@ import {
   useSettings,
 } from "../lib/settings";
 import {
+  openThemePreview,
   revealThemesFolder,
   useThemes,
   type AcornTheme,
@@ -1866,7 +1868,15 @@ function ThemeCatalogSection({
       title={st(t, "settings.appearance.theme.library.title")}
       description={st(t, "settings.appearance.theme.library.description")}
     >
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => void openThemePreview()}
+        >
+          <ExternalLink size={11} />
+          {st(t, "settings.appearance.theme.library.preview")}
+        </Button>
         <Button
           variant="outline"
           size="xs"
