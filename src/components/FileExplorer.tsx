@@ -724,7 +724,9 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   // large generated-file bursts do not fan out into per-file work.
   useEffect(() => {
     let cancel: (() => void) | null = null;
+    let cancelled = false;
     void listen<FsChangePayload>(FS_CHANGED_EVENT, (event) => {
+      if (cancelled) return;
       const payload = event.payload;
       if (
         payload.root &&
@@ -768,9 +770,14 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       scheduleGitStatusRefresh("fs-event");
       scheduleGitDiffStats();
     }).then((unlisten) => {
-      cancel = unlisten;
+      if (cancelled) {
+        unlisten();
+      } else {
+        cancel = unlisten;
+      }
     });
     return () => {
+      cancelled = true;
       if (cancel) cancel();
     };
   }, [rootPath, fetchDir, scheduleGitStatusRefresh, scheduleGitDiffStats]);
