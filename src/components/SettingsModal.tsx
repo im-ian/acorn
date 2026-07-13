@@ -98,6 +98,7 @@ import {
   revealThemesFolder,
   useThemes,
   type AcornTheme,
+  type ThemeCatalogEntry,
 } from "../lib/themes";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
@@ -124,6 +125,7 @@ import {
 type Tab =
   | "interface"
   | "appearance"
+  | "themes"
   | "terminal"
   | "sessions"
   | "agents"
@@ -139,6 +141,7 @@ type Tab =
 const TABS: Array<{ id: Tab; labelKey: TranslationKey }> = [
   { id: "interface", labelKey: "settings.tabs.interface" },
   { id: "appearance", labelKey: "settings.tabs.appearance" },
+  { id: "themes", labelKey: "settings.tabs.themes" },
   { id: "terminal", labelKey: "settings.tabs.terminal" },
   { id: "sessions", labelKey: "settings.tabs.sessions" },
   { id: "agents", labelKey: "settings.tabs.agents" },
@@ -498,6 +501,8 @@ export function SettingsModal() {
             <InterfaceSettings t={t} />
           ) : tab === "appearance" ? (
             <AppearanceSettings />
+          ) : tab === "themes" ? (
+            <ThemeSettings />
           ) : tab === "terminal" ? (
             <TerminalSettings />
           ) : tab === "sessions" ? (
@@ -1571,10 +1576,6 @@ function AppearanceSettings() {
 
   return (
     <section className="space-y-6">
-      <ThemeSection
-        themeId={appearance.themeId}
-        onChange={(themeId) => patchAppearance({ themeId })}
-      />
       <SessionDisplaySection
         sessionDisplay={settings.sessionDisplay}
         patch={patchSessionDisplay}
@@ -1591,6 +1592,20 @@ function AppearanceSettings() {
         state={appearance.background}
         onChange={(background) => patchAppearance({ background })}
       />
+    </section>
+  );
+}
+
+function ThemeSettings() {
+  const themeId = useSettings((s) => s.settings.appearance.themeId);
+  const patchAppearance = useSettings((s) => s.patchAppearance);
+  const onChange = (nextThemeId: string) =>
+    patchAppearance({ themeId: nextThemeId });
+
+  return (
+    <section className="space-y-6">
+      <ThemeSection themeId={themeId} onChange={onChange} />
+      <ThemeCatalogSection themeId={themeId} onChange={onChange} />
     </section>
   );
 }
@@ -1675,17 +1690,11 @@ function buildThemeSelectItems(
 ): Array<SelectItem | SelectOptionGroup> {
   const customLabel = st(t, "settings.appearance.theme.custom");
   const acornBuiltIns = themes.filter(isAcornBuiltInTheme);
-  const otherBuiltInDark = themes.filter(
-    (theme) =>
-      theme.source === "builtin" &&
-      theme.mode === "dark" &&
-      !isAcornBuiltInTheme(theme),
+  const catalogDark = themes.filter(
+    (theme) => theme.source === "catalog" && theme.mode === "dark",
   );
-  const otherBuiltInLight = themes.filter(
-    (theme) =>
-      theme.source === "builtin" &&
-      theme.mode === "light" &&
-      !isAcornBuiltInTheme(theme),
+  const catalogLight = themes.filter(
+    (theme) => theme.source === "catalog" && theme.mode === "light",
   );
   const userThemes = themes.filter((theme) => theme.source === "user");
 
@@ -1696,11 +1705,11 @@ function buildThemeSelectItems(
     },
     {
       label: st(t, "settings.appearance.theme.groups.dark"),
-      options: otherBuiltInDark.map((theme) => themeToSelectOption(theme)),
+      options: catalogDark.map((theme) => themeToSelectOption(theme)),
     },
     {
       label: st(t, "settings.appearance.theme.groups.light"),
-      options: otherBuiltInLight.map((theme) => themeToSelectOption(theme)),
+      options: catalogLight.map((theme) => themeToSelectOption(theme)),
     },
     {
       label: st(t, "settings.appearance.theme.groups.custom"),
@@ -1721,10 +1730,7 @@ function buildThemeSelectItems(
 }
 
 function isAcornBuiltInTheme(theme: AcornTheme): boolean {
-  return (
-    theme.source === "builtin" &&
-    (theme.id.startsWith("acorn-") || theme.label.startsWith("Acorn "))
-  );
+  return theme.source === "builtin";
 }
 
 function themeToSelectOption(theme: AcornTheme, suffix?: string) {
@@ -1789,6 +1795,203 @@ function ThemeSection({
         </button>
       </div>
     </Field>
+  );
+}
+
+function ThemeCatalogSection({
+  themeId,
+  onChange,
+}: {
+  themeId: string;
+  onChange: (id: string) => void;
+}) {
+  const themes = useThemes((state) => state.themes);
+  const catalog = useThemes((state) => state.catalog);
+  const catalogStatus = useThemes((state) => state.catalogStatus);
+  const catalogError = useThemes((state) => state.catalogError);
+  const operations = useThemes((state) => state.operations);
+  const loadCatalog = useThemes((state) => state.loadCatalog);
+  const install = useThemes((state) => state.install);
+  const uninstall = useThemes((state) => state.uninstall);
+  const showToast = useToasts((state) => state.show);
+  const t = useTranslation();
+
+  useEffect(() => {
+    if (catalogStatus === "idle") {
+      void loadCatalog();
+    }
+  }, [catalogStatus, loadCatalog]);
+
+  const handleInstall = async (theme: ThemeCatalogEntry) => {
+    try {
+      await install(theme);
+      showToast(
+        stf(t, "settings.appearance.theme.library.toasts.installed", {
+          theme: theme.label,
+        }),
+      );
+    } catch (error) {
+      showToast(
+        `${st(
+          t,
+          "settings.appearance.theme.library.toasts.installFailed",
+        )} ${messageFromUnknownError(error)}`,
+      );
+    }
+  };
+
+  const handleUninstall = async (theme: ThemeCatalogEntry) => {
+    try {
+      await uninstall(theme.id);
+      if (themeId === theme.id) {
+        onChange("acorn-dark");
+      }
+      showToast(
+        stf(t, "settings.appearance.theme.library.toasts.removed", {
+          theme: theme.label,
+        }),
+      );
+    } catch (error) {
+      showToast(
+        `${st(
+          t,
+          "settings.appearance.theme.library.toasts.removeFailed",
+        )} ${messageFromUnknownError(error)}`,
+      );
+    }
+  };
+
+  return (
+    <SettingsGroup
+      title={st(t, "settings.appearance.theme.library.title")}
+      description={st(t, "settings.appearance.theme.library.description")}
+    >
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="xs"
+          disabled={catalogStatus === "loading"}
+          onClick={() => void loadCatalog()}
+        >
+          {catalogStatus === "loading" ? (
+            <Loader2 size={11} className="animate-spin" />
+          ) : (
+            <RefreshCcw size={11} />
+          )}
+          {st(t, "settings.appearance.theme.library.refresh")}
+        </Button>
+      </div>
+
+      {catalogStatus === "loading" && catalog.length === 0 ? (
+        <div className="flex items-center gap-2 py-4 text-xs text-fg-muted">
+          <Loader2 size={13} className="animate-spin" />
+          {st(t, "settings.appearance.theme.library.loading")}
+        </div>
+      ) : null}
+
+      {catalogStatus === "error" ? (
+        <Notice tone="danger" density="compact">
+          {st(t, "settings.appearance.theme.library.loadFailed")} {catalogError}
+        </Notice>
+      ) : null}
+
+      {catalog.length > 0 ? (
+        <div
+          className="overflow-hidden rounded-lg border border-border"
+          role="list"
+          aria-label={st(t, "settings.appearance.theme.library.title")}
+        >
+          {catalog.map((entry) => (
+            <ThemeCatalogRow
+              key={entry.id}
+              entry={entry}
+              installedTheme={themes.find((theme) => theme.id === entry.id)}
+              operation={operations[entry.id]}
+              onInstall={() => void handleInstall(entry)}
+              onUninstall={() => void handleUninstall(entry)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </SettingsGroup>
+  );
+}
+
+function ThemeCatalogRow({
+  entry,
+  installedTheme,
+  operation,
+  onInstall,
+  onUninstall,
+}: {
+  entry: ThemeCatalogEntry;
+  installedTheme: AcornTheme | undefined;
+  operation: "installing" | "removing" | undefined;
+  onInstall: () => void;
+  onUninstall: () => void;
+}) {
+  const t = useTranslation();
+  const isCatalogTheme = installedTheme?.source === "catalog";
+  const isCustomConflict = installedTheme?.source === "user";
+  const updateAvailable =
+    isCatalogTheme &&
+    (installedTheme.catalogVersion ?? 0) < entry.version;
+
+  let status = st(t, "settings.appearance.theme.library.status.available");
+  if (operation === "installing") {
+    status = st(t, "settings.appearance.theme.library.status.installing");
+  } else if (operation === "removing") {
+    status = st(t, "settings.appearance.theme.library.status.removing");
+  } else if (isCustomConflict) {
+    status = st(t, "settings.appearance.theme.library.status.custom");
+  } else if (updateAvailable) {
+    status = st(
+      t,
+      "settings.appearance.theme.library.status.updateAvailable",
+    );
+  } else if (isCatalogTheme) {
+    status = st(t, "settings.appearance.theme.library.status.installed");
+  }
+
+  return (
+    <div
+      role="listitem"
+      className="flex min-h-12 items-center gap-3 border-b border-border px-3 py-2 last:border-b-0"
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-xs font-medium text-fg">
+            {entry.label}
+          </span>
+          <span className="rounded bg-fill px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-fg-muted">
+            {entry.mode}
+          </span>
+        </div>
+        <div className="mt-0.5 text-[10px] text-fg-muted">{status}</div>
+      </div>
+
+      {operation ? (
+        <Loader2 size={13} className="shrink-0 animate-spin text-fg-muted" />
+      ) : isCustomConflict ? null : isCatalogTheme ? (
+        <div className="flex items-center gap-1.5">
+          {updateAvailable ? (
+            <Button variant="accentSoft" size="xs" onClick={onInstall}>
+              <Download size={11} />
+              {st(t, "settings.appearance.theme.library.update")}
+            </Button>
+          ) : null}
+          <Button variant="dangerGhost" size="xs" onClick={onUninstall}>
+            <Trash2 size={11} />
+            {st(t, "settings.appearance.theme.library.remove")}
+          </Button>
+        </div>
+      ) : (
+        <Button variant="outline" size="xs" onClick={onInstall}>
+          <Download size={11} />
+          {st(t, "settings.appearance.theme.library.download")}
+        </Button>
+      )}
+    </div>
   );
 }
 

@@ -53,6 +53,7 @@
     "tabs": {
       "interface": "Interface",
       "appearance": "Appearance",
+      "themes": "Themes",
       "terminal": "Terminal",
       "agents": "Agents",
       "sessions": "Sessions",
@@ -282,18 +283,42 @@
       },
       "theme": {
         "label": "Theme",
-        "hint": "Built-in palettes and valid CSS files from the themes folder.",
+        "hint": "Built-in palettes and downloaded or custom CSS files from the themes folder.",
         "custom": "(custom)",
         "searchPlaceholder": "Search themes",
         "groups": {
           "acorn": "Acorn themes",
-          "dark": "Built-in dark",
-          "light": "Built-in light",
+          "dark": "Downloaded dark",
+          "light": "Downloaded light",
           "custom": "Custom themes"
         },
         "rescanTitle": "Rescan themes folder",
         "refresh": "Refresh",
-        "revealFolder": "Reveal folder"
+        "revealFolder": "Reveal folder",
+        "library": {
+          "title": "Theme library",
+          "description": "Download and update themes from the acorn-themes repository. Removing a downloaded theme does not affect custom CSS files.",
+          "refresh": "Refresh library",
+          "loading": "Loading the theme library…",
+          "loadFailed": "Couldn't load the theme library.",
+          "download": "Download",
+          "update": "Update",
+          "remove": "Remove",
+          "status": {
+            "available": "Available to download",
+            "installing": "Downloading…",
+            "removing": "Removing…",
+            "custom": "A custom CSS file uses this theme id",
+            "updateAvailable": "Update available",
+            "installed": "Downloaded"
+          },
+          "toasts": {
+            "installed": "Downloaded {theme}.",
+            "installFailed": "Couldn't download the theme.",
+            "removed": "Removed {theme}.",
+            "removeFailed": "Couldn't remove the theme."
+          }
+        }
       },
       "toastPosition": {
         "label": "Toast position",
