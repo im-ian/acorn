@@ -2730,9 +2730,14 @@ test.describe("sidebar: project lifecycle", () => {
 
     const projectRow = page.getByRole("button", { name: "Project demo" });
     await projectRow.hover();
-    await expect(
-      page.getByRole("button", { name: "New session in this project" }),
-    ).toBeVisible();
+    const newSessionButton = page.getByRole("button", {
+      name: "New session in this project",
+    });
+    await expect(newSessionButton).toBeVisible();
+    await newSessionButton.hover();
+    await expect(page.getByRole("tooltip").locator("kbd")).toHaveText(
+      /^(⌘T|Ctrl\+T)$/,
+    );
     await expect(
       page.getByRole("button", {
         name: "New worktree session in this project",
@@ -2747,12 +2752,14 @@ test.describe("sidebar: project lifecycle", () => {
     const menuLabels = await page.getByRole("menuitem").evaluateAll((items) =>
       items.map((item) => item.textContent?.replace(/\s+/g, " ").trim()),
     );
-    expect(menuLabels.slice(0, 4)).toEqual([
+    expect(menuLabels.slice(0, 3)).toEqual([
       "New workspace",
       "New worktree workspace",
       "New chat session",
-      "New control session",
     ]);
+    expect(menuLabels[3]).toMatch(
+      /^New control session(?:⌥⇧⌘T|Ctrl\+Alt\+Shift\+T)$/,
+    );
     await expect(
       page.getByRole("menuitem", { name: "New session" }),
     ).toHaveCount(0);

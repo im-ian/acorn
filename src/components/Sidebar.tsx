@@ -73,6 +73,7 @@ import {
 import { api, type WorktreeRemoval } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
+import { formatHotkey } from "../lib/hotkeys";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
   useSettings,
@@ -269,6 +270,7 @@ function isLocalTerminalAreaFocused(): boolean {
 
 export function Sidebar() {
   const t = useTranslation();
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
   const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
@@ -1170,6 +1172,7 @@ export function Sidebar() {
           </Tooltip>
           <Tooltip
             label={sidebarText(t, "sidebar.projects.addExistingProject")}
+            shortcut={formatHotkey(shortcuts.addProject)}
             side="left"
           >
             <button
@@ -1875,6 +1878,7 @@ function ProjectGroupView({
   onToggleFolder,
 }: ProjectGroupViewProps) {
   const t = useTranslation();
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [createMenu, setCreateMenu] = useState<{
     x: number;
@@ -1919,6 +1923,9 @@ function ProjectGroupView({
         return {
           label: sidebarText(t, action.labelKey),
           icon: projectSessionCreateIcon(action.id),
+          shortcut: action.hotkeyId
+            ? formatHotkey(shortcuts[action.hotkeyId])
+            : undefined,
           onClick: () =>
             projectSessionCreationFolder
               ? onAddSession(
@@ -1930,7 +1937,7 @@ function ProjectGroupView({
               : undefined,
         };
       }),
-    [onAddSession, projectSessionCreationFolder, t],
+    [onAddSession, projectSessionCreationFolder, shortcuts, t],
   );
   const overflowCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => {
@@ -1939,6 +1946,9 @@ function ProjectGroupView({
           return {
             label: sidebarText(t, action.labelKey),
             icon: projectSessionCreateIcon(action.id),
+            shortcut: action.hotkeyId
+              ? formatHotkey(shortcuts[action.hotkeyId])
+              : undefined,
             onClick: () =>
               projectSessionCreationFolder
                 ? onAddSession(
@@ -1974,6 +1984,7 @@ function ProjectGroupView({
       onAddSession,
       onAddWorktreeFolder,
       projectSessionCreationFolder,
+      shortcuts,
       t,
     ],
   );
@@ -2082,6 +2093,11 @@ function ProjectGroupView({
             <Tooltip
               key={action.id}
               label={sidebarText(t, action.labelKey)}
+              shortcut={
+                action.hotkeyId
+                  ? formatHotkey(shortcuts[action.hotkeyId])
+                  : undefined
+              }
               side="bottom"
             >
               <button
@@ -2345,6 +2361,7 @@ function ProjectFolderView({
   onMoveSessionToFolder,
 }: ProjectFolderViewProps) {
   const t = useTranslation();
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [createMenu, setCreateMenu] = useState<{
@@ -2402,12 +2419,15 @@ function ProjectFolderView({
         return {
           label: sidebarText(t, action.labelKey),
           icon: projectSessionCreateIcon(action.id),
+          shortcut: action.hotkeyId
+            ? formatHotkey(shortcuts[action.hotkeyId])
+            : undefined,
           onClick: () =>
             onAddSession(action.isolated, action.kind, action.mode),
         };
       }),
     ],
-    [folderCreateMenu, onAddSession, t],
+    [folderCreateMenu, onAddSession, shortcuts, t],
   );
   const folderOverflowCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => [
@@ -2418,12 +2438,15 @@ function ProjectFolderView({
         return {
           label: sidebarText(t, action.labelKey),
           icon: projectSessionCreateIcon(action.id),
+          shortcut: action.hotkeyId
+            ? formatHotkey(shortcuts[action.hotkeyId])
+            : undefined,
           onClick: () =>
             onAddSession(action.isolated, action.kind, action.mode),
         };
       }),
     ],
-    [folderOverflowCreateMenu, onAddSession, t],
+    [folderOverflowCreateMenu, onAddSession, shortcuts, t],
   );
 
   function submitRename(next: string) {
@@ -2539,6 +2562,7 @@ function ProjectFolderView({
           <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover/project-folder:flex group-focus-within/project-folder:flex">
             <Tooltip
               label={sidebarText(t, "sidebar.aria.newSessionInProjectFolder")}
+              shortcut={formatHotkey(shortcuts.newSession)}
               side="bottom"
             >
               <button
@@ -3461,6 +3485,9 @@ function LocalTerminalArea({
   onMoveSessionToFolder,
 }: LocalTerminalAreaProps) {
   const t = useTranslation();
+  const newSessionShortcut = useSettings((s) =>
+    formatHotkey(s.settings.shortcuts.newSession),
+  );
   const sessions = useMemo(
     () => groups.flatMap((group) => group.sessions),
     [groups],
@@ -3503,6 +3530,7 @@ function LocalTerminalArea({
         <div className="flex items-center gap-1">
           <Tooltip
             label={sidebarText(t, "sidebar.localTerminals.newSession")}
+            shortcut={newSessionShortcut}
             side="bottom"
           >
             <button
@@ -4025,6 +4053,9 @@ function LocalWorkspaceView({
   onMoveSessionToFolder,
 }: LocalWorkspaceViewProps) {
   const t = useTranslation();
+  const newSessionShortcut = useSettings((s) =>
+    formatHotkey(s.settings.shortcuts.newSession),
+  );
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const folder = folderGroup.folder;
@@ -4047,6 +4078,7 @@ function LocalWorkspaceView({
     {
       label: sidebarText(t, "sidebar.localTerminals.newSession"),
       icon: <Plus size={12} />,
+      shortcut: newSessionShortcut,
       onClick: onCreateSession,
     },
     contextMenuGroupTitle(t, "workspace"),
@@ -4173,6 +4205,7 @@ function LocalWorkspaceView({
           <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover/local-workspace:flex group-focus-within/local-workspace:flex">
             <Tooltip
               label={sidebarText(t, "sidebar.localTerminals.newSession")}
+              shortcut={newSessionShortcut}
               side="bottom"
             >
               <button

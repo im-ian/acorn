@@ -17,6 +17,8 @@ interface TooltipProps {
    * wrappable layout.
    */
   label: ReactNode;
+  /** Platform-formatted keyboard shortcut shown after the label. */
+  shortcut?: string;
   /** Where the tooltip appears relative to the trigger. Default: "bottom". */
   side?: "top" | "bottom" | "left" | "right";
   /** Delay before showing on hover, in ms. Default: 1000. */
@@ -196,6 +198,7 @@ export function FloatingTooltip({
  */
 export function Tooltip({
   label,
+  shortcut,
   side = "bottom",
   delay = 1000,
   multiline = false,
@@ -256,7 +259,18 @@ export function Tooltip({
         {children}
       </span>
       <FloatingTooltip
-        label={label}
+        label={
+          shortcut ? (
+            <span className="inline-flex items-center gap-2">
+              <span>{label}</span>
+              <kbd className="font-sans text-[10px] text-fg-muted">
+                {shortcut}
+              </kbd>
+            </span>
+          ) : (
+            label
+          )
+        }
         anchorRect={anchorRect}
         side={side}
         multiline={multiline}

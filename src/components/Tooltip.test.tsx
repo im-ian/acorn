@@ -91,6 +91,21 @@ describe("Tooltip", () => {
     expect(tooltip()?.textContent).toBe("Tooltip details");
   });
 
+  it("renders a keyboard shortcut hint next to the label", () => {
+    act(() => {
+      root.render(
+        <Tooltip label="Close" shortcut="⌘W" delay={0}>
+          <button type="button">Trigger</button>
+        </Tooltip>,
+      );
+    });
+    hoverTrigger();
+    act(() => vi.advanceTimersByTime(0));
+
+    expect(tooltip()?.textContent).toBe("Close⌘W");
+    expect(tooltip()?.querySelector("kbd")?.textContent).toBe("⌘W");
+  });
+
   it("does not show when hover leaves before the delay completes", () => {
     renderTooltip(500);
     hoverTrigger();
