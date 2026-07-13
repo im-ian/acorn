@@ -36,7 +36,10 @@ vi.mock("./api", () => ({
 }));
 
 import { api } from "./api";
-import { rightPanelCache } from "./right-panel-cache";
+import {
+  rememberRecentStagedDiff,
+  rightPanelCache,
+} from "./right-panel-cache";
 
 const mockApi = vi.mocked(api);
 const REPO = "/tmp/acorn";
@@ -220,6 +223,41 @@ describe("rightPanelCache", () => {
     await rightPanelCache.fetchCommitDiff(REPO, "sha-0");
 
     expect(mockApi.commitDiff).toHaveBeenCalledTimes(21);
+  });
+
+  it("keeps only the most recent staged diff payloads", () => {
+    let diffByPath: Record<string, DiffPayload> = {};
+
+    for (let index = 0; index < 20; index += 1) {
+      diffByPath = rememberRecentStagedDiff(
+        diffByPath,
+        `src/file-${index}.ts`,
+        { files: [] },
+      );
+    }
+
+    expect(Object.keys(diffByPath)).toHaveLength(16);
+    expect(diffByPath["src/file-0.ts"]).toBeUndefined();
+    expect(diffByPath["src/file-19.ts"]).toBeDefined();
+  });
+
+  it("bounds oversized staged entries stored by callers", () => {
+    const diffByPath = Object.fromEntries(
+      Array.from({ length: 20 }, (_, index) => [
+        `src/file-${index}.ts`,
+        { files: [] },
+      ]),
+    );
+
+    rightPanelCache.setStaged(REPO, {
+      files: [],
+      selectedPath: null,
+      diffByPath,
+    });
+
+    expect(Object.keys(rightPanelCache.getStaged(REPO)!.diffByPath)).toHaveLength(
+      16,
+    );
   });
 
   it("keeps a fresh commit diff request when a pruned stale request settles", async () => {
