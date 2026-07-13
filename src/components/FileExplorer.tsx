@@ -36,6 +36,7 @@ import {
   hasDetectedAgent,
 } from "../lib/agentContextMenu";
 import { cn } from "../lib/cn";
+import { retainRecentGitStatPaths } from "../lib/fileExplorerGitStats";
 import { matchesHotkeyEvent } from "../lib/hotkeys";
 import { planGitRefresh } from "../lib/git-refresh-scheduler";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -741,9 +742,11 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       const toFetch = new Set<string>();
       const changedPaths = payload.paths.filter((p) => pathInsideRoot(p, rootPath));
 
-      for (const p of changedPaths) {
-        changedPathsRef.current.add(p);
-      }
+      retainRecentGitStatPaths(
+        changedPathsRef.current,
+        changedPaths,
+        payload.cap,
+      );
 
       if (payload.overflow && payload.refresh) {
         const refreshPath =
@@ -1000,7 +1003,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       }
     }
     setSelection(new Set());
-    for (const p of paths) changedPathsRef.current.add(p);
+    retainRecentGitStatPaths(changedPathsRef.current, paths);
     pendingWorkingTreeRef.current = true;
     scheduleGitStatusRefresh("user");
     scheduleGitDiffStats();
