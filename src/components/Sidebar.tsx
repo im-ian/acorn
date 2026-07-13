@@ -73,7 +73,7 @@ import {
 import { api, type WorktreeRemoval } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
-import { formatHotkey } from "../lib/hotkeys";
+import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
   useSettings,
@@ -2481,12 +2481,17 @@ function ProjectFolderView({
           if (editing) return;
           listeners?.onKeyDown?.(e);
           if (e.defaultPrevented) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onActivate();
-          } else if (e.key === "F2") {
+          if (
+            matchesHotkeyEvent(
+              useSettings.getState().settings.shortcuts.renameItem,
+              e,
+            )
+          ) {
             e.preventDefault();
             setEditing(true);
+          } else if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onActivate();
           }
         }}
         onContextMenu={(e) => {
@@ -3122,12 +3127,17 @@ function SessionRow({
         if (editing) return;
         listeners?.onKeyDown?.(e);
         if (e.defaultPrevented) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        } else if (e.key === "F2") {
+        if (
+          matchesHotkeyEvent(
+            useSettings.getState().settings.shortcuts.renameItem,
+            e,
+          )
+        ) {
           e.preventDefault();
           if (canRename) setEditing(true);
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
         }
       }}
       onContextMenu={(e) => {
@@ -4123,12 +4133,17 @@ function LocalWorkspaceView({
         }}
         onKeyDown={(e) => {
           if (editing) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onActivate();
-          } else if (e.key === "F2") {
+          if (
+            matchesHotkeyEvent(
+              useSettings.getState().settings.shortcuts.renameItem,
+              e,
+            )
+          ) {
             e.preventDefault();
             setEditing(true);
+          } else if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onActivate();
           }
         }}
         onContextMenu={(e) => {
@@ -4468,12 +4483,17 @@ function LocalSessionRow({
         if (editing) return;
         listeners?.onKeyDown?.(e);
         if (e.defaultPrevented) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        } else if (e.key === "F2") {
+        if (
+          matchesHotkeyEvent(
+            useSettings.getState().settings.shortcuts.renameItem,
+            e,
+          )
+        ) {
           e.preventDefault();
           if (canRename) setEditing(true);
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
         }
       }}
       onContextMenu={(e) => {

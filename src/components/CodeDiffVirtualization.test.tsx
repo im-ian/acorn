@@ -253,7 +253,7 @@ describe("virtualized code and diff rendering", () => {
       window.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "f",
-          metaKey: true,
+          ctrlKey: true,
           bubbles: true,
           cancelable: true,
         }),
@@ -395,6 +395,9 @@ describe("virtualized code and diff rendering", () => {
   });
 
   it("finds and highlights matches inside a code viewer", async () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.shortcuts.findInView = "F4";
+    useSettings.setState({ settings });
     const content = "alpha\nbeta alpha\nALPHA";
     vi.mocked(api.fsReadFile).mockResolvedValueOnce({
       content,
@@ -414,6 +417,21 @@ describe("virtualized code and diff rendering", () => {
         new KeyboardEvent("keydown", {
           key: "f",
           metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(
+      container.querySelector<HTMLInputElement>('input[aria-label="Find in file"]'),
+    ).toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "F4",
+          code: "F4",
           bubbles: true,
           cancelable: true,
         }),

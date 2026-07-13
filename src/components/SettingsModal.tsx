@@ -197,6 +197,14 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
         id: "addProject",
         labelKey: "settings.shortcuts.items.addProject.label",
       },
+      {
+        id: "findInView",
+        labelKey: "settings.shortcuts.items.findInView.label",
+      },
+      {
+        id: "renameItem",
+        labelKey: "settings.shortcuts.items.renameItem.label",
+      },
     ],
   },
   {

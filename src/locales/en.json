@@ -506,6 +506,12 @@
         "addProject": {
           "label": "Add project"
         },
+        "findInView": {
+          "label": "Find in current view"
+        },
+        "renameItem": {
+          "label": "Rename selected item"
+        },
         "focusSidebar": {
           "label": "Focus sidebar"
         },

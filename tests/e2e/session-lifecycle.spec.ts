@@ -21,10 +21,16 @@ const BASE_SESSION = {
 };
 
 test.describe("session lifecycle", () => {
-  test("F2 → type → Enter invokes rename_session with the new name", async ({
+  test("a customized rename shortcut starts renaming the selected session", async ({
     page,
     tauri,
   }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ shortcuts: { renameItem: "F3" } }),
+      );
+    });
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [BASE_SESSION]);
     // rename_session captures args and returns the renamed session shape so
@@ -49,9 +55,10 @@ test.describe("session lifecycle", () => {
       .getByRole("button", { name: /^alpha main · Ready/ })
       .first();
     await row.click();
-    // After activation the row's accessible name now includes the visible
-    // Remove button, so re-resolve via the rename input that opens on F2.
+    // The configured key replaces the built-in F2 binding.
     await page.keyboard.press("F2");
+    await expect(sidebar.locator("input[type='text']")).toHaveCount(0);
+    await page.keyboard.press("F3");
 
     const input = sidebar.locator("input[type='text']");
     await expect(input).toBeVisible();

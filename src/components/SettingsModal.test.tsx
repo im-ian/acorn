@@ -1033,6 +1033,8 @@ describe("SettingsModal font controls", () => {
     expect(bodyText).toContain("Focus pane to the right");
     expect(bodyText).toContain("Focus pane above");
     expect(bodyText).toContain("Focus pane below");
+    expect(bodyText).toContain("Find in current view");
+    expect(bodyText).toContain("Rename selected item");
     expect(bodyText).toContain("Right panel");
     expect(bodyText).toContain("Record");
     expect(bodyText).toMatch(/⌘P|Ctrl\+P/);
