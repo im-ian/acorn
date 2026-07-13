@@ -952,6 +952,31 @@ describe("ChatPane", () => {
     expect(document.activeElement).not.toBe(textarea);
   });
 
+  it("coalesces visible-state refreshes while the chat state load is pending", async () => {
+    let resolveLoad!: (state: ChatSessionState) => void;
+    mocks.loadChatSessionState.mockImplementation(
+      () =>
+        new Promise<ChatSessionState>((resolve) => {
+          resolveLoad = resolve;
+        }),
+    );
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    expect(mocks.loadChatSessionState).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(mocks.loadChatSessionState).toHaveBeenCalledTimes(1);
+
+    resolveLoad(chatState("s1"));
+    await settle();
+  });
+
   it("refreshes when the backend emits a chat state update", async () => {
     mocks.loadChatSessionState.mockResolvedValueOnce(
       chatState("s1", [
