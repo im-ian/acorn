@@ -112,6 +112,10 @@ import {
   selectDueSessionStatusPollIds,
   selectImmediateSessionStatusPollIds,
 } from "./lib/sessionStatusPolling";
+import {
+  pruneSessionIdSet,
+  retainSessionMapEntries,
+} from "./lib/sessionTracking";
 import { useAppStore } from "./store";
 import type { TranslationKey, Translator } from "./lib/i18n";
 import type { Session } from "./lib/types";
@@ -517,8 +521,27 @@ function App() {
   const [resumePrimeVersion, setResumePrimeVersion] = useState(0);
   const probedSessionsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
+    const liveSessionIds = new Set(
+      useAppStore.getState().sessions.map((session) => session.id),
+    );
+    pruneSessionIdSet(primedResumeSessionsRef.current, liveSessionIds);
+    pruneSessionIdSet(probedSessionsRef.current, liveSessionIds);
+    titleGenerationLastAttemptAtRef.current = retainSessionMapEntries(
+      titleGenerationLastAttemptAtRef.current,
+      liveSessionIds,
+    );
+    setResumeCandidates((current) =>
+      retainSessionMapEntries(current, liveSessionIds),
+    );
+  }, [sessionIdsKey]);
+
+  useEffect(() => {
     if (!resumeModalEnabled) {
       primedResumeSessionsRef.current.clear();
+      probedSessionsRef.current.clear();
+      setResumeCandidates((current) =>
+        current.size === 0 ? current : new Map(),
+      );
       setResumePrimeVersion((version) => version + 1);
       return;
     }
