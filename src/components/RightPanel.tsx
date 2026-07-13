@@ -4108,14 +4108,19 @@ function WorkflowRunDetailModal({
                   </button>
                 </Tooltip>
               ) : null}
-              <button
-                type="button"
-                aria-label={t("dialogs.common.close")}
-                onClick={onClose}
-                className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+              <Tooltip
+                label={t("dialogs.common.close")}
+                side="bottom"
               >
-                <X size={16} />
-              </button>
+                <button
+                  type="button"
+                  aria-label={t("dialogs.common.close")}
+                  onClick={onClose}
+                  className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                >
+                  <X size={16} />
+                </button>
+              </Tooltip>
             </div>
           </header>
           <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto text-xs">
@@ -4164,14 +4169,19 @@ function WorkflowRunDetailSkeleton({ onClose }: { onClose: () => void }) {
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <SkeletonBlock className="h-6 w-6 rounded bg-fg-muted/10" />
-          <button
-            type="button"
-            aria-label={t("dialogs.common.close")}
-            onClick={onClose}
-            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          <Tooltip
+            label={t("dialogs.common.close")}
+            side="bottom"
           >
-            <X size={16} />
-          </button>
+            <button
+              type="button"
+              aria-label={t("dialogs.common.close")}
+              onClick={onClose}
+              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            >
+              <X size={16} />
+            </button>
+          </Tooltip>
         </div>
       </header>
       <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto text-xs">

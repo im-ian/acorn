@@ -1121,11 +1121,19 @@ test.describe("workspace kanban mode", () => {
       "aria-label",
       "Expand terminal",
     );
+    await expandButton.hover();
+    await expect(
+      page.getByRole("tooltip", { name: "Expand terminal" }),
+    ).toBeVisible();
     await expandButton.click();
     await expect(expandButton).toHaveAttribute(
       "aria-label",
       "Restore terminal size",
     );
+    await expandButton.hover();
+    await expect(
+      page.getByRole("tooltip", { name: "Restore terminal size" }),
+    ).toBeVisible();
     await expect(resizeHandle).toHaveCount(0);
     const expandedPopoverBox = await shellPopover.boundingBox();
     const viewport = await page.evaluate(() => ({

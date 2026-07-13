@@ -399,14 +399,19 @@ function IssueDetailBody({
               <ExternalLink size={14} />
             </button>
           </Tooltip>
-          <button
-            type="button"
-            aria-label={dt(t, "dialogs.common.close")}
-            onClick={onClose}
-            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          <Tooltip
+            label={dt(t, "dialogs.common.close")}
+            side="bottom"
           >
-            <X size={16} />
-          </button>
+            <button
+              type="button"
+              aria-label={dt(t, "dialogs.common.close")}
+              onClick={onClose}
+              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            >
+              <X size={16} />
+            </button>
+          </Tooltip>
         </div>
       </header>
       <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto">

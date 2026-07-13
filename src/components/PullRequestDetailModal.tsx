@@ -726,14 +726,19 @@ function DetailBody({
               <ExternalLink size={14} />
             </button>
           </Tooltip>
-          <button
-            type="button"
-            aria-label={dt(t, "dialogs.common.close")}
-            onClick={onClose}
-            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          <Tooltip
+            label={dt(t, "dialogs.common.close")}
+            side="bottom"
           >
-            <X size={16} />
-          </button>
+            <button
+              type="button"
+              aria-label={dt(t, "dialogs.common.close")}
+              onClick={onClose}
+              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            >
+              <X size={16} />
+            </button>
+          </Tooltip>
         </div>
       </header>
 
@@ -909,14 +914,19 @@ function DetailSkeleton({
           <span className="mx-1 h-4 w-px bg-border" aria-hidden />
           <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
           <SkeletonBlock className="h-6 w-6 rounded bg-fg-muted/10" />
-          <button
-            type="button"
-            aria-label={dt(t, "dialogs.common.close")}
-            onClick={onClose}
-            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          <Tooltip
+            label={dt(t, "dialogs.common.close")}
+            side="bottom"
           >
-            <X size={16} />
-          </button>
+            <button
+              type="button"
+              aria-label={dt(t, "dialogs.common.close")}
+              onClick={onClose}
+              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            >
+              <X size={16} />
+            </button>
+          </Tooltip>
         </div>
       </header>
 
