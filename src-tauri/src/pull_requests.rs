@@ -313,6 +313,7 @@ const PR_PLAIN_TEXT_FALLBACK_MIN_CHARS: usize = 3;
 /// cheap, short enough that a `gh auth login` for a new account becomes
 /// usable without restarting the app.
 const RESOLUTION_TTL: Duration = Duration::from_secs(10 * 60);
+const RESOLUTION_CACHE_CAPACITY: usize = 128;
 
 #[derive(Clone)]
 struct CachedResolution {
@@ -326,37 +327,76 @@ impl CachedResolution {
     }
 }
 
+struct ResolutionCache {
+    entries: HashMap<PathBuf, CachedResolution>,
+    capacity: usize,
+}
+
+impl ResolutionCache {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn get(&mut self, repo_path: &Path) -> Option<CachedResolution> {
+        let entry = self.entries.get(repo_path)?.clone();
+        if entry.fresh() {
+            Some(entry)
+        } else {
+            self.entries.remove(repo_path);
+            None
+        }
+    }
+
+    fn insert_at(&mut self, repo_path: PathBuf, login: String, cached_at: Instant) {
+        self.entries.retain(|_, entry| entry.fresh());
+        if self.capacity == 0 {
+            return;
+        }
+        if !self.entries.contains_key(&repo_path) && self.entries.len() >= self.capacity {
+            let oldest = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.cached_at)
+                .map(|(path, _)| path.clone());
+            if let Some(oldest) = oldest {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.entries
+            .insert(repo_path, CachedResolution { login, cached_at });
+    }
+
+    fn remove(&mut self, repo_path: &Path) {
+        self.entries.remove(repo_path);
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 /// Per-repo cache of which gh login was last seen with access. Keyed by
 /// the repo path the frontend sent (the worktree). The token itself is
 /// re-fetched on every call — that's a fast local `gh auth token` spawn,
 /// no network — so we never store secrets in this cache.
-fn resolution_cache() -> &'static Mutex<HashMap<PathBuf, CachedResolution>> {
+fn resolution_cache() -> &'static Mutex<ResolutionCache> {
     use std::sync::OnceLock;
-    static CELL: OnceLock<Mutex<HashMap<PathBuf, CachedResolution>>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+    static CELL: OnceLock<Mutex<ResolutionCache>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(ResolutionCache::with_capacity(RESOLUTION_CACHE_CAPACITY)))
 }
 
 fn cached_login(repo_path: &Path) -> Option<CachedResolution> {
-    let cache = resolution_cache().lock().ok()?;
-    let entry = cache.get(repo_path)?;
-    if entry.fresh() {
-        Some(entry.clone())
-    } else {
-        None
-    }
+    resolution_cache().lock().ok()?.get(repo_path)
 }
 
 fn store_resolution(repo_path: &Path, login: &str) {
     let Ok(mut cache) = resolution_cache().lock() else {
         return;
     };
-    cache.insert(
-        repo_path.to_path_buf(),
-        CachedResolution {
-            login: login.to_string(),
-            cached_at: Instant::now(),
-        },
-    );
+    cache.insert_at(repo_path.to_path_buf(), login.to_string(), Instant::now());
 }
 
 fn invalidate_resolution(repo_path: &Path) {
@@ -3123,6 +3163,51 @@ mod tests {
         assert_eq!(cache.len(), 2);
         assert_eq!(cache.get(&first), Some(&Some("alice-updated".to_string())));
         assert_eq!(cache.get(&second), Some(&Some("bob".to_string())));
+    }
+
+    #[test]
+    fn resolution_cache_removes_expired_entries_on_read() {
+        let mut cache = ResolutionCache::with_capacity(2);
+        let repo = PathBuf::from("/tmp/expired-worktree");
+        let expired_at = Instant::now()
+            .checked_sub(RESOLUTION_TTL)
+            .expect("resolution TTL should fit before now");
+        cache.insert_at(repo.clone(), "alice".to_string(), expired_at);
+
+        assert!(cache.get(&repo).is_none());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn resolution_cache_evicts_oldest_fresh_repo_at_capacity() {
+        let mut cache = ResolutionCache::with_capacity(2);
+        let now = Instant::now();
+        let first = PathBuf::from("/tmp/first-worktree");
+        let second = PathBuf::from("/tmp/second-worktree");
+        let third = PathBuf::from("/tmp/third-worktree");
+
+        cache.insert_at(
+            first.clone(),
+            "alice".to_string(),
+            now.checked_sub(Duration::from_secs(2)).unwrap(),
+        );
+        cache.insert_at(
+            second.clone(),
+            "bob".to_string(),
+            now.checked_sub(Duration::from_secs(1)).unwrap(),
+        );
+        cache.insert_at(third.clone(), "carol".to_string(), now);
+
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get(&first).is_none());
+        assert_eq!(
+            cache.get(&second).map(|entry| entry.login),
+            Some("bob".into())
+        );
+        assert_eq!(
+            cache.get(&third).map(|entry| entry.login),
+            Some("carol".into())
+        );
     }
 
     #[test]
