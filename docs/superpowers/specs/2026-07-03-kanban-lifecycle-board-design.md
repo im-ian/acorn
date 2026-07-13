@@ -39,14 +39,14 @@ that a particular session performed the work.
 | Working | accent (pulse) | a known agent or chat run is working |
 | Waiting | warning (amber highlight) | `status === "needs_input"` or `status === "failed"` (failed cards keep a red accent) |
 | Review | success | an agent turn completed and still needs acknowledgement |
-| Done | neutral | a matching PR completed after the latest agent activity, or manually pinned done |
+| Done | neutral | a matching PR completed after the latest user request, or manually pinned done |
 
 Derivation precedence (first match wins):
 
 1. `needs_input` | `failed` → **Waiting**
 2. known agent/chat `running` → **Working**
 3. manual done pin → **Done**
-4. PR completion timestamp ≥ latest agent activity → **Done**
+4. PR completion timestamp ≥ latest user request → **Done**
 5. completed agent turn → **Review**
 6. otherwise → **Idle**
 
@@ -57,10 +57,13 @@ the single source of truth (mirrors the existing `kanbanBoard.ts` pattern).
 ## Data plumbing
 
 - **PRs:** reuse `rightPanelCache.fetchPullRequests(repoPath, "all", 50)`,
-  polled every 60 s per distinct `repo_path`, matched to sessions via
-  `head_branch === session.branch`. `closedAt` / `mergedAt` must not predate
-  the session's latest transcript/chat activity before the PR can move the
-  card to Done. Non-GitHub repos degrade gracefully (listing kind
+  polled every 60 s per distinct `repo_path`. Direct matches use
+  `head_branch === session.branch`; once observed, the PR branch is retained
+  per session so checking out the base branch after merge does not sever the
+  card's PR identity. `closedAt` / `mergedAt` must not predate the latest real
+  user request. Provider cleanup and final output from the same turn may land
+  after merge without reopening the card, while a later user request returns
+  it to Review. Non-GitHub repos degrade gracefully (listing kind
   `not_github` → no PR context).
 - **Diff:** `api.fsGitStatus(worktree_path)` per board-visible session, polled
   every 20 s, paused while `document.hidden`. Produces `hasDiff` and summed

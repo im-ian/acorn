@@ -202,6 +202,24 @@ describe("deriveKanbanStage", () => {
     ).toBe("review");
   });
 
+  it("keeps a post-merge user request in review", () => {
+    expect(
+      deriveKanbanStage(
+        makeSession({
+          last_user_message: "Make a follow-up change",
+          last_user_message_at: "2026-01-04T00:00:00.000Z",
+          last_agent_message: "Follow-up completed",
+          agent_activity_at: "2026-01-04T00:05:00.000Z",
+        } as Partial<Session>),
+        ctx({
+          pr: makePr("MERGED", {
+            merged_at: "2026-01-03T00:00:00.000Z",
+          }),
+        }),
+      ),
+    ).toBe("review");
+  });
+
   it("keeps completed work in review when PR timing cannot be verified", () => {
     const session = makeSession({
       last_agent_message: "Ready for review",

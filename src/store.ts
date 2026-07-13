@@ -1864,6 +1864,12 @@ export const useAppStore = create<AppStateModel>()(
                 )
                   ? (update.last_user_message ?? null)
                   : (sess.last_user_message ?? null);
+                const nextLastUserMessageAt = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "last_user_message_at",
+                )
+                  ? (update.last_user_message_at ?? null)
+                  : (sess.last_user_message_at ?? null);
                 const nextLastAgentMessage = Object.prototype.hasOwnProperty.call(
                   update,
                   "last_agent_message",
@@ -1926,6 +1932,8 @@ export const useAppStore = create<AppStateModel>()(
                   nextBranch !== sess.branch ||
                   nextLastMessage !== sess.last_message ||
                   nextLastUserMessage !== (sess.last_user_message ?? null) ||
+                  nextLastUserMessageAt !==
+                    (sess.last_user_message_at ?? null) ||
                   nextLastAgentMessage !== (sess.last_agent_message ?? null) ||
                   nextAgentProvider !== (sess.agent_provider ?? null) ||
                   nextAgentTranscriptProvider !==
@@ -1950,6 +1958,7 @@ export const useAppStore = create<AppStateModel>()(
                     branch: nextBranch,
                     last_message: nextLastMessage,
                     last_user_message: nextLastUserMessage,
+                    last_user_message_at: nextLastUserMessageAt,
                     last_agent_message: nextLastAgentMessage,
                     agent_provider: nextAgentProvider,
                     agent_transcript_provider: nextAgentTranscriptProvider,

@@ -329,6 +329,7 @@ fn antigravity_brain_roots() -> Vec<PathBuf> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ConversationPreview {
     pub last_user_message: Option<String>,
+    pub last_user_message_at: Option<String>,
     pub last_agent_message: Option<String>,
 }
 
@@ -354,6 +355,9 @@ pub(crate) fn extract_conversation_preview(
                     .preview_text
                     .as_deref()
                     .and_then(|text| collapse_preview(text, PREVIEW_CHARS));
+                if preview.last_user_message.is_some() {
+                    preview.last_user_message_at = parsed.timestamp;
+                }
             }
             TranscriptRole::Other => {}
             _ => {}

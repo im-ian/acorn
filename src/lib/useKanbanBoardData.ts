@@ -23,6 +23,56 @@ const CLEAN_DIFF: DiffSummary = { hasDiff: false, additions: 0, deletions: 0 };
 const PR_POLL_INTERVAL_MS = 60_000;
 const DIFF_POLL_INTERVAL_MS = 20_000;
 const PR_LIST_LIMIT = 50;
+const PR_BRANCH_LINKS_STORAGE_KEY =
+  "acorn:workspace-kanban:pr-branch-links:v1";
+
+export interface KanbanPrBranchLink {
+  repoPath: string;
+  headBranch: string;
+}
+
+export type KanbanPrBranchLinks = Record<string, KanbanPrBranchLink>;
+
+function isKanbanPrBranchLink(value: unknown): value is KanbanPrBranchLink {
+  if (!value || typeof value !== "object") return false;
+  const link = value as Partial<KanbanPrBranchLink>;
+  return (
+    typeof link.repoPath === "string" &&
+    link.repoPath.trim().length > 0 &&
+    typeof link.headBranch === "string" &&
+    link.headBranch.trim().length > 0
+  );
+}
+
+export function readKanbanPrBranchLinks(): KanbanPrBranchLinks {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(PR_BRANCH_LINKS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, KanbanPrBranchLink] =>
+          isKanbanPrBranchLink(entry[1]),
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function writeKanbanPrBranchLinks(links: KanbanPrBranchLinks): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      PR_BRANCH_LINKS_STORAGE_KEY,
+      JSON.stringify(links),
+    );
+  } catch {
+    // Current-branch PR matching still works when storage is unavailable.
+  }
+}
 
 /**
  * Pick the PR that best represents a branch when several share a head branch:
@@ -46,6 +96,18 @@ export function pickPullRequestForBranch(
     if (Date.parse(pr.updated_at) > Date.parse(best.updated_at)) best = pr;
   }
   return best;
+}
+
+export function pickPullRequestForBranches(
+  prs: readonly PullRequestInfo[],
+  branches: readonly string[],
+): PullRequestInfo | null {
+  const branchSet = new Set(
+    branches.map((branch) => branch.trim()).filter(Boolean),
+  );
+  return pickPullRequestForBranch(
+    prs.filter((pr) => branchSet.has(pr.head_branch)),
+  );
 }
 
 function indexListingByBranch(
@@ -111,6 +173,9 @@ export function useKanbanBoardData(
   const [diffBySession, setDiffBySession] = useState<
     ReadonlyMap<string, DiffSummary>
   >(new Map());
+  const [prBranchLinks, setPrBranchLinks] = useState<KanbanPrBranchLinks>(
+    readKanbanPrBranchLinks,
+  );
   const prRequestSeqRef = useRef(new Map<string, number>());
   const diffRefreshSeqRef = useRef(0);
 
@@ -275,14 +340,53 @@ export function useKanbanBoardData(
     };
   }, [worktreeKey]);
 
+  useEffect(() => {
+    setPrBranchLinks((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const session of sessions) {
+        const branch = session.branch?.trim();
+        if (!branch) continue;
+        const repoPath = kanbanSessionBoardLookupPath(session);
+        const direct = pickPullRequestForBranch(
+          prIndexByRepo.get(repoPath)?.get(branch) ?? [],
+        );
+        if (!direct) continue;
+        const current = next[session.id];
+        if (
+          current?.repoPath === repoPath &&
+          current.headBranch === direct.head_branch
+        ) {
+          continue;
+        }
+        next[session.id] = {
+          repoPath,
+          headBranch: direct.head_branch,
+        };
+        changed = true;
+      }
+      if (!changed) return previous;
+      writeKanbanPrBranchLinks(next);
+      return next;
+    });
+  }, [prIndexByRepo, sessions]);
+
   return useMemo(() => {
     const data = new Map<string, KanbanSessionBoardData>();
     for (const session of sessions) {
       const branch = session.branch?.trim();
       const repoPath = kanbanSessionBoardLookupPath(session);
-      const candidates = branch
-        ? (prIndexByRepo.get(repoPath)?.get(branch) ?? [])
-        : [];
+      const linkedBranch =
+        prBranchLinks[session.id]?.repoPath === repoPath
+          ? prBranchLinks[session.id]?.headBranch
+          : undefined;
+      const branches = [branch, linkedBranch].filter(
+        (candidate): candidate is string => Boolean(candidate),
+      );
+      const candidates = [...branches].flatMap(
+        (candidateBranch) =>
+          prIndexByRepo.get(repoPath)?.get(candidateBranch) ?? [],
+      );
       const diff = diffBySession.get(session.id) ?? CLEAN_DIFF;
       data.set(session.id, {
         repoPath,
@@ -293,5 +397,5 @@ export function useKanbanBoardData(
       });
     }
     return data;
-  }, [diffBySession, prIndexByRepo, sessions]);
+  }, [diffBySession, prBranchLinks, prIndexByRepo, sessions]);
 }
