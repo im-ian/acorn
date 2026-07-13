@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import defaultCapability from "../../src-tauri/capabilities/default.json";
 
 const tauriFsMock = vi.hoisted(() => ({
   exists: vi.fn(),
@@ -87,6 +88,14 @@ describe("parseThemeCatalog", () => {
         themes: [{ ...THEME, file: "../note.css" }],
       }),
     ).toThrow(/invalid file path/);
+  });
+});
+
+describe("theme filesystem capability", () => {
+  it("allows the text writes used for downloaded CSS and catalog metadata", () => {
+    expect(defaultCapability.permissions).toContain(
+      "fs:allow-write-text-file",
+    );
   });
 });
 
