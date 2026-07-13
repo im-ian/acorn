@@ -3,6 +3,7 @@ import {
   clearRememberedTerminalScrollback,
   rememberedTerminalScrollback,
   rememberTerminalScrollback,
+  retainRememberedTerminalScrollbacks,
 } from "./terminalScrollbackHandoff";
 
 describe("terminal scrollback handoff", () => {
@@ -29,5 +30,17 @@ describe("terminal scrollback handoff", () => {
     clearRememberedTerminalScrollback("s3");
 
     expect(rememberedTerminalScrollback("s3")).toBeNull();
+  });
+
+  it("releases snapshots for sessions that no longer exist", () => {
+    rememberTerminalScrollback("live", "keep this scrollback\n");
+    rememberTerminalScrollback("deleted", "release this scrollback\n");
+
+    retainRememberedTerminalScrollbacks(new Set(["live"]));
+
+    expect(rememberedTerminalScrollback("live")).toBe(
+      "keep this scrollback\n",
+    );
+    expect(rememberedTerminalScrollback("deleted")).toBeNull();
   });
 });
