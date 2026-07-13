@@ -122,8 +122,10 @@ function mergeRefreshedSessionRuntimeState(
     if (!current) return refreshed;
 
     const merged = { ...refreshed };
+    const hasOwn = <K extends keyof Session>(session: Session, key: K) =>
+      Object.prototype.hasOwnProperty.call(session, key);
     const preserve = <K extends keyof Session>(key: K) => {
-      if (Object.prototype.hasOwnProperty.call(current, key)) {
+      if (!hasOwn(refreshed, key) && hasOwn(current, key)) {
         merged[key] = current[key];
       }
     };
@@ -143,7 +145,10 @@ function mergeRefreshedSessionRuntimeState(
     preserve("agent_activity_at");
     preserve("active_processes");
     preserve("git_context_path");
-    if (current.git_context_path?.trim()) {
+    if (
+      !hasOwn(refreshed, "git_context_path") &&
+      current.git_context_path?.trim()
+    ) {
       merged.branch = current.branch;
     }
     return merged;
