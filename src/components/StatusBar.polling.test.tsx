@@ -5,12 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const apiMocks = vi.hoisted(() => ({
   daemonStatus: vi.fn(),
   getAcornIpcStatus: vi.fn(),
+  getAgentTokenUsage: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => ({
   api: {
     daemonStatus: apiMocks.daemonStatus,
     getAcornIpcStatus: apiMocks.getAcornIpcStatus,
+    getAgentTokenUsage: apiMocks.getAgentTokenUsage,
   },
 }));
 
@@ -84,5 +86,55 @@ describe("StatusBar service polling", () => {
 
     expect(apiMocks.getAcornIpcStatus).toHaveBeenCalledOnce();
     expect(apiMocks.daemonStatus).toHaveBeenCalledOnce();
+  });
+
+  it("does not overlap a slow agent token usage poll", async () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.statusBar.showAgentTokenUsage = true;
+    useSettings.setState({ settings });
+    useAppStore.setState({
+      sessions: [
+        {
+          id: "session-a",
+          name: "Codex",
+          repo_path: "/repo/a",
+          worktree_path: "/repo/a",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "default",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: null,
+          in_worktree: false,
+          agent_provider: "codex",
+        },
+      ],
+      activeSessionId: "session-a",
+    });
+    apiMocks.getAcornIpcStatus.mockResolvedValue({ server_running: true });
+    apiMocks.daemonStatus.mockResolvedValue({
+      running: true,
+      enabled: true,
+      session_count_alive: 1,
+    });
+    const pending = deferred<unknown>();
+    apiMocks.getAgentTokenUsage.mockReturnValue(pending.promise);
+
+    await act(async () => {
+      root.render(<StatusBar />);
+    });
+    expect(apiMocks.getAgentTokenUsage).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.getAgentTokenUsage).toHaveBeenCalledOnce();
   });
 });
