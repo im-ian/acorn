@@ -356,6 +356,9 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     createEmptySessionAgentDetection(),
   );
   const gitStatsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gitStatsInFlightRef = useRef<Promise<void> | null>(null);
+  const gitStatsRefreshPendingRef = useRef(false);
+  const scheduleGitDiffStatsRef = useRef<(() => void) | null>(null);
   const gitStatusRef = useRef<Record<string, FsGitStatusEntry>>({});
   const gitHugeRef = useRef(false);
   const visiblePathsRef = useRef<Set<string>>(new Set());
@@ -525,6 +528,10 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     }
     gitStatsTimerRef.current = setTimeout(() => {
       gitStatsTimerRef.current = null;
+      if (gitStatsInFlightRef.current) {
+        gitStatsRefreshPendingRef.current = true;
+        return;
+      }
       const targetPaths = new Set([
         ...visiblePathsRef.current,
         ...changedPathsRef.current,
@@ -535,7 +542,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
         .map(([path, status]) => ({ path, kind: status.kind }));
       if (entries.length === 0) return;
 
-      void api
+      const promise = api
         .fsGitDiffStats(rootPath, entries)
         .then((stats) => {
           const requestedKinds = new Map(entries.map((e) => [e.path, e.kind]));
@@ -558,9 +565,22 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
             return changed ? next : prev;
           });
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          if (gitStatsInFlightRef.current !== promise) return;
+          gitStatsInFlightRef.current = null;
+          if (gitStatsRefreshPendingRef.current) {
+            gitStatsRefreshPendingRef.current = false;
+            scheduleGitDiffStatsRef.current?.();
+          }
+        });
+      gitStatsInFlightRef.current = promise;
     }, 1200);
   }, [rootPath]);
+
+  useEffect(() => {
+    scheduleGitDiffStatsRef.current = scheduleGitDiffStats;
+  }, [scheduleGitDiffStats]);
 
   const gitStatusKindFingerprint = useMemo(
     () =>
