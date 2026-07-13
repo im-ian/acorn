@@ -1,0 +1,97 @@
+/* @mode light */
+:root[data-acorn-theme="acorn-ink"] {
+  --color-bg: rgba(247, 241, 225, 0.92);
+  --color-bg-elevated: rgba(255, 251, 241, 0.96);
+  --color-bg-sidebar: rgba(238, 228, 206, 0.94);
+  --color-input: rgba(239, 230, 210, 0.90);
+  --color-input-hover: rgba(231, 220, 196, 0.94);
+  --color-input-border: #aebfd2;
+  --color-fg: #1c2d4c;
+  --color-fg-muted: #606c84;
+  --color-border: #b8c7d9;
+  --color-accent: #244e8a;
+  --color-accent-hover: #173965;
+  --color-on-accent: #fffaf0;
+  --color-danger: #b64949;
+  --color-warning: #8c651b;
+  --color-terminal-bg: #f7f0df;
+  --color-terminal-fg: #1c2d4c;
+  --color-selection: rgba(36, 78, 138, 0.20);
+  --color-term-selection: rgba(36, 78, 138, 0.24);
+  --color-term-scrollbar: rgba(28, 45, 76, 0.12);
+  --color-term-scrollbar-hover: rgba(28, 45, 76, 0.22);
+  --color-term-scrollbar-active: rgba(28, 45, 76, 0.32);
+  --color-term-black: #1c2d4c;
+  --color-term-red: #a53f46;
+  --color-term-green: #3f6b4b;
+  --color-term-yellow: #856116;
+  --color-term-blue: #244e8a;
+  --color-term-magenta: #70477d;
+  --color-term-cyan: #246a73;
+  --color-term-white: #5f687a;
+  --color-term-bright-black: #5d6981;
+  --color-term-bright-red: #86333a;
+  --color-term-bright-green: #31583c;
+  --color-term-bright-yellow: #694b0d;
+  --color-term-bright-blue: #173965;
+  --color-term-bright-magenta: #583762;
+  --color-term-bright-cyan: #18545c;
+  --color-term-bright-white: #3d4654;
+  --font-sans: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, "Apple SD Gothic Neo", serif;
+  --acorn-canvas: #d8ccb2;
+  --acorn-pane-radius: 0.25rem;
+  --ink-rule: rgba(76, 123, 164, 0.16);
+  --ink-margin: rgba(181, 70, 70, 0.24);
+  --ink-fiber: rgba(88, 72, 43, 0.035);
+}
+
+:root[data-acorn-theme="acorn-ink"] body,
+:root[data-acorn-theme="acorn-ink"] .acorn-app-shell {
+  background-color: #f7f1e1;
+  background-image:
+    linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 3.45rem,
+      var(--ink-margin) 3.45rem,
+      var(--ink-margin) calc(3.45rem + 1px),
+      transparent calc(3.45rem + 1px)
+    ),
+    repeating-linear-gradient(
+      180deg,
+      transparent 0,
+      transparent 23px,
+      var(--ink-rule) 23px,
+      var(--ink-rule) 24px
+    ),
+    radial-gradient(circle at 30% 20%, var(--ink-fiber) 0 0.7px, transparent 0.8px);
+  background-size: 100% 100%, 100% 24px, 13px 11px;
+}
+
+:root[data-acorn-theme="acorn-ink"] body > [role="dialog"] > div {
+  background-color: #fffaf0;
+  background-image:
+    repeating-linear-gradient(
+      180deg,
+      transparent 0,
+      transparent 23px,
+      rgba(76, 123, 164, 0.10) 23px,
+      rgba(76, 123, 164, 0.10) 24px
+    ),
+    radial-gradient(circle at 30% 20%, var(--ink-fiber) 0 0.7px, transparent 0.8px);
+  background-size: 100% 24px, 13px 11px;
+}
+
+:root[data-acorn-theme="acorn-ink"] .acorn-terminal-shell {
+  background-color: var(--color-terminal-bg);
+  background-image:
+    repeating-linear-gradient(
+      180deg,
+      transparent 0,
+      transparent 23px,
+      rgba(76, 123, 164, 0.13) 23px,
+      rgba(76, 123, 164, 0.13) 24px
+    ),
+    radial-gradient(circle at 30% 20%, var(--ink-fiber) 0 0.7px, transparent 0.8px);
+  background-size: 100% 24px, 13px 11px;
+}

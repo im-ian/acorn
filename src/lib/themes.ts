@@ -4,12 +4,15 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { create } from "zustand";
 
 import acornDarkCss from "../assets/themes/acorn-dark.css?raw";
+import acornInkCss from "../assets/themes/acorn-ink.css?raw";
 import acornLightCss from "../assets/themes/acorn-light.css?raw";
 import acornLightPinkCss from "../assets/themes/acorn-light-pink.css?raw";
 import acornPinkCss from "../assets/themes/acorn-pink.css?raw";
+import amberTerminalCss from "../assets/themes/amber-terminal.css?raw";
 import ayuDarkCss from "../assets/themes/ayu-dark.css?raw";
 import catppuccinLatteCss from "../assets/themes/catppuccin-latte.css?raw";
 import catppuccinMochaCss from "../assets/themes/catppuccin-mocha.css?raw";
+import cobaltCircuitCss from "../assets/themes/cobalt-circuit.css?raw";
 import draculaCss from "../assets/themes/dracula.css?raw";
 import everforestDarkCss from "../assets/themes/everforest-dark.css?raw";
 import flexokiDarkCss from "../assets/themes/flexoki-dark.css?raw";
@@ -25,6 +28,9 @@ import monokaiProCss from "../assets/themes/monokai-pro.css?raw";
 import nordCss from "../assets/themes/nord.css?raw";
 import oneDarkProCss from "../assets/themes/one-dark-pro.css?raw";
 import oneLightCss from "../assets/themes/one-light.css?raw";
+import oledMonoCss from "../assets/themes/oled-mono.css?raw";
+import paperLedgerCss from "../assets/themes/paper-ledger.css?raw";
+import retroTerminalCss from "../assets/themes/retro-terminal.css?raw";
 import rosePineCss from "../assets/themes/rose-pine.css?raw";
 import solarizedDarkCss from "../assets/themes/solarized-dark.css?raw";
 import solarizedLightCss from "../assets/themes/solarized-light.css?raw";
@@ -68,6 +74,34 @@ export const BUILT_IN_THEMES: ReadonlyArray<AcornTheme> = [
     label: "Acorn Dark Pink",
     mode: "dark",
     css: acornPinkCss,
+    source: "builtin",
+  },
+  {
+    id: "retro-terminal",
+    label: "Retro Terminal",
+    mode: "dark",
+    css: retroTerminalCss,
+    source: "builtin",
+  },
+  {
+    id: "amber-terminal",
+    label: "Amber Terminal",
+    mode: "dark",
+    css: amberTerminalCss,
+    source: "builtin",
+  },
+  {
+    id: "oled-mono",
+    label: "OLED Mono",
+    mode: "dark",
+    css: oledMonoCss,
+    source: "builtin",
+  },
+  {
+    id: "cobalt-circuit",
+    label: "Cobalt Circuit",
+    mode: "dark",
+    css: cobaltCircuitCss,
     source: "builtin",
   },
   {
@@ -187,6 +221,20 @@ export const BUILT_IN_THEMES: ReadonlyArray<AcornTheme> = [
     label: "Acorn Light Pink",
     mode: "light",
     css: acornLightPinkCss,
+    source: "builtin",
+  },
+  {
+    id: "acorn-ink",
+    label: "Ink",
+    mode: "light",
+    css: acornInkCss,
+    source: "builtin",
+  },
+  {
+    id: "paper-ledger",
+    label: "Paper Ledger",
+    mode: "light",
+    css: paperLedgerCss,
     source: "builtin",
   },
   {

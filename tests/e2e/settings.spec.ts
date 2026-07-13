@@ -33,6 +33,145 @@ test.describe("settings modal", () => {
     await expect(modal).toHaveCount(0);
   });
 
+  test("selects and persists the expanded built-in theme pack", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Appearance|모양)$/ }).click();
+
+    const themeSelect = modal.getByRole("combobox", {
+      name: /^(Theme|테마)$/,
+    });
+    const themes = [
+      {
+        id: "retro-terminal",
+        label: "Retro Terminal",
+        accent: "#52f27b",
+        terminalBackground: "#020704",
+        paneRadius: "0.2rem",
+      },
+      {
+        id: "amber-terminal",
+        label: "Amber Terminal",
+        accent: "#ffb000",
+        terminalBackground: "#080400",
+        paneRadius: "0.2rem",
+      },
+      {
+        id: "oled-mono",
+        label: "OLED Mono",
+        accent: "#f5f5f5",
+        terminalBackground: "#000000",
+        paneRadius: "0.35rem",
+      },
+      {
+        id: "cobalt-circuit",
+        label: "Cobalt Circuit",
+        accent: "#38bdf8",
+        terminalBackground: "#030914",
+        paneRadius: "0.35rem",
+      },
+      {
+        id: "paper-ledger",
+        label: "Paper Ledger",
+        accent: "#9f3f2f",
+        terminalBackground: "#1f1b16",
+        paneRadius: "0.15rem",
+      },
+      {
+        id: "acorn-ink",
+        label: "Ink",
+        accent: "#244e8a",
+        terminalBackground: "#f7f0df",
+        paneRadius: "0.25rem",
+      },
+    ] as const;
+
+    for (const theme of themes) {
+      await themeSelect.click();
+      await page
+        .getByRole("option", { name: theme.label, exact: true })
+        .click();
+
+      await expect(themeSelect).toContainText(theme.label);
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            document.documentElement.getAttribute("data-acorn-theme"),
+          ),
+        )
+        .toBe(theme.id);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const styles = getComputedStyle(document.documentElement);
+            return {
+              accent: styles.getPropertyValue("--color-accent").trim(),
+              terminalBackground: styles
+                .getPropertyValue("--color-terminal-bg")
+                .trim(),
+              paneRadius: styles.getPropertyValue("--acorn-pane-radius").trim(),
+            };
+          }),
+        )
+        .toEqual({
+          accent: theme.accent,
+          terminalBackground: theme.terminalBackground,
+          paneRadius: theme.paneRadius,
+        });
+      if (theme.id === "paper-ledger") {
+        await expect
+          .poll(() =>
+            page.evaluate(() => {
+              const radio = document.querySelector<HTMLElement>(
+                'input[name="acorn-session-title"]:not(:checked)',
+              )?.parentElement;
+              return radio ? getComputedStyle(radio).backgroundColor : null;
+            }),
+          )
+          .toBe("rgb(244, 236, 216)");
+      }
+      if (theme.id === "acorn-ink") {
+        const inkSurface = await page.evaluate(() => {
+          const appShell = document.querySelector<HTMLElement>(
+            ".acorn-app-shell",
+          );
+          const modalSurface = document.querySelector<HTMLElement>(
+            'body > [role="dialog"] > div',
+          );
+          const rootStyles = getComputedStyle(document.documentElement);
+          return {
+            font: rootStyles.getPropertyValue("--font-sans").trim(),
+            appBackground: appShell
+              ? getComputedStyle(appShell).backgroundImage
+              : "",
+            modalBackground: modalSurface
+              ? getComputedStyle(modalSurface).backgroundImage
+              : "",
+          };
+        });
+        expect(inkSurface.font).toContain("Iowan Old Style");
+        expect(inkSurface.appBackground).toContain("repeating-linear-gradient");
+        expect(inkSurface.appBackground).toContain("linear-gradient(90deg");
+        expect(inkSurface.modalBackground).toContain(
+          "repeating-linear-gradient",
+        );
+      }
+    }
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).appearance?.themeId : null;
+        }),
+      )
+      .toBe("acorn-ink");
+  });
+
   test("adjusts terminal letter spacing and persists it", async ({ page }) => {
     await page.goto("/");
     await pressHotkey(page, { mod: true, key: "," });
