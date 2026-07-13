@@ -148,13 +148,11 @@ function normalizeSessionNotificationKind(
 ): SessionNotificationKind | null {
   if (
     value === "waiting_for_input" ||
-    value === "errored" ||
-    value === "became_ready"
+    value === "errored"
   ) {
     return value;
   }
   if (value === "needs_input") return "waiting_for_input";
-  if (value === "became_idle") return "became_ready";
   if (value === "error") return "errored";
   return null;
 }
@@ -162,9 +160,7 @@ function normalizeSessionNotificationKind(
 function statusForNotificationKind(
   kind: SessionNotificationKind,
 ): SessionStatus {
-  if (kind === "waiting_for_input") return "waiting_for_input";
-  if (kind === "errored") return "errored";
-  return "ready";
+  return kind;
 }
 
 function normalizeSessionNotification(

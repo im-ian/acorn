@@ -144,6 +144,55 @@ test.describe("session notification center", () => {
     await expect(activity).toContainText("0 unread");
   });
 
+  test("does not collect ready status transitions", async ({ page, tauri }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "session-1",
+        name: "agent run",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.handle("detect_session_statuses", () => [
+      {
+        id: "session-1",
+        status: "ready",
+        branch: "main",
+        agent_provider: null,
+      },
+    ]);
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("button", { name: /^agent run main · Ready$/ }),
+    ).toBeVisible();
+    const activity = page.getByRole("region", {
+      name: "Session activity",
+    });
+    await expect(activity).toContainText("0 unread");
+    await expect(activity.getByText("Ready", { exact: true })).toHaveCount(0);
+  });
+
   test("opens the kanban terminal popover from sidebar activity rows", async ({
     page,
     tauri,

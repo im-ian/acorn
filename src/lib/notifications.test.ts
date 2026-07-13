@@ -157,6 +157,22 @@ describe("notifications", () => {
     dispose();
   });
 
+  it("does not record ready transitions as activity", () => {
+    const dispose = startSessionActivityInboxWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "ready",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+
+    expect(useAppStore.getState().sessionNotifications).toEqual([]);
+    dispose();
+  });
+
   it("suppresses system notifications and activity while a session is silenced", async () => {
     useAppStore.setState({
       silencedSessionIds: { "session-1": true },

@@ -79,7 +79,6 @@ function notificationKindForTransition(
   if (prev === next) return null;
   if (next === "waiting_for_input") return "waiting_for_input";
   if (next === "errored") return "errored";
-  if (next === "ready") return "became_ready";
   return null;
 }
 

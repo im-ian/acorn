@@ -3698,7 +3698,6 @@ const SIDEBAR_ACTIVITY_KIND_KEYS: Record<
 > = {
   waiting_for_input: "sidebar.activity.kind.waitingForInput",
   errored: "sidebar.activity.kind.errored",
-  became_ready: "sidebar.activity.kind.becameReady",
 };
 
 function SessionActivityInbox() {
@@ -3982,7 +3981,6 @@ function SidebarActivityRow({
 
 function sidebarActivityDotTone(kind: SessionNotificationKind): StatusTone {
   if (kind === "errored") return "danger";
-  if (kind === "became_ready") return "neutral";
   return "warning";
 }
 
