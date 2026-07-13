@@ -8,6 +8,7 @@
     "dev": "vite",
     "dev:sidecar": "TAURI_SIDECAR_PROFILE=debug ./src-tauri/scripts/build-sidecar.sh",
     "build": "tsc && vite build",
+    "build:frontend": "vite build",
     "build:sidecar": "./src-tauri/scripts/build-sidecar.sh",
     "preview": "vite preview",
     "tauri": "tauri",
