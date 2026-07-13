@@ -609,6 +609,31 @@ mod tests {
     }
 
     #[test]
+    fn codex_conversation_preview_skips_goal_internal_context() {
+        let base = ScratchDir::new("codex-goal-preview");
+        let path = base.path().join("rollout.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Implement the kanban preview fix."}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect the transcript parser."}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<codex_internal_context source=\"goal\">\nThe user set an active goal.\n</codex_internal_context>"}]}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Codex, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Implement the kanban preview fix.")
+        );
+        assert_eq!(
+            preview.last_agent_message.as_deref(),
+            Some("I will inspect the transcript parser.")
+        );
+    }
+
+    #[test]
     fn codex_conversation_preview_keeps_inline_context_tag_mentions() {
         let base = ScratchDir::new("codex-inline-context-preview");
         let path = base.path().join("rollout.jsonl");
