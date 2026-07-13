@@ -3,6 +3,7 @@ import {
   diffStatsEntries,
   kanbanSessionBoardLookupPath,
   pickPullRequestForBranch,
+  pickPullRequestForBranches,
   summarizeDiffStats,
 } from "./useKanbanBoardData";
 import type { PullRequestInfo, Session } from "./types";
@@ -57,6 +58,21 @@ describe("pickPullRequestForBranch", () => {
     });
     expect(pickPullRequestForBranch([older, newer])?.number).toBe(2);
     expect(pickPullRequestForBranch([newer, older])?.number).toBe(2);
+  });
+});
+
+describe("pickPullRequestForBranches", () => {
+  it("keeps a PR linked after the worktree checks out the base branch", () => {
+    const pr = makePr({
+      number: 604,
+      state: "MERGED",
+      head_branch: "feat/x",
+      merged_at: "2026-01-02T00:10:13.000Z",
+    });
+
+    expect(pickPullRequestForBranches([pr], ["main", "feat/x"])?.number).toBe(
+      604,
+    );
   });
 });
 
