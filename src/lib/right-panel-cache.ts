@@ -121,7 +121,9 @@ class RightPanelCacheManager {
         return items;
       })
       .finally(() => {
-        this.agentHistoryInFlight.delete(repoPath);
+        if (this.agentHistoryInFlight.get(repoPath) === promise) {
+          this.agentHistoryInFlight.delete(repoPath);
+        }
       });
     this.agentHistoryInFlight.set(repoPath, promise);
     return promise;
@@ -150,7 +152,9 @@ class RightPanelCacheManager {
         return items;
       })
       .finally(() => {
-        this.unscopedAgentHistoryInFlight.delete(limit);
+        if (this.unscopedAgentHistoryInFlight.get(limit) === promise) {
+          this.unscopedAgentHistoryInFlight.delete(limit);
+        }
       });
     this.unscopedAgentHistoryInFlight.set(limit, promise);
     return promise;
@@ -185,7 +189,9 @@ class RightPanelCacheManager {
         return payload;
       })
       .finally(() => {
-        this.commitDiffInFlight.delete(key);
+        if (this.commitDiffInFlight.get(key) === promise) {
+          this.commitDiffInFlight.delete(key);
+        }
       });
     this.commitDiffInFlight.set(key, promise);
     return promise;
@@ -285,7 +291,9 @@ class RightPanelCacheManager {
         return result;
       })
       .finally(() => {
-        this.issueListInFlight.delete(key);
+        if (this.issueListInFlight.get(key) === promise) {
+          this.issueListInFlight.delete(key);
+        }
       });
     this.issueListInFlight.set(key, promise);
     return promise;
@@ -315,7 +323,9 @@ class RightPanelCacheManager {
         return result;
       })
       .finally(() => {
-        this.workflowRunsInFlight.delete(key);
+        if (this.workflowRunsInFlight.get(key) === promise) {
+          this.workflowRunsInFlight.delete(key);
+        }
       });
     this.workflowRunsInFlight.set(key, promise);
     return promise;
