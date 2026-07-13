@@ -17,6 +17,7 @@ import type {
 
 const CURRENT_PR_CACHE_TTL_MS = 60_000;
 const CURRENT_PR_EMPTY_RETRY_MS = 15_000;
+const CURRENT_PR_CACHE_MAX_ENTRIES = 256;
 
 type CurrentPullRequestCacheEntry = {
   value: SessionPullRequestSummary | null;
@@ -39,6 +40,18 @@ const currentPullRequestProjectCache = new Map<
 >();
 const currentPullRequestSubscribers = new Set<CurrentPullRequestSubscriber>();
 
+function setBoundedCacheEntry(
+  cache: Map<string, CurrentPullRequestCacheEntry>,
+  key: string,
+  entry: CurrentPullRequestCacheEntry,
+): void {
+  if (!cache.has(key) && cache.size >= CURRENT_PR_CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next();
+    if (!oldest.done) cache.delete(oldest.value);
+  }
+  cache.set(key, entry);
+}
+
 function normalizeRepoPath(repoPath: string): string {
   return repoPath.replace(/\\/g, "/").replace(/\/+$/, "");
 }
@@ -60,10 +73,14 @@ function setCurrentPullRequestCache(
   value: SessionPullRequestSummary | null,
   ttlMs: number,
 ): void {
-  currentPullRequestCache.set(currentPullRequestCacheKey(repoPath, branch), {
-    value,
-    expiresAt: Date.now() + ttlMs,
-  });
+  setBoundedCacheEntry(
+    currentPullRequestCache,
+    currentPullRequestCacheKey(repoPath, branch),
+    {
+      value,
+      expiresAt: Date.now() + ttlMs,
+    },
+  );
 }
 
 function readPrimedCurrentPullRequest(
@@ -144,7 +161,8 @@ export function primeCurrentPullRequestCacheFromListing(
     );
     if (!summary) continue;
     summariesByBranch.set(summary.head_branch, summary);
-    currentPullRequestProjectCache.set(
+    setBoundedCacheEntry(
+      currentPullRequestProjectCache,
       currentPullRequestProjectCacheKey(projectRepoPath, summary.head_branch),
       {
         value: summary,
@@ -188,7 +206,7 @@ function loadCurrentPullRequest(
     .then((listing) => findCurrentPullRequestForBranch(listing, branch))
     .catch(() => null);
 
-  currentPullRequestCache.set(key, {
+  setBoundedCacheEntry(currentPullRequestCache, key, {
     value: cached?.value ?? null,
     expiresAt: now + CURRENT_PR_CACHE_TTL_MS,
     promise,
@@ -203,7 +221,7 @@ function loadCurrentPullRequest(
     ) {
       return latest.value;
     }
-    currentPullRequestCache.set(key, {
+    setBoundedCacheEntry(currentPullRequestCache, key, {
       value,
       expiresAt:
         Date.now() +

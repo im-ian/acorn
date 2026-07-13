@@ -126,6 +126,40 @@ describe("useCurrentPullRequest", () => {
     expect(container.textContent).toBe("PR #77");
   });
 
+  it("evicts the oldest primed branches when the project cache is full", async () => {
+    const items = Array.from({ length: 300 }, (_, index) =>
+      pullRequest({
+        number: index + 1,
+        head_branch: `feat/branch-${index}`,
+      }),
+    );
+    primeCurrentPullRequestCacheFromListing("/tmp/demo", {
+      kind: "ok",
+      account: "test",
+      items,
+    });
+    mockApi.listPullRequests.mockResolvedValue({
+      kind: "ok",
+      account: "test",
+      items: [],
+    });
+
+    await act(async () => {
+      root.render(
+        <Probe value={session({ branch: "feat/branch-0" })} />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toBe("none");
+    expect(mockApi.listPullRequests).toHaveBeenCalledWith(
+      "/tmp/demo/.worktrees/runner",
+      "open",
+      10,
+      "head:feat/branch-0",
+    );
+  });
+
   it("clears and retries current PR context when a lifecycle mutation lands", async () => {
     mockApi.listPullRequests
       .mockResolvedValueOnce({
