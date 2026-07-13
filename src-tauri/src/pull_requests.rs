@@ -3050,6 +3050,41 @@ mod tests {
     }
 
     #[test]
+    fn commit_login_cache_evicts_oldest_entry_at_capacity() {
+        let mut cache = CommitLoginCache::with_capacity(2);
+        let first = ("acme/widgets".to_string(), "1".repeat(40));
+        let second = ("acme/widgets".to_string(), "2".repeat(40));
+        let third = ("acme/widgets".to_string(), "3".repeat(40));
+
+        cache.insert(first.clone(), Some("alice".to_string()));
+        cache.insert(second.clone(), Some("bob".to_string()));
+        cache.insert(third.clone(), Some("carol".to_string()));
+
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get(&first), None);
+        assert_eq!(cache.get(&second), Some(&Some("bob".to_string())));
+        assert_eq!(cache.get(&third), Some(&Some("carol".to_string())));
+    }
+
+    #[test]
+    fn commit_login_cache_update_does_not_consume_capacity() {
+        let mut cache = CommitLoginCache::with_capacity(2);
+        let first = ("acme/widgets".to_string(), "1".repeat(40));
+        let second = ("acme/widgets".to_string(), "2".repeat(40));
+
+        cache.insert(first.clone(), Some("alice".to_string()));
+        cache.insert(second.clone(), Some("bob".to_string()));
+        cache.insert(first.clone(), Some("alice-updated".to_string()));
+
+        assert_eq!(cache.len(), 2);
+        assert_eq!(
+            cache.get(&first),
+            Some(&Some("alice-updated".to_string()))
+        );
+        assert_eq!(cache.get(&second), Some(&Some("bob".to_string())));
+    }
+
+    #[test]
     fn commit_login_input_validation_rejects_graphql_fragments() {
         assert_eq!(
             validate_github_slug("acme/widgets").unwrap(),
