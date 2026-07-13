@@ -1,0 +1,42 @@
+/* @mode light */
+:root[data-acorn-theme="paper-ledger"] {
+  --color-bg: #f4ecd8;
+  --color-bg-elevated: #fffaf0;
+  --color-bg-sidebar: #e8dcc1;
+  --color-input: #eee2c9;
+  --color-input-hover: #e4d5b5;
+  --color-input-border: #c4b28e;
+  --color-fg: #2c2418;
+  --color-fg-muted: #74654e;
+  --color-border: #cdbc9a;
+  --color-accent: #9f3f2f;
+  --color-accent-hover: #7f2e23;
+  --color-on-accent: #fffaf0;
+  --color-danger: #b42318;
+  --color-warning: #8a5b12;
+  --color-terminal-bg: #1f1b16;
+  --color-terminal-fg: #f4e8cc;
+  --color-selection: rgba(159, 63, 47, 0.22);
+  --color-term-selection: rgba(217, 164, 65, 0.38);
+  --color-term-scrollbar: rgba(244, 232, 204, 0.12);
+  --color-term-scrollbar-hover: rgba(244, 232, 204, 0.24);
+  --color-term-scrollbar-active: rgba(244, 232, 204, 0.36);
+  --color-term-black: #1f1b16;
+  --color-term-red: #e06c5f;
+  --color-term-green: #93b47d;
+  --color-term-yellow: #d9a441;
+  --color-term-blue: #79a8d8;
+  --color-term-magenta: #b58ac4;
+  --color-term-cyan: #76b7ad;
+  --color-term-white: #e8dcc2;
+  --color-term-bright-black: #756b5c;
+  --color-term-bright-red: #ef8b7e;
+  --color-term-bright-green: #afd09a;
+  --color-term-bright-yellow: #edbf68;
+  --color-term-bright-blue: #9ac2e9;
+  --color-term-bright-magenta: #d0a9dc;
+  --color-term-bright-cyan: #9bd1c9;
+  --color-term-bright-white: #fff8e8;
+  --font-sans: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --acorn-pane-radius: 0.15rem;
+}
