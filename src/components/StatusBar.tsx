@@ -1076,6 +1076,7 @@ function ServicesStatusButton() {
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const pollInFlightRef = useRef<Promise<void> | null>(null);
   const [open, setOpen] = useState(false);
 
   const [ipc, setIpc] = useState<IpcSnapshot>({
@@ -1108,14 +1109,22 @@ function ServicesStatusButton() {
   }, []);
 
   useEffect(() => {
-    void refreshIpc();
-    void refreshDaemon();
+    const poll = () => {
+      if (pollInFlightRef.current) return;
+      const promise = Promise.all([refreshIpc(), refreshDaemon()])
+        .then(() => undefined)
+        .finally(() => {
+          if (pollInFlightRef.current === promise) {
+            pollInFlightRef.current = null;
+          }
+        });
+      pollInFlightRef.current = promise;
+    };
+
+    poll();
     // Daemon socket round-trip every 5s; IPC probe piggy-backs on
     // the same cadence so both reads share one tick budget.
-    const id = window.setInterval(() => {
-      void refreshIpc();
-      void refreshDaemon();
-    }, 5_000);
+    const id = window.setInterval(poll, 5_000);
     return () => window.clearInterval(id);
   }, [refreshIpc, refreshDaemon]);
 
