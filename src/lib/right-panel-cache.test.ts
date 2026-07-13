@@ -198,6 +198,30 @@ describe("rightPanelCache", () => {
     expect(mockApi.commitDiff).toHaveBeenCalledTimes(1);
   });
 
+  it("evicts old commit diff payloads after the cache reaches its limit", async () => {
+    mockApi.commitDiff.mockImplementation(async (_repoPath, sha) => ({
+      files: [
+        {
+          old_path: `${sha}.old`,
+          new_path: `${sha}.new`,
+          patch: `@@ -1 +1 @@\n-${sha}\n+updated-${sha}\n`,
+          is_image: false,
+        },
+      ],
+    }));
+
+    for (let index = 0; index < 20; index += 1) {
+      await rightPanelCache.fetchCommitDiff(REPO, `sha-${index}`);
+    }
+
+    expect(rightPanelCache.getCommitDiff(REPO, "sha-0")).toBeNull();
+    expect(rightPanelCache.getCommitDiff(REPO, "sha-19")).not.toBeNull();
+
+    await rightPanelCache.fetchCommitDiff(REPO, "sha-0");
+
+    expect(mockApi.commitDiff).toHaveBeenCalledTimes(21);
+  });
+
   it("tracks project prefetch once until the repo is pruned", () => {
     expect(rightPanelCache.claimProjectPrefetch(REPO)).toBe(true);
     expect(rightPanelCache.claimProjectPrefetch(REPO)).toBe(false);

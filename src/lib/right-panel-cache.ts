@@ -22,6 +22,8 @@ interface FetchOptions {
   force?: boolean;
 }
 
+const COMMIT_DIFF_CACHE_MAX_ENTRIES = 16;
+
 class RightPanelCacheManager {
   private retainedRepos: Set<string> | null = null;
   private repoVersions = new Map<string, number>();
@@ -178,7 +180,7 @@ class RightPanelCacheManager {
       .commitDiff(repoPath, sha)
       .then((payload) => {
         if (this.isCurrentRepoVersion(repoPath, version)) {
-          this.commitDiffCache.set(key, payload);
+          this.storeCommitDiff(key, payload);
         }
         return payload;
       })
@@ -378,6 +380,17 @@ class RightPanelCacheManager {
 
   private commitDiffKey(repoPath: string, sha: string): string {
     return JSON.stringify([repoPath, sha]);
+  }
+
+  private storeCommitDiff(key: string, payload: DiffPayload): void {
+    if (
+      !this.commitDiffCache.has(key) &&
+      this.commitDiffCache.size >= COMMIT_DIFF_CACHE_MAX_ENTRIES
+    ) {
+      const oldest = this.commitDiffCache.keys().next();
+      if (!oldest.done) this.commitDiffCache.delete(oldest.value);
+    }
+    this.commitDiffCache.set(key, payload);
   }
 
   private pruneStringKeyedMap<T>(map: Map<string, T>, retained: Set<string>): void {
