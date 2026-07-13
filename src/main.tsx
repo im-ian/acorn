@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { AppRecoveryBoundary } from "./components/AppRecoveryBoundary";
 
 // Block right-click context menu (Inspector access) globally.
 window.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -22,6 +23,8 @@ window.addEventListener("keydown", (e) => {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <AppRecoveryBoundary>
+      <App />
+    </AppRecoveryBoundary>
   </React.StrictMode>,
 );
