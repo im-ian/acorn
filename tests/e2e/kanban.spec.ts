@@ -104,6 +104,116 @@ test.describe("workspace kanban mode", () => {
     ).toContainText("+19-3");
   });
 
+  test("keeps surviving cards in their lifecycle columns while deleting a completed session", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessions: {
+            confirmRemove: true,
+            confirmDeleteIsolatedWorktrees: true,
+            showRestartPromptOnExit: true,
+          },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __kanbanSessionRemoved?: boolean };
+      const survivor = {
+        id: "survivor",
+        name: "survivor",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo/.worktrees/survivor",
+        branch: "feat/survivor",
+        isolated: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: true,
+      };
+      if (w.__kanbanSessionRemoved) return [survivor];
+      return [
+        {
+          id: "completed",
+          name: "completed",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo/.worktrees/completed",
+          branch: "feat/completed",
+          isolated: true,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+          kind: "regular",
+          owner: { kind: "user" },
+          position: null,
+          in_worktree: true,
+        },
+        {
+          ...survivor,
+          last_user_message: "Implement the lifecycle refresh fix",
+          last_agent_message: "The lifecycle refresh fix is ready",
+          agent_activity_at: "2026-01-01T00:00:04Z",
+        },
+      ];
+    });
+    await tauri.handle("remove_session", () => {
+      const w = window as unknown as { __kanbanSessionRemoved?: boolean };
+      w.__kanbanSessionRemoved = true;
+      return {
+        token: "kanban-removal-token",
+        repoPath: "/tmp/demo",
+        worktreePath: "/tmp/demo/.worktrees/completed",
+        gitCommonDir: "/tmp/demo/.git",
+      };
+    });
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    const completedCard = board.locator(
+      '[data-kanban-session-id="completed"]',
+    );
+    await completedCard.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Mark as done" }).click();
+    await expect(
+      board.locator(
+        'section[aria-label="Done"] [data-kanban-session-id="completed"]',
+      ),
+    ).toBeVisible();
+
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await page
+      .locator('[data-panel-id="sidebar"]')
+      .getByRole("button", { name: /^completed worktree/ })
+      .first()
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Remove Session", exact: true })
+      .click();
+    const dialog = page.getByRole("dialog");
+    await dialog
+      .getByRole("button", { name: "Remove + delete worktree" })
+      .click();
+
+    await expect(page.getByText(/Removing completed worktree in \d+s/)).toBeVisible();
+    await expect(
+      board.locator(
+        'section[aria-label="Review"] [data-kanban-session-id="survivor"]',
+      ),
+    ).toBeVisible();
+  });
+
   test("updates card PR metadata when the PR list refresh discovers a new PR", async ({
     page,
     tauri,
