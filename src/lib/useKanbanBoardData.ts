@@ -18,6 +18,10 @@ export interface DiffSummary {
   deletions: number;
 }
 
+export interface KanbanBoardDataOptions {
+  pollDiffs?: boolean;
+}
+
 const CLEAN_DIFF: DiffSummary = { hasDiff: false, additions: 0, deletions: 0 };
 
 const PR_POLL_INTERVAL_MS = 60_000;
@@ -158,14 +162,16 @@ export function kanbanSessionBoardLookupPath(
 }
 
 /**
- * Poll PR listings (per distinct repo) and worktree diff summaries (per
- * session) for the workspace kanban. Both polls pause while the document is
- * hidden and refresh immediately when it becomes visible again. `refreshKey`
- * forces an immediate PR re-fetch (bump it after a PR mutation).
+ * Poll PR listings (per distinct repo) for the workspace lifecycle and,
+ * optionally, worktree diff summaries per session for the visible Kanban.
+ * Both polls pause while the document is hidden and refresh immediately when
+ * it becomes visible again. `refreshKey` forces an immediate PR re-fetch
+ * (bump it after a PR mutation).
  */
 export function useKanbanBoardData(
   sessions: readonly Session[],
   refreshKey = 0,
+  { pollDiffs = true }: KanbanBoardDataOptions = {},
 ): Map<string, KanbanSessionBoardData> {
   const [prIndexByRepo, setPrIndexByRepo] = useState<
     ReadonlyMap<string, Map<string, PullRequestInfo[]>>
@@ -276,7 +282,7 @@ export function useKanbanBoardData(
 
   useEffect(() => {
     let cancelled = false;
-    if (!worktreeKey) {
+    if (!pollDiffs || !worktreeKey) {
       setDiffBySession(new Map());
       return;
     }
@@ -338,7 +344,7 @@ export function useKanbanBoardData(
       window.clearInterval(handle);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [worktreeKey]);
+  }, [pollDiffs, worktreeKey]);
 
   useEffect(() => {
     setPrBranchLinks((previous) => {

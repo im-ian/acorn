@@ -60,11 +60,12 @@ the single source of truth (mirrors the existing `kanbanBoard.ts` pattern).
   polled every 60 s per distinct `repo_path`. Direct matches use
   `head_branch === session.branch`; once observed, the PR branch is retained
   per session so checking out the base branch after merge does not sever the
-  card's PR identity. `closedAt` / `mergedAt` must not predate the latest real
-  user request. Provider cleanup and final output from the same turn may land
-  after merge without reopening the card, while a later user request returns
-  it to Review. Non-GitHub repos degrade gracefully (listing kind
-  `not_github` → no PR context).
+  card's PR identity. PR observation stays mounted at the workspace level in
+  both Panes and Kanban modes; only diff polling is Kanban-only. `closedAt` /
+  `mergedAt` must not predate the latest real user request. Provider cleanup
+  and final output from the same turn may land after merge without reopening
+  the card, while a later user request returns it to Review. Non-GitHub repos
+  degrade gracefully (listing kind `not_github` → no PR context).
 - **Diff:** `api.fsGitStatus(worktree_path)` per board-visible session, polled
   every 20 s, paused while `document.hidden`. Produces `hasDiff` and summed
   `+additions/−deletions` for the card chip without moving the card between
