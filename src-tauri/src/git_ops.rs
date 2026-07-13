@@ -1,6 +1,8 @@
 use git2::{DiffOptions, Repository};
 use serde::Serialize;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use crate::error::{AppError, AppResult};
 use crate::worktree::ensure_repo;
@@ -134,17 +136,67 @@ fn is_github_host(host: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn cached_ssh_hostname(alias: &str) -> Option<String> {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
+const SSH_HOSTNAME_CACHE_CAPACITY: usize = 64;
 
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+struct SshHostnameCache {
+    entries: HashMap<String, Option<String>>,
+    insertion_order: VecDeque<String>,
+    capacity: usize,
+}
+
+impl SshHostnameCache {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(capacity),
+            insertion_order: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn get(&self, alias: &str) -> Option<&Option<String>> {
+        self.entries.get(alias)
+    }
+
+    fn insert(&mut self, alias: String, hostname: Option<String>) {
+        if self.entries.contains_key(&alias) {
+            self.entries.insert(alias, hostname);
+            return;
+        }
+        if self.capacity == 0 {
+            return;
+        }
+        while self.entries.len() >= self.capacity {
+            let Some(oldest) = self.insertion_order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+        self.insertion_order.push_back(alias.clone());
+        self.entries.insert(alias, hostname);
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+fn ssh_hostname_cache() -> &'static Mutex<SshHostnameCache> {
+    static CACHE: OnceLock<Mutex<SshHostnameCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(SshHostnameCache::with_capacity(SSH_HOSTNAME_CACHE_CAPACITY)))
+}
+
+fn cached_ssh_hostname(alias: &str) -> Option<String> {
+    if !is_plain_hostname(alias) {
+        return None;
+    }
+    let cache = ssh_hostname_cache();
 
     // A poisoned lock would otherwise silently skip the cache and re-spawn
     // `ssh -G` on every call; the map itself stays valid, so recover it.
     {
-        let map = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let map = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(hit) = map.get(alias) {
             return hit.clone();
         }
@@ -549,6 +601,26 @@ mod tests {
         let sig = git2::Signature::now("test", "t@example").expect("sig");
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, parents)
             .expect("commit")
+    }
+
+    #[test]
+    fn ssh_hostname_cache_bounds_successes_and_failures() {
+        let mut cache = SshHostnameCache::with_capacity(2);
+
+        cache.insert("first".to_string(), Some("github.com".to_string()));
+        cache.insert("second".to_string(), None);
+        cache.insert("third".to_string(), Some("example.com".to_string()));
+
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get("first"), None);
+        assert_eq!(cache.get("second"), Some(&None));
+        assert_eq!(cache.get("third"), Some(&Some("example.com".to_string())));
+    }
+
+    #[test]
+    fn ssh_hostname_validation_rejects_oversized_cache_keys() {
+        assert!(is_plain_hostname(&"a".repeat(255)));
+        assert!(!is_plain_hostname(&"a".repeat(256)));
     }
 
     #[test]
