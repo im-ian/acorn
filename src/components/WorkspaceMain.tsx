@@ -217,7 +217,27 @@ interface WorkspaceMainProps {
 
 export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
   const isKanban = viewMode === "kanban";
+  const panes = useAppStore((s) => s.panes);
+  const sessionsById = useAppStore(selectSessionsById);
   const closeTerminalPopup = useAppStore((s) => s.closeTerminalPopup);
+  const sessions = useMemo(() => {
+    const ordered: Session[] = [];
+    const seen = new Set<string>();
+    for (const pane of Object.values(panes)) {
+      for (const id of pane.tabIds) {
+        if (seen.has(id)) continue;
+        const session = sessionsById.get(id);
+        if (!session) continue;
+        seen.add(id);
+        ordered.push(session);
+      }
+    }
+    return ordered;
+  }, [panes, sessionsById]);
+  const [prRefreshKey, setPrRefreshKey] = useState(0);
+  const boardData = useKanbanBoardData(sessions, prRefreshKey, {
+    pollDiffs: isKanban,
+  });
 
   useEffect(() => {
     if (!isKanban) closeTerminalPopup();
@@ -228,7 +248,13 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
       {isKanban ? (
         <div className="relative flex h-full min-w-0 flex-col overflow-hidden">
           <div className="min-h-0 min-w-0 flex-1">
-            <WorkspaceKanbanBoard />
+            <WorkspaceKanbanBoard
+              sessions={sessions}
+              boardData={boardData}
+              onPullRequestsMutated={() =>
+                setPrRefreshKey((key) => key + 1)
+              }
+            />
           </div>
           <KanbanFilePreviewOverlay />
         </div>
@@ -315,18 +341,41 @@ function KanbanFilePreviewOverlay() {
   );
 }
 
-function WorkspaceKanbanBoard() {
+function WorkspaceKanbanBoard({
+  sessions,
+  boardData,
+  onPullRequestsMutated,
+}: {
+  sessions: readonly Session[];
+  boardData: ReadonlyMap<string, KanbanSessionBoardData>;
+  onPullRequestsMutated: () => void;
+}) {
   // Remount per project so each board hydrates its own persisted prefs through
   // the useState initializer rather than racing an effect to swap them in.
   const projectId = useAppStore((s) => s.activeProject);
   return (
-    <KanbanBoard key={projectId ?? "__no-project__"} projectId={projectId} />
+    <KanbanBoard
+      key={projectId ?? "__no-project__"}
+      projectId={projectId}
+      sessions={sessions}
+      boardData={boardData}
+      onPullRequestsMutated={onPullRequestsMutated}
+    />
   );
 }
 
-function KanbanBoard({ projectId }: { projectId: string | null }) {
+function KanbanBoard({
+  projectId,
+  sessions,
+  boardData,
+  onPullRequestsMutated,
+}: {
+  projectId: string | null;
+  sessions: readonly Session[];
+  boardData: ReadonlyMap<string, KanbanSessionBoardData>;
+  onPullRequestsMutated: () => void;
+}) {
   const t = useTranslation();
-  const panes = useAppStore((s) => s.panes);
   const sessionsById = useAppStore(selectSessionsById);
   const selectSession = useAppStore((s) => s.selectSession);
   const openTerminalPopup = useAppStore((s) => s.openTerminalPopup);
@@ -344,21 +393,6 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
     null,
   );
   const columnResizeCleanupRef = useRef<(() => void) | null>(null);
-
-  const sessions = useMemo(() => {
-    const ordered: Session[] = [];
-    const seen = new Set<string>();
-    for (const pane of Object.values(panes)) {
-      for (const id of pane.tabIds) {
-        if (seen.has(id)) continue;
-        const session = sessionsById.get(id);
-        if (!session) continue;
-        seen.add(id);
-        ordered.push(session);
-      }
-    }
-    return ordered;
-  }, [panes, sessionsById]);
 
   const visibleSessions = useMemo(
     () =>
@@ -382,8 +416,6 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
     return () => window.clearInterval(handle);
   }, []);
 
-  const [prRefreshKey, setPrRefreshKey] = useState(0);
-  const boardData = useKanbanBoardData(sessions, prRefreshKey);
   const [prDetail, setPrDetail] = useState<{
     repoPath: string;
     number: number;
@@ -841,7 +873,7 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
         open={prDetail}
         cwd={prDetail?.repoPath}
         onClose={() => setPrDetail(null)}
-        onMutated={() => setPrRefreshKey((key) => key + 1)}
+        onMutated={onPullRequestsMutated}
       />
     </div>
   );

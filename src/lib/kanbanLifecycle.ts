@@ -26,7 +26,7 @@ export const KANBAN_LIFECYCLE_STAGES: readonly KanbanLifecycleStage[] = [
 export const KANBAN_STALL_THRESHOLD_MS = 5 * 60_000;
 
 export interface KanbanStageContext {
-  /** PR whose head branch matches the session branch, if any. */
+  /** PR matched to the session's current or previously observed PR branch. */
   pr: PullRequestInfo | null;
   /** User pinned the card to Done via the card menu. */
   manualDone: boolean;
@@ -72,11 +72,13 @@ function completedPullRequestAt(pr: PullRequestInfo | null): string | null {
   return null;
 }
 
-function pullRequestCompletedAfterAgentWork(
+function pullRequestCompletedAfterAgentRequest(
   session: Session,
   pr: PullRequestInfo | null,
 ): boolean {
-  const activityAt = Date.parse(session.agent_activity_at ?? "");
+  const requestAt = Date.parse(session.last_user_message_at ?? "");
+  const fallbackActivityAt = Date.parse(session.agent_activity_at ?? "");
+  const activityAt = Number.isFinite(requestAt) ? requestAt : fallbackActivityAt;
   const completedAt = Date.parse(completedPullRequestAt(pr) ?? "");
   return (
     Number.isFinite(activityAt) &&
@@ -92,7 +94,7 @@ function pullRequestCompletedAfterAgentWork(
  * 1. waiting/error                         → waiting
  * 2. live agent work                       → working
  * 3. manual done pin                       → done
- * 4. PR completed after latest agent work  → done
+ * 4. PR completed after latest user request → done
  * 5. completed agent work                  → review
  * 6. otherwise                             → idle
  *
@@ -110,7 +112,7 @@ export function deriveKanbanStage(
   if (isAgentWorking(session)) return "working";
   if (context.manualDone) return "done";
   if (!hasCompletedAgentWork(session)) return "idle";
-  if (pullRequestCompletedAfterAgentWork(session, context.pr)) return "done";
+  if (pullRequestCompletedAfterAgentRequest(session, context.pr)) return "done";
   return "review";
 }
 

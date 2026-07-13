@@ -197,6 +197,24 @@ describe("deriveKanbanStage", () => {
     }
   });
 
+  it("ignores same-turn cleanup written after the PR merged", () => {
+    expect(
+      deriveKanbanStage(
+        makeSession({
+          last_user_message: "Merge the pull request",
+          last_agent_message: "Merged and cleaned up the branch",
+          last_user_message_at: "2026-01-02T00:00:00.000Z",
+          agent_activity_at: "2026-01-02T00:10:40.000Z",
+        } as Partial<Session>),
+        ctx({
+          pr: makePr("MERGED", {
+            merged_at: "2026-01-02T00:10:13.000Z",
+          }),
+        }),
+      ),
+    ).toBe("done");
+  });
+
   it("keeps newer agent work in review when the matching PR was already finished", () => {
     expect(
       deriveKanbanStage(
@@ -204,6 +222,24 @@ describe("deriveKanbanStage", () => {
           last_agent_message: "Started follow-up work",
           agent_activity_at: "2026-01-04T00:00:00.000Z",
         }),
+        ctx({
+          pr: makePr("MERGED", {
+            merged_at: "2026-01-03T00:00:00.000Z",
+          }),
+        }),
+      ),
+    ).toBe("review");
+  });
+
+  it("keeps a post-merge user request in review", () => {
+    expect(
+      deriveKanbanStage(
+        makeSession({
+          last_user_message: "Make a follow-up change",
+          last_user_message_at: "2026-01-04T00:00:00.000Z",
+          last_agent_message: "Follow-up completed",
+          agent_activity_at: "2026-01-04T00:05:00.000Z",
+        } as Partial<Session>),
         ctx({
           pr: makePr("MERGED", {
             merged_at: "2026-01-03T00:00:00.000Z",

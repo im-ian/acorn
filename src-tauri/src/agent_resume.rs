@@ -329,6 +329,7 @@ fn antigravity_brain_roots() -> Vec<PathBuf> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ConversationPreview {
     pub last_user_message: Option<String>,
+    pub last_user_message_at: Option<String>,
     pub last_agent_message: Option<String>,
 }
 
@@ -354,6 +355,9 @@ pub(crate) fn extract_conversation_preview(
                     .preview_text
                     .as_deref()
                     .and_then(|text| collapse_preview(text, PREVIEW_CHARS));
+                if preview.last_user_message.is_some() {
+                    preview.last_user_message_at = parsed.timestamp;
+                }
             }
             TranscriptRole::Other => {}
             _ => {}
@@ -568,7 +572,7 @@ mod tests {
         let path = base.path().join("rollout.jsonl");
         fs::write(
             &path,
-            r#"{"type":"message","payload":{"role":"user","content":[{"type":"input_text","text":"Check the drawer regression."}]}}
+            r#"{"timestamp":"2026-01-02T03:00:00.000Z","type":"message","payload":{"role":"user","content":[{"type":"input_text","text":"Check the drawer regression."}]}}
 {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The regression is in the popover target."}]}}
 "#,
         )
@@ -583,6 +587,10 @@ mod tests {
         assert_eq!(
             preview.last_agent_message.as_deref(),
             Some("The regression is in the popover target.")
+        );
+        assert_eq!(
+            preview.last_user_message_at.as_deref(),
+            Some("2026-01-02T03:00:00.000Z")
         );
     }
 
