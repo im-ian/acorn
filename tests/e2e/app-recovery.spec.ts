@@ -40,7 +40,7 @@ test.describe("app recovery", () => {
     ).toBeVisible();
     await expect(
       page.getByText(
-        "터미널 세션과 프로젝트 자체는 삭제되지 않고, 화면 배치와 폴더 구성만 초기화됩니다.",
+        "터미널 세션과 프로젝트 자체는 삭제되지 않고, 로컬 작업공간 설정만 초기화됩니다.",
       ),
     ).toBeVisible();
 

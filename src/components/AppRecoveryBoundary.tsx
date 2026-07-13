@@ -10,7 +10,7 @@ const COPY = {
     description:
       "A saved workspace configuration may be incompatible with this version after the update.",
     resetHint:
-      "Your terminal sessions and projects will remain. Only window layout and folder organization will be reset.",
+      "Your terminal sessions and projects will remain. Only local workspace preferences will be reset.",
     reload: "Try again",
     reset: "Reset workspace view and reopen",
     details: "Error details",
@@ -23,7 +23,7 @@ const COPY = {
     description:
       "업데이트 후 저장된 작업공간 구성이 현재 버전과 호환되지 않을 수 있습니다.",
     resetHint:
-      "터미널 세션과 프로젝트 자체는 삭제되지 않고, 화면 배치와 폴더 구성만 초기화됩니다.",
+      "터미널 세션과 프로젝트 자체는 삭제되지 않고, 로컬 작업공간 설정만 초기화됩니다.",
     reload: "다시 열기",
     reset: "화면 설정 초기화 후 다시 열기",
     details: "오류 상세",
@@ -62,8 +62,11 @@ export class AppRecoveryBoundary extends Component<
     resetFailed: false,
   };
 
-  static getDerivedStateFromError(error: Error): AppRecoveryBoundaryState {
-    return { error, resetFailed: false };
+  static getDerivedStateFromError(error: unknown): AppRecoveryBoundaryState {
+    return {
+      error: error instanceof Error ? error : new Error(String(error)),
+      resetFailed: false,
+    };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
