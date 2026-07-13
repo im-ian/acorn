@@ -588,6 +588,48 @@ describe("refreshAll", () => {
     expect(s.workspaces[folder.id].panes.root.tabIds).toEqual(["web"]);
     expect(s.workspaces[REPO_A].panes.root.tabIds).toEqual(["root"]);
   });
+
+  it("preserves runtime session metadata while applying refreshed persisted fields", async () => {
+    const runtimeSession = session("a1", REPO_A, {
+      name: "before refresh",
+      branch: "feat/live-branch",
+      status_reason: "turn_complete",
+      status_started_at: "2026-01-02T00:00:00.000Z",
+      last_message: "Finished the requested change",
+      last_user_message: "Implement the requested change",
+      last_agent_message: "Finished the requested change",
+      agent_provider: "codex",
+      agent_transcript_provider: "codex",
+      agent_transcript_path: "/tmp/codex-session.jsonl",
+      agent_activity_at: "2026-01-02T00:00:05.000Z",
+      active_processes: [{ pid: 42, name: "codex", depth: 1 }],
+      git_context_path: `${REPO_A}/.worktrees/live`,
+    });
+    await seed([project(REPO_A, 0)], [runtimeSession]);
+
+    mockApi.listSessions.mockResolvedValueOnce([
+      session("a1", REPO_A, { name: "after refresh" }),
+    ]);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+
+    await useAppStore.getState().refreshAll();
+
+    expect(useAppStore.getState().sessions[0]).toMatchObject({
+      name: "after refresh",
+      branch: "feat/live-branch",
+      status_reason: "turn_complete",
+      status_started_at: "2026-01-02T00:00:00.000Z",
+      last_message: "Finished the requested change",
+      last_user_message: "Implement the requested change",
+      last_agent_message: "Finished the requested change",
+      agent_provider: "codex",
+      agent_transcript_provider: "codex",
+      agent_transcript_path: "/tmp/codex-session.jsonl",
+      agent_activity_at: "2026-01-02T00:00:05.000Z",
+      active_processes: [{ pid: 42, name: "codex", depth: 1 }],
+      git_context_path: `${REPO_A}/.worktrees/live`,
+    });
+  });
 });
 
 describe("selectSession", () => {
