@@ -222,6 +222,7 @@ export function useKanbanBoardData(
   const diffRefreshSeqRef = useRef(0);
   const diffRefreshInFlightRef = useRef<{
     key: string;
+    owner: symbol;
     promise: Promise<void>;
   } | null>(null);
 
@@ -323,6 +324,7 @@ export function useKanbanBoardData(
 
   useEffect(() => {
     let cancelled = false;
+    const owner = Symbol();
     if (!pollDiffs || !worktreeKey) {
       setDiffBySession(new Map());
       return;
@@ -330,7 +332,9 @@ export function useKanbanBoardData(
 
     const refresh = (): Promise<void> => {
       const existing = diffRefreshInFlightRef.current;
-      if (existing?.key === worktreeKey) return existing.promise;
+      if (existing?.key === worktreeKey && existing.owner === owner) {
+        return existing.promise;
+      }
 
       const run = async () => {
         const requestSeq = ++diffRefreshSeqRef.current;
@@ -381,7 +385,7 @@ export function useKanbanBoardData(
           diffRefreshInFlightRef.current = null;
         }
       });
-      diffRefreshInFlightRef.current = { key: worktreeKey, promise };
+      diffRefreshInFlightRef.current = { key: worktreeKey, owner, promise };
       return promise;
     };
 
@@ -395,6 +399,9 @@ export function useKanbanBoardData(
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
+      if (diffRefreshInFlightRef.current?.owner === owner) {
+        diffRefreshInFlightRef.current = null;
+      }
       window.clearInterval(handle);
       document.removeEventListener("visibilitychange", onVisible);
     };
