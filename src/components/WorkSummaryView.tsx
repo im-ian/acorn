@@ -137,6 +137,10 @@ export function WorkSummaryView({
   const [conversationLoading, setConversationLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const transcriptLocationRef = useRef<AgentTranscriptLocation | null>(null);
+  const summaryInFlightRef = useRef<{
+    identity: string;
+    promise: Promise<WorkSummarySnapshot>;
+  } | null>(null);
   const conversationInFlightRef = useRef<{
     identity: string;
     promise: Promise<WorkSummaryConversationSnapshot>;
@@ -161,6 +165,19 @@ export function WorkSummaryView({
     const summary = buildWorkSummary(tab.cwdPath, status, diffStats);
     return { summary };
   }, [tab.cwdPath]);
+
+  const fetchSummaryCoalesced = useCallback(() => {
+    const existing = summaryInFlightRef.current;
+    if (existing?.identity === tab.cwdPath) return existing.promise;
+
+    const promise = fetchSummary().finally(() => {
+      if (summaryInFlightRef.current?.promise === promise) {
+        summaryInFlightRef.current = null;
+      }
+    });
+    summaryInFlightRef.current = { identity: tab.cwdPath, promise };
+    return promise;
+  }, [fetchSummary, tab.cwdPath]);
 
   const fetchConversation = useCallback(async (): Promise<WorkSummaryConversationSnapshot> => {
     if (!session) {
@@ -257,7 +274,7 @@ export function WorkSummaryView({
     setSummaryLoading(true);
     setConversationLoading(true);
     setError(null);
-    const summaryTask = fetchSummary()
+    const summaryTask = fetchSummaryCoalesced()
       .then(applySnapshot)
       .catch((err) => {
         setError(err instanceof Error ? err.message : String(err));
@@ -274,7 +291,7 @@ export function WorkSummaryView({
     applyConversationSnapshot,
     applySnapshot,
     fetchConversationCoalesced,
-    fetchSummary,
+    fetchSummaryCoalesced,
   ]);
 
   useEffect(() => {
@@ -286,7 +303,7 @@ export function WorkSummaryView({
 
     async function runSummary() {
       try {
-        const snapshot = await fetchSummary();
+        const snapshot = await fetchSummaryCoalesced();
         if (!cancelled) applySnapshot(snapshot);
       } catch (err) {
         if (!cancelled) {
@@ -319,7 +336,7 @@ export function WorkSummaryView({
     applyConversationSnapshot,
     applySnapshot,
     fetchConversationCoalesced,
-    fetchSummary,
+    fetchSummaryCoalesced,
     isActive,
   ]);
 
@@ -333,7 +350,7 @@ export function WorkSummaryView({
 
     async function refreshSummarySilently() {
       try {
-        const snapshot = await fetchSummary();
+        const snapshot = await fetchSummaryCoalesced();
         if (!cancelled) applySnapshot(snapshot);
       } catch (err) {
         void err;
@@ -397,7 +414,7 @@ export function WorkSummaryView({
     applyConversationSnapshot,
     applySnapshot,
     fetchConversationCoalesced,
-    fetchSummary,
+    fetchSummaryCoalesced,
     isActive,
     session?.id,
     session?.agent_transcript_id,
