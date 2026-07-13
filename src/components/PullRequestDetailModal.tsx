@@ -142,6 +142,26 @@ export function PullRequestDetailModal({
   } | null>(null);
   const [bodySaveError, setBodySaveError] = useState<string | null>(null);
   const bodyWriteSeqRef = useRef(0);
+  const detailFetchInFlightRef = useRef<{
+    key: string;
+    promise: Promise<PullRequestDetailListing>;
+  } | null>(null);
+
+  const fetchDetail = useCallback((repoPath: string, number: number) => {
+    const key = `${repoPath}#${number}`;
+    const existing = detailFetchInFlightRef.current;
+    if (existing?.key === key) return existing.promise;
+
+    const promise = api
+      .getPullRequestDetail(repoPath, number)
+      .finally(() => {
+        if (detailFetchInFlightRef.current?.promise === promise) {
+          detailFetchInFlightRef.current = null;
+        }
+      });
+    detailFetchInFlightRef.current = { key, promise };
+    return promise;
+  }, []);
 
   const requestClose = useCallback(() => {
     if (commentDraft.trim().length > 0) {
@@ -200,8 +220,7 @@ export function PullRequestDetailModal({
     if (!open) return;
     let cancelled = false;
     setRefreshing(true);
-    api
-      .getPullRequestDetail(open.repoPath, open.number)
+    fetchDetail(open.repoPath, open.number)
       .then((result) => {
         if (cancelled) return;
         setListing(result);
@@ -216,7 +235,7 @@ export function PullRequestDetailModal({
     return () => {
       cancelled = true;
     };
-  }, [open, reloadKey]);
+  }, [fetchDetail, open, reloadKey]);
 
   const detail = listing && listing.kind === "ok" ? listing.detail : null;
   const hasRunningChecks =
@@ -227,8 +246,7 @@ export function PullRequestDetailModal({
     if (!open || !hasRunningChecks) return;
     let cancelled = false;
     const handle = window.setInterval(() => {
-      void api
-        .getPullRequestDetail(open.repoPath, open.number)
+      void fetchDetail(open.repoPath, open.number)
         .then((result) => {
           if (!cancelled) {
             setListing(result);
@@ -245,7 +263,7 @@ export function PullRequestDetailModal({
       cancelled = true;
       window.clearInterval(handle);
     };
-  }, [open, hasRunningChecks, refreshIntervalMs]);
+  }, [fetchDetail, open, hasRunningChecks, refreshIntervalMs]);
 
   const handleRefresh = useCallback(() => {
     setReloadKey((k) => k + 1);
