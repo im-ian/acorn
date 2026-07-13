@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_HOTKEYS,
   formatHotkey,
+  matchesHotkeyEvent,
   recordHotkeyFromEvent,
   resolveHotkeys,
   shouldUseTinykeysToggleMultiInputFallback,
@@ -148,6 +149,26 @@ describe("recordHotkeyFromEvent", () => {
   });
 });
 
+describe("matchesHotkeyEvent", () => {
+  it("matches configurable unmodified function keys", () => {
+    expect(
+      matchesHotkeyEvent(
+        "F3",
+        new KeyboardEvent("keydown", { key: "F3", code: "F3" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects the previous binding after a shortcut changes", () => {
+    expect(
+      matchesHotkeyEvent(
+        "F3",
+        new KeyboardEvent("keydown", { key: "F2", code: "F2" }),
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("resolveHotkeys", () => {
   it("keeps every default binding unique", () => {
     const bindingCounts = new Map<string, number>();
@@ -163,6 +184,11 @@ describe("resolveHotkeys", () => {
   it("uses vertical mod-option arrows for conversation navigation", () => {
     expect(DEFAULT_HOTKEYS.previousConversation).toBe("$mod+Alt+ArrowUp");
     expect(DEFAULT_HOTKEYS.nextConversation).toBe("$mod+Alt+ArrowDown");
+  });
+
+  it("defines defaults for contextual find and rename commands", () => {
+    expect(DEFAULT_HOTKEYS.findInView).toBe("$mod+f");
+    expect(DEFAULT_HOTKEYS.renameItem).toBe("F2");
   });
 
   it("migrates persisted legacy defaults to current defaults", () => {

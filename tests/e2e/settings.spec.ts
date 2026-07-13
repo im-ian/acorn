@@ -273,6 +273,8 @@ test.describe("settings modal", () => {
     await expect(modal.getByText("Focus pane to the right")).toBeVisible();
     await expect(modal.getByText("Focus pane above")).toBeVisible();
     await expect(modal.getByText("Focus pane below")).toBeVisible();
+    await expect(modal.getByText("Find in current view")).toBeVisible();
+    await expect(modal.getByText("Rename selected item")).toBeVisible();
 
     await modal
       .getByRole("button", {
