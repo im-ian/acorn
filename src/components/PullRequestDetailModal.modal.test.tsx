@@ -395,6 +395,69 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     expect(document.body.textContent).toContain("6s");
   });
 
+  it("coalesces PR detail polls while the previous request is pending", async () => {
+    vi.useFakeTimers();
+    useSettings.setState({
+      settings: {
+        ...structuredClone(DEFAULT_SETTINGS),
+        github: {
+          ...DEFAULT_SETTINGS.github,
+          refreshIntervalMs: 2_000,
+        },
+      },
+    });
+    const runningListing: PullRequestDetailListing = {
+      kind: "ok",
+      account: "tester",
+      detail: {
+        ...fakeDetail(""),
+        checks: [
+          {
+            name: "test",
+            workflow_name: "CI",
+            status: "IN_PROGRESS",
+            conclusion: null,
+            started_at: "2026-05-19T12:00:00Z",
+            completed_at: null,
+            url: "https://github.com/x/y/actions/runs/1",
+          },
+        ],
+      },
+    };
+    let resolvePoll!: (listing: PullRequestDetailListing) => void;
+    mockApi.getPullRequestDetail
+      .mockResolvedValueOnce(runningListing)
+      .mockImplementation(
+        () =>
+          new Promise<PullRequestDetailListing>((resolve) => {
+            resolvePoll = resolve;
+          }),
+      );
+
+    await act(async () => {
+      root.render(
+        <PullRequestDetailModal
+          open={{ repoPath: "/r", number: 999 }}
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+    });
+    expect(mockApi.getPullRequestDetail).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+    });
+    expect(mockApi.getPullRequestDetail).toHaveBeenCalledTimes(2);
+
+    resolvePoll(runningListing);
+    await flushPromises();
+  });
+
   it("loads the PR diff only after the Files tab is selected", async () => {
     mockApi.getPullRequestDetail.mockResolvedValueOnce({
       kind: "ok",
