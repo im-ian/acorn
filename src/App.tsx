@@ -73,6 +73,7 @@ import {
 import { findFocusedSessionId } from "./lib/focus";
 import { isSessionTabId } from "./lib/workspaceTabs";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
+import { retainRememberedTerminalScrollbacks } from "./lib/terminalScrollbackHandoff";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
 import {
@@ -526,6 +527,7 @@ function App() {
     );
     pruneSessionIdSet(primedResumeSessionsRef.current, liveSessionIds);
     pruneSessionIdSet(probedSessionsRef.current, liveSessionIds);
+    retainRememberedTerminalScrollbacks(liveSessionIds);
     titleGenerationLastAttemptAtRef.current = retainSessionMapEntries(
       titleGenerationLastAttemptAtRef.current,
       liveSessionIds,

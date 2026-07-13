@@ -22,3 +22,11 @@ export function rememberedTerminalScrollback(sessionId: string): string | null {
 export function clearRememberedTerminalScrollback(sessionId: string): void {
   snapshots.delete(sessionId);
 }
+
+export function retainRememberedTerminalScrollbacks(
+  liveSessionIds: ReadonlySet<string>,
+): void {
+  for (const sessionId of snapshots.keys()) {
+    if (!liveSessionIds.has(sessionId)) snapshots.delete(sessionId);
+  }
+}
