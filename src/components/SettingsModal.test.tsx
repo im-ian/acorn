@@ -23,7 +23,8 @@ const mocks = vi.hoisted(() => ({
       id: "one-dark-pro",
       label: "One Dark Pro",
       mode: "dark" as const,
-      source: "builtin" as const,
+      source: "catalog" as const,
+      catalogVersion: 1,
     },
     {
       css: "",
@@ -44,7 +45,8 @@ const mocks = vi.hoisted(() => ({
       id: "github-light",
       label: "GitHub Light",
       mode: "light" as const,
-      source: "builtin" as const,
+      source: "catalog" as const,
+      catalogVersion: 1,
     },
     {
       css: "",
@@ -54,6 +56,33 @@ const mocks = vi.hoisted(() => ({
       source: "user" as const,
     },
   ],
+  catalog: [
+    {
+      id: "one-dark-pro",
+      label: "One Dark Pro",
+      mode: "dark" as const,
+      version: 2,
+      file: "themes/one-dark-pro.css",
+    },
+    {
+      id: "github-light",
+      label: "GitHub Light",
+      mode: "light" as const,
+      version: 1,
+      file: "themes/github-light.css",
+    },
+    {
+      id: "note",
+      label: "Note",
+      mode: "light" as const,
+      version: 1,
+      file: "themes/note.css",
+    },
+  ],
+  loadThemeCatalog: vi.fn<() => Promise<void>>(),
+  installTheme: vi.fn<() => Promise<void>>(),
+  openThemePreview: vi.fn<() => Promise<void>>(),
+  uninstallTheme: vi.fn<() => Promise<void>>(),
   importBackgroundImage: vi.fn<
     (name: string, bytes: Uint8Array) => Promise<{ relativePath: string; fileName: string }>
   >(),
@@ -104,11 +133,19 @@ vi.mock("../lib/releases", () => ({
 
 vi.mock("../lib/themes", () => ({
   BUILT_IN_THEMES: mocks.themes.filter((theme) => theme.source === "builtin"),
+  openThemePreview: mocks.openThemePreview,
   revealThemesFolder: vi.fn(),
   useThemes: (selector: (state: unknown) => unknown) =>
     selector({
+      catalog: mocks.catalog,
+      catalogError: null,
+      catalogStatus: "ready",
+      install: mocks.installTheme,
+      loadCatalog: mocks.loadThemeCatalog,
+      operations: {},
       refresh: vi.fn(),
       themes: mocks.themes,
+      uninstall: mocks.uninstallTheme,
     }),
 }));
 
@@ -149,6 +186,19 @@ function openAppearanceTab() {
   );
   if (!(button instanceof HTMLButtonElement)) {
     throw new Error("Appearance tab button not found");
+  }
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+function openThemesTab() {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element) =>
+      element.textContent === "Themes" || element.textContent === "테마",
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Themes tab button not found");
   }
   act(() => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -830,7 +880,7 @@ describe("SettingsModal font controls", () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
     });
-    openAppearanceTab();
+    openThemesTab();
     await act(async () => {
       await Promise.resolve();
     });
@@ -847,8 +897,8 @@ describe("SettingsModal font controls", () => {
       ),
     ).toEqual([
       "Acorn themes",
-      "Built-in dark",
-      "Built-in light",
+      "Downloaded dark",
+      "Downloaded light",
       "Custom themes",
     ]);
     expect(separatorLabels()).toEqual([
@@ -878,6 +928,42 @@ describe("SettingsModal font controls", () => {
     expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({
       themeId: "solarized-local",
     });
+  });
+
+  it("shows downloaded, update, and available states in the theme library", async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openThemesTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.body.textContent).toContain("Theme library");
+    expect(document.body.textContent).toContain("Update available");
+    expect(document.body.textContent).toContain("Downloaded");
+    expect(document.body.textContent).toContain("Available to download");
+
+    const previewButton = Array.from(document.querySelectorAll("button")).find(
+      (element) => element.textContent?.trim() === "Preview themes",
+    );
+    await act(async () => {
+      previewButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(mocks.openThemePreview).toHaveBeenCalledTimes(1);
+
+    const noteRow = Array.from(document.querySelectorAll('[role="listitem"]')).find(
+      (element) => element.textContent?.includes("Note"),
+    );
+    const downloadButton = noteRow?.querySelector("button");
+    expect(downloadButton?.textContent).toContain("Download");
+    await act(async () => {
+      downloadButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(mocks.installTheme).toHaveBeenCalledWith(mocks.catalog[2]);
   });
 
   it("edits Interface UI scale with presets only", async () => {

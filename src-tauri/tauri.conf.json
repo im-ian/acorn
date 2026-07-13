@@ -22,8 +22,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: https:; media-src 'self' asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost https://api.github.com; font-src 'self'; object-src 'none'; base-uri 'none'; frame-src asset: http://asset.localhost",
-      "devCsp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: https: http://localhost:* http://127.0.0.1:*; media-src 'self' asset: http://asset.localhost http://localhost:* http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost https://api.github.com http://localhost:* ws://localhost:* http://127.0.0.1:* ws://127.0.0.1:*; font-src 'self'; object-src 'none'; base-uri 'none'; frame-src asset: http://asset.localhost http://localhost:* http://127.0.0.1:*",
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: https:; media-src 'self' asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost https://api.github.com https://raw.githubusercontent.com; font-src 'self'; object-src 'none'; base-uri 'none'; frame-src asset: http://asset.localhost",
+      "devCsp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: https: http://localhost:* http://127.0.0.1:*; media-src 'self' asset: http://asset.localhost http://localhost:* http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost https://api.github.com https://raw.githubusercontent.com http://localhost:* ws://localhost:* http://127.0.0.1:* ws://127.0.0.1:*; font-src 'self'; object-src 'none'; base-uri 'none'; frame-src asset: http://asset.localhost http://localhost:* http://127.0.0.1:*",
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPLOCALDATA/backgrounds/**/*"]

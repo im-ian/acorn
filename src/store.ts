@@ -2149,6 +2149,15 @@ export const useAppStore = create<AppStateModel>()(
     // portal reattach, same as the session-create focus path above.
     if (id !== null && typeof window !== "undefined") {
       requestAnimationFrame(() => {
+        const active = document.activeElement;
+        if (
+          active instanceof HTMLInputElement ||
+          active instanceof HTMLTextAreaElement ||
+          active instanceof HTMLSelectElement ||
+          active?.getAttribute("contenteditable") === "true"
+        ) {
+          return;
+        }
         window.dispatchEvent(
           new CustomEvent("acorn:focus-session", {
             detail: { sessionId: id },

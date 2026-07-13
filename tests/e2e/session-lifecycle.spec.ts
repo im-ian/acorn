@@ -56,9 +56,9 @@ test.describe("session lifecycle", () => {
       .first();
     await row.click();
     // The configured key replaces the built-in F2 binding.
-    await page.keyboard.press("F2");
+    await row.press("F2");
     await expect(sidebar.locator("input[type='text']")).toHaveCount(0);
-    await page.keyboard.press("F3");
+    await row.press("F3");
 
     const input = sidebar.locator("input[type='text']");
     await expect(input).toBeVisible();
