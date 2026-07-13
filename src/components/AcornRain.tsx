@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import acornUrl from "../assets/acorn-trimmed.png";
 
 interface Acorn {
-  id: number;
+  id: string;
   leftPct: number;
   size: number;
   duration: number;
@@ -20,21 +20,21 @@ const MIN_DURATION = 4.5;
 const MAX_DURATION = 8.5;
 const MAX_DELAY = 3.5;
 const MAX_TOTAL = (MAX_DURATION + MAX_DELAY) * 1000 + 200;
+const MAX_ACTIVE_BATCHES = 3;
 
 function rand(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
-function buildBatch(): Acorn[] {
+function buildBatch(batchId: number): Acorn[] {
   const reduced =
     typeof window !== "undefined" &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const count = reduced
     ? Math.floor(MIN_COUNT / 2)
     : Math.floor(rand(MIN_COUNT, MAX_COUNT));
-  const seed = Date.now();
   return Array.from({ length: count }, (_, i) => ({
-    id: seed + i,
+    id: `${batchId}:${i}`,
     leftPct: rand(-2, 102),
     size: Math.round(rand(MIN_SIZE, MAX_SIZE)),
     duration: rand(MIN_DURATION, MAX_DURATION),
@@ -47,26 +47,46 @@ function buildBatch(): Acorn[] {
 
 export function AcornRain() {
   const [batches, setBatches] = useState<Map<number, Acorn[]>>(new Map());
+  const cleanupTimersRef = useRef(new Map<number, number>());
+  const nextBatchIdRef = useRef(0);
 
   useEffect(() => {
     function handler() {
-      const batchId = Date.now() + Math.random();
-      const acorns = buildBatch();
-      setBatches((prev) => {
-        const next = new Map(prev);
-        next.set(batchId, acorns);
-        return next;
-      });
-      window.setTimeout(() => {
+      const batchId = ++nextBatchIdRef.current;
+      const acorns = buildBatch(batchId);
+      const cleanupTimer = window.setTimeout(() => {
+        cleanupTimersRef.current.delete(batchId);
         setBatches((prev) => {
           const next = new Map(prev);
           next.delete(batchId);
           return next;
         });
       }, MAX_TOTAL);
+      cleanupTimersRef.current.set(batchId, cleanupTimer);
+      setBatches((prev) => {
+        const next = new Map(prev);
+        next.set(batchId, acorns);
+        while (next.size > MAX_ACTIVE_BATCHES) {
+          const oldestBatchId = next.keys().next().value;
+          if (oldestBatchId === undefined) break;
+          next.delete(oldestBatchId);
+          const oldestTimer = cleanupTimersRef.current.get(oldestBatchId);
+          if (oldestTimer !== undefined) {
+            window.clearTimeout(oldestTimer);
+            cleanupTimersRef.current.delete(oldestBatchId);
+          }
+        }
+        return next;
+      });
     }
     window.addEventListener("acorn:shake-tree", handler);
-    return () => window.removeEventListener("acorn:shake-tree", handler);
+    return () => {
+      window.removeEventListener("acorn:shake-tree", handler);
+      for (const timer of cleanupTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      cleanupTimersRef.current.clear();
+    };
   }, []);
 
   if (batches.size === 0) return null;
