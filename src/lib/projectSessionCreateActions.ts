@@ -1,4 +1,5 @@
 import type { TranslationKey } from "./i18n";
+import type { HotkeyId } from "./hotkeys";
 import type { SessionKind, SessionMode } from "./types";
 
 type SidebarActionKey = Extract<TranslationKey, `sidebar.actions.${string}`>;
@@ -17,6 +18,7 @@ export interface ProjectSessionCreateAction {
   isolated: boolean;
   kind: SessionKind;
   mode: SessionMode;
+  hotkeyId?: HotkeyId;
 }
 
 const TERMINAL_ACTION = {
@@ -26,6 +28,7 @@ const TERMINAL_ACTION = {
   isolated: false,
   kind: "regular",
   mode: "terminal",
+  hotkeyId: "newSession",
 } as const satisfies ProjectSessionCreateAction;
 
 const ISOLATED_ACTION = {
@@ -35,6 +38,7 @@ const ISOLATED_ACTION = {
   isolated: true,
   kind: "regular",
   mode: "terminal",
+  hotkeyId: "newIsolatedSession",
 } as const satisfies ProjectSessionCreateAction;
 
 const CHAT_ACTION = {
@@ -44,6 +48,7 @@ const CHAT_ACTION = {
   isolated: false,
   kind: "regular",
   mode: "chat",
+  hotkeyId: undefined,
 } as const satisfies ProjectSessionCreateAction;
 
 const CONTROL_ACTION = {
@@ -53,6 +58,7 @@ const CONTROL_ACTION = {
   isolated: false,
   kind: "control",
   mode: "terminal",
+  hotkeyId: "newControlSession",
 } as const satisfies ProjectSessionCreateAction;
 
 export const PROJECT_SESSION_CREATE_ACTIONS = [

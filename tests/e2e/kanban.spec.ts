@@ -353,7 +353,9 @@ test.describe("workspace kanban mode", () => {
       name: "New session",
     });
     await expect(newSessionMenuItem).toBeVisible();
-    await expect(newSessionMenuItem.locator("kbd")).not.toBeEmpty();
+    await expect(newSessionMenuItem.locator("kbd")).toHaveText(
+      /^(⌘T|Ctrl\+T)$/,
+    );
     await expect(
       page.getByRole("menuitem", { name: "New worktree session" }),
     ).toBeVisible();
@@ -771,7 +773,9 @@ test.describe("workspace kanban mode", () => {
     await closePopoverButton.hover();
     const closePopoverTooltip = page.getByRole("tooltip");
     await expect(closePopoverTooltip).toContainText("Close");
-    await expect(closePopoverTooltip.locator("kbd")).not.toBeEmpty();
+    await expect(closePopoverTooltip.locator("kbd")).toHaveText(
+      /^(⌘W|Ctrl\+W)$/,
+    );
     await page.mouse.move(0, 0);
     await expect(
       page.getByTestId("kanban-terminal-popover-reset-position"),
