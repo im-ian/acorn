@@ -652,9 +652,13 @@ mod tests {
             .contains("notify=[\\\"bash\\\",\\\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\\\"]"));
         assert!(wrapper.contains("CODEX_TUI_RECORD_SESSION=1"));
         assert!(wrapper.contains("ACORN_AGENT_HOOK_URL"));
+        assert!(wrapper.contains("\"$_acorn_notify\" start turn"));
+        assert!(wrapper.contains("\"$_acorn_notify\" start tool"));
 
         let notify = fs::read_to_string(dir.join("acorn-codex-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"codex\""));
+        assert!(notify.contains("source=\"${2-hook}\""));
+        assert!(notify.contains("\"source\":\"%s\""));
         // A completed turn is ready for optional follow-up. Only explicit
         // approval or question events require user input.
         assert!(notify.contains("agent-turn-complete|task_complete|turn_complete) event=\"stop\""));

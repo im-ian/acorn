@@ -765,6 +765,24 @@ mod tests {
     }
 
     #[test]
+    fn hook_tool_activity_is_scoped_to_a_turn_and_cleared_on_remove() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        let started_at = std::time::SystemTime::UNIX_EPOCH
+            + std::time::Duration::from_secs(123_456);
+
+        store.mark_hook_tool_started_at(&session.id, started_at);
+        assert_eq!(store.hook_tool_started_at(&session.id), Some(started_at));
+
+        store.begin_hook_turn(&session.id);
+        assert_eq!(store.hook_tool_started_at(&session.id), None);
+
+        store.mark_hook_tool_started_at(&session.id, started_at);
+        store.remove(&session.id).expect("session exists");
+        assert_eq!(store.hook_tool_started_at(&session.id), None);
+    }
+
+    #[test]
     fn hook_revision_guards_conditional_status_refresh() {
         let store = SessionStore::new();
         let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));

@@ -6164,6 +6164,83 @@ mod status_hint_tests {
     }
 
     #[test]
+    fn only_descendants_started_during_current_tool_activity_count_as_live_work() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let old_mcp = Pid::from_u32(3);
+        let current_tool = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![old_mcp, current_tool]);
+
+        assert!(has_current_activity_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |_| false,
+            |pid| pid == current_tool,
+        ));
+    }
+
+    #[test]
+    fn infrastructure_started_before_current_tool_activity_does_not_count() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let old_mcp = Pid::from_u32(3);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![old_mcp]);
+
+        assert!(!has_current_activity_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |_| false,
+            |_| false,
+        ));
+    }
+
+    #[test]
+    fn current_tool_below_older_intermediary_still_counts_as_live_work() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let old_intermediary = Pid::from_u32(3);
+        let current_tool = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![old_intermediary]);
+        children.insert(old_intermediary, vec![current_tool]);
+
+        assert!(has_current_activity_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |_| false,
+            |pid| pid == current_tool,
+        ));
+    }
+
+    #[test]
+    fn persistent_helper_subtrees_never_count_as_live_work() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let helper = Pid::from_u32(3);
+        let helper_child = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![helper]);
+        children.insert(helper, vec![helper_child]);
+
+        assert!(!has_current_activity_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |pid| pid == helper,
+            |pid| pid == helper_child,
+        ));
+    }
+
+    #[test]
     fn session_process_noise_filters_shell_wrappers() {
         assert!(is_session_process_noise("(zsh)"));
         assert!(is_session_process_noise("tail"));

@@ -449,6 +449,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn codex_hook_sources_scope_tool_activity_to_the_current_turn() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        let session_id = session.id;
+        sessions.insert(session);
+
+        let apply = |source: &str, event| {
+            apply_agent_hook_event(
+                &sessions,
+                AgentHookEvent {
+                    session_id,
+                    provider: SessionAgentProvider::Codex,
+                    event,
+                    message: None,
+                    source: Some(source.to_string()),
+                },
+            )
+            .expect("event applies")
+        };
+
+        apply("turn", AgentHookEventKind::Start);
+        assert_eq!(sessions.hook_tool_started_at(&session_id), None);
+
+        apply("tool", AgentHookEventKind::Start);
+        assert!(sessions.hook_tool_started_at(&session_id).is_some());
+
+        apply("hook", AgentHookEventKind::Stop);
+        assert!(sessions.hook_tool_started_at(&session_id).is_some());
+
+        apply("turn", AgentHookEventKind::Start);
+        assert_eq!(sessions.hook_tool_started_at(&session_id), None);
+    }
+
     fn post(hooks: &AgentHookServer, token: &str, body: &str) -> String {
         let mut stream = TcpStream::connect(addr_from_url(hooks.hook_url())).expect("connect hook");
         write!(
