@@ -880,8 +880,7 @@
       "itemTitle": "{project} · {session}",
       "kind": {
         "waitingForInput": "Waiting for input",
-        "errored": "Error",
-        "becameReady": "Ready"
+        "errored": "Error"
       },
       "actions": {
         "markAllRead": "Mark all read",
@@ -1199,8 +1198,7 @@
       "itemTitle": "{project} · {session}",
       "kind": {
         "waitingForInput": "Waiting for input",
-        "errored": "Error",
-        "becameReady": "Ready"
+        "errored": "Error"
       },
       "actions": {
         "markAllRead": "Mark all read",
@@ -1397,8 +1395,7 @@
       "itemTitle": "{project} · {session}",
       "kind": {
         "waitingForInput": "Waiting for input",
-        "errored": "Error",
-        "becameReady": "Ready"
+        "errored": "Error"
       },
       "actions": {
         "markAllRead": "Mark all read",
@@ -2043,8 +2040,7 @@
     "activity": {
       "kind": {
         "waitingForInput": "Waiting for input",
-        "errored": "Error",
-        "becameReady": "Ready"
+        "errored": "Error"
       }
     }
   },
