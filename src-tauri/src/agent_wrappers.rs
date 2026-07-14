@@ -649,6 +649,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn codex_wrapper_notifications_for_tui_line(line: &str) -> String {
         let base = ScratchDir::new("codex-tui-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
@@ -729,11 +730,15 @@ done
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn codex_wrapper_maps_current_tui_user_turn_to_turn_start() {
         let line = r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
 
-        assert_eq!(codex_wrapper_notifications_for_tui_line(line), "start turn\n");
+        assert_eq!(
+            codex_wrapper_notifications_for_tui_line(line),
+            "start turn\n"
+        );
     }
 
     #[test]
