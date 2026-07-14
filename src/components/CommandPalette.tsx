@@ -211,10 +211,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   function handleOpenActivity(notificationId: string, sessionId: string) {
     const state = useAppStore.getState();
     state.markSessionNotificationRead(notificationId);
-    state.selectSession(sessionId);
-    if (state.workspaceViewMode === "kanban") {
-      state.openTerminalPopup(sessionId);
-    }
+    state.openSessionSurface(sessionId);
     close();
   }
 

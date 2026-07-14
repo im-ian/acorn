@@ -281,7 +281,6 @@ export function Sidebar() {
   const activeProjectFolderId = useAppStore((s) => s.activeProjectFolderId);
   const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const selectSession = useAppStore((s) => s.selectSession);
-  const openTerminalPopup = useAppStore((s) => s.openTerminalPopup);
   const focusLocalSessions = useAppStore((s) => s.focusLocalSessions);
   const setActiveProject = useAppStore((s) => s.setActiveProject);
   const setActiveProjectFolder = useAppStore((s) => s.setActiveProjectFolder);
@@ -418,10 +417,7 @@ export function Sidebar() {
   }
 
   function selectSidebarSession(sessionId: string) {
-    selectSession(sessionId);
-    if (useAppStore.getState().workspaceViewMode === "kanban") {
-      openTerminalPopup(sessionId);
-    }
+    useAppStore.getState().openSessionSurface(sessionId);
   }
 
   function applyClickPlan(
@@ -3915,18 +3911,14 @@ function SidebarActivityRow({
   notification: SessionNotification;
 }) {
   const t = useTranslation();
-  const selectSession = useAppStore((s) => s.selectSession);
-  const openTerminalPopup = useAppStore((s) => s.openTerminalPopup);
+  const openSessionSurface = useAppStore((s) => s.openSessionSurface);
   const markRead = useAppStore((s) => s.markSessionNotificationRead);
   const dismiss = useAppStore((s) => s.dismissSessionNotification);
   const unread = !notification.readAt;
 
   const openSession = () => {
     markRead(notification.id);
-    selectSession(notification.sessionId);
-    if (useAppStore.getState().workspaceViewMode === "kanban") {
-      openTerminalPopup(notification.sessionId);
-    }
+    openSessionSurface(notification.sessionId);
   };
 
   return (

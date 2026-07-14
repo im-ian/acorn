@@ -169,24 +169,30 @@ test.describe("command palette", () => {
     ).toBeVisible();
   });
 
-  test("opens unread session activity from the palette", async ({
+  test("opens unread session activity in the destination workspace mode", async ({
     page,
     tauri,
   }) => {
     await tauri.handle("list_projects", () => [
       {
-        repo_path: "/tmp/demo",
-        name: "demo",
+        repo_path: "/tmp/beta",
+        name: "beta",
         created_at: "2026-01-01T00:00:00Z",
         position: 0,
+      },
+      {
+        repo_path: "/tmp/alpha",
+        name: "alpha",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 1,
       },
     ]);
     await tauri.handle("list_sessions", () => [
       {
         id: "session-1",
         name: "foreground",
-        repo_path: "/tmp/demo",
-        worktree_path: "/tmp/demo",
+        repo_path: "/tmp/beta",
+        worktree_path: "/tmp/beta",
         branch: "main",
         isolated: false,
         project_scoped: true,
@@ -202,8 +208,8 @@ test.describe("command palette", () => {
       {
         id: "session-2",
         name: "agent run",
-        repo_path: "/tmp/demo",
-        worktree_path: "/tmp/demo",
+        repo_path: "/tmp/alpha",
+        worktree_path: "/tmp/alpha",
         branch: "main",
         isolated: false,
         project_scoped: true,
@@ -217,16 +223,36 @@ test.describe("command palette", () => {
         in_worktree: false,
       },
     ]);
-    await tauri.handle("detect_session_statuses", () => [
-      {
-        id: "session-2",
-        status: "waiting_for_input",
-        branch: null,
-        agent_provider: null,
-      },
-    ]);
+    await tauri.handle("detect_session_statuses", () => {
+      const state = window as unknown as { __emitAlphaActivity?: boolean };
+      return state.__emitAlphaActivity
+        ? [
+            {
+              id: "session-2",
+              status: "waiting_for_input",
+              branch: null,
+              agent_provider: null,
+            },
+          ]
+        : [];
+    });
 
     await page.goto("/");
+
+    const modeSelect = page.getByTestId("workspace-view-status");
+    await expect(modeSelect).toContainText("Panes");
+    await page.getByRole("button", { name: "Project alpha" }).click();
+    await modeSelect.click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+    await expect(modeSelect).toContainText("Kanban");
+    await page.getByRole("button", { name: "Project beta" }).click();
+    await expect(modeSelect).toContainText("Panes");
+
+    await page.evaluate(() => {
+      (window as unknown as { __emitAlphaActivity?: boolean })
+        .__emitAlphaActivity = true;
+      window.dispatchEvent(new Event("focus"));
+    });
     await expect(page.getByRole("button", { name: "Session notifications" }))
       .toContainText("1");
 
@@ -235,11 +261,17 @@ test.describe("command palette", () => {
     await expect(palette.getByText("Unread activity")).toBeVisible();
 
     await palette
-      .getByRole("option", { name: /Waiting for input.*agent run.*demo/ })
+      .getByRole("option", { name: /Waiting for input.*agent run.*alpha/ })
       .click();
 
     await expect(palette).toHaveCount(0);
-    await expect(page.getByText("agent run").first()).toBeVisible();
+    await expect(modeSelect).toContainText("Kanban");
+    await expect(page.getByTestId("workspace-kanban")).toBeVisible();
+    const popover = page.getByTestId("kanban-terminal-popover");
+    await expect(popover).toBeVisible();
+    await expect(
+      popover.getByRole("heading", { name: "agent run" }),
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: "Session notifications" }))
       .not.toContainText("1");
   });
