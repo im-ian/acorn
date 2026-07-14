@@ -665,6 +665,44 @@ describe("selectSession", () => {
   });
 });
 
+describe("openSessionSurface", () => {
+  it("uses the destination workspace mode when moving between projects", async () => {
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [session("a1", REPO_A), session("b1", REPO_B)],
+    );
+
+    useAppStore.getState().setActiveProject(REPO_B);
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+    useAppStore.getState().setActiveProject(REPO_A);
+
+    expect(useAppStore.getState().workspaceViewMode).toBe("panes");
+    expect(useAppStore.getState().openSessionSurface("b1")).toBe(true);
+
+    let state = useAppStore.getState();
+    expect(state.activeProject).toBe(REPO_B);
+    expect(state.activeSessionId).toBe("b1");
+    expect(state.workspaceViewMode).toBe("kanban");
+    expect(state.terminalPopupSessionId).toBe("b1");
+
+    expect(useAppStore.getState().openSessionSurface("a1")).toBe(true);
+
+    state = useAppStore.getState();
+    expect(state.activeProject).toBe(REPO_A);
+    expect(state.activeSessionId).toBe("a1");
+    expect(state.workspaceViewMode).toBe("panes");
+    expect(state.terminalPopupSessionId).toBeNull();
+  });
+
+  it("does not open a surface for an unknown session", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+
+    expect(useAppStore.getState().openSessionSurface("missing")).toBe(false);
+    expect(useAppStore.getState().activeSessionId).toBe("a1");
+    expect(useAppStore.getState().terminalPopupSessionId).toBeNull();
+  });
+});
+
 describe("focusLocalSessions", () => {
   it("activates a local session so project focus is cleared in the UI", async () => {
     const local = session("local", "/Users/me", { project_scoped: false });
