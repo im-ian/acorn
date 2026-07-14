@@ -5242,30 +5242,28 @@ fn poll_defers_to_hook(
 /// forever — the store still says Working and, since a resting agent emits no
 /// further events, nothing would ever correct it. Until the first hook event
 /// of this run confirms the channel, allow exactly the one transition hooks
-/// can no longer report: Working -> Ready backed by a real turn-complete
-/// marker in the transcript. The Waiting case also upgrades status persisted
-/// by releases that treated every normal turn completion as input-required.
+/// can no longer report: Working -> WaitingForInput backed by a real
+/// turn-complete marker in the transcript (a finished turn leaves the agent
+/// awaiting the user's next instruction, which is what the lost turn-end
+/// hook would have reported).
 ///
 /// One-directional on purpose: while the app is closed nobody can submit a
-/// prompt to the session, so Ready -> Working cannot happen offline and a
-/// stale-tail Working must never demote a persisted resting status. Once an
-/// event lands this run (`hook_confirmed_this_run`), hooks own both
-/// directions again and this reconciliation switches off — leaving it open
-/// in-run would recreate the UserPromptSubmit-vs-stale-tail race the full
-/// hook deference exists to close.
+/// prompt to the session, so a resting status cannot regress to Working
+/// offline and a stale-tail Working must never demote a persisted resting
+/// status. Once an event lands this run (`hook_confirmed_this_run`), hooks
+/// own both directions again and this reconciliation switches off — leaving
+/// it open in-run would recreate the UserPromptSubmit-vs-stale-tail race the
+/// full hook deference exists to close.
 fn hook_boot_reconciled_status(
     stored: SessionStatus,
     hook_confirmed_this_run: bool,
     detection: session_status::StatusDetection,
 ) -> Option<SessionStatus> {
     (!hook_confirmed_this_run
-        && matches!(
-            stored,
-            SessionStatus::Working | SessionStatus::WaitingForInput
-        )
+        && stored == SessionStatus::Working
         && detection.status == SessionStatus::Ready
         && detection.reason == Some(SessionStatusReason::TurnComplete))
-    .then_some(SessionStatus::Ready)
+    .then_some(SessionStatus::WaitingForInput)
 }
 
 fn detect_session_statuses_blocking(
@@ -7110,7 +7108,8 @@ mod tests {
     fn boot_reconciliation_recovers_turn_end_lost_while_app_was_closed() {
         // Persisted hook status says Working, no event has confirmed the
         // channel this run, and the transcript holds a real turn-complete
-        // marker — the turn ended while nobody was listening.
+        // marker — the turn ended while nobody was listening, leaving the
+        // agent awaiting the user's next instruction.
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
@@ -7121,12 +7120,14 @@ mod tests {
                 false,
                 detection
             ),
-            Some(acorn_session::SessionStatus::Ready)
+            Some(acorn_session::SessionStatus::WaitingForInput)
         );
     }
 
     #[test]
-    fn boot_reconciliation_upgrades_legacy_completed_waiting_status() {
+    fn boot_reconciliation_keeps_persisted_waiting_status() {
+        // WaitingForInput is already the correct resting value for a
+        // completed turn — reconciliation must not demote it to Ready.
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
@@ -7137,7 +7138,7 @@ mod tests {
                 false,
                 detection
             ),
-            Some(acorn_session::SessionStatus::Ready)
+            None
         );
     }
 
