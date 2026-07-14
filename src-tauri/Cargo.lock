@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acorn"
-version = "1.26.0"
+version = "1.26.1"
 dependencies = [
  "acorn-agent",
  "acorn-daemon",
