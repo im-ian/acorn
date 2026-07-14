@@ -442,6 +442,7 @@ interface AppStateModel {
   pollSessionStatuses: (ids?: string[]) => Promise<void>;
   selectTab: (id: string | null) => void;
   selectSession: (id: string | null) => void;
+  openSessionSurface: (id: string) => boolean;
   focusLocalSessions: () => void;
   setActiveProject: (repoPath: string) => void;
   setActiveProjectFolder: (folderId: string) => void;
@@ -2165,6 +2166,21 @@ export const useAppStore = create<AppStateModel>()(
         );
       });
     }
+  },
+
+  openSessionSurface(id) {
+    if (!get().sessions.some((session) => session.id === id)) return false;
+
+    get().selectSession(id);
+    const state = get();
+    if (state.activeSessionId !== id) return false;
+
+    if (state.workspaceViewMode === "kanban") {
+      state.openTerminalPopup(id);
+    } else {
+      state.closeTerminalPopup();
+    }
+    return true;
   },
 
   focusLocalSessions() {

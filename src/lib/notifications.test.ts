@@ -29,11 +29,14 @@ vi.mock("@tauri-apps/api/window", () => ({
 import {
   resetNotificationsForTests,
   startFocusedSessionNotificationReadWatcher,
+  startNotificationClickHandler,
   startSessionActivityInboxWatcher,
   startSessionNotificationWatcher,
 } from "./notifications";
 import { DEFAULT_SETTINGS, useSettings } from "./settings";
 import { useAppStore } from "../store";
+
+const originalOpenSessionSurface = useAppStore.getState().openSessionSurface;
 
 const BASE_SESSION: Session = {
   id: "session-1",
@@ -83,6 +86,7 @@ describe("notifications", () => {
         },
       ],
       activeSessionId: null,
+      openSessionSurface: originalOpenSessionSurface,
       sessionNotifications: [],
       silencedSessionIds: {},
       sessionsLoadedCleanly: true,
@@ -115,6 +119,30 @@ describe("notifications", () => {
       }),
     );
     dispose();
+  });
+
+  it("opens the destination session surface when a system notification is clicked", async () => {
+    const unregister = vi.fn();
+    mocks.onAction.mockResolvedValue({ unregister });
+    const openSessionSurface = vi.fn(() => true);
+    useAppStore.setState({ openSessionSurface });
+
+    const dispose = await startNotificationClickHandler();
+    const handleAction = mocks.onAction.mock.calls[0]?.[0] as
+      | ((notification: { extra?: Record<string, unknown> }) => void)
+      | undefined;
+    expect(handleAction).toBeDefined();
+    if (!handleAction) throw new Error("notification action handler missing");
+
+    handleAction({ extra: { sessionId: "session-1" } });
+
+    expect(openSessionSurface).toHaveBeenCalledWith("session-1");
+    expect(mocks.show).toHaveBeenCalled();
+    expect(mocks.unminimize).toHaveBeenCalled();
+    expect(mocks.setFocus).toHaveBeenCalled();
+
+    dispose();
+    expect(unregister).toHaveBeenCalled();
   });
 
   it("marks a focused session transition read instead of sending a system notification", async () => {
