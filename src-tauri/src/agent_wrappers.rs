@@ -81,6 +81,9 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
 
     tail -n 0 -F "$_acorn_log" 2>/dev/null | while IFS= read -r _acorn_line; do
       case "$_acorn_line" in
+        *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
+          "$_acorn_notify" start turn >/dev/null 2>&1 || true
+          ;;
         *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)
           _acorn_turn_id=$(printf '%s\n' "$_acorn_line" | awk -F'"turn_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
           [ -n "$_acorn_turn_id" ] || _acorn_turn_id="task_started"
@@ -646,6 +649,54 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn codex_wrapper_notifications_for_tui_line(line: &str) -> String {
+        let base = ScratchDir::new("codex-tui-event");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        fs::create_dir_all(&real_dir).unwrap();
+
+        let capture_path = base.path().join("notifications.log");
+        let session_log_path = base.path().join("session.jsonl");
+        write_executable(
+            &wrapper_dir.join("acorn-codex-notify"),
+            "#!/bin/sh\nprintf '%s %s\\n' \"$1\" \"$2\" >> \"$ACORN_NOTIFY_CAPTURE\"\n",
+        )
+        .unwrap();
+        write_executable(
+            &real_dir.join("codex"),
+            r#"#!/bin/sh
+: > "$CODEX_TUI_SESSION_LOG_PATH"
+sleep 0.1
+printf '%s\n' "$ACORN_TEST_TUI_LINE" >> "$CODEX_TUI_SESSION_LOG_PATH"
+_acorn_i=0
+while [ ! -s "$ACORN_NOTIFY_CAPTURE" ] && [ "$_acorn_i" -lt 50 ]; do
+  _acorn_i=$((_acorn_i + 1))
+  sleep 0.02
+done
+"#,
+        )
+        .unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", real_dir.display());
+        let status = Command::new(wrapper_dir.join("codex"))
+            .env("PATH", path)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_NOTIFY_CAPTURE", &capture_path)
+            .env("ACORN_TEST_TUI_LINE", line)
+            .env("CODEX_TUI_SESSION_LOG_PATH", &session_log_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        fs::read_to_string(capture_path).unwrap_or_default()
+    }
+
     #[test]
     fn writes_codex_wrapper_and_notify_helper() {
         let base = ScratchDir::new("codex");
@@ -677,6 +728,17 @@ mod tests {
         ));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_maps_current_tui_user_turn_to_turn_start() {
+        let line = r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
+
+        assert_eq!(
+            codex_wrapper_notifications_for_tui_line(line),
+            "start turn\n"
+        );
     }
 
     #[test]
