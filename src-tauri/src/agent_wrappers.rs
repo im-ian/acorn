@@ -81,6 +81,9 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
 
     tail -n 0 -F "$_acorn_log" 2>/dev/null | while IFS= read -r _acorn_line; do
       case "$_acorn_line" in
+        *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
+          "$_acorn_notify" start turn >/dev/null 2>&1 || true
+          ;;
         *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)
           _acorn_turn_id=$(printf '%s\n' "$_acorn_line" | awk -F'"turn_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
           [ -n "$_acorn_turn_id" ] || _acorn_turn_id="task_started"
