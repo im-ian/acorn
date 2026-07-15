@@ -17,6 +17,7 @@ import {
   MessageSquareText,
   Plus,
   RefreshCw,
+  Scan,
   Sparkles,
   Terminal,
   Trash2,
@@ -51,9 +52,15 @@ function cpt(t: Translator, key: CommandPaletteTranslationKey): string {
 }
 
 function workspaceModeLabel(t: Translator, mode: WorkspaceViewMode): string {
-  return mode === "kanban"
-    ? t("workspace.mode.kanban")
-    : t("workspace.mode.panes");
+  if (mode === "kanban") return t("workspace.mode.kanban");
+  if (mode === "canvas") return t("workspace.mode.canvas");
+  return t("workspace.mode.panes");
+}
+
+function nextWorkspaceMode(mode: WorkspaceViewMode): WorkspaceViewMode {
+  if (mode === "panes") return "kanban";
+  if (mode === "kanban") return "canvas";
+  return "panes";
 }
 
 const ACTIVITY_KIND_KEYS: Record<
@@ -84,9 +91,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const t = useTranslation();
   const nextWorkspaceViewMode: WorkspaceViewMode =
-    workspaceViewMode === "kanban" ? "panes" : "kanban";
+    nextWorkspaceMode(workspaceViewMode);
   const NextWorkspaceViewIcon =
-    nextWorkspaceViewMode === "kanban" ? Kanban : Columns3;
+    nextWorkspaceViewMode === "kanban"
+      ? Kanban
+      : nextWorkspaceViewMode === "canvas"
+        ? Scan
+        : Columns3;
 
   // Derived once per render — sessions array identity is stable from zustand
   // until the underlying list actually changes.
@@ -441,7 +452,15 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           <Command.Item
             value="toggle-workspace-view"
             onSelect={handleToggleWorkspaceView}
-            keywords={["workspace", "view", "panes", "pane", "kanban", "board"]}
+            keywords={[
+              "workspace",
+              "view",
+              "panes",
+              "pane",
+              "kanban",
+              "board",
+              "canvas",
+            ]}
           >
             <NextWorkspaceViewIcon size={14} className="text-fg-muted" />
             <span>{cpt(t, "commandPalette.commands.toggleWorkspaceView")}</span>

@@ -181,7 +181,11 @@ function visibleTerminalSessionIdKey(state: AppStateSnapshot): string {
     if (ws) {
       ids.push(
         ...Object.values(ws.panes)
-          .map((pane) => pane.activeTabId)
+          .flatMap((pane) =>
+            state.workspaceViewMode === "canvas"
+              ? pane.tabIds
+              : [pane.activeTabId],
+          )
           .filter((id): id is string => Boolean(id)),
       );
     }
@@ -201,6 +205,12 @@ function visibleTerminalTargetKey(
   if (!workspaceId) return null;
   const ws = state.workspaces[workspaceId];
   if (!ws) return null;
+  if (
+    state.workspaceViewMode === "canvas" &&
+    Object.values(ws.panes).some((pane) => pane.tabIds.includes(sessionId))
+  ) {
+    return `canvas:${sessionId}`;
+  }
   for (const pane of Object.values(ws.panes)) {
     if (pane.activeTabId === sessionId) return `pane:${pane.id}`;
   }
@@ -217,6 +227,12 @@ function terminalDestinationForTargetKey(
       `[data-terminal-popover-body="${cssEscape(sessionId)}"]`,
     ) as HTMLElement | null;
   }
+  if (targetKey.startsWith("canvas:")) {
+    const sessionId = targetKey.slice("canvas:".length);
+    return document.querySelector(
+      `[data-canvas-terminal-body="${cssEscape(sessionId)}"]`,
+    ) as HTMLElement | null;
+  }
   if (targetKey.startsWith("pane:")) {
     const paneId = targetKey.slice("pane:".length);
     return document.querySelector(
@@ -228,6 +244,14 @@ function terminalDestinationForTargetKey(
 
 function terminalTargetIsPopover(targetKey: string | null): boolean {
   return Boolean(targetKey?.startsWith("popover:"));
+}
+
+function terminalTargetIsCanvas(targetKey: string | null): boolean {
+  return Boolean(targetKey?.startsWith("canvas:"));
+}
+
+function terminalTargetNeedsDomRetry(targetKey: string | null): boolean {
+  return terminalTargetIsPopover(targetKey) || terminalTargetIsCanvas(targetKey);
 }
 
 function parseSessionIdKey(key: string): Set<string> {
@@ -263,6 +287,8 @@ function PortaledTerminal({ session }: { session: Session }) {
   const isFocusedPane = useAppStore((state) =>
     terminalTargetIsPopover(visibleTargetKey)
       ? true
+      : terminalTargetIsCanvas(visibleTargetKey)
+        ? state.activeSessionId === session.id
       : isSessionInFocusedPane(session.id, state.panes, state.focusedPaneId),
   );
   const workspaceKey = useAppStore((state) =>
@@ -297,7 +323,7 @@ function PortaledTerminal({ session }: { session: Session }) {
       if (target.parentElement !== nextParent) nextParent.appendChild(target);
       if (
         dest === null &&
-        terminalTargetIsPopover(visibleTargetKey) &&
+        terminalTargetNeedsDomRetry(visibleTargetKey) &&
         attempts < 30
       ) {
         attempts += 1;

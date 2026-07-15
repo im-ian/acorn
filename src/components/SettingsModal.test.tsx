@@ -481,10 +481,10 @@ describe("SettingsModal font controls", () => {
     openInterfaceTab();
 
     clickElement(getComboboxByLabel("Default workspace mode"));
-    clickOption("Kanban");
+    clickOption("Canvas");
 
     expect(patchInterface).toHaveBeenCalledWith({
-      defaultWorkspaceViewMode: "kanban",
+      defaultWorkspaceViewMode: "canvas",
     });
   });
 

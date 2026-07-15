@@ -945,7 +945,24 @@
     "mode": {
       "ariaLabel": "Workspace view mode",
       "panes": "Panes",
-      "kanban": "Kanban"
+      "kanban": "Kanban",
+      "canvas": "Canvas"
+    },
+    "canvas": {
+      "regionLabel": "Workspace canvas",
+      "toolbarLabel": "Canvas controls",
+      "empty": "No terminal sessions on this canvas. Chat sessions stay available in Panes.",
+      "hint": "Drag empty space or middle-drag to pan · Pinch or modifier-scroll to zoom · Alt skips snapping",
+      "terminalCountOne": "1 terminal",
+      "terminalCountOther": "{count} terminals",
+      "zoomOut": "Zoom out",
+      "zoomIn": "Zoom in",
+      "fit": "Fit all terminals",
+      "reset": "Reset terminal layout",
+      "newSession": "New session",
+      "moveSession": "Move {name}",
+      "resizeSession": "Resize {name}",
+      "openInPanes": "Open {name} in panes"
     },
     "kanban": {
       "title": "Workspace kanban",
