@@ -300,6 +300,8 @@
           "description": "acorn-themes 저장소에서 테마를 다운로드하고 업데이트합니다. 다운로드한 테마를 삭제해도 직접 추가한 CSS 파일에는 영향을 주지 않습니다.",
           "preview": "테마 미리보기",
           "refresh": "라이브러리 새로고침",
+          "searchPlaceholder": "테마 라이브러리 검색",
+          "noMatches": "검색과 일치하는 테마가 없습니다.",
           "loading": "테마 라이브러리를 불러오는 중…",
           "loadFailed": "테마 라이브러리를 불러오지 못했습니다.",
           "download": "다운로드",
