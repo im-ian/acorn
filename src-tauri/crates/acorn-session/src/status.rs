@@ -18,7 +18,9 @@
 //!   `agent_message phase=commentary`, reasoning, etc.).
 //!
 //! Antigravity transcripts:
-//! - last `type=PLANNER_RESPONSE` with `status=DONE` -> Ready.
+//! - last `type=PLANNER_RESPONSE` with `status=DONE` and no pending
+//!   `tool_calls` -> Ready.
+//! - last `type=PLANNER_RESPONSE` with non-empty `tool_calls` -> Working.
 //! - last `type=USER_INPUT` or any non-DONE model/tool line -> Working.
 //!
 //! Meta-only lines (claude: `last-prompt` / `permission-mode` /

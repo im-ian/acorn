@@ -110,9 +110,41 @@ enum MappingScope {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodexRolloutScope {
+    AnyTerminal,
+    SessionOwner,
+    ResumedOwner,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AgentProcessRole {
     Emit,
     Quarantine,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgentProcessShape {
+    Launcher,
+    Runtime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AgentProcessIdentity {
+    kind: AgentKind,
+    shape: AgentProcessShape,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AgentProcessNode {
+    identity: AgentProcessIdentity,
+    cwd: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AgentProcessObservation {
+    pid: Pid,
+    parent: Option<Pid>,
+    node: AgentProcessNode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -258,6 +290,26 @@ pub fn find_agent_run_transcript(
     }
 }
 
+/// Resolve a Codex rollout for an explicit `codex resume` invocation whose
+/// picker/flag did not expose the selected UUID in argv. A rollout retains its
+/// original `source.subagent` metadata when the user deliberately resumes it
+/// as a top-level conversation, so this narrow path allows such a writer.
+pub fn find_resumed_codex_run_transcript(
+    cwd: &Path,
+    process_start: SystemTime,
+) -> Option<(PathBuf, String)> {
+    let now = SystemTime::now();
+    let recency_cutoff = now
+        .checked_sub(Duration::from_secs(RECENCY_WINDOW_SECS))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    find_completed_resumed_codex_jsonl(
+        cwd,
+        codex_sessions_root().as_deref(),
+        recency_cutoff,
+        process_start,
+    )
+}
+
 fn scan_live_mappings(
     sessions: &[SessionPid],
     scope: MappingScope,
@@ -271,37 +323,30 @@ fn scan_live_mappings(
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
 
     let mut children: std::collections::HashMap<Pid, Vec<Pid>> = std::collections::HashMap::new();
-    // Host-wide counts of live agent processes (tracked by Acorn or
-    // not). The `/new` rotation in `pick_anchor_or_rotate` is only safe
-    // when the paired process is the sole agent in scope — any second
+    // Host-wide process observations (tracked by Acorn or not) feed the
+    // logical invocation counts below. The `/new` rotation in
+    // `pick_anchor_or_rotate` is only safe
+    // when the paired invocation is the sole agent in scope — any second
     // live agent could be the writer of the hot later-born transcript,
-    // so rotation stays off while one is around. claude/codex bucket
-    // their transcripts by cwd, so the scope is per-cwd; antigravity
-    // transcripts carry no cwd, so its scope is the whole host.
-    let mut claude_cwd_counts: std::collections::HashMap<PathBuf, u32> =
-        std::collections::HashMap::new();
-    let mut codex_cwd_counts: std::collections::HashMap<PathBuf, u32> =
-        std::collections::HashMap::new();
-    let mut antigravity_count: u32 = 0;
+    // so rotation stays off while one is around. Claude/Codex bucket their
+    // transcripts by cwd. Antigravity transcripts carry no cwd, but the CLI's
+    // exact cwd-keyed owner cursor identifies its rotation successor, so only
+    // another logical invocation in that same cwd makes rotation ambiguous.
+    let mut observations = Vec::new();
     for (pid, proc) in sys.processes() {
         if let Some(parent) = proc.parent() {
             children.entry(parent).or_default().push(*pid);
         }
-        if process_basename_matches(proc, "claude") {
-            if let Some(cwd) = proc.cwd() {
-                *claude_cwd_counts.entry(cwd.to_path_buf()).or_default() += 1;
-            }
-        } else if process_basename_matches(proc, "codex") {
-            if let Some(cwd) = proc.cwd() {
-                *codex_cwd_counts.entry(cwd.to_path_buf()).or_default() += 1;
-            }
-        } else if process_basename_matches(proc, "agy")
-            || process_basename_matches(proc, "antigravity")
-            || process_basename_matches(proc, "antigravity-cli")
-        {
-            antigravity_count += 1;
+        if let Some(node) = agent_process_node(proc) {
+            observations.push(AgentProcessObservation {
+                pid: *pid,
+                parent: proc.parent(),
+                node,
+            });
         }
     }
+    let (claude_cwd_counts, codex_cwd_counts, antigravity_cwd_counts) =
+        logical_agent_process_counts(&observations);
 
     // Tracks transcripts that have already been claimed by some session
     // this cycle so two sessions running claude in the same cwd do not
@@ -324,6 +369,7 @@ fn scan_live_mappings(
 
     let claude_root = claude_projects_root();
     let codex_root = codex_sessions_root();
+    let antigravity_storage_root = google_agent_storage_root();
     let antigravity_roots = antigravity_brain_roots();
 
     // Collect every (session, agent-process) candidate first so we can
@@ -340,6 +386,7 @@ fn scan_live_mappings(
         cwd: PathBuf,
         start_time: SystemTime,
         explicit_transcript_id: Option<String>,
+        codex_resume_requested: bool,
         role: AgentProcessRole,
     }
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -351,25 +398,12 @@ fn scan_live_mappings(
 
         let matches =
             collect_agent_processes_in_tree(&children, Pid::from_u32(root_pid), scope, |pid| {
-                let proc = sys.process(pid)?;
-                if process_basename_matches(proc, "claude") {
-                    return Some(AgentKind::Claude);
-                }
-                if process_basename_matches(proc, "codex") {
-                    return Some(AgentKind::Codex);
-                }
-                if process_basename_matches(proc, "agy")
-                    || process_basename_matches(proc, "antigravity")
-                    || process_basename_matches(proc, "antigravity-cli")
-                {
-                    return Some(AgentKind::Antigravity);
-                }
-                None
+                sys.process(pid).and_then(agent_process_node)
             });
 
         for process_match in matches {
             if let Some(proc) = sys.process(process_match.pid) {
-                if let Some(cwd) = proc.cwd().map(|p| p.to_path_buf()) {
+                if let Some(cwd) = agent_process_node(proc).and_then(|node| node.cwd) {
                     let start_time =
                         SystemTime::UNIX_EPOCH + Duration::from_secs(proc.start_time());
                     let explicit_transcript_id = match process_match.kind {
@@ -377,6 +411,8 @@ fn scan_live_mappings(
                         AgentKind::Codex => codex_resume_id_from_process(proc),
                         AgentKind::Antigravity => None,
                     };
+                    let codex_resume_requested = process_match.kind == AgentKind::Codex
+                        && codex_resume_requested_from_process(proc);
                     candidates.push(Candidate {
                         session_id: session.session_id,
                         kind: process_match.kind,
@@ -384,6 +420,7 @@ fn scan_live_mappings(
                         cwd,
                         start_time,
                         explicit_transcript_id,
+                        codex_resume_requested,
                         role: process_match.role,
                     });
                 }
@@ -402,8 +439,19 @@ fn scan_live_mappings(
         }
     }
 
-    // Newest agent process first so it claims the newest matching transcript.
-    candidates.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+    // Codex owner scans must let the top-level logical invocation claim its
+    // transcript before an independent nested invocation reserves one. Other
+    // providers and all-descendant scans retain newest-first ordering.
+    candidates.sort_by(|a, b| {
+        let is_codex_owner = |candidate: &Candidate| {
+            scope == MappingScope::SessionOwners
+                && candidate.kind == AgentKind::Codex
+                && candidate.role == AgentProcessRole::Emit
+        };
+        is_codex_owner(b)
+            .cmp(&is_codex_owner(a))
+            .then_with(|| b.start_time.cmp(&a.start_time))
+    });
 
     for c in candidates {
         let mut reserved = assigned.clone();
@@ -453,19 +501,47 @@ fn scan_live_mappings(
                     .as_deref()
                     .and_then(|id| find_codex_jsonl_for_uuid(codex_root.as_deref(), id, &assigned))
                     .or_else(|| {
-                        find_recent_codex_jsonl(
-                            &c.cwd,
-                            codex_root.as_deref(),
-                            recency_cutoff,
-                            c.start_time,
-                            now,
-                            allow_rotation,
-                            &reserved,
-                        )
+                        match codex_rollout_scope_for_mapping(
+                            scope,
+                            c.role,
+                            c.codex_resume_requested,
+                        ) {
+                            CodexRolloutScope::SessionOwner => find_recent_codex_owner_jsonl(
+                                &c.cwd,
+                                codex_root.as_deref(),
+                                recency_cutoff,
+                                c.start_time,
+                                now,
+                                allow_rotation,
+                                &reserved,
+                            ),
+                            CodexRolloutScope::ResumedOwner => find_recent_resumed_codex_jsonl(
+                                &c.cwd,
+                                codex_root.as_deref(),
+                                recency_cutoff,
+                                c.start_time,
+                                now,
+                                allow_rotation,
+                                &reserved,
+                            ),
+                            CodexRolloutScope::AnyTerminal => find_recent_codex_jsonl(
+                                &c.cwd,
+                                codex_root.as_deref(),
+                                recency_cutoff,
+                                c.start_time,
+                                now,
+                                allow_rotation,
+                                &reserved,
+                            ),
+                        }
                     })
             }
             AgentKind::Antigravity => {
-                let allow_rotation = antigravity_count <= 1
+                let owner_cursor_id =
+                    antigravity_owner_cursor_id(antigravity_storage_root.as_deref(), &c.cwd);
+                let sole_antigravity_in_cwd =
+                    antigravity_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
+                let allow_rotation = sole_antigravity_in_cwd
                     && !owner_rotation_quarantined.contains(&owner_rotation_scope(
                         c.session_id,
                         c.kind,
@@ -477,6 +553,7 @@ fn scan_live_mappings(
                     c.start_time,
                     now,
                     allow_rotation,
+                    owner_cursor_id.as_deref(),
                     &reserved,
                 )
             }
@@ -529,22 +606,33 @@ fn collect_agent_processes_in_tree<F>(
     children: &std::collections::HashMap<Pid, Vec<Pid>>,
     root: Pid,
     scope: MappingScope,
-    mut kind_for_pid: F,
+    mut node_for_pid: F,
 ) -> Vec<AgentProcessMatch>
 where
-    F: FnMut(Pid) -> Option<AgentKind>,
+    F: FnMut(Pid) -> Option<AgentProcessNode>,
 {
     let mut out = Vec::new();
-    let mut stack = vec![(root, false)];
-    while let Some((pid, below_agent_boundary)) = stack.pop() {
+    let mut stack = vec![(root, false, None)];
+    while let Some((pid, below_agent_boundary, contiguous_parent)) = stack.pop() {
         let mut next_below_agent_boundary = below_agent_boundary;
-        if let Some(kind) = kind_for_pid(pid) {
-            let role = if scope == MappingScope::SessionOwners && below_agent_boundary {
-                AgentProcessRole::Quarantine
-            } else {
-                AgentProcessRole::Emit
-            };
-            out.push(AgentProcessMatch { pid, kind, role });
+        let node = node_for_pid(pid);
+        let belongs_to_parent = contiguous_parent
+            .as_ref()
+            .zip(node.as_ref())
+            .is_some_and(|(parent, child)| same_logical_agent_invocation(parent, child));
+        if let Some(node) = &node {
+            if !belongs_to_parent {
+                let role = if scope == MappingScope::SessionOwners && below_agent_boundary {
+                    AgentProcessRole::Quarantine
+                } else {
+                    AgentProcessRole::Emit
+                };
+                out.push(AgentProcessMatch {
+                    pid,
+                    kind: node.identity.kind,
+                    role,
+                });
+            }
             next_below_agent_boundary =
                 below_agent_boundary || scope == MappingScope::SessionOwners;
         }
@@ -552,7 +640,7 @@ where
             stack.extend(
                 kids.iter()
                     .copied()
-                    .map(|kid| (kid, next_below_agent_boundary)),
+                    .map(|kid| (kid, next_below_agent_boundary, node.clone())),
             );
         }
     }
@@ -629,32 +717,246 @@ fn owner_rotation_scope(session_id: uuid::Uuid, kind: AgentKind, cwd: &Path) -> 
     }
 }
 
-fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
-    fn basename_matches(s: &str, target: &str) -> bool {
-        let base = s.rsplit('/').next().unwrap_or(s);
-        base == target
-            || base.strip_suffix(".js") == Some(target)
-            || base.strip_suffix(".mjs") == Some(target)
-            || base.strip_suffix(".cjs") == Some(target)
+fn basename_matches(s: &str, target: &str) -> bool {
+    let base = s.rsplit('/').next().unwrap_or(s);
+    base == target
+        || base.strip_suffix(".js") == Some(target)
+        || base.strip_suffix(".mjs") == Some(target)
+        || base.strip_suffix(".cjs") == Some(target)
+}
+
+fn agent_kind_for_basename(value: &str) -> Option<AgentKind> {
+    if basename_matches(value, "claude") {
+        Some(AgentKind::Claude)
+    } else if basename_matches(value, "codex") {
+        Some(AgentKind::Codex)
+    } else if basename_matches(value, "agy")
+        || basename_matches(value, "antigravity")
+        || basename_matches(value, "antigravity-cli")
+    {
+        Some(AgentKind::Antigravity)
+    } else {
+        None
+    }
+}
+
+fn agent_process_identity_from_parts(
+    exe: Option<&Path>,
+    name: Option<&str>,
+    args: &[String],
+) -> Option<AgentProcessIdentity> {
+    // A provider executable (or an explicitly provider-named argv[0]) is the
+    // runtime itself. Interpreters such as sh/node whose later arguments name
+    // the provider are wrapper/watcher/JS launcher processes. Check the
+    // interpreter-facing fields before the process-name fallback: on some
+    // platforms a shebang process inherits the script basename as its name.
+    let primary_kind = exe
+        .and_then(|path| agent_kind_for_basename(&path.to_string_lossy()))
+        .or_else(|| args.first().and_then(|arg| agent_kind_for_basename(arg)));
+    if let Some(kind) = primary_kind {
+        return Some(AgentProcessIdentity {
+            kind,
+            shape: AgentProcessShape::Runtime,
+        });
     }
 
-    if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
-        if basename_matches(exe, target) {
-            return true;
+    if let Some(kind) = args
+        .iter()
+        .skip(1)
+        .find_map(|arg| agent_kind_for_basename(arg))
+    {
+        return Some(AgentProcessIdentity {
+            kind,
+            shape: AgentProcessShape::Launcher,
+        });
+    }
+
+    name.and_then(agent_kind_for_basename)
+        .map(|kind| AgentProcessIdentity {
+            kind,
+            shape: AgentProcessShape::Runtime,
+        })
+}
+
+fn agent_process_node(proc: &sysinfo::Process) -> Option<AgentProcessNode> {
+    let args = proc
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    agent_process_node_from_parts(proc.exe(), proc.name().to_str(), &args, proc.cwd())
+}
+
+fn agent_process_node_from_parts(
+    exe: Option<&Path>,
+    name: Option<&str>,
+    args: &[String],
+    process_cwd: Option<&Path>,
+) -> Option<AgentProcessNode> {
+    let identity = agent_process_identity_from_parts(exe, name, args)?;
+    let cwd = if identity.kind == AgentKind::Codex {
+        codex_effective_cwd_from_args(args, process_cwd)
+            .or_else(|| process_cwd.map(Path::to_path_buf))
+    } else {
+        process_cwd.map(Path::to_path_buf)
+    };
+    Some(AgentProcessNode { identity, cwd })
+}
+
+/// Resolve Codex's working directory override from the global CLI option
+/// prefix. Acorn's shell wrapper and the Node launcher keep their original
+/// process cwd while the native Codex child applies `-C` / `--cd`; using the
+/// effective cwd here lets all three processes remain one logical invocation.
+/// Stop at the first positional argument so prompt text can never be mistaken
+/// for an option.
+fn codex_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) -> Option<PathBuf> {
+    let mut index = args.iter().position(|arg| basename_matches(arg, "codex"))? + 1;
+    let mut requested_cwd = None;
+    enum Scope {
+        TopLevel,
+        Exec,
+        ResumeLike,
+    }
+    let mut scope = Scope::TopLevel;
+
+    while let Some(arg) = args.get(index).map(String::as_str) {
+        if arg == "--" {
+            break;
+        }
+        if !arg.starts_with('-') {
+            match scope {
+                Scope::TopLevel if matches!(arg, "exec" | "e") => {
+                    scope = Scope::Exec;
+                    index += 1;
+                    continue;
+                }
+                Scope::TopLevel if matches!(arg, "resume" | "fork") => {
+                    scope = Scope::ResumeLike;
+                    index += 1;
+                    continue;
+                }
+                // `exec resume` has its own option grammar and does not accept
+                // a cwd override after this nested subcommand. Every effective
+                // `-C` / `--cd` has therefore already been consumed.
+                Scope::Exec if arg == "resume" => break,
+                _ => break,
+            }
+        }
+
+        if matches!(arg, "-C" | "--cd") {
+            requested_cwd = Some(PathBuf::from(args.get(index + 1)?));
+        } else if let Some(value) = arg.strip_prefix("--cd=") {
+            if value.is_empty() {
+                return None;
+            }
+            requested_cwd = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.strip_prefix("-C") {
+            if !value.is_empty() {
+                requested_cwd = Some(PathBuf::from(value));
+            }
+        }
+
+        index = match scope {
+            Scope::TopLevel => codex_option_end(args, index, false),
+            Scope::Exec => {
+                codex_option_end(args, index, false).or_else(|| codex_exec_option_end(args, index))
+            }
+            Scope::ResumeLike => codex_option_end(args, index, true),
+        }?;
+    }
+
+    requested_cwd.map(|cwd| {
+        let effective = if cwd.is_absolute() {
+            cwd
+        } else if let Some(process_cwd) = process_cwd {
+            process_cwd.join(cwd)
+        } else {
+            cwd
+        };
+        effective.canonicalize().unwrap_or(effective)
+    })
+}
+
+fn codex_exec_option_end(args: &[String], index: usize) -> Option<usize> {
+    let arg = args.get(index)?.as_str();
+    if matches!(
+        arg,
+        "--skip-git-repo-check"
+            | "--ephemeral"
+            | "--ignore-user-config"
+            | "--ignore-rules"
+            | "--json"
+    ) {
+        return Some(index + 1);
+    }
+
+    const VALUE_OPTIONS: &[&str] = &["--output-schema", "--color", "-o", "--output-last-message"];
+    if VALUE_OPTIONS.contains(&arg) {
+        args.get(index + 1)?;
+        return Some(index + 2);
+    }
+
+    let has_attached_value = VALUE_OPTIONS.iter().any(|option| {
+        option.starts_with("--")
+            && arg
+                .strip_prefix(option)
+                .is_some_and(|suffix| suffix.starts_with('='))
+    }) || arg.starts_with("-o") && arg.len() > 2;
+    has_attached_value.then_some(index + 1)
+}
+
+fn same_logical_agent_invocation(parent: &AgentProcessNode, child: &AgentProcessNode) -> bool {
+    if parent.identity.kind != child.identity.kind
+        || parent.identity.shape != AgentProcessShape::Launcher
+    {
+        return false;
+    }
+
+    match child.identity.kind {
+        AgentKind::Antigravity => true,
+        AgentKind::Claude | AgentKind::Codex => parent.cwd.is_some() && parent.cwd == child.cwd,
+    }
+}
+
+fn logical_agent_process_counts(
+    processes: &[AgentProcessObservation],
+) -> (
+    std::collections::HashMap<PathBuf, u32>,
+    std::collections::HashMap<PathBuf, u32>,
+    std::collections::HashMap<PathBuf, u32>,
+) {
+    let by_pid = processes
+        .iter()
+        .map(|process| (process.pid, &process.node))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut claude_cwd_counts = std::collections::HashMap::new();
+    let mut codex_cwd_counts = std::collections::HashMap::new();
+    let mut antigravity_cwd_counts = std::collections::HashMap::new();
+
+    for process in processes {
+        let belongs_to_parent = process
+            .parent
+            .and_then(|parent| by_pid.get(&parent))
+            .is_some_and(|parent| same_logical_agent_invocation(parent, &process.node));
+        if belongs_to_parent {
+            continue;
+        }
+
+        match (process.node.identity.kind, &process.node.cwd) {
+            (AgentKind::Claude, Some(cwd)) => {
+                *claude_cwd_counts.entry(cwd.clone()).or_default() += 1;
+            }
+            (AgentKind::Codex, Some(cwd)) => {
+                *codex_cwd_counts.entry(cwd.clone()).or_default() += 1;
+            }
+            (AgentKind::Antigravity, Some(cwd)) => {
+                *antigravity_cwd_counts.entry(cwd.clone()).or_default() += 1;
+            }
+            (AgentKind::Claude | AgentKind::Codex | AgentKind::Antigravity, None) => {}
         }
     }
-    if let Some(name) = proc.name().to_str() {
-        if basename_matches(name, target) {
-            return true;
-        }
-    }
-    for arg in proc.cmd() {
-        let s = arg.to_string_lossy();
-        if basename_matches(&s, target) {
-            return true;
-        }
-    }
-    false
+
+    (claude_cwd_counts, codex_cwd_counts, antigravity_cwd_counts)
 }
 
 fn codex_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
@@ -664,6 +966,15 @@ fn codex_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     codex_resume_id_from_args(&args)
+}
+
+fn codex_resume_requested_from_process(proc: &sysinfo::Process) -> bool {
+    let args = proc
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    codex_resume_requested_from_args(&args)
 }
 
 fn claude_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
@@ -676,15 +987,197 @@ fn claude_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
 }
 
 fn claude_resume_id_from_args(args: &[String]) -> Option<String> {
-    args.windows(2).find_map(|pair| {
-        (pair[0] == "--resume" && is_uuid_v4_shape(&pair[1])).then(|| pair[1].clone())
+    let start = args
+        .iter()
+        .position(|arg| basename_matches(arg, "claude"))?
+        + 1;
+    let option_args = args[start..]
+        .iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .collect::<Vec<_>>();
+
+    // Claude allocates a fresh session id for a fork. Pinning the resumed id
+    // would keep Acorn attached to the source conversation instead of letting
+    // the newly-created transcript become the owner.
+    if option_args
+        .iter()
+        .any(|arg| arg.as_str() == "--fork-session")
+    {
+        return None;
+    }
+
+    option_args.iter().enumerate().find_map(|(index, arg)| {
+        let arg = arg.as_str();
+        let candidate = if matches!(arg, "--resume" | "-r") {
+            option_args.get(index + 1).map(|value| value.as_str())
+        } else {
+            arg.strip_prefix("--resume=")
+                .or_else(|| arg.strip_prefix("-r").filter(|value| !value.is_empty()))
+        };
+        candidate
+            .filter(|id| is_uuid_v4_shape(id))
+            .map(str::to_string)
     })
 }
 
 fn codex_resume_id_from_args(args: &[String]) -> Option<String> {
-    args.windows(2).find_map(|pair| {
-        (pair[0] == "resume" && is_uuid_v4_shape(&pair[1])).then(|| pair[1].clone())
-    })
+    let command = codex_resume_subcommand(args)?;
+    let mut index = command.index + 1;
+    while let Some(arg) = args.get(index).map(String::as_str) {
+        if arg == "--" {
+            return args
+                .get(index + 1)
+                .filter(|candidate| is_uuid_v4_shape(candidate))
+                .cloned();
+        }
+        if !arg.starts_with('-') {
+            return is_uuid_v4_shape(arg).then(|| arg.to_string());
+        }
+        index = match command.kind {
+            CodexResumeKind::Interactive => codex_option_end(args, index, true),
+            CodexResumeKind::Exec => {
+                codex_option_end(args, index, true).or_else(|| codex_exec_option_end(args, index))
+            }
+        }?;
+    }
+    None
+}
+
+#[derive(Clone, Copy)]
+enum CodexResumeKind {
+    Interactive,
+    Exec,
+}
+
+#[derive(Clone, Copy)]
+struct CodexResumeCommand {
+    index: usize,
+    kind: CodexResumeKind,
+}
+
+/// Return whether `args` select Codex's interactive or non-interactive
+/// `resume` subcommand.
+///
+/// The wrapper injects global `--enable` and `-c` options before the user's
+/// arguments, and Node installations put a `codex.js` launcher after the
+/// runtime executable. Parse those prefixes while failing closed at the first
+/// exec prompt so later prompt text mentioning `resume` never widens owner
+/// matching to historical sub-agent rollouts.
+pub fn codex_resume_requested_from_args(args: &[String]) -> bool {
+    codex_resume_subcommand(args).is_some()
+}
+
+fn codex_resume_subcommand(args: &[String]) -> Option<CodexResumeCommand> {
+    let mut index = args.iter().position(|arg| basename_matches(arg, "codex"))? + 1;
+
+    while let Some(arg) = args.get(index).map(String::as_str) {
+        if arg == "resume" {
+            return Some(CodexResumeCommand {
+                index,
+                kind: CodexResumeKind::Interactive,
+            });
+        }
+        if matches!(arg, "exec" | "e") {
+            return codex_exec_resume_subcommand(args, index + 1);
+        }
+        if arg == "--" || !arg.starts_with('-') {
+            return None;
+        }
+
+        if matches!(arg, "-h" | "--help" | "-V" | "--version") {
+            return None;
+        }
+        index = codex_option_end(args, index, false)?;
+    }
+    None
+}
+
+fn codex_exec_resume_subcommand(args: &[String], mut index: usize) -> Option<CodexResumeCommand> {
+    while let Some(arg) = args.get(index).map(String::as_str) {
+        if arg == "resume" {
+            return Some(CodexResumeCommand {
+                index,
+                kind: CodexResumeKind::Exec,
+            });
+        }
+        if arg == "--"
+            || !arg.starts_with('-')
+            || matches!(arg, "-h" | "--help" | "-V" | "--version")
+        {
+            return None;
+        }
+        index =
+            codex_option_end(args, index, false).or_else(|| codex_exec_option_end(args, index))?;
+    }
+    None
+}
+
+fn codex_option_end(args: &[String], index: usize, after_resume: bool) -> Option<usize> {
+    let arg = args.get(index)?.as_str();
+    let is_flag = matches!(
+        arg,
+        "--strict-config"
+            | "--oss"
+            | "--dangerously-bypass-approvals-and-sandbox"
+            | "--yolo"
+            | "--dangerously-bypass-hook-trust"
+            | "--search"
+            | "--no-alt-screen"
+    ) || (after_resume
+        && matches!(arg, "--last" | "--all" | "--include-non-interactive"));
+    if is_flag {
+        return Some(index + 1);
+    }
+
+    const VALUE_OPTIONS: &[&str] = &[
+        "-c",
+        "--config",
+        "--enable",
+        "--disable",
+        "--remote",
+        "--remote-auth-token-env",
+        "-i",
+        "--image",
+        "-m",
+        "--model",
+        "--local-provider",
+        "-p",
+        "--profile",
+        "-s",
+        "--sandbox",
+        "-C",
+        "--cd",
+        "--add-dir",
+        "-a",
+        "--ask-for-approval",
+    ];
+    if VALUE_OPTIONS.contains(&arg) {
+        args.get(index + 1)?;
+        return Some(index + 2);
+    }
+    let has_attached_value = VALUE_OPTIONS.iter().any(|option| {
+        option.starts_with("--")
+            && arg
+                .strip_prefix(option)
+                .is_some_and(|suffix| suffix.starts_with('='))
+    }) || ["-c", "-i", "-m", "-p", "-s", "-C", "-a"]
+        .iter()
+        .any(|option| arg.starts_with(option) && arg.len() > option.len());
+    has_attached_value.then_some(index + 1)
+}
+
+fn codex_rollout_scope_for_mapping(
+    scope: MappingScope,
+    role: AgentProcessRole,
+    codex_resume_requested: bool,
+) -> CodexRolloutScope {
+    if scope != MappingScope::SessionOwners || role != AgentProcessRole::Emit {
+        CodexRolloutScope::AnyTerminal
+    } else if codex_resume_requested {
+        CodexRolloutScope::ResumedOwner
+    } else {
+        CodexRolloutScope::SessionOwner
+    }
 }
 
 fn claude_projects_root() -> Option<PathBuf> {
@@ -856,6 +1349,17 @@ fn antigravity_brain_roots() -> Vec<PathBuf> {
         .collect()
 }
 
+fn antigravity_owner_cursor_id(storage_root: Option<&Path>, cwd: &Path) -> Option<String> {
+    let cwd = cwd.to_str()?;
+    let path = storage_root?
+        .join("antigravity-cli")
+        .join("cache")
+        .join("last_conversations.json");
+    let cursors: std::collections::HashMap<String, String> =
+        serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    cursors.get(cwd).filter(|id| is_uuid_v4_shape(id)).cloned()
+}
+
 /// Resolve the JSONL transcript a `claude` process is currently writing
 /// in the given cwd. Claude normally buckets transcripts by slugified cwd,
 /// but the metadata fallback keeps pairing stable when that slug differs.
@@ -952,50 +1456,146 @@ fn find_recent_codex_jsonl(
     allow_rotation: bool,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
+    find_recent_codex_jsonl_with_scope(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        CodexRolloutScope::AnyTerminal,
+    )
+}
+
+fn find_recent_codex_owner_jsonl(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+) -> Option<(PathBuf, String)> {
+    find_recent_codex_jsonl_with_scope(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        CodexRolloutScope::SessionOwner,
+    )
+}
+
+fn find_recent_resumed_codex_jsonl(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+) -> Option<(PathBuf, String)> {
+    find_recent_codex_jsonl_with_scope(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        CodexRolloutScope::ResumedOwner,
+    )
+}
+
+fn codex_day_dirs_for_scope(root: &Path, scope: CodexRolloutScope) -> Vec<PathBuf> {
+    if scope != CodexRolloutScope::ResumedOwner {
+        return newest_subdir(root)
+            .and_then(|year| newest_subdir(&year))
+            .and_then(|month| newest_subdir(&month))
+            .into_iter()
+            .collect();
+    }
+
+    // A picker, --last, or named resume can reopen a rollout stored under any
+    // historical date. Its file mtime becomes current without changing the
+    // containing directory, so the resume-only path must inspect every date
+    // directory and let the normal mtime/process-start filters discard cold
+    // files. New-session scans stay on the newest day above.
+    let mut days = Vec::new();
+    for year in iter_subdirs_desc(root).unwrap_or_default() {
+        for month in iter_subdirs_desc(&year).unwrap_or_default() {
+            days.extend(iter_subdirs_desc(&month).unwrap_or_default());
+        }
+    }
+    days
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_recent_codex_jsonl_with_scope(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+    scope: CodexRolloutScope,
+) -> Option<(PathBuf, String)> {
     // Codex rollouts live under <root>/<year>/<month>/<day>/. The
     // filename does NOT encode the cwd (unlike claude), so we read each
     // candidate's first JSONL line and match its `payload.cwd` against
-    // the live process's cwd. Walking just the newest date-dir keeps
-    // the per-cycle work bounded. The cwd check runs while collecting
-    // (not after ranking) so the rotation successor is also guaranteed
-    // to belong to this cwd.
+    // the live process's cwd. New-session scans walk just the newest date
+    // directory; non-UUID resume scans include historical date directories
+    // because reopening a rollout updates the file, not its parent directory.
+    // The cwd check runs while collecting (not after ranking) so the rotation
+    // successor is also guaranteed to belong to this cwd.
     let root = sessions_root?;
-    let day_dir = newest_subdir(&newest_subdir(&newest_subdir(root)?)?)?;
     let mut candidates: Vec<TranscriptCandidate> = Vec::new();
-    for entry in std::fs::read_dir(&day_dir).ok()?.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
-        }
-        if assigned.contains(&path) {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else { continue };
-        let Ok(mtime) = meta.modified() else { continue };
-        if mtime < recency_cutoff {
-            continue;
-        }
-        // Transcript must have been written after this agent process
-        // started — otherwise it belongs to an earlier run.
-        if mtime < process_start {
-            continue;
-        }
-        let Some(uuid) = extract_uuid_from_path(&path) else {
+    for day_dir in codex_day_dirs_for_scope(root, scope) {
+        let Ok(entries) = std::fs::read_dir(&day_dir) else {
             continue;
         };
-        let Some(head) = read_codex_rollout_head(&path) else {
-            continue;
-        };
-        if head.cwd != cwd || !head.is_terminal_writer() {
-            continue;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if assigned.contains(&path) {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(mtime) = meta.modified() else { continue };
+            if mtime < recency_cutoff {
+                continue;
+            }
+            // Transcript must have been written after this agent process
+            // started — otherwise it belongs to an earlier run.
+            if mtime < process_start {
+                continue;
+            }
+            let Some(uuid) = extract_uuid_from_path(&path) else {
+                continue;
+            };
+            let Some(head) = read_codex_rollout_head(&path) else {
+                continue;
+            };
+            if head.cwd != cwd || !head.is_writer_for_scope(scope) {
+                continue;
+            }
+            let birth = meta.created().unwrap_or(mtime);
+            candidates.push(TranscriptCandidate {
+                path,
+                birth,
+                mtime,
+                uuid,
+            });
         }
-        let birth = meta.created().unwrap_or(mtime);
-        candidates.push(TranscriptCandidate {
-            path,
-            birth,
-            mtime,
-            uuid,
-        });
+    }
+    if scope == CodexRolloutScope::ResumedOwner {
+        retain_resumed_codex_roots(&mut candidates, root, process_start);
     }
     pick_anchor_or_rotate(candidates, process_start, now, allow_rotation)
 }
@@ -1006,35 +1606,78 @@ fn find_completed_codex_jsonl(
     recency_cutoff: SystemTime,
     process_start: SystemTime,
 ) -> Option<(PathBuf, String)> {
+    find_completed_codex_jsonl_with_scope(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        CodexRolloutScope::SessionOwner,
+    )
+}
+
+fn find_completed_resumed_codex_jsonl(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+) -> Option<(PathBuf, String)> {
+    find_completed_codex_jsonl_with_scope(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        CodexRolloutScope::ResumedOwner,
+    )
+}
+
+fn find_completed_codex_jsonl_with_scope(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    scope: CodexRolloutScope,
+) -> Option<(PathBuf, String)> {
     let root = sessions_root?;
-    let day_dir = newest_subdir(&newest_subdir(&newest_subdir(root)?)?)?;
-    let mut candidates: Vec<(PathBuf, SystemTime, String)> = Vec::new();
-    for entry in std::fs::read_dir(&day_dir).ok()?.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else { continue };
-        let Ok(mtime) = meta.modified() else { continue };
-        if mtime < recency_cutoff || mtime < process_start {
-            continue;
-        }
-        let Some(head) = read_codex_rollout_head(&path) else {
+    let mut candidates: Vec<TranscriptCandidate> = Vec::new();
+    for day_dir in codex_day_dirs_for_scope(root, scope) {
+        let Ok(entries) = std::fs::read_dir(&day_dir) else {
             continue;
         };
-        if head.cwd != cwd || !head.is_terminal_writer() {
-            continue;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(mtime) = meta.modified() else { continue };
+            if mtime < recency_cutoff || mtime < process_start {
+                continue;
+            }
+            let Some(head) = read_codex_rollout_head(&path) else {
+                continue;
+            };
+            if head.cwd != cwd || !head.is_writer_for_scope(scope) {
+                continue;
+            }
+            let Some(uuid) = extract_uuid_from_path(&path) else {
+                continue;
+            };
+            let birth = meta.created().unwrap_or(mtime);
+            candidates.push(TranscriptCandidate {
+                path,
+                birth,
+                mtime,
+                uuid,
+            });
         }
-        let Some(uuid) = extract_uuid_from_path(&path) else {
-            continue;
-        };
-        let created = meta.created().unwrap_or(mtime);
-        candidates.push((path, created, uuid));
     }
-    candidates.sort_by_key(|candidate| time_distance(candidate.1, process_start));
+    if scope == CodexRolloutScope::ResumedOwner {
+        retain_resumed_codex_roots(&mut candidates, root, process_start);
+    }
+    candidates.sort_by_key(|candidate| time_distance(candidate.birth, process_start));
     if candidates.len() == 1 {
-        let (path, _, id) = candidates.pop()?;
-        Some((path, id))
+        let candidate = candidates.pop()?;
+        Some((candidate.path, candidate.uuid))
     } else {
         None
     }
@@ -1046,6 +1689,7 @@ fn find_recent_antigravity_jsonl(
     process_start: SystemTime,
     now: SystemTime,
     allow_rotation: bool,
+    owner_cursor_id: Option<&str>,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
     let mut candidates: Vec<TranscriptCandidate> = Vec::new();
@@ -1090,7 +1734,13 @@ fn find_recent_antigravity_jsonl(
             });
         }
     }
-    pick_anchor_or_rotate(candidates, process_start, now, allow_rotation)
+    pick_anchor_or_rotate_with_target(
+        candidates,
+        process_start,
+        now,
+        allow_rotation && owner_cursor_id.is_some(),
+        owner_cursor_id,
+    )
 }
 
 fn find_completed_antigravity_jsonl(
@@ -1150,6 +1800,7 @@ fn find_completed_antigravity_jsonl(
 struct CodexRolloutHead {
     cwd: PathBuf,
     originator: Option<String>,
+    is_subagent: bool,
 }
 
 /// Rollout writers that share `~/.codex/sessions` with the terminal CLI but
@@ -1166,11 +1817,100 @@ impl CodexRolloutHead {
             .as_deref()
             .is_none_or(|originator| !CODEX_GUI_HOST_ORIGINATORS.contains(&originator))
     }
+
+    fn is_session_owner_writer(&self) -> bool {
+        self.is_terminal_writer() && !self.is_subagent
+    }
+
+    fn is_writer_for_scope(&self, scope: CodexRolloutScope) -> bool {
+        match scope {
+            CodexRolloutScope::SessionOwner => self.is_session_owner_writer(),
+            CodexRolloutScope::AnyTerminal | CodexRolloutScope::ResumedOwner => {
+                self.is_terminal_writer()
+            }
+        }
+    }
 }
 
-/// Read `cwd` (and `originator` when present) from a codex rollout's leading
-/// `session_meta` line. Both live at the top level in old formats and under
-/// `payload` in current ones.
+/// Return the owner declared by a Codex sub-agent rollout. Marker repair uses
+/// this relationship narrowly; arbitrary backwards transcript moves still
+/// pass the normal dormant-echo guard.
+pub fn codex_rollout_parent_thread_id(path: &Path) -> Option<String> {
+    use std::io::{BufRead, BufReader};
+    let file = std::fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    for line in reader.lines().map_while(Result::ok).take(20) {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        for scope in [Some(&value), value.get("payload")] {
+            let Some(scope) = scope else { continue };
+            let (is_subagent, parent_thread_id) = codex_subagent_metadata(scope);
+            if is_subagent && parent_thread_id.is_some() {
+                return parent_thread_id;
+            }
+        }
+    }
+    None
+}
+
+/// A deliberately resumed sub-agent rollout becomes the root conversation for
+/// this terminal run, but it keeps its original `source.subagent` metadata.
+/// Historical ancestors remain candidates so normal birth anchoring selects
+/// the youngest pre-existing rollout. Only descendants born by this process
+/// are removed. Process start times are second-granularity on supported hosts;
+/// treating same-second descendants as new fails closed in the rare ambiguous
+/// boundary instead of allowing a child to take over the live owner marker.
+fn retain_resumed_codex_roots(
+    candidates: &mut Vec<TranscriptCandidate>,
+    sessions_root: &Path,
+    process_start: SystemTime,
+) {
+    let candidate_ids = candidates
+        .iter()
+        .map(|candidate| candidate.uuid.clone())
+        .collect::<HashSet<_>>();
+    candidates.retain(|candidate| {
+        let born_this_run = candidate.birth.duration_since(process_start).is_ok();
+        !born_this_run
+            || !codex_rollout_has_candidate_ancestor(&candidate.path, &candidate_ids, sessions_root)
+    });
+}
+
+fn codex_rollout_has_candidate_ancestor(
+    rollout: &Path,
+    candidate_ids: &HashSet<String>,
+    sessions_root: &Path,
+) -> bool {
+    const MAX_ANCESTOR_DEPTH: usize = 16;
+
+    let mut current = rollout.to_path_buf();
+    let mut seen = HashSet::new();
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        let Some(parent_uuid) = codex_rollout_parent_thread_id(&current) else {
+            return false;
+        };
+        if !seen.insert(parent_uuid.clone()) {
+            return true;
+        }
+        if candidate_ids.contains(&parent_uuid) {
+            return true;
+        }
+        let Some((parent_path, _)) =
+            find_codex_jsonl_for_uuid(Some(sessions_root), &parent_uuid, &HashSet::new())
+        else {
+            return false;
+        };
+        current = parent_path;
+    }
+    true
+}
+
+/// Read owner metadata from a codex rollout's leading `session_meta` line.
+/// Fields live at the top level in old formats and under `payload` in current
+/// ones. Current sub-agent sources encode their parent beneath
+/// `source.subagent`; the payload-level parent id is retained as a fallback
+/// for compatible writers.
 fn read_codex_rollout_head(path: &Path) -> Option<CodexRolloutHead> {
     use std::io::{BufRead, BufReader};
     let f = std::fs::File::open(path).ok()?;
@@ -1185,17 +1925,46 @@ fn read_codex_rollout_head(path: &Path) -> Option<CodexRolloutHead> {
         for scope in [Some(&v), v.get("payload")] {
             let Some(scope) = scope else { continue };
             if let Some(cwd) = scope.get("cwd").and_then(|c| c.as_str()) {
+                let (is_subagent, _) = codex_subagent_metadata(scope);
                 return Some(CodexRolloutHead {
                     cwd: PathBuf::from(cwd),
                     originator: scope
                         .get("originator")
                         .and_then(|o| o.as_str())
                         .map(str::to_string),
+                    is_subagent,
                 });
             }
         }
     }
     None
+}
+
+fn codex_subagent_metadata(scope: &serde_json::Value) -> (bool, Option<String>) {
+    let source = scope.get("source");
+    let subagent_source = source.and_then(|source| source.get("subagent"));
+    let is_subagent =
+        subagent_source.is_some() || source.and_then(|source| source.as_str()) == Some("subagent");
+    let parent_thread_id = subagent_source
+        .and_then(find_parent_thread_id)
+        .or_else(|| {
+            is_subagent
+                .then(|| scope.get("parent_thread_id").and_then(|id| id.as_str()))
+                .flatten()
+        })
+        .map(str::to_string);
+    (is_subagent, parent_thread_id)
+}
+
+fn find_parent_thread_id(value: &serde_json::Value) -> Option<&str> {
+    match value {
+        serde_json::Value::Object(fields) => fields
+            .get("parent_thread_id")
+            .and_then(|value| value.as_str())
+            .or_else(|| fields.values().find_map(find_parent_thread_id)),
+        serde_json::Value::Array(values) => values.iter().find_map(find_parent_thread_id),
+        _ => None,
+    }
 }
 
 fn read_agent_transcript_cwd(path: &Path) -> Option<PathBuf> {
@@ -1345,17 +2114,29 @@ struct TranscriptCandidate {
 ///      of their writer dying, while our own post-/new transcript is
 ///      the one being appended right now;
 ///   3. the caller must vouch via `allow_rotation` that this process is
-///      the only matching agent in scope (same cwd for claude/codex,
-///      host-wide for antigravity, whose transcripts carry no cwd) —
-///      with a second live agent around, the hot later-born file may be
-///      theirs, so ambiguity falls back to the anchor (old behaviour).
+///      the only matching agent in its cwd — with a second live agent
+///      around, the hot later-born file may be theirs, so ambiguity falls
+///      back to the anchor.
+///   4. providers with ownerless transcript metadata may further constrain
+///      the successor id. Antigravity uses its cwd-keyed CLI continuation
+///      cursor so a hot built-in subagent brain cannot impersonate `/new`.
 ///
 /// Tracked siblings are also excluded via `assigned` upstream.
 fn pick_anchor_or_rotate(
+    candidates: Vec<TranscriptCandidate>,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+) -> Option<(PathBuf, String)> {
+    pick_anchor_or_rotate_with_target(candidates, process_start, now, allow_rotation, None)
+}
+
+fn pick_anchor_or_rotate_with_target(
     mut candidates: Vec<TranscriptCandidate>,
     process_start: SystemTime,
     now: SystemTime,
     allow_rotation: bool,
+    successor_id: Option<&str>,
 ) -> Option<(PathBuf, String)> {
     candidates.sort_by_key(|c| time_distance(c.birth, process_start));
     let anchor = candidates.first()?;
@@ -1368,6 +2149,7 @@ fn pick_anchor_or_rotate(
             .iter()
             .filter(|c| c.birth > anchor.birth && c.mtime > anchor.mtime)
             .filter(|c| c.mtime >= dormant_before)
+            .filter(|c| successor_id.map_or(true, |id| c.uuid == id))
             .max_by_key(|c| c.birth);
         if let Some(c) = successor {
             return Some((c.path.clone(), c.uuid.clone()));
@@ -1433,6 +2215,47 @@ fn is_uuid_v4_shape(s: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn agent_node(kind: AgentKind, shape: AgentProcessShape) -> AgentProcessNode {
+        AgentProcessNode {
+            identity: AgentProcessIdentity { kind, shape },
+            cwd: Some(PathBuf::from("/repo")),
+        }
+    }
+
+    fn runtime(kind: AgentKind) -> AgentProcessNode {
+        agent_node(kind, AgentProcessShape::Runtime)
+    }
+
+    fn launcher(kind: AgentKind) -> AgentProcessNode {
+        agent_node(kind, AgentProcessShape::Launcher)
+    }
+
+    fn process_node(exe: &str, name: &str, args: &[&str], process_cwd: &str) -> AgentProcessNode {
+        let args = args
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect::<Vec<_>>();
+        agent_process_node_from_parts(
+            Some(Path::new(exe)),
+            Some(name),
+            &args,
+            Some(Path::new(process_cwd)),
+        )
+        .expect("test process should be recognised as an agent")
+    }
+
+    fn observation(
+        pid: u32,
+        parent: Option<u32>,
+        node: AgentProcessNode,
+    ) -> AgentProcessObservation {
+        AgentProcessObservation {
+            pid: Pid::from_u32(pid),
+            parent: parent.map(Pid::from_u32),
+            node,
+        }
+    }
+
     fn process_roles(matches: Vec<AgentProcessMatch>) -> Vec<(u32, AgentKind, AgentProcessRole)> {
         matches
             .into_iter()
@@ -1487,17 +2310,179 @@ mod tests {
     #[test]
     fn codex_resume_id_from_args_reads_resume_subcommand() {
         let id = "019e2001-3250-76b0-8410-2e073b38a2c1";
-        let args = vec!["codex".to_string(), "resume".to_string(), id.to_string()];
+        for args in [
+            vec!["codex", "resume", id],
+            vec!["codex", "resume", "--all", id],
+            vec!["codex", "resume", "--yolo", id],
+            vec!["codex", "resume", "-c", "model=o3", id],
+            vec!["codex", "exec", "resume", id],
+            vec!["codex", "e", "--json", "resume", "--all", id],
+            vec![
+                "node",
+                "/opt/codex.js",
+                "-C",
+                "/repo",
+                "exec",
+                "--json",
+                "resume",
+                "-c",
+                "model=o3",
+                id,
+            ],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(
+                codex_resume_id_from_args(&args).as_deref(),
+                Some(id),
+                "{args:?}"
+            );
+        }
+    }
 
-        assert_eq!(codex_resume_id_from_args(&args).as_deref(), Some(id));
+    #[test]
+    fn codex_resume_mode_allows_explicitly_resumed_subagent_owner() {
+        for args in [
+            vec!["codex".into(), "resume".into()],
+            vec!["codex".into(), "resume".into(), "--last".into()],
+            vec!["codex".into(), "resume".into(), "named-session".into()],
+            vec!["codex".into(), "exec".into(), "resume".into()],
+            vec![
+                "codex".into(),
+                "exec".into(),
+                "--json".into(),
+                "resume".into(),
+                "--last".into(),
+            ],
+            vec!["codex".into(), "e".into(), "resume".into(), "--last".into()],
+        ] {
+            assert!(codex_resume_requested_from_args(&args));
+        }
+        assert!(!codex_resume_requested_from_args(&["codex".into()]));
+
+        assert_eq!(
+            codex_rollout_scope_for_mapping(
+                MappingScope::SessionOwners,
+                AgentProcessRole::Emit,
+                false,
+            ),
+            CodexRolloutScope::SessionOwner,
+        );
+        assert_eq!(
+            codex_rollout_scope_for_mapping(
+                MappingScope::SessionOwners,
+                AgentProcessRole::Emit,
+                true,
+            ),
+            CodexRolloutScope::ResumedOwner,
+        );
+        assert_eq!(
+            codex_rollout_scope_for_mapping(
+                MappingScope::SessionOwners,
+                AgentProcessRole::Quarantine,
+                false,
+            ),
+            CodexRolloutScope::AnyTerminal,
+        );
+    }
+
+    #[test]
+    fn codex_resume_mode_only_accepts_the_resume_subcommand() {
+        let id = "019e2001-3250-76b0-8410-2e073b38a2c1";
+        for args in [
+            vec!["codex", "--enable", "hooks", "-c", "notify=[]", "resume"],
+            vec!["node", "/opt/codex.js", "resume", "--last"],
+            vec![
+                "node",
+                "/opt/codex.js",
+                "--enable",
+                "hooks",
+                "-c",
+                "notify=[]",
+                "--yolo",
+                "resume",
+                id,
+            ],
+            vec!["codex", "resume", "named-session"],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert!(codex_resume_requested_from_args(&args), "{args:?}");
+        }
+
+        for args in [
+            vec!["codex", "exec", "explain resume state"],
+            vec!["codex", "exec", "explain", "resume"],
+            vec!["codex", "e", "--json", "explain", "resume"],
+            vec!["codex", "exec", "--", "resume"],
+            vec!["codex", "-C", "resume"],
+            vec!["codex", "--", "resume"],
+            vec!["codex", "review", "resume", id],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert!(!codex_resume_requested_from_args(&args), "{args:?}");
+            assert_eq!(codex_resume_id_from_args(&args), None, "{args:?}");
+        }
     }
 
     #[test]
     fn claude_resume_id_from_args_reads_resume_flag() {
         let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-        let args = vec!["claude".to_string(), "--resume".to_string(), id.to_string()];
+        for args in [vec!["claude", "--resume", id], vec!["claude", "-r", id]] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(
+                claude_resume_id_from_args(&args).as_deref(),
+                Some(id),
+                "{args:?}"
+            );
+        }
+    }
 
-        assert_eq!(claude_resume_id_from_args(&args).as_deref(), Some(id));
+    #[test]
+    fn claude_resume_id_from_args_reads_attached_resume_values() {
+        let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        for resume_arg in [format!("--resume={id}"), format!("-r{id}")] {
+            let args = vec!["claude".to_string(), resume_arg];
+            assert_eq!(
+                claude_resume_id_from_args(&args).as_deref(),
+                Some(id),
+                "{args:?}"
+            );
+        }
+
+        for args in [
+            vec![
+                "claude".to_string(),
+                format!("--resume={id}"),
+                "--fork-session".to_string(),
+            ],
+            vec![
+                "claude".to_string(),
+                "--".to_string(),
+                format!("--resume={id}"),
+            ],
+        ] {
+            assert_eq!(
+                claude_resume_id_from_args(&args),
+                None,
+                "forked sessions and prompt text must not pin the source owner: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn claude_fork_session_does_not_pin_the_resumed_id() {
+        let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        for args in [
+            vec!["claude", "--resume", id, "--fork-session"],
+            vec!["claude", "-r", id, "--fork-session"],
+            vec!["claude", "--fork-session", "--resume", id],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(
+                claude_resume_id_from_args(&args),
+                None,
+                "a fork creates a new owner instead of reusing {id}: {args:?}"
+            );
+        }
     }
 
     #[test]
@@ -1505,14 +2490,16 @@ mod tests {
         let root = Pid::from_u32(1);
         let wrapper = Pid::from_u32(2);
         let codex = Pid::from_u32(3);
-        let nested_codex = Pid::from_u32(4);
+        let tool_shell = Pid::from_u32(4);
+        let nested_codex = Pid::from_u32(5);
         let mut children = std::collections::HashMap::new();
         children.insert(root, vec![wrapper]);
         children.insert(wrapper, vec![codex]);
-        children.insert(codex, vec![nested_codex]);
+        children.insert(codex, vec![tool_shell]);
+        children.insert(tool_shell, vec![nested_codex]);
 
-        let kind_for_pid = |pid: Pid| match pid.as_u32() {
-            3 | 4 => Some(AgentKind::Codex),
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            3 | 5 => Some(runtime(AgentKind::Codex)),
             _ => None,
         };
 
@@ -1520,26 +2507,478 @@ mod tests {
             &children,
             root,
             MappingScope::AllDescendants,
-            kind_for_pid,
+            node_for_pid,
         );
         assert_eq!(
             all.into_iter().map(|m| m.pid.as_u32()).collect::<Vec<_>>(),
-            vec![3, 4],
+            vec![3, 5],
         );
 
         let owners = collect_agent_processes_in_tree(
             &children,
             root,
             MappingScope::SessionOwners,
-            kind_for_pid,
+            node_for_pid,
         );
         assert_eq!(
             process_roles(owners),
             vec![
                 (3, AgentKind::Codex, AgentProcessRole::Emit),
-                (4, AgentKind::Codex, AgentProcessRole::Quarantine),
+                (5, AgentKind::Codex, AgentProcessRole::Quarantine),
             ],
         );
+    }
+
+    #[test]
+    fn session_owner_scope_collapses_contiguous_provider_launcher_chains() {
+        let root = Pid::from_u32(1);
+        let codex_wrapper = Pid::from_u32(10);
+        let codex_watcher = Pid::from_u32(11);
+        let codex_node = Pid::from_u32(12);
+        let codex_native = Pid::from_u32(13);
+        let claude_wrapper = Pid::from_u32(20);
+        let claude_native = Pid::from_u32(21);
+        let agy_wrapper = Pid::from_u32(30);
+        let agy_watcher = Pid::from_u32(31);
+        let agy_native = Pid::from_u32(32);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![codex_wrapper, claude_wrapper, agy_wrapper]);
+        children.insert(codex_wrapper, vec![codex_watcher, codex_node]);
+        children.insert(codex_node, vec![codex_native]);
+        children.insert(claude_wrapper, vec![claude_native]);
+        children.insert(agy_wrapper, vec![agy_watcher, agy_native]);
+
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            10..=12 => Some(launcher(AgentKind::Codex)),
+            13 => Some(runtime(AgentKind::Codex)),
+            20 => Some(launcher(AgentKind::Claude)),
+            21 => Some(runtime(AgentKind::Claude)),
+            30..=31 => Some(launcher(AgentKind::Antigravity)),
+            32 => Some(runtime(AgentKind::Antigravity)),
+            _ => None,
+        };
+        let mut owners = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::SessionOwners,
+            node_for_pid,
+        );
+        owners.sort_by_key(|process| process.pid.as_u32());
+
+        assert_eq!(
+            process_roles(owners),
+            vec![
+                (10, AgentKind::Codex, AgentProcessRole::Emit),
+                (20, AgentKind::Claude, AgentProcessRole::Emit),
+                (30, AgentKind::Antigravity, AgentProcessRole::Emit),
+            ]
+        );
+
+        let mut all = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::AllDescendants,
+            node_for_pid,
+        );
+        all.sort_by_key(|process| process.pid.as_u32());
+        assert_eq!(
+            process_roles(all),
+            vec![
+                (10, AgentKind::Codex, AgentProcessRole::Emit),
+                (20, AgentKind::Claude, AgentProcessRole::Emit),
+                (30, AgentKind::Antigravity, AgentProcessRole::Emit),
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_cd_collapses_wrapper_launcher_chain_across_process_cwds() {
+        let root = Pid::from_u32(1);
+        let wrapper = Pid::from_u32(10);
+        let watcher = Pid::from_u32(11);
+        let node_launcher = Pid::from_u32(12);
+        let native_runtime = Pid::from_u32(13);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![wrapper]);
+        children.insert(wrapper, vec![watcher, node_launcher]);
+        children.insert(node_launcher, vec![native_runtime]);
+
+        let wrapper_node = process_node(
+            "/bin/sh",
+            "sh",
+            &["sh", "/acorn/agent-wrappers/codex", "-C", "/other"],
+            "/repo",
+        );
+        let watcher_node = wrapper_node.clone();
+        let node_node = process_node(
+            "/usr/local/bin/node",
+            "node",
+            &[
+                "node",
+                "/opt/codex.js",
+                "--enable",
+                "hooks",
+                "-c",
+                "notify=[]",
+                "--cd=/other",
+            ],
+            "/repo",
+        );
+        let runtime_node =
+            process_node("/opt/codex", "codex", &["codex", "-C", "/other"], "/other");
+
+        assert_eq!(wrapper_node.cwd.as_deref(), Some(Path::new("/other")));
+        assert_eq!(node_node.cwd.as_deref(), Some(Path::new("/other")));
+
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            10 => Some(wrapper_node.clone()),
+            11 => Some(watcher_node.clone()),
+            12 => Some(node_node.clone()),
+            13 => Some(runtime_node.clone()),
+            _ => None,
+        };
+        let owners = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::SessionOwners,
+            node_for_pid,
+        );
+        assert_eq!(
+            process_roles(owners),
+            vec![(10, AgentKind::Codex, AgentProcessRole::Emit)]
+        );
+
+        let observations = vec![
+            observation(10, None, wrapper_node),
+            observation(11, Some(10), watcher_node),
+            observation(12, Some(10), node_node),
+            observation(13, Some(12), runtime_node),
+        ];
+        let (_, codex, _) = logical_agent_process_counts(&observations);
+        assert_eq!(codex.get(Path::new("/other")), Some(&1));
+        assert_eq!(codex.get(Path::new("/repo")), None);
+    }
+
+    #[test]
+    fn codex_runtime_spawning_cd_launcher_remains_an_independent_invocation() {
+        let root = Pid::from_u32(1);
+        let owner_runtime = Pid::from_u32(20);
+        let nested_launcher = Pid::from_u32(21);
+        let nested_runtime = Pid::from_u32(22);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![owner_runtime]);
+        children.insert(owner_runtime, vec![nested_launcher]);
+        children.insert(nested_launcher, vec![nested_runtime]);
+
+        let owner_node = process_node("/opt/codex", "codex", &["codex"], "/repo");
+        let launcher_node = process_node(
+            "/bin/sh",
+            "sh",
+            &["sh", "/acorn/agent-wrappers/codex", "--cd", "/other"],
+            "/repo",
+        );
+        let nested_node = process_node("/opt/codex", "codex", &["codex", "--cd=/other"], "/other");
+
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            20 => Some(owner_node.clone()),
+            21 => Some(launcher_node.clone()),
+            22 => Some(nested_node.clone()),
+            _ => None,
+        };
+        let owners = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::SessionOwners,
+            node_for_pid,
+        );
+        assert_eq!(
+            process_roles(owners),
+            vec![
+                (20, AgentKind::Codex, AgentProcessRole::Emit),
+                (21, AgentKind::Codex, AgentProcessRole::Quarantine),
+            ]
+        );
+
+        let observations = vec![
+            observation(20, None, owner_node),
+            observation(21, Some(20), launcher_node),
+            observation(22, Some(21), nested_node),
+        ];
+        let (_, codex, _) = logical_agent_process_counts(&observations);
+        assert_eq!(codex.get(Path::new("/repo")), Some(&1));
+        assert_eq!(codex.get(Path::new("/other")), Some(&1));
+    }
+
+    #[test]
+    fn codex_cd_parses_supported_subcommand_option_prefixes_only() {
+        let id = "019e2001-3250-76b0-8410-2e073b38a2c1";
+        for args in [
+            vec!["codex", "resume", "--last", "--cd=/other"],
+            vec!["codex", "fork", "--all", "-C", "/other"],
+            vec!["codex", "exec", "--json", "-C", "/other"],
+            vec!["codex", "-C/other", "exec", "resume", "--last"],
+            vec!["codex", "exec", "--json", "-C/other", "resume", id],
+            vec!["codex", "e", "--cd=/other", "resume", "--last"],
+        ] {
+            let node = process_node("/opt/codex", "codex", &args, "/repo");
+            assert_eq!(node.cwd.as_deref(), Some(Path::new("/other")), "{args:?}");
+        }
+
+        let prompt = process_node(
+            "/opt/codex",
+            "codex",
+            &["codex", "exec", "explain this", "-C", "/other"],
+            "/repo",
+        );
+        assert_eq!(prompt.cwd.as_deref(), Some(Path::new("/repo")));
+
+        let resumed_prompt = process_node(
+            "/opt/codex",
+            "codex",
+            &[
+                "codex",
+                "exec",
+                "-C/other",
+                "resume",
+                id,
+                "explain -C /not-the-cwd",
+            ],
+            "/repo",
+        );
+        assert_eq!(resumed_prompt.cwd.as_deref(), Some(Path::new("/other")));
+    }
+
+    #[test]
+    fn provider_process_identity_distinguishes_launchers_from_runtimes() {
+        let cases = [
+            (
+                "/bin/sh",
+                "sh",
+                vec!["sh", "/acorn/agent-wrappers/codex"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Codex,
+                    shape: AgentProcessShape::Launcher,
+                },
+            ),
+            (
+                "/usr/local/bin/node",
+                "node",
+                vec!["node", "/opt/codex.js"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Codex,
+                    shape: AgentProcessShape::Launcher,
+                },
+            ),
+            (
+                "/bin/sh",
+                "sh",
+                vec!["sh", "/acorn/agent-wrappers/claude"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Claude,
+                    shape: AgentProcessShape::Launcher,
+                },
+            ),
+            (
+                "/bin/sh",
+                "sh",
+                vec!["sh", "/acorn/agent-wrappers/agy"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Antigravity,
+                    shape: AgentProcessShape::Launcher,
+                },
+            ),
+            (
+                "/opt/codex",
+                "codex",
+                vec!["codex"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Codex,
+                    shape: AgentProcessShape::Runtime,
+                },
+            ),
+            (
+                "/opt/claude",
+                "claude",
+                vec!["claude"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Claude,
+                    shape: AgentProcessShape::Runtime,
+                },
+            ),
+            (
+                "/opt/agy",
+                "agy",
+                vec!["agy"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Antigravity,
+                    shape: AgentProcessShape::Runtime,
+                },
+            ),
+        ];
+
+        for (exe, name, args, expected) in cases {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(
+                agent_process_identity_from_parts(Some(Path::new(exe)), Some(name), &args),
+                Some(expected),
+                "{args:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn provider_runtime_children_remain_independent_invocations() {
+        let root = Pid::from_u32(1);
+        let owner_runtime = Pid::from_u32(2);
+        let nested_runtime = Pid::from_u32(3);
+        let nested_launcher = Pid::from_u32(4);
+        let nested_native = Pid::from_u32(5);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![owner_runtime]);
+        children.insert(owner_runtime, vec![nested_runtime, nested_launcher]);
+        children.insert(nested_launcher, vec![nested_native]);
+
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            2 | 3 | 5 => Some(runtime(AgentKind::Codex)),
+            4 => Some(launcher(AgentKind::Codex)),
+            _ => None,
+        };
+        let owners = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::SessionOwners,
+            node_for_pid,
+        );
+        assert_eq!(
+            process_roles(owners),
+            vec![
+                (2, AgentKind::Codex, AgentProcessRole::Emit),
+                (4, AgentKind::Codex, AgentProcessRole::Quarantine),
+                (3, AgentKind::Codex, AgentProcessRole::Quarantine),
+            ]
+        );
+
+        let all = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::AllDescendants,
+            node_for_pid,
+        );
+        assert_eq!(
+            process_roles(all),
+            vec![
+                (2, AgentKind::Codex, AgentProcessRole::Emit),
+                (4, AgentKind::Codex, AgentProcessRole::Emit),
+                (3, AgentKind::Codex, AgentProcessRole::Emit),
+            ]
+        );
+    }
+
+    #[test]
+    fn logical_agent_counts_collapse_launchers_but_keep_nested_invocations() {
+        let cwd = PathBuf::from("/repo");
+        let other_cwd = PathBuf::from("/other");
+        let in_cwd = |kind, shape| AgentProcessNode {
+            identity: AgentProcessIdentity { kind, shape },
+            cwd: Some(cwd.clone()),
+        };
+        let processes = vec![
+            // One wrapped Codex invocation: wrapper -> watcher and
+            // wrapper -> Node launcher -> native runtime.
+            observation(
+                10,
+                None,
+                in_cwd(AgentKind::Codex, AgentProcessShape::Launcher),
+            ),
+            observation(
+                11,
+                Some(10),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Launcher),
+            ),
+            observation(
+                12,
+                Some(10),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Launcher),
+            ),
+            observation(
+                13,
+                Some(12),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Runtime),
+            ),
+            // An independent nested invocation behind an unrecognised tool
+            // shell is a second logical Codex process.
+            observation(
+                15,
+                Some(14),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Launcher),
+            ),
+            // A runtime spawning another launcher is also independent. The
+            // native child belongs to that second launcher, not to pid 13.
+            observation(
+                16,
+                Some(13),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Launcher),
+            ),
+            observation(
+                17,
+                Some(16),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Runtime),
+            ),
+            observation(
+                20,
+                None,
+                in_cwd(AgentKind::Claude, AgentProcessShape::Launcher),
+            ),
+            observation(
+                21,
+                Some(20),
+                in_cwd(AgentKind::Claude, AgentProcessShape::Runtime),
+            ),
+            observation(
+                22,
+                None,
+                AgentProcessNode {
+                    identity: AgentProcessIdentity {
+                        kind: AgentKind::Claude,
+                        shape: AgentProcessShape::Runtime,
+                    },
+                    cwd: Some(other_cwd.clone()),
+                },
+            ),
+            observation(30, None, launcher(AgentKind::Antigravity)),
+            observation(31, Some(30), launcher(AgentKind::Antigravity)),
+            observation(32, Some(30), runtime(AgentKind::Antigravity)),
+        ];
+
+        let (claude, codex, antigravity) = logical_agent_process_counts(&processes);
+
+        assert_eq!(codex.get(&cwd), Some(&3));
+        assert_eq!(claude.get(&cwd), Some(&1));
+        assert_eq!(claude.get(&other_cwd), Some(&1));
+        assert_eq!(antigravity.get(&cwd), Some(&1));
+    }
+
+    #[test]
+    fn logical_antigravity_counts_are_scoped_by_exact_cwd() {
+        let cwd = PathBuf::from("/repo");
+        let other_cwd = PathBuf::from("/other");
+        let agy_in = |cwd: &Path| AgentProcessNode {
+            identity: AgentProcessIdentity {
+                kind: AgentKind::Antigravity,
+                shape: AgentProcessShape::Runtime,
+            },
+            cwd: Some(cwd.to_path_buf()),
+        };
+        let processes = vec![
+            observation(30, None, agy_in(&cwd)),
+            observation(31, None, agy_in(&other_cwd)),
+            observation(32, None, agy_in(&cwd)),
+        ];
+
+        let (_, _, antigravity) = logical_agent_process_counts(&processes);
+
+        assert_eq!(antigravity.get(&cwd), Some(&2));
+        assert_eq!(antigravity.get(&other_cwd), Some(&1));
     }
 
     #[test]
@@ -1557,8 +2996,8 @@ mod tests {
         let mut owners =
             collect_agent_processes_in_tree(&children, root, MappingScope::SessionOwners, |pid| {
                 match pid.as_u32() {
-                    2 | 5 => Some(AgentKind::Codex),
-                    4 => Some(AgentKind::Claude),
+                    2 | 5 => Some(runtime(AgentKind::Codex)),
+                    4 => Some(runtime(AgentKind::Claude)),
                     _ => None,
                 }
             })
@@ -1574,16 +3013,18 @@ mod tests {
     #[test]
     fn session_owner_scope_handles_exec_replaced_shell_root() {
         let root_codex = Pid::from_u32(1);
-        let nested_codex = Pid::from_u32(2);
+        let tool_shell = Pid::from_u32(2);
+        let nested_codex = Pid::from_u32(3);
         let mut children = std::collections::HashMap::new();
-        children.insert(root_codex, vec![nested_codex]);
+        children.insert(root_codex, vec![tool_shell]);
+        children.insert(tool_shell, vec![nested_codex]);
 
         let owners = collect_agent_processes_in_tree(
             &children,
             root_codex,
             MappingScope::SessionOwners,
             |pid| match pid.as_u32() {
-                1 | 2 => Some(AgentKind::Codex),
+                1 | 3 => Some(runtime(AgentKind::Codex)),
                 _ => None,
             },
         );
@@ -1592,7 +3033,7 @@ mod tests {
             process_roles(owners),
             vec![
                 (1, AgentKind::Codex, AgentProcessRole::Emit),
-                (2, AgentKind::Codex, AgentProcessRole::Quarantine),
+                (3, AgentKind::Codex, AgentProcessRole::Quarantine),
             ],
         );
     }
@@ -1611,8 +3052,8 @@ mod tests {
         let owners =
             collect_agent_processes_in_tree(&children, root, MappingScope::SessionOwners, |pid| {
                 match pid.as_u32() {
-                    2 => Some(AgentKind::Claude),
-                    4 => Some(AgentKind::Codex),
+                    2 => Some(runtime(AgentKind::Claude)),
+                    4 => Some(runtime(AgentKind::Codex)),
                     _ => None,
                 }
             });
@@ -1641,9 +3082,9 @@ mod tests {
         children.insert(claude, vec![tool_shell]);
         children.insert(tool_shell, vec![nested_codex]);
 
-        let kind_for_pid = |pid: Pid| match pid.as_u32() {
-            2 => Some(AgentKind::Claude),
-            4 => Some(AgentKind::Codex),
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            2 => Some(runtime(AgentKind::Claude)),
+            4 => Some(runtime(AgentKind::Codex)),
             _ => None,
         };
 
@@ -1651,7 +3092,7 @@ mod tests {
             &children,
             root,
             MappingScope::AllDescendants,
-            kind_for_pid,
+            node_for_pid,
         );
         assert_eq!(
             process_roles(all),
@@ -1665,7 +3106,7 @@ mod tests {
             &children,
             root,
             MappingScope::SessionOwners,
-            kind_for_pid,
+            node_for_pid,
         );
         assert_eq!(
             emitted_processes(owners.clone()),
@@ -2430,6 +3871,456 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
+    #[test]
+    fn find_recent_codex_owner_jsonl_does_not_rotate_to_same_process_subagent() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxsubagent-owner-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+        let parent_id = "019e2001-3250-76b0-8410-2e073b38a2e1";
+        let child_id = "019e2001-3250-76b0-8410-2e073b38a2e2";
+
+        let write_rollout = |id: &str, source: serde_json::Value, parent: Option<&str>| {
+            let path = day.join(format!("rollout-2026-06-10T10-00-00-{id}.jsonl"));
+            let mut file = File::create(&path).unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "type": "session_meta",
+                    "payload": {
+                        "id": id,
+                        "cwd": cwd,
+                        "originator": "codex-tui",
+                        "source": source,
+                        "parent_thread_id": parent,
+                    }
+                })
+            )
+            .unwrap();
+            path
+        };
+
+        let parent = write_rollout(parent_id, serde_json::json!("cli"), None);
+        std::thread::sleep(Duration::from_millis(1100));
+        let child = write_rollout(
+            child_id,
+            serde_json::json!({
+                "subagent": {
+                    "thread_spawn": {
+                        "parent_thread_id": parent_id,
+                        "depth": 1
+                    }
+                }
+            }),
+            Some(parent_id),
+        );
+        let now = fs::metadata(&child).unwrap().modified().unwrap();
+        let process_start = now - Duration::from_secs(DORMANT_TRANSCRIPT_SECS + 120);
+        set_mtime(&parent, process_start + Duration::from_secs(1));
+
+        let picked = find_recent_codex_owner_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some(parent_id),
+            "a hot same-process subagent must not look like a /new owner rotation"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn completed_codex_owner_resolution_ignores_subagent_rollout() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxsubagent-complete-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+        let parent_id = "019e2001-3250-76b0-8410-2e073b38a2f1";
+        let child_id = "019e2001-3250-76b0-8410-2e073b38a2f2";
+
+        for (id, source, parent) in [
+            (parent_id, serde_json::json!("cli"), None),
+            (
+                child_id,
+                serde_json::json!({
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": parent_id,
+                            "depth": 1
+                        }
+                    }
+                }),
+                Some(parent_id),
+            ),
+        ] {
+            let path = day.join(format!("rollout-2026-06-10T10-00-00-{id}.jsonl"));
+            let mut file = File::create(path).unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "type": "session_meta",
+                    "payload": {
+                        "id": id,
+                        "cwd": cwd,
+                        "originator": "codex-tui",
+                        "source": source,
+                        "parent_thread_id": parent,
+                    }
+                })
+            )
+            .unwrap();
+        }
+        let process_start = SystemTime::now() - Duration::from_secs(5);
+
+        let resolved = find_completed_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+        );
+        assert_eq!(
+            resolved.map(|(_, id)| id).as_deref(),
+            Some(parent_id),
+            "a child rollout must not make the owner fallback ambiguous"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn completed_resumed_codex_resolution_accepts_subagent_rollout() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxsubagent-resumed-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+        let parent_id = "019e2001-3250-76b0-8410-2e073b38a2f1";
+        let parent = day.join(format!("rollout-2026-06-10T09-59-59-{parent_id}.jsonl"));
+        let mut parent_file = File::create(&parent).unwrap();
+        writeln!(
+            parent_file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": parent_id,
+                    "cwd": cwd,
+                    "originator": "codex-tui",
+                    "source": "cli"
+                }
+            })
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        let child_id = "019e2001-3250-76b0-8410-2e073b38a2f3";
+        let child = day.join(format!("rollout-2026-06-10T10-00-00-{child_id}.jsonl"));
+        let mut file = File::create(&child).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": child_id,
+                    "cwd": cwd,
+                    "originator": "codex-tui",
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": parent_id,
+                                "depth": 1
+                            }
+                        }
+                    }
+                }
+            })
+        )
+        .unwrap();
+        let process_start = SystemTime::now();
+        std::thread::sleep(Duration::from_millis(1100));
+        let nested_id = "019e2001-3250-76b0-8410-2e073b38a2f4";
+        let nested = day.join(format!("rollout-2026-06-10T10-00-01-{nested_id}.jsonl"));
+        let mut nested_file = File::create(&nested).unwrap();
+        writeln!(
+            nested_file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": nested_id,
+                    "cwd": cwd,
+                    "originator": "codex-tui",
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": child_id,
+                                "depth": 2
+                            }
+                        }
+                    }
+                }
+            })
+        )
+        .unwrap();
+        let now = fs::metadata(&nested).unwrap().modified().unwrap();
+        set_mtime(&child, now);
+        set_mtime(&parent, process_start - Duration::from_secs(1));
+
+        let resolved = find_completed_resumed_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+        );
+        assert_eq!(
+            resolved,
+            Some((child.clone(), child_id.to_string())),
+            "a newer child of the resumed rollout must not take over the owner marker"
+        );
+
+        set_mtime(&parent, now);
+        let live = find_recent_resumed_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            live,
+            Some((child, child_id.to_string())),
+            "a hot historical parent and newer child must not displace the resumed boundary"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resumed_codex_resolution_scans_older_date_directories() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxresume-old-day-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let old_day = sessions.join("2025").join("12").join("31");
+        let new_day = sessions.join("2026").join("07").join("15");
+        fs::create_dir_all(&old_day).unwrap();
+        fs::create_dir_all(&new_day).unwrap();
+        let cwd = root.join("repo");
+        let owner_id = "019e2001-3250-76b0-8410-2e073b38a2f3";
+        let owner = old_day.join(format!("rollout-2025-12-31T23-59-59-{owner_id}.jsonl"));
+        let mut owner_file = File::create(&owner).unwrap();
+        writeln!(
+            owner_file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": owner_id,
+                    "cwd": cwd,
+                    "originator": "codex-tui",
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "019e2001-3250-76b0-8410-2e073b38a2f1",
+                                "depth": 1
+                            }
+                        }
+                    }
+                }
+            })
+        )
+        .unwrap();
+
+        let unrelated_id = "019e2001-3250-76b0-8410-2e073b38a2f9";
+        let unrelated = new_day.join(format!("rollout-2026-07-15T10-00-00-{unrelated_id}.jsonl"));
+        let mut unrelated_file = File::create(&unrelated).unwrap();
+        writeln!(
+            unrelated_file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": unrelated_id,
+                    "cwd": root.join("other-repo"),
+                    "originator": "codex-tui",
+                    "source": "cli"
+                }
+            })
+        )
+        .unwrap();
+
+        let process_start = SystemTime::now() - Duration::from_secs(5);
+        let now = SystemTime::now();
+        set_mtime(&owner, now);
+        set_mtime(&unrelated, now);
+
+        let completed = find_completed_resumed_codex_jsonl(
+            &cwd,
+            Some(&sessions),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+        );
+        assert_eq!(completed, Some((owner.clone(), owner_id.to_string())));
+
+        let live = find_recent_resumed_codex_jsonl(
+            &cwd,
+            Some(&sessions),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(live, Some((owner, owner_id.to_string())));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resumed_codex_resolution_excludes_descendants_born_in_the_first_second() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxresume-first-second-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let day = sessions.join("2026").join("07").join("15");
+        fs::create_dir_all(&day).unwrap();
+        let owner_id = "019e2001-3250-76b0-8410-2e073b38a2f3";
+        let owner = day.join(format!("rollout-owner-{owner_id}.jsonl"));
+        File::create(&owner).unwrap();
+        let child_id = "019e2001-3250-76b0-8410-2e073b38a2f4";
+        let child = day.join(format!("rollout-child-{child_id}.jsonl"));
+        let mut child_file = File::create(&child).unwrap();
+        writeln!(
+            child_file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": child_id,
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": owner_id,
+                                "depth": 1
+                            }
+                        }
+                    }
+                }
+            })
+        )
+        .unwrap();
+
+        let process_start = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        let mut candidates = vec![
+            TranscriptCandidate {
+                path: owner,
+                birth: process_start - Duration::from_secs(60),
+                mtime: process_start + Duration::from_secs(1),
+                uuid: owner_id.to_string(),
+            },
+            TranscriptCandidate {
+                path: child,
+                birth: process_start + Duration::from_millis(500),
+                mtime: process_start + Duration::from_secs(1),
+                uuid: child_id.to_string(),
+            },
+        ];
+
+        retain_resumed_codex_roots(&mut candidates, &sessions, process_start);
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.uuid.as_str())
+                .collect::<Vec<_>>(),
+            vec![owner_id]
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn explicit_codex_resume_can_select_subagent_rollout() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxsubagent-explicit-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let child_id = "019e2001-3250-76b0-8410-2e073b38a2f3";
+        let day = codex_day_dirs_for_uuid(&sessions, child_id)
+            .into_iter()
+            .next()
+            .unwrap();
+        fs::create_dir_all(&day).unwrap();
+        let child = day.join(format!("rollout-2026-06-10T10-00-00-{child_id}.jsonl"));
+        let mut file = File::create(&child).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": child_id,
+                    "cwd": "/tmp/repo",
+                    "originator": "codex-tui",
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "019e2001-3250-76b0-8410-2e073b38a2f1",
+                                "depth": 1
+                            }
+                        }
+                    }
+                }
+            })
+        )
+        .unwrap();
+
+        let resolved = find_codex_jsonl_for_uuid(Some(&sessions), child_id, &HashSet::new());
+        assert_eq!(resolved, Some((child, child_id.to_string())));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     /// Backs `find_agent_run_transcript`, the path-returning form the
     /// status poll's codex marker fallback consumes: the resolver must
     /// hand back the rollout path alongside the id.
@@ -2523,11 +4414,11 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
-    /// Antigravity `/new` keeps the same `agy` process alive and creates
-    /// a fresh brain conversation; a dormant anchor must roll forward to
-    /// the hot one, and only when agy is the sole live instance.
+    /// Antigravity `/new` keeps the same `agy` process alive and creates a
+    /// fresh brain conversation. Built-in subagents also create hot brains,
+    /// so only the CLI owner cursor may authorize a rotation successor.
     #[test]
-    fn find_recent_antigravity_jsonl_rotates_to_hot_brain() {
+    fn antigravity_rotation_selects_cached_owner_among_hot_brains() {
         use std::fs::{self, File};
 
         let root =
@@ -2544,11 +4435,14 @@ mod tests {
             t
         };
         let a_id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
-        let b_id = "28a49f9d-4b8f-419c-9d8a-bf0854310e03";
+        let new_owner_id = "28a49f9d-4b8f-419c-9d8a-bf0854310e03";
+        let subagent_id = "39b50aae-5c90-42ad-ae9b-c01965421f14";
         let a = make_brain(a_id);
         std::thread::sleep(Duration::from_millis(1100));
-        let b = make_brain(b_id);
-        let now = fs::metadata(&b).unwrap().modified().unwrap();
+        let new_owner = make_brain(new_owner_id);
+        std::thread::sleep(Duration::from_millis(1100));
+        let subagent = make_brain(subagent_id);
+        let now = fs::metadata(&subagent).unwrap().modified().unwrap();
         let a_mtime = now - Duration::from_secs(60);
         set_mtime(&a, a_mtime);
         let process_start = a_mtime;
@@ -2559,27 +4453,89 @@ mod tests {
             process_start,
             now,
             true,
+            Some(new_owner_id),
             &HashSet::new(),
         );
         assert_eq!(
             picked.map(|(_, id)| id).as_deref(),
-            Some(b_id),
-            "dormant antigravity anchor must roll forward to the hot brain"
+            Some(new_owner_id),
+            "the cached owner must win even when a newer subagent brain is hot"
         );
 
-        let pinned = find_recent_antigravity_jsonl(
+        for owner_cursor in [
+            None,
+            Some(a_id),
+            Some("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
+        ] {
+            let pinned = find_recent_antigravity_jsonl(
+                &[brain.clone()],
+                SystemTime::UNIX_EPOCH,
+                process_start,
+                now,
+                true,
+                owner_cursor,
+                &HashSet::new(),
+            );
+            assert_eq!(
+                pinned.map(|(_, id)| id).as_deref(),
+                Some(a_id),
+                "missing, unchanged, or unknown owner cursor must pin the anchor"
+            );
+        }
+
+        let multiple_agents = find_recent_antigravity_jsonl(
             &[brain],
             SystemTime::UNIX_EPOCH,
             process_start,
             now,
             false,
+            Some(new_owner_id),
             &HashSet::new(),
         );
+        assert_eq!(multiple_agents.map(|(_, id)| id).as_deref(), Some(a_id));
+
+        assert!(new_owner.is_file());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn antigravity_owner_cursor_reads_exact_cwd_and_valid_uuid() {
+        use std::fs;
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-agcursor-{}", uuid::Uuid::new_v4().simple()));
+        let cache = root.join("antigravity-cli").join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        let cwd = root.join("repo");
+        let other = root.join("repo-other");
+        let id = "28a49f9d-4b8f-419c-9d8a-bf0854310e03";
+        let other_id = "39b50aae-5c90-42ad-ae9b-c01965421f14";
+        let cursors = std::collections::HashMap::from([
+            (cwd.to_string_lossy().into_owned(), id.to_string()),
+            (other.to_string_lossy().into_owned(), other_id.to_string()),
+        ]);
+        fs::write(
+            cache.join("last_conversations.json"),
+            serde_json::to_vec(&cursors).unwrap(),
+        )
+        .unwrap();
+
         assert_eq!(
-            pinned.map(|(_, id)| id).as_deref(),
-            Some(a_id),
-            "rotation must stay off when agy is not the sole live instance"
+            antigravity_owner_cursor_id(Some(&root), &cwd).as_deref(),
+            Some(id)
         );
+        assert_eq!(
+            antigravity_owner_cursor_id(Some(&root), &other).as_deref(),
+            Some(other_id),
+            "each top-level cwd must read only its own continuation cursor"
+        );
+        assert_eq!(
+            antigravity_owner_cursor_id(Some(&root), &root.join("missing")),
+            None
+        );
+        fs::write(cache.join("last_conversations.json"), "not-json").unwrap();
+        assert_eq!(antigravity_owner_cursor_id(Some(&root), &cwd), None);
 
         fs::remove_dir_all(&root).unwrap();
     }
