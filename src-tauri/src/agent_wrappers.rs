@@ -309,11 +309,12 @@ event=""
 # field-boundary regex cannot match JSON-escaped decoy text inside strings.
 case "$hook_event_name" in
   SessionStart|UserPromptSubmit) event="start" ;;
-  SubagentStop) event="start" ;;
   Stop)
     compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
     if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"(background_tasks|session_crons)"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'; then
-      event="start"
+      # This is a pause, not a new start. Sending nothing preserves both the
+      # existing Working state and any concurrent attention request.
+      event=""
     else
       event="needs_input"
     fi
@@ -508,7 +509,9 @@ case "$event" in
       Stop)
         compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
         if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"fullyIdle"[[:space:]]*:[[:space:]]*false([[:space:]]*[,}]|$)'; then
-          event="start"
+          # Preserve Working or a concurrent attention request; a non-idle
+          # Stop is a pause, not a new turn boundary.
+          event=""
         else
           event="needs_input"
         fi
@@ -614,7 +617,6 @@ fn write_claude_settings(dir: &Path) -> io::Result<()> {
     "SessionStart": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "UserPromptSubmit": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Stop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
-    "SubagentStop": [{{"matcher":"*","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Notification": [{{"matcher":"permission_prompt|elicitation_dialog|agent_needs_input","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "PermissionRequest": [{{"matcher":"*","hooks":[{{"type":"command","command":"{cmd}"}}]}}]
   }}
@@ -1441,11 +1443,9 @@ done
             background_stop,
             final_stop,
         ]
-            .into_iter()
-            .map(|payload| {
-                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &payload.to_string())
-            })
-            .collect::<Vec<_>>();
+        .into_iter()
+        .map(|payload| notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &payload.to_string()))
+        .collect::<Vec<_>>();
         assert_eq!(
             events,
             [
