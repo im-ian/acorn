@@ -1069,26 +1069,31 @@ exit 1
         planner_with_tools: &str,
         final_planner: &str,
     ) -> (String, bool) {
+        const OWNER_ID: &str = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+
         let base = ScratchDir::new("antigravity-turn");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let real_dir = base.path().join("real-bin");
+        let state_dir = base.path().join("agent-state");
         let gemini_dir = base.path().join("gemini");
         let transcript = gemini_dir
             .join("antigravity-cli")
             .join("brain")
-            .join("019e4818-7c15-4e60-9b3b-898a1c7803d6")
+            .join(OWNER_ID)
             .join(".system_generated")
             .join("logs")
             .join("transcript.jsonl");
         fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&state_dir).unwrap();
         fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        fs::write(state_dir.join("antigravity.id"), format!("{OWNER_ID}\n")).unwrap();
 
         let capture_path = base.path().join("notifications.log");
         let tail_pid_path = base.path().join("tail.pid");
         let real_tail = install_tail_probe(&real_dir);
         write_executable(
             &wrapper_dir.join(ANTIGRAVITY_NOTIFY_NAME),
-            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$ACORN_NOTIFY_CAPTURE\"\n",
+            "#!/bin/sh\nprintf '%s %s\\n' \"$1\" \"$2\" >> \"$ACORN_NOTIFY_CAPTURE\"\n",
         )
         .unwrap();
         write_executable(
@@ -1120,6 +1125,7 @@ done
             .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_STATE_DIR", &state_dir)
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .env("ACORN_TEST_AGY_TRANSCRIPT", &transcript)
             .env("ACORN_TEST_REAL_TAIL", real_tail)
@@ -1130,6 +1136,107 @@ done
             )
             .env("ACORN_TEST_AGY_PLANNER_WITH_TOOLS", planner_with_tools)
             .env("ACORN_TEST_AGY_FINAL_PLANNER", final_planner)
+            .env("GEMINI_DIR", &gemini_dir)
+            .env_remove("ANTIGRAVITY_DIR")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "agy wrapper failed with {status}");
+
+        (
+            fs::read_to_string(capture_path).unwrap_or_default(),
+            tail_process_survived_wrapper(&tail_pid_path),
+        )
+    }
+
+    #[cfg(unix)]
+    fn antigravity_wrapper_notifications_across_owner_rotation() -> (String, bool) {
+        const FIRST_ID: &str = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+        const SECOND_ID: &str = "019f631f-0bfc-76f1-9c1d-334be74958ca";
+
+        let base = ScratchDir::new("antigravity-owner-rotation");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        let state_dir = base.path().join("agent-state");
+        let gemini_dir = base.path().join("gemini");
+        let transcript_for = |id: &str| {
+            gemini_dir
+                .join("antigravity-cli")
+                .join("brain")
+                .join(id)
+                .join(".system_generated")
+                .join("logs")
+                .join("transcript.jsonl")
+        };
+        let first_transcript = transcript_for(FIRST_ID);
+        let second_transcript = transcript_for(SECOND_ID);
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::create_dir_all(first_transcript.parent().unwrap()).unwrap();
+        fs::create_dir_all(second_transcript.parent().unwrap()).unwrap();
+        fs::write(state_dir.join("antigravity.id"), format!("{FIRST_ID}\n")).unwrap();
+
+        let capture_path = base.path().join("notifications.log");
+        let tail_pid_path = base.path().join("tail.pid");
+        let real_tail = install_tail_probe(&real_dir);
+        write_executable(
+            &wrapper_dir.join(ANTIGRAVITY_NOTIFY_NAME),
+            "#!/bin/sh\nprintf '%s %s\\n' \"$1\" \"$2\" >> \"$ACORN_NOTIFY_CAPTURE\"\n",
+        )
+        .unwrap();
+        write_executable(
+            &real_dir.join("agy"),
+            r#"#!/bin/sh
+: > "$ACORN_TEST_AGY_FIRST_TRANSCRIPT"
+: > "$ACORN_TEST_AGY_SECOND_TRANSCRIPT"
+_acorn_i=0
+while [ ! -s "$ACORN_TEST_TAIL_PID" ] && [ "$_acorn_i" -lt 100 ]; do
+  _acorn_i=$((_acorn_i + 1))
+  sleep 0.05
+done
+[ -s "$ACORN_TEST_TAIL_PID" ] || exit 1
+
+# The second brain is newer and active, but it is not this Acorn session's
+# owner yet. Its completion must not leak into the first owner's status.
+printf '%s\n' '{"type":"PLANNER_RESPONSE","status":"DONE","content":"decoy"}' >> "$ACORN_TEST_AGY_SECOND_TRANSCRIPT"
+printf '%s\n' '{"type":"USER_INPUT","status":"DONE"}' >> "$ACORN_TEST_AGY_FIRST_TRANSCRIPT"
+printf '%s\n' '{"type":"PLANNER_RESPONSE","status":"DONE","content":"first"}' >> "$ACORN_TEST_AGY_FIRST_TRANSCRIPT"
+
+_acorn_i=0
+while [ "$(wc -l < "$ACORN_NOTIFY_CAPTURE" 2>/dev/null || echo 0)" -lt 2 ] && [ "$_acorn_i" -lt 40 ]; do
+  _acorn_i=$((_acorn_i + 1))
+  sleep 0.05
+done
+
+printf '%s\n' "$ACORN_TEST_AGY_SECOND_ID" > "$ACORN_AGENT_STATE_DIR/antigravity.id"
+sleep 0.3
+printf '%s\n' '{"type":"USER_INPUT","status":"DONE"}' >> "$ACORN_TEST_AGY_SECOND_TRANSCRIPT"
+printf '%s\n' '{"type":"PLANNER_RESPONSE","status":"DONE","content":"second"}' >> "$ACORN_TEST_AGY_SECOND_TRANSCRIPT"
+
+_acorn_i=0
+while [ "$(wc -l < "$ACORN_NOTIFY_CAPTURE" 2>/dev/null || echo 0)" -lt 4 ] && [ "$_acorn_i" -lt 40 ]; do
+  _acorn_i=$((_acorn_i + 1))
+  sleep 0.05
+done
+"#,
+        )
+        .unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", real_dir.display());
+        let status = Command::new(wrapper_dir.join(ANTIGRAVITY_WRAPPER_NAME))
+            .env("PATH", path)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_STATE_DIR", &state_dir)
+            .env("ACORN_NOTIFY_CAPTURE", &capture_path)
+            .env("ACORN_TEST_AGY_FIRST_TRANSCRIPT", &first_transcript)
+            .env("ACORN_TEST_AGY_SECOND_TRANSCRIPT", &second_transcript)
+            .env("ACORN_TEST_AGY_SECOND_ID", SECOND_ID)
+            .env("ACORN_TEST_REAL_TAIL", real_tail)
+            .env("ACORN_TEST_TAIL_PID", &tail_pid_path)
             .env("GEMINI_DIR", &gemini_dir)
             .env_remove("ANTIGRAVITY_DIR")
             .stdout(std::process::Stdio::null())
@@ -1760,18 +1867,41 @@ done
     #[cfg(unix)]
     #[test]
     fn antigravity_wrapper_keeps_working_for_planner_tool_calls() {
+        const OWNER_ID: &str = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
         let (notifications, tail_alive) = antigravity_wrapper_notifications_for_turn(
             r#"{"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"invoke_subagent","args":{}}]}"#,
             r#"{"type":"PLANNER_RESPONSE","status":"DONE","content":"finished"}"#,
         );
 
         assert_eq!(
-            notifications, "start\nstart\nneeds_input\nstop\n",
+            notifications,
+            format!("start {OWNER_ID}\nstart {OWNER_ID}\nneeds_input {OWNER_ID}\n"),
             "an intermediate planner response must keep the parent turn working"
         );
         assert!(
             !tail_alive,
             "the transcript tail must exit with the wrapper"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antigravity_wrapper_follows_the_bound_owner_across_new_conversations() {
+        const FIRST_ID: &str = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+        const SECOND_ID: &str = "019f631f-0bfc-76f1-9c1d-334be74958ca";
+        let (notifications, tail_alive) =
+            antigravity_wrapper_notifications_across_owner_rotation();
+
+        assert_eq!(
+            notifications,
+            format!(
+                "start {FIRST_ID}\nneeds_input {FIRST_ID}\nstart {SECOND_ID}\nneeds_input {SECOND_ID}\n"
+            ),
+            "a newer unbound brain must be ignored until the owner marker rotates",
+        );
+        assert!(
+            !tail_alive,
+            "the reattached transcript tail must exit with the wrapper"
         );
     }
 
