@@ -2523,6 +2523,55 @@ done
 
     #[cfg(unix)]
     #[test]
+    fn claude_subagent_hooks_cannot_transition_the_parent_session() {
+        for hook_event_name in [
+            "UserPromptSubmit",
+            "Notification",
+            "PermissionRequest",
+            "Stop",
+        ] {
+            let payload = serde_json::json!({
+                "hook_event_name": hook_event_name,
+                "agent_id": "019f6338-6250-7303-88a6-a7add31dba1d",
+                "agent_type": "Explore",
+                "background_tasks": [],
+                "session_crons": [],
+            });
+            assert_eq!(
+                notify_payload_for_input(
+                    CLAUDE_NOTIFY_NAME,
+                    &[],
+                    &payload.to_string(),
+                    None,
+                ),
+                None,
+                "a child {hook_event_name} must not transition its parent session",
+            );
+        }
+
+        let top_level_agent = serde_json::json!({
+            "hook_event_name": "PermissionRequest",
+            "agent_type": "reviewer",
+        });
+        assert_eq!(
+            notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &top_level_agent.to_string()).as_deref(),
+            Some("needs_input"),
+            "top-level --agent sessions have agent_type without a child agent_id",
+        );
+
+        let decoy = serde_json::json!({
+            "hook_event_name": "PermissionRequest",
+            "message": "literal decoy: {\"agent_id\":\"not-a-real-field\"}",
+        });
+        assert_eq!(
+            notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &decoy.to_string()).as_deref(),
+            Some("needs_input"),
+            "escaped message text must not look like a top-level child id",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn claude_explicit_attention_events_do_not_require_owner_binding() {
         for payload in [
             serde_json::json!({"hook_event_name": "PermissionRequest"}),
