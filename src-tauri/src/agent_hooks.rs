@@ -705,6 +705,42 @@ mod tests {
     }
 
     #[test]
+    fn codex_tui_preview_is_not_an_authoritative_hook_event() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.hook_provider = Some(SessionAgentProvider::Codex);
+        session.hook_active = true;
+        session.status = SessionStatus::Working;
+        let session_id = session.id;
+        sessions.insert(session);
+
+        apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event: AgentHookEventKind::Start,
+                message: None,
+                source: Some("preview".to_string()),
+                turn_id: None,
+            },
+        )
+        .expect("the ordered TUI preview applies");
+
+        assert_eq!(sessions.hook_revision(&session_id), 0);
+        assert!(!sessions.is_hook_confirmed_this_run(&session_id));
+        assert!(!sessions.has_hook_turn_boundary(&session_id));
+    }
+
+    #[test]
     fn delayed_codex_completion_cannot_overwrite_a_newer_turn() {
         let sessions = acorn_session::SessionStore::new();
         let mut session = Session::new(
