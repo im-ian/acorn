@@ -500,6 +500,12 @@ case "$event" in
     event=""
     hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hookEventName"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
     [ -n "$hook_event_name" ] || hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+    if [ -z "$hook_event_name" ]; then
+      compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
+      if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"fullyIdle"[[:space:]]*:[[:space:]]*(true|false)([[:space:]]*[,}]|$)'; then
+        hook_event_name="Stop"
+      fi
+    fi
     # SubagentStop fires when a Task subagent finishes mid-turn, so it
     # re-asserts Running rather than ending the turn. Main-agent Stop carries
     # fullyIdle=false while async work can still wake it; only an idle Stop is
