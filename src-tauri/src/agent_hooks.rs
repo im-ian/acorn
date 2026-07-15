@@ -737,7 +737,8 @@ mod tests {
 
         assert_eq!(sessions.hook_revision(&session_id), 0);
         assert!(!sessions.is_hook_confirmed_this_run(&session_id));
-        assert!(!sessions.has_hook_turn_boundary(&session_id));
+        assert!(sessions.has_hook_turn_boundary(&session_id));
+        assert_eq!(sessions.hook_turn_id(&session_id), None);
     }
 
     #[test]
