@@ -1120,6 +1120,69 @@ cat >> "$ACORN_CURL_CAPTURE"
 
     #[cfg(unix)]
     #[test]
+    fn codex_wrapper_watches_a_custom_recorder_created_after_launch() {
+        let base = ScratchDir::new("codex-late-custom-recorder");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        fs::create_dir_all(&real_dir).unwrap();
+
+        let capture_path = base.path().join("notifications.log");
+        let session_log_path = base.path().join("created-by-codex/session.jsonl");
+        let line = r#"{"dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
+        write_executable(
+            &wrapper_dir.join("acorn-codex-notify"),
+            "#!/bin/sh\nprintf '%s\\n' \"$2\" >> \"$ACORN_NOTIFY_CAPTURE\"\ncat >> \"$ACORN_NOTIFY_CAPTURE\"\n",
+        )
+        .unwrap();
+        write_executable(
+            &real_dir.join("codex"),
+            r#"#!/bin/sh
+if [ "${1-}" = "--version" ]; then
+  printf 'codex-cli 0.144.4\n'
+  exit 0
+fi
+for _acorn_arg in "$@"; do
+  if [ "$_acorn_arg" = "features" ]; then
+    exit 0
+  fi
+done
+mkdir -p "${CODEX_TUI_SESSION_LOG_PATH%/*}"
+: > "$CODEX_TUI_SESSION_LOG_PATH"
+sleep 0.3
+printf '%s\n' "$ACORN_TEST_TUI_LINE" >> "$CODEX_TUI_SESSION_LOG_PATH"
+_acorn_i=0
+while [ ! -s "$ACORN_NOTIFY_CAPTURE" ] && [ "$_acorn_i" -lt 100 ]; do
+  _acorn_i=$((_acorn_i + 1))
+  sleep 0.02
+done
+"#,
+        )
+        .unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", real_dir.display());
+        let status = Command::new(wrapper_dir.join("codex"))
+            .env("PATH", path)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_NOTIFY_CAPTURE", &capture_path)
+            .env("ACORN_TEST_TUI_LINE", line)
+            .env("CODEX_TUI_SESSION_LOG_PATH", &session_log_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+
+        assert!(status.success());
+        assert_eq!(
+            fs::read_to_string(capture_path).unwrap_or_default(),
+            format!("jsonl_user\n{line}\n")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn codex_wrapper_keeps_recording_artifacts_owner_only() {
         use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 

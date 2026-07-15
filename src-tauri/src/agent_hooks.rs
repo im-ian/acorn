@@ -1043,6 +1043,27 @@ mod tests {
     }
 
     #[test]
+    fn hook_server_drop_releases_the_listener_before_returning() {
+        let hooks = AgentHookServer::start().expect("hook server starts");
+        let addr = addr_from_url(hooks.hook_url());
+        let body = format!(
+            "{{\"session_id\":\"{}\",\"provider\":\"codex\",\"event\":\"start\"}}",
+            Uuid::new_v4()
+        );
+        assert!(post(&hooks, hooks.token(), &body).starts_with("HTTP/1.1 204 No Content"));
+
+        // Give the accept loop time to return to its nonblocking poll. Drop
+        // must still join it instead of leaving the port and thread alive.
+        std::thread::sleep(Duration::from_millis(20));
+        drop(hooks);
+
+        assert!(
+            TcpStream::connect(addr).is_err(),
+            "hook listener remained reachable after server drop"
+        );
+    }
+
+    #[test]
     fn hook_server_rejects_invalid_token_and_accepts_valid_token() {
         let hooks = AgentHookServer::start().expect("hook server starts");
         let body = format!(
@@ -1595,6 +1616,48 @@ mod tests {
         );
 
         apply_codex(&reducer, session_id, "jsonl_tool", "run-1", Some("turn-1"));
+        assert_eq!(sessions.codex_permission_waiting_at(&session_id), None);
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+    }
+
+    #[test]
+    fn reducer_tool_resume_ignores_a_lagging_jsonl_approval() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+        apply_codex(
+            &reducer,
+            session_id,
+            "native_prompt",
+            "run-1",
+            Some("turn-1"),
+        );
+        apply_codex(
+            &reducer,
+            session_id,
+            "native_permission",
+            "run-1",
+            Some("turn-1"),
+        );
+        apply_codex(
+            &reducer,
+            session_id,
+            "native_tool_complete",
+            "run-1",
+            Some("turn-1"),
+        );
+
+        assert!(matches!(
+            apply_codex(
+                &reducer,
+                session_id,
+                "jsonl_approval",
+                "run-1",
+                Some("turn-1"),
+            ),
+            AgentHookApplyOutcome::Ignored { .. }
+        ));
         assert_eq!(sessions.codex_permission_waiting_at(&session_id), None);
         assert_eq!(
             sessions.get(&session_id).expect("session").status,
