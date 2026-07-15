@@ -738,20 +738,20 @@ case "$event" in
         hook_event_name="Stop"
       fi
     fi
-    # SubagentStop and fullyIdle=false are pauses inside the owner turn. They
-    # emit nothing so a concurrent permission or input request stays visible.
-    # Only an idle main-agent Stop awaits the user's next prompt. The
-    # field-boundary regex ignores escaped decoy text.
+    # SubagentStop and any Stop not carrying literal fullyIdle=true are pauses
+    # inside the owner turn. They emit nothing so a concurrent permission or
+    # input request stays visible. The field-boundary regex ignores escaped
+    # decoy text.
     case "$hook_event_name" in
       SessionStart|UserPromptSubmit|PreToolUse) event="start" ;;
       SubagentStop) event="" ;;
       Stop)
-        if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"fullyIdle"[[:space:]]*:[[:space:]]*false([[:space:]]*[,}]|$)'; then
-          # Preserve Working or a concurrent attention request; a non-idle
-          # Stop is a pause, not a new turn boundary.
-          event=""
-        else
+        if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"fullyIdle"[[:space:]]*:[[:space:]]*true([[:space:]]*[,}]|$)'; then
           event="needs_input"
+        else
+          # Preserve Working or a concurrent attention request; a non-idle or
+          # malformed Stop is a pause, not a new turn boundary.
+          event=""
         fi
         ;;
       Notification|PermissionRequest) event="needs_input" ;;
