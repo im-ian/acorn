@@ -290,19 +290,21 @@ fn run_listener(
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _addr)) => {
-                let token = token.clone();
-                let handler = handler.clone();
-                std::thread::Builder::new()
-                    .name("acorn-agent-hook-conn".to_string())
-                    .spawn(move || {
-                        if let Err(err) = handle_connection(stream, &token, &handler) {
-                            tracing::warn!(error = %err, "agent hook connection failed");
-                        }
-                    })
-                    .map(|_| ())
-                    .unwrap_or_else(|err| {
-                        tracing::warn!(error = %err, "agent hook worker thread failed to start");
-                    });
+                dispatch_connection(
+                    stream,
+                    token.clone(),
+                    handler.clone(),
+                    |stream, token, handler| {
+                        std::thread::Builder::new()
+                            .name("acorn-agent-hook-conn".to_string())
+                            .spawn(move || {
+                                if let Err(err) = handle_connection(stream, &token, &handler) {
+                                    tracing::warn!(error = %err, "agent hook connection failed");
+                                }
+                            })
+                            .map(|_| ())
+                    },
+                );
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                 std::thread::sleep(ACCEPT_POLL_INTERVAL);
@@ -310,6 +312,36 @@ fn run_listener(
             Err(err) => {
                 tracing::warn!(error = %err, "agent hook accept failed");
                 std::thread::sleep(ACCEPT_POLL_INTERVAL);
+            }
+        }
+    }
+}
+
+fn dispatch_connection<F>(
+    stream: TcpStream,
+    token: String,
+    handler: HookEventHandler,
+    spawn_worker: F,
+) where
+    F: FnOnce(TcpStream, String, HookEventHandler) -> io::Result<()>,
+{
+    let fallback_stream = stream.try_clone();
+    if let Err(spawn_error) = spawn_worker(stream, token.clone(), handler.clone()) {
+        tracing::warn!(
+            error = %spawn_error,
+            "agent hook worker thread failed to start; handling request inline"
+        );
+        match fallback_stream {
+            Ok(stream) => {
+                if let Err(err) = handle_connection(stream, &token, &handler) {
+                    tracing::warn!(error = %err, "inline agent hook connection failed");
+                }
+            }
+            Err(clone_error) => {
+                tracing::warn!(
+                    error = %clone_error,
+                    "agent hook connection could not be retained for inline fallback"
+                );
             }
         }
     }
