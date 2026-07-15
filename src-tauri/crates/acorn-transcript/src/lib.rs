@@ -123,6 +123,31 @@ enum AgentProcessRole {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgentProcessShape {
+    Launcher,
+    Runtime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AgentProcessIdentity {
+    kind: AgentKind,
+    shape: AgentProcessShape,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AgentProcessNode {
+    identity: AgentProcessIdentity,
+    cwd: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AgentProcessObservation {
+    pid: Pid,
+    parent: Option<Pid>,
+    node: AgentProcessNode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AgentProcessMatch {
     pid: Pid,
     kind: AgentKind,
@@ -298,37 +323,37 @@ fn scan_live_mappings(
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
 
     let mut children: std::collections::HashMap<Pid, Vec<Pid>> = std::collections::HashMap::new();
-    // Host-wide counts of live agent processes (tracked by Acorn or
-    // not). The `/new` rotation in `pick_anchor_or_rotate` is only safe
-    // when the paired process is the sole agent in scope — any second
+    // Host-wide process observations (tracked by Acorn or not) feed the
+    // logical invocation counts below. The `/new` rotation in
+    // `pick_anchor_or_rotate` is only safe
+    // when the paired invocation is the sole agent in scope — any second
     // live agent could be the writer of the hot later-born transcript,
-    // so rotation stays off while one is around. claude/codex bucket
-    // their transcripts by cwd, so the scope is per-cwd; antigravity
-    // transcripts carry no cwd, so its scope is the whole host.
-    let mut claude_cwd_counts: std::collections::HashMap<PathBuf, u32> =
-        std::collections::HashMap::new();
-    let mut codex_cwd_counts: std::collections::HashMap<PathBuf, u32> =
-        std::collections::HashMap::new();
-    let mut antigravity_count: u32 = 0;
+    // so rotation stays off while one is around. Claude/Codex bucket their
+    // transcripts by cwd, so the scope is per-cwd. Antigravity transcripts
+    // carry no cwd and need an additional owner-cursor constraint before its
+    // wrapper helpers can safely be collapsed for rotation.
+    let mut observations = Vec::new();
     for (pid, proc) in sys.processes() {
         if let Some(parent) = proc.parent() {
             children.entry(parent).or_default().push(*pid);
         }
-        if process_basename_matches(proc, "claude") {
-            if let Some(cwd) = proc.cwd() {
-                *claude_cwd_counts.entry(cwd.to_path_buf()).or_default() += 1;
-            }
-        } else if process_basename_matches(proc, "codex") {
-            if let Some(cwd) = proc.cwd() {
-                *codex_cwd_counts.entry(cwd.to_path_buf()).or_default() += 1;
-            }
-        } else if process_basename_matches(proc, "agy")
-            || process_basename_matches(proc, "antigravity")
-            || process_basename_matches(proc, "antigravity-cli")
-        {
-            antigravity_count += 1;
+        if let Some(node) = agent_process_node(proc) {
+            observations.push(AgentProcessObservation {
+                pid: *pid,
+                parent: proc.parent(),
+                node,
+            });
         }
     }
+    // AGY rotation remains on the conservative raw-process gate until its
+    // owner cursor constrains which brain may replace the dormant anchor.
+    // Without that cursor, collapsing helpers could let a hot subagent brain
+    // masquerade as the owner's `/new` successor.
+    let antigravity_count = observations
+        .iter()
+        .filter(|process| process.node.identity.kind == AgentKind::Antigravity)
+        .count() as u32;
+    let (claude_cwd_counts, codex_cwd_counts, _) = logical_agent_process_counts(&observations);
 
     // Tracks transcripts that have already been claimed by some session
     // this cycle so two sessions running claude in the same cwd do not
@@ -379,20 +404,7 @@ fn scan_live_mappings(
 
         let matches =
             collect_agent_processes_in_tree(&children, Pid::from_u32(root_pid), scope, |pid| {
-                let proc = sys.process(pid)?;
-                if process_basename_matches(proc, "claude") {
-                    return Some(AgentKind::Claude);
-                }
-                if process_basename_matches(proc, "codex") {
-                    return Some(AgentKind::Codex);
-                }
-                if process_basename_matches(proc, "agy")
-                    || process_basename_matches(proc, "antigravity")
-                    || process_basename_matches(proc, "antigravity-cli")
-                {
-                    return Some(AgentKind::Antigravity);
-                }
-                None
+                sys.process(pid).and_then(agent_process_node)
             });
 
         for process_match in matches {
@@ -433,11 +445,9 @@ fn scan_live_mappings(
         }
     }
 
-    // Codex owner scans must let the top-level process claim its transcript
-    // before descendant processes reserve theirs. A shell wrapper, node shim,
-    // and native binary can all contain a `codex` argv entry and therefore look
-    // like nested agent processes. Other providers and all-descendant scans
-    // retain newest-first ordering.
+    // Codex owner scans must let the top-level logical invocation claim its
+    // transcript before an independent nested invocation reserves one. Other
+    // providers and all-descendant scans retain newest-first ordering.
     candidates.sort_by(|a, b| {
         let is_codex_owner = |candidate: &Candidate| {
             scope == MappingScope::SessionOwners
@@ -597,27 +607,32 @@ fn collect_agent_processes_in_tree<F>(
     children: &std::collections::HashMap<Pid, Vec<Pid>>,
     root: Pid,
     scope: MappingScope,
-    mut kind_for_pid: F,
+    mut node_for_pid: F,
 ) -> Vec<AgentProcessMatch>
 where
-    F: FnMut(Pid) -> Option<AgentKind>,
+    F: FnMut(Pid) -> Option<AgentProcessNode>,
 {
     let mut out = Vec::new();
     let mut stack = vec![(root, false, None)];
-    while let Some((pid, below_agent_boundary, contiguous_parent_kind)) = stack.pop() {
+    while let Some((pid, below_agent_boundary, contiguous_parent)) = stack.pop() {
         let mut next_below_agent_boundary = below_agent_boundary;
-        let kind = kind_for_pid(pid);
-        let same_provider_launcher = scope == MappingScope::SessionOwners
-            && kind.is_some()
-            && kind == contiguous_parent_kind;
-        if let Some(kind) = kind {
-            if !same_provider_launcher {
+        let node = node_for_pid(pid);
+        let belongs_to_parent = contiguous_parent
+            .as_ref()
+            .zip(node.as_ref())
+            .is_some_and(|(parent, child)| same_logical_agent_invocation(parent, child));
+        if let Some(node) = &node {
+            if !belongs_to_parent {
                 let role = if scope == MappingScope::SessionOwners && below_agent_boundary {
                     AgentProcessRole::Quarantine
                 } else {
                     AgentProcessRole::Emit
                 };
-                out.push(AgentProcessMatch { pid, kind, role });
+                out.push(AgentProcessMatch {
+                    pid,
+                    kind: node.identity.kind,
+                    role,
+                });
             }
             next_below_agent_boundary =
                 below_agent_boundary || scope == MappingScope::SessionOwners;
@@ -626,7 +641,7 @@ where
             stack.extend(
                 kids.iter()
                     .copied()
-                    .map(|kid| (kid, next_below_agent_boundary, kind)),
+                    .map(|kid| (kid, next_below_agent_boundary, node.clone())),
             );
         }
     }
@@ -711,24 +726,122 @@ fn basename_matches(s: &str, target: &str) -> bool {
         || base.strip_suffix(".cjs") == Some(target)
 }
 
-fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
-    if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
-        if basename_matches(exe, target) {
-            return true;
+fn agent_kind_for_basename(value: &str) -> Option<AgentKind> {
+    if basename_matches(value, "claude") {
+        Some(AgentKind::Claude)
+    } else if basename_matches(value, "codex") {
+        Some(AgentKind::Codex)
+    } else if basename_matches(value, "agy")
+        || basename_matches(value, "antigravity")
+        || basename_matches(value, "antigravity-cli")
+    {
+        Some(AgentKind::Antigravity)
+    } else {
+        None
+    }
+}
+
+fn agent_process_identity_from_parts(
+    exe: Option<&Path>,
+    name: Option<&str>,
+    args: &[String],
+) -> Option<AgentProcessIdentity> {
+    // A provider executable (or an explicitly provider-named argv[0]) is the
+    // runtime itself. Interpreters such as sh/node whose later arguments name
+    // the provider are wrapper/watcher/JS launcher processes. Check the
+    // interpreter-facing fields before the process-name fallback: on some
+    // platforms a shebang process inherits the script basename as its name.
+    let primary_kind = exe
+        .and_then(|path| agent_kind_for_basename(&path.to_string_lossy()))
+        .or_else(|| args.first().and_then(|arg| agent_kind_for_basename(arg)));
+    if let Some(kind) = primary_kind {
+        return Some(AgentProcessIdentity {
+            kind,
+            shape: AgentProcessShape::Runtime,
+        });
+    }
+
+    if let Some(kind) = args
+        .iter()
+        .skip(1)
+        .find_map(|arg| agent_kind_for_basename(arg))
+    {
+        return Some(AgentProcessIdentity {
+            kind,
+            shape: AgentProcessShape::Launcher,
+        });
+    }
+
+    name.and_then(agent_kind_for_basename)
+        .map(|kind| AgentProcessIdentity {
+            kind,
+            shape: AgentProcessShape::Runtime,
+        })
+}
+
+fn agent_process_node(proc: &sysinfo::Process) -> Option<AgentProcessNode> {
+    let args = proc
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let identity = agent_process_identity_from_parts(proc.exe(), proc.name().to_str(), &args)?;
+    Some(AgentProcessNode {
+        identity,
+        cwd: proc.cwd().map(Path::to_path_buf),
+    })
+}
+
+fn same_logical_agent_invocation(parent: &AgentProcessNode, child: &AgentProcessNode) -> bool {
+    if parent.identity.kind != child.identity.kind
+        || parent.identity.shape != AgentProcessShape::Launcher
+    {
+        return false;
+    }
+
+    match child.identity.kind {
+        AgentKind::Antigravity => true,
+        AgentKind::Claude | AgentKind::Codex => parent.cwd.is_some() && parent.cwd == child.cwd,
+    }
+}
+
+fn logical_agent_process_counts(
+    processes: &[AgentProcessObservation],
+) -> (
+    std::collections::HashMap<PathBuf, u32>,
+    std::collections::HashMap<PathBuf, u32>,
+    u32,
+) {
+    let by_pid = processes
+        .iter()
+        .map(|process| (process.pid, &process.node))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut claude_cwd_counts = std::collections::HashMap::new();
+    let mut codex_cwd_counts = std::collections::HashMap::new();
+    let mut antigravity_count = 0;
+
+    for process in processes {
+        let belongs_to_parent = process
+            .parent
+            .and_then(|parent| by_pid.get(&parent))
+            .is_some_and(|parent| same_logical_agent_invocation(parent, &process.node));
+        if belongs_to_parent {
+            continue;
+        }
+
+        match (process.node.identity.kind, &process.node.cwd) {
+            (AgentKind::Claude, Some(cwd)) => {
+                *claude_cwd_counts.entry(cwd.clone()).or_default() += 1;
+            }
+            (AgentKind::Codex, Some(cwd)) => {
+                *codex_cwd_counts.entry(cwd.clone()).or_default() += 1;
+            }
+            (AgentKind::Antigravity, _) => antigravity_count += 1,
+            (AgentKind::Claude | AgentKind::Codex, None) => {}
         }
     }
-    if let Some(name) = proc.name().to_str() {
-        if basename_matches(name, target) {
-            return true;
-        }
-    }
-    for arg in proc.cmd() {
-        let s = arg.to_string_lossy();
-        if basename_matches(&s, target) {
-            return true;
-        }
-    }
-    false
+
+    (claude_cwd_counts, codex_cwd_counts, antigravity_count)
 }
 
 fn codex_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
