@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use acorn_session::{SessionAgentProvider, SessionStatus, SessionStore};
+use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
@@ -253,6 +254,16 @@ impl AgentHookServer {
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
         let hook_url = format!("http://{addr}{HOOK_PATH}");
+
+        // Connections are parsed concurrently, but the application callback
+        // applies state, persists the complete session list, and emits a UI
+        // notification as one logical pipeline. Keep those side effects from
+        // overlapping and writing snapshots out of order.
+        let pipeline_lock = Arc::new(Mutex::new(()));
+        let handler: HookEventHandler = Arc::new(move |event| {
+            let _pipeline_guard = pipeline_lock.lock();
+            handler(event);
+        });
 
         let running = Arc::new(AtomicBool::new(true));
         let running_for_thread = running.clone();
