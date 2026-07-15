@@ -1524,7 +1524,7 @@ done
     #[cfg(unix)]
     fn codex_wrapper_notifications_for_tui_line(
         line: &str,
-        native_confirmation: Option<&str>,
+        native_confirmation: Option<(&str, &str)>,
     ) -> (String, bool) {
         let base = ScratchDir::new("codex-tui-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
@@ -1559,8 +1559,8 @@ while [ ! -s "$ACORN_TEST_TAIL_PID" ] && [ "$_acorn_i" -lt 100 ]; do
   sleep 0.05
 done
 [ -s "$ACORN_TEST_TAIL_PID" ] || exit 1
-if [ -n "$ACORN_TEST_NATIVE_CONFIRMATION" ]; then
-  (umask 077; printf '%s\n' "$ACORN_TEST_NATIVE_CONFIRMATION" > "$ACORN_CODEX_NATIVE_ACTIVE_FILE")
+if [ -n "$ACORN_TEST_NATIVE_CAPABILITY" ] && [ -n "$ACORN_TEST_NATIVE_CONFIRMATION" ]; then
+  (umask 077; printf '%s\n' "$ACORN_TEST_NATIVE_CONFIRMATION" > "$ACORN_CODEX_NATIVE_ACTIVE_FILE.$ACORN_TEST_NATIVE_CAPABILITY")
 fi
 printf '%s\n' "$ACORN_TEST_TUI_LINE" >> "$CODEX_TUI_SESSION_LOG_PATH"
 _acorn_i=0
@@ -1583,8 +1583,16 @@ done
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .env("ACORN_TEST_TUI_LINE", line)
             .env(
+                "ACORN_TEST_NATIVE_CAPABILITY",
+                native_confirmation
+                    .map(|(capability, _)| capability)
+                    .unwrap_or_default(),
+            )
+            .env(
                 "ACORN_TEST_NATIVE_CONFIRMATION",
-                native_confirmation.unwrap_or_default(),
+                native_confirmation
+                    .map(|(_, token)| token)
+                    .unwrap_or_default(),
             )
             .env("ACORN_TEST_REAL_TAIL", real_tail)
             .env("ACORN_TEST_TAIL_PID", &tail_pid_path)
@@ -1612,10 +1620,35 @@ done
         owner_thread_id: Option<&str>,
         owner_update: Option<&str>,
     ) -> String {
+        codex_notify_post_for_payload_with_context(payload, owner_thread_id, owner_update, None)
+    }
+
+    #[cfg(unix)]
+    fn codex_notify_post_for_payload_with_native_capability(
+        payload: &str,
+        owner_thread_id: Option<&str>,
+        native_capability: &str,
+    ) -> String {
+        codex_notify_post_for_payload_with_context(
+            payload,
+            owner_thread_id,
+            None,
+            Some(native_capability),
+        )
+    }
+
+    #[cfg(unix)]
+    fn codex_notify_post_for_payload_with_context(
+        payload: &str,
+        owner_thread_id: Option<&str>,
+        owner_update: Option<&str>,
+        native_capability: Option<&str>,
+    ) -> String {
         let base = ScratchDir::new("codex-notify-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let fake_bin = base.path().join("fake-bin");
         let state_dir = base.path().join("agent-state");
+        let active_file = base.path().join("native-active");
         fs::create_dir_all(&fake_bin).unwrap();
         fs::create_dir_all(&state_dir).unwrap();
 
@@ -1644,8 +1677,16 @@ exit 1
         if let Some(owner_thread_id) = owner_thread_id {
             fs::write(state_dir.join("codex.id"), format!("{owner_thread_id}\n")).unwrap();
         }
+        if let Some(native_capability) = native_capability {
+            fs::write(
+                format!("{}.{native_capability}", active_file.display()),
+                "token-1\n",
+            )
+            .unwrap();
+        }
 
-        let output = Command::new(wrapper_dir.join(CODEX_NOTIFY_NAME))
+        let mut command = Command::new(wrapper_dir.join(CODEX_NOTIFY_NAME));
+        command
             .arg(payload)
             .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
             .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
@@ -1656,8 +1697,8 @@ exit 1
             .env("ACORN_AGENT_INVOCATION_TOKEN", "owner-invocation")
             .env("ACORN_AGENT_INVOCATION_DEPTH", "1")
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
-            .output()
-            .unwrap();
+            .env("ACORN_CODEX_NATIVE_ACTIVE_FILE", &active_file);
+        let output = command.output().unwrap();
         if let Some(owner_thread_id) = owner_update {
             fs::write(state_dir.join("codex.id"), format!("{owner_thread_id}\n")).unwrap();
         }
@@ -2391,7 +2432,7 @@ done
     fn codex_wrapper_downgrades_tui_events_after_native_hook_confirmation() {
         let line = r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
         let (notifications, tail_alive) =
-            codex_wrapper_notifications_for_tui_line(line, Some("token-1"));
+            codex_wrapper_notifications_for_tui_line(line, Some(("turn", "token-1")));
 
         assert_eq!(notifications, "start preview\n");
         assert!(
@@ -2405,13 +2446,42 @@ done
     fn codex_wrapper_ignores_native_confirmation_from_an_old_receiver() {
         let line = r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
         let (notifications, tail_alive) =
-            codex_wrapper_notifications_for_tui_line(line, Some("old-token"));
+            codex_wrapper_notifications_for_tui_line(line, Some(("turn", "old-token")));
 
         assert_eq!(notifications, "start transcript\n");
         assert!(
             !tail_alive,
             "the transcript tail must exit with the wrapper"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_gates_each_transcript_mapping_on_its_native_callback() {
+        for (line, capability, fallback) in [
+            (
+                r#"{"dir":"to_tui","kind":"codex_event","msg":{"type":"task_started"}}"#,
+                "turn",
+                "start transcript\n",
+            ),
+            (
+                r#"{"dir":"to_tui","kind":"codex_event","msg":{"type":"exec_approval_request"}}"#,
+                "permission",
+                "needs_input transcript\n",
+            ),
+            (
+                r#"{"dir":"to_tui","kind":"codex_event","msg":{"type":"exec_command_begin"}}"#,
+                "tool",
+                "start transcript\n",
+            ),
+        ] {
+            let (without_confirmation, _) = codex_wrapper_notifications_for_tui_line(line, None);
+            assert_eq!(without_confirmation, fallback, "{capability} fallback");
+
+            let (with_confirmation, _) =
+                codex_wrapper_notifications_for_tui_line(line, Some((capability, "token-1")));
+            assert_eq!(with_confirmation, "", "{capability} suppression");
+        }
     }
 
     #[cfg(unix)]
@@ -2467,46 +2537,52 @@ done
             assert!(child.wait().unwrap().success());
         };
 
+        let capability_file =
+            |capability: &str| PathBuf::from(format!("{}.{capability}", active_file.display()));
+
+        run_notify("PreToolUse", "0", "204");
+        assert!(
+            capability_file("tool").is_file(),
+            "PreToolUse must confirm only tool delivery"
+        );
+        assert!(!capability_file("turn").exists());
+
+        run_notify("PermissionRequest", "0", "204");
+        assert!(
+            capability_file("permission").is_file(),
+            "PermissionRequest must confirm only permission delivery"
+        );
+        assert!(!capability_file("stop").exists());
+
         run_notify("UserPromptSubmit", "0", "204");
         assert!(
-            !active_file.exists(),
-            "one lifecycle category must not confirm the full native channel"
+            capability_file("turn").is_file(),
+            "UserPromptSubmit must confirm turn delivery"
         );
 
         run_notify("Stop", "0", "204");
         assert!(
-            active_file.is_file(),
-            "applied start and completion hooks must confirm the runtime channel"
+            capability_file("stop").is_file(),
+            "Stop must confirm completion delivery"
         );
-        assert_eq!(fs::read_to_string(&active_file).unwrap(), "token-1\n");
 
         run_notify("PermissionRequest", "0", "202");
         assert!(
-            active_file.is_file(),
+            capability_file("permission").is_file(),
             "an ignored child hook must not revoke an existing confirmation"
         );
 
-        fs::remove_file(&active_file).unwrap();
-        let _ = fs::remove_file(format!("{}.start", active_file.display()));
-        let _ = fs::remove_file(format!("{}.needs-input", active_file.display()));
-        run_notify("PermissionRequest", "0", "202");
-        assert!(
-            !active_file.exists(),
-            "an ignored child hook must not confirm the runtime channel"
-        );
-
-        fs::write(&active_file, "token-1\n").unwrap();
         run_notify("Stop", "0", "409");
         assert!(
-            !active_file.exists(),
-            "a rejected owner hook must reactivate the transcript fallback"
+            !capability_file("stop").exists(),
+            "a rejected Stop must reactivate only its completion fallback"
         );
+        assert!(capability_file("turn").is_file());
 
-        fs::write(&active_file, "token-1\n").unwrap();
-        run_notify("Stop", "1", "000");
+        run_notify("UserPromptSubmit", "1", "000");
         assert!(
-            !active_file.exists(),
-            "a failed native request must reactivate the transcript fallback"
+            !capability_file("turn").exists(),
+            "a failed prompt hook must reactivate its turn fallback"
         );
     }
 
@@ -2578,6 +2654,30 @@ done
             post,
             "{\"session_id\":\"session-1\",\"provider\":\"codex\",\"event\":\"needs_input\",\"source\":\"legacy\"}\n",
             "the owner thread completion must still mark the session as waiting"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_notify_uses_transcript_completion_until_native_stop_is_confirmed() {
+        let owner = "019f631f-0bfc-76f1-9c1d-334be74958ca";
+        let payload =
+            format!(r#"{{"type":"agent-turn-complete","thread-id":"{owner}","turn-id":"turn-1"}}"#);
+
+        let turn_only =
+            codex_notify_post_for_payload_with_native_capability(&payload, Some(owner), "turn");
+        assert_eq!(
+            turn_only,
+            "{\"session_id\":\"session-1\",\"provider\":\"codex\",\"event\":\"needs_input\",\"source\":\"transcript\"}\n",
+            "legacy completion remains authoritative when the native Stop callback is unconfirmed"
+        );
+
+        let stop_confirmed =
+            codex_notify_post_for_payload_with_native_capability(&payload, Some(owner), "stop");
+        assert_eq!(
+            stop_confirmed,
+            "{\"session_id\":\"session-1\",\"provider\":\"codex\",\"event\":\"needs_input\",\"source\":\"legacy\"}\n",
+            "confirmed native Stop keeps its duplicate completion non-authoritative"
         );
     }
 
