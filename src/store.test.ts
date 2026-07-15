@@ -694,6 +694,22 @@ describe("openSessionSurface", () => {
     expect(state.terminalPopupSessionId).toBeNull();
   });
 
+  it("keeps canvas mode visible when opening one of its sessions", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+
+    useAppStore.getState().setWorkspaceViewMode("canvas");
+
+    expect(useAppStore.getState().openSessionSurface("a2")).toBe(true);
+
+    const state = useAppStore.getState();
+    expect(state.activeSessionId).toBe("a2");
+    expect(state.workspaceViewMode).toBe("canvas");
+    expect(state.terminalPopupSessionId).toBeNull();
+  });
+
   it("does not open a surface for an unknown session", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
 
@@ -1886,6 +1902,35 @@ describe("splitFocusedPane", () => {
     useAppStore.getState().setWorkspaceViewMode("panes");
 
     expect(useAppStore.getState().workspaces[REPO_A].viewMode).toBe("panes");
+  });
+
+  it("stores canvas geometry independently for each workspace", async () => {
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [session("a1", REPO_A), session("b1", REPO_B)],
+    );
+
+    useAppStore.getState().setWorkspaceCanvasState(REPO_A, {
+      viewport: { offset: { x: -120, y: 45 }, zoom: 0.8 },
+      nodes: {
+        a1: { x: 80, y: 120, width: 640, height: 420, zIndex: 2 },
+      },
+    });
+
+    expect(useAppStore.getState().workspaces[REPO_A].canvas).toEqual({
+      viewport: { offset: { x: -120, y: 45 }, zoom: 0.8 },
+      nodes: {
+        a1: { x: 80, y: 120, width: 640, height: 420, zIndex: 2 },
+      },
+    });
+    expect(useAppStore.getState().workspaces[REPO_B].canvas).toBeUndefined();
+
+    useAppStore.getState().setActiveProject(REPO_B);
+    useAppStore.getState().setWorkspaceViewMode("canvas");
+    expect(useAppStore.getState().workspaceViewMode).toBe("canvas");
+    expect(useAppStore.getState().workspaces[REPO_A].canvas?.nodes.a1.x).toBe(
+      80,
+    );
   });
 
   it("stores the workspace view mode per project", async () => {

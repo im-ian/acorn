@@ -9,6 +9,7 @@ import {
   Loader2,
   RefreshCcw,
   Save,
+  Scan,
   Settings as SettingsIcon,
   Sparkles,
   Trash2,
@@ -1400,7 +1401,7 @@ function ProjectTabPrioritySection({
 function isDefaultWorkspaceViewMode(
   value: string,
 ): value is DefaultWorkspaceViewMode {
-  return value === "panes" || value === "kanban";
+  return value === "panes" || value === "kanban" || value === "canvas";
 }
 
 function DefaultWorkspaceViewModeSection({
@@ -1423,6 +1424,11 @@ function DefaultWorkspaceViewModeSection({
       value: "kanban",
       label: t("workspace.mode.kanban"),
       icon: <Kanban size={13} />,
+    },
+    {
+      value: "canvas",
+      label: t("workspace.mode.canvas"),
+      icon: <Scan size={13} />,
     },
   ];
 
