@@ -2855,6 +2855,7 @@ done
     #[test]
     fn antigravity_native_stop_uses_synchronous_wrapper_ownership() {
         let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+        let child = "019f631f-0bfc-76f1-9c1d-334be74958ca";
         let stop = |conversation_id: Option<&str>| {
             let mut payload = serde_json::json!({
                 "hookEventName": "Stop",
@@ -2886,6 +2887,17 @@ done
             ),
             None,
             "a matching conversation marker cannot authorize a nested wrapper",
+        );
+        assert_eq!(
+            notify_payload_for_input_with_invocation(
+                ANTIGRAVITY_NOTIFY_NAME,
+                &[],
+                &stop(Some(child)),
+                Some(("antigravity.id", owner)),
+                Some(("owner-invocation", "1")),
+            ),
+            None,
+            "a child conversation Stop cannot transition the bound owner session",
         );
     }
 
