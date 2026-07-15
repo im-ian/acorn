@@ -1253,7 +1253,7 @@ done
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"claude\""));
         assert!(notify.contains("SessionStart|UserPromptSubmit) event=\"start\""));
-        assert!(notify.contains("SubagentStop) event=\"start\""));
+        assert!(!notify.contains("SubagentStop"));
         assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
@@ -1265,7 +1265,7 @@ done
         assert!(!settings.contains("\"PostToolUse\""));
         assert!(!settings.contains("\"PostToolUseFailure\""));
         assert!(settings.contains("\"Stop\""));
-        assert!(settings.contains("\"SubagentStop\""));
+        assert!(!settings.contains("\"SubagentStop\""));
         assert!(settings.contains("\"Notification\""));
         assert!(settings
             .contains("\"matcher\":\"permission_prompt|elicitation_dialog|agent_needs_input\""));
@@ -1340,14 +1340,14 @@ done
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
         assert!(notify.contains("SessionStart|UserPromptSubmit) event=\"start\""));
-        assert!(notify.contains("SubagentStop) event=\"start\""));
+        assert!(!notify.contains("SubagentStop"));
         assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
         assert!(notify.contains("Error) event=\"error\""));
     }
 
     #[cfg(unix)]
     #[test]
-    fn claude_stop_stays_working_for_background_tasks_and_crons() {
+    fn claude_stop_with_background_work_emits_no_transition() {
         let payloads = [
             serde_json::json!({
                 "hook_event_name": "Stop",
@@ -1374,8 +1374,8 @@ done
         for payload in payloads {
             let pretty = serde_json::to_string_pretty(&payload).unwrap();
             assert_eq!(
-                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &pretty).as_deref(),
-                Some("start"),
+                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &pretty),
+                None,
                 "{pretty}",
             );
         }
@@ -1411,7 +1411,7 @@ done
 
     #[cfg(unix)]
     #[test]
-    fn claude_subagent_completion_reasserts_working_until_final_stop() {
+    fn claude_background_hooks_cannot_erase_pending_attention() {
         let background_stop = serde_json::json!({
             "hook_event_name": "Stop",
             "background_tasks": [{"id": "agent-1", "status": "running"}],
@@ -1422,19 +1422,41 @@ done
             "background_tasks": [],
             "session_crons": [],
         });
+        let permission = serde_json::json!({"hook_event_name": "PermissionRequest"});
+        let notification = serde_json::json!({
+            "hook_event_name": "Notification",
+            "notification_type": "agent_needs_input",
+        });
         let final_stop = serde_json::json!({
             "hook_event_name": "Stop",
             "background_tasks": [],
             "session_crons": [],
         });
 
-        let events = [background_stop, subagent_stop, final_stop]
+        let events = [
+            permission,
+            background_stop.clone(),
+            subagent_stop,
+            notification,
+            background_stop,
+            final_stop,
+        ]
             .into_iter()
             .map(|payload| {
-                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &payload.to_string()).unwrap()
+                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &payload.to_string())
             })
             .collect::<Vec<_>>();
-        assert_eq!(events, ["start", "start", "needs_input"]);
+        assert_eq!(
+            events,
+            [
+                Some("needs_input".into()),
+                None,
+                None,
+                Some("needs_input".into()),
+                None,
+                Some("needs_input".into()),
+            ]
+        );
     }
 
     #[test]
@@ -1571,7 +1593,7 @@ done
 
     #[cfg(unix)]
     #[test]
-    fn antigravity_stop_stays_working_until_fully_idle() {
+    fn antigravity_non_idle_stop_emits_no_transition() {
         for payload in [
             serde_json::json!({"hookEventName": "Stop", "fullyIdle": false}),
             serde_json::json!({
@@ -1582,8 +1604,8 @@ done
         ] {
             let pretty = serde_json::to_string_pretty(&payload).unwrap();
             assert_eq!(
-                notify_event_for_stdin(ANTIGRAVITY_NOTIFY_NAME, &pretty).as_deref(),
-                Some("start"),
+                notify_event_for_stdin(ANTIGRAVITY_NOTIFY_NAME, &pretty),
+                None,
                 "{pretty}",
             );
         }
