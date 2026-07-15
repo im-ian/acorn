@@ -1263,7 +1263,10 @@ done
 
         let started = Instant::now();
         while !log_path_capture.is_file() {
-            if started.elapsed() > Duration::from_secs(3) {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("Codex wrapper exited before publishing its recorder path: {status}");
+            }
+            if started.elapsed() > Duration::from_secs(10) {
                 let _ = child.kill();
                 let _ = child.wait();
                 panic!("Codex wrapper did not publish its recorder path");
