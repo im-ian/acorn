@@ -38,6 +38,12 @@ const CHAT_SESSION_STATE_CHANGED_EVENT: &str = "acorn:chat-session-state-changed
 const WORKTREE_IN_USE_BY_OTHER_SESSIONS: &str =
     "Close other sessions using this worktree before removing it.";
 const CODEX_TOOL_PROCESS_START_TOLERANCE: std::time::Duration = std::time::Duration::from_secs(1);
+const CODEX_IGNORED_ACTIVITY_HELPER_BASENAMES: &[&str] = &[
+    "node_repl",
+    "SkyComputerUseClient",
+    "codex-code-mode-host",
+    "acorn-codex-notify",
+];
 
 async fn run_blocking<T, F>(label: &'static str, f: F) -> AppResult<T>
 where
@@ -5397,13 +5403,16 @@ fn detect_session_statuses_blocking(
             let live_agent_kind = live_agent.map(|(kind, _)| kind);
             let codex_tool_started_at =
                 parsed_id.and_then(|uuid| state.sessions.hook_tool_started_at(&uuid));
+            let codex_permission_waiting_at =
+                parsed_id.and_then(|uuid| state.sessions.codex_permission_waiting_at(&uuid));
+            let codex_activity_started_at = codex_permission_waiting_at.or(codex_tool_started_at);
             let live_codex_tool_child = matches!(live_agent_kind, Some(AgentKind::Codex))
                 && root_pid_value.is_some_and(|pid| {
                     live_codex_has_tool_descendant(
                         &sys,
                         &children,
                         Pid::from_u32(pid),
-                        codex_tool_started_at,
+                        codex_activity_started_at,
                     )
                 });
             // Resolve the live transcript via the persister's resume markers
@@ -5528,6 +5537,7 @@ fn detect_session_statuses_blocking(
                     hook_status,
                     live_agent_kind,
                     live_codex_tool_child,
+                    codex_permission_waiting_at.is_some(),
                 )
             } else {
                 detection.status
@@ -5871,7 +5881,7 @@ fn live_codex_has_tool_descendant(
         },
         |pid| {
             sys.process(pid)
-                .is_some_and(is_codex_persistent_helper_process)
+                .is_some_and(is_codex_ignored_activity_process)
         },
         |pid| {
             sys.process(pid).is_some_and(|proc| {
@@ -5887,10 +5897,12 @@ fn hook_status_with_live_tool_activity(
     hook_status: SessionStatus,
     live_agent_kind: Option<AgentKind>,
     live_tool_child: bool,
+    permission_waiting: bool,
 ) -> SessionStatus {
     if live_tool_child
         && matches!(live_agent_kind, Some(AgentKind::Codex))
-        && hook_status == SessionStatus::Ready
+        && (hook_status == SessionStatus::Ready
+            || (hook_status == SessionStatus::WaitingForInput && permission_waiting))
     {
         SessionStatus::Working
     } else {
@@ -5898,10 +5910,17 @@ fn hook_status_with_live_tool_activity(
     }
 }
 
-fn is_codex_persistent_helper_process(proc: &sysinfo::Process) -> bool {
-    process_basename_matches(proc, "node_repl")
-        || process_basename_matches(proc, "SkyComputerUseClient")
-        || process_basename_matches(proc, "codex-code-mode-host")
+fn is_codex_ignored_activity_process(proc: &sysinfo::Process) -> bool {
+    CODEX_IGNORED_ACTIVITY_HELPER_BASENAMES
+        .iter()
+        .any(|basename| process_basename_matches(proc, basename))
+}
+
+#[cfg(test)]
+fn is_codex_ignored_activity_basename(candidate: &str) -> bool {
+    CODEX_IGNORED_ACTIVITY_HELPER_BASENAMES
+        .iter()
+        .any(|target| process_basename_part_matches(candidate, target))
 }
 
 /// BFS from `root` that returns on the FIRST pid the callback classifies.
@@ -6302,6 +6321,14 @@ mod status_hint_tests {
             |pid| pid == helper,
             |pid| pid == helper_child,
         ));
+    }
+
+    #[test]
+    fn acorn_codex_notifier_is_ignored_as_tool_activity() {
+        assert!(is_codex_ignored_activity_basename(
+            "/tmp/agent-wrappers/acorn-codex-notify"
+        ));
+        assert!(!is_codex_ignored_activity_basename("curl"));
     }
 
     #[test]

@@ -49,6 +49,31 @@ if [ -z "$REAL_BIN" ]; then
   exit 127
 fi
 
+# A Codex launched from inside an instrumented Codex process inherits the
+# Acorn session environment. Let only the outer CLI own that terminal's
+# lifecycle channel.
+if [ -n "${ACORN_CODEX_WRAPPER_ACTIVE-}" ]; then
+  unset CODEX_TUI_RECORD_SESSION CODEX_TUI_SESSION_LOG_PATH
+  exec "$REAL_BIN" "$@"
+fi
+
+_acorn_codex_version_supported() {
+  _acorn_version="$1"
+  case "$_acorn_version" in
+    ''|*[!0-9.]*) return 1 ;;
+  esac
+  _acorn_old_ifs=$IFS
+  IFS=.
+  set -- $_acorn_version
+  IFS=$_acorn_old_ifs
+  [ "$#" -eq 3 ] || return 1
+  [ "$1" -gt 0 ] && return 0
+  [ "$1" -eq 0 ] || return 1
+  [ "$2" -gt 135 ] && return 0
+  [ "$2" -eq 135 ] || return 1
+  [ "$3" -ge 0 ]
+}
+
 # Hook channel is available when the endpoint file exists (rewritten by each
 # app launch with the current server URL + token) or the spawn-time env pair
 # is present. The session id has no file fallback — without it, events cannot
@@ -58,76 +83,113 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
    { [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ] ||
      { [ -n "${ACORN_AGENT_HOOK_URL-}" ] && [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ]; }; } &&
    [ -x "$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify" ]; then
+  export ACORN_CODEX_WRAPPER_ACTIVE=1
+  _acorn_codex_version=$("$REAL_BIN" --version 2>/dev/null |
+    sed -n 's/^[^0-9]*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*$/\1/p' |
+    sed -n '1p')
+  export ACORN_CODEX_VERSION="${_acorn_codex_version:-unknown}"
+  _acorn_codex_ts="$(date +%s 2>/dev/null || echo 0)"
+  export ACORN_CODEX_LIFECYCLE_ID="$$_${_acorn_codex_ts}"
+
+  _acorn_codex_notify_config="notify=[\"sh\",\"-c\",'exec \"\$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\" \"\$1\" legacy_completion',\"acorn-codex-notify\"]"
+  _acorn_codex_prompt_config="hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command='exec \"\$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\" \"\" native_prompt',timeout=2}]}]"
+  _acorn_codex_stop_config="hooks.Stop=[{hooks=[{type=\"command\",command='exec \"\$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\" \"\" native_stop',timeout=2}]}]"
+  _acorn_codex_permission_config="hooks.PermissionRequest=[{hooks=[{type=\"command\",command='exec \"\$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\" \"\" native_permission',timeout=2}]}]"
+  _acorn_codex_tool_complete_config="hooks.PostToolUse=[{hooks=[{type=\"command\",command='exec \"\$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\" \"\" native_tool_complete',timeout=2}]}]"
+
+  _acorn_codex_native_hooks=0
+  if _acorn_codex_version_supported "$_acorn_codex_version" &&
+     "$REAL_BIN" --enable hooks \
+       -c "$_acorn_codex_prompt_config" \
+       -c "$_acorn_codex_stop_config" \
+       -c "$_acorn_codex_permission_config" \
+       -c "$_acorn_codex_tool_complete_config" \
+       features list >/dev/null 2>&1; then
+    _acorn_codex_native_hooks=1
+  fi
+
   export CODEX_TUI_RECORD_SESSION=1
+  _acorn_codex_owns_log=0
   if [ -z "${CODEX_TUI_SESSION_LOG_PATH-}" ]; then
     _acorn_codex_ts="$(date +%s 2>/dev/null || echo "$$")"
     export CODEX_TUI_SESSION_LOG_PATH="${TMPDIR:-/tmp}/acorn-codex-session-$$_${_acorn_codex_ts}.jsonl"
+    _acorn_codex_owns_log=1
   fi
 
-  (
-    _acorn_log="$CODEX_TUI_SESSION_LOG_PATH"
-    _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify"
-    _acorn_last_turn_id=""
-    _acorn_last_approval_id=""
-    _acorn_last_exec_call_id=""
-    _acorn_approval_fallback_seq=0
+  _acorn_log="$CODEX_TUI_SESSION_LOG_PATH"
+  _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify"
+  _acorn_fifo="${TMPDIR:-/tmp}/acorn-codex-watch-${ACORN_CODEX_LIFECYCLE_ID}.fifo"
+  ACORN_CODEX_TAIL_PID=""
+  ACORN_CODEX_WATCHER_PID=""
 
-    _acorn_i=0
-    while [ ! -f "$_acorn_log" ] && [ "$_acorn_i" -lt 200 ]; do
-      _acorn_i=$((_acorn_i + 1))
-      sleep 0.05
-    done
-    [ -f "$_acorn_log" ] || exit 0
+  _acorn_cleanup_codex() {
+    if [ -n "$ACORN_CODEX_TAIL_PID" ]; then
+      kill "$ACORN_CODEX_TAIL_PID" >/dev/null 2>&1 || true
+      wait "$ACORN_CODEX_TAIL_PID" 2>/dev/null || true
+      ACORN_CODEX_TAIL_PID=""
+    fi
+    if [ -n "$ACORN_CODEX_WATCHER_PID" ]; then
+      wait "$ACORN_CODEX_WATCHER_PID" 2>/dev/null || true
+      ACORN_CODEX_WATCHER_PID=""
+    fi
+    rm -f "$_acorn_fifo"
+    if [ "$_acorn_codex_owns_log" = "1" ]; then
+      rm -f "$CODEX_TUI_SESSION_LOG_PATH"
+      _acorn_codex_owns_log=0
+    fi
+  }
+  trap '_acorn_cleanup_codex; exit 129' 1
+  trap '_acorn_cleanup_codex; exit 130' 2
+  trap '_acorn_cleanup_codex; exit 143' 15
 
-    tail -n 0 -F "$_acorn_log" 2>/dev/null | while IFS= read -r _acorn_line; do
-      case "$_acorn_line" in
-        *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
-          "$_acorn_notify" start turn >/dev/null 2>&1 || true
-          ;;
-        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)
-          _acorn_turn_id=$(printf '%s\n' "$_acorn_line" | awk -F'"turn_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          [ -n "$_acorn_turn_id" ] || _acorn_turn_id="task_started"
-          if [ "$_acorn_turn_id" != "$_acorn_last_turn_id" ]; then
-            _acorn_last_turn_id="$_acorn_turn_id"
-            "$_acorn_notify" start turn >/dev/null 2>&1 || true
-          fi
-          ;;
-        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)
-          _acorn_approval_id=$(printf '%s\n' "$_acorn_line" | awk -F'"id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          [ -n "$_acorn_approval_id" ] || _acorn_approval_id=$(printf '%s\n' "$_acorn_line" | awk -F'"approval_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          [ -n "$_acorn_approval_id" ] || _acorn_approval_id=$(printf '%s\n' "$_acorn_line" | awk -F'"call_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          if [ -z "$_acorn_approval_id" ]; then
-            _acorn_approval_fallback_seq=$((_acorn_approval_fallback_seq + 1))
-            _acorn_approval_id="approval_request_${_acorn_approval_fallback_seq}"
-          fi
-          if [ "$_acorn_approval_id" != "$_acorn_last_approval_id" ]; then
-            _acorn_last_approval_id="$_acorn_approval_id"
-            "$_acorn_notify" needs_input >/dev/null 2>&1 || true
-          fi
-          ;;
-        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"exec_command_begin"'*)
-          _acorn_exec_call_id=$(printf '%s\n' "$_acorn_line" | awk -F'"call_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          if [ -n "$_acorn_exec_call_id" ]; then
-            if [ "$_acorn_exec_call_id" != "$_acorn_last_exec_call_id" ]; then
-              _acorn_last_exec_call_id="$_acorn_exec_call_id"
-              "$_acorn_notify" start tool >/dev/null 2>&1 || true
-            fi
-          else
-            "$_acorn_notify" start tool >/dev/null 2>&1 || true
-          fi
-          ;;
-      esac
-    done
-  ) &
-  ACORN_CODEX_WATCHER_PID=$!
+  if : >>"$_acorn_log" 2>/dev/null; then
+    rm -f "$_acorn_fifo"
+    if mkfifo "$_acorn_fifo" && exec 9<>"$_acorn_fifo"; then
+      (
+        exec 9>&-
+        exec tail -n 0 -F "$_acorn_log" >"$_acorn_fifo" 2>/dev/null
+      ) &
+      ACORN_CODEX_TAIL_PID=$!
+      (
+        exec 9>&-
+        while IFS= read -r _acorn_line; do
+          case "$_acorn_line" in
+            *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
+              printf '%s\n' "$_acorn_line" | "$_acorn_notify" "" jsonl_user >/dev/null 2>&1 || true
+              ;;
+            *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)
+              printf '%s\n' "$_acorn_line" | "$_acorn_notify" "" jsonl_task >/dev/null 2>&1 || true
+              ;;
+            *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)
+              printf '%s\n' "$_acorn_line" | "$_acorn_notify" "" jsonl_approval >/dev/null 2>&1 || true
+              ;;
+            *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"exec_command_begin"'*)
+              printf '%s\n' "$_acorn_line" | "$_acorn_notify" "" jsonl_tool >/dev/null 2>&1 || true
+              ;;
+          esac
+        done <"$_acorn_fifo"
+      ) &
+      ACORN_CODEX_WATCHER_PID=$!
+      exec 9>&-
+    else
+      rm -f "$_acorn_fifo"
+    fi
+  fi
 
-  "$REAL_BIN" --enable hooks -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@"
+  if [ "$_acorn_codex_native_hooks" = "1" ]; then
+    "$REAL_BIN" --enable hooks \
+      -c "$_acorn_codex_notify_config" \
+      -c "$_acorn_codex_prompt_config" \
+      -c "$_acorn_codex_stop_config" \
+      -c "$_acorn_codex_permission_config" \
+      -c "$_acorn_codex_tool_complete_config" \
+      "$@"
+  else
+    "$REAL_BIN" -c "$_acorn_codex_notify_config" "$@"
+  fi
   ACORN_CODEX_STATUS=$?
 
-  if [ -n "${ACORN_CODEX_WATCHER_PID-}" ]; then
-    kill "$ACORN_CODEX_WATCHER_PID" >/dev/null 2>&1 || true
-    wait "$ACORN_CODEX_WATCHER_PID" 2>/dev/null || true
-  fi
+  _acorn_cleanup_codex
   exit "$ACORN_CODEX_STATUS"
 fi
 
@@ -136,43 +198,48 @@ exec "$REAL_BIN" "$@"
 
 const CODEX_NOTIFY_BODY: &str = r#"#!/bin/sh
 input="${1-}"
-source="${2-hook}"
+source="${2-}"
+legacy_contract=0
 case "$source" in
-  hook|turn|tool) ;;
-  *) source="hook" ;;
+  native_prompt|native_stop|native_permission|native_tool_complete|jsonl_user|jsonl_task|jsonl_tool|jsonl_approval|legacy_completion) ;;
+  ''|hook|turn|tool)
+    legacy_contract=1
+    source="${source:-hook}"
+    ;;
+  *) exit 0 ;;
 esac
 if [ -z "$input" ]; then
   input=$(cat 2>/dev/null || true)
 fi
+[ -n "$input" ] || exit 0
 
-event="$input"
-case "$event" in
-  start|stop|needs_input|error)
-    ;;
-  *)
-    event=""
-    hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
-    # A completed turn leaves Codex resting and awaiting the user's next
-    # instruction, so turn completion maps to needs_input like approval and
-    # question events. Ready is reserved for sessions with no pending
-    # conversation — the status poll derives it once the agent exits.
-    case "$hook_event_name" in
-      Start|UserPromptSubmit) event="start" ;;
-      Stop) event="needs_input" ;;
-      PermissionRequest) event="needs_input" ;;
-      Error) event="error" ;;
-    esac
-    if [ -z "$event" ]; then
-      codex_type=$(printf '%s\n' "$input" | grep -oE '"type"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
-      case "$codex_type" in
-        task_started) event="start" ;;
-        agent-turn-complete|task_complete|turn_complete) event="needs_input" ;;
-        exec_approval_request|apply_patch_approval_request|request_user_input) event="needs_input" ;;
+# Daemon-owned sessions can keep their wrapper process across app upgrades.
+# Those processes call this shared helper with normalized events and no
+# lifecycle header, so forward that limited contract through the generic API.
+if [ "$legacy_contract" = "1" ]; then
+  event="$input"
+  case "$event" in
+    start|stop|needs_input|error) ;;
+    *)
+      event=""
+      hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+      case "$hook_event_name" in
+        Start|UserPromptSubmit) event="start" ;;
+        Stop|PermissionRequest) event="needs_input" ;;
+        Error) event="error" ;;
       esac
-    fi
-    [ -n "$event" ] || exit 0
-    ;;
-esac
+      if [ -z "$event" ]; then
+        codex_type=$(printf '%s\n' "$input" | grep -oE '"type"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+        case "$codex_type" in
+          task_started) event="start" ;;
+          agent-turn-complete|task_complete|turn_complete) event="needs_input" ;;
+          exec_approval_request|apply_patch_approval_request|request_user_input) event="needs_input" ;;
+        esac
+      fi
+      [ -n "$event" ] || exit 0
+      ;;
+  esac
+fi
 
 # Resolve the hook endpoint at send time. Each app launch rewrites the
 # endpoint file with that run's server URL + token (the hook server binds a
@@ -193,11 +260,27 @@ fi
 [ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
-payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source")
-curl -sf -X POST \
+if [ "$legacy_contract" = "1" ]; then
+  payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source")
+  printf '%s' "$payload" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
+    -H 'Content-Type: application/json' \
+    -H "X-Acorn-Agent-Hook-Token: $hook_token" \
+    --data-binary @- \
+    "$hook_url" >/dev/null 2>&1 || true
+  exit 0
+fi
+
+[ -n "${ACORN_CODEX_LIFECYCLE_ID-}" ] || exit 0
+
+printf '%s' "$input" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
   -H 'Content-Type: application/json' \
   -H "X-Acorn-Agent-Hook-Token: $hook_token" \
-  -d "$payload" \
+  -H 'X-Acorn-Agent-Hook-Provider: codex' \
+  -H "X-Acorn-Agent-Hook-Session-Id: $ACORN_AGENT_HOOK_SESSION_ID" \
+  -H "X-Acorn-Agent-Hook-Source: $source" \
+  -H "X-Acorn-Codex-Lifecycle-Id: $ACORN_CODEX_LIFECYCLE_ID" \
+  -H "X-Acorn-Codex-Version: ${ACORN_CODEX_VERSION-unknown}" \
+  --data-binary @- \
   "$hook_url" >/dev/null 2>&1 || true
 "#;
 
@@ -638,7 +721,7 @@ mod tests {
             if child.try_wait()?.is_some() {
                 return child.wait_with_output();
             }
-            if started.elapsed() > Duration::from_secs(2) {
+            if started.elapsed() > Duration::from_secs(5) {
                 child.kill()?;
                 let _ = child.wait();
                 return Err(io::Error::new(
@@ -652,6 +735,11 @@ mod tests {
 
     #[cfg(unix)]
     fn codex_wrapper_notifications_for_tui_line(line: &str) -> String {
+        codex_wrapper_notifications_for_tui_parts("", line)
+    }
+
+    #[cfg(unix)]
+    fn codex_wrapper_notifications_for_tui_parts(prefix: &str, suffix: &str) -> String {
         let base = ScratchDir::new("codex-tui-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let real_dir = base.path().join("real-bin");
@@ -661,17 +749,28 @@ mod tests {
         let session_log_path = base.path().join("session.jsonl");
         write_executable(
             &wrapper_dir.join("acorn-codex-notify"),
-            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$2\" \"$1\" >> \"$ACORN_NOTIFY_CAPTURE\"\n",
+            "#!/bin/sh\ninput=\"$1\"\n[ -n \"$input\" ] || input=$(cat)\nprintf '%s\\n%s\\n' \"$2\" \"$input\" >> \"$ACORN_NOTIFY_CAPTURE\"\n",
         )
         .unwrap();
         write_executable(
             &real_dir.join("codex"),
             r#"#!/bin/sh
+if [ "${1-}" = "--version" ]; then
+  printf 'codex-cli 0.144.4\n'
+  exit 0
+fi
+for _acorn_arg in "$@"; do
+  if [ "$_acorn_arg" = "features" ]; then
+    exit 0
+  fi
+done
 : > "$CODEX_TUI_SESSION_LOG_PATH"
-sleep 0.1
-printf '%s\n' "$ACORN_TEST_TUI_LINE" >> "$CODEX_TUI_SESSION_LOG_PATH"
+sleep 0.5
+printf '%s' "$ACORN_TEST_TUI_PREFIX" >> "$CODEX_TUI_SESSION_LOG_PATH"
+sleep 0.2
+printf '%s\n' "$ACORN_TEST_TUI_SUFFIX" >> "$CODEX_TUI_SESSION_LOG_PATH"
 _acorn_i=0
-while [ ! -s "$ACORN_NOTIFY_CAPTURE" ] && [ "$_acorn_i" -lt 50 ]; do
+while [ ! -s "$ACORN_NOTIFY_CAPTURE" ] && [ "$_acorn_i" -lt 150 ]; do
   _acorn_i=$((_acorn_i + 1))
   sleep 0.02
 done
@@ -687,13 +786,21 @@ done
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
-            .env("ACORN_TEST_TUI_LINE", line)
+            .env("ACORN_TEST_TUI_PREFIX", prefix)
+            .env("ACORN_TEST_TUI_SUFFIX", suffix)
             .env("CODEX_TUI_SESSION_LOG_PATH", &session_log_path)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
             .unwrap();
         assert!(status.success());
+
+        let process_list = Command::new("ps")
+            .args(["-axo", "command="])
+            .output()
+            .expect("list processes after wrapper exit");
+        assert!(!String::from_utf8_lossy(&process_list.stdout)
+            .contains(session_log_path.to_string_lossy().as_ref()));
 
         fs::read_to_string(capture_path).unwrap_or_default()
     }
@@ -771,6 +878,7 @@ printf '%s\n' "$@" > "$ACORN_ARGS_CAPTURE"
             &fake_bin.join("curl"),
             r#"#!/bin/sh
 printf '%s\n' "$@" > "$ACORN_CURL_CAPTURE"
+cat >> "$ACORN_CURL_CAPTURE"
 "#,
         )
         .unwrap();
@@ -802,6 +910,47 @@ printf '%s\n' "$@" > "$ACORN_CURL_CAPTURE"
         fs::read_to_string(capture_path).unwrap()
     }
 
+    #[cfg(unix)]
+    fn codex_legacy_notify_request(input: &str, source: Option<&str>) -> String {
+        let base = ScratchDir::new("codex-legacy-payload");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let fake_bin = base.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+
+        let capture_path = base.path().join("payload.json");
+        write_executable(
+            &fake_bin.join("curl"),
+            r#"#!/bin/sh
+printf '%s\n' "$@" > "$ACORN_CURL_CAPTURE"
+cat >> "$ACORN_CURL_CAPTURE"
+"#,
+        )
+        .unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", fake_bin.display());
+        let mut command = Command::new(wrapper_dir.join("acorn-codex-notify"));
+        command
+            .arg(input)
+            .env("PATH", path)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env(
+                "ACORN_AGENT_HOOK_SESSION_ID",
+                "00000000-0000-0000-0000-000000000001",
+            )
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env_remove("ACORN_CODEX_LIFECYCLE_ID")
+            .env("ACORN_CURL_CAPTURE", &capture_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if let Some(source) = source {
+            command.arg(source);
+        }
+        assert!(command.status().unwrap().success());
+
+        fs::read_to_string(capture_path).unwrap_or_default()
+    }
+
     #[test]
     fn writes_codex_wrapper_and_notify_helper() {
         let base = ScratchDir::new("codex");
@@ -815,19 +964,19 @@ printf '%s\n' "$@" > "$ACORN_CURL_CAPTURE"
         assert!(wrapper.contains("hooks.PermissionRequest="));
         assert!(wrapper.contains("hooks.PostToolUse="));
         assert!(!wrapper.contains("--enable codex_hooks"));
-        assert!(wrapper
-            .contains("notify=[\\\"bash\\\",\\\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\\\"]"));
+        assert!(wrapper.contains("notify=[\\\"sh\\\",\\\"-c\\\""));
+        assert!(wrapper.contains("legacy_completion"));
         assert!(wrapper.contains("CODEX_TUI_RECORD_SESSION=1"));
         assert!(wrapper.contains("ACORN_AGENT_HOOK_URL"));
-        assert!(wrapper.contains("\"$_acorn_notify\" \"$_acorn_line\" jsonl_user"));
-        assert!(wrapper.contains("\"$_acorn_notify\" \"$_acorn_line\" jsonl_tool"));
+        assert!(wrapper.contains("\"$_acorn_notify\" \"\" jsonl_user"));
+        assert!(wrapper.contains("\"$_acorn_notify\" \"\" jsonl_tool"));
         assert!(wrapper.contains("ACORN_CODEX_WRAPPER_ACTIVE"));
 
         let notify = fs::read_to_string(dir.join("acorn-codex-notify")).unwrap();
         assert!(notify.contains("X-Acorn-Agent-Hook-Provider: codex"));
         assert!(notify.contains("X-Acorn-Agent-Hook-Source: $source"));
         assert!(notify.contains("X-Acorn-Codex-Lifecycle-Id: $ACORN_CODEX_LIFECYCLE_ID"));
-        assert!(notify.contains("--data-binary \"$input\""));
+        assert!(notify.contains("--data-binary @-"));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
         assert!(notify.contains("--connect-timeout 1"));
@@ -924,6 +1073,22 @@ printf '%s\n' "$@" > "$ACORN_CURL_CAPTURE"
 
     #[cfg(unix)]
     #[test]
+    fn codex_notify_keeps_daemon_sessions_on_the_generic_hook_contract() {
+        let turn_start = codex_legacy_notify_request("start", Some("turn"));
+        assert!(turn_start.contains(
+            r#"{"session_id":"00000000-0000-0000-0000-000000000001","provider":"codex","event":"start","source":"turn"}"#
+        ));
+        assert!(!turn_start.contains("X-Acorn-Agent-Hook-Provider"));
+
+        let stop = codex_legacy_notify_request(r#"{"hook_event_name":"Stop"}"#, None);
+        assert!(stop.contains(
+            r#"{"session_id":"00000000-0000-0000-0000-000000000001","provider":"codex","event":"needs_input","source":"hook"}"#
+        ));
+        assert!(!stop.contains("X-Acorn-Codex-Lifecycle-Id"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn nested_codex_invocation_skips_acorn_instrumentation() {
         let args = codex_wrapper_args_for_version("0.144.4", false, true);
 
@@ -937,6 +1102,18 @@ printf '%s\n' "$@" > "$ACORN_CURL_CAPTURE"
 
         assert_eq!(
             codex_wrapper_notifications_for_tui_line(line),
+            format!("jsonl_user\n{line}\n")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_preserves_tui_record_split_before_newline() {
+        let line = r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
+        let split_at = line.find("\"payload\"").expect("payload field") + 5;
+
+        assert_eq!(
+            codex_wrapper_notifications_for_tui_parts(&line[..split_at], &line[split_at..]),
             format!("jsonl_user\n{line}\n")
         );
     }

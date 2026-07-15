@@ -375,6 +375,10 @@ pub struct SessionStore {
     /// Runtime-only: after an app restart, process-tree arbitration stays
     /// conservative until a fresh tagged tool event arrives.
     hook_tool_started_at: DashMap<Uuid, SystemTime>,
+    /// Start of the current Codex approval wait. The process poll uses this
+    /// boundary to distinguish a newly approved tool from descendants that
+    /// were already alive before the approval request appeared.
+    codex_permission_waiting_at: DashMap<Uuid, SystemTime>,
 }
 
 impl SessionStore {
@@ -499,6 +503,7 @@ impl SessionStore {
     /// Reset per-turn tool evidence when Codex reports a new task boundary.
     pub fn begin_hook_turn(&self, id: &Uuid) {
         self.hook_tool_started_at.remove(id);
+        self.codex_permission_waiting_at.remove(id);
     }
 
     /// Record the first exec tool observed in the current Codex turn. Keeping
@@ -512,6 +517,20 @@ impl SessionStore {
         self.hook_tool_started_at
             .get(id)
             .map(|started_at| *started_at)
+    }
+
+    pub fn mark_codex_permission_waiting_at(&self, id: &Uuid, requested_at: SystemTime) {
+        self.codex_permission_waiting_at.insert(*id, requested_at);
+    }
+
+    pub fn codex_permission_waiting_at(&self, id: &Uuid) -> Option<SystemTime> {
+        self.codex_permission_waiting_at
+            .get(id)
+            .map(|requested_at| *requested_at)
+    }
+
+    pub fn clear_codex_permission_waiting(&self, id: &Uuid) {
+        self.codex_permission_waiting_at.remove(id);
     }
 
     /// Whether `id` has ever reported an agent lifecycle hook event — either
@@ -690,6 +709,7 @@ impl SessionStore {
         self.hook_confirmed.remove(id);
         self.hook_revisions.remove(id);
         self.hook_tool_started_at.remove(id);
+        self.codex_permission_waiting_at.remove(id);
         self.inner
             .remove(id)
             .map(|(_, v)| v)
