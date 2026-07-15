@@ -1118,6 +1118,93 @@ cat >> "$ACORN_CURL_CAPTURE"
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_keeps_recording_artifacts_owner_only() {
+        use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
+
+        let base = ScratchDir::new("codex-recording-permissions");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        let shared_tmp = base.path().join("shared-tmp");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&shared_tmp).unwrap();
+        fs::set_permissions(&shared_tmp, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let log_path_capture = base.path().join("log-path");
+        let release_path = base.path().join("release-codex");
+        write_executable(
+            &real_dir.join("codex"),
+            r#"#!/bin/sh
+if [ "${1-}" = "--version" ]; then
+  printf 'codex-cli 0.144.4\n'
+  exit 0
+fi
+for _acorn_arg in "$@"; do
+  if [ "$_acorn_arg" = "features" ]; then
+    exit 0
+  fi
+done
+printf '%s\n' "$CODEX_TUI_SESSION_LOG_PATH" > "$ACORN_LOG_PATH_CAPTURE"
+while [ ! -e "$ACORN_TEST_RELEASE" ]; do
+  sleep 0.02
+done
+"#,
+        )
+        .unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", real_dir.display());
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "umask 022; exec \"$1\" sentinel", "sh"])
+            .arg(wrapper_dir.join("codex"))
+            .env("PATH", path)
+            .env("TMPDIR", &shared_tmp)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_LOG_PATH_CAPTURE", &log_path_capture)
+            .env("ACORN_TEST_RELEASE", &release_path)
+            .env_remove("CODEX_TUI_SESSION_LOG_PATH")
+            .env_remove("CODEX_TUI_RECORD_SESSION")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let started = Instant::now();
+        while !log_path_capture.is_file() {
+            if started.elapsed() > Duration::from_secs(3) {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("Codex wrapper did not publish its recorder path");
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let session_log = PathBuf::from(
+            fs::read_to_string(&log_path_capture)
+                .unwrap()
+                .trim(),
+        );
+        let runtime_dir = session_log.parent().expect("recorder has parent");
+        let log_mode = fs::metadata(&session_log).unwrap().permissions().mode() & 0o777;
+        let dir_mode = fs::metadata(runtime_dir).unwrap().permissions().mode() & 0o777;
+        let fifo = fs::read_dir(runtime_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| entry.file_type().is_ok_and(|kind| kind.is_fifo()))
+            .expect("watcher FIFO exists while Codex is running");
+        let fifo_mode = fifo.metadata().unwrap().permissions().mode() & 0o777;
+
+        fs::write(&release_path, b"release").unwrap();
+        assert!(child.wait().unwrap().success());
+
+        assert_eq!(dir_mode, 0o700, "recorder directory must be private");
+        assert_eq!(log_mode, 0o600, "session JSONL must be owner-only");
+        assert_eq!(fifo_mode, 0o600, "watcher FIFO must be owner-only");
+    }
+
     #[test]
     fn wrappers_skip_their_own_dir_when_wrapper_env_is_absent() {
         let base = ScratchDir::new("self-skip");
