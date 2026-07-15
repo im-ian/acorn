@@ -327,6 +327,10 @@ fn inject_agent_hook_env(
         return;
     };
 
+    // This marker is the one-shot proof that a wrapper was reached directly
+    // from a newly spawned Acorn PTY. Wrappers consume it before launching the
+    // provider, so descendants cannot promote themselves to hook owners.
+    effective_env.insert("ACORN_AGENT_INVOCATION_ROOT".to_string(), "1".to_string());
     effective_env
         .entry("ACORN_AGENT_HOOK_URL".to_string())
         .or_insert_with(|| hooks.hook_url().to_string());

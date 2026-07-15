@@ -49,22 +49,29 @@ if [ -z "$REAL_BIN" ]; then
   exit 127
 fi
 
-# The first Acorn-managed wrapper owns the terminal's hook channel. A provider
-# launched from inside that agent keeps the original token only as a nesting
-# marker; it must not install hooks or report against the outer session.
+# The PTY root marker is consumed by its first wrapper. Provider descendants
+# keep the invocation token only as a nesting marker and cannot reuse the
+# outer session's hook channel. A tokenless process with hook env is a provider
+# that survived an app update; any new wrapper below it must also fail closed.
 if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   _acorn_invocation_depth="${ACORN_AGENT_INVOCATION_DEPTH-1}"
   case "$_acorn_invocation_depth" in
     ''|*[!0-9]*) _acorn_invocation_depth=1 ;;
   esac
   export ACORN_AGENT_INVOCATION_DEPTH=$((_acorn_invocation_depth + 1))
-  unset ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN
+  unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
   exec "$REAL_BIN" "$@"
 fi
-if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
-  _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
-  export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
-  export ACORN_AGENT_INVOCATION_DEPTH=1
+if [ "${ACORN_AGENT_INVOCATION_ROOT-}" = "1" ]; then
+  unset ACORN_AGENT_INVOCATION_ROOT
+  if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+    _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
+    export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
+    export ACORN_AGENT_INVOCATION_DEPTH=1
+  fi
+elif [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+  unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
+  exec "$REAL_BIN" "$@"
 fi
 
 # Hook channel is available when the endpoint file exists (rewritten by each
@@ -208,9 +215,6 @@ exec "$REAL_BIN" "$@"
 "#;
 
 const CODEX_NOTIFY_BODY: &str = r#"#!/bin/sh
-[ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ] || exit 0
-[ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
-
 input="${1-}"
 source="${2-hook}"
 case "$source" in
@@ -219,6 +223,20 @@ case "$source" in
 esac
 if [ -z "$input" ]; then
   input=$(cat 2>/dev/null || true)
+fi
+
+if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
+  [ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
+else
+  [ -z "${ACORN_AGENT_INVOCATION_DEPTH-}" ] || exit 0
+  compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
+  legacy_thread_id=$(printf '%s\n' "$compact_input" | grep -oE '(^|[,{])[[:space:]]*"thread-id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
+  printf '%s\n' "$legacy_thread_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
+  legacy_owner_thread_id=""
+  if [ -n "${ACORN_AGENT_STATE_DIR-}" ] && [ -r "$ACORN_AGENT_STATE_DIR/codex.id" ]; then
+    legacy_owner_thread_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/codex.id" 2>/dev/null | tr -d '\r\n')
+  fi
+  [ "$legacy_owner_thread_id" = "$legacy_thread_id" ] || exit 0
 fi
 
 event="$input"
@@ -337,22 +355,29 @@ if [ -z "$REAL_BIN" ]; then
   exit 127
 fi
 
-# The first Acorn-managed wrapper owns the terminal's hook channel. A provider
-# launched from inside that agent keeps the original token only as a nesting
-# marker; it must not install hooks or report against the outer session.
+# The PTY root marker is consumed by its first wrapper. Provider descendants
+# keep the invocation token only as a nesting marker and cannot reuse the
+# outer session's hook channel. A tokenless process with hook env is a provider
+# that survived an app update; any new wrapper below it must also fail closed.
 if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   _acorn_invocation_depth="${ACORN_AGENT_INVOCATION_DEPTH-1}"
   case "$_acorn_invocation_depth" in
     ''|*[!0-9]*) _acorn_invocation_depth=1 ;;
   esac
   export ACORN_AGENT_INVOCATION_DEPTH=$((_acorn_invocation_depth + 1))
-  unset ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN
+  unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
   exec "$REAL_BIN" "$@"
 fi
-if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
-  _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
-  export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
-  export ACORN_AGENT_INVOCATION_DEPTH=1
+if [ "${ACORN_AGENT_INVOCATION_ROOT-}" = "1" ]; then
+  unset ACORN_AGENT_INVOCATION_ROOT
+  if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+    _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
+    export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
+    export ACORN_AGENT_INVOCATION_DEPTH=1
+  fi
+elif [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+  unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
+  exec "$REAL_BIN" "$@"
 fi
 
 # Hook channel is available when the endpoint file exists (rewritten by each
@@ -372,10 +397,21 @@ exec "$REAL_BIN" "$@"
 "#;
 
 const CLAUDE_NOTIFY_BODY: &str = r#"#!/bin/sh
-[ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ] || exit 0
-[ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
-
 input=$(cat 2>/dev/null || true)
+
+if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
+  [ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
+else
+  [ -z "${ACORN_AGENT_INVOCATION_DEPTH-}" ] || exit 0
+  compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
+  legacy_session_id=$(printf '%s\n' "$compact_input" | grep -oE '(^|[,{])[[:space:]]*"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
+  printf '%s\n' "$legacy_session_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
+  legacy_owner_session_id=""
+  if [ -n "${ACORN_AGENT_STATE_DIR-}" ] && [ -r "$ACORN_AGENT_STATE_DIR/claude.id" ]; then
+    legacy_owner_session_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/claude.id" 2>/dev/null | tr -d '\r\n')
+  fi
+  [ "$legacy_owner_session_id" = "$legacy_session_id" ] || exit 0
+fi
 
 hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
 
@@ -519,22 +555,29 @@ if [ -z "$REAL_BIN" ]; then
   exit 127
 fi
 
-# The first Acorn-managed wrapper owns the terminal's hook channel. A provider
-# launched from inside that agent keeps the original token only as a nesting
-# marker; it must not install hooks or report against the outer session.
+# The PTY root marker is consumed by its first wrapper. Provider descendants
+# keep the invocation token only as a nesting marker and cannot reuse the
+# outer session's hook channel. A tokenless process with hook env is a provider
+# that survived an app update; any new wrapper below it must also fail closed.
 if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   _acorn_invocation_depth="${ACORN_AGENT_INVOCATION_DEPTH-1}"
   case "$_acorn_invocation_depth" in
     ''|*[!0-9]*) _acorn_invocation_depth=1 ;;
   esac
   export ACORN_AGENT_INVOCATION_DEPTH=$((_acorn_invocation_depth + 1))
-  unset ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN
+  unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
   exec "$REAL_BIN" "$@"
 fi
-if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
-  _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
-  export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
-  export ACORN_AGENT_INVOCATION_DEPTH=1
+if [ "${ACORN_AGENT_INVOCATION_ROOT-}" = "1" ]; then
+  unset ACORN_AGENT_INVOCATION_ROOT
+  if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+    _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
+    export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
+    export ACORN_AGENT_INVOCATION_DEPTH=1
+  fi
+elif [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+  unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
+  exec "$REAL_BIN" "$@"
 fi
 
 # Hook channel is available when the endpoint file exists (rewritten by each
@@ -618,13 +661,29 @@ exec "$REAL_BIN" "$@"
 "#;
 
 const ANTIGRAVITY_NOTIFY_BODY: &str = r#"#!/bin/sh
-[ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ] || exit 0
-[ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
-
 input="${1-}"
 completion_brain_id="${2-}"
 if [ -z "$input" ]; then
   input=$(cat 2>/dev/null || true)
+fi
+
+if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
+  [ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
+else
+  [ -z "${ACORN_AGENT_INVOCATION_DEPTH-}" ] || exit 0
+  compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
+  legacy_payload_brain_id=$(printf '%s\n' "$compact_input" | grep -oE '(^|[,{])[[:space:]]*"conversationId"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
+  legacy_brain_id="$completion_brain_id"
+  if [ -n "$legacy_payload_brain_id" ]; then
+    [ -z "$legacy_brain_id" ] || [ "$legacy_brain_id" = "$legacy_payload_brain_id" ] || exit 0
+    legacy_brain_id="$legacy_payload_brain_id"
+  fi
+  printf '%s\n' "$legacy_brain_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
+  legacy_owner_brain_id=""
+  if [ -n "${ACORN_AGENT_STATE_DIR-}" ] && [ -r "$ACORN_AGENT_STATE_DIR/antigravity.id" ]; then
+    legacy_owner_brain_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/antigravity.id" 2>/dev/null | tr -d '\r\n')
+  fi
+  [ "$legacy_owner_brain_id" = "$legacy_brain_id" ] || exit 0
 fi
 
 source="hook"
