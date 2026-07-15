@@ -605,6 +605,12 @@ mod tests {
 
         apply("turn", AgentHookEventKind::Start);
         assert_eq!(sessions.hook_tool_started_at(&session_id), None);
+
+        apply("tool", AgentHookEventKind::Start);
+        assert!(sessions.hook_tool_started_at(&session_id).is_some());
+
+        apply("native_turn", AgentHookEventKind::Start);
+        assert_eq!(sessions.hook_tool_started_at(&session_id), None);
     }
 
     fn post(hooks: &AgentHookServer, token: &str, body: &str) -> String {

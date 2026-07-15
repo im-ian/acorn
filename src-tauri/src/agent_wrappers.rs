@@ -578,6 +578,7 @@ fn write_executable(path: &Path, body: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
     use std::process::Command;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -697,6 +698,98 @@ done
         fs::read_to_string(capture_path).unwrap_or_default()
     }
 
+    #[cfg(unix)]
+    fn codex_wrapper_args_for_version(version: &str) -> Vec<String> {
+        let base = ScratchDir::new("codex-native-args");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        fs::create_dir_all(&real_dir).unwrap();
+
+        let capture_path = base.path().join("args.log");
+        write_executable(
+            &real_dir.join("codex"),
+            r#"#!/bin/sh
+if [ "${1-}" = "--version" ]; then
+  printf 'codex-cli %s\n' "$ACORN_TEST_CODEX_VERSION"
+  exit 0
+fi
+printf '%s\n' "$@" > "$ACORN_ARGS_CAPTURE"
+"#,
+        )
+        .unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", real_dir.display());
+        let status = Command::new(wrapper_dir.join("codex"))
+            .arg("sentinel-user-arg")
+            .env("PATH", path)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_TEST_CODEX_VERSION", version)
+            .env("ACORN_ARGS_CAPTURE", &capture_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        fs::read_to_string(capture_path)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[cfg(unix)]
+    fn codex_native_notify_payload(hook_event_name: &str, source: &str) -> serde_json::Value {
+        let base = ScratchDir::new("codex-native-payload");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let fake_bin = base.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+
+        let capture_path = base.path().join("payload.json");
+        write_executable(
+            &fake_bin.join("curl"),
+            r#"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-d" ]; then
+    shift
+    printf '%s' "$1" > "$ACORN_CURL_CAPTURE"
+    exit 0
+  fi
+  shift
+done
+exit 1
+"#,
+        )
+        .unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", fake_bin.display());
+        let mut child = Command::new(wrapper_dir.join("acorn-codex-notify"))
+            .arg("")
+            .arg(source)
+            .env("PATH", path)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_CURL_CAPTURE", &capture_path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        write!(
+            child.stdin.take().unwrap(),
+            r#"{{"hook_event_name":"{hook_event_name}"}}"#
+        )
+        .unwrap();
+        assert!(child.wait().unwrap().success());
+
+        serde_json::from_str(&fs::read_to_string(capture_path).unwrap()).unwrap()
+    }
+
     #[test]
     fn writes_codex_wrapper_and_notify_helper() {
         let base = ScratchDir::new("codex");
@@ -728,6 +821,64 @@ done
         ));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
+        assert!(notify.contains("--connect-timeout 1"));
+        assert!(notify.contains("--max-time 1"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_injects_native_lifecycle_hooks_for_supported_versions() {
+        let args = codex_wrapper_args_for_version("0.144.4");
+        let user_arg = args
+            .iter()
+            .position(|arg| arg == "sentinel-user-arg")
+            .unwrap();
+
+        for (event, source) in [
+            ("SessionStart", "native_hook"),
+            ("UserPromptSubmit", "native_turn"),
+            ("Stop", "native_hook"),
+            ("PermissionRequest", "native_hook"),
+        ] {
+            let hook_arg = args
+                .iter()
+                .position(|arg| arg.starts_with(&format!("hooks.{event}=")))
+                .unwrap_or_else(|| panic!("missing native {event} hook in {args:?}"));
+            assert!(hook_arg < user_arg, "Acorn hook must precede user args");
+            assert!(args[hook_arg].contains("$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify"));
+            assert!(args[hook_arg].contains(source));
+        }
+
+        assert!(args.iter().any(|arg| arg.starts_with("notify=")));
+        assert!(!args
+            .iter()
+            .any(|arg| arg == "--dangerously-bypass-hook-trust"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_keeps_legacy_fallback_for_unsupported_versions() {
+        let args = codex_wrapper_args_for_version("0.134.9");
+
+        assert!(args.iter().any(|arg| arg.starts_with("notify=")));
+        assert!(!args.iter().any(|arg| arg.starts_with("hooks.")));
+        assert!(args.iter().any(|arg| arg == "sentinel-user-arg"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_native_hooks_use_the_existing_event_channel_with_source() {
+        for (hook_event_name, expected_event, expected_source) in [
+            ("SessionStart", "start", "native_hook"),
+            ("UserPromptSubmit", "start", "native_turn"),
+            ("Stop", "needs_input", "native_hook"),
+            ("PermissionRequest", "needs_input", "native_hook"),
+        ] {
+            let payload = codex_native_notify_payload(hook_event_name, expected_source);
+            assert_eq!(payload["event"], expected_event);
+            assert_eq!(payload["provider"], "codex");
+            assert_eq!(payload["source"], expected_source);
+        }
     }
 
     #[cfg(unix)]
