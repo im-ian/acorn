@@ -2840,6 +2840,30 @@ done
         for payload in [
             serde_json::json!({
                 "hookEventName": "Stop",
+                "conversationId": owner,
+            }),
+            serde_json::json!({
+                "hookEventName": "Stop",
+                "fullyIdle": null,
+                "conversationId": owner,
+            }),
+            serde_json::json!({
+                "hookEventName": "Stop",
+                "fullyIdle": "true",
+                "conversationId": owner,
+            }),
+        ] {
+            let body = payload.to_string();
+            assert_eq!(
+                notify_event_for_stdin(ANTIGRAVITY_NOTIFY_NAME, &body),
+                None,
+                "only a literal fullyIdle=true may complete the owner: {body}",
+            );
+        }
+
+        for payload in [
+            serde_json::json!({
+                "hookEventName": "Stop",
                 "fullyIdle": true,
                 "conversationId": owner,
             }),
