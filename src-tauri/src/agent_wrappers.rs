@@ -82,8 +82,25 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     export CODEX_TUI_SESSION_LOG_PATH="${TMPDIR:-/tmp}/acorn-codex-session-$$_${_acorn_codex_ts}.jsonl"
   fi
 
+  # A read/write FIFO descriptor is held only by this wrapper. The watcher
+  # closes its inherited copy and blocks on the read end, so wrapper exit is
+  # delivered by kernel EOF without a polling process.
+  if ! _acorn_lifetime_dir=$(mktemp -d "${TMPDIR:-/tmp}/acorn-codex-lifetime.XXXXXX"); then
+    exec "$REAL_BIN" --enable hooks -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@"
+    exit 127
+  fi
+  _acorn_lifetime_fifo="$_acorn_lifetime_dir/owner"
+  if ! mkfifo "$_acorn_lifetime_fifo" || ! exec 9<>"$_acorn_lifetime_fifo"; then
+    rm -rf "$_acorn_lifetime_dir"
+    exec "$REAL_BIN" --enable hooks -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@"
+    exit 127
+  fi
+
   _acorn_codex_wrapper_pid=$$
   (
+    _acorn_lifetime_dir="$_acorn_lifetime_dir"
+    _acorn_lifetime_fifo="$_acorn_lifetime_fifo"
+    exec 9>&-
     _acorn_wrapper_pid="$_acorn_codex_wrapper_pid"
     _acorn_log="$CODEX_TUI_SESSION_LOG_PATH"
     _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify"
@@ -121,6 +138,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
         _acorn_tail_pid=""
       fi
       rm -rf "$_acorn_watch_dir"
+      rm -rf "$_acorn_lifetime_dir"
     }
     trap _acorn_cleanup_watcher EXIT
     trap 'exit 0' HUP INT TERM
@@ -129,9 +147,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     _acorn_tail_pid=$!
     (
       trap - EXIT HUP INT TERM
-      while kill -0 "$_acorn_wrapper_pid" 2>/dev/null; do
-        sleep 0.1
-      done
+      IFS= read -r _acorn_lifetime_signal < "$_acorn_lifetime_fifo" || true
       kill "$_acorn_tail_pid" >/dev/null 2>&1 || true
     ) &
     _acorn_parent_guard_pid=$!
@@ -177,8 +193,9 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
   ) &
   ACORN_CODEX_WATCHER_PID=$!
 
-  "$REAL_BIN" --enable hooks -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@"
+  "$REAL_BIN" --enable hooks -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@" 9>&-
   ACORN_CODEX_STATUS=$?
+  exec 9>&-
 
   if [ -n "${ACORN_CODEX_WATCHER_PID-}" ]; then
     kill "$ACORN_CODEX_WATCHER_PID" >/dev/null 2>&1 || true
