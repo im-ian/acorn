@@ -629,6 +629,52 @@ mod tests {
         format!("'{}'", input.replace('\'', r"'\''"))
     }
 
+    #[cfg(unix)]
+    fn install_tail_probe(real_dir: &Path) -> &'static str {
+        let real_tail = ["/usr/bin/tail", "/bin/tail"]
+            .into_iter()
+            .find(|path| Path::new(path).is_file())
+            .expect("tail binary must exist on unix");
+        write_executable(
+            &real_dir.join("tail"),
+            r#"#!/bin/sh
+printf '%s\n' "$$" > "$ACORN_TEST_TAIL_PID"
+if [ "${1-}" = "-n" ] && [ "${2-}" = "0" ]; then
+  shift 2
+  set -- -n +1 "$@"
+fi
+exec "$ACORN_TEST_REAL_TAIL" "$@"
+"#,
+        )
+        .unwrap();
+        real_tail
+    }
+
+    #[cfg(unix)]
+    fn tail_process_survived_wrapper(tail_pid_path: &Path) -> bool {
+        let tail_pid = fs::read_to_string(tail_pid_path)
+            .unwrap()
+            .trim()
+            .to_string();
+        let mut tail_alive = true;
+        for _ in 0..20 {
+            tail_alive = Command::new("kill")
+                .args(["-0", &tail_pid])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            if !tail_alive {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        if tail_alive {
+            let _ = Command::new("kill").arg(&tail_pid).status();
+        }
+        tail_alive
+    }
+
     fn run_wrapper_with_timeout(
         program: impl AsRef<std::ffi::OsStr>,
         path: &str,
@@ -670,7 +716,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn codex_wrapper_notifications_for_tui_line(line: &str) -> String {
+    fn codex_wrapper_notifications_for_tui_line(line: &str) -> (String, bool) {
         let base = ScratchDir::new("codex-tui-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let real_dir = base.path().join("real-bin");
@@ -678,6 +724,8 @@ mod tests {
 
         let capture_path = base.path().join("notifications.log");
         let session_log_path = base.path().join("session.jsonl");
+        let tail_pid_path = base.path().join("tail.pid");
+        let real_tail = install_tail_probe(&real_dir);
         write_executable(
             &wrapper_dir.join("acorn-codex-notify"),
             "#!/bin/sh\nprintf '%s %s\\n' \"$1\" \"$2\" >> \"$ACORN_NOTIFY_CAPTURE\"\n",
@@ -687,7 +735,12 @@ mod tests {
             &real_dir.join("codex"),
             r#"#!/bin/sh
 : > "$CODEX_TUI_SESSION_LOG_PATH"
-sleep 0.1
+_acorn_i=0
+while [ ! -s "$ACORN_TEST_TAIL_PID" ] && [ "$_acorn_i" -lt 100 ]; do
+  _acorn_i=$((_acorn_i + 1))
+  sleep 0.05
+done
+[ -s "$ACORN_TEST_TAIL_PID" ] || exit 1
 printf '%s\n' "$ACORN_TEST_TUI_LINE" >> "$CODEX_TUI_SESSION_LOG_PATH"
 _acorn_i=0
 while [ ! -s "$ACORN_NOTIFY_CAPTURE" ] && [ "$_acorn_i" -lt 50 ]; do
@@ -707,6 +760,8 @@ done
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .env("ACORN_TEST_TUI_LINE", line)
+            .env("ACORN_TEST_REAL_TAIL", real_tail)
+            .env("ACORN_TEST_TAIL_PID", &tail_pid_path)
             .env("CODEX_TUI_SESSION_LOG_PATH", &session_log_path)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -714,7 +769,10 @@ done
             .unwrap();
         assert!(status.success());
 
-        fs::read_to_string(capture_path).unwrap_or_default()
+        (
+            fs::read_to_string(capture_path).unwrap_or_default(),
+            tail_process_survived_wrapper(&tail_pid_path),
+        )
     }
 
     #[cfg(unix)]
@@ -791,7 +849,7 @@ exit 1
     fn antigravity_wrapper_notifications_for_turn(
         planner_with_tools: &str,
         final_planner: &str,
-    ) -> String {
+    ) -> (String, bool) {
         let base = ScratchDir::new("antigravity-turn");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let real_dir = base.path().join("real-bin");
@@ -807,6 +865,8 @@ exit 1
         fs::create_dir_all(transcript.parent().unwrap()).unwrap();
 
         let capture_path = base.path().join("notifications.log");
+        let tail_pid_path = base.path().join("tail.pid");
+        let real_tail = install_tail_probe(&real_dir);
         write_executable(
             &wrapper_dir.join(ANTIGRAVITY_NOTIFY_NAME),
             "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$ACORN_NOTIFY_CAPTURE\"\n",
@@ -816,11 +876,14 @@ exit 1
             &real_dir.join("agy"),
             r#"#!/bin/sh
 : > "$ACORN_TEST_AGY_TRANSCRIPT"
-sleep 0.2
+_acorn_i=0
+while [ ! -s "$ACORN_TEST_TAIL_PID" ] && [ "$_acorn_i" -lt 100 ]; do
+  _acorn_i=$((_acorn_i + 1))
+  sleep 0.05
+done
+[ -s "$ACORN_TEST_TAIL_PID" ] || exit 1
 printf '%s\n' "$ACORN_TEST_AGY_USER_LINE" >> "$ACORN_TEST_AGY_TRANSCRIPT"
-sleep 0.2
 printf '%s\n' "$ACORN_TEST_AGY_PLANNER_WITH_TOOLS" >> "$ACORN_TEST_AGY_TRANSCRIPT"
-sleep 0.2
 printf '%s\n' "$ACORN_TEST_AGY_FINAL_PLANNER" >> "$ACORN_TEST_AGY_TRANSCRIPT"
 _acorn_i=0
 while [ "$(wc -l < "$ACORN_NOTIFY_CAPTURE" 2>/dev/null || echo 0)" -lt 3 ] && [ "$_acorn_i" -lt 100 ]; do
@@ -840,6 +903,8 @@ done
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .env("ACORN_TEST_AGY_TRANSCRIPT", &transcript)
+            .env("ACORN_TEST_REAL_TAIL", real_tail)
+            .env("ACORN_TEST_TAIL_PID", &tail_pid_path)
             .env(
                 "ACORN_TEST_AGY_USER_LINE",
                 r#"{"type":"USER_INPUT","status":"DONE"}"#,
@@ -847,13 +912,17 @@ done
             .env("ACORN_TEST_AGY_PLANNER_WITH_TOOLS", planner_with_tools)
             .env("ACORN_TEST_AGY_FINAL_PLANNER", final_planner)
             .env("GEMINI_DIR", &gemini_dir)
+            .env_remove("ANTIGRAVITY_DIR")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
             .unwrap();
         assert!(status.success(), "agy wrapper failed with {status}");
 
-        fs::read_to_string(capture_path).unwrap_or_default()
+        (
+            fs::read_to_string(capture_path).unwrap_or_default(),
+            tail_process_survived_wrapper(&tail_pid_path),
+        )
     }
 
     #[test]
@@ -894,10 +963,12 @@ done
     #[test]
     fn codex_wrapper_maps_current_tui_user_turn_to_turn_start() {
         let line = r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
+        let (notifications, tail_alive) = codex_wrapper_notifications_for_tui_line(line);
 
-        assert_eq!(
-            codex_wrapper_notifications_for_tui_line(line),
-            "start turn\n"
+        assert_eq!(notifications, "start turn\n");
+        assert!(
+            !tail_alive,
+            "the transcript tail must exit with the wrapper"
         );
     }
 
@@ -1249,9 +1320,9 @@ done
         assert!(wrapper.contains("acorn-antigravity-notify"));
         assert!(wrapper.contains("PLANNER_RESPONSE"));
         assert!(wrapper.contains("USER_INPUT"));
-        assert!(wrapper.contains(
-            r#"grep -qE '"tool_calls"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'"#
-        ));
+        assert!(
+            wrapper.contains(r#"grep -qE '"tool_calls"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'"#)
+        );
 
         let notify = fs::read_to_string(dir.join("acorn-antigravity-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"antigravity\""));
@@ -1264,7 +1335,7 @@ done
     #[cfg(unix)]
     #[test]
     fn antigravity_wrapper_keeps_working_for_planner_tool_calls() {
-        let notifications = antigravity_wrapper_notifications_for_turn(
+        let (notifications, tail_alive) = antigravity_wrapper_notifications_for_turn(
             r#"{"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"invoke_subagent","args":{}}]}"#,
             r#"{"type":"PLANNER_RESPONSE","status":"DONE","content":"finished"}"#,
         );
@@ -1272,6 +1343,10 @@ done
         assert_eq!(
             notifications, "start\nstart\nneeds_input\nstop\n",
             "an intermediate planner response must keep the parent turn working"
+        );
+        assert!(
+            !tail_alive,
+            "the transcript tail must exit with the wrapper"
         );
     }
 
