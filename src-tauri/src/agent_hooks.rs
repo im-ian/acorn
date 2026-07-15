@@ -1582,6 +1582,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn transcript_codex_completion_can_finish_a_bound_native_turn() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        let session_id = session.id;
+        sessions.insert(session);
+
+        apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event: AgentHookEventKind::Start,
+                message: None,
+                source: Some("turn".to_string()),
+                turn_id: Some("019f6338-6250-7303-88a6-a7add31dba1d".to_string()),
+            },
+        )
+        .expect("native turn starts");
+
+        apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event: AgentHookEventKind::NeedsInput,
+                message: None,
+                source: Some("transcript".to_string()),
+                turn_id: None,
+            },
+        )
+        .expect("transcript fallback completes the turn when Stop is unavailable");
+
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+    }
+
     fn post(hooks: &AgentHookServer, token: &str, body: &str) -> String {
         let mut stream = TcpStream::connect(addr_from_url(hooks.hook_url())).expect("connect hook");
         write!(

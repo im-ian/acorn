@@ -136,8 +136,8 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
   fi
   chmod 700 "$_acorn_lifetime_dir" >/dev/null 2>&1 || true
   # A successful capability probe only proves that Codex accepts the hook
-  # config. The notifier confirms both lifecycle directions against the current
-  # receiver before the JSONL watcher switches to preview-only mode.
+  # config. The notifier confirms each callback against the current receiver;
+  # the JSONL watcher suppresses only that callback's compatibility mapping.
   if [ "$_acorn_codex_native_hooks" = "1" ]; then
     export ACORN_CODEX_NATIVE_ACTIVE_FILE="$_acorn_lifetime_dir/native-active"
   else
@@ -182,7 +182,10 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
 
     _acorn_native_confirmation_matches() {
       [ -n "$_acorn_native_active_file" ] || return 1
-      [ -r "$_acorn_native_active_file" ] || return 1
+      _acorn_native_capability="${1-}"
+      [ -n "$_acorn_native_capability" ] || return 1
+      _acorn_native_capability_file="$_acorn_native_active_file.$_acorn_native_capability"
+      [ -r "$_acorn_native_capability_file" ] || return 1
       _acorn_current_hook_token=""
       if [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] &&
          [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ]; then
@@ -192,7 +195,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
         _acorn_current_hook_token="${ACORN_AGENT_HOOK_TOKEN-}"
       fi
       [ -n "$_acorn_current_hook_token" ] || return 1
-      _acorn_confirmed_hook_token=$(sed -n '1p' "$_acorn_native_active_file" 2>/dev/null | tr -d '\r\n')
+      _acorn_confirmed_hook_token=$(sed -n '1p' "$_acorn_native_capability_file" 2>/dev/null | tr -d '\r\n')
       [ "$_acorn_confirmed_hook_token" = "$_acorn_current_hook_token" ]
     }
 
@@ -234,31 +237,34 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     ) &
     _acorn_parent_guard_pid=$!
     while IFS= read -r _acorn_line; do
-      # Native start and completion callbacks must both succeed against the
-      # current receiver before transcript events become a harmless preview.
-      if [ "$_acorn_native_hooks" = "1" ] &&
-         _acorn_native_confirmation_matches; then
-        case "$_acorn_line" in
-          *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
+      case "$_acorn_line" in
+        *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
+          if [ "$_acorn_native_hooks" = "1" ] &&
+             _acorn_native_confirmation_matches turn; then
             "$_acorn_notify" start preview >/dev/null 2>&1 || true
-            ;;
-        esac
-      else
-        case "$_acorn_line" in
-          *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
+          else
             "$_acorn_notify" start transcript >/dev/null 2>&1 || true
-            ;;
-          *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)
+          fi
+          ;;
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)
+          if [ "$_acorn_native_hooks" != "1" ] ||
+             ! _acorn_native_confirmation_matches turn; then
             "$_acorn_notify" start transcript >/dev/null 2>&1 || true
-            ;;
-          *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)
+          fi
+          ;;
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)
+          if [ "$_acorn_native_hooks" != "1" ] ||
+             ! _acorn_native_confirmation_matches permission; then
             "$_acorn_notify" needs_input transcript >/dev/null 2>&1 || true
-            ;;
-          *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"exec_command_begin"'*)
+          fi
+          ;;
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"exec_command_begin"'*)
+          if [ "$_acorn_native_hooks" != "1" ] ||
+             ! _acorn_native_confirmation_matches tool; then
             "$_acorn_notify" start transcript >/dev/null 2>&1 || true
-            ;;
-        esac
-      fi
+          fi
+          ;;
+      esac
     done < "$_acorn_watch_fifo"
   ) &
   ACORN_CODEX_WATCHER_PID=$!
@@ -306,10 +312,13 @@ _acorn_current_hook_token() {
 
 _acorn_native_confirmation_matches() {
   [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] || return 1
-  [ -r "$ACORN_CODEX_NATIVE_ACTIVE_FILE" ] || return 1
+  _acorn_native_capability="${1-}"
+  [ -n "$_acorn_native_capability" ] || return 1
+  _acorn_native_capability_file="$ACORN_CODEX_NATIVE_ACTIVE_FILE.$_acorn_native_capability"
+  [ -r "$_acorn_native_capability_file" ] || return 1
   _acorn_expected_hook_token=$(_acorn_current_hook_token)
   [ -n "$_acorn_expected_hook_token" ] || return 1
-  _acorn_confirmed_hook_token=$(sed -n '1p' "$ACORN_CODEX_NATIVE_ACTIVE_FILE" 2>/dev/null | tr -d '\r\n')
+  _acorn_confirmed_hook_token=$(sed -n '1p' "$_acorn_native_capability_file" 2>/dev/null | tr -d '\r\n')
   [ "$_acorn_confirmed_hook_token" = "$_acorn_expected_hook_token" ]
 }
 
@@ -357,25 +366,19 @@ if [ "$native_contract" = "1" ]; then
   curl_status=$?
 
   if [ "$curl_status" -eq 0 ] && [ "$hook_status" = "204" ]; then
-    marker_class=""
+    marker_capability=""
     case "$hook_event_name" in
-      UserPromptSubmit|PreToolUse) marker_class="start" ;;
-      PermissionRequest|Stop) marker_class="needs-input" ;;
+      UserPromptSubmit) marker_capability="turn" ;;
+      PreToolUse) marker_capability="tool" ;;
+      PermissionRequest) marker_capability="permission" ;;
+      Stop) marker_capability="stop" ;;
     esac
-    if [ -n "$marker_class" ] && [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ]; then
-      marker_file="$ACORN_CODEX_NATIVE_ACTIVE_FILE.$marker_class"
+    if [ -n "$marker_capability" ] && [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ]; then
+      marker_file="$ACORN_CODEX_NATIVE_ACTIVE_FILE.$marker_capability"
       marker_tmp="$marker_file.tmp.$$"
       if (umask 077; printf '%s\n' "$hook_token" > "$marker_tmp") 2>/dev/null &&
          mv -f "$marker_tmp" "$marker_file" 2>/dev/null; then
-        start_token=$(sed -n '1p' "$ACORN_CODEX_NATIVE_ACTIVE_FILE.start" 2>/dev/null | tr -d '\r\n')
-        needs_input_token=$(sed -n '1p' "$ACORN_CODEX_NATIVE_ACTIVE_FILE.needs-input" 2>/dev/null | tr -d '\r\n')
-        if [ "$start_token" = "$hook_token" ] && [ "$needs_input_token" = "$hook_token" ]; then
-          active_tmp="$ACORN_CODEX_NATIVE_ACTIVE_FILE.tmp.$$"
-          if (umask 077; printf '%s\n' "$hook_token" > "$active_tmp") 2>/dev/null; then
-            mv -f "$active_tmp" "$ACORN_CODEX_NATIVE_ACTIVE_FILE" 2>/dev/null ||
-              rm -f "$active_tmp" >/dev/null 2>&1 || true
-          fi
-        fi
+        :
       else
         rm -f "$marker_tmp" >/dev/null 2>&1 || true
       fi
@@ -383,10 +386,19 @@ if [ "$native_contract" = "1" ]; then
   elif [ "$curl_status" -eq 0 ] && [ "$hook_status" = "202" ]; then
     :
   elif [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ]; then
-    for marker_file in \
-      "$ACORN_CODEX_NATIVE_ACTIVE_FILE" \
-      "$ACORN_CODEX_NATIVE_ACTIVE_FILE.start" \
-      "$ACORN_CODEX_NATIVE_ACTIVE_FILE.needs-input"; do
+    marker_capability=""
+    case "$hook_event_name" in
+      UserPromptSubmit) marker_capability="turn" ;;
+      PreToolUse) marker_capability="tool" ;;
+      PermissionRequest) marker_capability="permission" ;;
+      Stop) marker_capability="stop" ;;
+    esac
+    marker_files="turn tool permission stop"
+    if [ -n "$marker_capability" ]; then
+      marker_files="$marker_capability"
+    fi
+    for marker_capability in $marker_files; do
+      marker_file="$ACORN_CODEX_NATIVE_ACTIVE_FILE.$marker_capability"
       marker_token=$(sed -n '1p' "$marker_file" 2>/dev/null | tr -d '\r\n')
       if [ "$marker_token" = "$hook_token" ]; then
         rm -f "$marker_file" >/dev/null 2>&1 || true
@@ -405,7 +417,8 @@ case "$event" in
     ;;
   needs_input|stop|error)
     if [ "$source" != "transcript" ]; then
-      if ! _acorn_native_confirmation_matches; then
+      if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] &&
+         ! _acorn_native_confirmation_matches stop; then
         source="transcript"
       else
         source="legacy"
@@ -462,10 +475,31 @@ case "$event" in
           fi
           [ "$owner_thread_id" = "$completion_thread_id" ] || exit 0
           event="needs_input"
-          source="legacy"
+          if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] &&
+             ! _acorn_native_confirmation_matches stop; then
+            source="transcript"
+          else
+            source="legacy"
+          fi
           ;;
-        task_complete|turn_complete) event="needs_input"; source="legacy" ;;
-        exec_approval_request|apply_patch_approval_request|request_user_input) event="needs_input"; source="legacy" ;;
+        task_complete|turn_complete)
+          event="needs_input"
+          if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] &&
+             ! _acorn_native_confirmation_matches stop; then
+            source="transcript"
+          else
+            source="legacy"
+          fi
+          ;;
+        exec_approval_request|apply_patch_approval_request|request_user_input)
+          event="needs_input"
+          if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] &&
+             ! _acorn_native_confirmation_matches permission; then
+            source="transcript"
+          else
+            source="legacy"
+          fi
+          ;;
       esac
     fi
     [ -n "$event" ] || exit 0
@@ -1696,8 +1730,12 @@ exit 1
             .env("ACORN_AGENT_STATE_DIR", &state_dir)
             .env("ACORN_AGENT_INVOCATION_TOKEN", "owner-invocation")
             .env("ACORN_AGENT_INVOCATION_DEPTH", "1")
-            .env("ACORN_NOTIFY_CAPTURE", &capture_path)
-            .env("ACORN_CODEX_NATIVE_ACTIVE_FILE", &active_file);
+            .env("ACORN_NOTIFY_CAPTURE", &capture_path);
+        if native_capability.is_some() {
+            command.env("ACORN_CODEX_NATIVE_ACTIVE_FILE", &active_file);
+        } else {
+            command.env_remove("ACORN_CODEX_NATIVE_ACTIVE_FILE");
+        }
         let output = command.output().unwrap();
         if let Some(owner_thread_id) = owner_update {
             fs::write(state_dir.join("codex.id"), format!("{owner_thread_id}\n")).unwrap();
@@ -2401,11 +2439,10 @@ done
         // completion maps to needs_input like approval and question events.
         assert!(notify.contains("agent-turn-complete)"));
         assert!(notify.contains("owner_thread_id"));
-        assert!(notify.contains("task_complete|turn_complete) event=\"needs_input\""));
+        assert!(notify.contains("task_complete|turn_complete)"));
         assert!(notify.contains("Stop) event=\"needs_input\""));
-        assert!(notify.contains(
-            "exec_approval_request|apply_patch_approval_request|request_user_input) event=\"needs_input\""
-        ));
+        assert!(notify
+            .contains("exec_approval_request|apply_patch_approval_request|request_user_input)"));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
         assert!(notify.contains("X-Acorn-Agent-Hook-Provider: codex"));
