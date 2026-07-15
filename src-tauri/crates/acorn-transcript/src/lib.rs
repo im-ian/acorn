@@ -1883,6 +1883,33 @@ fn is_uuid_v4_shape(s: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn agent_node(kind: AgentKind, shape: AgentProcessShape) -> AgentProcessNode {
+        AgentProcessNode {
+            identity: AgentProcessIdentity { kind, shape },
+            cwd: Some(PathBuf::from("/repo")),
+        }
+    }
+
+    fn runtime(kind: AgentKind) -> AgentProcessNode {
+        agent_node(kind, AgentProcessShape::Runtime)
+    }
+
+    fn launcher(kind: AgentKind) -> AgentProcessNode {
+        agent_node(kind, AgentProcessShape::Launcher)
+    }
+
+    fn observation(
+        pid: u32,
+        parent: Option<u32>,
+        node: AgentProcessNode,
+    ) -> AgentProcessObservation {
+        AgentProcessObservation {
+            pid: Pid::from_u32(pid),
+            parent: parent.map(Pid::from_u32),
+            node,
+        }
+    }
+
     fn process_roles(matches: Vec<AgentProcessMatch>) -> Vec<(u32, AgentKind, AgentProcessRole)> {
         matches
             .into_iter()
@@ -2046,8 +2073,8 @@ mod tests {
         children.insert(codex, vec![tool_shell]);
         children.insert(tool_shell, vec![nested_codex]);
 
-        let kind_for_pid = |pid: Pid| match pid.as_u32() {
-            3 | 5 => Some(AgentKind::Codex),
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            3 | 5 => Some(runtime(AgentKind::Codex)),
             _ => None,
         };
 
@@ -2055,7 +2082,7 @@ mod tests {
             &children,
             root,
             MappingScope::AllDescendants,
-            kind_for_pid,
+            node_for_pid,
         );
         assert_eq!(
             all.into_iter().map(|m| m.pid.as_u32()).collect::<Vec<_>>(),
@@ -2066,7 +2093,7 @@ mod tests {
             &children,
             root,
             MappingScope::SessionOwners,
-            kind_for_pid,
+            node_for_pid,
         );
         assert_eq!(
             process_roles(owners),
@@ -2096,15 +2123,21 @@ mod tests {
         children.insert(claude_wrapper, vec![claude_native]);
         children.insert(agy_wrapper, vec![agy_watcher, agy_native]);
 
-        let mut owners =
-            collect_agent_processes_in_tree(&children, root, MappingScope::SessionOwners, |pid| {
-                match pid.as_u32() {
-                    10..=13 => Some(AgentKind::Codex),
-                    20..=21 => Some(AgentKind::Claude),
-                    30..=32 => Some(AgentKind::Antigravity),
-                    _ => None,
-                }
-            });
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            10..=12 => Some(launcher(AgentKind::Codex)),
+            13 => Some(runtime(AgentKind::Codex)),
+            20 => Some(launcher(AgentKind::Claude)),
+            21 => Some(runtime(AgentKind::Claude)),
+            30..=31 => Some(launcher(AgentKind::Antigravity)),
+            32 => Some(runtime(AgentKind::Antigravity)),
+            _ => None,
+        };
+        let mut owners = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::SessionOwners,
+            node_for_pid,
+        );
         owners.sort_by_key(|process| process.pid.as_u32());
 
         assert_eq!(
@@ -2115,68 +2148,229 @@ mod tests {
                 (30, AgentKind::Antigravity, AgentProcessRole::Emit),
             ]
         );
+
+        let mut all = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::AllDescendants,
+            node_for_pid,
+        );
+        all.sort_by_key(|process| process.pid.as_u32());
+        assert_eq!(
+            process_roles(all),
+            vec![
+                (10, AgentKind::Codex, AgentProcessRole::Emit),
+                (20, AgentKind::Claude, AgentProcessRole::Emit),
+                (30, AgentKind::Antigravity, AgentProcessRole::Emit),
+            ]
+        );
+    }
+
+    #[test]
+    fn provider_process_identity_distinguishes_launchers_from_runtimes() {
+        let cases = [
+            (
+                "/bin/sh",
+                "sh",
+                vec!["sh", "/acorn/agent-wrappers/codex"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Codex,
+                    shape: AgentProcessShape::Launcher,
+                },
+            ),
+            (
+                "/usr/local/bin/node",
+                "node",
+                vec!["node", "/opt/codex.js"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Codex,
+                    shape: AgentProcessShape::Launcher,
+                },
+            ),
+            (
+                "/bin/sh",
+                "sh",
+                vec!["sh", "/acorn/agent-wrappers/claude"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Claude,
+                    shape: AgentProcessShape::Launcher,
+                },
+            ),
+            (
+                "/bin/sh",
+                "sh",
+                vec!["sh", "/acorn/agent-wrappers/agy"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Antigravity,
+                    shape: AgentProcessShape::Launcher,
+                },
+            ),
+            (
+                "/opt/codex",
+                "codex",
+                vec!["codex"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Codex,
+                    shape: AgentProcessShape::Runtime,
+                },
+            ),
+            (
+                "/opt/claude",
+                "claude",
+                vec!["claude"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Claude,
+                    shape: AgentProcessShape::Runtime,
+                },
+            ),
+            (
+                "/opt/agy",
+                "agy",
+                vec!["agy"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Antigravity,
+                    shape: AgentProcessShape::Runtime,
+                },
+            ),
+        ];
+
+        for (exe, name, args, expected) in cases {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(
+                agent_process_identity_from_parts(Some(Path::new(exe)), Some(name), &args),
+                Some(expected),
+                "{args:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn provider_runtime_children_remain_independent_invocations() {
+        let root = Pid::from_u32(1);
+        let owner_runtime = Pid::from_u32(2);
+        let nested_runtime = Pid::from_u32(3);
+        let nested_launcher = Pid::from_u32(4);
+        let nested_native = Pid::from_u32(5);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![owner_runtime]);
+        children.insert(owner_runtime, vec![nested_runtime, nested_launcher]);
+        children.insert(nested_launcher, vec![nested_native]);
+
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            2 | 3 | 5 => Some(runtime(AgentKind::Codex)),
+            4 => Some(launcher(AgentKind::Codex)),
+            _ => None,
+        };
+        let owners = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::SessionOwners,
+            node_for_pid,
+        );
+        assert_eq!(
+            process_roles(owners),
+            vec![
+                (2, AgentKind::Codex, AgentProcessRole::Emit),
+                (4, AgentKind::Codex, AgentProcessRole::Quarantine),
+                (3, AgentKind::Codex, AgentProcessRole::Quarantine),
+            ]
+        );
+
+        let all = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::AllDescendants,
+            node_for_pid,
+        );
+        assert_eq!(
+            process_roles(all),
+            vec![
+                (2, AgentKind::Codex, AgentProcessRole::Emit),
+                (4, AgentKind::Codex, AgentProcessRole::Emit),
+                (3, AgentKind::Codex, AgentProcessRole::Emit),
+            ]
+        );
     }
 
     #[test]
     fn logical_agent_counts_collapse_launchers_but_keep_nested_invocations() {
         let cwd = PathBuf::from("/repo");
         let other_cwd = PathBuf::from("/other");
+        let in_cwd = |kind, shape| AgentProcessNode {
+            identity: AgentProcessIdentity { kind, shape },
+            cwd: Some(cwd.clone()),
+        };
         let processes = vec![
-            (Pid::from_u32(10), None, AgentKind::Codex, Some(cwd.clone())),
-            (
-                Pid::from_u32(11),
-                Some(Pid::from_u32(10)),
-                AgentKind::Codex,
-                Some(cwd.clone()),
-            ),
-            (
-                Pid::from_u32(12),
-                Some(Pid::from_u32(10)),
-                AgentKind::Codex,
-                Some(cwd.clone()),
-            ),
-            (
-                Pid::from_u32(13),
-                Some(Pid::from_u32(12)),
-                AgentKind::Codex,
-                Some(cwd.clone()),
-            ),
-            (
-                Pid::from_u32(15),
-                Some(Pid::from_u32(14)),
-                AgentKind::Codex,
-                Some(cwd.clone()),
-            ),
-            (
-                Pid::from_u32(20),
+            // One wrapped Codex invocation: wrapper -> watcher and
+            // wrapper -> Node launcher -> native runtime.
+            observation(
+                10,
                 None,
-                AgentKind::Claude,
-                Some(cwd.clone()),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Launcher),
             ),
-            (
-                Pid::from_u32(21),
-                Some(Pid::from_u32(20)),
-                AgentKind::Claude,
-                Some(cwd.clone()),
+            observation(
+                11,
+                Some(10),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Launcher),
             ),
-            (
-                Pid::from_u32(22),
+            observation(
+                12,
+                Some(10),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Launcher),
+            ),
+            observation(
+                13,
+                Some(12),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Runtime),
+            ),
+            // An independent nested invocation behind an unrecognised tool
+            // shell is a second logical Codex process.
+            observation(
+                15,
+                Some(14),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Launcher),
+            ),
+            // A runtime spawning another launcher is also independent. The
+            // native child belongs to that second launcher, not to pid 13.
+            observation(
+                16,
+                Some(13),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Launcher),
+            ),
+            observation(
+                17,
+                Some(16),
+                in_cwd(AgentKind::Codex, AgentProcessShape::Runtime),
+            ),
+            observation(
+                20,
                 None,
-                AgentKind::Claude,
-                Some(other_cwd.clone()),
+                in_cwd(AgentKind::Claude, AgentProcessShape::Launcher),
             ),
-            (Pid::from_u32(30), None, AgentKind::Antigravity, None),
-            (
-                Pid::from_u32(31),
-                Some(Pid::from_u32(30)),
-                AgentKind::Antigravity,
+            observation(
+                21,
+                Some(20),
+                in_cwd(AgentKind::Claude, AgentProcessShape::Runtime),
+            ),
+            observation(
+                22,
                 None,
+                AgentProcessNode {
+                    identity: AgentProcessIdentity {
+                        kind: AgentKind::Claude,
+                        shape: AgentProcessShape::Runtime,
+                    },
+                    cwd: Some(other_cwd.clone()),
+                },
             ),
+            observation(30, None, launcher(AgentKind::Antigravity)),
+            observation(31, Some(30), launcher(AgentKind::Antigravity)),
+            observation(32, Some(30), runtime(AgentKind::Antigravity)),
         ];
 
         let (claude, codex, antigravity) = logical_agent_process_counts(&processes);
 
-        assert_eq!(codex.get(&cwd), Some(&2));
+        assert_eq!(codex.get(&cwd), Some(&3));
         assert_eq!(claude.get(&cwd), Some(&1));
         assert_eq!(claude.get(&other_cwd), Some(&1));
         assert_eq!(antigravity, 1);
@@ -2197,8 +2391,8 @@ mod tests {
         let mut owners =
             collect_agent_processes_in_tree(&children, root, MappingScope::SessionOwners, |pid| {
                 match pid.as_u32() {
-                    2 | 5 => Some(AgentKind::Codex),
-                    4 => Some(AgentKind::Claude),
+                    2 | 5 => Some(runtime(AgentKind::Codex)),
+                    4 => Some(runtime(AgentKind::Claude)),
                     _ => None,
                 }
             })
@@ -2225,7 +2419,7 @@ mod tests {
             root_codex,
             MappingScope::SessionOwners,
             |pid| match pid.as_u32() {
-                1 | 3 => Some(AgentKind::Codex),
+                1 | 3 => Some(runtime(AgentKind::Codex)),
                 _ => None,
             },
         );
@@ -2253,8 +2447,8 @@ mod tests {
         let owners =
             collect_agent_processes_in_tree(&children, root, MappingScope::SessionOwners, |pid| {
                 match pid.as_u32() {
-                    2 => Some(AgentKind::Claude),
-                    4 => Some(AgentKind::Codex),
+                    2 => Some(runtime(AgentKind::Claude)),
+                    4 => Some(runtime(AgentKind::Codex)),
                     _ => None,
                 }
             });
@@ -2283,9 +2477,9 @@ mod tests {
         children.insert(claude, vec![tool_shell]);
         children.insert(tool_shell, vec![nested_codex]);
 
-        let kind_for_pid = |pid: Pid| match pid.as_u32() {
-            2 => Some(AgentKind::Claude),
-            4 => Some(AgentKind::Codex),
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            2 => Some(runtime(AgentKind::Claude)),
+            4 => Some(runtime(AgentKind::Codex)),
             _ => None,
         };
 
@@ -2293,7 +2487,7 @@ mod tests {
             &children,
             root,
             MappingScope::AllDescendants,
-            kind_for_pid,
+            node_for_pid,
         );
         assert_eq!(
             process_roles(all),
@@ -2307,7 +2501,7 @@ mod tests {
             &children,
             root,
             MappingScope::SessionOwners,
-            kind_for_pid,
+            node_for_pid,
         );
         assert_eq!(
             emitted_processes(owners.clone()),
