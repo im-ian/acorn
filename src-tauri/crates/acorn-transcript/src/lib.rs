@@ -329,9 +329,9 @@ fn scan_live_mappings(
     // when the paired invocation is the sole agent in scope — any second
     // live agent could be the writer of the hot later-born transcript,
     // so rotation stays off while one is around. Claude/Codex bucket their
-    // transcripts by cwd, so the scope is per-cwd. Antigravity transcripts
-    // carry no cwd, so its host-wide logical count is paired with the CLI's
-    // cwd-keyed owner cursor before a later brain may replace the anchor.
+    // transcripts by cwd. Antigravity transcripts carry no cwd, but the CLI's
+    // exact cwd-keyed owner cursor identifies its rotation successor, so only
+    // another logical invocation in that same cwd makes rotation ambiguous.
     let mut observations = Vec::new();
     for (pid, proc) in sys.processes() {
         if let Some(parent) = proc.parent() {
@@ -345,7 +345,7 @@ fn scan_live_mappings(
             });
         }
     }
-    let (claude_cwd_counts, codex_cwd_counts, antigravity_count) =
+    let (claude_cwd_counts, codex_cwd_counts, antigravity_cwd_counts) =
         logical_agent_process_counts(&observations);
 
     // Tracks transcripts that have already been claimed by some session
@@ -539,7 +539,9 @@ fn scan_live_mappings(
             AgentKind::Antigravity => {
                 let owner_cursor_id =
                     antigravity_owner_cursor_id(antigravity_storage_root.as_deref(), &c.cwd);
-                let allow_rotation = antigravity_count <= 1
+                let sole_antigravity_in_cwd =
+                    antigravity_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
+                let allow_rotation = sole_antigravity_in_cwd
                     && !owner_rotation_quarantined.contains(&owner_rotation_scope(
                         c.session_id,
                         c.kind,
@@ -810,25 +812,35 @@ fn agent_process_node_from_parts(
 fn codex_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) -> Option<PathBuf> {
     let mut index = args.iter().position(|arg| basename_matches(arg, "codex"))? + 1;
     let mut requested_cwd = None;
-    let mut after_exec = false;
-    let mut after_resume_like = false;
+    enum Scope {
+        TopLevel,
+        Exec,
+        ResumeLike,
+    }
+    let mut scope = Scope::TopLevel;
 
     while let Some(arg) = args.get(index).map(String::as_str) {
         if arg == "--" {
             break;
         }
         if !arg.starts_with('-') {
-            if arg == "exec" && !after_exec && !after_resume_like {
-                after_exec = true;
-                index += 1;
-                continue;
+            match scope {
+                Scope::TopLevel if matches!(arg, "exec" | "e") => {
+                    scope = Scope::Exec;
+                    index += 1;
+                    continue;
+                }
+                Scope::TopLevel if matches!(arg, "resume" | "fork") => {
+                    scope = Scope::ResumeLike;
+                    index += 1;
+                    continue;
+                }
+                // `exec resume` has its own option grammar and does not accept
+                // a cwd override after this nested subcommand. Every effective
+                // `-C` / `--cd` has therefore already been consumed.
+                Scope::Exec if arg == "resume" => break,
+                _ => break,
             }
-            if matches!(arg, "resume" | "fork") && !after_resume_like {
-                after_resume_like = true;
-                index += 1;
-                continue;
-            }
-            break;
         }
 
         if matches!(arg, "-C" | "--cd") {
@@ -844,11 +856,13 @@ fn codex_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) ->
             }
         }
 
-        index = codex_option_end(args, index, after_resume_like).or_else(|| {
-            after_exec
-                .then(|| codex_exec_option_end(args, index))
-                .flatten()
-        })?;
+        index = match scope {
+            Scope::TopLevel => codex_option_end(args, index, false),
+            Scope::Exec => {
+                codex_option_end(args, index, false).or_else(|| codex_exec_option_end(args, index))
+            }
+            Scope::ResumeLike => codex_option_end(args, index, true),
+        }?;
     }
 
     requested_cwd.map(|cwd| {
@@ -909,7 +923,7 @@ fn logical_agent_process_counts(
 ) -> (
     std::collections::HashMap<PathBuf, u32>,
     std::collections::HashMap<PathBuf, u32>,
-    u32,
+    std::collections::HashMap<PathBuf, u32>,
 ) {
     let by_pid = processes
         .iter()
@@ -917,7 +931,7 @@ fn logical_agent_process_counts(
         .collect::<std::collections::HashMap<_, _>>();
     let mut claude_cwd_counts = std::collections::HashMap::new();
     let mut codex_cwd_counts = std::collections::HashMap::new();
-    let mut antigravity_count = 0;
+    let mut antigravity_cwd_counts = std::collections::HashMap::new();
 
     for process in processes {
         let belongs_to_parent = process
@@ -935,12 +949,14 @@ fn logical_agent_process_counts(
             (AgentKind::Codex, Some(cwd)) => {
                 *codex_cwd_counts.entry(cwd.clone()).or_default() += 1;
             }
-            (AgentKind::Antigravity, _) => antigravity_count += 1,
-            (AgentKind::Claude | AgentKind::Codex, None) => {}
+            (AgentKind::Antigravity, Some(cwd)) => {
+                *antigravity_cwd_counts.entry(cwd.clone()).or_default() += 1;
+            }
+            (AgentKind::Claude | AgentKind::Codex | AgentKind::Antigravity, None) => {}
         }
     }
 
-    (claude_cwd_counts, codex_cwd_counts, antigravity_count)
+    (claude_cwd_counts, codex_cwd_counts, antigravity_cwd_counts)
 }
 
 fn codex_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
@@ -971,13 +987,36 @@ fn claude_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
 }
 
 fn claude_resume_id_from_args(args: &[String]) -> Option<String> {
-    args.windows(2).find_map(|pair| {
-        (pair[0] == "--resume" && is_uuid_v4_shape(&pair[1])).then(|| pair[1].clone())
+    let start = args
+        .iter()
+        .position(|arg| basename_matches(arg, "claude"))?
+        + 1;
+    let option_args = args[start..]
+        .iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .collect::<Vec<_>>();
+
+    // Claude allocates a fresh session id for a fork. Pinning the resumed id
+    // would keep Acorn attached to the source conversation instead of letting
+    // the newly-created transcript become the owner.
+    if option_args
+        .iter()
+        .any(|arg| arg.as_str() == "--fork-session")
+    {
+        return None;
+    }
+
+    option_args.windows(2).find_map(|pair| {
+        matches!(pair[0].as_str(), "--resume" | "-r")
+            .then_some(pair[1])
+            .filter(|id| is_uuid_v4_shape(id))
+            .map(|id| (*id).clone())
     })
 }
 
 fn codex_resume_id_from_args(args: &[String]) -> Option<String> {
-    let mut index = codex_resume_subcommand_index(args)? + 1;
+    let command = codex_resume_subcommand(args)?;
+    let mut index = command.index + 1;
     while let Some(arg) = args.get(index).map(String::as_str) {
         if arg == "--" {
             return args
@@ -988,28 +1027,52 @@ fn codex_resume_id_from_args(args: &[String]) -> Option<String> {
         if !arg.starts_with('-') {
             return is_uuid_v4_shape(arg).then(|| arg.to_string());
         }
-        index = codex_option_end(args, index, true)?;
+        index = match command.kind {
+            CodexResumeKind::Interactive => codex_option_end(args, index, true),
+            CodexResumeKind::Exec => {
+                codex_option_end(args, index, true).or_else(|| codex_exec_option_end(args, index))
+            }
+        }?;
     }
     None
 }
 
-/// Return whether `args` select Codex's top-level `resume` subcommand.
+#[derive(Clone, Copy)]
+enum CodexResumeKind {
+    Interactive,
+    Exec,
+}
+
+#[derive(Clone, Copy)]
+struct CodexResumeCommand {
+    index: usize,
+    kind: CodexResumeKind,
+}
+
+/// Return whether `args` select Codex's interactive or non-interactive
+/// `resume` subcommand.
 ///
 /// The wrapper injects global `--enable` and `-c` options before the user's
 /// arguments, and Node installations put a `codex.js` launcher after the
-/// runtime executable. Parse that prefix while failing closed on unknown
-/// options so prompt text such as `codex exec resume` never widens owner
+/// runtime executable. Parse those prefixes while failing closed at the first
+/// exec prompt so later prompt text mentioning `resume` never widens owner
 /// matching to historical sub-agent rollouts.
 pub fn codex_resume_requested_from_args(args: &[String]) -> bool {
-    codex_resume_subcommand_index(args).is_some()
+    codex_resume_subcommand(args).is_some()
 }
 
-fn codex_resume_subcommand_index(args: &[String]) -> Option<usize> {
+fn codex_resume_subcommand(args: &[String]) -> Option<CodexResumeCommand> {
     let mut index = args.iter().position(|arg| basename_matches(arg, "codex"))? + 1;
 
     while let Some(arg) = args.get(index).map(String::as_str) {
         if arg == "resume" {
-            return Some(index);
+            return Some(CodexResumeCommand {
+                index,
+                kind: CodexResumeKind::Interactive,
+            });
+        }
+        if matches!(arg, "exec" | "e") {
+            return codex_exec_resume_subcommand(args, index + 1);
         }
         if arg == "--" || !arg.starts_with('-') {
             return None;
@@ -1019,6 +1082,26 @@ fn codex_resume_subcommand_index(args: &[String]) -> Option<usize> {
             return None;
         }
         index = codex_option_end(args, index, false)?;
+    }
+    None
+}
+
+fn codex_exec_resume_subcommand(args: &[String], mut index: usize) -> Option<CodexResumeCommand> {
+    while let Some(arg) = args.get(index).map(String::as_str) {
+        if arg == "resume" {
+            return Some(CodexResumeCommand {
+                index,
+                kind: CodexResumeKind::Exec,
+            });
+        }
+        if arg == "--"
+            || !arg.starts_with('-')
+            || matches!(arg, "-h" | "--help" | "-V" | "--version")
+        {
+            return None;
+        }
+        index =
+            codex_option_end(args, index, false).or_else(|| codex_exec_option_end(args, index))?;
     }
     None
 }
@@ -2265,12 +2348,7 @@ mod tests {
                 "resume".into(),
                 "--last".into(),
             ],
-            vec![
-                "codex".into(),
-                "e".into(),
-                "resume".into(),
-                "--last".into(),
-            ],
+            vec!["codex".into(), "e".into(), "resume".into(), "--last".into()],
         ] {
             assert!(codex_resume_requested_from_args(&args));
         }
@@ -2343,10 +2421,7 @@ mod tests {
     #[test]
     fn claude_resume_id_from_args_reads_resume_flag() {
         let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-        for args in [
-            vec!["claude", "--resume", id],
-            vec!["claude", "-r", id],
-        ] {
+        for args in [vec!["claude", "--resume", id], vec!["claude", "-r", id]] {
             let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
             assert_eq!(
                 claude_resume_id_from_args(&args).as_deref(),
