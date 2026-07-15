@@ -1145,6 +1145,22 @@ mod tests {
         );
         assert_eq!(event.provider_turn_id.as_deref(), Some("turn-7"));
         assert_eq!(event.provider_version.as_deref(), Some("0.144.4"));
+
+        let body = r#"{"session_id":"provider-session","turn_id":"turn-7","hook_event_name":"PostToolUse","tool_use_id":"tool-7","tool_name":"Bash"}"#;
+        let response = post_with_codex_headers(
+            &hooks,
+            hooks.token(),
+            session_id,
+            "native_tool_complete",
+            "lifecycle-2",
+            "0.144.4",
+            body,
+        );
+        assert!(response.starts_with("HTTP/1.1 204 No Content"));
+        let event = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("post-tool event delivered");
+        assert_eq!(event.provider_tool_id.as_deref(), Some("tool-7"));
     }
 
     #[test]
@@ -1184,7 +1200,7 @@ mod tests {
             "jsonl_tool",
             "lifecycle-2",
             "0.144.4",
-            r#"{"dir":"to_tui","kind":"codex_event","msg":{"type":"exec_command_begin","turn_id":"turn-8"}}"#,
+            r#"{"dir":"to_tui","kind":"codex_event","msg":{"type":"exec_command_begin","turn_id":"turn-8","call_id":"tool-8"}}"#,
         );
         assert!(jsonl.starts_with("HTTP/1.1 204 No Content"));
         let event = rx
@@ -1193,6 +1209,23 @@ mod tests {
         assert_eq!(event.event, AgentHookEventKind::Start);
         assert_eq!(event.source.as_deref(), Some("jsonl_tool"));
         assert_eq!(event.provider_turn_id.as_deref(), Some("turn-8"));
+        assert_eq!(event.provider_tool_id, None);
+
+        let approval = post_with_codex_headers(
+            &hooks,
+            hooks.token(),
+            session_id,
+            "jsonl_approval",
+            "lifecycle-2",
+            "0.144.4",
+            r#"{"dir":"to_tui","kind":"codex_event","msg":{"type":"exec_approval_request","turn_id":"turn-8","call_id":"tool-8"}}"#,
+        );
+        assert!(approval.starts_with("HTTP/1.1 204 No Content"));
+        let event = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("JSONL approval delivered");
+        assert_eq!(event.event, AgentHookEventKind::NeedsInput);
+        assert_eq!(event.provider_tool_id.as_deref(), Some("tool-8"));
     }
 
     #[test]
@@ -1631,7 +1664,7 @@ mod tests {
     }
 
     #[test]
-    fn reducer_tool_resume_ignores_a_lagging_jsonl_approval() {
+    fn reducer_tool_resume_ignores_a_matching_lagging_jsonl_approval() {
         let (sessions, session_id, reducer) = codex_reducer_fixture();
         apply_codex(
             &reducer,
@@ -1647,21 +1680,23 @@ mod tests {
             "run-1",
             Some("turn-1"),
         );
-        apply_codex(
+        apply_codex_with_tool_id(
             &reducer,
             session_id,
             "native_tool_complete",
             "run-1",
             Some("turn-1"),
+            Some("tool-1"),
         );
 
         assert!(matches!(
-            apply_codex(
+            apply_codex_with_tool_id(
                 &reducer,
                 session_id,
                 "jsonl_approval",
                 "run-1",
                 Some("turn-1"),
+                Some("tool-1"),
             ),
             AgentHookApplyOutcome::Ignored { .. }
         ));
@@ -1670,6 +1705,39 @@ mod tests {
             sessions.get(&session_id).expect("session").status,
             SessionStatus::Working
         );
+    }
+
+    #[test]
+    fn reducer_tool_resume_keeps_a_different_jsonl_approval() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+        apply_codex(
+            &reducer,
+            session_id,
+            "native_prompt",
+            "run-1",
+            Some("turn-1"),
+        );
+        apply_codex_with_tool_id(
+            &reducer,
+            session_id,
+            "native_tool_complete",
+            "run-1",
+            Some("turn-1"),
+            Some("tool-1"),
+        );
+
+        assert!(matches!(
+            apply_codex_with_tool_id(
+                &reducer,
+                session_id,
+                "jsonl_approval",
+                "run-1",
+                Some("turn-1"),
+                Some("tool-2"),
+            ),
+            AgentHookApplyOutcome::Applied(SessionStatus::WaitingForInput)
+        ));
+        assert!(sessions.codex_permission_waiting_at(&session_id).is_some());
     }
 
     #[test]
@@ -1974,6 +2042,24 @@ mod tests {
         lifecycle_id: &str,
         provider_turn_id: Option<&str>,
     ) -> AgentHookApplyOutcome {
+        apply_codex_with_tool_id(
+            reducer,
+            session_id,
+            source,
+            lifecycle_id,
+            provider_turn_id,
+            None,
+        )
+    }
+
+    fn apply_codex_with_tool_id(
+        reducer: &AgentHookReducer,
+        session_id: Uuid,
+        source: &str,
+        lifecycle_id: &str,
+        provider_turn_id: Option<&str>,
+        provider_tool_id: Option<&str>,
+    ) -> AgentHookApplyOutcome {
         let event = match source {
             "native_stop" | "native_permission" | "legacy_completion" | "jsonl_approval" => {
                 AgentHookEventKind::NeedsInput
@@ -1990,6 +2076,7 @@ mod tests {
                 lifecycle_id: Some(lifecycle_id.to_string()),
                 provider_session_id: Some("provider-session".to_string()),
                 provider_turn_id: provider_turn_id.map(str::to_string),
+                provider_tool_id: provider_tool_id.map(str::to_string),
                 provider_version: Some("0.144.4".to_string()),
             })
             .expect("event applies")
