@@ -238,7 +238,58 @@ fn marker_rollback_is_dormant_echo(kind: AgentKind, prev_uuid: &str, next_uuid: 
     let Some(next_path) = agent_resume::locate_transcript(kind, next_uuid) else {
         return false;
     };
-    rollback_is_dormant_echo(&prev_path, &next_path, SystemTime::now())
+    rollback_is_dormant_echo_for_kind(kind, &prev_path, &next_path, next_uuid, SystemTime::now())
+}
+
+fn rollback_is_dormant_echo_for_kind(
+    kind: AgentKind,
+    prev: &Path,
+    next: &Path,
+    next_uuid: &str,
+    now: SystemTime,
+) -> bool {
+    let dormant_echo = rollback_is_dormant_echo(prev, next, now);
+    if !dormant_echo {
+        return false;
+    }
+    // A Codex marker can point to a child rollout. If that child names the
+    // newly resolved transcript in its bounded parent chain, allow the owner
+    // scan to repair the marker even though the owner is older and dormant.
+    // Other backwards moves retain the oscillation guard.
+    if kind == AgentKind::Codex
+        && codex_rollout_declares_ancestor(prev, next_uuid, |thread_id| {
+            agent_resume::locate_transcript(AgentKind::Codex, thread_id)
+        })
+    {
+        return false;
+    }
+    true
+}
+
+fn codex_rollout_declares_ancestor<F>(rollout: &Path, ancestor_uuid: &str, mut locate: F) -> bool
+where
+    F: FnMut(&str) -> Option<PathBuf>,
+{
+    const MAX_ANCESTOR_DEPTH: usize = 16;
+
+    let mut current = rollout.to_path_buf();
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        let Some(parent_uuid) = acorn_transcript::codex_rollout_parent_thread_id(&current) else {
+            return false;
+        };
+        if !seen.insert(parent_uuid.clone()) {
+            return false;
+        }
+        if parent_uuid == ancestor_uuid {
+            return true;
+        }
+        let Some(parent_path) = locate(&parent_uuid) else {
+            return false;
+        };
+        current = parent_path;
+    }
+    false
 }
 
 fn rollback_is_dormant_echo(prev: &Path, next: &Path, now: SystemTime) -> bool {
@@ -444,6 +495,95 @@ mod tests {
         // Backwards move onto a hot older transcript: a real resume.
         set_mtime(&older, now);
         assert!(!rollback_is_dormant_echo(&newer, &older, now));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn codex_declared_parent_bypasses_dormant_echo_gate() {
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-subagent-rollback-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let parent_id = "019e2001-3250-76b0-8410-2e073b38a2f1";
+        let child_id = "019e2001-3250-76b0-8410-2e073b38a2f2";
+        let parent = dir.join("parent.jsonl");
+        fs::write(
+            &parent,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{parent_id}\",\"source\":\"cli\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        let child = dir.join("child.jsonl");
+        fs::write(
+            &child,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{child_id}\",\"source\":{{\"subagent\":{{\"thread_spawn\":{{\"parent_thread_id\":\"{parent_id}\",\"depth\":1}}}}}}}}}}\n"
+            ),
+        )
+        .unwrap();
+        let now = fs::metadata(&child).unwrap().modified().unwrap();
+        set_mtime(
+            &parent,
+            now - Duration::from_secs(acorn_transcript::DORMANT_TRANSCRIPT_SECS + 60),
+        );
+
+        assert!(
+            rollback_is_dormant_echo(&child, &parent, now),
+            "generic rollback detection sees a dormant backwards move"
+        );
+        assert!(
+            !rollback_is_dormant_echo_for_kind(AgentKind::Codex, &child, &parent, parent_id, now,),
+            "a child marker must be allowed to self-heal to its declared parent"
+        );
+        assert!(
+            rollback_is_dormant_echo_for_kind(AgentKind::Claude, &child, &parent, parent_id, now,),
+            "the Codex ownership repair must not weaken other providers' rollback guard"
+        );
+
+        let grandchild = dir.join("grandchild.jsonl");
+        fs::write(
+            &grandchild,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"source\":{{\"subagent\":{{\"thread_spawn\":{{\"parent_thread_id\":\"{child_id}\",\"depth\":2}}}}}}}}}}\n"
+            ),
+        )
+        .unwrap();
+        assert!(
+            codex_rollout_declares_ancestor(&grandchild, parent_id, |thread_id| {
+                (thread_id == child_id).then(|| child.clone())
+            }),
+            "a marker corrupted to a deeper descendant must self-heal to the top-level owner"
+        );
+        assert!(
+            !codex_rollout_declares_ancestor(&grandchild, parent_id, |_| None),
+            "a missing intermediate rollout must fail closed"
+        );
+
+        let cycle_a_id = "019e2001-3250-76b0-8410-2e073b38a2f3";
+        let cycle_b_id = "019e2001-3250-76b0-8410-2e073b38a2f4";
+        let cycle_a = dir.join("cycle-a.jsonl");
+        let cycle_b = dir.join("cycle-b.jsonl");
+        for (path, parent_thread_id) in [(&cycle_a, cycle_b_id), (&cycle_b, cycle_a_id)] {
+            fs::write(
+                path,
+                format!(
+                    "{{\"type\":\"session_meta\",\"payload\":{{\"source\":{{\"subagent\":{{\"thread_spawn\":{{\"parent_thread_id\":\"{parent_thread_id}\"}}}}}}}}}}\n"
+                ),
+            )
+            .unwrap();
+        }
+        assert!(
+            !codex_rollout_declares_ancestor(&cycle_a, parent_id, |thread_id| match thread_id {
+                id if id == cycle_a_id => Some(cycle_a.clone()),
+                id if id == cycle_b_id => Some(cycle_b.clone()),
+                _ => None,
+            }),
+            "a malformed ancestry cycle must fail closed"
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }

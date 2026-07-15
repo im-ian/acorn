@@ -327,6 +327,15 @@ fn inject_agent_hook_env(
         return;
     };
 
+    // This marker is the one-shot proof that a wrapper was reached directly
+    // from a newly spawned Acorn PTY. Wrappers consume it before launching the
+    // provider, so descendants cannot promote themselves to hook owners.
+    // A control session can launch another Acorn app from inside an existing
+    // provider invocation. The new PTY is nevertheless a fresh ownership
+    // boundary, so do not inherit the outer wrapper's token or nesting depth.
+    effective_env.remove("ACORN_AGENT_INVOCATION_TOKEN");
+    effective_env.remove("ACORN_AGENT_INVOCATION_DEPTH");
+    effective_env.insert("ACORN_AGENT_INVOCATION_ROOT".to_string(), "1".to_string());
     effective_env
         .entry("ACORN_AGENT_HOOK_URL".to_string())
         .or_insert_with(|| hooks.hook_url().to_string());
@@ -5692,9 +5701,17 @@ fn codex_live_transcript_fallback(
     let proc = sys.process(pid)?;
     let cwd = proc.cwd()?;
     let process_start = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(proc.start_time());
-    let Some((path, id)) =
+    let process_args = proc
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let resolved = if acorn_transcript::codex_resume_requested_from_args(&process_args) {
+        acorn_transcript::find_resumed_codex_run_transcript(cwd, process_start)
+    } else {
         acorn_transcript::find_agent_run_transcript(cwd, AgentKind::Codex, process_start)
-    else {
+    };
+    let Some((path, id)) = resolved else {
         tracing::debug!(
             %session_id,
             pid = pid.as_u32(),
@@ -8698,6 +8715,15 @@ mod tests {
             "ACORN_AGENT_HOOK_TOKEN".to_string(),
             "caller-token".to_string(),
         );
+        env.insert(
+            "ACORN_AGENT_INVOCATION_ROOT".to_string(),
+            "caller-root".to_string(),
+        );
+        env.insert(
+            "ACORN_AGENT_INVOCATION_TOKEN".to_string(),
+            "ancestor-owner".to_string(),
+        );
+        env.insert("ACORN_AGENT_INVOCATION_DEPTH".to_string(), "3".to_string());
 
         inject_agent_hook_env(&mut env, &session, Some(&hooks));
 
@@ -8713,6 +8739,13 @@ mod tests {
             env.get("ACORN_AGENT_HOOK_SESSION_ID"),
             Some(&session.id.to_string())
         );
+        assert_eq!(
+            env.get("ACORN_AGENT_INVOCATION_ROOT"),
+            Some(&"1".to_string()),
+            "the PTY boundary must overwrite caller input with a fresh root marker",
+        );
+        assert!(!env.contains_key("ACORN_AGENT_INVOCATION_TOKEN"));
+        assert!(!env.contains_key("ACORN_AGENT_INVOCATION_DEPTH"));
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_PROVIDER"),
             Some(&"codex".to_string())
@@ -8734,6 +8767,7 @@ mod tests {
         let mut env = HashMap::new();
         inject_agent_hook_env(&mut env, &session, None);
         assert!(!env.contains_key("ACORN_AGENT_HOOK_URL"));
+        assert!(!env.contains_key("ACORN_AGENT_INVOCATION_ROOT"));
     }
 
     #[test]
@@ -8769,6 +8803,10 @@ mod tests {
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_SESSION_ID"),
             Some(&session.id.to_string())
+        );
+        assert_eq!(
+            env.get("ACORN_AGENT_INVOCATION_ROOT"),
+            Some(&"1".to_string())
         );
         // Provider is unknown at spawn; the per-provider notify script reports
         // its own provider, so the provider-specific var stays unset here.
