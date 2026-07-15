@@ -49,6 +49,24 @@ if [ -z "$REAL_BIN" ]; then
   exit 127
 fi
 
+# The first Acorn-managed wrapper owns the terminal's hook channel. A provider
+# launched from inside that agent keeps the original token only as a nesting
+# marker; it must not install hooks or report against the outer session.
+if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
+  _acorn_invocation_depth="${ACORN_AGENT_INVOCATION_DEPTH-1}"
+  case "$_acorn_invocation_depth" in
+    ''|*[!0-9]*) _acorn_invocation_depth=1 ;;
+  esac
+  export ACORN_AGENT_INVOCATION_DEPTH=$((_acorn_invocation_depth + 1))
+  unset ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN
+  exec "$REAL_BIN" "$@"
+fi
+if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+  _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
+  export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
+  export ACORN_AGENT_INVOCATION_DEPTH=1
+fi
+
 # Hook channel is available when the endpoint file exists (rewritten by each
 # app launch with the current server URL + token) or the spawn-time env pair
 # is present. The session id has no file fallback — without it, events cannot
@@ -67,7 +85,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
   (
     _acorn_log="$CODEX_TUI_SESSION_LOG_PATH"
     _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify"
-    _acorn_last_turn_id=""
+    _acorn_owner_turn_armed=0
     _acorn_last_approval_id=""
     _acorn_last_exec_call_id=""
     _acorn_approval_fallback_seq=0
@@ -103,13 +121,21 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
       case "$_acorn_line" in
         *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
           "$_acorn_notify" start turn >/dev/null 2>&1 || true
+          _acorn_owner_turn_armed=1
           ;;
         *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)
           _acorn_turn_id=$(printf '%s\n' "$_acorn_line" | awk -F'"turn_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          [ -n "$_acorn_turn_id" ] || _acorn_turn_id="task_started"
-          if [ "$_acorn_turn_id" != "$_acorn_last_turn_id" ]; then
-            _acorn_last_turn_id="$_acorn_turn_id"
-            "$_acorn_notify" start turn >/dev/null 2>&1 || true
+          if [ "$_acorn_owner_turn_armed" -eq 1 ] &&
+             printf '%s\n' "$_acorn_turn_id" | grep -Eq '^[[:alnum:]_.:-]+$'; then
+            _acorn_owner_turn_armed=0
+            "$_acorn_notify" start turn "$_acorn_turn_id" >/dev/null 2>&1 || true
+          fi
+          ;;
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_complete"'*|\
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"turn_complete"'*)
+          _acorn_turn_id=$(printf '%s\n' "$_acorn_line" | awk -F'"turn_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
+          if printf '%s\n' "$_acorn_turn_id" | grep -Eq '^[[:alnum:]_.:-]+$'; then
+            "$_acorn_notify" needs_input turn "$_acorn_turn_id" >/dev/null 2>&1 || true
           fi
           ;;
         *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)
@@ -155,12 +181,19 @@ exec "$REAL_BIN" "$@"
 "#;
 
 const CODEX_NOTIFY_BODY: &str = r#"#!/bin/sh
+[ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ] || exit 0
+[ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
+
 input="${1-}"
 source="${2-hook}"
+turn_id="${3-}"
 case "$source" in
   hook|turn|tool) ;;
   *) source="hook" ;;
 esac
+if ! printf '%s\n' "$turn_id" | grep -Eq '^[[:alnum:]_.:-]+$'; then
+  turn_id=""
+fi
 if [ -z "$input" ]; then
   input=$(cat 2>/dev/null || true)
 fi
@@ -200,6 +233,9 @@ case "$event" in
             owner_thread_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/codex.id" 2>/dev/null | tr -d '\r\n')
           fi
           [ "$owner_thread_id" = "$completion_thread_id" ] || exit 0
+          completion_turn_id=$(printf '%s\n' "$input" | grep -oE '"turn-id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
+          printf '%s\n' "$completion_turn_id" | grep -Eq '^[[:alnum:]_.:-]+$' || exit 0
+          turn_id="$completion_turn_id"
           event="needs_input"
           ;;
         task_complete|turn_complete) event="needs_input" ;;
@@ -229,7 +265,11 @@ fi
 [ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
-payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source")
+if [ -n "$turn_id" ]; then
+  payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s","turn_id":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source" "$turn_id")
+else
+  payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source")
+fi
 curl -sf -X POST \
   -H 'Content-Type: application/json' \
   -H "X-Acorn-Agent-Hook-Token: $hook_token" \
@@ -281,6 +321,24 @@ if [ -z "$REAL_BIN" ]; then
   exit 127
 fi
 
+# The first Acorn-managed wrapper owns the terminal's hook channel. A provider
+# launched from inside that agent keeps the original token only as a nesting
+# marker; it must not install hooks or report against the outer session.
+if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
+  _acorn_invocation_depth="${ACORN_AGENT_INVOCATION_DEPTH-1}"
+  case "$_acorn_invocation_depth" in
+    ''|*[!0-9]*) _acorn_invocation_depth=1 ;;
+  esac
+  export ACORN_AGENT_INVOCATION_DEPTH=$((_acorn_invocation_depth + 1))
+  unset ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN
+  exec "$REAL_BIN" "$@"
+fi
+if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+  _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
+  export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
+  export ACORN_AGENT_INVOCATION_DEPTH=1
+fi
+
 # Hook channel is available when the endpoint file exists (rewritten by each
 # app launch with the current server URL + token) or the spawn-time env pair
 # is present. The session id has no file fallback — without it, events cannot
@@ -298,6 +356,9 @@ exec "$REAL_BIN" "$@"
 "#;
 
 const CLAUDE_NOTIFY_BODY: &str = r#"#!/bin/sh
+[ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ] || exit 0
+[ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
+
 input=$(cat 2>/dev/null || true)
 
 hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
@@ -316,14 +377,6 @@ case "$hook_event_name" in
       # existing Working state and any concurrent attention request.
       event=""
     else
-      completion_session_id=$(printf '%s\n' "$input" | grep -oE '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
-      printf '%s\n' "$completion_session_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
-
-      owner_session_id=""
-      if [ -n "${ACORN_AGENT_STATE_DIR-}" ] && [ -r "$ACORN_AGENT_STATE_DIR/claude.id" ]; then
-        owner_session_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/claude.id" 2>/dev/null | tr -d '\r\n')
-      fi
-      [ "$owner_session_id" = "$completion_session_id" ] || exit 0
       event="needs_input"
     fi
     ;;
@@ -450,6 +503,24 @@ if [ -z "$REAL_BIN" ]; then
   exit 127
 fi
 
+# The first Acorn-managed wrapper owns the terminal's hook channel. A provider
+# launched from inside that agent keeps the original token only as a nesting
+# marker; it must not install hooks or report against the outer session.
+if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
+  _acorn_invocation_depth="${ACORN_AGENT_INVOCATION_DEPTH-1}"
+  case "$_acorn_invocation_depth" in
+    ''|*[!0-9]*) _acorn_invocation_depth=1 ;;
+  esac
+  export ACORN_AGENT_INVOCATION_DEPTH=$((_acorn_invocation_depth + 1))
+  unset ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN
+  exec "$REAL_BIN" "$@"
+fi
+if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+  _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
+  export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
+  export ACORN_AGENT_INVOCATION_DEPTH=1
+fi
+
 # Hook channel is available when the endpoint file exists (rewritten by each
 # app launch with the current server URL + token) or the spawn-time env pair
 # is present. The session id has no file fallback — without it, events cannot
@@ -528,6 +599,9 @@ exec "$REAL_BIN" "$@"
 "#;
 
 const ANTIGRAVITY_NOTIFY_BODY: &str = r#"#!/bin/sh
+[ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ] || exit 0
+[ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
+
 input="${1-}"
 completion_brain_id="${2-}"
 if [ -z "$input" ]; then
@@ -560,12 +634,13 @@ case "$event" in
         hook_event_name="Stop"
       fi
     fi
-    # SubagentStop fires when a Task subagent finishes mid-turn, so it
-    # re-asserts Running rather than ending the turn. Main-agent Stop carries
-    # fullyIdle=false while async work can still wake it; only an idle Stop is
-    # waiting for input. The field-boundary regex ignores escaped decoy text.
+    # SubagentStop and fullyIdle=false are pauses inside the owner turn. They
+    # emit nothing so a concurrent permission or input request stays visible.
+    # Only an idle main-agent Stop awaits the user's next prompt. The
+    # field-boundary regex ignores escaped decoy text.
     case "$hook_event_name" in
-      SessionStart|UserPromptSubmit|PreToolUse|SubagentStop) event="start" ;;
+      SessionStart|UserPromptSubmit|PreToolUse) event="start" ;;
+      SubagentStop) event="" ;;
       Stop)
         compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
         if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"fullyIdle"[[:space:]]*:[[:space:]]*false([[:space:]]*[,}]|$)'; then
@@ -573,14 +648,6 @@ case "$event" in
           # Stop is a pause, not a new turn boundary.
           event=""
         else
-          completion_brain_id=$(printf '%s\n' "$input" | grep -oE '"conversationId"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
-          printf '%s\n' "$completion_brain_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
-
-          owner_brain_id=""
-          if [ -n "${ACORN_AGENT_STATE_DIR-}" ] && [ -r "$ACORN_AGENT_STATE_DIR/antigravity.id" ]; then
-            owner_brain_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/antigravity.id" 2>/dev/null | tr -d '\r\n')
-          fi
-          [ "$owner_brain_id" = "$completion_brain_id" ] || exit 0
           event="needs_input"
         fi
         ;;
@@ -1035,21 +1102,6 @@ exit 1
     #[cfg(unix)]
     fn notify_event_for_stdin(script_name: &str, payload: &str) -> Option<String> {
         notify_event_for_input(script_name, &[], payload, None)
-    }
-
-    #[cfg(unix)]
-    fn notify_event_for_stdin_with_owner(
-        script_name: &str,
-        payload: &str,
-        marker_name: &str,
-        owner_id: Option<&str>,
-    ) -> Option<String> {
-        notify_event_for_input(
-            script_name,
-            &[],
-            payload,
-            owner_id.map(|owner_id| (marker_name, owner_id)),
-        )
     }
 
     #[cfg(unix)]
