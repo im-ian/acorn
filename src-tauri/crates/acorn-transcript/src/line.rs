@@ -353,7 +353,7 @@ fn antigravity_turn_state(value: &Value) -> Option<TurnState> {
     let status = value.get("status").and_then(Value::as_str).unwrap_or("");
     match line_type {
         "USER_INPUT" => Some(TurnState::Working),
-        "PLANNER_RESPONSE" => Some(if status == "DONE" {
+        "PLANNER_RESPONSE" => Some(if status == "DONE" && !antigravity_has_tool_calls(value) {
             TurnState::Ready
         } else {
             TurnState::Working
@@ -361,6 +361,13 @@ fn antigravity_turn_state(value: &Value) -> Option<TurnState> {
         "CONVERSATION_HISTORY" | "" => None,
         _ => Some(TurnState::Working),
     }
+}
+
+fn antigravity_has_tool_calls(value: &Value) -> bool {
+    value
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .is_some_and(|tool_calls| !tool_calls.is_empty())
 }
 
 fn codex_preview_role_and_text(

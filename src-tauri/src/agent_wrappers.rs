@@ -409,7 +409,11 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
           "$_acorn_notify" start >/dev/null 2>&1 || true
           ;;
         *'"type":"PLANNER_RESPONSE"'*'"status":"DONE"'*)
-          "$_acorn_notify" needs_input >/dev/null 2>&1 || true
+          if printf '%s\n' "$_acorn_line" | grep -qE '"tool_calls"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'; then
+            "$_acorn_notify" start >/dev/null 2>&1 || true
+          else
+            "$_acorn_notify" needs_input >/dev/null 2>&1 || true
+          fi
           ;;
         *'"status":"ERROR"'*)
           "$_acorn_notify" error >/dev/null 2>&1 || true
@@ -1246,8 +1250,7 @@ done
         assert!(wrapper.contains("PLANNER_RESPONSE"));
         assert!(wrapper.contains("USER_INPUT"));
         assert!(wrapper.contains(
-            r#"*'"type":"PLANNER_RESPONSE"'*'"status":"DONE"'*)
-          "$_acorn_notify" needs_input"#
+            r#"grep -qE '"tool_calls"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'"#
         ));
 
         let notify = fs::read_to_string(dir.join("acorn-antigravity-notify")).unwrap();
