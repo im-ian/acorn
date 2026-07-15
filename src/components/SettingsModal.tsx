@@ -10,6 +10,7 @@ import {
   RefreshCcw,
   Save,
   Scan,
+  Search,
   Settings as SettingsIcon,
   Sparkles,
   Trash2,
@@ -112,6 +113,7 @@ import {
   CodeValue,
   CommandHint,
   Field,
+  IconInput,
   Modal,
   ModalFooter,
   ModalHeader,
@@ -1823,6 +1825,16 @@ function ThemeCatalogSection({
   const uninstall = useThemes((state) => state.uninstall);
   const showToast = useToasts((state) => state.show);
   const t = useTranslation();
+  const [catalogQuery, setCatalogQuery] = useState("");
+
+  const normalizedCatalogQuery = catalogQuery.trim().toLowerCase();
+  const filteredCatalog = normalizedCatalogQuery
+    ? catalog.filter((theme) =>
+        `${theme.label} ${theme.id}`
+          .toLowerCase()
+          .includes(normalizedCatalogQuery),
+      )
+    : catalog;
 
   useEffect(() => {
     if (catalogStatus === "idle") {
@@ -1874,28 +1886,45 @@ function ThemeCatalogSection({
       title={st(t, "settings.appearance.theme.library.title")}
       description={st(t, "settings.appearance.theme.library.description")}
     >
-      <div className="flex justify-end gap-2">
-        <Button
-          variant="outline"
-          size="xs"
-          onClick={() => void openThemePreview()}
-        >
-          <ExternalLink size={11} />
-          {st(t, "settings.appearance.theme.library.preview")}
-        </Button>
-        <Button
-          variant="outline"
-          size="xs"
-          disabled={catalogStatus === "loading"}
-          onClick={() => void loadCatalog()}
-        >
-          {catalogStatus === "loading" ? (
-            <Loader2 size={11} className="animate-spin" />
-          ) : (
-            <RefreshCcw size={11} />
+      <div className="flex flex-wrap items-center gap-2">
+        <IconInput
+          type="search"
+          value={catalogQuery}
+          onChange={(event) => setCatalogQuery(event.currentTarget.value)}
+          leading={<Search size={12} aria-hidden="true" />}
+          placeholder={st(
+            t,
+            "settings.appearance.theme.library.searchPlaceholder",
           )}
-          {st(t, "settings.appearance.theme.library.refresh")}
-        </Button>
+          aria-label={st(
+            t,
+            "settings.appearance.theme.library.searchPlaceholder",
+          )}
+          className="min-w-48 flex-1 sm:max-w-64"
+        />
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => void openThemePreview()}
+          >
+            <ExternalLink size={11} />
+            {st(t, "settings.appearance.theme.library.preview")}
+          </Button>
+          <Button
+            variant="outline"
+            size="xs"
+            disabled={catalogStatus === "loading"}
+            onClick={() => void loadCatalog()}
+          >
+            {catalogStatus === "loading" ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <RefreshCcw size={11} />
+            )}
+            {st(t, "settings.appearance.theme.library.refresh")}
+          </Button>
+        </div>
       </div>
 
       {catalogStatus === "loading" && catalog.length === 0 ? (
@@ -1911,13 +1940,13 @@ function ThemeCatalogSection({
         </Notice>
       ) : null}
 
-      {catalog.length > 0 ? (
+      {filteredCatalog.length > 0 ? (
         <div
           className="overflow-hidden rounded-lg border border-border"
           role="list"
           aria-label={st(t, "settings.appearance.theme.library.title")}
         >
-          {catalog.map((entry) => (
+          {filteredCatalog.map((entry) => (
             <ThemeCatalogRow
               key={entry.id}
               entry={entry}
@@ -1927,6 +1956,10 @@ function ThemeCatalogSection({
               onUninstall={() => void handleUninstall(entry)}
             />
           ))}
+        </div>
+      ) : catalog.length > 0 ? (
+        <div className="py-4 text-center text-xs text-fg-muted">
+          {st(t, "settings.appearance.theme.library.noMatches")}
         </div>
       ) : null}
     </SettingsGroup>

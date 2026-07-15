@@ -300,6 +300,8 @@
           "description": "Download and update themes from the acorn-themes repository. Removing a downloaded theme does not affect custom CSS files.",
           "preview": "Preview themes",
           "refresh": "Refresh library",
+          "searchPlaceholder": "Search theme library",
+          "noMatches": "No themes match your search.",
           "loading": "Loading the theme library…",
           "loadFailed": "Couldn't load the theme library.",
           "download": "Download",

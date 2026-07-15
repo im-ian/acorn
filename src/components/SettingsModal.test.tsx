@@ -961,6 +961,31 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).toContain("Downloaded");
     expect(document.body.textContent).toContain("Available to download");
 
+    const catalogSearch = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Search theme library"]',
+    );
+    expect(catalogSearch).not.toBeNull();
+    setInputValue(catalogSearch as HTMLInputElement, "github-light");
+
+    const catalogList = document.querySelector(
+      '[role="list"][aria-label="Theme library"]',
+    );
+    expect(
+      Array.from(catalogList?.querySelectorAll('[role="listitem"]') ?? []).map(
+        (element) => element.textContent,
+      ),
+    ).toEqual([expect.stringContaining("GitHub Light")]);
+
+    setInputValue(catalogSearch as HTMLInputElement, "missing-theme");
+    expect(
+      document.querySelector('[role="list"][aria-label="Theme library"]'),
+    ).toBeNull();
+    expect(document.body.textContent).toContain(
+      "No themes match your search.",
+    );
+
+    setInputValue(catalogSearch as HTMLInputElement, "");
+
     const previewButton = Array.from(document.querySelectorAll("button")).find(
       (element) => element.textContent?.trim() === "Preview themes",
     );
