@@ -903,12 +903,89 @@ exit 1
 
     #[cfg(unix)]
     fn notify_event_for_stdin(script_name: &str, payload: &str) -> Option<String> {
+        notify_event_for_input(script_name, &[], payload, None)
+    }
+
+    #[cfg(unix)]
+    fn notify_event_for_stdin_with_owner(
+        script_name: &str,
+        payload: &str,
+        marker_name: &str,
+        owner_id: Option<&str>,
+    ) -> Option<String> {
+        notify_event_for_input(
+            script_name,
+            &[],
+            payload,
+            owner_id.map(|owner_id| (marker_name, owner_id)),
+        )
+    }
+
+    #[cfg(unix)]
+    fn notify_event_for_args_with_owner(
+        script_name: &str,
+        args: &[&str],
+        marker_name: &str,
+        owner_id: Option<&str>,
+    ) -> Option<String> {
+        notify_event_for_input(
+            script_name,
+            args,
+            "",
+            owner_id.map(|owner_id| (marker_name, owner_id)),
+        )
+    }
+
+    #[cfg(unix)]
+    fn notify_source_for_args_with_owner(
+        script_name: &str,
+        args: &[&str],
+        marker_name: &str,
+        owner_id: Option<&str>,
+    ) -> Option<String> {
+        notify_payload_for_input(
+            script_name,
+            args,
+            "",
+            owner_id.map(|owner_id| (marker_name, owner_id)),
+        )?
+        .get("source")?
+        .as_str()
+        .map(str::to_string)
+    }
+
+    #[cfg(unix)]
+    fn notify_event_for_input(
+        script_name: &str,
+        args: &[&str],
+        payload: &str,
+        owner_marker: Option<(&str, &str)>,
+    ) -> Option<String> {
+        notify_payload_for_input(script_name, args, payload, owner_marker)?
+            .get("event")?
+            .as_str()
+            .map(str::to_string)
+    }
+
+    #[cfg(unix)]
+    fn notify_payload_for_input(
+        script_name: &str,
+        args: &[&str],
+        payload: &str,
+        owner_marker: Option<(&str, &str)>,
+    ) -> Option<serde_json::Value> {
         use std::io::Write as _;
 
         let base = ScratchDir::new("stdin-notify-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let fake_bin = base.path().join("fake-bin");
+        let state_dir = base.path().join("agent-state");
         fs::create_dir_all(&fake_bin).unwrap();
+        fs::create_dir_all(&state_dir).unwrap();
+
+        if let Some((marker_name, owner_id)) = owner_marker {
+            fs::write(state_dir.join(marker_name), format!("{owner_id}\n")).unwrap();
+        }
 
         let capture_path = base.path().join("curl.log");
         write_executable(
@@ -927,18 +1004,20 @@ exit 1
         )
         .unwrap();
 
-        let mut child = Command::new(wrapper_dir.join(script_name))
+        let mut command = Command::new(wrapper_dir.join(script_name));
+        command
+            .args(args)
             .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
             .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
             .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_STATE_DIR", &state_dir)
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
+            .stderr(std::process::Stdio::piped());
+        let mut child = command.spawn().unwrap();
         child
             .stdin
             .take()
@@ -953,11 +1032,7 @@ exit 1
         );
 
         let body = fs::read_to_string(capture_path).ok()?;
-        serde_json::from_str::<serde_json::Value>(&body)
-            .ok()?
-            .get("event")?
-            .as_str()
-            .map(str::to_string)
+        serde_json::from_str::<serde_json::Value>(&body).ok()
     }
 
     #[cfg(unix)]
@@ -1380,15 +1455,17 @@ done
     #[cfg(unix)]
     #[test]
     fn claude_stop_waits_only_when_no_background_work_remains() {
+        let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
         let payloads = [
             serde_json::json!({
                 "hook_event_name": "Stop",
+                "session_id": owner,
                 "background_tasks": [],
                 "session_crons": [],
             }),
-            serde_json::json!({"hook_event_name": "Stop"}),
             serde_json::json!({
                 "hook_event_name": "Stop",
+                "session_id": owner,
                 "background_tasks": [],
                 "session_crons": [],
                 "last_assistant_message": "decoy: \"background_tasks\":[{\"status\":\"running\"}]",
@@ -1398,7 +1475,13 @@ done
         for payload in payloads {
             let body = serde_json::to_string(&payload).unwrap();
             assert_eq!(
-                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &body).as_deref(),
+                notify_event_for_stdin_with_owner(
+                    CLAUDE_NOTIFY_NAME,
+                    &body,
+                    "claude.id",
+                    Some(owner),
+                )
+                .as_deref(),
                 Some("needs_input"),
                 "{body}",
             );
@@ -1407,9 +1490,90 @@ done
 
     #[cfg(unix)]
     #[test]
+    fn claude_owner_completion_gate_rejects_nested_or_unknown_sessions() {
+        let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+        let nested = "019f631f-0bfc-76f1-9c1d-334be74958ca";
+        let stop = |session_id: &str| {
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "session_id": session_id,
+                "background_tasks": [],
+                "session_crons": [],
+            })
+            .to_string()
+        };
+
+        assert_eq!(
+            notify_event_for_stdin_with_owner(
+                CLAUDE_NOTIFY_NAME,
+                &stop(owner),
+                "claude.id",
+                Some(owner),
+            )
+            .as_deref(),
+            Some("needs_input"),
+        );
+        assert_eq!(
+            notify_event_for_stdin_with_owner(
+                CLAUDE_NOTIFY_NAME,
+                &stop(nested),
+                "claude.id",
+                Some(owner),
+            ),
+            None,
+            "a nested Claude Stop must not mark the terminal owner Waiting",
+        );
+        assert_eq!(
+            notify_event_for_stdin_with_owner(CLAUDE_NOTIFY_NAME, &stop(owner), "claude.id", None,),
+            None,
+            "completion must fail closed before Acorn binds an owner",
+        );
+        assert_eq!(
+            notify_event_for_stdin_with_owner(
+                CLAUDE_NOTIFY_NAME,
+                &stop("not-a-uuid"),
+                "claude.id",
+                Some("not-a-uuid"),
+            ),
+            None,
+            "matching malformed ids must not bypass owner validation",
+        );
+        assert_eq!(
+            notify_event_for_stdin_with_owner(
+                CLAUDE_NOTIFY_NAME,
+                r#"{"hook_event_name":"Stop","background_tasks":[],"session_crons":[]}"#,
+                "claude.id",
+                Some(owner),
+            ),
+            None,
+            "a Stop without a session id cannot prove ownership",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_explicit_attention_events_do_not_require_owner_binding() {
+        for payload in [
+            serde_json::json!({"hook_event_name": "PermissionRequest"}),
+            serde_json::json!({
+                "hook_event_name": "Notification",
+                "notification_type": "agent_needs_input",
+            }),
+        ] {
+            assert_eq!(
+                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &payload.to_string()).as_deref(),
+                Some("needs_input"),
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn claude_background_hooks_cannot_erase_pending_attention() {
+        let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
         let background_stop = serde_json::json!({
             "hook_event_name": "Stop",
+            "session_id": owner,
             "background_tasks": [{"id": "agent-1", "status": "running"}],
             "session_crons": [],
         });
@@ -1425,6 +1589,7 @@ done
         });
         let final_stop = serde_json::json!({
             "hook_event_name": "Stop",
+            "session_id": owner,
             "background_tasks": [],
             "session_crons": [],
         });
@@ -1438,7 +1603,14 @@ done
             final_stop,
         ]
         .into_iter()
-        .map(|payload| notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &payload.to_string()))
+        .map(|payload| {
+            notify_event_for_stdin_with_owner(
+                CLAUDE_NOTIFY_NAME,
+                &payload.to_string(),
+                "claude.id",
+                Some(owner),
+            )
+        })
         .collect::<Vec<_>>();
         assert_eq!(
             events,
@@ -1588,16 +1760,18 @@ done
     #[cfg(unix)]
     #[test]
     fn antigravity_non_idle_stop_emits_no_transition() {
+        let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
         for payload in [
             serde_json::json!({
                 "executionNum": 1,
                 "terminationReason": "model_stop",
                 "fullyIdle": false,
-                "conversationId": "019e4818-7c15-4e60-9b3b-898a1c7803d6",
+                "conversationId": owner,
             }),
             serde_json::json!({
                 "hook_event_name": "Stop",
                 "fullyIdle": false,
+                "conversationId": owner,
                 "background": {"kind": "subagent"},
             }),
         ] {
@@ -1610,25 +1784,169 @@ done
         }
 
         for payload in [
-            serde_json::json!({"hookEventName": "Stop", "fullyIdle": true}),
+            serde_json::json!({
+                "hookEventName": "Stop",
+                "fullyIdle": true,
+                "conversationId": owner,
+            }),
             serde_json::json!({
                 "executionNum": 2,
                 "terminationReason": "model_stop",
                 "fullyIdle": true,
-                "conversationId": "019e4818-7c15-4e60-9b3b-898a1c7803d6",
+                "conversationId": owner,
             }),
-            serde_json::json!({"hookEventName": "Stop"}),
             serde_json::json!({
                 "hookEventName": "Stop",
                 "fullyIdle": true,
+                "conversationId": owner,
                 "message": "decoy: \"fullyIdle\":false",
             }),
         ] {
             let body = payload.to_string();
             assert_eq!(
-                notify_event_for_stdin(ANTIGRAVITY_NOTIFY_NAME, &body).as_deref(),
+                notify_event_for_stdin_with_owner(
+                    ANTIGRAVITY_NOTIFY_NAME,
+                    &body,
+                    "antigravity.id",
+                    Some(owner),
+                )
+                .as_deref(),
                 Some("needs_input"),
                 "{body}",
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antigravity_owner_completion_gate_rejects_nested_or_unknown_brains() {
+        let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+        let nested = "019f631f-0bfc-76f1-9c1d-334be74958ca";
+        let stop = |conversation_id: Option<&str>| {
+            let mut payload = serde_json::json!({
+                "hookEventName": "Stop",
+                "fullyIdle": true,
+            });
+            if let Some(conversation_id) = conversation_id {
+                payload["conversationId"] = conversation_id.into();
+            }
+            payload.to_string()
+        };
+
+        assert_eq!(
+            notify_event_for_stdin_with_owner(
+                ANTIGRAVITY_NOTIFY_NAME,
+                &stop(Some(owner)),
+                "antigravity.id",
+                Some(owner),
+            )
+            .as_deref(),
+            Some("needs_input"),
+        );
+        assert_eq!(
+            notify_event_for_stdin_with_owner(
+                ANTIGRAVITY_NOTIFY_NAME,
+                &stop(Some(nested)),
+                "antigravity.id",
+                Some(owner),
+            ),
+            None,
+            "a nested Antigravity Stop must not mark the terminal owner Waiting",
+        );
+        assert_eq!(
+            notify_event_for_stdin_with_owner(
+                ANTIGRAVITY_NOTIFY_NAME,
+                &stop(Some(owner)),
+                "antigravity.id",
+                None,
+            ),
+            None,
+            "completion must fail closed before Acorn binds an owner",
+        );
+        assert_eq!(
+            notify_event_for_stdin_with_owner(
+                ANTIGRAVITY_NOTIFY_NAME,
+                &stop(Some("not-a-uuid")),
+                "antigravity.id",
+                Some("not-a-uuid"),
+            ),
+            None,
+            "matching malformed ids must not bypass owner validation",
+        );
+        assert_eq!(
+            notify_event_for_stdin_with_owner(
+                ANTIGRAVITY_NOTIFY_NAME,
+                &stop(None),
+                "antigravity.id",
+                Some(owner),
+            ),
+            None,
+            "a Stop without a conversation id cannot prove ownership",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antigravity_transcript_completion_requires_owner_brain() {
+        let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+        let nested = "019f631f-0bfc-76f1-9c1d-334be74958ca";
+
+        for event in ["needs_input", "stop"] {
+            assert_eq!(
+                notify_event_for_args_with_owner(
+                    ANTIGRAVITY_NOTIFY_NAME,
+                    &[event, owner],
+                    "antigravity.id",
+                    Some(owner),
+                )
+                .as_deref(),
+                Some(event),
+            );
+            assert_eq!(
+                notify_source_for_args_with_owner(
+                    ANTIGRAVITY_NOTIFY_NAME,
+                    &[event, owner],
+                    "antigravity.id",
+                    Some(owner),
+                )
+                .as_deref(),
+                Some("transcript"),
+            );
+            assert_eq!(
+                notify_event_for_args_with_owner(
+                    ANTIGRAVITY_NOTIFY_NAME,
+                    &[event, nested],
+                    "antigravity.id",
+                    Some(owner),
+                ),
+                None,
+            );
+            assert_eq!(
+                notify_event_for_args_with_owner(
+                    ANTIGRAVITY_NOTIFY_NAME,
+                    &[event],
+                    "antigravity.id",
+                    Some(owner),
+                ),
+                None,
+                "transcript completion without a brain id must fail closed",
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antigravity_explicit_attention_events_do_not_require_owner_binding() {
+        for payload in [
+            serde_json::json!({"hookEventName": "PermissionRequest"}),
+            serde_json::json!({
+                "hookEventName": "Notification",
+                "notificationType": "agent_needs_input",
+            }),
+        ] {
+            assert_eq!(
+                notify_event_for_stdin(ANTIGRAVITY_NOTIFY_NAME, &payload.to_string()).as_deref(),
+                Some("needs_input"),
             );
         }
     }
