@@ -8724,6 +8724,11 @@ mod tests {
             "ancestor-owner".to_string(),
         );
         env.insert("ACORN_AGENT_INVOCATION_DEPTH".to_string(), "3".to_string());
+        env.insert("CODEX_TUI_RECORD_SESSION".to_string(), "1".to_string());
+        env.insert(
+            "CODEX_TUI_SESSION_LOG_PATH".to_string(),
+            "/tmp/outer-codex.jsonl".to_string(),
+        );
 
         inject_agent_hook_env(&mut env, &session, Some(&hooks));
 
@@ -8746,9 +8751,45 @@ mod tests {
         );
         assert!(!env.contains_key("ACORN_AGENT_INVOCATION_TOKEN"));
         assert!(!env.contains_key("ACORN_AGENT_INVOCATION_DEPTH"));
+        assert!(!env.contains_key("CODEX_TUI_RECORD_SESSION"));
+        assert!(!env.contains_key("CODEX_TUI_SESSION_LOG_PATH"));
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_PROVIDER"),
             Some(&"codex".to_string())
+        );
+    }
+
+    #[test]
+    fn inject_agent_hook_env_preserves_unowned_recorder_configuration() {
+        let hooks = crate::agent_hooks::AgentHookServer::start().expect("hook server starts");
+        let mut session = Session::new(
+            "Codex".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.id = Uuid::new_v4();
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+
+        let mut env = HashMap::from([
+            ("CODEX_TUI_RECORD_SESSION".to_string(), "1".to_string()),
+            (
+                "CODEX_TUI_SESSION_LOG_PATH".to_string(),
+                "/tmp/caller-codex.jsonl".to_string(),
+            ),
+        ]);
+
+        inject_agent_hook_env(&mut env, &session, Some(&hooks));
+
+        assert_eq!(
+            env.get("CODEX_TUI_RECORD_SESSION").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            env.get("CODEX_TUI_SESSION_LOG_PATH").map(String::as_str),
+            Some("/tmp/caller-codex.jsonl")
         );
     }
 

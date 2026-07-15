@@ -590,7 +590,7 @@ fn write_response(stream: &mut TcpStream, code: u16, reason: &str) -> io::Result
 mod tests {
     use super::{
         apply_agent_hook_event, dispatch_connection, handle_connection, AgentHookEvent,
-        AgentHookEventKind, AgentHookServer, HookEventHandler,
+        AgentHookEventKind, AgentHookServer, HookEventHandler, MAX_HEADER_BYTES,
     };
     use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionStatus};
     use std::io::{self, Read, Write};
@@ -933,6 +933,31 @@ mod tests {
         assert!(
             response.starts_with("HTTP/1.1 204 No Content"),
             "unexpected large-payload response: {response:?}"
+        );
+    }
+
+    #[test]
+    fn hook_server_rejects_headers_over_the_documented_limit() {
+        let hooks = AgentHookServer::start().expect("hook server starts");
+        let body = format!(
+            "{{\"session_id\":\"{}\",\"provider\":\"codex\",\"event\":\"start\"}}",
+            Uuid::new_v4()
+        );
+        let padding = "x".repeat(MAX_HEADER_BYTES);
+        let mut stream = TcpStream::connect(addr_from_url(hooks.hook_url())).expect("connect hook");
+        write!(
+            stream,
+            "POST /agent-hook HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Padding: {padding}\r\nX-Acorn-Agent-Hook-Token: {}\r\nContent-Length: {}\r\n\r\n{body}",
+            hooks.token(),
+            body.len()
+        )
+        .expect("write oversized header");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read response");
+
+        assert!(
+            response.starts_with("HTTP/1.1 413 Payload Too Large"),
+            "oversized completed header bypassed the limit: {response:?}"
         );
     }
 
