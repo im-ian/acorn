@@ -1853,6 +1853,31 @@ mod tests {
     }
 
     #[test]
+    fn codex_resume_mode_only_accepts_the_resume_subcommand() {
+        let id = "019e2001-3250-76b0-8410-2e073b38a2c1";
+        for args in [
+            vec!["codex", "--enable", "hooks", "-c", "notify=[]", "resume"],
+            vec!["node", "/opt/codex.js", "resume", "--last"],
+            vec!["codex", "resume", "named-session"],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert!(codex_resume_requested_from_args(&args), "{args:?}");
+        }
+
+        for args in [
+            vec!["codex", "exec", "resume"],
+            vec!["codex", "exec", "--json", "resume"],
+            vec!["codex", "-C", "resume"],
+            vec!["codex", "--", "resume"],
+            vec!["codex", "review", "resume", id],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert!(!codex_resume_requested_from_args(&args), "{args:?}");
+            assert_eq!(codex_resume_id_from_args(&args), None, "{args:?}");
+        }
+    }
+
+    #[test]
     fn claude_resume_id_from_args_reads_resume_flag() {
         let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
         let args = vec!["claude".to_string(), "--resume".to_string(), id.to_string()];
@@ -3037,6 +3062,158 @@ mod tests {
             live,
             Some((child, child_id.to_string())),
             "a hot historical parent and newer child must not displace the resumed boundary"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resumed_codex_resolution_scans_older_date_directories() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxresume-old-day-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let old_day = sessions.join("2025").join("12").join("31");
+        let new_day = sessions.join("2026").join("07").join("15");
+        fs::create_dir_all(&old_day).unwrap();
+        fs::create_dir_all(&new_day).unwrap();
+        let cwd = root.join("repo");
+        let owner_id = "019e2001-3250-76b0-8410-2e073b38a2f3";
+        let owner = old_day.join(format!("rollout-2025-12-31T23-59-59-{owner_id}.jsonl"));
+        let mut owner_file = File::create(&owner).unwrap();
+        writeln!(
+            owner_file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": owner_id,
+                    "cwd": cwd,
+                    "originator": "codex-tui",
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "019e2001-3250-76b0-8410-2e073b38a2f1",
+                                "depth": 1
+                            }
+                        }
+                    }
+                }
+            })
+        )
+        .unwrap();
+
+        let unrelated_id = "019e2001-3250-76b0-8410-2e073b38a2f9";
+        let unrelated = new_day.join(format!("rollout-2026-07-15T10-00-00-{unrelated_id}.jsonl"));
+        let mut unrelated_file = File::create(&unrelated).unwrap();
+        writeln!(
+            unrelated_file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": unrelated_id,
+                    "cwd": root.join("other-repo"),
+                    "originator": "codex-tui",
+                    "source": "cli"
+                }
+            })
+        )
+        .unwrap();
+
+        let process_start = SystemTime::now() - Duration::from_secs(5);
+        let now = SystemTime::now();
+        set_mtime(&owner, now);
+        set_mtime(&unrelated, now);
+
+        let completed = find_completed_resumed_codex_jsonl(
+            &cwd,
+            Some(&sessions),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+        );
+        assert_eq!(completed, Some((owner.clone(), owner_id.to_string())));
+
+        let live = find_recent_resumed_codex_jsonl(
+            &cwd,
+            Some(&sessions),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(live, Some((owner, owner_id.to_string())));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resumed_codex_resolution_excludes_descendants_born_in_the_first_second() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxresume-first-second-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let day = sessions.join("2026").join("07").join("15");
+        fs::create_dir_all(&day).unwrap();
+        let owner_id = "019e2001-3250-76b0-8410-2e073b38a2f3";
+        let owner = day.join(format!("rollout-owner-{owner_id}.jsonl"));
+        File::create(&owner).unwrap();
+        let child_id = "019e2001-3250-76b0-8410-2e073b38a2f4";
+        let child = day.join(format!("rollout-child-{child_id}.jsonl"));
+        let mut child_file = File::create(&child).unwrap();
+        writeln!(
+            child_file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": child_id,
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": owner_id,
+                                "depth": 1
+                            }
+                        }
+                    }
+                }
+            })
+        )
+        .unwrap();
+
+        let process_start = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        let mut candidates = vec![
+            TranscriptCandidate {
+                path: owner,
+                birth: process_start - Duration::from_secs(60),
+                mtime: process_start + Duration::from_secs(1),
+                uuid: owner_id.to_string(),
+            },
+            TranscriptCandidate {
+                path: child,
+                birth: process_start + Duration::from_millis(500),
+                mtime: process_start + Duration::from_secs(1),
+                uuid: child_id.to_string(),
+            },
+        ];
+
+        retain_resumed_codex_roots(&mut candidates, &sessions, process_start);
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.uuid.as_str())
+                .collect::<Vec<_>>(),
+            vec![owner_id]
         );
 
         fs::remove_dir_all(&root).unwrap();
