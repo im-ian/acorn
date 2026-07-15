@@ -357,6 +357,52 @@ describe("TerminalHost", () => {
     popoverBody.remove();
   });
 
+  it("mounts every workspace terminal in its canvas node and reuses it in panes", async () => {
+    installWorkspaceSessions(["first", "second"]);
+    const firstCanvasBody = document.createElement("div");
+    firstCanvasBody.dataset.canvasTerminalBody = "first";
+    const secondCanvasBody = document.createElement("div");
+    secondCanvasBody.dataset.canvasTerminalBody = "second";
+    const paneBody = document.createElement("div");
+    paneBody.dataset.paneBody = "root";
+    document.body.append(firstCanvasBody, secondCanvasBody, paneBody);
+    useAppStore.setState({ workspaceViewMode: "canvas" });
+
+    render();
+    await flushEffects();
+
+    const firstTerminal = firstCanvasBody.querySelector<HTMLElement>(
+      '[data-acorn-terminal-slot="first"] [data-testid="terminal"]',
+    );
+    expect(firstTerminal).not.toBeNull();
+    expect(
+      secondCanvasBody.querySelector(
+        '[data-acorn-terminal-slot="second"] [data-testid="terminal"]',
+      ),
+    ).not.toBeNull();
+    expect(terminalRows()).toEqual([
+      { id: "first", active: true },
+      { id: "second", active: true },
+    ]);
+
+    await act(async () => {
+      useAppStore.setState({ workspaceViewMode: "panes" });
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(
+      paneBody.querySelector(
+        '[data-acorn-terminal-slot="first"] [data-testid="terminal"]',
+      ),
+    ).toBe(firstTerminal);
+    expect(secondCanvasBody.childElementCount).toBe(0);
+
+    firstCanvasBody.remove();
+    secondCanvasBody.remove();
+    paneBody.remove();
+  });
+
   it("uses the configured resident terminal limit when evicting idle daemon terminals", async () => {
     const ids = ["s1", "s2", "s3", "s4"];
     useSettings.setState({

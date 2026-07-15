@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LayoutNode } from "../lib/layout";
+import type { Session } from "../lib/types";
 
 vi.mock("./LayoutRenderer", async () => {
   const React = await vi.importActual<typeof import("react")>("react");
@@ -12,7 +13,7 @@ vi.mock("./LayoutRenderer", async () => {
 });
 
 import { WorkspaceMain } from "./WorkspaceMain";
-import { useAppStore } from "../store";
+import { useAppStore, type WorkspaceViewMode } from "../store";
 import { DEFAULT_SETTINGS, useSettings } from "../lib/settings";
 
 const REPO = "/Users/me/repo";
@@ -31,6 +32,7 @@ function resetStore(): void {
         },
       },
       activeProject: REPO,
+      activeProjectFolderId: REPO,
       layout: LAYOUT,
       panes: { root: pane },
       focusedPaneId: "root",
@@ -49,6 +51,50 @@ function queryLayout(): HTMLElement | null {
 
 function queryKanban(): HTMLElement | null {
   return document.querySelector<HTMLElement>("[data-testid='workspace-kanban']");
+}
+
+function queryCanvas(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    "[data-testid='workspace-canvas']",
+  );
+}
+
+function installCanvasSessions(ids: string[]): void {
+  const sessions: Session[] = ids.map((id) => ({
+    id,
+    name: id,
+    repo_path: REPO,
+    worktree_path: `${REPO}/.worktrees/${id}`,
+    branch: `feat/${id}`,
+    isolated: false,
+    status: "ready",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    last_message: null,
+    title_source: "default",
+    kind: "regular",
+    owner: { kind: "user" },
+    position: null,
+    in_worktree: false,
+  }));
+  const pane = {
+    id: "root",
+    tabIds: ids,
+    activeTabId: ids[0] ?? null,
+  };
+  useAppStore.setState((state) => ({
+    sessions,
+    panes: { root: pane },
+    activeTabId: pane.activeTabId,
+    activeSessionId: pane.activeTabId,
+    workspaces: {
+      ...state.workspaces,
+      [REPO]: {
+        ...state.workspaces[REPO],
+        panes: { root: pane },
+      },
+    },
+  }));
 }
 
 function queryColumnResizeHandle(): HTMLElement | null {
@@ -98,7 +144,7 @@ describe("WorkspaceMain", () => {
     vi.clearAllMocks();
   });
 
-  function render(viewMode: "panes" | "kanban"): void {
+  function render(viewMode: WorkspaceViewMode): void {
     act(() => {
       root.render(<WorkspaceMain layout={LAYOUT} viewMode={viewMode} />);
     });
@@ -128,6 +174,158 @@ describe("WorkspaceMain", () => {
 
     render("kanban");
     expect(queryLayout()?.parentElement?.className).toContain("hidden");
+  });
+
+  it("keeps the pane layout mounted while the canvas is shown", () => {
+    render("panes");
+    const initial = queryLayout();
+
+    render("canvas");
+    expect(queryCanvas()).not.toBeNull();
+    expect(queryLayout()).toBe(initial);
+    expect(queryLayout()?.parentElement?.className).toContain("hidden");
+
+    render("panes");
+    expect(queryCanvas()).toBeNull();
+    expect(queryLayout()).toBe(initial);
+  });
+
+  it("moves and resizes canvas terminals and persists their geometry", () => {
+    installCanvasSessions(["alpha", "beta"]);
+    render("canvas");
+
+    const nodes = document.querySelectorAll<HTMLElement>(
+      "[data-testid='workspace-canvas-node']",
+    );
+    expect(nodes).toHaveLength(2);
+    const alpha = document.querySelector<HTMLElement>(
+      '[data-canvas-session-id="alpha"]',
+    );
+    expect(alpha).not.toBeNull();
+
+    const dragHandle = alpha!.querySelector<HTMLElement>(
+      "[data-testid='workspace-canvas-node-drag-handle']",
+    );
+    firePointer(dragHandle!, "pointerdown", { clientX: 100, clientY: 100 });
+    firePointer(window, "pointerup", { clientX: 100, clientY: 100 });
+    expect(alpha!.dataset.canvasNodeX).toBe("48");
+    expect(alpha!.dataset.canvasNodeY).toBe("48");
+
+    firePointer(dragHandle!, "pointerdown", { clientX: 100, clientY: 100 });
+    firePointer(window, "pointermove", { clientX: 152, clientY: 132 });
+    firePointer(window, "pointerup", { clientX: 152, clientY: 132 });
+
+    expect(alpha!.dataset.canvasNodeX).toBe("100");
+    expect(alpha!.dataset.canvasNodeY).toBe("80");
+    expect(
+      useAppStore.getState().workspaces[REPO].canvas?.nodes.alpha,
+    ).toMatchObject({ x: 100, y: 80 });
+
+    const resizeHandle = alpha!.querySelector<HTMLElement>(
+      "[data-testid='workspace-canvas-node-resize-handle']",
+    );
+    firePointer(resizeHandle!, "pointerdown", {
+      clientX: 100,
+      clientY: 100,
+    });
+    firePointer(window, "pointermove", { clientX: 180, clientY: 160 });
+    firePointer(window, "pointerup", { clientX: 180, clientY: 160 });
+
+    expect(alpha!.dataset.canvasNodeWidth).toBe("700");
+    expect(alpha!.dataset.canvasNodeHeight).toBe("460");
+    expect(alpha!.dataset.canvasNodeX).toBe("100");
+    expect(alpha!.dataset.canvasNodeY).toBe("80");
+    expect(
+      useAppStore.getState().workspaces[REPO].canvas?.nodes.alpha,
+    ).toMatchObject({ width: 700, height: 460 });
+  });
+
+  it("preserves saved nodes while sessions are transiently empty at startup", () => {
+    const pane = {
+      id: "root",
+      tabIds: ["alpha"],
+      activeTabId: "alpha",
+    };
+    useAppStore.setState((state) => ({
+      panes: { root: pane },
+      activeTabId: "alpha",
+      activeSessionId: "alpha",
+      workspaces: {
+        ...state.workspaces,
+        [REPO]: {
+          ...state.workspaces[REPO],
+          panes: { root: pane },
+          canvas: {
+            viewport: { offset: { x: -40, y: 20 }, zoom: 0.8 },
+            nodes: {
+              alpha: {
+                x: 320,
+                y: 180,
+                width: 680,
+                height: 440,
+                zIndex: 1,
+              },
+            },
+          },
+        },
+      },
+    }));
+    render("canvas");
+    expect(useAppStore.getState().workspaces[REPO].canvas?.nodes.alpha.x).toBe(
+      320,
+    );
+
+    act(() => installCanvasSessions(["alpha"]));
+
+    expect(
+      document.querySelector<HTMLElement>('[data-canvas-session-id="alpha"]')
+        ?.dataset.canvasNodeX,
+    ).toBe("320");
+    expect(useAppStore.getState().workspaces[REPO].canvas?.nodes.alpha.x).toBe(
+      320,
+    );
+  });
+
+  it("prunes saved nodes after the final pane tab is removed", () => {
+    installCanvasSessions(["alpha"]);
+    render("canvas");
+    expect(
+      document.querySelector('[data-canvas-session-id="alpha"]'),
+    ).not.toBeNull();
+
+    const emptyPane = { id: "root", tabIds: [], activeTabId: null };
+    act(() => {
+      useAppStore.setState((state) => ({
+        sessions: [],
+        panes: { root: emptyPane },
+        activeTabId: null,
+        activeSessionId: null,
+        workspaces: {
+          ...state.workspaces,
+          [REPO]: {
+            ...state.workspaces[REPO],
+            panes: { root: emptyPane },
+          },
+        },
+      }));
+    });
+
+    expect(useAppStore.getState().workspaces[REPO].canvas?.nodes).toEqual({});
+  });
+
+  it("activates a canvas terminal when focus enters its portaled body", () => {
+    installCanvasSessions(["alpha", "beta"]);
+    render("canvas");
+    const betaBody = document.querySelector<HTMLElement>(
+      '[data-canvas-terminal-body="beta"]',
+    );
+    const input = document.createElement("textarea");
+    betaBody!.appendChild(input);
+
+    act(() => input.focus());
+
+    expect(useAppStore.getState().activeSessionId).toBe("beta");
+    expect(useAppStore.getState().panes.root.activeTabId).toBe("beta");
   });
 
   it("resizes the column during a drag and restores body styles on pointerup", () => {

@@ -1,0 +1,374 @@
+export interface WorkspaceCanvasPoint {
+  x: number;
+  y: number;
+}
+
+export interface WorkspaceCanvasSize {
+  width: number;
+  height: number;
+}
+
+export interface WorkspaceCanvasViewport {
+  offset: WorkspaceCanvasPoint;
+  zoom: number;
+}
+
+export interface WorkspaceCanvasNode {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+}
+
+export interface WorkspaceCanvasState {
+  viewport: WorkspaceCanvasViewport;
+  nodes: Record<string, WorkspaceCanvasNode>;
+}
+
+export const WORKSPACE_CANVAS_MIN_ZOOM = 0.35;
+export const WORKSPACE_CANVAS_MAX_ZOOM = 2;
+export const WORKSPACE_CANVAS_MIN_NODE_WIDTH = 360;
+export const WORKSPACE_CANVAS_MIN_NODE_HEIGHT = 240;
+export const WORKSPACE_CANVAS_DEFAULT_NODE_WIDTH = 620;
+export const WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT = 400;
+export const WORKSPACE_CANVAS_GRID_SIZE = 20;
+
+const WORKSPACE_CANVAS_MAX_NODE_WIDTH = 2_400;
+const WORKSPACE_CANVAS_MAX_NODE_HEIGHT = 1_600;
+const WORKSPACE_CANVAS_COORDINATE_LIMIT = 100_000;
+const WORKSPACE_CANVAS_NODE_GAP = 40;
+const WORKSPACE_CANVAS_NODE_ORIGIN = 48;
+const WORKSPACE_CANVAS_DEFAULT_COLUMNS = 2;
+
+export function defaultWorkspaceCanvasViewport(): WorkspaceCanvasViewport {
+  return { offset: { x: 48, y: 48 }, zoom: 1 };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizePoint(value: unknown): WorkspaceCanvasPoint | null {
+  if (!value || typeof value !== "object") return null;
+  const point = value as Partial<WorkspaceCanvasPoint>;
+  const x = finiteNumber(point.x);
+  const y = finiteNumber(point.y);
+  if (x === null || y === null) return null;
+  return {
+    x: clamp(
+      x,
+      -WORKSPACE_CANVAS_COORDINATE_LIMIT,
+      WORKSPACE_CANVAS_COORDINATE_LIMIT,
+    ),
+    y: clamp(
+      y,
+      -WORKSPACE_CANVAS_COORDINATE_LIMIT,
+      WORKSPACE_CANVAS_COORDINATE_LIMIT,
+    ),
+  };
+}
+
+export function clampWorkspaceCanvasZoom(zoom: number): number {
+  if (!Number.isFinite(zoom)) return 1;
+  return clamp(zoom, WORKSPACE_CANVAS_MIN_ZOOM, WORKSPACE_CANVAS_MAX_ZOOM);
+}
+
+export function clampWorkspaceCanvasNode(
+  node: WorkspaceCanvasNode,
+): WorkspaceCanvasNode {
+  return {
+    x: clamp(
+      Number.isFinite(node.x) ? node.x : 0,
+      -WORKSPACE_CANVAS_COORDINATE_LIMIT,
+      WORKSPACE_CANVAS_COORDINATE_LIMIT,
+    ),
+    y: clamp(
+      Number.isFinite(node.y) ? node.y : 0,
+      -WORKSPACE_CANVAS_COORDINATE_LIMIT,
+      WORKSPACE_CANVAS_COORDINATE_LIMIT,
+    ),
+    width: clamp(
+      Number.isFinite(node.width)
+        ? node.width
+        : WORKSPACE_CANVAS_DEFAULT_NODE_WIDTH,
+      WORKSPACE_CANVAS_MIN_NODE_WIDTH,
+      WORKSPACE_CANVAS_MAX_NODE_WIDTH,
+    ),
+    height: clamp(
+      Number.isFinite(node.height)
+        ? node.height
+        : WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT,
+      WORKSPACE_CANVAS_MIN_NODE_HEIGHT,
+      WORKSPACE_CANVAS_MAX_NODE_HEIGHT,
+    ),
+    zIndex: clamp(
+      Number.isFinite(node.zIndex) ? Math.trunc(node.zIndex) : 1,
+      1,
+      Number.MAX_SAFE_INTEGER,
+    ),
+  };
+}
+
+function normalizeNode(value: unknown): WorkspaceCanvasNode | null {
+  if (!value || typeof value !== "object") return null;
+  const node = value as Partial<WorkspaceCanvasNode>;
+  const x = finiteNumber(node.x);
+  const y = finiteNumber(node.y);
+  const width = finiteNumber(node.width);
+  const height = finiteNumber(node.height);
+  const zIndex = finiteNumber(node.zIndex);
+  if (
+    x === null ||
+    y === null ||
+    width === null ||
+    height === null ||
+    zIndex === null
+  ) {
+    return null;
+  }
+  return clampWorkspaceCanvasNode({ x, y, width, height, zIndex });
+}
+
+export function normalizeWorkspaceCanvasState(
+  value: unknown,
+): WorkspaceCanvasState | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const state = value as Partial<WorkspaceCanvasState>;
+  if (!state.viewport || typeof state.viewport !== "object") return undefined;
+  const viewport = state.viewport as Partial<WorkspaceCanvasViewport>;
+  const offset = normalizePoint(viewport.offset);
+  const zoom = finiteNumber(viewport.zoom);
+  if (!offset || zoom === null) return undefined;
+
+  const nodes: Record<string, WorkspaceCanvasNode> = {};
+  if (state.nodes && typeof state.nodes === "object") {
+    for (const [sessionId, rawNode] of Object.entries(state.nodes)) {
+      if (!sessionId.trim()) continue;
+      const node = normalizeNode(rawNode);
+      if (node) nodes[sessionId] = node;
+    }
+  }
+
+  return {
+    viewport: { offset, zoom: clampWorkspaceCanvasZoom(zoom) },
+    nodes,
+  };
+}
+
+function defaultNodeAt(index: number, zIndex: number): WorkspaceCanvasNode {
+  const column = index % WORKSPACE_CANVAS_DEFAULT_COLUMNS;
+  const row = Math.floor(index / WORKSPACE_CANVAS_DEFAULT_COLUMNS);
+  return {
+    x:
+      WORKSPACE_CANVAS_NODE_ORIGIN +
+      column *
+        (WORKSPACE_CANVAS_DEFAULT_NODE_WIDTH + WORKSPACE_CANVAS_NODE_GAP),
+    y:
+      WORKSPACE_CANVAS_NODE_ORIGIN +
+      row * (WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT + WORKSPACE_CANVAS_NODE_GAP),
+    width: WORKSPACE_CANVAS_DEFAULT_NODE_WIDTH,
+    height: WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT,
+    zIndex,
+  };
+}
+
+function nodesOverlap(
+  first: WorkspaceCanvasNode,
+  second: WorkspaceCanvasNode,
+): boolean {
+  const gap = WORKSPACE_CANVAS_NODE_GAP / 2;
+  return !(
+    first.x + first.width + gap <= second.x ||
+    second.x + second.width + gap <= first.x ||
+    first.y + first.height + gap <= second.y ||
+    second.y + second.height + gap <= first.y
+  );
+}
+
+function nextOpenNode(
+  existing: readonly WorkspaceCanvasNode[],
+  zIndex: number,
+): WorkspaceCanvasNode {
+  for (let index = 0; index < 10_000; index += 1) {
+    const candidate = defaultNodeAt(index, zIndex);
+    if (!existing.some((node) => nodesOverlap(candidate, node))) {
+      return candidate;
+    }
+  }
+  return defaultNodeAt(existing.length, zIndex);
+}
+
+export function reconcileWorkspaceCanvasState(
+  value: unknown,
+  sessionIds: readonly string[],
+): WorkspaceCanvasState {
+  const normalized = normalizeWorkspaceCanvasState(value) ?? {
+    viewport: defaultWorkspaceCanvasViewport(),
+    nodes: {},
+  };
+  const ids = [...new Set(sessionIds.filter((id) => id.trim().length > 0))];
+  const nodes: Record<string, WorkspaceCanvasNode> = {};
+  let maxZ = 0;
+
+  for (const id of ids) {
+    const existing = normalized.nodes[id];
+    if (!existing) continue;
+    nodes[id] = existing;
+    maxZ = Math.max(maxZ, existing.zIndex);
+  }
+
+  for (const id of ids) {
+    if (nodes[id]) continue;
+    maxZ += 1;
+    nodes[id] = nextOpenNode(Object.values(nodes), maxZ);
+  }
+
+  return { viewport: normalized.viewport, nodes };
+}
+
+export function resetWorkspaceCanvasState(
+  sessionIds: readonly string[],
+): WorkspaceCanvasState {
+  const ids = [...new Set(sessionIds.filter((id) => id.trim().length > 0))];
+  return {
+    viewport: defaultWorkspaceCanvasViewport(),
+    nodes: Object.fromEntries(
+      ids.map((id, index) => [id, defaultNodeAt(index, index + 1)]),
+    ),
+  };
+}
+
+export function workspaceCanvasStatesEqual(
+  first: WorkspaceCanvasState | undefined,
+  second: WorkspaceCanvasState,
+): boolean {
+  if (!first) return false;
+  if (
+    first.viewport.zoom !== second.viewport.zoom ||
+    first.viewport.offset.x !== second.viewport.offset.x ||
+    first.viewport.offset.y !== second.viewport.offset.y
+  ) {
+    return false;
+  }
+  const firstIds = Object.keys(first.nodes);
+  const secondIds = Object.keys(second.nodes);
+  if (firstIds.length !== secondIds.length) return false;
+  return secondIds.every((id) => {
+    const a = first.nodes[id];
+    const b = second.nodes[id];
+    return Boolean(
+      a &&
+        b &&
+        a.x === b.x &&
+        a.y === b.y &&
+        a.width === b.width &&
+        a.height === b.height &&
+        a.zIndex === b.zIndex,
+    );
+  });
+}
+
+export function zoomWorkspaceCanvasAtPoint(
+  viewport: WorkspaceCanvasViewport,
+  nextZoom: number,
+  point: WorkspaceCanvasPoint,
+): WorkspaceCanvasViewport {
+  const zoom = clampWorkspaceCanvasZoom(nextZoom);
+  const currentZoom = clampWorkspaceCanvasZoom(viewport.zoom);
+  const worldPoint = {
+    x: (point.x - viewport.offset.x) / currentZoom,
+    y: (point.y - viewport.offset.y) / currentZoom,
+  };
+  return {
+    zoom,
+    offset: {
+      x: point.x - worldPoint.x * zoom,
+      y: point.y - worldPoint.y * zoom,
+    },
+  };
+}
+
+export function fitWorkspaceCanvasViewport(
+  nodes: Readonly<Record<string, WorkspaceCanvasNode>>,
+  container: WorkspaceCanvasSize,
+  padding = 56,
+): WorkspaceCanvasViewport {
+  const values = Object.values(nodes);
+  if (
+    values.length === 0 ||
+    !Number.isFinite(container.width) ||
+    !Number.isFinite(container.height) ||
+    container.width <= 0 ||
+    container.height <= 0
+  ) {
+    return defaultWorkspaceCanvasViewport();
+  }
+
+  const minX = Math.min(...values.map((node) => node.x));
+  const minY = Math.min(...values.map((node) => node.y));
+  const maxX = Math.max(...values.map((node) => node.x + node.width));
+  const maxY = Math.max(...values.map((node) => node.y + node.height));
+  const contentWidth = Math.max(maxX - minX, 1);
+  const contentHeight = Math.max(maxY - minY, 1);
+  const availableWidth = Math.max(container.width - padding * 2, 1);
+  const availableHeight = Math.max(container.height - padding * 2, 1);
+  const zoom = clampWorkspaceCanvasZoom(
+    Math.min(availableWidth / contentWidth, availableHeight / contentHeight, 1),
+  );
+
+  return {
+    zoom,
+    offset: {
+      x: (container.width - contentWidth * zoom) / 2 - minX * zoom,
+      y: (container.height - contentHeight * zoom) / 2 - minY * zoom,
+    },
+  };
+}
+
+export function revealWorkspaceCanvasNode(
+  viewport: WorkspaceCanvasViewport,
+  node: WorkspaceCanvasNode,
+  container: WorkspaceCanvasSize,
+  padding = 48,
+): WorkspaceCanvasViewport {
+  if (container.width <= 0 || container.height <= 0) return viewport;
+  const zoom = clampWorkspaceCanvasZoom(viewport.zoom);
+  const left = node.x * zoom + viewport.offset.x;
+  const top = node.y * zoom + viewport.offset.y;
+  const right = left + node.width * zoom;
+  const bottom = top + node.height * zoom;
+  const availableWidth = Math.max(container.width - padding * 2, 1);
+  const availableHeight = Math.max(container.height - padding * 2, 1);
+  let x = viewport.offset.x;
+  let y = viewport.offset.y;
+
+  if (node.width * zoom > availableWidth) {
+    x += container.width / 2 - (left + right) / 2;
+  } else if (left < padding) {
+    x += padding - left;
+  } else if (right > container.width - padding) {
+    x -= right - (container.width - padding);
+  }
+
+  if (node.height * zoom > availableHeight) {
+    y += container.height / 2 - (top + bottom) / 2;
+  } else if (top < padding) {
+    y += padding - top;
+  } else if (bottom > container.height - padding) {
+    y -= bottom - (container.height - padding);
+  }
+
+  return { zoom, offset: { x, y } };
+}
+
+export function snapWorkspaceCanvasValue(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const snapped =
+    Math.round(value / WORKSPACE_CANVAS_GRID_SIZE) * WORKSPACE_CANVAS_GRID_SIZE;
+  return Object.is(snapped, -0) ? 0 : snapped;
+}

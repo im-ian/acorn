@@ -87,6 +87,7 @@ import {
 } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
+import { isWorkspaceTabId } from "../lib/workspaceTabs";
 import {
   KANBAN_COLUMN_DEFAULT_WIDTH,
   clampKanbanColumnWidth,
@@ -128,6 +129,7 @@ import { LayoutRenderer } from "./LayoutRenderer";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
+import { WorkspaceCanvas } from "./WorkspaceCanvas";
 
 const STATUS_TONE: Record<SessionStatus, StatusTone> = {
   ready: "neutral",
@@ -217,23 +219,33 @@ interface WorkspaceMainProps {
 
 export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
   const isKanban = viewMode === "kanban";
+  const isCanvas = viewMode === "canvas";
   const panes = useAppStore((s) => s.panes);
   const sessionsById = useAppStore(selectSessionsById);
+  const workspaceId = useAppStore(
+    (s) => s.activeProjectFolderId ?? s.activeProject,
+  );
   const closeTerminalPopup = useAppStore((s) => s.closeTerminalPopup);
-  const sessions = useMemo(() => {
-    const ordered: Session[] = [];
+  const workspaceSessionIds = useMemo(() => {
+    const ordered: string[] = [];
     const seen = new Set<string>();
     for (const pane of Object.values(panes)) {
       for (const id of pane.tabIds) {
-        if (seen.has(id)) continue;
-        const session = sessionsById.get(id);
-        if (!session) continue;
+        if (seen.has(id) || isWorkspaceTabId(id)) continue;
         seen.add(id);
-        ordered.push(session);
+        ordered.push(id);
       }
     }
     return ordered;
-  }, [panes, sessionsById]);
+  }, [panes]);
+  const sessions = useMemo(() => {
+    const ordered: Session[] = [];
+    for (const id of workspaceSessionIds) {
+      const session = sessionsById.get(id);
+      if (session) ordered.push(session);
+    }
+    return ordered;
+  }, [sessionsById, workspaceSessionIds]);
   const [prRefreshKey, setPrRefreshKey] = useState(0);
   const boardData = useKanbanBoardData(sessions, prRefreshKey, {
     pollDiffs: isKanban,
@@ -259,14 +271,27 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
           <KanbanFilePreviewOverlay />
         </div>
       ) : null}
+      {isCanvas ? (
+        <div className="relative h-full min-w-0 overflow-hidden">
+          <WorkspaceCanvas
+            key={workspaceId ?? "__local__"}
+            workspaceId={workspaceId}
+            workspaceSessionIds={workspaceSessionIds}
+            sessions={sessions}
+          />
+          <KanbanFilePreviewOverlay />
+        </div>
+      ) : null}
       {/*
-        Keep the pane layout mounted (hidden) in kanban mode instead of
+        Keep the pane layout mounted (hidden) in alternate views instead of
         unmounting it. TerminalHost appendChild's each live terminal's target
         div into a pane body; unmounting the layout orphans those divs, so
         returning to panes shows blank terminals until an unrelated reattach.
         Hiding preserves the pane-body DOM identity so the terminals stay put.
       */}
-      <div className={cn("h-full min-w-0", isKanban && "hidden")}>
+      <div
+        className={cn("h-full min-w-0", viewMode !== "panes" && "hidden")}
+      >
         <LayoutRenderer node={layout} />
       </div>
     </div>
@@ -295,7 +320,7 @@ function KanbanFilePreviewOverlay() {
 
   return (
     <div
-      className="absolute inset-0 z-20 flex items-center justify-center bg-bg/45 p-4 backdrop-blur-[1px]"
+      className="absolute inset-0 z-40 flex items-center justify-center bg-bg/45 p-4 backdrop-blur-[1px]"
       data-testid="kanban-file-preview-overlay"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) closeWorkspaceTab(tab.id);

@@ -18,6 +18,7 @@ import {
   Gauge,
   Kanban,
   Loader2,
+  Scan,
   Settings,
   Trash2,
   X,
@@ -103,13 +104,13 @@ function statusBarFormat(
 }
 
 function workspaceViewLabel(t: Translator, mode: WorkspaceViewMode): string {
-  return mode === "kanban"
-    ? t("workspace.mode.kanban")
-    : t("workspace.mode.panes");
+  if (mode === "kanban") return t("workspace.mode.kanban");
+  if (mode === "canvas") return t("workspace.mode.canvas");
+  return t("workspace.mode.panes");
 }
 
 function isWorkspaceViewMode(value: string): value is WorkspaceViewMode {
-  return value === "panes" || value === "kanban";
+  return value === "panes" || value === "kanban" || value === "canvas";
 }
 
 function useHomeDir(): string | null {
@@ -309,6 +310,11 @@ export function StatusBar() {
       label: workspaceViewLabel(t, "kanban"),
       icon: <Kanban size={12} />,
     },
+    {
+      value: "canvas",
+      label: workspaceViewLabel(t, "canvas"),
+      icon: <Scan size={12} />,
+    },
   ];
 
   return (
@@ -382,7 +388,7 @@ export function StatusBar() {
               if (isWorkspaceViewMode(value)) setWorkspaceViewMode(value);
             }}
             className={cn(
-              "w-[5.75rem] shrink-0",
+              "w-[6.25rem] shrink-0",
               "[&>button]:h-5 [&>button]:rounded [&>button]:border-transparent [&>button]:bg-transparent",
               "[&>button]:font-mono [&>button]:text-xs [&>button]:text-fg-muted",
               "[&>button]:hover:bg-bg-elevated [&>button]:hover:text-fg",

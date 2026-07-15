@@ -130,7 +130,7 @@ export const TERMINAL_LINE_HEIGHT_MAX = 2.0;
 export const TERMINAL_LINE_HEIGHT_STEP = 0.05;
 
 export type ToastPosition = "top" | "bottom";
-export type DefaultWorkspaceViewMode = "panes" | "kanban";
+export type DefaultWorkspaceViewMode = "panes" | "kanban" | "canvas";
 export type KanbanTerminalPopoverPlacement = "card" | "center";
 export type KanbanTerminalPopoverDefaultSize = "custom" | "fullscreen";
 
@@ -688,6 +688,7 @@ const VALID_TOAST_POSITIONS = new Set<ToastPosition>(["top", "bottom"]);
 const VALID_WORKSPACE_VIEW_MODES = new Set<DefaultWorkspaceViewMode>([
   "panes",
   "kanban",
+  "canvas",
 ]);
 const VALID_KANBAN_TERMINAL_POPOVER_PLACEMENTS =
   new Set<KanbanTerminalPopoverPlacement>(["card", "center"]);

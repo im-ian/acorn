@@ -80,6 +80,11 @@ import {
   summarizeTokenUsage,
   type WorkSummaryTokenBaseline,
 } from "./lib/workSummary";
+import {
+  normalizeWorkspaceCanvasState,
+  workspaceCanvasStatesEqual,
+  type WorkspaceCanvasState,
+} from "./lib/workspaceCanvas";
 
 export type { RightGroup, RightTab };
 
@@ -331,11 +336,12 @@ export interface ProjectWorkspace {
   focusedPaneId: PaneId;
   viewMode?: WorkspaceViewMode;
   localViewMode?: WorkspaceViewMode;
+  canvas?: WorkspaceCanvasState;
   rightTab?: RightTab;
   rightTabByGroup?: Record<RightGroup, RightTab>;
 }
 
-export type WorkspaceViewMode = "panes" | "kanban";
+export type WorkspaceViewMode = "panes" | "kanban" | "canvas";
 type WorkspaceViewScope = "project" | "local";
 
 export interface MoveTabArgs {
@@ -459,6 +465,10 @@ interface AppStateModel {
   ) => void;
   setFocusedPane: (paneId: PaneId) => void;
   setWorkspaceViewMode: (mode: WorkspaceViewMode) => void;
+  setWorkspaceCanvasState: (
+    workspaceId: string,
+    canvas: WorkspaceCanvasState,
+  ) => void;
   openTerminalPopup: (sessionId: string) => void;
   closeTerminalPopup: () => void;
   focusAdjacentPane: (direction: PaneFocusDirection) => void;
@@ -685,6 +695,7 @@ function emptyWorkspace(
 
 type PersistedWorkspaceState = Partial<ProjectWorkspace> & {
   localViewMode?: unknown;
+  canvas?: unknown;
   rightTab?: unknown;
   rightTabByGroup?: Partial<Record<RightGroup, unknown>>;
 };
@@ -712,7 +723,9 @@ function defaultWorkspaceViewMode(): WorkspaceViewMode {
 }
 
 function readWorkspaceViewMode(value: unknown): WorkspaceViewMode | null {
-  return value === "kanban" || value === "panes" ? value : null;
+  return value === "kanban" || value === "panes" || value === "canvas"
+    ? value
+    : null;
 }
 
 function normalizeWorkspaceViewMode(
@@ -2541,6 +2554,26 @@ export const useAppStore = create<AppStateModel>()(
     });
   },
 
+  setWorkspaceCanvasState(workspaceId, canvas) {
+    const normalized = normalizeWorkspaceCanvasState(canvas);
+    if (!normalized) return;
+    set((s) => {
+      const workspace = s.workspaces[workspaceId];
+      if (
+        !workspace ||
+        workspaceCanvasStatesEqual(workspace.canvas, normalized)
+      ) {
+        return s;
+      }
+      return {
+        workspaces: {
+          ...s.workspaces,
+          [workspaceId]: { ...workspace, canvas: normalized },
+        },
+      };
+    });
+  },
+
   openTerminalPopup(sessionId) {
     set({ terminalPopupSessionId: sessionId });
   },
@@ -2633,7 +2666,9 @@ export const useAppStore = create<AppStateModel>()(
     const sessionId = latestNeedsInputSessionId(get());
     if (!sessionId) return false;
     get().selectSession(sessionId);
-    get().setWorkspaceViewMode("panes");
+    if (get().workspaceViewMode === "kanban") {
+      get().setWorkspaceViewMode("panes");
+    }
     return get().activeSessionId === sessionId;
   },
 
@@ -4063,6 +4098,9 @@ export const useAppStore = create<AppStateModel>()(
           const explicitLocalViewMode = readWorkspaceViewMode(
             (ws as PersistedWorkspaceState).localViewMode,
           );
+          const canvas = normalizeWorkspaceCanvasState(
+            (ws as PersistedWorkspaceState).canvas,
+          );
           const newPanes: Record<PaneId, PaneState> = {};
           for (const [pid, pane] of Object.entries(ws.panes ?? {})) {
             const normalized = normalizePaneState(
@@ -4103,6 +4141,11 @@ export const useAppStore = create<AppStateModel>()(
             normalizedWorkspace.localViewMode = explicitLocalViewMode;
           } else {
             delete normalizedWorkspace.localViewMode;
+          }
+          if (canvas) {
+            normalizedWorkspace.canvas = canvas;
+          } else {
+            delete normalizedWorkspace.canvas;
           }
           sanitized[key] = normalizedWorkspace;
         }

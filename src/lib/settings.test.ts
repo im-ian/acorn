@@ -120,7 +120,7 @@ describe("interface settings", () => {
       STORAGE_KEY,
       JSON.stringify({
         interface: {
-          defaultWorkspaceViewMode: "kanban",
+          defaultWorkspaceViewMode: "canvas",
           prioritizeNeedsInputTabs: true,
           kanbanTerminalPopoverPlacement: "center",
           kanbanTerminalPopoverDefaultSize: "fullscreen",
@@ -134,7 +134,7 @@ describe("interface settings", () => {
 
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
-    ).toBe("kanban");
+    ).toBe("canvas");
     expect(
       useSettings.getState().settings.interface.prioritizeNeedsInputTabs,
     ).toBe(true);
