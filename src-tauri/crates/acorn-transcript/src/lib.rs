@@ -330,8 +330,8 @@ fn scan_live_mappings(
     // live agent could be the writer of the hot later-born transcript,
     // so rotation stays off while one is around. Claude/Codex bucket their
     // transcripts by cwd, so the scope is per-cwd. Antigravity transcripts
-    // carry no cwd and need an additional owner-cursor constraint before its
-    // wrapper helpers can safely be collapsed for rotation.
+    // carry no cwd, so its host-wide logical count is paired with the CLI's
+    // cwd-keyed owner cursor before a later brain may replace the anchor.
     let mut observations = Vec::new();
     for (pid, proc) in sys.processes() {
         if let Some(parent) = proc.parent() {
@@ -345,15 +345,8 @@ fn scan_live_mappings(
             });
         }
     }
-    // AGY rotation remains on the conservative raw-process gate until its
-    // owner cursor constrains which brain may replace the dormant anchor.
-    // Without that cursor, collapsing helpers could let a hot subagent brain
-    // masquerade as the owner's `/new` successor.
-    let antigravity_count = observations
-        .iter()
-        .filter(|process| process.node.identity.kind == AgentKind::Antigravity)
-        .count() as u32;
-    let (claude_cwd_counts, codex_cwd_counts, _) = logical_agent_process_counts(&observations);
+    let (claude_cwd_counts, codex_cwd_counts, antigravity_count) =
+        logical_agent_process_counts(&observations);
 
     // Tracks transcripts that have already been claimed by some session
     // this cycle so two sessions running claude in the same cwd do not
@@ -376,6 +369,7 @@ fn scan_live_mappings(
 
     let claude_root = claude_projects_root();
     let codex_root = codex_sessions_root();
+    let antigravity_storage_root = google_agent_storage_root();
     let antigravity_roots = antigravity_brain_roots();
 
     // Collect every (session, agent-process) candidate first so we can
@@ -543,6 +537,8 @@ fn scan_live_mappings(
                     })
             }
             AgentKind::Antigravity => {
+                let owner_cursor_id =
+                    antigravity_owner_cursor_id(antigravity_storage_root.as_deref(), &c.cwd);
                 let allow_rotation = antigravity_count <= 1
                     && !owner_rotation_quarantined.contains(&owner_rotation_scope(
                         c.session_id,
@@ -555,6 +551,7 @@ fn scan_live_mappings(
                     c.start_time,
                     now,
                     allow_rotation,
+                    owner_cursor_id.as_deref(),
                     &reserved,
                 )
             }
@@ -1161,6 +1158,17 @@ fn antigravity_brain_roots() -> Vec<PathBuf> {
         .collect()
 }
 
+fn antigravity_owner_cursor_id(storage_root: Option<&Path>, cwd: &Path) -> Option<String> {
+    let cwd = cwd.to_str()?;
+    let path = storage_root?
+        .join("antigravity-cli")
+        .join("cache")
+        .join("last_conversations.json");
+    let cursors: std::collections::HashMap<String, String> =
+        serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    cursors.get(cwd).filter(|id| is_uuid_v4_shape(id)).cloned()
+}
+
 /// Resolve the JSONL transcript a `claude` process is currently writing
 /// in the given cwd. Claude normally buckets transcripts by slugified cwd,
 /// but the metadata fallback keeps pairing stable when that slug differs.
@@ -1490,6 +1498,7 @@ fn find_recent_antigravity_jsonl(
     process_start: SystemTime,
     now: SystemTime,
     allow_rotation: bool,
+    owner_cursor_id: Option<&str>,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
     let mut candidates: Vec<TranscriptCandidate> = Vec::new();
@@ -1534,7 +1543,13 @@ fn find_recent_antigravity_jsonl(
             });
         }
     }
-    pick_anchor_or_rotate(candidates, process_start, now, allow_rotation)
+    pick_anchor_or_rotate_with_target(
+        candidates,
+        process_start,
+        now,
+        allow_rotation && owner_cursor_id.is_some(),
+        owner_cursor_id,
+    )
 }
 
 fn find_completed_antigravity_jsonl(
@@ -1912,13 +1927,26 @@ struct TranscriptCandidate {
 ///      host-wide for antigravity, whose transcripts carry no cwd) —
 ///      with a second live agent around, the hot later-born file may be
 ///      theirs, so ambiguity falls back to the anchor (old behaviour).
+///   4. providers with ownerless transcript metadata may further constrain
+///      the successor id. Antigravity uses its cwd-keyed CLI continuation
+///      cursor so a hot built-in subagent brain cannot impersonate `/new`.
 ///
 /// Tracked siblings are also excluded via `assigned` upstream.
 fn pick_anchor_or_rotate(
+    candidates: Vec<TranscriptCandidate>,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+) -> Option<(PathBuf, String)> {
+    pick_anchor_or_rotate_with_target(candidates, process_start, now, allow_rotation, None)
+}
+
+fn pick_anchor_or_rotate_with_target(
     mut candidates: Vec<TranscriptCandidate>,
     process_start: SystemTime,
     now: SystemTime,
     allow_rotation: bool,
+    successor_id: Option<&str>,
 ) -> Option<(PathBuf, String)> {
     candidates.sort_by_key(|c| time_distance(c.birth, process_start));
     let anchor = candidates.first()?;
@@ -1931,6 +1959,7 @@ fn pick_anchor_or_rotate(
             .iter()
             .filter(|c| c.birth > anchor.birth && c.mtime > anchor.mtime)
             .filter(|c| c.mtime >= dormant_before)
+            .filter(|c| successor_id.map_or(true, |id| c.uuid == id))
             .max_by_key(|c| c.birth);
         if let Some(c) = successor {
             return Some((c.path.clone(), c.uuid.clone()));
@@ -3970,7 +3999,11 @@ mod tests {
             "the cached owner must win even when a newer subagent brain is hot"
         );
 
-        for owner_cursor in [None, Some(a_id), Some("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")] {
+        for owner_cursor in [
+            None,
+            Some(a_id),
+            Some("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
+        ] {
             let pinned = find_recent_antigravity_jsonl(
                 &[brain.clone()],
                 SystemTime::UNIX_EPOCH,
@@ -4007,10 +4040,8 @@ mod tests {
     fn antigravity_owner_cursor_reads_exact_cwd_and_valid_uuid() {
         use std::fs;
 
-        let root = std::env::temp_dir().join(format!(
-            "acorn-agcursor-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("acorn-agcursor-{}", uuid::Uuid::new_v4().simple()));
         let cache = root.join("antigravity-cli").join("cache");
         fs::create_dir_all(&cache).unwrap();
         let cwd = root.join("repo");
