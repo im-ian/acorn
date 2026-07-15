@@ -1044,13 +1044,7 @@ function TabItem({
     session != null &&
     canRegenerateSessionTitle(session) &&
     !isGeneratingTitle;
-  const showAgentProviderIcons = useSettings(
-    (s) => s.settings.sessionDisplay.icons.agentProvider,
-  );
-  const agentProvider =
-    showAgentProviderIcons && session
-      ? resolveSessionAgentProvider(session)
-      : null;
+  const agentProvider = session ? resolveSessionAgentProvider(session) : null;
   const tabPath =
     tab.kind === "session"
       ? tab.session.worktree_path

@@ -2848,12 +2848,7 @@ function WorkspaceSessionIcon({
   size?: "sm" | "md";
   className?: string;
 }) {
-  const showAgentProviderIcons = useSettings(
-    (s) => s.settings.sessionDisplay.icons.agentProvider,
-  );
-  const agentProvider = showAgentProviderIcons
-    ? resolveSessionAgentProvider(session)
-    : null;
+  const agentProvider = resolveSessionAgentProvider(session);
   const fallbackKind =
     session.kind === "control"
       ? "control"

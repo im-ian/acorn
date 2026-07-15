@@ -391,22 +391,6 @@
             "description": "Idle / Running / Needs input / Failed / Completed."
           }
         },
-        "icons": {
-          "label": "Inline icons",
-          "hint": "Glyphs that decorate each session row. Hide to make the list denser.",
-          "statusDot": {
-            "label": "Status dot",
-            "description": "Colored bullet at the row start. Redundant when Status is enabled in metadata."
-          },
-          "agentProvider": {
-            "label": "Agent provider icons",
-            "description": "Use Claude/Codex/Antigravity icons in status positions and Agents History. Turn off to show status dots and text badges."
-          },
-          "sessionKind": {
-            "label": "Session kind icons",
-            "description": "Branch glyph for isolated worktrees and bot glyph for control sessions."
-          }
-        },
         "hover": {
           "label": "Show details on hover",
           "hint": "Pop a tooltip with every field when hovering a session row, regardless of which fields the row itself shows.",

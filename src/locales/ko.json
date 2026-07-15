@@ -391,22 +391,6 @@
             "description": "Idle / Running / Needs input / Failed / Completed."
           }
         },
-        "icons": {
-          "label": "인라인 아이콘",
-          "hint": "각 세션 행을 꾸미는 글리프입니다. 숨기면 목록이 더 조밀해집니다.",
-          "statusDot": {
-            "label": "상태 점",
-            "description": "행 시작 부분의 색상 점입니다. 메타데이터에서 Status가 켜져 있으면 중복됩니다."
-          },
-          "agentProvider": {
-            "label": "에이전트 제공자 아이콘",
-            "description": "상태 위치와 Agents History에 Claude/Codex/Antigravity 아이콘을 표시합니다. 끄면 상태 점과 텍스트 배지를 표시합니다."
-          },
-          "sessionKind": {
-            "label": "세션 종류 아이콘",
-            "description": "격리된 워크트리에는 브랜치 글리프를, 컨트롤 세션에는 봇 글리프를 표시합니다."
-          }
-        },
         "hover": {
           "label": "호버 시 세부 정보 표시",
           "hint": "세션 행에 마우스를 올리면 행에 표시되는 필드와 관계없이 모든 필드가 포함된 툴팁을 표시합니다.",

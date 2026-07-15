@@ -875,6 +875,22 @@ describe("SettingsModal font controls", () => {
     expect(document.querySelector('[role="listbox"]')).toBeNull();
   });
 
+  it("does not render inline icon preferences", async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.body.textContent).not.toContain("Inline icons");
+    expect(document.body.textContent).not.toContain("Status dot");
+    expect(document.body.textContent).not.toContain("Agent provider icons");
+    expect(document.body.textContent).not.toContain("Session kind icons");
+  });
+
   it("renders searchable grouped theme options with separators including user themes", async () => {
     await act(async () => {
       root = createRoot(container);
