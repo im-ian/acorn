@@ -373,11 +373,14 @@ fn write_response(stream: &mut TcpStream, code: u16, reason: &str) -> io::Result
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_agent_hook_event, AgentHookEvent, AgentHookEventKind, AgentHookServer};
+    use super::{
+        apply_agent_hook_event, AgentHookApplyOutcome, AgentHookEvent, AgentHookEventKind,
+        AgentHookReducer, AgentHookServer,
+    };
     use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionStatus};
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpStream};
-    use std::sync::mpsc;
+    use std::sync::{mpsc, Arc, Barrier};
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -427,6 +430,39 @@ mod tests {
         assert_eq!(event.provider, SessionAgentProvider::Codex);
         assert_eq!(event.event, AgentHookEventKind::NeedsInput);
         assert_eq!(event.message.as_deref(), Some("ready"));
+    }
+
+    #[test]
+    fn hook_server_normalizes_raw_codex_native_payload() {
+        let (tx, rx) = mpsc::channel();
+        let hooks = AgentHookServer::start_with_handler(move |event| {
+            tx.send(event).expect("send event");
+        })
+        .expect("hook server starts");
+        let session_id = Uuid::new_v4();
+        let body = r#"{"session_id":"provider-session","turn_id":"turn-7","hook_event_name":"PermissionRequest","tool_name":"Bash"}"#;
+
+        let response = post_with_codex_headers(
+            &hooks,
+            hooks.token(),
+            session_id,
+            "native_permission",
+            "lifecycle-2",
+            "0.144.4",
+            body,
+        );
+        assert!(response.starts_with("HTTP/1.1 204 No Content"));
+
+        let event = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("event delivered");
+        assert_eq!(event.session_id, session_id);
+        assert_eq!(event.event, AgentHookEventKind::NeedsInput);
+        assert_eq!(event.source.as_deref(), Some("native_permission"));
+        assert_eq!(event.lifecycle_id.as_deref(), Some("lifecycle-2"));
+        assert_eq!(event.provider_session_id.as_deref(), Some("provider-session"));
+        assert_eq!(event.provider_turn_id.as_deref(), Some("turn-7"));
+        assert_eq!(event.provider_version.as_deref(), Some("0.144.4"));
     }
 
     #[test]
@@ -613,11 +649,237 @@ mod tests {
         assert_eq!(sessions.hook_tool_started_at(&session_id), None);
     }
 
+    #[test]
+    fn reducer_native_stop_suppresses_late_jsonl_for_the_same_turn() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+
+        apply_codex(&reducer, session_id, "native_prompt", "run-1", Some("turn-1"));
+        apply_codex(&reducer, session_id, "native_stop", "run-1", Some("turn-1"));
+        let revision = sessions.hook_revision(&session_id);
+
+        for source in ["jsonl_task", "jsonl_tool"] {
+            assert!(matches!(
+                apply_codex(&reducer, session_id, source, "run-1", Some("turn-1")),
+                AgentHookApplyOutcome::Ignored { .. }
+            ));
+        }
+
+        assert_eq!(sessions.hook_revision(&session_id), revision);
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
+    fn reducer_native_stop_wins_over_concurrent_tool_completion() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+        apply_codex(&reducer, session_id, "native_prompt", "run-1", Some("turn-1"));
+
+        let barrier = Arc::new(Barrier::new(3));
+        let stop = {
+            let reducer = reducer.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                apply_codex(&reducer, session_id, "native_stop", "run-1", Some("turn-1"))
+            })
+        };
+        let tool = {
+            let reducer = reducer.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                apply_codex(
+                    &reducer,
+                    session_id,
+                    "native_tool_complete",
+                    "run-1",
+                    Some("turn-1"),
+                )
+            })
+        };
+        barrier.wait();
+        stop.join().expect("stop thread");
+        tool.join().expect("tool thread");
+
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
+    fn reducer_recovers_individual_missing_native_edges_from_fallbacks() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+
+        apply_codex(&reducer, session_id, "jsonl_task", "run-1", Some("turn-1"));
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+
+        apply_codex(
+            &reducer,
+            session_id,
+            "legacy_completion",
+            "run-1",
+            Some("turn-1"),
+        );
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
+    fn reducer_permission_wait_ignores_lagging_start_and_resumes_on_tool() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+        apply_codex(&reducer, session_id, "native_prompt", "run-1", Some("turn-1"));
+        apply_codex(
+            &reducer,
+            session_id,
+            "native_permission",
+            "run-1",
+            Some("turn-1"),
+        );
+
+        assert!(sessions.codex_permission_waiting_at(&session_id).is_some());
+        assert!(matches!(
+            apply_codex(&reducer, session_id, "jsonl_task", "run-1", Some("turn-1")),
+            AgentHookApplyOutcome::Ignored { .. }
+        ));
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+
+        apply_codex(&reducer, session_id, "jsonl_tool", "run-1", Some("turn-1"));
+        assert_eq!(sessions.codex_permission_waiting_at(&session_id), None);
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+    }
+
+    #[test]
+    fn reducer_old_turn_and_retired_lifecycle_cannot_overwrite_current_turn() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+        apply_codex(&reducer, session_id, "native_prompt", "run-1", Some("turn-1"));
+        apply_codex(&reducer, session_id, "native_stop", "run-1", Some("turn-1"));
+        apply_codex(&reducer, session_id, "native_prompt", "run-1", Some("turn-2"));
+
+        assert!(matches!(
+            apply_codex(
+                &reducer,
+                session_id,
+                "legacy_completion",
+                "run-1",
+                Some("turn-1"),
+            ),
+            AgentHookApplyOutcome::Ignored { .. }
+        ));
+
+        apply_codex(&reducer, session_id, "native_prompt", "run-2", Some("turn-3"));
+        assert!(matches!(
+            apply_codex(&reducer, session_id, "native_stop", "run-1", Some("turn-2")),
+            AgentHookApplyOutcome::Ignored { .. }
+        ));
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+    }
+
+    #[test]
+    fn reducer_consumes_unidentified_jsonl_backlog_before_recovering_next_turn() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+        apply_codex(&reducer, session_id, "native_prompt", "run-1", Some("turn-1"));
+        apply_codex(&reducer, session_id, "native_stop", "run-1", Some("turn-1"));
+
+        assert!(matches!(
+            apply_codex(&reducer, session_id, "jsonl_user", "run-1", None),
+            AgentHookApplyOutcome::Ignored { .. }
+        ));
+        apply_codex(&reducer, session_id, "jsonl_user", "run-1", None);
+
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+    }
+
+    fn codex_reducer_fixture() -> (Arc<acorn_session::SessionStore>, Uuid, Arc<AgentHookReducer>) {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        let session_id = session.id;
+        sessions.insert(session);
+        let reducer = Arc::new(AgentHookReducer::new(sessions.clone()));
+        (sessions, session_id, reducer)
+    }
+
+    fn apply_codex(
+        reducer: &AgentHookReducer,
+        session_id: Uuid,
+        source: &str,
+        lifecycle_id: &str,
+        provider_turn_id: Option<&str>,
+    ) -> AgentHookApplyOutcome {
+        let event = match source {
+            "native_stop" | "native_permission" | "legacy_completion" | "jsonl_approval" => {
+                AgentHookEventKind::NeedsInput
+            }
+            _ => AgentHookEventKind::Start,
+        };
+        reducer
+            .apply(AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event,
+                message: None,
+                source: Some(source.to_string()),
+                lifecycle_id: Some(lifecycle_id.to_string()),
+                provider_session_id: Some("provider-session".to_string()),
+                provider_turn_id: provider_turn_id.map(str::to_string),
+                provider_version: Some("0.144.4".to_string()),
+            })
+            .expect("event applies")
+    }
+
     fn post(hooks: &AgentHookServer, token: &str, body: &str) -> String {
         let mut stream = TcpStream::connect(addr_from_url(hooks.hook_url())).expect("connect hook");
         write!(
             stream,
             "POST /agent-hook HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Acorn-Agent-Hook-Token: {token}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .expect("write request");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read response");
+        response
+    }
+
+    fn post_with_codex_headers(
+        hooks: &AgentHookServer,
+        token: &str,
+        session_id: Uuid,
+        source: &str,
+        lifecycle_id: &str,
+        version: &str,
+        body: &str,
+    ) -> String {
+        let mut stream = TcpStream::connect(addr_from_url(hooks.hook_url())).expect("connect hook");
+        write!(
+            stream,
+            "POST /agent-hook HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Acorn-Agent-Hook-Token: {token}\r\nX-Acorn-Agent-Hook-Provider: codex\r\nX-Acorn-Agent-Hook-Session-Id: {session_id}\r\nX-Acorn-Agent-Hook-Source: {source}\r\nX-Acorn-Codex-Lifecycle-Id: {lifecycle_id}\r\nX-Acorn-Codex-Version: {version}\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         )
         .expect("write request");

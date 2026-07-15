@@ -7045,11 +7045,12 @@ mod tests {
     }
 
     #[test]
-    fn live_tool_activity_preserves_explicit_waiting() {
+    fn live_tool_activity_resumes_only_a_codex_permission_wait() {
         assert_eq!(
             super::hook_status_with_live_tool_activity(
                 acorn_session::SessionStatus::WaitingForInput,
                 Some(super::AgentKind::Claude),
+                true,
                 true,
             ),
             acorn_session::SessionStatus::WaitingForInput
@@ -7057,8 +7058,9 @@ mod tests {
         assert_eq!(
             super::hook_status_with_live_tool_activity(
                 acorn_session::SessionStatus::WaitingForInput,
-                Some(super::AgentKind::Claude),
+                Some(super::AgentKind::Codex),
                 false,
+                true,
             ),
             acorn_session::SessionStatus::WaitingForInput
         );
@@ -7067,6 +7069,7 @@ mod tests {
                 acorn_session::SessionStatus::Ready,
                 Some(super::AgentKind::Codex),
                 true,
+                false,
             ),
             acorn_session::SessionStatus::Working
         );
@@ -7075,16 +7078,18 @@ mod tests {
                 acorn_session::SessionStatus::WaitingForInput,
                 Some(super::AgentKind::Codex),
                 true,
+                false,
             ),
             acorn_session::SessionStatus::WaitingForInput
         );
         assert_eq!(
             super::hook_status_with_live_tool_activity(
                 acorn_session::SessionStatus::WaitingForInput,
-                Some(super::AgentKind::Antigravity),
+                Some(super::AgentKind::Codex),
+                true,
                 true,
             ),
-            acorn_session::SessionStatus::WaitingForInput
+            acorn_session::SessionStatus::Working
         );
     }
 
