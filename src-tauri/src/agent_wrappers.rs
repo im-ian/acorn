@@ -677,12 +677,12 @@ completion_brain_id="${2-}"
 if [ -z "$input" ]; then
   input=$(cat 2>/dev/null || true)
 fi
+compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
 
 if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   [ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
 else
   [ -z "${ACORN_AGENT_INVOCATION_DEPTH-}" ] || exit 0
-  compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
   legacy_payload_brain_id=$(printf '%s\n' "$compact_input" | grep -oE '(^|[,{])[[:space:]]*"conversationId"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
   legacy_brain_id="$completion_brain_id"
   if [ -n "$legacy_payload_brain_id" ]; then
@@ -695,6 +695,22 @@ else
     legacy_owner_brain_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/antigravity.id" 2>/dev/null | tr -d '\r\n')
   fi
   [ "$legacy_owner_brain_id" = "$legacy_brain_id" ] || exit 0
+fi
+
+# A native hook inherits the top-level wrapper token even when AGY fires it
+# inside a child conversation. Once the cwd-bound owner marker exists, only
+# that exact conversation may transition the aggregate Acorn session. Missing
+# markers remain accepted during initial synchronous startup; the transcript
+# owner watcher supplies the eventual binding.
+payload_brain_id=$(printf '%s\n' "$compact_input" | grep -oE '(^|[,{])[[:space:]]*"conversationId"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
+if [ -n "$payload_brain_id" ]; then
+  printf '%s\n' "$payload_brain_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
+  if [ -n "${ACORN_AGENT_STATE_DIR-}" ] && [ -r "$ACORN_AGENT_STATE_DIR/antigravity.id" ]; then
+    bound_brain_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/antigravity.id" 2>/dev/null | tr -d '\r\n')
+    if printf '%s\n' "$bound_brain_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$'; then
+      [ "$bound_brain_id" = "$payload_brain_id" ] || exit 0
+    fi
+  fi
 fi
 
 source="hook"
@@ -718,7 +734,6 @@ case "$event" in
     hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hookEventName"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
     [ -n "$hook_event_name" ] || hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
     if [ -z "$hook_event_name" ]; then
-      compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
       if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"fullyIdle"[[:space:]]*:[[:space:]]*(true|false)([[:space:]]*[,}]|$)'; then
         hook_event_name="Stop"
       fi
@@ -731,7 +746,6 @@ case "$event" in
       SessionStart|UserPromptSubmit|PreToolUse) event="start" ;;
       SubagentStop) event="" ;;
       Stop)
-        compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
         if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"fullyIdle"[[:space:]]*:[[:space:]]*false([[:space:]]*[,}]|$)'; then
           # Preserve Working or a concurrent attention request; a non-idle
           # Stop is a pause, not a new turn boundary.
