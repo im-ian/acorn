@@ -2227,6 +2227,20 @@ mod tests {
             vec!["codex", "resume", "--all", id],
             vec!["codex", "resume", "--yolo", id],
             vec!["codex", "resume", "-c", "model=o3", id],
+            vec!["codex", "exec", "resume", id],
+            vec!["codex", "e", "--json", "resume", "--all", id],
+            vec![
+                "node",
+                "/opt/codex.js",
+                "-C",
+                "/repo",
+                "exec",
+                "--json",
+                "resume",
+                "-c",
+                "model=o3",
+                id,
+            ],
         ] {
             let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
             assert_eq!(
@@ -2243,6 +2257,20 @@ mod tests {
             vec!["codex".into(), "resume".into()],
             vec!["codex".into(), "resume".into(), "--last".into()],
             vec!["codex".into(), "resume".into(), "named-session".into()],
+            vec!["codex".into(), "exec".into(), "resume".into()],
+            vec![
+                "codex".into(),
+                "exec".into(),
+                "--json".into(),
+                "resume".into(),
+                "--last".into(),
+            ],
+            vec![
+                "codex".into(),
+                "e".into(),
+                "resume".into(),
+                "--last".into(),
+            ],
         ] {
             assert!(codex_resume_requested_from_args(&args));
         }
@@ -2298,8 +2326,10 @@ mod tests {
         }
 
         for args in [
-            vec!["codex", "exec", "resume"],
-            vec!["codex", "exec", "--json", "resume"],
+            vec!["codex", "exec", "explain resume state"],
+            vec!["codex", "exec", "explain", "resume"],
+            vec!["codex", "e", "--json", "explain", "resume"],
+            vec!["codex", "exec", "--", "resume"],
             vec!["codex", "-C", "resume"],
             vec!["codex", "--", "resume"],
             vec!["codex", "review", "resume", id],
@@ -2313,9 +2343,34 @@ mod tests {
     #[test]
     fn claude_resume_id_from_args_reads_resume_flag() {
         let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-        let args = vec!["claude".to_string(), "--resume".to_string(), id.to_string()];
+        for args in [
+            vec!["claude", "--resume", id],
+            vec!["claude", "-r", id],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(
+                claude_resume_id_from_args(&args).as_deref(),
+                Some(id),
+                "{args:?}"
+            );
+        }
+    }
 
-        assert_eq!(claude_resume_id_from_args(&args).as_deref(), Some(id));
+    #[test]
+    fn claude_fork_session_does_not_pin_the_resumed_id() {
+        let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        for args in [
+            vec!["claude", "--resume", id, "--fork-session"],
+            vec!["claude", "-r", id, "--fork-session"],
+            vec!["claude", "--fork-session", "--resume", id],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(
+                claude_resume_id_from_args(&args),
+                None,
+                "a fork creates a new owner instead of reusing {id}: {args:?}"
+            );
+        }
     }
 
     #[test]
@@ -2544,11 +2599,14 @@ mod tests {
 
     #[test]
     fn codex_cd_parses_supported_subcommand_option_prefixes_only() {
+        let id = "019e2001-3250-76b0-8410-2e073b38a2c1";
         for args in [
             vec!["codex", "resume", "--last", "--cd=/other"],
             vec!["codex", "fork", "--all", "-C", "/other"],
             vec!["codex", "exec", "--json", "-C", "/other"],
-            vec!["codex", "exec", "resume", "--last", "-C/other"],
+            vec!["codex", "-C/other", "exec", "resume", "--last"],
+            vec!["codex", "exec", "--json", "-C/other", "resume", id],
+            vec!["codex", "e", "--cd=/other", "resume", "--last"],
         ] {
             let node = process_node("/opt/codex", "codex", &args, "/repo");
             assert_eq!(node.cwd.as_deref(), Some(Path::new("/other")), "{args:?}");
@@ -2561,6 +2619,21 @@ mod tests {
             "/repo",
         );
         assert_eq!(prompt.cwd.as_deref(), Some(Path::new("/repo")));
+
+        let resumed_prompt = process_node(
+            "/opt/codex",
+            "codex",
+            &[
+                "codex",
+                "exec",
+                "-C/other",
+                "resume",
+                id,
+                "explain -C /not-the-cwd",
+            ],
+            "/repo",
+        );
+        assert_eq!(resumed_prompt.cwd.as_deref(), Some(Path::new("/other")));
     }
 
     #[test]
@@ -2770,7 +2843,30 @@ mod tests {
         assert_eq!(codex.get(&cwd), Some(&3));
         assert_eq!(claude.get(&cwd), Some(&1));
         assert_eq!(claude.get(&other_cwd), Some(&1));
-        assert_eq!(antigravity, 1);
+        assert_eq!(antigravity.get(&cwd), Some(&1));
+    }
+
+    #[test]
+    fn logical_antigravity_counts_are_scoped_by_exact_cwd() {
+        let cwd = PathBuf::from("/repo");
+        let other_cwd = PathBuf::from("/other");
+        let agy_in = |cwd: &Path| AgentProcessNode {
+            identity: AgentProcessIdentity {
+                kind: AgentKind::Antigravity,
+                shape: AgentProcessShape::Runtime,
+            },
+            cwd: Some(cwd.to_path_buf()),
+        };
+        let processes = vec![
+            observation(30, None, agy_in(&cwd)),
+            observation(31, None, agy_in(&other_cwd)),
+            observation(32, None, agy_in(&cwd)),
+        ];
+
+        let (_, _, antigravity) = logical_agent_process_counts(&processes);
+
+        assert_eq!(antigravity.get(&cwd), Some(&2));
+        assert_eq!(antigravity.get(&other_cwd), Some(&1));
     }
 
     #[test]
@@ -4302,12 +4398,10 @@ mod tests {
         let cwd = root.join("repo");
         let other = root.join("repo-other");
         let id = "28a49f9d-4b8f-419c-9d8a-bf0854310e03";
+        let other_id = "39b50aae-5c90-42ad-ae9b-c01965421f14";
         let cursors = std::collections::HashMap::from([
             (cwd.to_string_lossy().into_owned(), id.to_string()),
-            (
-                other.to_string_lossy().into_owned(),
-                "not-a-uuid".to_string(),
-            ),
+            (other.to_string_lossy().into_owned(), other_id.to_string()),
         ]);
         fs::write(
             cache.join("last_conversations.json"),
@@ -4319,7 +4413,11 @@ mod tests {
             antigravity_owner_cursor_id(Some(&root), &cwd).as_deref(),
             Some(id)
         );
-        assert_eq!(antigravity_owner_cursor_id(Some(&root), &other), None);
+        assert_eq!(
+            antigravity_owner_cursor_id(Some(&root), &other).as_deref(),
+            Some(other_id),
+            "each top-level cwd must read only its own continuation cursor"
+        );
         assert_eq!(
             antigravity_owner_cursor_id(Some(&root), &root.join("missing")),
             None
