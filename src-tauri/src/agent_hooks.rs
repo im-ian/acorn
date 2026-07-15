@@ -584,7 +584,7 @@ mod tests {
     use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionStatus};
     use std::io::{self, Read, Write};
     use std::net::{SocketAddr, TcpStream};
-    use std::sync::{mpsc, Arc};
+    use std::sync::{mpsc, Arc, Mutex};
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -595,6 +595,68 @@ mod tests {
         assert!(hooks.hook_url().starts_with("http://127.0.0.1:"));
         assert!(hooks.hook_url().ends_with("/agent-hook"));
         assert!(!hooks.token().is_empty());
+    }
+
+    #[test]
+    fn hook_server_serializes_handler_side_effects() {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let hooks = Arc::new(
+            AgentHookServer::start_with_handler(move |_| {
+                entered_tx.send(()).expect("report handler entry");
+                release_rx
+                    .lock()
+                    .expect("lock release receiver")
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("release handler");
+            })
+            .expect("hook server starts"),
+        );
+        let body = format!(
+            "{{\"session_id\":\"{}\",\"provider\":\"codex\",\"event\":\"start\"}}",
+            Uuid::new_v4()
+        );
+
+        let first_hooks = hooks.clone();
+        let first_body = body.clone();
+        let first = std::thread::spawn(move || {
+            let token = first_hooks.token().to_string();
+            post(&first_hooks, &token, &first_body)
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first handler enters");
+
+        let second_hooks = hooks.clone();
+        let second = std::thread::spawn(move || {
+            let token = second_hooks.token().to_string();
+            post(&second_hooks, &token, &body)
+        });
+        let handlers_overlapped = entered_rx.recv_timeout(Duration::from_millis(500)).is_ok();
+
+        release_tx.send(()).expect("release first handler");
+        if handlers_overlapped {
+            release_tx.send(()).expect("release second handler");
+        } else {
+            entered_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("second handler enters after first exits");
+            release_tx.send(()).expect("release second handler");
+        }
+
+        assert!(first
+            .join()
+            .expect("first client")
+            .starts_with("HTTP/1.1 204 No Content"));
+        assert!(second
+            .join()
+            .expect("second client")
+            .starts_with("HTTP/1.1 204 No Content"));
+        assert!(
+            !handlers_overlapped,
+            "concurrent hook callbacks can reorder apply, persist, and emit"
+        );
     }
 
     #[test]
