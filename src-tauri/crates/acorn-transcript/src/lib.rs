@@ -810,9 +810,24 @@ fn agent_process_node_from_parts(
 fn codex_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) -> Option<PathBuf> {
     let mut index = args.iter().position(|arg| basename_matches(arg, "codex"))? + 1;
     let mut requested_cwd = None;
+    let mut after_exec = false;
+    let mut after_resume_like = false;
 
     while let Some(arg) = args.get(index).map(String::as_str) {
-        if arg == "--" || !arg.starts_with('-') {
+        if arg == "--" {
+            break;
+        }
+        if !arg.starts_with('-') {
+            if arg == "exec" && !after_exec && !after_resume_like {
+                after_exec = true;
+                index += 1;
+                continue;
+            }
+            if matches!(arg, "resume" | "fork") && !after_resume_like {
+                after_resume_like = true;
+                index += 1;
+                continue;
+            }
             break;
         }
 
@@ -829,7 +844,11 @@ fn codex_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) ->
             }
         }
 
-        index = codex_option_end(args, index, false)?;
+        index = codex_option_end(args, index, after_resume_like).or_else(|| {
+            after_exec
+                .then(|| codex_exec_option_end(args, index))
+                .flatten()
+        })?;
     }
 
     requested_cwd.map(|cwd| {
@@ -842,6 +861,34 @@ fn codex_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) ->
         };
         effective.canonicalize().unwrap_or(effective)
     })
+}
+
+fn codex_exec_option_end(args: &[String], index: usize) -> Option<usize> {
+    let arg = args.get(index)?.as_str();
+    if matches!(
+        arg,
+        "--skip-git-repo-check"
+            | "--ephemeral"
+            | "--ignore-user-config"
+            | "--ignore-rules"
+            | "--json"
+    ) {
+        return Some(index + 1);
+    }
+
+    const VALUE_OPTIONS: &[&str] = &["--output-schema", "--color", "-o", "--output-last-message"];
+    if VALUE_OPTIONS.contains(&arg) {
+        args.get(index + 1)?;
+        return Some(index + 2);
+    }
+
+    let has_attached_value = VALUE_OPTIONS.iter().any(|option| {
+        option.starts_with("--")
+            && arg
+                .strip_prefix(option)
+                .is_some_and(|suffix| suffix.starts_with('='))
+    }) || arg.starts_with("-o") && arg.len() > 2;
+    has_attached_value.then_some(index + 1)
 }
 
 fn same_logical_agent_invocation(parent: &AgentProcessNode, child: &AgentProcessNode) -> bool {
