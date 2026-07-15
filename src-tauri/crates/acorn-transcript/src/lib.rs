@@ -403,7 +403,7 @@ fn scan_live_mappings(
 
         for process_match in matches {
             if let Some(proc) = sys.process(process_match.pid) {
-                if let Some(cwd) = proc.cwd().map(|p| p.to_path_buf()) {
+                if let Some(cwd) = agent_process_node(proc).and_then(|node| node.cwd) {
                     let start_time =
                         SystemTime::UNIX_EPOCH + Duration::from_secs(proc.start_time());
                     let explicit_transcript_id = match process_match.kind {
@@ -782,10 +782,65 @@ fn agent_process_node(proc: &sysinfo::Process) -> Option<AgentProcessNode> {
         .iter()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
-    let identity = agent_process_identity_from_parts(proc.exe(), proc.name().to_str(), &args)?;
-    Some(AgentProcessNode {
-        identity,
-        cwd: proc.cwd().map(Path::to_path_buf),
+    agent_process_node_from_parts(proc.exe(), proc.name().to_str(), &args, proc.cwd())
+}
+
+fn agent_process_node_from_parts(
+    exe: Option<&Path>,
+    name: Option<&str>,
+    args: &[String],
+    process_cwd: Option<&Path>,
+) -> Option<AgentProcessNode> {
+    let identity = agent_process_identity_from_parts(exe, name, args)?;
+    let cwd = if identity.kind == AgentKind::Codex {
+        codex_effective_cwd_from_args(args, process_cwd)
+            .or_else(|| process_cwd.map(Path::to_path_buf))
+    } else {
+        process_cwd.map(Path::to_path_buf)
+    };
+    Some(AgentProcessNode { identity, cwd })
+}
+
+/// Resolve Codex's working directory override from the global CLI option
+/// prefix. Acorn's shell wrapper and the Node launcher keep their original
+/// process cwd while the native Codex child applies `-C` / `--cd`; using the
+/// effective cwd here lets all three processes remain one logical invocation.
+/// Stop at the first positional argument so prompt text can never be mistaken
+/// for an option.
+fn codex_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) -> Option<PathBuf> {
+    let mut index = args.iter().position(|arg| basename_matches(arg, "codex"))? + 1;
+    let mut requested_cwd = None;
+
+    while let Some(arg) = args.get(index).map(String::as_str) {
+        if arg == "--" || !arg.starts_with('-') {
+            break;
+        }
+
+        if matches!(arg, "-C" | "--cd") {
+            requested_cwd = Some(PathBuf::from(args.get(index + 1)?));
+        } else if let Some(value) = arg.strip_prefix("--cd=") {
+            if value.is_empty() {
+                return None;
+            }
+            requested_cwd = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.strip_prefix("-C") {
+            if !value.is_empty() {
+                requested_cwd = Some(PathBuf::from(value));
+            }
+        }
+
+        index = codex_option_end(args, index, false)?;
+    }
+
+    requested_cwd.map(|cwd| {
+        let effective = if cwd.is_absolute() {
+            cwd
+        } else if let Some(process_cwd) = process_cwd {
+            process_cwd.join(cwd)
+        } else {
+            cwd
+        };
+        effective.canonicalize().unwrap_or(effective)
     })
 }
 
