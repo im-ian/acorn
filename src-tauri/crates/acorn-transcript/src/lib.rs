@@ -1920,9 +1920,19 @@ mod tests {
     #[test]
     fn codex_resume_id_from_args_reads_resume_subcommand() {
         let id = "019e2001-3250-76b0-8410-2e073b38a2c1";
-        let args = vec!["codex".to_string(), "resume".to_string(), id.to_string()];
-
-        assert_eq!(codex_resume_id_from_args(&args).as_deref(), Some(id));
+        for args in [
+            vec!["codex", "resume", id],
+            vec!["codex", "resume", "--all", id],
+            vec!["codex", "resume", "--yolo", id],
+            vec!["codex", "resume", "-c", "model=o3", id],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(
+                codex_resume_id_from_args(&args).as_deref(),
+                Some(id),
+                "{args:?}"
+            );
+        }
     }
 
     #[test]
@@ -1968,6 +1978,17 @@ mod tests {
         for args in [
             vec!["codex", "--enable", "hooks", "-c", "notify=[]", "resume"],
             vec!["node", "/opt/codex.js", "resume", "--last"],
+            vec![
+                "node",
+                "/opt/codex.js",
+                "--enable",
+                "hooks",
+                "-c",
+                "notify=[]",
+                "--yolo",
+                "resume",
+                id,
+            ],
             vec!["codex", "resume", "named-session"],
         ] {
             let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
