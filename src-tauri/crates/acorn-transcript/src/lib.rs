@@ -2032,14 +2032,16 @@ mod tests {
         let root = Pid::from_u32(1);
         let wrapper = Pid::from_u32(2);
         let codex = Pid::from_u32(3);
-        let nested_codex = Pid::from_u32(4);
+        let tool_shell = Pid::from_u32(4);
+        let nested_codex = Pid::from_u32(5);
         let mut children = std::collections::HashMap::new();
         children.insert(root, vec![wrapper]);
         children.insert(wrapper, vec![codex]);
-        children.insert(codex, vec![nested_codex]);
+        children.insert(codex, vec![tool_shell]);
+        children.insert(tool_shell, vec![nested_codex]);
 
         let kind_for_pid = |pid: Pid| match pid.as_u32() {
-            3 | 4 => Some(AgentKind::Codex),
+            3 | 5 => Some(AgentKind::Codex),
             _ => None,
         };
 
@@ -2051,7 +2053,7 @@ mod tests {
         );
         assert_eq!(
             all.into_iter().map(|m| m.pid.as_u32()).collect::<Vec<_>>(),
-            vec![3, 4],
+            vec![3, 5],
         );
 
         let owners = collect_agent_processes_in_tree(
@@ -2064,8 +2066,48 @@ mod tests {
             process_roles(owners),
             vec![
                 (3, AgentKind::Codex, AgentProcessRole::Emit),
-                (4, AgentKind::Codex, AgentProcessRole::Quarantine),
+                (5, AgentKind::Codex, AgentProcessRole::Quarantine),
             ],
+        );
+    }
+
+    #[test]
+    fn session_owner_scope_collapses_contiguous_provider_launcher_chains() {
+        let root = Pid::from_u32(1);
+        let codex_wrapper = Pid::from_u32(10);
+        let codex_watcher = Pid::from_u32(11);
+        let codex_node = Pid::from_u32(12);
+        let codex_native = Pid::from_u32(13);
+        let claude_wrapper = Pid::from_u32(20);
+        let claude_native = Pid::from_u32(21);
+        let agy_wrapper = Pid::from_u32(30);
+        let agy_watcher = Pid::from_u32(31);
+        let agy_native = Pid::from_u32(32);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![codex_wrapper, claude_wrapper, agy_wrapper]);
+        children.insert(codex_wrapper, vec![codex_watcher, codex_node]);
+        children.insert(codex_node, vec![codex_native]);
+        children.insert(claude_wrapper, vec![claude_native]);
+        children.insert(agy_wrapper, vec![agy_watcher, agy_native]);
+
+        let mut owners =
+            collect_agent_processes_in_tree(&children, root, MappingScope::SessionOwners, |pid| {
+                match pid.as_u32() {
+                    10..=13 => Some(AgentKind::Codex),
+                    20..=21 => Some(AgentKind::Claude),
+                    30..=32 => Some(AgentKind::Antigravity),
+                    _ => None,
+                }
+            });
+        owners.sort_by_key(|process| process.pid.as_u32());
+
+        assert_eq!(
+            process_roles(owners),
+            vec![
+                (10, AgentKind::Codex, AgentProcessRole::Emit),
+                (20, AgentKind::Claude, AgentProcessRole::Emit),
+                (30, AgentKind::Antigravity, AgentProcessRole::Emit),
+            ]
         );
     }
 
@@ -2101,16 +2143,18 @@ mod tests {
     #[test]
     fn session_owner_scope_handles_exec_replaced_shell_root() {
         let root_codex = Pid::from_u32(1);
-        let nested_codex = Pid::from_u32(2);
+        let tool_shell = Pid::from_u32(2);
+        let nested_codex = Pid::from_u32(3);
         let mut children = std::collections::HashMap::new();
-        children.insert(root_codex, vec![nested_codex]);
+        children.insert(root_codex, vec![tool_shell]);
+        children.insert(tool_shell, vec![nested_codex]);
 
         let owners = collect_agent_processes_in_tree(
             &children,
             root_codex,
             MappingScope::SessionOwners,
             |pid| match pid.as_u32() {
-                1 | 2 => Some(AgentKind::Codex),
+                1 | 3 => Some(AgentKind::Codex),
                 _ => None,
             },
         );
@@ -2119,7 +2163,7 @@ mod tests {
             process_roles(owners),
             vec![
                 (1, AgentKind::Codex, AgentProcessRole::Emit),
-                (2, AgentKind::Codex, AgentProcessRole::Quarantine),
+                (3, AgentKind::Codex, AgentProcessRole::Quarantine),
             ],
         );
     }
