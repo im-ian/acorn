@@ -910,7 +910,21 @@ mod tests {
         .expect("hook server starts");
         let session_id = Uuid::new_v4();
 
-        for body in [
+        let child = serde_json::json!({
+            "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+            "turn_id": "019f6338-6250-7303-88a6-a7add31dba1d",
+            "hook_event_name": "PermissionRequest",
+            "agent_id": "019f6322-41e5-7882-a99a-d186dff6739c",
+            "agent_type": "worker",
+        });
+        let response = post_raw_codex_hook(&hooks, session_id, &child.to_string());
+        assert!(response.starts_with("HTTP/1.1 202 Accepted"));
+        assert!(
+            rx.try_recv().is_err(),
+            "a child event reached the owner handler"
+        );
+
+        for malformed_owner in [
             serde_json::json!({
                 "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
                 "turn_id": "019f6338-6250-7303-88a6-a7add31dba1d",
@@ -920,16 +934,16 @@ mod tests {
             serde_json::json!({
                 "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
                 "turn_id": "019f6338-6250-7303-88a6-a7add31dba1d",
-                "hook_event_name": "PermissionRequest",
-                "agent_id": "019f6322-41e5-7882-a99a-d186dff6739c",
+                "hook_event_name": "PreToolUse",
+                "agent_id": null,
                 "agent_type": "worker",
             }),
         ] {
-            let response = post_raw_codex_hook(&hooks, session_id, &body.to_string());
-            assert!(response.starts_with("HTTP/1.1 202 Accepted"));
+            let response = post_raw_codex_hook(&hooks, session_id, &malformed_owner.to_string());
+            assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
             assert!(
                 rx.try_recv().is_err(),
-                "unscoped or child event reached the owner handler"
+                "malformed ownership reached the owner handler"
             );
         }
 

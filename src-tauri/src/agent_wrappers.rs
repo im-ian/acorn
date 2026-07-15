@@ -2523,6 +2523,24 @@ done
 
     #[cfg(unix)]
     #[test]
+    fn codex_wrapper_consumes_each_native_confirmation_once() {
+        let approval =
+            r#"{"dir":"to_tui","kind":"codex_event","msg":{"type":"exec_approval_request"}}"#;
+        let two_approvals = format!("{approval}\n{approval}");
+
+        let (notifications, _) = codex_wrapper_notifications_for_tui_line(
+            &two_approvals,
+            Some(("permission", "token-1")),
+        );
+
+        assert_eq!(
+            notifications, "needs_input transcript\n",
+            "one native callback must suppress only its matching fallback event"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn codex_native_notify_tracks_runtime_delivery() {
         use std::io::Write as _;
 
@@ -2577,6 +2595,18 @@ done
         let capability_file =
             |capability: &str| PathBuf::from(format!("{}.{capability}", active_file.display()));
 
+        run_notify("PermissionRequest", "0", "202");
+        assert!(
+            capability_file("permission").is_file(),
+            "an explicit child callback must suppress its matching JSONL duplicate"
+        );
+
+        run_notify("Stop", "0", "409");
+        assert!(
+            capability_file("stop").is_file(),
+            "a semantically rejected Stop must suppress its unsafe legacy duplicate"
+        );
+
         run_notify("PreToolUse", "0", "204");
         assert!(
             capability_file("tool").is_file(),
@@ -2596,7 +2626,14 @@ done
             capability_file("turn").is_file(),
             "UserPromptSubmit must confirm turn delivery"
         );
+        assert!(
+            !capability_file("tool").exists()
+                && !capability_file("permission").exists()
+                && !capability_file("stop").exists(),
+            "a new applied owner turn must invalidate prior-turn confirmations"
+        );
 
+        run_notify("PermissionRequest", "0", "204");
         run_notify("Stop", "0", "204");
         assert!(
             capability_file("stop").is_file(),
@@ -2609,10 +2646,11 @@ done
             "an ignored child hook must not revoke an existing confirmation"
         );
 
+        fs::remove_file(capability_file("stop")).unwrap();
         run_notify("Stop", "0", "409");
         assert!(
-            !capability_file("stop").exists(),
-            "a rejected Stop must reactivate only its completion fallback"
+            capability_file("stop").is_file(),
+            "a rejected Stop must suppress only its unsafe duplicate"
         );
         assert!(capability_file("turn").is_file());
 
@@ -2620,6 +2658,12 @@ done
         assert!(
             !capability_file("turn").exists(),
             "a failed prompt hook must reactivate its turn fallback"
+        );
+
+        run_notify("PermissionRequest", "0", "400");
+        assert!(
+            !capability_file("permission").exists(),
+            "a malformed callback must reactivate its compatibility fallback"
         );
     }
 
