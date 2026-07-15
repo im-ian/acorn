@@ -843,6 +843,55 @@ exec "$ACORN_TEST_REAL_TAIL" "$@"
     }
 
     #[cfg(unix)]
+    fn run_hooked_wrapper_for_invocation_ownership(
+        provider: &str,
+        inherited_invocation: bool,
+    ) -> std::process::Output {
+        let base = ScratchDir::new(&format!("{provider}-invocation-owner"));
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        let state_dir = base.path().join("agent-state");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&state_dir).unwrap();
+
+        write_executable(
+            &real_dir.join(provider),
+            r#"#!/bin/sh
+printf 'hook_session=%s\n' "${ACORN_AGENT_HOOK_SESSION_ID-}"
+printf 'hook_url=%s\n' "${ACORN_AGENT_HOOK_URL-}"
+printf 'hook_token=%s\n' "${ACORN_AGENT_HOOK_TOKEN-}"
+printf 'invocation_token=%s\n' "${ACORN_AGENT_INVOCATION_TOKEN-}"
+printf 'invocation_depth=%s\n' "${ACORN_AGENT_INVOCATION_DEPTH-}"
+for arg in "$@"; do
+  printf 'arg=%s\n' "$arg"
+done
+"#,
+        )
+        .unwrap();
+
+        let mut command = Command::new(wrapper_dir.join(provider));
+        command
+            .arg("sentinel")
+            .env("PATH", format!("{}:/usr/bin:/bin", real_dir.display()))
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_STATE_DIR", &state_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "hook-token-1")
+            .env_remove("ACORN_AGENT_INVOCATION_TOKEN")
+            .env_remove("ACORN_AGENT_INVOCATION_DEPTH")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if inherited_invocation {
+            command
+                .env("ACORN_AGENT_INVOCATION_TOKEN", "outer-invocation")
+                .env("ACORN_AGENT_INVOCATION_DEPTH", "1");
+        }
+
+        command.output().unwrap()
+    }
+
+    #[cfg(unix)]
     fn codex_wrapper_notifications_for_tui_line(line: &str) -> (String, bool) {
         let base = ScratchDir::new("codex-tui-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
@@ -948,6 +997,8 @@ exit 1
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
             .env("ACORN_AGENT_STATE_DIR", &state_dir)
+            .env("ACORN_AGENT_INVOCATION_TOKEN", "owner-invocation")
+            .env("ACORN_AGENT_INVOCATION_DEPTH", "1")
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .output()
             .unwrap();
@@ -1036,6 +1087,23 @@ exit 1
         payload: &str,
         owner_marker: Option<(&str, &str)>,
     ) -> Option<serde_json::Value> {
+        notify_payload_for_input_with_invocation(
+            script_name,
+            args,
+            payload,
+            owner_marker,
+            Some(("owner-invocation", "1")),
+        )
+    }
+
+    #[cfg(unix)]
+    fn notify_payload_for_input_with_invocation(
+        script_name: &str,
+        args: &[&str],
+        payload: &str,
+        owner_marker: Option<(&str, &str)>,
+        invocation: Option<(&str, &str)>,
+    ) -> Option<serde_json::Value> {
         use std::io::Write as _;
 
         let base = ScratchDir::new("stdin-notify-event");
@@ -1076,9 +1144,16 @@ exit 1
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
             .env("ACORN_AGENT_STATE_DIR", &state_dir)
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
+            .env_remove("ACORN_AGENT_INVOCATION_TOKEN")
+            .env_remove("ACORN_AGENT_INVOCATION_DEPTH")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped());
+        if let Some((token, depth)) = invocation {
+            command
+                .env("ACORN_AGENT_INVOCATION_TOKEN", token)
+                .env("ACORN_AGENT_INVOCATION_DEPTH", depth);
+        }
         let mut child = command.spawn().unwrap();
         child
             .stdin
@@ -1403,6 +1478,122 @@ done
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn top_level_wrappers_create_one_provider_independent_invocation_owner() {
+        for provider in [
+            CODEX_WRAPPER_NAME,
+            CLAUDE_WRAPPER_NAME,
+            ANTIGRAVITY_WRAPPER_NAME,
+        ] {
+            let output = run_hooked_wrapper_for_invocation_ownership(provider, false);
+            assert!(
+                output.status.success(),
+                "{provider} wrapper failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                stdout.contains("invocation_depth=1\n"),
+                "{provider} did not mark its top-level invocation: {stdout}"
+            );
+            let token = stdout
+                .lines()
+                .find_map(|line| line.strip_prefix("invocation_token="))
+                .unwrap_or_default();
+            assert!(
+                !token.is_empty(),
+                "{provider} did not create an invocation token: {stdout}"
+            );
+            assert_eq!(
+                stdout.matches("invocation_token=").count(),
+                1,
+                "{provider} must expose exactly one invocation owner: {stdout}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nested_wrappers_disable_outer_acorn_hook_attribution_across_providers() {
+        for provider in [
+            CODEX_WRAPPER_NAME,
+            CLAUDE_WRAPPER_NAME,
+            ANTIGRAVITY_WRAPPER_NAME,
+        ] {
+            let output = run_hooked_wrapper_for_invocation_ownership(provider, true);
+            assert!(
+                output.status.success(),
+                "nested {provider} wrapper failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(stdout.contains("hook_session=\n"), "{provider}: {stdout}");
+            assert!(stdout.contains("hook_url=\n"), "{provider}: {stdout}");
+            assert!(stdout.contains("hook_token=\n"), "{provider}: {stdout}");
+            assert!(
+                stdout.contains("invocation_token=outer-invocation\n"),
+                "{provider} replaced the first wrapper's owner token: {stdout}"
+            );
+            assert!(
+                stdout.contains("invocation_depth=2\n"),
+                "{provider} did not mark itself nested: {stdout}"
+            );
+            assert!(
+                !stdout.contains("arg=--settings\n") && !stdout.contains("arg=--enable\n"),
+                "nested {provider} installed Acorn hooks: {stdout}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn notify_helpers_accept_only_the_top_level_invocation_owner() {
+        let cases = [
+            (CODEX_NOTIFY_NAME, vec!["needs_input"], ""),
+            (
+                CLAUDE_NOTIFY_NAME,
+                vec![],
+                r#"{"hook_event_name":"PermissionRequest"}"#,
+            ),
+            (
+                ANTIGRAVITY_NOTIFY_NAME,
+                vec![],
+                r#"{"hookEventName":"PermissionRequest"}"#,
+            ),
+        ];
+
+        for (script, args, payload) in cases {
+            assert_eq!(
+                notify_payload_for_input_with_invocation(script, &args, payload, None, None),
+                None,
+                "{script} accepted a hook without wrapper ownership",
+            );
+            assert_eq!(
+                notify_payload_for_input_with_invocation(
+                    script,
+                    &args,
+                    payload,
+                    None,
+                    Some(("outer-invocation", "2")),
+                ),
+                None,
+                "{script} accepted a nested invocation hook",
+            );
+            assert!(
+                notify_payload_for_input_with_invocation(
+                    script,
+                    &args,
+                    payload,
+                    None,
+                    Some(("owner-invocation", "1")),
+                )
+                .is_some(),
+                "{script} rejected its top-level invocation hook",
+            );
+        }
+    }
+
     #[test]
     fn wrappers_skip_their_own_dir_when_wrapper_env_is_absent() {
         let base = ScratchDir::new("self-skip");
@@ -1628,17 +1819,15 @@ done
     #[cfg(unix)]
     #[test]
     fn claude_stop_waits_only_when_no_background_work_remains() {
-        let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
         let payloads = [
             serde_json::json!({
                 "hook_event_name": "Stop",
-                "session_id": owner,
+                "session_id": "019e4818-7c15-4e60-9b3b-898a1c7803d6",
                 "background_tasks": [],
                 "session_crons": [],
             }),
             serde_json::json!({
                 "hook_event_name": "Stop",
-                "session_id": owner,
                 "background_tasks": [],
                 "session_crons": [],
                 "last_assistant_message": "decoy: \"background_tasks\":[{\"status\":\"running\"}]",
@@ -1648,13 +1837,7 @@ done
         for payload in payloads {
             let body = serde_json::to_string(&payload).unwrap();
             assert_eq!(
-                notify_event_for_stdin_with_owner(
-                    CLAUDE_NOTIFY_NAME,
-                    &body,
-                    "claude.id",
-                    Some(owner),
-                )
-                .as_deref(),
+                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &body).as_deref(),
                 Some("needs_input"),
                 "{body}",
             );
@@ -1663,63 +1846,24 @@ done
 
     #[cfg(unix)]
     #[test]
-    fn claude_owner_completion_gate_rejects_nested_or_unknown_sessions() {
-        let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
-        let nested = "019f631f-0bfc-76f1-9c1d-334be74958ca";
-        let stop = |session_id: &str| {
-            serde_json::json!({
-                "hook_event_name": "Stop",
-                "session_id": session_id,
-                "background_tasks": [],
-                "session_crons": [],
-            })
-            .to_string()
-        };
+    fn claude_native_stop_uses_synchronous_wrapper_ownership() {
+        let stop = r#"{"hook_event_name":"Stop","background_tasks":[],"session_crons":[]}"#;
 
         assert_eq!(
-            notify_event_for_stdin_with_owner(
-                CLAUDE_NOTIFY_NAME,
-                &stop(owner),
-                "claude.id",
-                Some(owner),
-            )
-            .as_deref(),
+            notify_event_for_stdin(CLAUDE_NOTIFY_NAME, stop).as_deref(),
             Some("needs_input"),
+            "a top-level hook must not wait for the asynchronous claude.id marker",
         );
         assert_eq!(
-            notify_event_for_stdin_with_owner(
+            notify_payload_for_input_with_invocation(
                 CLAUDE_NOTIFY_NAME,
-                &stop(nested),
-                "claude.id",
-                Some(owner),
+                &[],
+                stop,
+                Some(("claude.id", "019e4818-7c15-4e60-9b3b-898a1c7803d6")),
+                Some(("outer-invocation", "2")),
             ),
             None,
-            "a nested Claude Stop must not mark the terminal owner Waiting",
-        );
-        assert_eq!(
-            notify_event_for_stdin_with_owner(CLAUDE_NOTIFY_NAME, &stop(owner), "claude.id", None,),
-            None,
-            "completion must fail closed before Acorn binds an owner",
-        );
-        assert_eq!(
-            notify_event_for_stdin_with_owner(
-                CLAUDE_NOTIFY_NAME,
-                &stop("not-a-uuid"),
-                "claude.id",
-                Some("not-a-uuid"),
-            ),
-            None,
-            "matching malformed ids must not bypass owner validation",
-        );
-        assert_eq!(
-            notify_event_for_stdin_with_owner(
-                CLAUDE_NOTIFY_NAME,
-                r#"{"hook_event_name":"Stop","background_tasks":[],"session_crons":[]}"#,
-                "claude.id",
-                Some(owner),
-            ),
-            None,
-            "a Stop without a session id cannot prove ownership",
+            "a matching conversation marker cannot authorize a nested wrapper",
         );
     }
 
@@ -1743,10 +1887,8 @@ done
     #[cfg(unix)]
     #[test]
     fn claude_background_hooks_cannot_erase_pending_attention() {
-        let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
         let background_stop = serde_json::json!({
             "hook_event_name": "Stop",
-            "session_id": owner,
             "background_tasks": [{"id": "agent-1", "status": "running"}],
             "session_crons": [],
         });
@@ -1762,7 +1904,6 @@ done
         });
         let final_stop = serde_json::json!({
             "hook_event_name": "Stop",
-            "session_id": owner,
             "background_tasks": [],
             "session_crons": [],
         });
@@ -1776,14 +1917,7 @@ done
             final_stop,
         ]
         .into_iter()
-        .map(|payload| {
-            notify_event_for_stdin_with_owner(
-                CLAUDE_NOTIFY_NAME,
-                &payload.to_string(),
-                "claude.id",
-                Some(owner),
-            )
-        })
+        .map(|payload| notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &payload.to_string()))
         .collect::<Vec<_>>();
         assert_eq!(
             events,
@@ -1942,14 +2076,20 @@ done
     }
 
     #[test]
-    fn antigravity_notify_treats_subagent_stop_as_running() {
+    fn antigravity_subagent_stop_emits_no_transition() {
         let base = ScratchDir::new("agy-events");
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let notify = fs::read_to_string(dir.join("acorn-antigravity-notify")).unwrap();
-        // SubagentStop fires mid-turn, so it re-asserts Running; the
-        // main-agent Stop ends the turn and awaits the user.
-        assert!(notify.contains("SubagentStop) event=\"start\""));
+        assert!(!notify.contains("SubagentStop) event=\"start\""));
         assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
+        assert_eq!(
+            notify_event_for_stdin(
+                ANTIGRAVITY_NOTIFY_NAME,
+                r#"{"hookEventName":"SubagentStop","fullyIdle":false}"#,
+            ),
+            None,
+            "subagent completion must preserve a concurrent attention request",
+        );
     }
 
     #[cfg(unix)]
@@ -1999,13 +2139,7 @@ done
         ] {
             let body = payload.to_string();
             assert_eq!(
-                notify_event_for_stdin_with_owner(
-                    ANTIGRAVITY_NOTIFY_NAME,
-                    &body,
-                    "antigravity.id",
-                    Some(owner),
-                )
-                .as_deref(),
+                notify_event_for_stdin(ANTIGRAVITY_NOTIFY_NAME, &body).as_deref(),
                 Some("needs_input"),
                 "{body}",
             );
@@ -2014,9 +2148,8 @@ done
 
     #[cfg(unix)]
     #[test]
-    fn antigravity_owner_completion_gate_rejects_nested_or_unknown_brains() {
+    fn antigravity_native_stop_uses_synchronous_wrapper_ownership() {
         let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
-        let nested = "019f631f-0bfc-76f1-9c1d-334be74958ca";
         let stop = |conversation_id: Option<&str>| {
             let mut payload = serde_json::json!({
                 "hookEventName": "Stop",
@@ -2029,54 +2162,25 @@ done
         };
 
         assert_eq!(
-            notify_event_for_stdin_with_owner(
-                ANTIGRAVITY_NOTIFY_NAME,
-                &stop(Some(owner)),
-                "antigravity.id",
-                Some(owner),
-            )
-            .as_deref(),
+            notify_event_for_stdin(ANTIGRAVITY_NOTIFY_NAME, &stop(Some(owner))).as_deref(),
             Some("needs_input"),
+            "a top-level hook must not wait for the asynchronous antigravity.id marker",
         );
         assert_eq!(
-            notify_event_for_stdin_with_owner(
-                ANTIGRAVITY_NOTIFY_NAME,
-                &stop(Some(nested)),
-                "antigravity.id",
-                Some(owner),
-            ),
-            None,
-            "a nested Antigravity Stop must not mark the terminal owner Waiting",
+            notify_event_for_stdin(ANTIGRAVITY_NOTIFY_NAME, &stop(None)).as_deref(),
+            Some("needs_input"),
+            "the wrapper invocation proves ownership even without a conversation id",
         );
         assert_eq!(
-            notify_event_for_stdin_with_owner(
+            notify_payload_for_input_with_invocation(
                 ANTIGRAVITY_NOTIFY_NAME,
+                &[],
                 &stop(Some(owner)),
-                "antigravity.id",
-                None,
+                Some(("antigravity.id", owner)),
+                Some(("outer-invocation", "2")),
             ),
             None,
-            "completion must fail closed before Acorn binds an owner",
-        );
-        assert_eq!(
-            notify_event_for_stdin_with_owner(
-                ANTIGRAVITY_NOTIFY_NAME,
-                &stop(Some("not-a-uuid")),
-                "antigravity.id",
-                Some("not-a-uuid"),
-            ),
-            None,
-            "matching malformed ids must not bypass owner validation",
-        );
-        assert_eq!(
-            notify_event_for_stdin_with_owner(
-                ANTIGRAVITY_NOTIFY_NAME,
-                &stop(None),
-                "antigravity.id",
-                Some(owner),
-            ),
-            None,
-            "a Stop without a conversation id cannot prove ownership",
+            "a matching conversation marker cannot authorize a nested wrapper",
         );
     }
 
