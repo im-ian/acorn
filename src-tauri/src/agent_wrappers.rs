@@ -1595,7 +1595,12 @@ done
     #[test]
     fn antigravity_non_idle_stop_emits_no_transition() {
         for payload in [
-            serde_json::json!({"hookEventName": "Stop", "fullyIdle": false}),
+            serde_json::json!({
+                "executionNum": 1,
+                "terminationReason": "model_stop",
+                "fullyIdle": false,
+                "conversationId": "019e4818-7c15-4e60-9b3b-898a1c7803d6",
+            }),
             serde_json::json!({
                 "hook_event_name": "Stop",
                 "fullyIdle": false,
@@ -1612,6 +1617,12 @@ done
 
         for payload in [
             serde_json::json!({"hookEventName": "Stop", "fullyIdle": true}),
+            serde_json::json!({
+                "executionNum": 2,
+                "terminationReason": "model_stop",
+                "fullyIdle": true,
+                "conversationId": "019e4818-7c15-4e60-9b3b-898a1c7803d6",
+            }),
             serde_json::json!({"hookEventName": "Stop"}),
             serde_json::json!({
                 "hookEventName": "Stop",
