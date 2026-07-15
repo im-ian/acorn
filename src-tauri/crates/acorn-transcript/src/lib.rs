@@ -2496,6 +2496,27 @@ mod tests {
     }
 
     #[test]
+    fn codex_cd_parses_supported_subcommand_option_prefixes_only() {
+        for args in [
+            vec!["codex", "resume", "--last", "--cd=/other"],
+            vec!["codex", "fork", "--all", "-C", "/other"],
+            vec!["codex", "exec", "--json", "-C", "/other"],
+            vec!["codex", "exec", "resume", "--last", "-C/other"],
+        ] {
+            let node = process_node("/opt/codex", "codex", &args, "/repo");
+            assert_eq!(node.cwd.as_deref(), Some(Path::new("/other")), "{args:?}");
+        }
+
+        let prompt = process_node(
+            "/opt/codex",
+            "codex",
+            &["codex", "exec", "explain this", "-C", "/other"],
+            "/repo",
+        );
+        assert_eq!(prompt.cwd.as_deref(), Some(Path::new("/repo")));
+    }
+
+    #[test]
     fn provider_process_identity_distinguishes_launchers_from_runtimes() {
         let cases = [
             (
