@@ -2431,6 +2431,38 @@ mod tests {
     }
 
     #[test]
+    fn claude_resume_id_from_args_reads_attached_resume_values() {
+        let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        for resume_arg in [format!("--resume={id}"), format!("-r{id}")] {
+            let args = vec!["claude".to_string(), resume_arg];
+            assert_eq!(
+                claude_resume_id_from_args(&args).as_deref(),
+                Some(id),
+                "{args:?}"
+            );
+        }
+
+        for args in [
+            vec![
+                "claude".to_string(),
+                format!("--resume={id}"),
+                "--fork-session".to_string(),
+            ],
+            vec![
+                "claude".to_string(),
+                "--".to_string(),
+                format!("--resume={id}"),
+            ],
+        ] {
+            assert_eq!(
+                claude_resume_id_from_args(&args),
+                None,
+                "forked sessions and prompt text must not pin the source owner: {args:?}"
+            );
+        }
+    }
+
+    #[test]
     fn claude_fork_session_does_not_pin_the_resumed_id() {
         let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
         for args in [
