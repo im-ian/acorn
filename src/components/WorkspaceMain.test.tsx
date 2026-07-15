@@ -357,7 +357,7 @@ describe("WorkspaceMain", () => {
     expect(useAppStore.getState().panes.root.activeTabId).toBe("beta");
   });
 
-  it("restores canvas geometry and viewport through the reset undo action", async () => {
+  it("restores canvas geometry and viewport through the reset undo control", () => {
     installCanvasSessions(["alpha", "beta"]);
     useAppStore.setState((state) => ({
       workspaces: {
@@ -401,15 +401,85 @@ describe("WorkspaceMain", () => {
       beforeReset,
     );
     const toasts = useToasts.getState().toasts;
-    const undoToast = toasts[toasts.length - 1];
-    expect(undoToast?.message).toBe("Terminal layout reset. Undo");
-    expect(undoToast?.action).not.toBeNull();
+    const resetToast = toasts[toasts.length - 1];
+    expect(resetToast?.message).toBe(
+      "Terminal layout reset. Undo is available in the toolbar.",
+    );
+    expect(resetToast?.action).toBeNull();
 
-    await act(async () => {
-      await undoToast?.action?.();
-    });
+    const undo = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Undo reset"]',
+    );
+    expect(undo).not.toBeNull();
+    act(() => undo!.click());
 
     expect(useAppStore.getState().workspaces[REPO].canvas).toEqual(beforeReset);
+    expect(
+      document.querySelector('button[aria-label="Undo reset"]'),
+    ).toBeNull();
+  });
+
+  it("invalidates reset undo after the next canvas mutation", () => {
+    installCanvasSessions(["alpha"]);
+    useAppStore.getState().setWorkspaceCanvasState(REPO, {
+      viewport: { offset: { x: -120, y: 40 }, zoom: 1.2 },
+      nodes: {
+        alpha: { x: 180, y: 100, width: 620, height: 400, zIndex: 1 },
+      },
+    });
+    render("canvas");
+
+    act(() =>
+      document
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Reset terminal layout"]',
+        )!
+        .click(),
+    );
+    expect(
+      document.querySelector('button[aria-label="Undo reset"]'),
+    ).not.toBeNull();
+
+    act(() =>
+      document
+        .querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')!
+        .click(),
+    );
+    expect(
+      document.querySelector('button[aria-label="Undo reset"]'),
+    ).toBeNull();
+  });
+
+  it("uses pane session ids for reset and undo while metadata is unavailable", () => {
+    installCanvasSessions(["alpha", "beta"]);
+    const previous = {
+      viewport: { offset: { x: -140, y: 60 }, zoom: 1.25 },
+      nodes: {
+        alpha: { x: 200, y: 140, width: 640, height: 420, zIndex: 2 },
+        beta: { x: 900, y: 300, width: 580, height: 360, zIndex: 1 },
+      },
+    };
+    useAppStore.getState().setWorkspaceCanvasState(REPO, previous);
+    render("canvas");
+
+    act(() => useAppStore.setState({ sessions: [] }));
+    act(() =>
+      document
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Reset terminal layout"]',
+        )!
+        .click(),
+    );
+    expect(
+      Object.keys(useAppStore.getState().workspaces[REPO].canvas!.nodes),
+    ).toEqual(["alpha", "beta"]);
+
+    act(() =>
+      document
+        .querySelector<HTMLButtonElement>('button[aria-label="Undo reset"]')!
+        .click(),
+    );
+    expect(useAppStore.getState().workspaces[REPO].canvas).toEqual(previous);
   });
 
   it("resizes the column during a drag and restores body styles on pointerup", () => {

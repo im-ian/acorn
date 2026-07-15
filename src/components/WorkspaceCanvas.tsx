@@ -7,6 +7,7 @@ import {
   RotateCcw,
   Scan,
   Terminal as TerminalIcon,
+  Undo2,
 } from "lucide-react";
 import {
   memo,
@@ -151,13 +152,22 @@ export function WorkspaceCanvas({
     () => terminalSessions.map((session) => session.id),
     [terminalSessions],
   );
-  const reconciliationIds =
-    sessions.length === 0 ? workspaceSessionIds : sessionIds;
-  const reconciliationIdsKey = reconciliationIds.join("\0");
+  const reconciliationIdsKey = (
+    sessions.length === 0 ? workspaceSessionIds : sessionIds
+  ).join("\0");
+  const reconciliationIds = useMemo(
+    () =>
+      reconciliationIdsKey.length > 0
+        ? reconciliationIdsKey.split("\0")
+        : [],
+    [reconciliationIdsKey],
+  );
   const [canvas, setCanvas] = useState<WorkspaceCanvasState>(() => {
     return reconcileWorkspaceCanvasState(persisted, reconciliationIds);
   });
   const canvasRef = useRef(canvas);
+  const resetUndoRef = useRef<WorkspaceCanvasState | null>(null);
+  const [canUndoReset, setCanUndoReset] = useState(false);
   const [containerSize, setContainerSize] = useState<WorkspaceCanvasSize>({
     width: 0,
     height: 0,
@@ -170,6 +180,12 @@ export function WorkspaceCanvas({
   const applyCanvas = useCallback((next: WorkspaceCanvasState) => {
     canvasRef.current = next;
     setCanvas(next);
+  }, []);
+
+  const clearResetUndo = useCallback(() => {
+    if (!resetUndoRef.current) return;
+    resetUndoRef.current = null;
+    setCanUndoReset(false);
   }, []);
 
   const persistCanvas = useCallback(
@@ -205,12 +221,13 @@ export function WorkspaceCanvas({
       const current = canvasRef.current;
       const next = updater(current);
       if (workspaceCanvasStatesEqual(current, next)) return current;
+      clearResetUndo();
       applyCanvas(next);
       if (persist === "now") persistCanvas(next);
       if (persist === "soon") schedulePersist(next);
       return next;
     },
-    [applyCanvas, persistCanvas, schedulePersist],
+    [applyCanvas, clearResetUndo, persistCanvas, schedulePersist],
   );
 
   const fitAll = useCallback(
@@ -244,17 +261,10 @@ export function WorkspaceCanvas({
     const current = canvasRef.current;
     const next = reconcileWorkspaceCanvasState(current, reconciliationIds);
     if (workspaceCanvasStatesEqual(current, next)) return;
+    clearResetUndo();
     applyCanvas(next);
     persistCanvas(next);
-  }, [applyCanvas, persistCanvas, reconciliationIds, reconciliationIdsKey]);
-
-  useEffect(() => {
-    if (!persisted) return;
-    const current = canvasRef.current;
-    const next = reconcileWorkspaceCanvasState(persisted, reconciliationIds);
-    if (workspaceCanvasStatesEqual(current, next)) return;
-    applyCanvas(next);
-  }, [applyCanvas, persisted, reconciliationIds, reconciliationIdsKey]);
+  }, [applyCanvas, clearResetUndo, persistCanvas, reconciliationIds]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -484,30 +494,27 @@ export function WorkspaceCanvas({
 
   const resetLayout = useCallback(() => {
     const previous = canvasRef.current;
-    const next = resetWorkspaceCanvasState(sessionIds);
+    const next = resetWorkspaceCanvasState(reconciliationIds);
     if (workspaceCanvasStatesEqual(previous, next)) return;
+    resetUndoRef.current = previous;
+    setCanUndoReset(true);
     applyCanvas(next);
     persistCanvas(next);
-    showToast(canvasText(t, "workspace.canvas.resetUndo"), {
-      action: () => {
-        const state = useAppStore.getState();
-        const workspace = workspaceId ? state.workspaces[workspaceId] : null;
-        const terminalIds = new Set(
-          state.sessions
-            .filter((session) => session.mode !== "chat")
-            .map((session) => session.id),
-        );
-        const liveIds = workspace
-          ? Object.values(workspace.panes).flatMap((pane) =>
-              pane.tabIds.filter((id) => terminalIds.has(id)),
-            )
-          : sessionIds;
-        const restored = reconcileWorkspaceCanvasState(previous, liveIds);
-        if (rootRef.current) applyCanvas(restored);
-        persistCanvas(restored);
-      },
-    });
-  }, [applyCanvas, persistCanvas, sessionIds, showToast, t, workspaceId]);
+    showToast(canvasText(t, "workspace.canvas.resetComplete"));
+  }, [applyCanvas, persistCanvas, reconciliationIds, showToast, t]);
+
+  const undoReset = useCallback(() => {
+    const previous = resetUndoRef.current;
+    if (!previous) return;
+    resetUndoRef.current = null;
+    setCanUndoReset(false);
+    const restored = reconcileWorkspaceCanvasState(
+      previous,
+      reconciliationIds,
+    );
+    applyCanvas(restored);
+    persistCanvas(restored);
+  }, [applyCanvas, persistCanvas, reconciliationIds]);
 
   const worldStyle: CSSProperties = {
     transform: `translate3d(${canvas.viewport.offset.x}px, ${canvas.viewport.offset.y}px, 0) scale(${canvas.viewport.zoom})`,
@@ -673,6 +680,17 @@ export function WorkspaceCanvas({
             <RotateCcw size={12} />
           </IconButton>
         </Tooltip>
+        {canUndoReset ? (
+          <Button
+            aria-label={canvasText(t, "workspace.canvas.undoReset")}
+            size="xs"
+            variant="accentSoft"
+            onClick={undoReset}
+          >
+            <Undo2 size={12} />
+            {canvasText(t, "workspace.canvas.undoReset")}
+          </Button>
+        ) : null}
       </div>
 
       {terminalSessions.length > 0 ? (
@@ -687,6 +705,9 @@ export function WorkspaceCanvas({
           sessionLabel={(name) =>
             canvasText(t, "workspace.canvas.overviewSession", { name })
           }
+          keyboardHint={canvasText(t, "workspace.canvas.overviewHint")}
+          collapseLabel={canvasText(t, "workspace.canvas.overviewCollapse")}
+          expandLabel={canvasText(t, "workspace.canvas.overviewExpand")}
           onActivateSession={activateNode}
           onViewportChange={(viewport, commit) =>
             setViewport(viewport, commit ? "now" : "soon")
@@ -695,9 +716,11 @@ export function WorkspaceCanvas({
         />
       ) : null}
 
-      <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-full border border-border/80 bg-bg/75 px-3 py-1 font-mono text-[10px] text-fg-muted shadow-lg backdrop-blur">
-        {canvasText(t, "workspace.canvas.hint")}
-      </div>
+      {containerSize.width >= 600 && containerSize.height >= 360 ? (
+        <div className="pointer-events-none absolute bottom-3 left-3 z-20 rounded-full border border-border/80 bg-bg/75 px-3 py-1 font-mono text-[10px] text-fg-muted shadow-lg backdrop-blur">
+          {canvasText(t, "workspace.canvas.hint")}
+        </div>
+      ) : null}
     </section>
   );
 }

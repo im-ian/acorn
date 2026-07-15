@@ -1,7 +1,10 @@
+import { ChevronDown, ChevronUp } from "lucide-react";
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
+  useState,
   type CSSProperties,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -16,6 +19,8 @@ import {
 
 const MINIMAP_WIDTH = 160;
 const MINIMAP_HEIGHT = 96;
+const COMPACT_MINIMAP_WIDTH = 120;
+const COMPACT_MINIMAP_HEIGHT = 72;
 const KEYBOARD_PAN_STEP = 80;
 
 interface WorkspaceCanvasMinimapSession {
@@ -32,6 +37,9 @@ interface WorkspaceCanvasMinimapProps {
   regionLabel: string;
   title: string;
   sessionLabel: (name: string) => string;
+  keyboardHint: string;
+  collapseLabel: string;
+  expandLabel: string;
   onActivateSession: (sessionId: string) => void;
   onViewportChange: (
     viewport: WorkspaceCanvasViewport,
@@ -40,15 +48,40 @@ interface WorkspaceCanvasMinimapProps {
   onCommitNavigation: () => void;
 }
 
-function visualRectStyle(
+function expandedRect(
   rect: { x: number; y: number; width: number; height: number },
   minimumSize: number,
-): CSSProperties {
+): { x: number; y: number; width: number; height: number } {
   const width = Math.max(rect.width, minimumSize);
   const height = Math.max(rect.height, minimumSize);
   return {
-    left: rect.x - (width - rect.width) / 2,
-    top: rect.y - (height - rect.height) / 2,
+    x: rect.x - (width - rect.width) / 2,
+    y: rect.y - (height - rect.height) / 2,
+    width,
+    height,
+  };
+}
+
+function positionedRectStyle(rect: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}): CSSProperties {
+  return { left: rect.x, top: rect.y, width: rect.width, height: rect.height };
+}
+
+function boundedExpandedRect(
+  rect: { x: number; y: number; width: number; height: number },
+  minimumSize: number,
+  bounds: WorkspaceCanvasSize,
+): { x: number; y: number; width: number; height: number } {
+  const expanded = expandedRect(rect, minimumSize);
+  const width = Math.min(expanded.width, bounds.width);
+  const height = Math.min(expanded.height, bounds.height);
+  return {
+    x: Math.min(Math.max(expanded.x, 0), bounds.width - width),
+    y: Math.min(Math.max(expanded.y, 0), bounds.height - height),
     width,
     height,
   };
@@ -63,21 +96,31 @@ export function WorkspaceCanvasMinimap({
   regionLabel,
   title,
   sessionLabel,
+  keyboardHint,
+  collapseLabel,
+  expandLabel,
   onActivateSession,
   onViewportChange,
   onCommitNavigation,
 }: WorkspaceCanvasMinimapProps) {
   const plotRef = useRef<HTMLDivElement | null>(null);
   const cancelDragRef = useRef<(() => void) | null>(null);
+  const hintId = useId();
+  const [collapsed, setCollapsed] = useState(false);
+  const compact =
+    canvasSize.width > 0 &&
+    (canvasSize.width < 520 || canvasSize.height < 420);
+  const minimapWidth = compact ? COMPACT_MINIMAP_WIDTH : MINIMAP_WIDTH;
+  const minimapHeight = compact ? COMPACT_MINIMAP_HEIGHT : MINIMAP_HEIGHT;
   const layout = useMemo(
     () =>
       layoutWorkspaceCanvasMinimap(
         nodes,
         viewport,
         canvasSize,
-        { width: MINIMAP_WIDTH, height: MINIMAP_HEIGHT },
+        { width: minimapWidth, height: minimapHeight },
       ),
-    [canvasSize, nodes, viewport],
+    [canvasSize, minimapHeight, minimapWidth, nodes, viewport],
   );
 
   useEffect(() => () => cancelDragRef.current?.(), []);
@@ -89,11 +132,11 @@ export function WorkspaceCanvasMinimap({
     const plot = plotRef.current;
     if (!plot) return null;
     const rect = plot.getBoundingClientRect();
-    const renderedWidth = rect.width || MINIMAP_WIDTH;
-    const renderedHeight = rect.height || MINIMAP_HEIGHT;
+    const renderedWidth = rect.width || minimapWidth;
+    const renderedHeight = rect.height || minimapHeight;
     return {
-      x: ((clientX - rect.left) / renderedWidth) * MINIMAP_WIDTH,
-      y: ((clientY - rect.top) / renderedHeight) * MINIMAP_HEIGHT,
+      x: ((clientX - rect.left) / renderedWidth) * minimapWidth,
+      y: ((clientY - rect.top) / renderedHeight) * minimapHeight,
     };
   };
 
@@ -150,7 +193,13 @@ export function WorkspaceCanvasMinimap({
   };
 
   const nudgeViewport = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.target !== event.currentTarget) return;
+    if (
+      collapsed ||
+      (event.target instanceof Element &&
+        event.target.closest("[data-workspace-canvas-minimap-toggle]"))
+    ) {
+      return;
+    }
     const direction =
       event.key === "ArrowLeft"
         ? { x: -1, y: 0 }
@@ -180,62 +229,101 @@ export function WorkspaceCanvasMinimap({
     <section
       role="region"
       aria-label={regionLabel}
+      aria-describedby={collapsed ? undefined : hintId}
       tabIndex={0}
       className="absolute bottom-3 right-3 z-30 rounded-lg border border-border bg-bg/88 p-1.5 text-fg shadow-xl backdrop-blur-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45"
       data-testid="workspace-canvas-minimap"
       data-workspace-canvas-toolbar
       onKeyDown={nudgeViewport}
     >
-      <div className="mb-1 flex items-center justify-between px-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-fg-muted">
-        <span>{title}</span>
-        <span className="tabular-nums">{Math.round(viewport.zoom * 100)}%</span>
-      </div>
+      <span id={hintId} className="sr-only">
+        {keyboardHint}
+      </span>
       <div
-        ref={plotRef}
-        className="relative touch-none cursor-crosshair overflow-hidden rounded border border-border/80 bg-bg-sidebar/90"
-        style={{ width: MINIMAP_WIDTH, height: MINIMAP_HEIGHT }}
-        onPointerDown={startNavigation}
+        className={`${collapsed ? "" : "mb-1"} flex items-center justify-between gap-2 px-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-fg-muted`}
       >
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 opacity-45"
-          style={{
-            backgroundImage:
-              "radial-gradient(circle, color-mix(in oklab, var(--color-fg-muted) 36%, transparent) 0.75px, transparent 0.75px)",
-            backgroundSize: "8px 8px",
-          }}
-        />
-        {sessions.map((session) => {
-          const rect = layout.nodeRects[session.id];
-          if (!rect) return null;
-          const active = session.id === activeSessionId;
-          return (
-            <button
-              key={session.id}
-              type="button"
-              aria-label={sessionLabel(session.name)}
-              aria-pressed={active}
-              className={`absolute rounded-[2px] border transition-[background-color,border-color,box-shadow] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
-                active
-                  ? "z-20 border-accent bg-accent/55 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-accent)_35%,transparent)]"
-                  : "z-10 border-fg-muted/55 bg-fg-muted/25 hover:border-accent/80 hover:bg-accent/25"
-              }`}
-              style={visualRectStyle(rect, 4)}
-              data-testid="workspace-canvas-minimap-node"
-              data-workspace-canvas-minimap-node
-              data-canvas-minimap-session-id={session.id}
-              onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
-              onClick={() => onActivateSession(session.id)}
-            />
-          );
-        })}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute z-30 rounded-[2px] border border-accent/90 bg-accent/8 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--color-bg)_55%,transparent)]"
-          style={visualRectStyle(layout.viewportRect, 3)}
-          data-testid="workspace-canvas-minimap-viewport"
-        />
+        <span>{title}</span>
+        <span className="flex items-center gap-1">
+          <span className="tabular-nums">
+            {Math.round(viewport.zoom * 100)}%
+          </span>
+          <button
+            type="button"
+            aria-label={collapsed ? expandLabel : collapseLabel}
+            aria-expanded={!collapsed}
+            className="inline-flex size-6 cursor-pointer items-center justify-center rounded text-fg-muted hover:bg-fill hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+            data-workspace-canvas-minimap-toggle
+            onClick={() => setCollapsed((current) => !current)}
+          >
+            {collapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          </button>
+        </span>
       </div>
+      {!collapsed ? (
+        <div
+          ref={plotRef}
+          className="relative touch-none cursor-crosshair overflow-hidden rounded border border-border/80 bg-bg-sidebar/90"
+          style={{ width: minimapWidth, height: minimapHeight }}
+          data-testid="workspace-canvas-minimap-plot"
+          onPointerDown={startNavigation}
+        >
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 opacity-45"
+            style={{
+              backgroundImage:
+                "radial-gradient(circle, color-mix(in oklab, var(--color-fg-muted) 36%, transparent) 0.75px, transparent 0.75px)",
+              backgroundSize: "8px 8px",
+            }}
+          />
+          {sessions.map((session) => {
+            const rect = layout.nodeRects[session.id];
+            if (!rect) return null;
+            const active = session.id === activeSessionId;
+            const visualRect = expandedRect(rect, 4);
+            const hitRect = boundedExpandedRect(visualRect, 24, {
+              width: minimapWidth,
+              height: minimapHeight,
+            });
+            return (
+              <button
+                key={session.id}
+                type="button"
+                aria-label={sessionLabel(session.name)}
+                aria-pressed={active}
+                className={`group absolute cursor-pointer rounded-[3px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${active ? "z-20" : "z-10"}`}
+                style={positionedRectStyle(hitRect)}
+                data-testid="workspace-canvas-minimap-node"
+                data-workspace-canvas-minimap-node
+                data-canvas-minimap-session-id={session.id}
+                onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+                onClick={() => onActivateSession(session.id)}
+              >
+                <span
+                  aria-hidden="true"
+                  className={`absolute rounded-[2px] border transition-[background-color,border-color,box-shadow] ${
+                    active
+                      ? "border-accent bg-accent/55 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-accent)_35%,transparent)]"
+                      : "border-fg-muted/55 bg-fg-muted/25 group-hover:border-accent/80 group-hover:bg-accent/25"
+                  }`}
+                  style={{
+                    left: visualRect.x - hitRect.x,
+                    top: visualRect.y - hitRect.y,
+                    width: visualRect.width,
+                    height: visualRect.height,
+                  }}
+                />
+              </button>
+            );
+          })}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute z-30 rounded-[2px] border border-dashed border-fg/85 bg-accent/5 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-bg)_55%,transparent)]"
+            style={positionedRectStyle(expandedRect(layout.viewportRect, 3))}
+            data-testid="workspace-canvas-minimap-viewport"
+          />
+        </div>
+      ) : null}
     </section>
   );
 }

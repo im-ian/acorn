@@ -147,4 +147,48 @@ describe("workspaceCanvas", () => {
       zoom: 1,
     });
   });
+
+  it("includes a distant viewport in minimap bounds and stays finite before measurement", () => {
+    const nodes = {
+      first: { x: -200, y: -100, width: 100, height: 100, zIndex: 1 },
+    };
+    const viewport = { offset: { x: -1_000, y: -500 }, zoom: 1 };
+    const distant = layoutWorkspaceCanvasMinimap(
+      nodes,
+      viewport,
+      { width: 200, height: 100 },
+      { width: 160, height: 96 },
+    );
+
+    expect(distant.bounds).toEqual({
+      x: -200,
+      y: -100,
+      width: 1_400,
+      height: 700,
+    });
+
+    const unmeasured = layoutWorkspaceCanvasMinimap(
+      nodes,
+      viewport,
+      { width: 0, height: 0 },
+      { width: 160, height: 96 },
+    );
+    const centered = centerWorkspaceCanvasViewportFromMinimapPoint(
+      viewport,
+      { width: 0, height: 0 },
+      unmeasured,
+      { x: 80, y: 48 },
+    );
+    expect(
+      [
+        unmeasured.scale,
+        unmeasured.origin.x,
+        unmeasured.origin.y,
+        unmeasured.viewportRect.x,
+        unmeasured.viewportRect.y,
+        centered.offset.x,
+        centered.offset.y,
+      ].every(Number.isFinite),
+    ).toBe(true);
+  });
 });

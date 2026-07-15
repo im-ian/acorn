@@ -85,6 +85,12 @@ test.describe("workspace canvas mode", () => {
       .poll(async () => Number(await alpha.getAttribute("data-canvas-node-y")))
       .toBeGreaterThan(initialY);
 
+    await page
+      .getByRole("region", { name: "Canvas overview" })
+      .getByRole("button", { name: "Show alpha on canvas" })
+      .click();
+    await expect(alpha).toBeInViewport();
+
     const initialWidth = Number(
       await alpha.getAttribute("data-canvas-node-width"),
     );
@@ -216,6 +222,10 @@ test.describe("workspace canvas mode", () => {
     const canvas = page.getByTestId("workspace-canvas");
     const overview = page.getByRole("region", { name: "Canvas overview" });
     await expect(overview).toBeVisible();
+    await expect(canvas.getByTestId("workspace-canvas-node")).toHaveCount(2);
+    await expect(
+      canvas.locator('[data-canvas-session-id="gamma"]'),
+    ).toHaveCount(0);
     await expect(
       overview.getByTestId("workspace-canvas-minimap-node"),
     ).toHaveCount(2);
@@ -256,6 +266,134 @@ test.describe("workspace canvas mode", () => {
         Number(await world.getAttribute("data-canvas-offset-x")),
       )
       .not.toBe(offscreenOffset);
+    const betaNode = canvas.locator('[data-canvas-session-id="beta"]');
+    const betaX = Number(await betaNode.getAttribute("data-canvas-node-x"));
+    await canvas
+      .getByRole("button", { name: "Move beta" })
+      .press("Shift+ArrowRight");
+    await expect
+      .poll(async () =>
+        Number(await betaNode.getAttribute("data-canvas-node-x")),
+      )
+      .toBeGreaterThan(betaX);
+    const demoBetaX = await betaNode.getAttribute("data-canvas-node-x");
+
+    await page.getByRole("button", { name: "Project other" }).click();
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Panes",
+    );
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+    await expect(canvas.getByTestId("workspace-canvas-node")).toHaveCount(1);
+    await expect(
+      canvas.locator('[data-canvas-session-id="gamma"]'),
+    ).toBeVisible();
+    await expect(
+      canvas.locator('[data-canvas-session-id="alpha"]'),
+    ).toHaveCount(0);
+    await expect(
+      canvas.locator('[data-canvas-session-id="beta"]'),
+    ).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Project demo" }).click();
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Canvas",
+    );
+    await expect(canvas.getByTestId("workspace-canvas-node")).toHaveCount(2);
+    await expect(
+      canvas.locator('[data-canvas-session-id="gamma"]'),
+    ).toHaveCount(0);
+    await expect(betaNode).toHaveAttribute("data-canvas-node-x", demoBetaX!);
+
+    await overview
+      .getByRole("button", { name: "Collapse canvas overview" })
+      .click();
+    await expect(
+      overview.getByTestId("workspace-canvas-minimap-plot"),
+    ).toHaveCount(0);
+    await overview
+      .getByRole("button", { name: "Expand canvas overview" })
+      .click();
+    await expect(
+      overview.getByTestId("workspace-canvas-minimap-plot"),
+    ).toBeVisible();
+  });
+
+  test("pans from the minimap pointer and keyboard controls and commits it", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [session("alpha"), session("beta")]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const overview = page.getByRole("region", { name: "Canvas overview" });
+    const plot = overview.getByTestId("workspace-canvas-minimap-plot");
+    const world = page.getByTestId("workspace-canvas-world");
+    const box = await plot.boundingBox();
+    if (!box) throw new Error("Canvas overview plot is not visible");
+
+    const initialOffset = Number(
+      await world.getAttribute("data-canvas-offset-x"),
+    );
+    await plot.dispatchEvent("pointerdown", {
+      button: 0,
+      clientX: box.x + box.width * 0.8,
+      clientY: box.y + box.height * 0.75,
+    });
+    await page.evaluate(() =>
+      window.dispatchEvent(new PointerEvent("pointerup", { button: 0 })),
+    );
+    await expect
+      .poll(async () => Number(await world.getAttribute("data-canvas-offset-x")))
+      .not.toBe(initialOffset);
+
+    const clickedOffset = Number(
+      await world.getAttribute("data-canvas-offset-x"),
+    );
+    await plot.dispatchEvent("pointerdown", {
+      button: 0,
+      clientX: box.x + box.width * 0.2,
+      clientY: box.y + box.height * 0.25,
+    });
+    await page.evaluate(
+      ({ x, y }) =>
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { clientX: x, clientY: y }),
+        ),
+      { x: box.x + box.width * 0.65, y: box.y + box.height * 0.6 },
+    );
+    await page.evaluate(() =>
+      window.dispatchEvent(new PointerEvent("pointerup", { button: 0 })),
+    );
+    await expect
+      .poll(async () => Number(await world.getAttribute("data-canvas-offset-x")))
+      .not.toBe(clickedOffset);
+
+    await overview.focus();
+    const draggedOffset = Number(
+      await world.getAttribute("data-canvas-offset-x"),
+    );
+    await page.keyboard.press("ArrowRight");
+    await expect(world).toHaveAttribute(
+      "data-canvas-offset-x",
+      String(draggedOffset - 80),
+    );
+    const persistedOffset = draggedOffset - 80;
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = localStorage.getItem("acorn-workspaces");
+          return raw
+            ? (JSON.parse(raw).state.workspaces?.["/tmp/demo"]?.canvas
+                ?.viewport?.offset?.x ?? null)
+            : null;
+        }),
+      )
+      .toBe(persistedOffset);
   });
 
   test("undoes a reset without remounting the live terminal", async ({
@@ -288,22 +426,29 @@ test.describe("workspace canvas mode", () => {
       '[data-canvas-terminal-body="alpha"] [data-acorn-terminal-slot="alpha"]',
     );
     await expect(terminalSlot).toBeAttached();
+    await terminalSlot.evaluate((element) =>
+      element.setAttribute("data-canvas-terminal-identity", "preserved"),
+    );
     await page.getByRole("button", { name: "Reset terminal layout" }).click();
 
     await expect(alpha).toHaveAttribute("data-canvas-node-x", "48");
     await expect(alpha).toHaveAttribute("data-canvas-node-y", "48");
     await expect(world).toHaveAttribute("data-canvas-zoom", "1");
 
-    const undo = page.getByRole("status").filter({
-      hasText: "Terminal layout reset. Undo",
-    });
+    await expect(
+      page.getByRole("status").filter({ hasText: "Terminal layout reset." }),
+    ).toBeVisible();
+    const undo = page.getByRole("button", { name: "Undo reset" });
     await expect(undo).toBeVisible();
     await undo.click();
 
     await expect(alpha).toHaveAttribute("data-canvas-node-x", beforeReset.x!);
     await expect(alpha).toHaveAttribute("data-canvas-node-y", beforeReset.y!);
     await expect(world).toHaveAttribute("data-canvas-zoom", beforeReset.zoom!);
-    await expect(terminalSlot).toBeAttached();
+    await expect(terminalSlot).toHaveAttribute(
+      "data-canvas-terminal-identity",
+      "preserved",
+    );
 
     await page.reload();
     await expect(page.locator('[data-canvas-session-id="alpha"]')).toHaveAttribute(
