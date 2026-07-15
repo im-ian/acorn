@@ -380,6 +380,10 @@ pub struct SessionStore {
     /// assigns that turn an id. This lets delayed completion notifications
     /// fail closed instead of overwriting the new turn's Working status.
     hook_turn_ids: DashMap<Uuid, String>,
+    /// Start of the current Codex approval wait. Runtime-only: process-tree
+    /// reconciliation may promote Waiting back to Working only for a tool
+    /// descendant that appeared after this boundary.
+    codex_permission_waiting_at: DashMap<Uuid, SystemTime>,
 }
 
 impl SessionStore {
@@ -510,6 +514,7 @@ impl SessionStore {
     /// the map also distinguishes it from runtime state lost on app restart.
     pub fn begin_hook_turn(&self, id: &Uuid, turn_id: Option<&str>) {
         self.hook_tool_started_at.remove(id);
+        self.codex_permission_waiting_at.remove(id);
         match turn_id.map(str::trim).filter(|turn_id| !turn_id.is_empty()) {
             Some(turn_id) => {
                 self.hook_turn_ids.insert(*id, turn_id.to_string());
@@ -544,6 +549,20 @@ impl SessionStore {
         self.hook_tool_started_at
             .get(id)
             .map(|started_at| *started_at)
+    }
+
+    pub fn mark_codex_permission_waiting_at(&self, id: &Uuid, requested_at: SystemTime) {
+        self.codex_permission_waiting_at.insert(*id, requested_at);
+    }
+
+    pub fn codex_permission_waiting_at(&self, id: &Uuid) -> Option<SystemTime> {
+        self.codex_permission_waiting_at
+            .get(id)
+            .map(|requested_at| *requested_at)
+    }
+
+    pub fn clear_codex_permission_waiting(&self, id: &Uuid) {
+        self.codex_permission_waiting_at.remove(id);
     }
 
     /// Whether `id` has ever reported an agent lifecycle hook event — either
@@ -587,6 +606,38 @@ impl SessionStore {
         entry.agent_provider = provider;
         entry.agent_transcript_id = transcript_id;
         Ok(entry.clone())
+    }
+
+    /// Record provider identity from a non-authoritative owner observation
+    /// before its native hook arrives. A provider-specific transcript can
+    /// prove which agent owns the PTY without proving lifecycle status, so a
+    /// switch clears only the previous provider's hook ownership and runtime
+    /// turn evidence. The next native event establishes the new hook channel.
+    pub fn prepare_agent_provider_switch(
+        &self,
+        id: &Uuid,
+        provider: SessionAgentProvider,
+    ) -> SessionResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        entry.agent_provider = Some(provider);
+        let clears_previous_hook = entry.hook_provider != Some(provider);
+        if clears_previous_hook {
+            entry.hook_provider = None;
+            entry.hook_active = false;
+        }
+        let updated = entry.clone();
+        drop(entry);
+
+        if clears_previous_hook {
+            self.hook_confirmed.remove(id);
+            self.hook_tool_started_at.remove(id);
+            self.hook_turn_ids.remove(id);
+            self.codex_permission_waiting_at.remove(id);
+        }
+        Ok(updated)
     }
 
     /// Flip the explicit auto-title opt-in. Used by the status poll to
@@ -723,6 +774,7 @@ impl SessionStore {
         self.hook_revisions.remove(id);
         self.hook_tool_started_at.remove(id);
         self.hook_turn_ids.remove(id);
+        self.codex_permission_waiting_at.remove(id);
         self.inner
             .remove(id)
             .map(|(_, v)| v)
@@ -866,6 +918,31 @@ mod tests {
     }
 
     #[test]
+    fn codex_permission_boundary_is_scoped_to_a_turn_and_cleared_on_remove() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        let requested_at =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(123_456);
+
+        store.mark_codex_permission_waiting_at(&session.id, requested_at);
+        assert_eq!(
+            store.codex_permission_waiting_at(&session.id),
+            Some(requested_at)
+        );
+
+        store.begin_hook_turn(&session.id, Some("turn-1"));
+        assert_eq!(store.codex_permission_waiting_at(&session.id), None);
+
+        store.mark_codex_permission_waiting_at(&session.id, requested_at);
+        store.clear_codex_permission_waiting(&session.id);
+        assert_eq!(store.codex_permission_waiting_at(&session.id), None);
+
+        store.mark_codex_permission_waiting_at(&session.id, requested_at);
+        store.remove(&session.id).expect("session exists");
+        assert_eq!(store.codex_permission_waiting_at(&session.id), None);
+    }
+
+    #[test]
     fn hook_revision_guards_conditional_status_refresh() {
         let store = SessionStore::new();
         let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
@@ -978,6 +1055,31 @@ mod tests {
         let stored = store.get(&session.id).expect("session exists");
         assert_eq!(stored.agent_provider, None);
         assert_eq!(stored.agent_transcript_id.as_deref(), Some("codex-old"));
+    }
+
+    #[test]
+    fn observed_provider_switch_clears_previous_hook_ownership_and_turn_evidence() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        store.mark_hook_active(&session.id, SessionAgentProvider::Claude);
+        store.begin_hook_turn(&session.id, Some("turn-1"));
+        store.mark_hook_tool_started_at(&session.id, SystemTime::now());
+        store.mark_codex_permission_waiting_at(&session.id, SystemTime::now());
+
+        let switched = store
+            .prepare_agent_provider_switch(&session.id, SessionAgentProvider::Antigravity)
+            .expect("session exists");
+
+        assert_eq!(
+            switched.agent_provider,
+            Some(SessionAgentProvider::Antigravity)
+        );
+        assert_eq!(switched.hook_provider, None);
+        assert!(!switched.hook_active);
+        assert!(!store.is_hook_confirmed_this_run(&session.id));
+        assert_eq!(store.hook_turn_id(&session.id), None);
+        assert_eq!(store.hook_tool_started_at(&session.id), None);
+        assert_eq!(store.codex_permission_waiting_at(&session.id), None);
     }
 
     #[test]
