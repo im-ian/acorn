@@ -26,6 +26,21 @@ export interface WorkspaceCanvasState {
   nodes: Record<string, WorkspaceCanvasNode>;
 }
 
+export interface WorkspaceCanvasRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface WorkspaceCanvasMinimapLayout {
+  bounds: WorkspaceCanvasRect;
+  origin: WorkspaceCanvasPoint;
+  scale: number;
+  nodeRects: Record<string, WorkspaceCanvasRect>;
+  viewportRect: WorkspaceCanvasRect;
+}
+
 export const WORKSPACE_CANVAS_MIN_ZOOM = 0.35;
 export const WORKSPACE_CANVAS_MAX_ZOOM = 2;
 export const WORKSPACE_CANVAS_MIN_NODE_WIDTH = 360;
@@ -51,6 +66,10 @@ function clamp(value: number, min: number, max: number): number {
 
 function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeZero(value: number): number {
+  return Object.is(value, -0) ? 0 : value;
 }
 
 function normalizePoint(value: unknown): WorkspaceCanvasPoint | null {
@@ -364,6 +383,129 @@ export function revealWorkspaceCanvasNode(
   }
 
   return { zoom, offset: { x, y } };
+}
+
+function rectFromNode(node: WorkspaceCanvasNode): WorkspaceCanvasRect {
+  return {
+    x: node.x,
+    y: node.y,
+    width: node.width,
+    height: node.height,
+  };
+}
+
+function unionWorkspaceCanvasRects(
+  rects: readonly WorkspaceCanvasRect[],
+): WorkspaceCanvasRect {
+  if (rects.length === 0) return { x: 0, y: 0, width: 1, height: 1 };
+  const minX = Math.min(...rects.map((rect) => rect.x));
+  const minY = Math.min(...rects.map((rect) => rect.y));
+  const maxX = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const maxY = Math.max(...rects.map((rect) => rect.y + rect.height));
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(maxX - minX, 1),
+    height: Math.max(maxY - minY, 1),
+  };
+}
+
+function mapWorkspaceCanvasRect(
+  rect: WorkspaceCanvasRect,
+  bounds: WorkspaceCanvasRect,
+  origin: WorkspaceCanvasPoint,
+  scale: number,
+): WorkspaceCanvasRect {
+  return {
+    x: origin.x + (rect.x - bounds.x) * scale,
+    y: origin.y + (rect.y - bounds.y) * scale,
+    width: rect.width * scale,
+    height: rect.height * scale,
+  };
+}
+
+export function layoutWorkspaceCanvasMinimap(
+  nodes: Readonly<Record<string, WorkspaceCanvasNode>>,
+  viewport: WorkspaceCanvasViewport,
+  canvasSize: WorkspaceCanvasSize,
+  minimapSize: WorkspaceCanvasSize,
+  padding = 8,
+): WorkspaceCanvasMinimapLayout {
+  const zoom = clampWorkspaceCanvasZoom(viewport.zoom);
+  const nodeWorldRects = Object.fromEntries(
+    Object.entries(nodes).map(([id, node]) => [id, rectFromNode(node)]),
+  );
+  const hasCanvasSize = canvasSize.width > 0 && canvasSize.height > 0;
+  const viewportWorldRect: WorkspaceCanvasRect = {
+    x: normalizeZero(-viewport.offset.x / zoom),
+    y: normalizeZero(-viewport.offset.y / zoom),
+    width: hasCanvasSize ? canvasSize.width / zoom : 0,
+    height: hasCanvasSize ? canvasSize.height / zoom : 0,
+  };
+  const bounds = unionWorkspaceCanvasRects([
+    ...Object.values(nodeWorldRects),
+    ...(hasCanvasSize ? [viewportWorldRect] : []),
+  ]);
+  const safePadding = Math.max(
+    0,
+    Math.min(
+      Number.isFinite(padding) ? padding : 0,
+      Math.max(Math.min(minimapSize.width, minimapSize.height) / 2 - 0.5, 0),
+    ),
+  );
+  const innerWidth = Math.max(minimapSize.width - safePadding * 2, 1);
+  const innerHeight = Math.max(minimapSize.height - safePadding * 2, 1);
+  const scale = Math.max(
+    Math.min(innerWidth / bounds.width, innerHeight / bounds.height),
+    Number.EPSILON,
+  );
+  const origin = {
+    x: safePadding + (innerWidth - bounds.width * scale) / 2,
+    y: safePadding + (innerHeight - bounds.height * scale) / 2,
+  };
+  const nodeRects = Object.fromEntries(
+    Object.entries(nodeWorldRects).map(([id, rect]) => [
+      id,
+      mapWorkspaceCanvasRect(rect, bounds, origin, scale),
+    ]),
+  );
+
+  return {
+    bounds,
+    origin,
+    scale,
+    nodeRects,
+    viewportRect: mapWorkspaceCanvasRect(
+      viewportWorldRect,
+      bounds,
+      origin,
+      scale,
+    ),
+  };
+}
+
+export function centerWorkspaceCanvasViewportFromMinimapPoint(
+  viewport: WorkspaceCanvasViewport,
+  canvasSize: WorkspaceCanvasSize,
+  layout: WorkspaceCanvasMinimapLayout,
+  point: WorkspaceCanvasPoint,
+): WorkspaceCanvasViewport {
+  const contentRight = layout.origin.x + layout.bounds.width * layout.scale;
+  const contentBottom = layout.origin.y + layout.bounds.height * layout.scale;
+  const mapX = clamp(point.x, layout.origin.x, contentRight);
+  const mapY = clamp(point.y, layout.origin.y, contentBottom);
+  const worldPoint = {
+    x: layout.bounds.x + (mapX - layout.origin.x) / layout.scale,
+    y: layout.bounds.y + (mapY - layout.origin.y) / layout.scale,
+  };
+  const zoom = clampWorkspaceCanvasZoom(viewport.zoom);
+  return {
+    zoom,
+    offset: {
+      x: canvasSize.width / 2 - worldPoint.x * zoom,
+      y: canvasSize.height / 2 - worldPoint.y * zoom,
+    },
+  };
 }
 
 export function snapWorkspaceCanvasValue(value: number): number {

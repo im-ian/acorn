@@ -26,6 +26,7 @@ import {
 import { basename } from "../lib/pathUtils";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import type { Session, SessionStatus } from "../lib/types";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   WORKSPACE_CANVAS_MAX_ZOOM,
@@ -46,6 +47,7 @@ import {
 import { useAppStore } from "../store";
 import { Button, IconButton, StatusDot, type StatusTone } from "./ui";
 import { Tooltip } from "./Tooltip";
+import { WorkspaceCanvasMinimap } from "./WorkspaceCanvasMinimap";
 
 type WorkspaceCanvasTranslationKey = Extract<
   TranslationKey,
@@ -130,6 +132,7 @@ export function WorkspaceCanvas({
   sessions,
 }: WorkspaceCanvasProps) {
   const t = useTranslation();
+  const showToast = useToasts((state) => state.show);
   const rootRef = useRef<HTMLElement | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const cancelPanRef = useRef<(() => void) | null>(null);
@@ -155,10 +158,11 @@ export function WorkspaceCanvas({
     return reconcileWorkspaceCanvasState(persisted, reconciliationIds);
   });
   const canvasRef = useRef(canvas);
-  const containerSizeRef = useRef<WorkspaceCanvasSize>({
+  const [containerSize, setContainerSize] = useState<WorkspaceCanvasSize>({
     width: 0,
     height: 0,
   });
+  const containerSizeRef = useRef<WorkspaceCanvasSize>(containerSize);
   const workspaceLabel =
     useAppStore((state) => activeWorkspaceLabel(state, workspaceId)) ??
     t("workspace.mode.canvas");
@@ -245,10 +249,23 @@ export function WorkspaceCanvas({
   }, [applyCanvas, persistCanvas, reconciliationIds, reconciliationIdsKey]);
 
   useEffect(() => {
+    if (!persisted) return;
+    const current = canvasRef.current;
+    const next = reconcileWorkspaceCanvasState(persisted, reconciliationIds);
+    if (workspaceCanvasStatesEqual(current, next)) return;
+    applyCanvas(next);
+  }, [applyCanvas, persisted, reconciliationIds, reconciliationIdsKey]);
+
+  useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const updateSize = (size: WorkspaceCanvasSize) => {
       containerSizeRef.current = size;
+      setContainerSize((current) =>
+        current.width === size.width && current.height === size.height
+          ? current
+          : size,
+      );
     };
     updateSize({ width: root.clientWidth, height: root.clientHeight });
     if (typeof ResizeObserver === "undefined") return;
@@ -466,10 +483,31 @@ export function WorkspaceCanvas({
   }, []);
 
   const resetLayout = useCallback(() => {
+    const previous = canvasRef.current;
     const next = resetWorkspaceCanvasState(sessionIds);
+    if (workspaceCanvasStatesEqual(previous, next)) return;
     applyCanvas(next);
     persistCanvas(next);
-  }, [applyCanvas, persistCanvas, sessionIds]);
+    showToast(canvasText(t, "workspace.canvas.resetUndo"), {
+      action: () => {
+        const state = useAppStore.getState();
+        const workspace = workspaceId ? state.workspaces[workspaceId] : null;
+        const terminalIds = new Set(
+          state.sessions
+            .filter((session) => session.mode !== "chat")
+            .map((session) => session.id),
+        );
+        const liveIds = workspace
+          ? Object.values(workspace.panes).flatMap((pane) =>
+              pane.tabIds.filter((id) => terminalIds.has(id)),
+            )
+          : sessionIds;
+        const restored = reconcileWorkspaceCanvasState(previous, liveIds);
+        if (rootRef.current) applyCanvas(restored);
+        persistCanvas(restored);
+      },
+    });
+  }, [applyCanvas, persistCanvas, sessionIds, showToast, t, workspaceId]);
 
   const worldStyle: CSSProperties = {
     transform: `translate3d(${canvas.viewport.offset.x}px, ${canvas.viewport.offset.y}px, 0) scale(${canvas.viewport.zoom})`,
@@ -636,6 +674,26 @@ export function WorkspaceCanvas({
           </IconButton>
         </Tooltip>
       </div>
+
+      {terminalSessions.length > 0 ? (
+        <WorkspaceCanvasMinimap
+          sessions={terminalSessions}
+          nodes={canvas.nodes}
+          viewport={canvas.viewport}
+          canvasSize={containerSize}
+          activeSessionId={activeSessionId}
+          regionLabel={canvasText(t, "workspace.canvas.overviewLabel")}
+          title={canvasText(t, "workspace.canvas.overviewTitle")}
+          sessionLabel={(name) =>
+            canvasText(t, "workspace.canvas.overviewSession", { name })
+          }
+          onActivateSession={activateNode}
+          onViewportChange={(viewport, commit) =>
+            setViewport(viewport, commit ? "now" : "soon")
+          }
+          onCommitNavigation={() => persistCanvas(canvasRef.current)}
+        />
+      ) : null}
 
       <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-full border border-border/80 bg-bg/75 px-3 py-1 font-mono text-[10px] text-fg-muted shadow-lg backdrop-blur">
         {canvasText(t, "workspace.canvas.hint")}

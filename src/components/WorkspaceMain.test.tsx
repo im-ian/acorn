@@ -400,7 +400,8 @@ describe("WorkspaceMain", () => {
     expect(useAppStore.getState().workspaces[REPO].canvas).not.toEqual(
       beforeReset,
     );
-    const undoToast = useToasts.getState().toasts.at(-1);
+    const toasts = useToasts.getState().toasts;
+    const undoToast = toasts[toasts.length - 1];
     expect(undoToast?.message).toBe("Terminal layout reset. Undo");
     expect(undoToast?.action).not.toBeNull();
 
