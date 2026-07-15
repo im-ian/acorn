@@ -68,6 +68,13 @@ test.describe("settings modal", () => {
                 version: 1,
                 file: "themes/note.css",
               },
+              {
+                id: "one-dark-pro",
+                label: "One Dark Pro",
+                mode: "dark",
+                version: 1,
+                file: "themes/one-dark-pro.css",
+              },
             ],
           }),
         }),
@@ -159,6 +166,28 @@ test.describe("settings modal", () => {
       .getByRole("option", { name: "Acorn Dark Green", exact: true })
       .click();
 
+    const themeLibrary = modal.getByRole("list", {
+      name: /^(Theme library|테마 라이브러리)$/,
+    });
+    const librarySearch = modal.getByRole("searchbox", {
+      name: /^(Search theme library|테마 라이브러리 검색)$/,
+    });
+    await expect(themeLibrary.getByRole("listitem")).toHaveCount(2);
+
+    await librarySearch.fill("note");
+    await expect(themeLibrary.getByRole("listitem")).toHaveCount(1);
+    await expect(themeLibrary).toContainText("Note");
+    await expect(themeLibrary).not.toContainText("One Dark Pro");
+
+    await librarySearch.fill("missing-theme");
+    await expect(themeLibrary).toHaveCount(0);
+    await expect(
+      modal.getByText(
+        /^(No themes match your search\.|검색과 일치하는 테마가 없습니다\.)$/,
+      ),
+    ).toBeVisible();
+
+    await librarySearch.fill("");
     const noteRow = modal.getByRole("listitem").filter({ hasText: "Note" });
     await expect(noteRow).toContainText(/Available to download|다운로드 가능/);
     await noteRow.getByRole("button", { name: /^(Download|다운로드)$/ }).click();
