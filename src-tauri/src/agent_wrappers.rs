@@ -886,6 +886,65 @@ exit 1
     }
 
     #[cfg(unix)]
+    fn notify_event_for_stdin(script_name: &str, payload: &str) -> Option<String> {
+        use std::io::Write as _;
+
+        let base = ScratchDir::new("stdin-notify-event");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let fake_bin = base.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+
+        let capture_path = base.path().join("curl.log");
+        write_executable(
+            &fake_bin.join("curl"),
+            r#"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-d" ]; then
+    shift
+    printf '%s\n' "$1" > "$ACORN_NOTIFY_CAPTURE"
+    exit 0
+  fi
+  shift
+done
+exit 1
+"#,
+        )
+        .unwrap();
+
+        let mut child = Command::new(wrapper_dir.join(script_name))
+            .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_NOTIFY_CAPTURE", &capture_path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "notify helper failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let body = fs::read_to_string(capture_path).ok()?;
+        serde_json::from_str::<serde_json::Value>(&body)
+            .ok()?
+            .get("event")?
+            .as_str()
+            .map(str::to_string)
+    }
+
+    #[cfg(unix)]
     fn antigravity_wrapper_notifications_for_turn(
         planner_with_tools: &str,
         final_planner: &str,
@@ -1177,8 +1236,8 @@ done
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"claude\""));
         assert!(notify.contains("SessionStart|UserPromptSubmit) event=\"start\""));
-        assert!(!notify.contains("SubagentStop"));
-        assert!(notify.contains("Stop|Notification|PermissionRequest) event=\"needs_input\""));
+        assert!(notify.contains("SubagentStop) event=\"start\""));
+        assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
 
@@ -1189,7 +1248,7 @@ done
         assert!(!settings.contains("\"PostToolUse\""));
         assert!(!settings.contains("\"PostToolUseFailure\""));
         assert!(settings.contains("\"Stop\""));
-        assert!(!settings.contains("\"SubagentStop\""));
+        assert!(settings.contains("\"SubagentStop\""));
         assert!(settings.contains("\"Notification\""));
         assert!(settings
             .contains("\"matcher\":\"permission_prompt|elicitation_dialog|agent_needs_input\""));
@@ -1264,9 +1323,101 @@ done
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
         assert!(notify.contains("SessionStart|UserPromptSubmit) event=\"start\""));
-        assert!(!notify.contains("SubagentStop"));
-        assert!(notify.contains("Stop|Notification|PermissionRequest) event=\"needs_input\""));
+        assert!(notify.contains("SubagentStop) event=\"start\""));
+        assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
         assert!(notify.contains("Error) event=\"error\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_stop_stays_working_for_background_tasks_and_crons() {
+        let payloads = [
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "background_tasks": [{"id": "agent-1", "type": "agent", "status": "running"}],
+                "session_crons": [],
+            }),
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "background_tasks": [{"id": "shell-1", "type": "shell", "status": "pending"}],
+                "session_crons": [],
+            }),
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "background_tasks": [],
+                "session_crons": [{"id": "cron-1", "schedule": "in 1m", "recurring": false}],
+            }),
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "background_tasks": [],
+                "session_crons": [{"id": "cron-2", "schedule": "*/5 * * * *", "recurring": true}],
+            }),
+        ];
+
+        for payload in payloads {
+            let pretty = serde_json::to_string_pretty(&payload).unwrap();
+            assert_eq!(
+                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &pretty).as_deref(),
+                Some("start"),
+                "{pretty}",
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_stop_waits_only_when_no_background_work_remains() {
+        let payloads = [
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "background_tasks": [],
+                "session_crons": [],
+            }),
+            serde_json::json!({"hook_event_name": "Stop"}),
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "background_tasks": [],
+                "session_crons": [],
+                "last_assistant_message": "decoy: \"background_tasks\":[{\"status\":\"running\"}]",
+            }),
+        ];
+
+        for payload in payloads {
+            let body = serde_json::to_string(&payload).unwrap();
+            assert_eq!(
+                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &body).as_deref(),
+                Some("needs_input"),
+                "{body}",
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_subagent_completion_reasserts_working_until_final_stop() {
+        let background_stop = serde_json::json!({
+            "hook_event_name": "Stop",
+            "background_tasks": [{"id": "agent-1", "status": "running"}],
+            "session_crons": [],
+        });
+        let subagent_stop = serde_json::json!({
+            "hook_event_name": "SubagentStop",
+            "background_tasks": [],
+            "session_crons": [],
+        });
+        let final_stop = serde_json::json!({
+            "hook_event_name": "Stop",
+            "background_tasks": [],
+            "session_crons": [],
+        });
+
+        let events = [background_stop, subagent_stop, final_stop]
+            .into_iter()
+            .map(|payload| {
+                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &payload.to_string()).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(events, ["start", "start", "needs_input"]);
     }
 
     #[test]
@@ -1398,6 +1549,43 @@ done
         // SubagentStop fires mid-turn, so it re-asserts Running; the
         // main-agent Stop ends the turn and awaits the user.
         assert!(notify.contains("SubagentStop) event=\"start\""));
-        assert!(notify.contains("Stop|Notification|PermissionRequest) event=\"needs_input\""));
+        assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antigravity_stop_stays_working_until_fully_idle() {
+        for payload in [
+            serde_json::json!({"hookEventName": "Stop", "fullyIdle": false}),
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "fullyIdle": false,
+                "background": {"kind": "subagent"},
+            }),
+        ] {
+            let pretty = serde_json::to_string_pretty(&payload).unwrap();
+            assert_eq!(
+                notify_event_for_stdin(ANTIGRAVITY_NOTIFY_NAME, &pretty).as_deref(),
+                Some("start"),
+                "{pretty}",
+            );
+        }
+
+        for payload in [
+            serde_json::json!({"hookEventName": "Stop", "fullyIdle": true}),
+            serde_json::json!({"hookEventName": "Stop"}),
+            serde_json::json!({
+                "hookEventName": "Stop",
+                "fullyIdle": true,
+                "message": "decoy: \"fullyIdle\":false",
+            }),
+        ] {
+            let body = payload.to_string();
+            assert_eq!(
+                notify_event_for_stdin(ANTIGRAVITY_NOTIFY_NAME, &body).as_deref(),
+                Some("needs_input"),
+                "{body}",
+            );
+        }
     }
 }
