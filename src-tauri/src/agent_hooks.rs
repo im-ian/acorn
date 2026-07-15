@@ -652,6 +652,93 @@ mod tests {
         assert_eq!(sessions.hook_tool_started_at(&session_id), None);
     }
 
+    #[test]
+    fn delayed_codex_completion_cannot_overwrite_a_newer_turn() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        let session_id = session.id;
+        sessions.insert(session);
+
+        let apply_json = |json: String| {
+            let event = serde_json::from_str::<AgentHookEvent>(&json).expect("valid hook event");
+            apply_agent_hook_event(&sessions, event)
+        };
+        let event = |kind: &str, source: &str, turn_id: Option<&str>| {
+            let turn_id = turn_id
+                .map(|id| format!(r#","turn_id":"{id}""#))
+                .unwrap_or_default();
+            format!(
+                r#"{{"session_id":"{session_id}","provider":"codex","event":"{kind}","source":"{source}"{turn_id}}}"#
+            )
+        };
+
+        apply_json(event("start", "turn", Some("turn-1"))).expect("first turn starts");
+        apply_json(event("start", "turn", Some("turn-2"))).expect("second turn starts");
+        let revision_after_start = sessions.hook_revision(&session_id);
+
+        let error = apply_json(event("needs_input", "hook", Some("turn-1")))
+            .expect_err("a delayed completion from the previous turn is stale");
+        assert!(error.contains("stale Codex turn"), "unexpected error: {error}");
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+        assert_eq!(sessions.hook_revision(&session_id), revision_after_start);
+
+        apply_json(event("needs_input", "hook", Some("turn-2")))
+            .expect("the current turn may complete");
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
+    fn codex_user_turn_without_an_id_invalidates_the_previous_turn() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        let session_id = session.id;
+        sessions.insert(session);
+
+        let apply = |kind: &str, turn_id: Option<&str>| {
+            let turn_id = turn_id
+                .map(|id| format!(r#","turn_id":"{id}""#))
+                .unwrap_or_default();
+            let json = format!(
+                r#"{{"session_id":"{session_id}","provider":"codex","event":"{kind}","source":"turn"{turn_id}}}"#
+            );
+            let event = serde_json::from_str::<AgentHookEvent>(&json).expect("valid hook event");
+            apply_agent_hook_event(&sessions, event)
+        };
+
+        apply("start", Some("turn-1")).expect("first turn starts");
+        apply("start", None).expect("new user turn starts before Codex assigns its id");
+
+        let error = apply("needs_input", Some("turn-1"))
+            .expect_err("the previous completion must not win the new-turn race");
+        assert!(error.contains("stale Codex turn"), "unexpected error: {error}");
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+    }
+
     fn post(hooks: &AgentHookServer, token: &str, body: &str) -> String {
         let mut stream = TcpStream::connect(addr_from_url(hooks.hook_url())).expect("connect hook");
         write!(
