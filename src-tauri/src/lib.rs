@@ -354,55 +354,9 @@ pub fn run() {
             });
 
             let state = app.state::<AppState>();
-            let hook_app = app.handle().clone();
-            let hook_sessions = state.sessions.clone();
-            match agent_hooks::AgentHookServer::start_with_result_handler(move |event| {
-                let session_id = event.session_id;
-                let status = agent_hooks::apply_agent_hook_event(&hook_sessions, event)
-                    .map_err(|err| {
-                        tracing::warn!(%session_id, error = %err, "agent hook event rejected");
-                        err
-                    })?;
-                if let Err(err) = persistence::save_sessions(&hook_sessions.list()) {
-                    tracing::warn!(error = %err, "agent hook persist status failed");
-                }
-                if let Err(err) = hook_app
-                    .emit(agent_hooks::AGENT_HOOK_STATUS_EVENT, session_id.to_string())
-                {
-                    tracing::warn!(
-                        error = %err,
-                        event = agent_hooks::AGENT_HOOK_STATUS_EVENT,
-                        "agent hook status emit failed",
-                    );
-                }
-                tracing::debug!(%session_id, ?status, "agent hook status applied");
-                Ok(())
-            }) {
-                Ok(server) => {
-                    // Publish this run's URL + token to the stable endpoint
-                    // file the notify scripts read at send time. Without it,
-                    // agent sessions that survived an app restart (daemon
-                    // PTYs) would keep POSTing hook events to the previous
-                    // run's dead port and pin their status forever.
-                    if let Err(err) = agent_wrappers::write_agent_hook_endpoint(
-                        server.hook_url(),
-                        server.token(),
-                    ) {
-                        tracing::warn!(
-                            error = %err,
-                            "agent hook endpoint publish failed; sessions surviving a restart will lose hook status updates",
-                        );
-                    }
-                    *state.agent_hooks.lock() = Some(std::sync::Arc::new(server));
-                }
-                Err(err) => {
-                    // Drop any stale endpoint file from a previous run — it
-                    // would win over the notify scripts' env fallback and
-                    // swallow events silently.
-                    agent_wrappers::remove_agent_hook_endpoint();
-                    tracing::warn!(error = %err, "agent hook server disabled");
-                }
-            }
+            // Do not expose the previous app instance's dead endpoint while
+            // session ownership is being restored.
+            agent_wrappers::remove_agent_hook_endpoint();
             let (sessions_loaded, sessions_clean) = persistence::load_sessions_with_status()
                 .unwrap_or_else(|err| {
                     tracing::warn!("session path resolution failed at boot: {err}");
@@ -469,6 +423,125 @@ pub fn run() {
             if projects_dirty {
                 if let Err(err) = persistence::save_projects(&state.projects.list()) {
                     tracing::warn!("failed to persist projects after project path cleanup: {err}");
+                }
+            }
+            let hook_app = app.handle().clone();
+            let hook_sessions = state.sessions.clone();
+            let hook_reducer = std::sync::Arc::new(agent_hooks::AgentHookReducer::new(
+                hook_sessions.clone(),
+            ));
+            match agent_hooks::AgentHookServer::start_with_outcome_handler(move |event| {
+                let session_id = event.session_id;
+                let provider = event.provider;
+                let source = event.source.clone();
+                let lifecycle_id = event.lifecycle_id.clone();
+                let provider_session_id = event.provider_session_id.clone();
+                let provider_turn_id = event.provider_turn_id.clone();
+                let provider_tool_id = event.provider_tool_id.clone();
+                let provider_version = event.provider_version.clone();
+                let native_hooks_enabled = event.native_hooks_enabled;
+                let ownership = event.ownership;
+                let status = match hook_reducer.apply(event) {
+                    Ok(agent_hooks::AgentHookApplyOutcome::Applied(status)) => status,
+                    Ok(agent_hooks::AgentHookApplyOutcome::Ignored { status, reason }) => {
+                        tracing::debug!(
+                            %session_id,
+                            ?provider,
+                            ?source,
+                            ?lifecycle_id,
+                            ?provider_session_id,
+                            ?provider_turn_id,
+                            ?provider_tool_id,
+                            ?provider_version,
+                            ?native_hooks_enabled,
+                            ?ownership,
+                            ?status,
+                            reason,
+                            "agent hook observation ignored",
+                        );
+                        return agent_hooks::AgentHookHandlerOutcome::Ignored;
+                    }
+                    Err(agent_hooks::AgentHookApplyError::Unavailable(err)) => {
+                        tracing::warn!(
+                            %session_id,
+                            ?provider,
+                            ?source,
+                            ?lifecycle_id,
+                            ?provider_session_id,
+                            ?provider_turn_id,
+                            ?provider_tool_id,
+                            ?provider_version,
+                            ?native_hooks_enabled,
+                            ?ownership,
+                            error = %err,
+                            "agent hook session unavailable",
+                        );
+                        return agent_hooks::AgentHookHandlerOutcome::Unavailable;
+                    }
+                    Err(agent_hooks::AgentHookApplyError::Conflict(err)) => {
+                        tracing::warn!(
+                            %session_id,
+                            ?provider,
+                            ?source,
+                            ?lifecycle_id,
+                            ?provider_session_id,
+                            ?provider_turn_id,
+                            ?provider_tool_id,
+                            ?provider_version,
+                            ?native_hooks_enabled,
+                            ?ownership,
+                            error = %err,
+                            "agent hook event rejected",
+                        );
+                        return agent_hooks::AgentHookHandlerOutcome::Conflict;
+                    }
+                };
+                if let Err(err) = persistence::save_sessions(&hook_sessions.list()) {
+                    tracing::warn!(error = %err, "agent hook persist status failed");
+                }
+                if let Err(err) = hook_app
+                    .emit(agent_hooks::AGENT_HOOK_STATUS_EVENT, session_id.to_string())
+                {
+                    tracing::warn!(
+                        error = %err,
+                        event = agent_hooks::AGENT_HOOK_STATUS_EVENT,
+                        "agent hook status emit failed",
+                    );
+                }
+                tracing::debug!(
+                    %session_id,
+                    ?provider,
+                    ?source,
+                    ?lifecycle_id,
+                    ?provider_session_id,
+                    ?provider_turn_id,
+                    ?provider_tool_id,
+                    ?provider_version,
+                    ?native_hooks_enabled,
+                    ?ownership,
+                    ?status,
+                    "agent hook status applied",
+                );
+                agent_hooks::AgentHookHandlerOutcome::Applied
+            }) {
+                Ok(server) => {
+                    // Publish only after normalized sessions and backfilled
+                    // projects are durable, so a surviving PTY cannot race a
+                    // valid event against partially restored startup state.
+                    if let Err(err) = agent_wrappers::write_agent_hook_endpoint(
+                        server.hook_url(),
+                        server.token(),
+                    ) {
+                        tracing::warn!(
+                            error = %err,
+                            "agent hook endpoint publish failed; sessions surviving a restart will lose hook status updates",
+                        );
+                    }
+                    *state.agent_hooks.lock() = Some(std::sync::Arc::new(server));
+                }
+                Err(err) => {
+                    agent_wrappers::remove_agent_hook_endpoint();
+                    tracing::warn!(error = %err, "agent hook server disabled");
                 }
             }
             // Drop scrollback files that no longer have a matching session.
