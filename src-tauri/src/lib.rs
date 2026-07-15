@@ -356,28 +356,27 @@ pub fn run() {
             let state = app.state::<AppState>();
             let hook_app = app.handle().clone();
             let hook_sessions = state.sessions.clone();
-            match agent_hooks::AgentHookServer::start_with_handler(move |event| {
+            match agent_hooks::AgentHookServer::start_with_result_handler(move |event| {
                 let session_id = event.session_id;
-                match agent_hooks::apply_agent_hook_event(&hook_sessions, event) {
-                    Ok(status) => {
-                        if let Err(err) = persistence::save_sessions(&hook_sessions.list()) {
-                            tracing::warn!(error = %err, "agent hook persist status failed");
-                        }
-                        if let Err(err) = hook_app
-                            .emit(agent_hooks::AGENT_HOOK_STATUS_EVENT, session_id.to_string())
-                        {
-                            tracing::warn!(
-                                error = %err,
-                                event = agent_hooks::AGENT_HOOK_STATUS_EVENT,
-                                "agent hook status emit failed",
-                            );
-                        }
-                        tracing::debug!(%session_id, ?status, "agent hook status applied");
-                    }
-                    Err(err) => {
+                let status = agent_hooks::apply_agent_hook_event(&hook_sessions, event)
+                    .map_err(|err| {
                         tracing::warn!(%session_id, error = %err, "agent hook event rejected");
-                    }
+                        err
+                    })?;
+                if let Err(err) = persistence::save_sessions(&hook_sessions.list()) {
+                    tracing::warn!(error = %err, "agent hook persist status failed");
                 }
+                if let Err(err) = hook_app
+                    .emit(agent_hooks::AGENT_HOOK_STATUS_EVENT, session_id.to_string())
+                {
+                    tracing::warn!(
+                        error = %err,
+                        event = agent_hooks::AGENT_HOOK_STATUS_EVENT,
+                        "agent hook status emit failed",
+                    );
+                }
+                tracing::debug!(%session_id, ?status, "agent hook status applied");
+                Ok(())
             }) {
                 Ok(server) => {
                     // Publish this run's URL + token to the stable endpoint

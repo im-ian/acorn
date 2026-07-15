@@ -18,7 +18,7 @@ const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 
-type HookEventHandler = Arc<dyn Fn(AgentHookEvent) + Send + Sync + 'static>;
+type HookEventHandler = Arc<dyn Fn(AgentHookEvent) -> Result<(), String> + Send + Sync + 'static>;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct AgentHookEvent {
@@ -231,9 +231,20 @@ impl AgentHookServer {
         Self::start_with_handler(|_| {})
     }
 
+    #[cfg(test)]
     pub fn start_with_handler<F>(handler: F) -> io::Result<Self>
     where
         F: Fn(AgentHookEvent) + Send + Sync + 'static,
+    {
+        Self::start_with_result_handler(move |event| {
+            handler(event);
+            Ok(())
+        })
+    }
+
+    pub fn start_with_result_handler<F>(handler: F) -> io::Result<Self>
+    where
+        F: Fn(AgentHookEvent) -> Result<(), String> + Send + Sync + 'static,
     {
         Self::start_with_token_and_handler(
             uuid::Uuid::new_v4().simple().to_string(),
@@ -262,7 +273,7 @@ impl AgentHookServer {
         let pipeline_lock = Arc::new(Mutex::new(()));
         let handler: HookEventHandler = Arc::new(move |event| {
             let _pipeline_guard = pipeline_lock.lock();
-            handler(event);
+            handler(event)
         });
 
         let running = Arc::new(AtomicBool::new(true));
@@ -469,14 +480,19 @@ fn validate_request(request: &[u8], token: &str, handler: &HookEventHandler) -> 
     let body = request.get(body_start..body_end).unwrap_or_default();
     let event = match parse_agent_hook_request(head, body) {
         Ok(Some(event)) => event,
-        Ok(None) => return HttpStatus::NoContent,
+        Ok(None) => return HttpStatus::Accepted,
         Err(err) => {
             tracing::warn!(error = %err, "agent hook payload rejected");
             return HttpStatus::BadRequest;
         }
     };
-    handler(event);
-    HttpStatus::NoContent
+    match handler(event) {
+        Ok(()) => HttpStatus::NoContent,
+        Err(err) => {
+            tracing::warn!(error = %err, "agent hook event could not be applied");
+            HttpStatus::Conflict
+        }
+    }
 }
 
 fn parse_agent_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentHookEvent>, String> {
@@ -547,8 +563,10 @@ fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 }
 
 enum HttpStatus {
+    Accepted,
     NoContent,
     BadRequest,
+    Conflict,
     Unauthorized,
     Forbidden,
     NotFound,
@@ -559,8 +577,10 @@ enum HttpStatus {
 impl HttpStatus {
     fn code(&self) -> u16 {
         match self {
+            Self::Accepted => 202,
             Self::NoContent => 204,
             Self::BadRequest => 400,
+            Self::Conflict => 409,
             Self::Unauthorized => 401,
             Self::Forbidden => 403,
             Self::NotFound => 404,
@@ -571,8 +591,10 @@ impl HttpStatus {
 
     fn reason(&self) -> &'static str {
         match self {
+            Self::Accepted => "Accepted",
             Self::NoContent => "No Content",
             Self::BadRequest => "Bad Request",
+            Self::Conflict => "Conflict",
             Self::Unauthorized => "Unauthorized",
             Self::Forbidden => "Forbidden",
             Self::NotFound => "Not Found",
@@ -700,6 +722,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let handler: HookEventHandler = Arc::new(move |event| {
             tx.send(event).expect("send event");
+            Ok(())
         });
         let session_id = Uuid::new_v4();
         let body = format!(
@@ -749,6 +772,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let handler: HookEventHandler = Arc::new(move |event| {
             tx.send(event).expect("send event");
+            Ok(())
         });
         let session_id = Uuid::new_v4();
         let body = format!(

@@ -136,8 +136,8 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
   fi
   chmod 700 "$_acorn_lifetime_dir" >/dev/null 2>&1 || true
   # A successful capability probe only proves that Codex accepts the hook
-  # config. The notifier creates this runtime marker after the receiver accepts
-  # a real callback; until then the JSONL watcher keeps the full fallback live.
+  # config. The notifier confirms both lifecycle directions against the current
+  # receiver before the JSONL watcher switches to preview-only mode.
   if [ "$_acorn_codex_native_hooks" = "1" ]; then
     export ACORN_CODEX_NATIVE_ACTIVE_FILE="$_acorn_lifetime_dir/native-active"
   else
@@ -180,6 +180,22 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     _acorn_native_hooks="$_acorn_codex_native_hooks"
     _acorn_native_active_file="${ACORN_CODEX_NATIVE_ACTIVE_FILE-}"
 
+    _acorn_native_confirmation_matches() {
+      [ -n "$_acorn_native_active_file" ] || return 1
+      [ -r "$_acorn_native_active_file" ] || return 1
+      _acorn_current_hook_token=""
+      if [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] &&
+         [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ]; then
+        _acorn_current_hook_token=$(sed -n '2p' "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" 2>/dev/null | tr -d '\r\n')
+      fi
+      if [ -z "$_acorn_current_hook_token" ]; then
+        _acorn_current_hook_token="${ACORN_AGENT_HOOK_TOKEN-}"
+      fi
+      [ -n "$_acorn_current_hook_token" ] || return 1
+      _acorn_confirmed_hook_token=$(sed -n '1p' "$_acorn_native_active_file" 2>/dev/null | tr -d '\r\n')
+      [ "$_acorn_confirmed_hook_token" = "$_acorn_current_hook_token" ]
+    }
+
     _acorn_watch_dir="$_acorn_lifetime_dir/watcher"
     if ! (umask 077; mkdir -m 700 "$_acorn_watch_dir"); then
       exit 0
@@ -218,12 +234,10 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     ) &
     _acorn_parent_guard_pid=$!
     while IFS= read -r _acorn_line; do
-      # Once a native callback succeeds, transcript events become a harmless
-      # preview. A failed callback removes the marker and re-enables the full
-      # compatibility mapping without mixing both sources as authoritative.
+      # Native start and completion callbacks must both succeed against the
+      # current receiver before transcript events become a harmless preview.
       if [ "$_acorn_native_hooks" = "1" ] &&
-         [ -n "$_acorn_native_active_file" ] &&
-         [ -f "$_acorn_native_active_file" ]; then
+         _acorn_native_confirmation_matches; then
         case "$_acorn_line" in
           *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
             "$_acorn_notify" start preview >/dev/null 2>&1 || true
@@ -277,6 +291,27 @@ if [ -z "$input" ]; then
   input=$(cat 2>/dev/null || true)
 fi
 compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
+hook_event_name=$(printf '%s\n' "$compact_input" | grep -oE '(^|[,{])[[:space:]]*"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
+
+_acorn_current_hook_token() {
+  _acorn_resolved_hook_token=""
+  if [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] && [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ]; then
+    _acorn_resolved_hook_token=$(sed -n '2p' "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" 2>/dev/null | tr -d '\r\n')
+  fi
+  if [ -z "$_acorn_resolved_hook_token" ]; then
+    _acorn_resolved_hook_token="${ACORN_AGENT_HOOK_TOKEN-}"
+  fi
+  printf '%s\n' "$_acorn_resolved_hook_token"
+}
+
+_acorn_native_confirmation_matches() {
+  [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] || return 1
+  [ -r "$ACORN_CODEX_NATIVE_ACTIVE_FILE" ] || return 1
+  _acorn_expected_hook_token=$(_acorn_current_hook_token)
+  [ -n "$_acorn_expected_hook_token" ] || return 1
+  _acorn_confirmed_hook_token=$(sed -n '1p' "$ACORN_CODEX_NATIVE_ACTIVE_FILE" 2>/dev/null | tr -d '\r\n')
+  [ "$_acorn_confirmed_hook_token" = "$_acorn_expected_hook_token" ]
+}
 
 if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   [ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
@@ -308,7 +343,7 @@ if [ "$native_contract" = "1" ]; then
   [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
   [ -n "${ACORN_CODEX_LIFECYCLE_ID-}" ] || exit 0
 
-  if printf '%s' "$input" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
+  hook_status=$(printf '%s' "$input" | curl -sS --connect-timeout 1 --max-time 1 -X POST \
       -H 'Content-Type: application/json' \
       -H "X-Acorn-Agent-Hook-Token: $hook_token" \
       -H 'X-Acorn-Agent-Hook-Provider: codex' \
@@ -317,12 +352,46 @@ if [ "$native_contract" = "1" ]; then
       -H "X-Acorn-Codex-Lifecycle-Id: $ACORN_CODEX_LIFECYCLE_ID" \
       -H "X-Acorn-Codex-Version: ${ACORN_CODEX_VERSION-unknown}" \
       --data-binary @- \
-      "$hook_url" >/dev/null 2>&1; then
-    if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ]; then
-      (umask 077; : > "$ACORN_CODEX_NATIVE_ACTIVE_FILE") 2>/dev/null || true
+      -o /dev/null -w '%{http_code}' \
+      "$hook_url" 2>/dev/null)
+  curl_status=$?
+
+  if [ "$curl_status" -eq 0 ] && [ "$hook_status" = "204" ]; then
+    marker_class=""
+    case "$hook_event_name" in
+      UserPromptSubmit|PreToolUse) marker_class="start" ;;
+      PermissionRequest|Stop) marker_class="needs-input" ;;
+    esac
+    if [ -n "$marker_class" ] && [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ]; then
+      marker_file="$ACORN_CODEX_NATIVE_ACTIVE_FILE.$marker_class"
+      marker_tmp="$marker_file.tmp.$$"
+      if (umask 077; printf '%s\n' "$hook_token" > "$marker_tmp") 2>/dev/null &&
+         mv -f "$marker_tmp" "$marker_file" 2>/dev/null; then
+        start_token=$(sed -n '1p' "$ACORN_CODEX_NATIVE_ACTIVE_FILE.start" 2>/dev/null | tr -d '\r\n')
+        needs_input_token=$(sed -n '1p' "$ACORN_CODEX_NATIVE_ACTIVE_FILE.needs-input" 2>/dev/null | tr -d '\r\n')
+        if [ "$start_token" = "$hook_token" ] && [ "$needs_input_token" = "$hook_token" ]; then
+          active_tmp="$ACORN_CODEX_NATIVE_ACTIVE_FILE.tmp.$$"
+          if (umask 077; printf '%s\n' "$hook_token" > "$active_tmp") 2>/dev/null; then
+            mv -f "$active_tmp" "$ACORN_CODEX_NATIVE_ACTIVE_FILE" 2>/dev/null ||
+              rm -f "$active_tmp" >/dev/null 2>&1 || true
+          fi
+        fi
+      else
+        rm -f "$marker_tmp" >/dev/null 2>&1 || true
+      fi
     fi
+  elif [ "$curl_status" -eq 0 ] && [ "$hook_status" = "202" ]; then
+    :
   elif [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ]; then
-    rm -f "$ACORN_CODEX_NATIVE_ACTIVE_FILE" >/dev/null 2>&1 || true
+    for marker_file in \
+      "$ACORN_CODEX_NATIVE_ACTIVE_FILE" \
+      "$ACORN_CODEX_NATIVE_ACTIVE_FILE.start" \
+      "$ACORN_CODEX_NATIVE_ACTIVE_FILE.needs-input"; do
+      marker_token=$(sed -n '1p' "$marker_file" 2>/dev/null | tr -d '\r\n')
+      if [ "$marker_token" = "$hook_token" ]; then
+        rm -f "$marker_file" >/dev/null 2>&1 || true
+      fi
+    done
   fi
   exit 0
 fi
@@ -336,8 +405,7 @@ case "$event" in
     ;;
   needs_input|stop|error)
     if [ "$source" != "transcript" ]; then
-      if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] &&
-         [ ! -f "$ACORN_CODEX_NATIVE_ACTIVE_FILE" ]; then
+      if ! _acorn_native_confirmation_matches; then
         source="transcript"
       else
         source="legacy"
@@ -347,7 +415,6 @@ case "$event" in
   *)
     event=""
     native_turn_id=""
-    hook_event_name=$(printf '%s\n' "$compact_input" | grep -oE '(^|[,{])[[:space:]]*"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
     case "$hook_event_name" in
       UserPromptSubmit|PreToolUse|PermissionRequest)
         # These events also fire for subagents. Native owner events carry
@@ -1461,12 +1528,8 @@ done
     ) -> (String, bool) {
         let base = ScratchDir::new("codex-tui-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
-        write_agent_hook_endpoint_at(
-            &wrapper_dir,
-            "http://127.0.0.1:1/agent-hook",
-            "token-1",
-        )
-        .unwrap();
+        write_agent_hook_endpoint_at(&wrapper_dir, "http://127.0.0.1:1/agent-hook", "token-1")
+            .unwrap();
         let real_dir = base.path().join("real-bin");
         fs::create_dir_all(&real_dir).unwrap();
 
