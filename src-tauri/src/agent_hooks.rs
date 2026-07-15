@@ -6,13 +6,14 @@ use std::time::{Duration, SystemTime};
 
 use acorn_session::{SessionAgentProvider, SessionStatus, SessionStore};
 use serde::Deserialize;
+use serde_json::Value;
 use uuid::Uuid;
 
 pub const AGENT_HOOK_STATUS_EVENT: &str = "acorn:agent-hook-status";
 
 const HOOK_PATH: &str = "/agent-hook";
 const MAX_HEADER_BYTES: usize = 8 * 1024;
-const MAX_BODY_BYTES: usize = 16 * 1024;
+const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -409,8 +410,9 @@ fn validate_request(request: &[u8], token: &str, handler: &HookEventHandler) -> 
         .unwrap_or(0);
     let body_end = body_start.saturating_add(content_length);
     let body = request.get(body_start..body_end).unwrap_or_default();
-    let event = match serde_json::from_slice::<AgentHookEvent>(body) {
-        Ok(event) => event,
+    let event = match parse_agent_hook_request(head, body) {
+        Ok(Some(event)) => event,
+        Ok(None) => return HttpStatus::NoContent,
         Err(err) => {
             tracing::warn!(error = %err, "agent hook payload rejected");
             return HttpStatus::BadRequest;
@@ -418,6 +420,59 @@ fn validate_request(request: &[u8], token: &str, handler: &HookEventHandler) -> 
     };
     handler(event);
     HttpStatus::NoContent
+}
+
+fn parse_agent_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentHookEvent>, String> {
+    match header_value(head, "x-acorn-agent-hook-provider") {
+        Some("codex") => parse_raw_codex_hook_request(head, body),
+        Some(provider) => Err(format!("unsupported raw hook provider: {provider}")),
+        None => serde_json::from_slice::<AgentHookEvent>(body)
+            .map(Some)
+            .map_err(|err| err.to_string()),
+    }
+}
+
+fn parse_raw_codex_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentHookEvent>, String> {
+    if header_value(head, "x-acorn-agent-hook-source") != Some("native") {
+        return Err("unsupported Codex hook source".to_string());
+    }
+    let session_id = header_value(head, "x-acorn-agent-hook-session-id")
+        .ok_or_else(|| "missing Acorn session id".to_string())?
+        .parse::<Uuid>()
+        .map_err(|_| "invalid Acorn session id".to_string())?;
+    let payload = serde_json::from_slice::<Value>(body).map_err(|err| err.to_string())?;
+    let hook_event_name = payload
+        .get("hook_event_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Codex hook payload has no hook_event_name".to_string())?;
+    let turn_id = payload
+        .get("turn_id")
+        .and_then(Value::as_str)
+        .filter(|value| Uuid::parse_str(value).is_ok())
+        .ok_or_else(|| "Codex hook payload has no valid turn_id".to_string())?;
+
+    let (event, source, requires_explicit_owner) = match hook_event_name {
+        "UserPromptSubmit" => (AgentHookEventKind::Start, "turn", true),
+        "PreToolUse" => (AgentHookEventKind::Start, "tool", true),
+        "PermissionRequest" => (AgentHookEventKind::NeedsInput, "hook", true),
+        "Stop" => (AgentHookEventKind::NeedsInput, "hook", false),
+        other => return Err(format!("unsupported Codex hook event: {other}")),
+    };
+    if requires_explicit_owner
+        && (!payload.get("agent_id").is_some_and(Value::is_null)
+            || !payload.get("agent_type").is_some_and(Value::is_null))
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(AgentHookEvent {
+        session_id,
+        provider: SessionAgentProvider::Codex,
+        event,
+        message: None,
+        source: Some(source.to_string()),
+        turn_id: Some(turn_id.to_string()),
+    }))
 }
 
 fn find_header_end(buf: &[u8]) -> Option<usize> {
