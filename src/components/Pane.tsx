@@ -612,7 +612,7 @@ export function Pane({ paneId }: PaneProps) {
             isActive={isFocused}
           />
         ) : null}
-        {active?.kind === "work-summary" ? (
+        {active?.kind === "work-summary" && workspaceViewMode === "panes" ? (
           <WorkSummaryView
             tab={active}
             session={

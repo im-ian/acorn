@@ -98,6 +98,90 @@ const CHAT_STATE = {
 };
 
 test.describe("work summary", () => {
+  test("opens as an overlay without leaving alternate workspace modes", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION]);
+    await tauri.respond("load_chat_session_state", CHAT_STATE);
+    await tauri.respond("fs_git_status", {
+      statuses: {},
+      huge: false,
+      limit: 500,
+    });
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    const card = board.getByRole("button", { name: "Open summary-session" });
+    await expect(card).toBeVisible();
+
+    await card.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Open Work Summary" }).click();
+
+    const overlay = page.getByTestId("workspace-work-summary-overlay");
+    await expect(overlay).toBeVisible();
+    await expect(
+      overlay.getByRole("heading", { name: "Work Summary" }),
+    ).toBeVisible();
+    await expect(board).toBeVisible();
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Kanban",
+    );
+
+    await overlay.getByRole("button", { name: "Close" }).click();
+    await expect(overlay).toHaveCount(0);
+
+    await card.click();
+    const terminalPopover = page.getByTestId("kanban-terminal-popover");
+    await expect(terminalPopover).toBeVisible();
+    await page
+      .getByTestId("kanban-terminal-popover-drag-handle")
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Open Work Summary" }).click();
+
+    await expect(overlay).toBeVisible();
+    await expect(terminalPopover).toHaveCount(0);
+    await expect(board).toBeVisible();
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Kanban",
+    );
+
+    await overlay.getByRole("button", { name: "Close" }).click();
+
+    const sidebarSession = page
+      .locator("aside [role='button']")
+      .filter({ hasText: "summary-session" })
+      .first();
+    await expect(sidebarSession).toBeVisible();
+    await sidebarSession.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Open Work Summary" }).click();
+
+    await expect(overlay).toBeVisible();
+    await expect(board).toBeVisible();
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Kanban",
+    );
+
+    await overlay.getByRole("button", { name: "Close" }).click();
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+    const canvas = page.getByTestId("workspace-canvas");
+    await expect(canvas).toBeVisible();
+
+    await sidebarSession.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Open Work Summary" }).click();
+
+    await expect(overlay).toBeVisible();
+    await expect(canvas).toBeVisible();
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Canvas",
+    );
+  });
+
   test("opens a changed file from the summary tab", async ({ page, tauri }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [SESSION]);
