@@ -8706,6 +8706,10 @@ mod tests {
             "ACORN_AGENT_HOOK_TOKEN".to_string(),
             "caller-token".to_string(),
         );
+        env.insert(
+            "ACORN_AGENT_INVOCATION_ROOT".to_string(),
+            "caller-root".to_string(),
+        );
 
         inject_agent_hook_env(&mut env, &session, Some(&hooks));
 
@@ -8720,6 +8724,11 @@ mod tests {
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_SESSION_ID"),
             Some(&session.id.to_string())
+        );
+        assert_eq!(
+            env.get("ACORN_AGENT_INVOCATION_ROOT"),
+            Some(&"1".to_string()),
+            "the PTY boundary must overwrite caller input with a fresh root marker",
         );
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_PROVIDER"),
@@ -8742,6 +8751,7 @@ mod tests {
         let mut env = HashMap::new();
         inject_agent_hook_env(&mut env, &session, None);
         assert!(!env.contains_key("ACORN_AGENT_HOOK_URL"));
+        assert!(!env.contains_key("ACORN_AGENT_INVOCATION_ROOT"));
     }
 
     #[test]
@@ -8777,6 +8787,10 @@ mod tests {
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_SESSION_ID"),
             Some(&session.id.to_string())
+        );
+        assert_eq!(
+            env.get("ACORN_AGENT_INVOCATION_ROOT"),
+            Some(&"1".to_string())
         );
         // Provider is unknown at spawn; the per-provider notify script reports
         // its own provider, so the provider-specific var stays unset here.

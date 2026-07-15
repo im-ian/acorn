@@ -961,6 +961,7 @@ while :; do sleep 1; done
             .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_ROOT", "1")
             .env("ACORN_TEST_REAL_TAIL", real_tail)
             .env("ACORN_TEST_TAIL_PID", &tail_pid_path)
             .env("ACORN_TEST_TAIL_PARENT_PID", &tail_parent_pid_path)
@@ -1082,6 +1083,7 @@ done
             .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_ROOT", "1")
             .env("ACORN_TEST_REAL_TAIL", real_tail)
             .env("ACORN_TEST_TAIL_PID", &tail_pid_path)
             .env("ACORN_TEST_REAL_SLEEP", real_sleep)
@@ -1147,9 +1149,16 @@ done
     }
 
     #[cfg(unix)]
+    enum WrapperInvocationContext {
+        Root,
+        Nested,
+        LegacyInherited,
+    }
+
+    #[cfg(unix)]
     fn run_hooked_wrapper_for_invocation_ownership(
         provider: &str,
-        inherited_invocation: bool,
+        context: WrapperInvocationContext,
     ) -> std::process::Output {
         let base = ScratchDir::new(&format!("{provider}-invocation-owner"));
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
@@ -1166,6 +1175,7 @@ printf 'hook_url=%s\n' "${ACORN_AGENT_HOOK_URL-}"
 printf 'hook_token=%s\n' "${ACORN_AGENT_HOOK_TOKEN-}"
 printf 'invocation_token=%s\n' "${ACORN_AGENT_INVOCATION_TOKEN-}"
 printf 'invocation_depth=%s\n' "${ACORN_AGENT_INVOCATION_DEPTH-}"
+printf 'invocation_root=%s\n' "${ACORN_AGENT_INVOCATION_ROOT-}"
 for arg in "$@"; do
   printf 'arg=%s\n' "$arg"
 done
@@ -1184,12 +1194,19 @@ done
             .env("ACORN_AGENT_HOOK_TOKEN", "hook-token-1")
             .env_remove("ACORN_AGENT_INVOCATION_TOKEN")
             .env_remove("ACORN_AGENT_INVOCATION_DEPTH")
+            .env_remove("ACORN_AGENT_INVOCATION_ROOT")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        if inherited_invocation {
-            command
-                .env("ACORN_AGENT_INVOCATION_TOKEN", "outer-invocation")
-                .env("ACORN_AGENT_INVOCATION_DEPTH", "1");
+        match context {
+            WrapperInvocationContext::Root => {
+                command.env("ACORN_AGENT_INVOCATION_ROOT", "1");
+            }
+            WrapperInvocationContext::Nested => {
+                command
+                    .env("ACORN_AGENT_INVOCATION_TOKEN", "outer-invocation")
+                    .env("ACORN_AGENT_INVOCATION_DEPTH", "1");
+            }
+            WrapperInvocationContext::LegacyInherited => {}
         }
 
         command.output().unwrap()
@@ -1238,6 +1255,7 @@ done
             .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_ROOT", "1")
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .env("ACORN_TEST_TUI_LINE", line)
             .env("ACORN_TEST_REAL_TAIL", real_tail)
@@ -1522,6 +1540,7 @@ done
             .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_ROOT", "1")
             .env("ACORN_AGENT_STATE_DIR", &state_dir)
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .env("ACORN_TEST_AGY_TRANSCRIPT", &transcript)
@@ -1631,6 +1650,7 @@ done
             .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_ROOT", "1")
             .env("ACORN_AGENT_STATE_DIR", &state_dir)
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .env("ACORN_TEST_AGY_FIRST_TRANSCRIPT", &first_transcript)
@@ -1775,7 +1795,10 @@ done
             CLAUDE_WRAPPER_NAME,
             ANTIGRAVITY_WRAPPER_NAME,
         ] {
-            let output = run_hooked_wrapper_for_invocation_ownership(provider, false);
+            let output = run_hooked_wrapper_for_invocation_ownership(
+                provider,
+                WrapperInvocationContext::Root,
+            );
             assert!(
                 output.status.success(),
                 "{provider} wrapper failed: {}",
@@ -1799,6 +1822,10 @@ done
                 1,
                 "{provider} must expose exactly one invocation owner: {stdout}"
             );
+            assert!(
+                stdout.contains("invocation_root=\n"),
+                "{provider} leaked the one-shot PTY root marker: {stdout}"
+            );
         }
     }
 
@@ -1810,7 +1837,10 @@ done
             CLAUDE_WRAPPER_NAME,
             ANTIGRAVITY_WRAPPER_NAME,
         ] {
-            let output = run_hooked_wrapper_for_invocation_ownership(provider, true);
+            let output = run_hooked_wrapper_for_invocation_ownership(
+                provider,
+                WrapperInvocationContext::Nested,
+            );
             assert!(
                 output.status.success(),
                 "nested {provider} wrapper failed: {}",
@@ -1831,6 +1861,40 @@ done
             assert!(
                 !stdout.contains("arg=--settings\n") && !stdout.contains("arg=--enable\n"),
                 "nested {provider} installed Acorn hooks: {stdout}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrappers_treat_tokenless_hook_env_as_a_legacy_owner_child() {
+        for provider in [
+            CODEX_WRAPPER_NAME,
+            CLAUDE_WRAPPER_NAME,
+            ANTIGRAVITY_WRAPPER_NAME,
+        ] {
+            let output = run_hooked_wrapper_for_invocation_ownership(
+                provider,
+                WrapperInvocationContext::LegacyInherited,
+            );
+            assert!(
+                output.status.success(),
+                "legacy nested {provider} wrapper failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(stdout.contains("hook_session=\n"), "{provider}: {stdout}");
+            assert!(stdout.contains("hook_url=\n"), "{provider}: {stdout}");
+            assert!(stdout.contains("hook_token=\n"), "{provider}: {stdout}");
+            assert!(
+                stdout.contains("invocation_token=\n")
+                    && stdout.contains("invocation_depth=\n")
+                    && stdout.contains("invocation_root=\n"),
+                "{provider} promoted a child of a pre-update owner: {stdout}"
+            );
+            assert!(
+                !stdout.contains("arg=--settings\n") && !stdout.contains("arg=--enable\n"),
+                "legacy nested {provider} installed Acorn hooks: {stdout}"
             );
         }
     }
@@ -1881,6 +1945,109 @@ done
                 "{script} rejected its top-level invocation hook",
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tokenless_pre_update_helpers_require_the_bound_provider_owner_id() {
+        let owner = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+        let other = "019f631f-0bfc-76f1-9c1d-334be74958ca";
+        let codex_completion =
+            format!(r#"{{"type":"agent-turn-complete","thread-id":"{owner}","turn-id":"turn-1"}}"#);
+        let claude_stop = format!(
+            r#"{{"hook_event_name":"Stop","session_id":"{owner}","background_tasks":[],"session_crons":[]}}"#
+        );
+        let antigravity_stop =
+            format!(r#"{{"hookEventName":"Stop","conversationId":"{owner}","fullyIdle":true}}"#);
+
+        for (script, args, payload, marker_name) in [
+            (
+                CODEX_NOTIFY_NAME,
+                vec![codex_completion.as_str()],
+                "",
+                "codex.id",
+            ),
+            (
+                CLAUDE_NOTIFY_NAME,
+                vec![],
+                claude_stop.as_str(),
+                "claude.id",
+            ),
+            (
+                ANTIGRAVITY_NOTIFY_NAME,
+                vec![],
+                antigravity_stop.as_str(),
+                "antigravity.id",
+            ),
+            (
+                ANTIGRAVITY_NOTIFY_NAME,
+                vec!["needs_input", owner],
+                "",
+                "antigravity.id",
+            ),
+        ] {
+            assert!(
+                notify_payload_for_input_with_invocation(
+                    script,
+                    &args,
+                    payload,
+                    Some((marker_name, owner)),
+                    None,
+                )
+                .is_some(),
+                "{script} rejected a surviving pre-update owner hook",
+            );
+            assert_eq!(
+                notify_payload_for_input_with_invocation(
+                    script,
+                    &args,
+                    payload,
+                    Some((marker_name, other)),
+                    None,
+                ),
+                None,
+                "{script} accepted a tokenless hook from a non-owner",
+            );
+            assert_eq!(
+                notify_payload_for_input_with_invocation(script, &args, payload, None, None),
+                None,
+                "{script} accepted a tokenless hook without an owner marker",
+            );
+        }
+
+        assert_eq!(
+            notify_payload_for_input_with_invocation(
+                CODEX_NOTIFY_NAME,
+                &["start", "turn"],
+                "",
+                Some(("codex.id", owner)),
+                None,
+            ),
+            None,
+            "a tokenless Codex watcher start has no thread id and must fail closed",
+        );
+        assert_eq!(
+            notify_payload_for_input_with_invocation(
+                CLAUDE_NOTIFY_NAME,
+                &[],
+                r#"{"hook_event_name":"PermissionRequest"}"#,
+                Some(("claude.id", owner)),
+                None,
+            ),
+            None,
+            "a tokenless Claude hook without session_id must fail closed",
+        );
+        assert_eq!(
+            notify_payload_for_input_with_invocation(
+                ANTIGRAVITY_NOTIFY_NAME,
+                &[],
+                r#"{"hookEventName":"PermissionRequest"}"#,
+                Some(("antigravity.id", owner)),
+                None,
+            ),
+            None,
+            "a tokenless Antigravity hook without conversationId must fail closed",
+        );
     }
 
     #[cfg(unix)]
