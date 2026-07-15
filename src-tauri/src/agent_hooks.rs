@@ -82,11 +82,17 @@ pub fn apply_agent_hook_event(
         }
     }
 
-    // Mark the hook channel live so the transcript-tail status poll defers
-    // turn-boundary classification to these events instead of clobbering a
+    // Mark native hook channels live so the transcript-tail status poll
+    // defers turn-boundary classification to them instead of clobbering a
     // just-set resting status (Ready/WaitingForInput) back to Working on its
-    // next tick. See `poll_defers_to_hook` in `commands`.
-    sessions.mark_hook_active(&event.session_id, event.provider);
+    // next tick. Transcript-derived wrapper observations are only a low-latency
+    // preview of the same data the poll reads. Treating those as an
+    // authoritative hook would make a missed line, owner rotation, or watcher
+    // restart permanently hide the fresher transcript classification.
+    // See `poll_defers_to_hook` in `commands`.
+    if event.source.as_deref() != Some("transcript") {
+        sessions.mark_hook_active(&event.session_id, event.provider);
+    }
 
     // The Codex JSONL watcher tags task and exec starts separately. This
     // runtime-only turn evidence lets the process poll distinguish a real
