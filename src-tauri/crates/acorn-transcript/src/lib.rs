@@ -2108,10 +2108,9 @@ struct TranscriptCandidate {
 ///      of their writer dying, while our own post-/new transcript is
 ///      the one being appended right now;
 ///   3. the caller must vouch via `allow_rotation` that this process is
-///      the only matching agent in scope (same cwd for claude/codex,
-///      host-wide for antigravity, whose transcripts carry no cwd) —
-///      with a second live agent around, the hot later-born file may be
-///      theirs, so ambiguity falls back to the anchor (old behaviour).
+///      the only matching agent in its cwd — with a second live agent
+///      around, the hot later-born file may be theirs, so ambiguity falls
+///      back to the anchor.
 ///   4. providers with ownerless transcript metadata may further constrain
 ///      the successor id. Antigravity uses its cwd-keyed CLI continuation
 ///      cursor so a hot built-in subagent brain cannot impersonate `/new`.
