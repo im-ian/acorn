@@ -1020,6 +1020,75 @@ while :; do sleep 1; done
         (tail_alive, watcher_alive)
     }
 
+    #[cfg(unix)]
+    fn codex_parent_guard_short_sleep_count() -> usize {
+        let base = ScratchDir::new("codex-parent-guard-churn");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        fs::create_dir_all(&real_dir).unwrap();
+
+        let session_log_path = base.path().join("session.jsonl");
+        let tail_pid_path = base.path().join("tail.pid");
+        let sleep_log_path = base.path().join("sleep.log");
+        let real_tail = install_tail_probe(&real_dir);
+        let real_sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .into_iter()
+            .find(|path| Path::new(path).is_file())
+            .expect("sleep binary must exist on unix");
+
+        write_executable(
+            &real_dir.join("sleep"),
+            r#"#!/bin/sh
+printf '%s\n' "${1-}" >> "$ACORN_TEST_SLEEP_LOG"
+exec "$ACORN_TEST_REAL_SLEEP" "$@"
+"#,
+        )
+        .unwrap();
+        write_executable(
+            &real_dir.join("codex"),
+            r#"#!/bin/sh
+: > "$CODEX_TUI_SESSION_LOG_PATH"
+_acorn_i=0
+while [ ! -s "$ACORN_TEST_TAIL_PID" ] && [ "$_acorn_i" -lt 100 ]; do
+  _acorn_i=$((_acorn_i + 1))
+  "$ACORN_TEST_REAL_SLEEP" 0.01
+done
+[ -s "$ACORN_TEST_TAIL_PID" ] || exit 1
+"$ACORN_TEST_REAL_SLEEP" 0.45
+"#,
+        )
+        .unwrap();
+
+        let status = Command::new(wrapper_dir.join(CODEX_WRAPPER_NAME))
+            .env("PATH", format!("{}:/usr/bin:/bin", real_dir.display()))
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_TEST_REAL_TAIL", real_tail)
+            .env("ACORN_TEST_TAIL_PID", &tail_pid_path)
+            .env("ACORN_TEST_REAL_SLEEP", real_sleep)
+            .env("ACORN_TEST_SLEEP_LOG", &sleep_log_path)
+            .env("CODEX_TUI_SESSION_LOG_PATH", &session_log_path)
+            .env_remove("ACORN_AGENT_INVOCATION_TOKEN")
+            .env_remove("ACORN_AGENT_INVOCATION_DEPTH")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "codex wrapper failed with {status}");
+        assert!(
+            !tail_process_survived_wrapper(&tail_pid_path),
+            "the churn probe left its transcript tail alive"
+        );
+
+        fs::read_to_string(sleep_log_path)
+            .unwrap_or_default()
+            .lines()
+            .filter(|duration| *duration == "0.1")
+            .count()
+    }
+
     fn run_wrapper_with_timeout(
         program: impl AsRef<std::ffi::OsStr>,
         path: &str,
@@ -1813,6 +1882,16 @@ done
                 (ANTIGRAVITY_WRAPPER_NAME, (false, false)),
             ],
             "direct wrapper termination must not orphan a watcher or tail",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_parent_guard_does_not_spawn_polling_sleep_processes() {
+        assert_eq!(
+            codex_parent_guard_short_sleep_count(),
+            0,
+            "the parent-liveness guard must block on a lifetime signal instead of polling",
         );
     }
 
