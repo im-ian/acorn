@@ -697,15 +697,15 @@ fn owner_rotation_scope(session_id: uuid::Uuid, kind: AgentKind, cwd: &Path) -> 
     }
 }
 
-fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
-    fn basename_matches(s: &str, target: &str) -> bool {
-        let base = s.rsplit('/').next().unwrap_or(s);
-        base == target
-            || base.strip_suffix(".js") == Some(target)
-            || base.strip_suffix(".mjs") == Some(target)
-            || base.strip_suffix(".cjs") == Some(target)
-    }
+fn basename_matches(s: &str, target: &str) -> bool {
+    let base = s.rsplit('/').next().unwrap_or(s);
+    base == target
+        || base.strip_suffix(".js") == Some(target)
+        || base.strip_suffix(".mjs") == Some(target)
+        || base.strip_suffix(".cjs") == Some(target)
+}
 
+fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
     if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
         if basename_matches(exe, target) {
             return true;
@@ -759,13 +759,93 @@ fn claude_resume_id_from_args(args: &[String]) -> Option<String> {
 }
 
 fn codex_resume_id_from_args(args: &[String]) -> Option<String> {
-    args.windows(2).find_map(|pair| {
-        (pair[0] == "resume" && is_uuid_v4_shape(&pair[1])).then(|| pair[1].clone())
-    })
+    let resume_index = codex_resume_subcommand_index(args)?;
+    args.get(resume_index + 1)
+        .filter(|arg| is_uuid_v4_shape(arg))
+        .cloned()
 }
 
-fn codex_resume_requested_from_args(args: &[String]) -> bool {
-    args.iter().any(|arg| arg == "resume")
+/// Return whether `args` select Codex's top-level `resume` subcommand.
+///
+/// The wrapper injects global `--enable` and `-c` options before the user's
+/// arguments, and Node installations put a `codex.js` launcher after the
+/// runtime executable. Parse that prefix while failing closed on unknown
+/// options so prompt text such as `codex exec resume` never widens owner
+/// matching to historical sub-agent rollouts.
+pub fn codex_resume_requested_from_args(args: &[String]) -> bool {
+    codex_resume_subcommand_index(args).is_some()
+}
+
+fn codex_resume_subcommand_index(args: &[String]) -> Option<usize> {
+    let mut index = args.iter().position(|arg| basename_matches(arg, "codex"))? + 1;
+
+    while let Some(arg) = args.get(index).map(String::as_str) {
+        if arg == "resume" {
+            return Some(index);
+        }
+        if arg == "--" || !arg.starts_with('-') {
+            return None;
+        }
+
+        if matches!(
+            arg,
+            "--strict-config"
+                | "--oss"
+                | "--dangerously-bypass-approvals-and-sandbox"
+                | "--dangerously-bypass-hook-trust"
+                | "--search"
+                | "--no-alt-screen"
+        ) {
+            index += 1;
+            continue;
+        }
+
+        if matches!(arg, "-h" | "--help" | "-V" | "--version") {
+            return None;
+        }
+
+        const VALUE_OPTIONS: &[&str] = &[
+            "-c",
+            "--config",
+            "--enable",
+            "--disable",
+            "--remote",
+            "--remote-auth-token-env",
+            "-i",
+            "--image",
+            "-m",
+            "--model",
+            "--local-provider",
+            "-p",
+            "--profile",
+            "-s",
+            "--sandbox",
+            "-C",
+            "--cd",
+            "--add-dir",
+            "-a",
+            "--ask-for-approval",
+        ];
+        if VALUE_OPTIONS.contains(&arg) {
+            args.get(index + 1)?;
+            index += 2;
+            continue;
+        }
+        if VALUE_OPTIONS.iter().any(|option| {
+            option.starts_with("--")
+                && arg
+                    .strip_prefix(option)
+                    .is_some_and(|suffix| suffix.starts_with('='))
+        }) || ["-c", "-i", "-m", "-p", "-s", "-C", "-a"]
+            .iter()
+            .any(|option| arg.starts_with(option) && arg.len() > option.len())
+        {
+            index += 1;
+            continue;
+        }
+        return None;
+    }
+    None
 }
 
 fn codex_rollout_scope_for_mapping(
@@ -1101,6 +1181,29 @@ fn find_recent_resumed_codex_jsonl(
     )
 }
 
+fn codex_day_dirs_for_scope(root: &Path, scope: CodexRolloutScope) -> Vec<PathBuf> {
+    if scope != CodexRolloutScope::ResumedOwner {
+        return newest_subdir(root)
+            .and_then(|year| newest_subdir(&year))
+            .and_then(|month| newest_subdir(&month))
+            .into_iter()
+            .collect();
+    }
+
+    // A picker, --last, or named resume can reopen a rollout stored under any
+    // historical date. Its file mtime becomes current without changing the
+    // containing directory, so the resume-only path must inspect every date
+    // directory and let the normal mtime/process-start filters discard cold
+    // files. New-session scans stay on the newest day above.
+    let mut days = Vec::new();
+    for year in iter_subdirs_desc(root).unwrap_or_default() {
+        for month in iter_subdirs_desc(&year).unwrap_or_default() {
+            days.extend(iter_subdirs_desc(&month).unwrap_or_default());
+        }
+    }
+    days
+}
+
 #[allow(clippy::too_many_arguments)]
 fn find_recent_codex_jsonl_with_scope(
     cwd: &Path,
@@ -1115,47 +1218,52 @@ fn find_recent_codex_jsonl_with_scope(
     // Codex rollouts live under <root>/<year>/<month>/<day>/. The
     // filename does NOT encode the cwd (unlike claude), so we read each
     // candidate's first JSONL line and match its `payload.cwd` against
-    // the live process's cwd. Walking just the newest date-dir keeps
-    // the per-cycle work bounded. The cwd check runs while collecting
-    // (not after ranking) so the rotation successor is also guaranteed
-    // to belong to this cwd.
+    // the live process's cwd. New-session scans walk just the newest date
+    // directory; non-UUID resume scans include historical date directories
+    // because reopening a rollout updates the file, not its parent directory.
+    // The cwd check runs while collecting (not after ranking) so the rotation
+    // successor is also guaranteed to belong to this cwd.
     let root = sessions_root?;
-    let day_dir = newest_subdir(&newest_subdir(&newest_subdir(root)?)?)?;
     let mut candidates: Vec<TranscriptCandidate> = Vec::new();
-    for entry in std::fs::read_dir(&day_dir).ok()?.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
-        }
-        if assigned.contains(&path) {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else { continue };
-        let Ok(mtime) = meta.modified() else { continue };
-        if mtime < recency_cutoff {
-            continue;
-        }
-        // Transcript must have been written after this agent process
-        // started — otherwise it belongs to an earlier run.
-        if mtime < process_start {
-            continue;
-        }
-        let Some(uuid) = extract_uuid_from_path(&path) else {
+    for day_dir in codex_day_dirs_for_scope(root, scope) {
+        let Ok(entries) = std::fs::read_dir(&day_dir) else {
             continue;
         };
-        let Some(head) = read_codex_rollout_head(&path) else {
-            continue;
-        };
-        if head.cwd != cwd || !head.is_writer_for_scope(scope) {
-            continue;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if assigned.contains(&path) {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(mtime) = meta.modified() else { continue };
+            if mtime < recency_cutoff {
+                continue;
+            }
+            // Transcript must have been written after this agent process
+            // started — otherwise it belongs to an earlier run.
+            if mtime < process_start {
+                continue;
+            }
+            let Some(uuid) = extract_uuid_from_path(&path) else {
+                continue;
+            };
+            let Some(head) = read_codex_rollout_head(&path) else {
+                continue;
+            };
+            if head.cwd != cwd || !head.is_writer_for_scope(scope) {
+                continue;
+            }
+            let birth = meta.created().unwrap_or(mtime);
+            candidates.push(TranscriptCandidate {
+                path,
+                birth,
+                mtime,
+                uuid,
+            });
         }
-        let birth = meta.created().unwrap_or(mtime);
-        candidates.push(TranscriptCandidate {
-            path,
-            birth,
-            mtime,
-            uuid,
-        });
     }
     if scope == CodexRolloutScope::ResumedOwner {
         retain_resumed_codex_roots(&mut candidates, root, process_start);
@@ -1201,34 +1309,38 @@ fn find_completed_codex_jsonl_with_scope(
     scope: CodexRolloutScope,
 ) -> Option<(PathBuf, String)> {
     let root = sessions_root?;
-    let day_dir = newest_subdir(&newest_subdir(&newest_subdir(root)?)?)?;
     let mut candidates: Vec<TranscriptCandidate> = Vec::new();
-    for entry in std::fs::read_dir(&day_dir).ok()?.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else { continue };
-        let Ok(mtime) = meta.modified() else { continue };
-        if mtime < recency_cutoff || mtime < process_start {
-            continue;
-        }
-        let Some(head) = read_codex_rollout_head(&path) else {
+    for day_dir in codex_day_dirs_for_scope(root, scope) {
+        let Ok(entries) = std::fs::read_dir(&day_dir) else {
             continue;
         };
-        if head.cwd != cwd || !head.is_writer_for_scope(scope) {
-            continue;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(mtime) = meta.modified() else { continue };
+            if mtime < recency_cutoff || mtime < process_start {
+                continue;
+            }
+            let Some(head) = read_codex_rollout_head(&path) else {
+                continue;
+            };
+            if head.cwd != cwd || !head.is_writer_for_scope(scope) {
+                continue;
+            }
+            let Some(uuid) = extract_uuid_from_path(&path) else {
+                continue;
+            };
+            let birth = meta.created().unwrap_or(mtime);
+            candidates.push(TranscriptCandidate {
+                path,
+                birth,
+                mtime,
+                uuid,
+            });
         }
-        let Some(uuid) = extract_uuid_from_path(&path) else {
-            continue;
-        };
-        let birth = meta.created().unwrap_or(mtime);
-        candidates.push(TranscriptCandidate {
-            path,
-            birth,
-            mtime,
-            uuid,
-        });
     }
     if scope == CodexRolloutScope::ResumedOwner {
         retain_resumed_codex_roots(&mut candidates, root, process_start);
@@ -1410,8 +1522,9 @@ pub fn codex_rollout_parent_thread_id(path: &Path) -> Option<String> {
 /// this terminal run, but it keeps its original `source.subagent` metadata.
 /// Historical ancestors remain candidates so normal birth anchoring selects
 /// the youngest pre-existing rollout. Only descendants born by this process
-/// are removed. Process start times are second-granularity on supported hosts,
-/// so require a full second of separation before classifying a rollout as new.
+/// are removed. Process start times are second-granularity on supported hosts;
+/// treating same-second descendants as new fails closed in the rare ambiguous
+/// boundary instead of allowing a child to take over the live owner marker.
 fn retain_resumed_codex_roots(
     candidates: &mut Vec<TranscriptCandidate>,
     sessions_root: &Path,
@@ -1422,10 +1535,7 @@ fn retain_resumed_codex_roots(
         .map(|candidate| candidate.uuid.clone())
         .collect::<HashSet<_>>();
     candidates.retain(|candidate| {
-        let born_this_run = candidate
-            .birth
-            .duration_since(process_start)
-            .is_ok_and(|elapsed| elapsed >= Duration::from_secs(1));
+        let born_this_run = candidate.birth.duration_since(process_start).is_ok();
         !born_this_run
             || !codex_rollout_has_candidate_ancestor(&candidate.path, &candidate_ids, sessions_root)
     });

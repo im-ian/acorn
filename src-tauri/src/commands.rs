@@ -5692,7 +5692,12 @@ fn codex_live_transcript_fallback(
     let proc = sys.process(pid)?;
     let cwd = proc.cwd()?;
     let process_start = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(proc.start_time());
-    let resolved = if proc.cmd().iter().any(|arg| arg.to_str() == Some("resume")) {
+    let process_args = proc
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let resolved = if acorn_transcript::codex_resume_requested_from_args(&process_args) {
         acorn_transcript::find_resumed_codex_run_transcript(cwd, process_start)
     } else {
         acorn_transcript::find_agent_run_transcript(cwd, AgentKind::Codex, process_start)
