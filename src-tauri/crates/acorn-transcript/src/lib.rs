@@ -2040,6 +2040,20 @@ mod tests {
         agent_node(kind, AgentProcessShape::Launcher)
     }
 
+    fn process_node(exe: &str, name: &str, args: &[&str], process_cwd: &str) -> AgentProcessNode {
+        let args = args
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect::<Vec<_>>();
+        agent_process_node_from_parts(
+            Some(Path::new(exe)),
+            Some(name),
+            &args,
+            Some(Path::new(process_cwd)),
+        )
+        .expect("test process should be recognised as an agent")
+    }
+
     fn observation(
         pid: u32,
         parent: Option<u32>,
@@ -2306,6 +2320,124 @@ mod tests {
                 (30, AgentKind::Antigravity, AgentProcessRole::Emit),
             ]
         );
+    }
+
+    #[test]
+    fn codex_cd_collapses_wrapper_launcher_chain_across_process_cwds() {
+        let root = Pid::from_u32(1);
+        let wrapper = Pid::from_u32(10);
+        let watcher = Pid::from_u32(11);
+        let node_launcher = Pid::from_u32(12);
+        let native_runtime = Pid::from_u32(13);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![wrapper]);
+        children.insert(wrapper, vec![watcher, node_launcher]);
+        children.insert(node_launcher, vec![native_runtime]);
+
+        let wrapper_node = process_node(
+            "/bin/sh",
+            "sh",
+            &["sh", "/acorn/agent-wrappers/codex", "-C", "/other"],
+            "/repo",
+        );
+        let watcher_node = wrapper_node.clone();
+        let node_node = process_node(
+            "/usr/local/bin/node",
+            "node",
+            &[
+                "node",
+                "/opt/codex.js",
+                "--enable",
+                "hooks",
+                "-c",
+                "notify=[]",
+                "--cd=/other",
+            ],
+            "/repo",
+        );
+        let runtime_node =
+            process_node("/opt/codex", "codex", &["codex", "-C", "/other"], "/other");
+
+        assert_eq!(wrapper_node.cwd.as_deref(), Some(Path::new("/other")));
+        assert_eq!(node_node.cwd.as_deref(), Some(Path::new("/other")));
+
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            10 => Some(wrapper_node.clone()),
+            11 => Some(watcher_node.clone()),
+            12 => Some(node_node.clone()),
+            13 => Some(runtime_node.clone()),
+            _ => None,
+        };
+        let owners = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::SessionOwners,
+            node_for_pid,
+        );
+        assert_eq!(
+            process_roles(owners),
+            vec![(10, AgentKind::Codex, AgentProcessRole::Emit)]
+        );
+
+        let observations = vec![
+            observation(10, None, wrapper_node),
+            observation(11, Some(10), watcher_node),
+            observation(12, Some(10), node_node),
+            observation(13, Some(12), runtime_node),
+        ];
+        let (_, codex, _) = logical_agent_process_counts(&observations);
+        assert_eq!(codex.get(Path::new("/other")), Some(&1));
+        assert_eq!(codex.get(Path::new("/repo")), None);
+    }
+
+    #[test]
+    fn codex_runtime_spawning_cd_launcher_remains_an_independent_invocation() {
+        let root = Pid::from_u32(1);
+        let owner_runtime = Pid::from_u32(20);
+        let nested_launcher = Pid::from_u32(21);
+        let nested_runtime = Pid::from_u32(22);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![owner_runtime]);
+        children.insert(owner_runtime, vec![nested_launcher]);
+        children.insert(nested_launcher, vec![nested_runtime]);
+
+        let owner_node = process_node("/opt/codex", "codex", &["codex"], "/repo");
+        let launcher_node = process_node(
+            "/bin/sh",
+            "sh",
+            &["sh", "/acorn/agent-wrappers/codex", "--cd", "/other"],
+            "/repo",
+        );
+        let nested_node = process_node("/opt/codex", "codex", &["codex", "--cd=/other"], "/other");
+
+        let node_for_pid = |pid: Pid| match pid.as_u32() {
+            20 => Some(owner_node.clone()),
+            21 => Some(launcher_node.clone()),
+            22 => Some(nested_node.clone()),
+            _ => None,
+        };
+        let owners = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::SessionOwners,
+            node_for_pid,
+        );
+        assert_eq!(
+            process_roles(owners),
+            vec![
+                (20, AgentKind::Codex, AgentProcessRole::Emit),
+                (21, AgentKind::Codex, AgentProcessRole::Quarantine),
+            ]
+        );
+
+        let observations = vec![
+            observation(20, None, owner_node),
+            observation(21, Some(20), launcher_node),
+            observation(22, Some(21), nested_node),
+        ];
+        let (_, codex, _) = logical_agent_process_counts(&observations);
+        assert_eq!(codex.get(Path::new("/repo")), Some(&1));
+        assert_eq!(codex.get(Path::new("/other")), Some(&1));
     }
 
     #[test]
