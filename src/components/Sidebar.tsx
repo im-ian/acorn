@@ -1475,28 +1475,23 @@ function SessionRowPreview({
     session,
     sessionDisplay.metadata,
   );
-  const agentProvider = sessionDisplay.icons.agentProvider
-    ? resolveSessionAgentProvider(session)
-    : null;
+  const agentProvider = resolveSessionAgentProvider(session);
 
   return (
     <div className="flex w-full items-start gap-1.5 rounded-md bg-bg-elevated/95 px-2 py-1 shadow-lg ring-1 ring-border/60">
-      {sessionDisplay.icons.statusDot ? (
-        <SessionStatusMarker
-          session={session}
-          agentProvider={agentProvider}
-          isGeneratingTitle={false}
-          generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
-          chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
-        />
-      ) : null}
+      <SessionStatusMarker
+        session={session}
+        agentProvider={agentProvider}
+        isGeneratingTitle={false}
+        generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+        chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
+      />
       <SessionRowLabel
         editing={false}
         session={session}
         titleText={titleText}
         metadataText={metadataText}
         currentPullRequest={null}
-        showKindIcons={sessionDisplay.icons.sessionKind}
         t={t}
         onSubmitRename={() => undefined}
         onCancelRename={() => undefined}
@@ -2763,7 +2758,6 @@ function SessionRow({
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
-  const showAgentProviderIcons = sessionDisplay.icons.agentProvider;
   const namedProjectFolders = projectFolders.filter(
     (folder) => !isDefaultProjectFolder(folder),
   );
@@ -2912,9 +2906,7 @@ function SessionRow({
     selectSession(session.id);
   }
 
-  const agentProvider = showAgentProviderIcons
-    ? resolveSessionAgentProvider(session)
-    : null;
+  const agentProvider = resolveSessionAgentProvider(session);
   const forkItems: ContextMenuItem[] = (() => {
     if (!agent) return [];
     return buildAgentContextMenuItems({
@@ -3153,22 +3145,19 @@ function SessionRow({
         ),
       })}
     >
-      {sessionDisplay.icons.statusDot || isGeneratingTitle ? (
-        <SessionStatusMarker
-          session={session}
-          agentProvider={agentProvider}
-          isGeneratingTitle={isGeneratingTitle}
-          generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
-          chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
-        />
-      ) : null}
+      <SessionStatusMarker
+        session={session}
+        agentProvider={agentProvider}
+        isGeneratingTitle={isGeneratingTitle}
+        generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+        chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
+      />
       <SessionRowLabel
         editing={editing}
         session={session}
         titleText={titleText}
         metadataText={metadataText}
         currentPullRequest={currentPullRequest}
-        showKindIcons={sessionDisplay.icons.sessionKind}
         hideWorktreeIcon={hideWorkspaceDuplicateContext}
         t={t}
         onSubmitRename={async (next) => {
@@ -3230,7 +3219,6 @@ interface SessionRowLabelProps {
   titleText: string;
   metadataText: string;
   currentPullRequest: SessionPullRequestSummary | null;
-  showKindIcons: boolean;
   hideWorktreeIcon?: boolean;
   t: Translator;
   onSubmitRename: (value: string) => void | Promise<void>;
@@ -3243,7 +3231,6 @@ function SessionRowLabel({
   titleText,
   metadataText,
   currentPullRequest,
-  showKindIcons,
   hideWorktreeIcon = false,
   t,
   onSubmitRename,
@@ -3277,14 +3264,14 @@ function SessionRowLabel({
             {titleText}
           </span>
         )}
-        {showKindIcons && inWorktree && !hideWorktreeIcon ? (
+        {inWorktree && !hideWorktreeIcon ? (
           <GitBranch
             size={10}
             className="shrink-0 text-fg-muted"
             aria-label={sidebarText(t, "sidebar.aria.worktree")}
           />
         ) : null}
-        {showKindIcons && session.kind === "control" ? (
+        {session.kind === "control" ? (
           <Bot
             size={10}
             className="shrink-0 text-accent"
@@ -4326,9 +4313,7 @@ function LocalSessionRow({
     session,
     sessionDisplay.metadata,
   );
-  const agentProvider = sessionDisplay.icons.agentProvider
-    ? resolveSessionAgentProvider(session)
-    : null;
+  const agentProvider = resolveSessionAgentProvider(session);
   const hoverDetails = sessionDisplay.showDetailsOnHover
     ? buildSessionHoverDetails(t, session, currentPullRequest)
     : null;
@@ -4505,22 +4490,19 @@ function LocalSessionRow({
         ),
       })}
     >
-      {sessionDisplay.icons.statusDot || isGeneratingTitle ? (
-        <SessionStatusMarker
-          session={session}
-          agentProvider={agentProvider}
-          isGeneratingTitle={isGeneratingTitle}
-          generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
-          chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
-        />
-      ) : null}
+      <SessionStatusMarker
+        session={session}
+        agentProvider={agentProvider}
+        isGeneratingTitle={isGeneratingTitle}
+        generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+        chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
+      />
       <SessionRowLabel
         editing={editing}
         session={session}
         titleText={titleText}
         metadataText={metadataText}
         currentPullRequest={currentPullRequest}
-        showKindIcons={sessionDisplay.icons.sessionKind}
         t={t}
         onSubmitRename={async (next) => {
           setEditing(false);

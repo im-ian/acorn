@@ -457,17 +457,6 @@ export interface AcornSettings {
       status: boolean;
     };
     /**
-     * Inline icon toggles. Status dot is the colored bullet at row start;
-     * agentProvider lets live Claude/Codex/Antigravity sessions replace that dot with
-     * their provider mark; sessionKind covers the isolated-worktree
-     * (GitBranch) and control (Bot) glyphs trailing the title.
-     */
-    icons: {
-      statusDot: boolean;
-      agentProvider: boolean;
-      sessionKind: boolean;
-    };
-    /**
      * When true, hovering a row pops a tooltip with every available
      * field (name, working directory, branch, status) regardless of
      * which ones the row itself shows.
@@ -602,11 +591,6 @@ export const DEFAULT_SETTINGS: AcornSettings = {
       branch: true,
       workingDirectory: false,
       status: true,
-    },
-    icons: {
-      statusDot: true,
-      agentProvider: true,
-      sessionKind: true,
     },
     showDetailsOnHover: true,
   },
@@ -1435,10 +1419,6 @@ function loadSettings(): AcornSettings {
           ...DEFAULT_SETTINGS.sessionDisplay.metadata,
           ...(parsed.sessionDisplay?.metadata ?? {}),
         },
-        icons: {
-          ...DEFAULT_SETTINGS.sessionDisplay.icons,
-          ...(parsed.sessionDisplay?.icons ?? {}),
-        },
         showDetailsOnHover:
           typeof parsed.sessionDisplay?.showDetailsOnHover === "boolean"
             ? parsed.sessionDisplay.showDetailsOnHover
@@ -1522,11 +1502,8 @@ interface SettingsState {
   patchStatusBar: (patch: Partial<AcornSettings["statusBar"]>) => void;
   patchGithub: (patch: Partial<AcornSettings["github"]>) => void;
   patchSessionDisplay: (
-    patch: Partial<
-      Omit<AcornSettings["sessionDisplay"], "metadata" | "icons">
-    > & {
+    patch: Partial<Omit<AcornSettings["sessionDisplay"], "metadata">> & {
       metadata?: Partial<AcornSettings["sessionDisplay"]["metadata"]>;
-      icons?: Partial<AcornSettings["sessionDisplay"]["icons"]>;
     },
   ) => void;
   patchAppearance: (
@@ -1764,17 +1741,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const metadata = patch.metadata
         ? { ...s.settings.sessionDisplay.metadata, ...patch.metadata }
         : s.settings.sessionDisplay.metadata;
-      const icons = patch.icons
-        ? { ...s.settings.sessionDisplay.icons, ...patch.icons }
-        : s.settings.sessionDisplay.icons;
-      const { metadata: _m, icons: _i, ...rest } = patch;
+      const { metadata: _m, ...rest } = patch;
       const next: AcornSettings = {
         ...s.settings,
         sessionDisplay: {
           ...s.settings.sessionDisplay,
           ...rest,
           metadata,
-          icons,
         },
       };
       persist(next);

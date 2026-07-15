@@ -187,7 +187,7 @@ test.describe("status bar", () => {
     await expect(page.getByText(/^tokens:/)).toHaveCount(0);
   });
 
-  test("uses a generic token icon when agent provider icons are disabled", async ({
+  test("ignores the removed agent provider icon preference", async ({
     page,
     tauri,
   }) => {
@@ -216,6 +216,6 @@ test.describe("status bar", () => {
     await expect(tokenBadge).toContainText("88%");
     await expect(tokenBadge).toContainText("w");
     await expect(tokenBadge).toContainText("66%");
-    await expect(footer.getByRole("img", { name: "Codex" })).toHaveCount(0);
+    await expect(footer.getByRole("img", { name: "Codex" })).toBeVisible();
   });
 });

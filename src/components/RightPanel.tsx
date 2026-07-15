@@ -871,13 +871,7 @@ function PrSkeletonList({ count = 6 }: { count?: number }) {
  * timestamp stacked on the right — so the panel doesn't reflow when items
  * arrive. Some rows skip the worktree bar to look like a real mixed list.
  */
-function HistorySkeletonRow({
-  index,
-  showAgentProviderIcons,
-}: {
-  index: number;
-  showAgentProviderIcons: boolean;
-}) {
+function HistorySkeletonRow({ index }: { index: number }) {
   const titleWidths = ["68%", "82%", "54%", "74%", "60%", "88%"];
   const previewWidths = ["92%", "76%", "60%", "84%"];
   const titleW = titleWidths[index % titleWidths.length];
@@ -890,10 +884,7 @@ function HistorySkeletonRow({
       style={{ animationDelay: `${index * 60}ms` }}
     >
       <SkeletonBlock
-        className={cn(
-          "mt-0.5 shrink-0 bg-fg-muted/15",
-          showAgentProviderIcons ? "size-5" : "h-4 w-12",
-        )}
+        className="mt-0.5 size-5 shrink-0 bg-fg-muted/15"
       />
       <div className="min-w-0 flex-1 space-y-1.5">
         <SkeletonBlock
@@ -1374,9 +1365,6 @@ function AgentHistoryTab({
   const createSession = useAppStore((s) => s.createSession);
   const adoptSessionWorktree = useAppStore((s) => s.adoptSessionWorktree);
   const setPendingTerminalInput = useAppStore((s) => s.setPendingTerminalInput);
-  const showAgentProviderIcons = useSettings(
-    (s) => s.settings.sessionDisplay.icons.agentProvider,
-  );
   const historyLimit = 100;
   // Hydrate from the module-level cache so re-opening a project or the
   // unscoped Chats history shows its list instantly.
@@ -1594,11 +1582,7 @@ function AgentHistoryTab({
             aria-label={rt(t, "rightPanel.history.loading")}
           >
             {Array.from({ length: 8 }).map((_, i) => (
-              <HistorySkeletonRow
-                key={i}
-                index={i}
-                showAgentProviderIcons={showAgentProviderIcons}
-              />
+              <HistorySkeletonRow key={i} index={i} />
             ))}
           </div>
         ) : historyItems.length === 0 ? (
@@ -1629,30 +1613,19 @@ function AgentHistoryTab({
                   }}
                 >
                   <div className="flex items-start gap-2">
-                    {showAgentProviderIcons ? (
-                      <span
-                        className={cn(
-                          "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded",
-                          providerTone,
-                        )}
-                      >
-                        <Tooltip label={item.provider} side="right">
-                          <AgentProviderIcon
-                            provider={item.provider}
-                            className="size-3"
-                          />
-                        </Tooltip>
-                      </span>
-                    ) : (
-                      <span
-                        className={cn(
-                          "mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                          providerTone,
-                        )}
-                      >
-                        {item.provider}
-                      </span>
-                    )}
+                    <span
+                      className={cn(
+                        "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded",
+                        providerTone,
+                      )}
+                    >
+                      <Tooltip label={item.provider} side="right">
+                        <AgentProviderIcon
+                          provider={item.provider}
+                          className="size-3"
+                        />
+                      </Tooltip>
+                    </span>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs font-medium text-fg">
                         {item.title}
