@@ -1,6 +1,7 @@
 import {
   createHighlighter,
   createJavaScriptRegexEngine,
+  defaultJavaScriptRegexConstructor,
   type BundledLanguage,
   type BundledTheme,
   type Highlighter,
@@ -75,7 +76,37 @@ const FILENAME_LANG: Record<string, BundledLanguage> = {
 // engine: the hardened renderer CSP (script-src 'self', no wasm-unsafe-eval)
 // blocks WebAssembly instantiation in the WKWebView, which would otherwise
 // make createHighlighter reject and silently drop all highlighting.
-const jsEngine = createJavaScriptRegexEngine({ forgiving: true });
+//
+// `singleline: false` is a JavaScriptCore workaround, not a semantic choice.
+// Shiki's default (`singleline: true`) compiles TextMate `^` to a bare `^`
+// anchor, and JSC then treats the whole pattern as start-anchored even when the
+// `^` sits inside an optional group — so `(^[\t ]+)?(//)` never matches a
+// trailing `//` and comments stop tokenizing, which lets a backtick inside a
+// comment open a template literal that swallows the rest of the file. Turning
+// the rule off emits a `(?<=^|\n)` lookbehind instead, which JSC scans
+// correctly. Shiki tokenizes one newline-free line at a time, so line-anchored
+// and string-anchored `^`/`$` are equivalent here.
+//
+// JSC's optimizeBOL bug is open and unassigned to a release:
+// https://bugs.webkit.org/show_bug.cgi?id=216671 (filed 2020)
+// https://bugs.webkit.org/show_bug.cgi?id=317274
+export function compileGrammarRegex(pattern: string): RegExp {
+  return defaultJavaScriptRegexConstructor(pattern, {
+    target: "auto",
+    rules: {
+      allowOrphanBackrefs: true,
+      asciiWordBoundaries: true,
+      captureGroup: true,
+      recursionLimit: 5,
+      singleline: false,
+    },
+  });
+}
+
+const jsEngine = createJavaScriptRegexEngine({
+  forgiving: true,
+  regexConstructor: compileGrammarRegex,
+});
 
 let highlighterPromise: Promise<Highlighter> | null = null;
 const loadedLangs = new Set<BundledLanguage>();
