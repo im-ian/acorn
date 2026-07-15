@@ -55,7 +55,7 @@ fi
 # that survived an app update; any new wrapper below it must also fail closed.
 if [ "${ACORN_AGENT_INVOCATION_ROOT-}" = "1" ]; then
   if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ] || [ -n "${ACORN_AGENT_INVOCATION_DEPTH-}" ]; then
-    unset CODEX_TUI_RECORD_SESSION CODEX_TUI_SESSION_LOG_PATH
+    unset CODEX_TUI_RECORD_SESSION CODEX_TUI_SESSION_LOG_PATH ACORN_CODEX_NATIVE_ACTIVE_FILE
   fi
   unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_INVOCATION_TOKEN ACORN_AGENT_INVOCATION_DEPTH
   if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
@@ -70,11 +70,11 @@ elif [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   esac
   export ACORN_AGENT_INVOCATION_DEPTH=$((_acorn_invocation_depth + 1))
   unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
-  unset CODEX_TUI_RECORD_SESSION CODEX_TUI_SESSION_LOG_PATH
+  unset CODEX_TUI_RECORD_SESSION CODEX_TUI_SESSION_LOG_PATH ACORN_CODEX_NATIVE_ACTIVE_FILE
   exec "$REAL_BIN" "$@"
 elif [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
   unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
-  unset CODEX_TUI_RECORD_SESSION CODEX_TUI_SESSION_LOG_PATH
+  unset CODEX_TUI_RECORD_SESSION CODEX_TUI_SESSION_LOG_PATH ACORN_CODEX_NATIVE_ACTIVE_FILE
   exec "$REAL_BIN" "$@"
 fi
 
@@ -135,12 +135,20 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     exit $?
   fi
   chmod 700 "$_acorn_lifetime_dir" >/dev/null 2>&1 || true
+  # A successful capability probe only proves that Codex accepts the hook
+  # config. The notifier creates this runtime marker after the receiver accepts
+  # a real callback; until then the JSONL watcher keeps the full fallback live.
+  if [ "$_acorn_codex_native_hooks" = "1" ]; then
+    export ACORN_CODEX_NATIVE_ACTIVE_FILE="$_acorn_lifetime_dir/native-active"
+  else
+    unset ACORN_CODEX_NATIVE_ACTIVE_FILE
+  fi
   _acorn_codex_owns_log=0
   if [ -z "${CODEX_TUI_SESSION_LOG_PATH-}" ]; then
     export CODEX_TUI_SESSION_LOG_PATH="$_acorn_lifetime_dir/session.jsonl"
     if ! (umask 077; : > "$CODEX_TUI_SESSION_LOG_PATH"); then
       rm -rf "$_acorn_lifetime_dir"
-      unset CODEX_TUI_SESSION_LOG_PATH
+      unset CODEX_TUI_SESSION_LOG_PATH ACORN_CODEX_NATIVE_ACTIVE_FILE
       _acorn_run_codex "$@"
       exit $?
     fi
@@ -155,6 +163,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     if [ "$_acorn_codex_owns_log" = "1" ]; then
       unset CODEX_TUI_SESSION_LOG_PATH
     fi
+    unset ACORN_CODEX_NATIVE_ACTIVE_FILE
     _acorn_run_codex "$@"
     exit $?
   fi
@@ -169,6 +178,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     _acorn_log="$CODEX_TUI_SESSION_LOG_PATH"
     _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify"
     _acorn_native_hooks="$_acorn_codex_native_hooks"
+    _acorn_native_active_file="${ACORN_CODEX_NATIVE_ACTIVE_FILE-}"
 
     _acorn_watch_dir="$_acorn_lifetime_dir/watcher"
     if ! (umask 077; mkdir -m 700 "$_acorn_watch_dir"); then
@@ -208,7 +218,12 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     ) &
     _acorn_parent_guard_pid=$!
     while IFS= read -r _acorn_line; do
-      if [ "$_acorn_native_hooks" = "1" ]; then
+      # Once a native callback succeeds, transcript events become a harmless
+      # preview. A failed callback removes the marker and re-enables the full
+      # compatibility mapping without mixing both sources as authoritative.
+      if [ "$_acorn_native_hooks" = "1" ] &&
+         [ -n "$_acorn_native_active_file" ] &&
+         [ -f "$_acorn_native_active_file" ]; then
         case "$_acorn_line" in
           *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
             "$_acorn_notify" start preview >/dev/null 2>&1 || true
@@ -293,16 +308,22 @@ if [ "$native_contract" = "1" ]; then
   [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
   [ -n "${ACORN_CODEX_LIFECYCLE_ID-}" ] || exit 0
 
-  printf '%s' "$input" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
-    -H 'Content-Type: application/json' \
-    -H "X-Acorn-Agent-Hook-Token: $hook_token" \
-    -H 'X-Acorn-Agent-Hook-Provider: codex' \
-    -H "X-Acorn-Agent-Hook-Session-Id: $ACORN_AGENT_HOOK_SESSION_ID" \
-    -H 'X-Acorn-Agent-Hook-Source: native' \
-    -H "X-Acorn-Codex-Lifecycle-Id: $ACORN_CODEX_LIFECYCLE_ID" \
-    -H "X-Acorn-Codex-Version: ${ACORN_CODEX_VERSION-unknown}" \
-    --data-binary @- \
-    "$hook_url" >/dev/null 2>&1 || true
+  if printf '%s' "$input" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
+      -H 'Content-Type: application/json' \
+      -H "X-Acorn-Agent-Hook-Token: $hook_token" \
+      -H 'X-Acorn-Agent-Hook-Provider: codex' \
+      -H "X-Acorn-Agent-Hook-Session-Id: $ACORN_AGENT_HOOK_SESSION_ID" \
+      -H 'X-Acorn-Agent-Hook-Source: native' \
+      -H "X-Acorn-Codex-Lifecycle-Id: $ACORN_CODEX_LIFECYCLE_ID" \
+      -H "X-Acorn-Codex-Version: ${ACORN_CODEX_VERSION-unknown}" \
+      --data-binary @- \
+      "$hook_url" >/dev/null 2>&1; then
+    if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ]; then
+      (umask 077; : > "$ACORN_CODEX_NATIVE_ACTIVE_FILE") 2>/dev/null || true
+    fi
+  elif [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ]; then
+    rm -f "$ACORN_CODEX_NATIVE_ACTIVE_FILE" >/dev/null 2>&1 || true
+  fi
   exit 0
 fi
 
@@ -314,7 +335,14 @@ case "$event" in
     esac
     ;;
   needs_input|stop|error)
-    [ "$source" = "transcript" ] || source="legacy"
+    if [ "$source" != "transcript" ]; then
+      if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] &&
+         [ ! -f "$ACORN_CODEX_NATIVE_ACTIVE_FILE" ]; then
+        source="transcript"
+      else
+        source="legacy"
+      fi
+    fi
     ;;
   *)
     event=""

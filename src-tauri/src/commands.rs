@@ -342,6 +342,7 @@ fn inject_agent_hook_env(
     if inherited_agent_invocation {
         effective_env.remove("CODEX_TUI_RECORD_SESSION");
         effective_env.remove("CODEX_TUI_SESSION_LOG_PATH");
+        effective_env.remove("ACORN_CODEX_NATIVE_ACTIVE_FILE");
     }
     effective_env.insert("ACORN_AGENT_INVOCATION_ROOT".to_string(), "1".to_string());
     effective_env
