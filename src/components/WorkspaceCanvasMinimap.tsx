@@ -11,6 +11,7 @@ import {
 } from "react";
 import {
   centerWorkspaceCanvasViewportFromMinimapPoint,
+  findWorkspaceCanvasMinimapNodeAtPoint,
   layoutWorkspaceCanvasMinimap,
   type WorkspaceCanvasNode,
   type WorkspaceCanvasSize,
@@ -142,17 +143,23 @@ export function WorkspaceCanvasMinimap({
 
   const startNavigation = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
-    const target = event.target;
-    if (
-      target instanceof Element &&
-      target.closest("[data-workspace-canvas-minimap-node]")
-    ) {
-      return;
-    }
     event.preventDefault();
     event.stopPropagation();
     cancelDragRef.current?.();
     const frozenLayout = layout;
+    const initialPoint = pointFromClient(event.clientX, event.clientY);
+    const targetSessionId = initialPoint
+      ? findWorkspaceCanvasMinimapNodeAtPoint(
+          sessions.map((session) => session.id),
+          nodes,
+          frozenLayout.nodeRects,
+          initialPoint,
+        )
+      : null;
+    if (targetSessionId) {
+      onActivateSession(targetSessionId);
+      return;
+    }
     const navigate = (clientX: number, clientY: number) => {
       const point = pointFromClient(clientX, clientY);
       if (!point) return;
@@ -296,8 +303,11 @@ export function WorkspaceCanvasMinimap({
                 data-testid="workspace-canvas-minimap-node"
                 data-workspace-canvas-minimap-node
                 data-canvas-minimap-session-id={session.id}
-                onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
-                onClick={() => onActivateSession(session.id)}
+                onClick={(clickEvent) => {
+                  if (clickEvent.detail === 0) {
+                    onActivateSession(session.id);
+                  }
+                }}
               >
                 <span
                   aria-hidden="true"

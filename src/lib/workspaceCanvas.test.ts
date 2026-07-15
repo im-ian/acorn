@@ -4,6 +4,7 @@ import {
   WORKSPACE_CANVAS_MIN_NODE_HEIGHT,
   WORKSPACE_CANVAS_MIN_NODE_WIDTH,
   WORKSPACE_CANVAS_MIN_ZOOM,
+  findWorkspaceCanvasMinimapNodeAtPoint,
   fitWorkspaceCanvasViewport,
   centerWorkspaceCanvasViewportFromMinimapPoint,
   layoutWorkspaceCanvasMinimap,
@@ -190,5 +191,53 @@ describe("workspaceCanvas", () => {
         centered.offset.y,
       ].every(Number.isFinite),
     ).toBe(true);
+  });
+
+  it("chooses the nearest visible marker when dense minimap targets overlap", () => {
+    const nodes = {
+      first: { x: 0, y: 0, width: 620, height: 400, zIndex: 1 },
+      second: { x: 660, y: 0, width: 620, height: 400, zIndex: 2 },
+      top: { x: 0, y: 440, width: 620, height: 400, zIndex: 4 },
+      underneath: { x: 0, y: 440, width: 620, height: 400, zIndex: 3 },
+    };
+    const rects = {
+      first: { x: 20, y: 20, width: 4, height: 4 },
+      second: { x: 30, y: 20, width: 4, height: 4 },
+      top: { x: 50, y: 50, width: 6, height: 6 },
+      underneath: { x: 50, y: 50, width: 6, height: 6 },
+    };
+
+    expect(
+      findWorkspaceCanvasMinimapNodeAtPoint(
+        ["first", "second"],
+        nodes,
+        rects,
+        { x: 22, y: 22 },
+      ),
+    ).toBe("first");
+    expect(
+      findWorkspaceCanvasMinimapNodeAtPoint(
+        ["first", "second"],
+        nodes,
+        rects,
+        { x: 32, y: 22 },
+      ),
+    ).toBe("second");
+    expect(
+      findWorkspaceCanvasMinimapNodeAtPoint(
+        ["underneath", "top"],
+        nodes,
+        rects,
+        { x: 53, y: 53 },
+      ),
+    ).toBe("top");
+    expect(
+      findWorkspaceCanvasMinimapNodeAtPoint(
+        ["first", "second"],
+        nodes,
+        rects,
+        { x: 100, y: 80 },
+      ),
+    ).toBeNull();
   });
 });

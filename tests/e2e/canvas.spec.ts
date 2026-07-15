@@ -396,6 +396,42 @@ test.describe("workspace canvas mode", () => {
       .toBe(persistedOffset);
   });
 
+  test("selects the intended marker in a dense minimap", async ({
+    page,
+    tauri,
+  }) => {
+    const sessions = Array.from({ length: 20 }, (_, index) =>
+      session(`session-${index}`),
+    );
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", sessions);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const overview = page.getByRole("region", { name: "Canvas overview" });
+    await expect(
+      overview.getByTestId("workspace-canvas-minimap-node"),
+    ).toHaveCount(20);
+    const target = overview.getByRole("button", {
+      name: "Show session-4 on canvas",
+    });
+    await expect(target).toHaveAttribute("aria-pressed", "false");
+    const visual = target.locator("span[aria-hidden='true']");
+    const box = await visual.boundingBox();
+    if (!box) throw new Error("Dense minimap marker is not visible");
+
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+    await expect(target).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page
+        .getByTestId("workspace-canvas")
+        .getByRole("button", { name: "Move session-4" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
   test("undoes a reset without remounting the live terminal", async ({
     page,
     tauri,

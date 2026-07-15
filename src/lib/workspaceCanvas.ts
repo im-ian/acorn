@@ -484,6 +484,67 @@ export function layoutWorkspaceCanvasMinimap(
   };
 }
 
+export function findWorkspaceCanvasMinimapNodeAtPoint(
+  candidateIds: readonly string[],
+  nodes: Readonly<Record<string, WorkspaceCanvasNode>>,
+  nodeRects: Readonly<Record<string, WorkspaceCanvasRect>>,
+  point: WorkspaceCanvasPoint,
+  minimumHitSize = 24,
+): string | null {
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+  const safeMinimumHitSize = Math.max(
+    Number.isFinite(minimumHitSize) ? minimumHitSize : 0,
+    0,
+  );
+  let best:
+    | {
+        id: string;
+        distanceSquared: number;
+        centerDistanceSquared: number;
+        zIndex: number;
+      }
+    | undefined;
+
+  for (const id of candidateIds) {
+    const node = nodes[id];
+    const rect = nodeRects[id];
+    if (!node || !rect) continue;
+    const hitWidth = Math.max(rect.width, safeMinimumHitSize);
+    const hitHeight = Math.max(rect.height, safeMinimumHitSize);
+    const hitX = rect.x - (hitWidth - rect.width) / 2;
+    const hitY = rect.y - (hitHeight - rect.height) / 2;
+    if (
+      point.x < hitX ||
+      point.x > hitX + hitWidth ||
+      point.y < hitY ||
+      point.y > hitY + hitHeight
+    ) {
+      continue;
+    }
+
+    const nearestX = clamp(point.x, rect.x, rect.x + rect.width);
+    const nearestY = clamp(point.y, rect.y, rect.y + rect.height);
+    const distanceSquared =
+      (point.x - nearestX) ** 2 + (point.y - nearestY) ** 2;
+    const centerX = rect.x + rect.width / 2;
+    const centerY = rect.y + rect.height / 2;
+    const centerDistanceSquared =
+      (point.x - centerX) ** 2 + (point.y - centerY) ** 2;
+    const isBetter =
+      !best ||
+      distanceSquared < best.distanceSquared ||
+      (distanceSquared === best.distanceSquared && node.zIndex > best.zIndex) ||
+      (distanceSquared === best.distanceSquared &&
+        node.zIndex === best.zIndex &&
+        centerDistanceSquared < best.centerDistanceSquared);
+    if (isBetter) {
+      best = { id, distanceSquared, centerDistanceSquared, zIndex: node.zIndex };
+    }
+  }
+
+  return best?.id ?? null;
+}
+
 export function centerWorkspaceCanvasViewportFromMinimapPoint(
   viewport: WorkspaceCanvasViewport,
   canvasSize: WorkspaceCanvasSize,
