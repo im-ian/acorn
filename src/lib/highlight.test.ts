@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { parseDiff } from "./diff";
-import { highlightDiff, highlightThemeForMode } from "./highlight";
+import {
+  compileGrammarRegex,
+  highlightDiff,
+  highlightThemeForMode,
+} from "./highlight";
+
+// The TextMate line-comment rule shared by the JS/TS grammars.
+const COMMENT_PATTERN = "(^[\\t ]+)?((//)(?:\\s*((@)internal)(?=\\s|$))?)";
 
 describe("highlightThemeForMode", () => {
   it("uses a high-contrast light syntax theme for light app themes", () => {
@@ -9,6 +16,24 @@ describe("highlightThemeForMode", () => {
 
   it("keeps the dark syntax theme for dark app themes", () => {
     expect(highlightThemeForMode("dark")).toBe("github-dark");
+  });
+});
+
+describe("compileGrammarRegex", () => {
+  // JavaScriptCore start-anchors any pattern containing a bare `^`, even inside
+  // an optional group, so it never finds a trailing `//`. Vitest runs on V8 and
+  // cannot observe that, so assert the shape that keeps WKWebView correct.
+  it("compiles a leading optional `^` group without a bare start anchor", () => {
+    const compiled = compileGrammarRegex(COMMENT_PATTERN);
+
+    expect(compiled.source).not.toMatch(/^\(\^/);
+    expect(compiled.source).toContain("(?<=");
+  });
+
+  it("still matches a comment that does not start the line", () => {
+    const compiled = compileGrammarRegex(COMMENT_PATTERN);
+
+    expect(compiled.exec("const a = []; // hi")?.index).toBe(14);
   });
 });
 
