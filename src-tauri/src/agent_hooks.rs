@@ -221,6 +221,7 @@ pub struct AgentHookServer {
     hook_url: String,
     token: String,
     running: Arc<AtomicBool>,
+    listener_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl AgentHookServer {
@@ -256,7 +257,7 @@ impl AgentHookServer {
         let running = Arc::new(AtomicBool::new(true));
         let running_for_thread = running.clone();
         let token_for_thread = token.clone();
-        std::thread::Builder::new()
+        let listener_thread = std::thread::Builder::new()
             .name("acorn-agent-hooks".to_string())
             .spawn(move || run_listener(listener, token_for_thread, handler, running_for_thread))?;
 
@@ -264,6 +265,7 @@ impl AgentHookServer {
             hook_url,
             token,
             running,
+            listener_thread: Some(listener_thread),
         })
     }
 }
@@ -271,6 +273,11 @@ impl AgentHookServer {
 impl Drop for AgentHookServer {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+        if let Some(listener_thread) = self.listener_thread.take() {
+            if listener_thread.join().is_err() {
+                tracing::warn!("agent hook listener thread panicked during shutdown");
+            }
+        }
     }
 }
 
@@ -313,6 +320,10 @@ fn handle_connection(
     token: &str,
     handler: &HookEventHandler,
 ) -> io::Result<()> {
+    // Accepted sockets can inherit the listener's nonblocking mode. Restore
+    // blocking reads so a temporarily empty receive buffer is not mistaken
+    // for the end of an HTTP request.
+    stream.set_nonblocking(false)?;
     if let Ok(addr) = stream.peer_addr() {
         if !addr.ip().is_loopback() {
             let status = HttpStatus::Forbidden;
