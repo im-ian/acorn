@@ -1935,6 +1935,92 @@ mod tests {
     }
 
     #[test]
+    fn codex_history_uses_real_request_after_hidden_message_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let id = "019e4818-7c15-7e60-9b3b-898a1c7803d6";
+        let transcript = dir
+            .path()
+            .join(format!("rollout-2026-07-15T00-00-00-{id}.jsonl"));
+        let mut file = fs::File::create(&transcript).unwrap();
+
+        for value in [
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": id,
+                    "cwd": repo.display().to_string(),
+                },
+            }),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "<codex_internal_context source=\"goal\">\nContinue the active goal.\n</codex_internal_context>",
+                    }],
+                },
+            }),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "<image name=[Image #1] path=\"/tmp/clipboard.png\">\n</image>\nShip the release",
+                    }],
+                },
+            }),
+            serde_json::json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "Ship the release",
+                },
+            }),
+            serde_json::json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "phase": "final_answer",
+                    "message": "The release is published.",
+                },
+            }),
+        ] {
+            writeln!(file, "{value}").unwrap();
+        }
+        drop(file);
+
+        let scope_repo = normalize_path(&repo);
+        let item = parse_codex_file(&transcript, HistoryScope::Project(&scope_repo)).unwrap();
+        assert_eq!(item.title, "Ship the release");
+        assert_eq!(item.preview.as_deref(), Some("The release is published."));
+
+        let summary =
+            summarize_agent_transcript(AgentHistoryProvider::Codex, id.to_string(), &transcript)
+                .unwrap();
+        assert_eq!(summary.message_count, 2);
+        assert_eq!(summary.user_messages, 1);
+        assert_eq!(summary.assistant_messages, 1);
+        assert_eq!(summary.turn_count, 1);
+        assert_eq!(
+            summary
+                .recent_messages
+                .iter()
+                .map(|message| (message.role.as_str(), message.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("user", "Ship the release"),
+                ("assistant", "The release is published."),
+            ]
+        );
+    }
+
+    #[test]
     fn codex_history_skips_marked_acorn_title_generation_prompt() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
