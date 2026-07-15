@@ -1006,11 +1006,17 @@ fn claude_resume_id_from_args(args: &[String]) -> Option<String> {
         return None;
     }
 
-    option_args.windows(2).find_map(|pair| {
-        matches!(pair[0].as_str(), "--resume" | "-r")
-            .then_some(pair[1])
+    option_args.iter().enumerate().find_map(|(index, arg)| {
+        let arg = arg.as_str();
+        let candidate = if matches!(arg, "--resume" | "-r") {
+            option_args.get(index + 1).map(|value| value.as_str())
+        } else {
+            arg.strip_prefix("--resume=")
+                .or_else(|| arg.strip_prefix("-r").filter(|value| !value.is_empty()))
+        };
+        candidate
             .filter(|id| is_uuid_v4_shape(id))
-            .map(|id| (*id).clone())
+            .map(str::to_string)
     })
 }
 
