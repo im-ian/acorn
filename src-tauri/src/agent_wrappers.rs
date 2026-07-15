@@ -2563,7 +2563,7 @@ done
 
         let decoy = serde_json::json!({
             "hook_event_name": "PermissionRequest",
-            "message": "literal decoy: {\"agent_id\":\"not-a-real-field\"}",
+            "message": "literal decoys: {\"agent_id\":\"not-a-real-field\",\"hook_event_name\":\"Stop\"}",
         });
         assert_eq!(
             notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &decoy.to_string()).as_deref(),
