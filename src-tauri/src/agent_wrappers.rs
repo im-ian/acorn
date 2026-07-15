@@ -303,14 +303,22 @@ input=$(cat 2>/dev/null || true)
 hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
 
 event=""
-# Claude fires Stop at the end of every assistant turn — the agent is resting
-# and awaiting the user's next prompt — so Stop maps to needs_input alongside
-# the explicit Notification/PermissionRequest attention events. Ready is
-# reserved for sessions with no pending conversation; the status poll derives
-# it once the agent exits.
+# Claude can emit Stop while background tasks or session crons are still able
+# to wake the parent turn. Keep those sessions Working; only a Stop with no
+# pending background work is actually awaiting the user's next prompt. The
+# field-boundary regex cannot match JSON-escaped decoy text inside strings.
 case "$hook_event_name" in
   SessionStart|UserPromptSubmit) event="start" ;;
-  Stop|Notification|PermissionRequest) event="needs_input" ;;
+  SubagentStop) event="start" ;;
+  Stop)
+    compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
+    if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"(background_tasks|session_crons)"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'; then
+      event="start"
+    else
+      event="needs_input"
+    fi
+    ;;
+  Notification|PermissionRequest) event="needs_input" ;;
   Error) event="error" ;;
 esac
 [ -n "$event" ] || exit 0
@@ -492,12 +500,20 @@ case "$event" in
     hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hookEventName"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
     [ -n "$hook_event_name" ] || hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
     # SubagentStop fires when a Task subagent finishes mid-turn, so it
-    # re-asserts Running rather than ending the turn. A completed main-agent
-    # turn awaits the user, so Stop maps to needs_input; the literal "stop"
-    # passthrough above stays reserved for process exit.
+    # re-asserts Running rather than ending the turn. Main-agent Stop carries
+    # fullyIdle=false while async work can still wake it; only an idle Stop is
+    # waiting for input. The field-boundary regex ignores escaped decoy text.
     case "$hook_event_name" in
       SessionStart|UserPromptSubmit|PreToolUse|SubagentStop) event="start" ;;
-      Stop|Notification|PermissionRequest) event="needs_input" ;;
+      Stop)
+        compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
+        if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"fullyIdle"[[:space:]]*:[[:space:]]*false([[:space:]]*[,}]|$)'; then
+          event="start"
+        else
+          event="needs_input"
+        fi
+        ;;
+      Notification|PermissionRequest) event="needs_input" ;;
       Error) event="error" ;;
     esac
     [ -n "$event" ] || exit 0
@@ -598,6 +614,7 @@ fn write_claude_settings(dir: &Path) -> io::Result<()> {
     "SessionStart": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "UserPromptSubmit": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Stop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
+    "SubagentStop": [{{"matcher":"*","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Notification": [{{"matcher":"permission_prompt|elicitation_dialog|agent_needs_input","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "PermissionRequest": [{{"matcher":"*","hooks":[{{"type":"command","command":"{cmd}"}}]}}]
   }}
