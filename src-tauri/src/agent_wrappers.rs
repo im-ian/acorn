@@ -387,30 +387,61 @@ _acorn_find_real_binary() {
   return 1
 }
 
-_acorn_mtime() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+_acorn_antigravity_transcript_for_id() {
+  _acorn_brain_id="$1"
+  printf '%s\n' "$_acorn_brain_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || return 1
+  _acorn_root="${ANTIGRAVITY_DIR:-${GEMINI_DIR:-$HOME/.gemini}}"
+  for _acorn_profile in antigravity antigravity-cli antigravity-ide; do
+    _acorn_path="$_acorn_root/$_acorn_profile/brain/$_acorn_brain_id/.system_generated/logs/transcript.jsonl"
+    if [ -f "$_acorn_path" ]; then
+      printf '%s\n' "$_acorn_path"
+      return 0
+    fi
+  done
+  return 1
 }
 
-_acorn_latest_antigravity_transcript() {
-  _acorn_root="${ANTIGRAVITY_DIR:-${GEMINI_DIR:-$HOME/.gemini}}"
-  _acorn_latest=""
-  _acorn_latest_mtime=0
-  for _acorn_profile in antigravity antigravity-cli antigravity-ide; do
-    _acorn_brain="$_acorn_root/$_acorn_profile/brain"
-    [ -d "$_acorn_brain" ] || continue
-    while IFS= read -r _acorn_path; do
-      [ -f "$_acorn_path" ] || continue
-      _acorn_file_mtime=$(_acorn_mtime "$_acorn_path")
-      [ "$_acorn_file_mtime" -ge "$_acorn_start_ts" ] || continue
-      if [ "$_acorn_file_mtime" -ge "$_acorn_latest_mtime" ]; then
-        _acorn_latest="$_acorn_path"
-        _acorn_latest_mtime="$_acorn_file_mtime"
-      fi
-    done <<EOF
-$(find "$_acorn_brain" -type f -path '*/.system_generated/logs/transcript.jsonl' 2>/dev/null)
-EOF
-  done
-  [ -n "$_acorn_latest" ] && printf '%s\n' "$_acorn_latest"
+_acorn_watch_antigravity_transcript() {
+  _acorn_transcript="$1"
+  _acorn_brain_id="$2"
+  _acorn_notify="$3"
+  _acorn_watch_dir=$(mktemp -d "${TMPDIR:-/tmp}/acorn-antigravity-watcher.XXXXXX") || exit 0
+  _acorn_watch_fifo="$_acorn_watch_dir/events"
+  if ! mkfifo "$_acorn_watch_fifo"; then
+    rmdir "$_acorn_watch_dir" >/dev/null 2>&1 || true
+    exit 0
+  fi
+  _acorn_tail_pid=""
+  _acorn_cleanup_transcript_tail() {
+    if [ -n "$_acorn_tail_pid" ]; then
+      kill "$_acorn_tail_pid" >/dev/null 2>&1 || true
+      wait "$_acorn_tail_pid" 2>/dev/null || true
+      _acorn_tail_pid=""
+    fi
+    rm -rf "$_acorn_watch_dir"
+  }
+  trap _acorn_cleanup_transcript_tail EXIT
+  trap 'exit 0' HUP INT TERM
+
+  tail -n 0 -F "$_acorn_transcript" > "$_acorn_watch_fifo" 2>/dev/null &
+  _acorn_tail_pid=$!
+  while IFS= read -r _acorn_line; do
+    case "$_acorn_line" in
+      *'"type":"USER_INPUT"'*)
+        "$_acorn_notify" start "$_acorn_brain_id" >/dev/null 2>&1 || true
+        ;;
+      *'"type":"PLANNER_RESPONSE"'*'"status":"DONE"'*)
+        if printf '%s\n' "$_acorn_line" | grep -qE '"tool_calls"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'; then
+          "$_acorn_notify" start "$_acorn_brain_id" >/dev/null 2>&1 || true
+        else
+          "$_acorn_notify" needs_input "$_acorn_brain_id" >/dev/null 2>&1 || true
+        fi
+        ;;
+      *'"status":"ERROR"'*)
+        "$_acorn_notify" error "$_acorn_brain_id" >/dev/null 2>&1 || true
+        ;;
+    esac
+  done < "$_acorn_watch_fifo"
 }
 
 REAL_BIN=$(_acorn_find_real_binary agy)
@@ -425,65 +456,67 @@ fi
 # be attributed to a session.
 if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
    [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] &&
+   [ -n "${ACORN_AGENT_STATE_DIR-}" ] &&
    { [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ] ||
      { [ -n "${ACORN_AGENT_HOOK_URL-}" ] && [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ]; }; } &&
    [ -x "$ACORN_AGENT_WRAPPER_DIR/acorn-antigravity-notify" ]; then
-  _acorn_start_ts=$(date +%s 2>/dev/null || echo 0)
   (
     _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-antigravity-notify"
-    _acorn_transcript=""
-    _acorn_i=0
-    while [ -z "$_acorn_transcript" ] && [ "$_acorn_i" -lt 400 ]; do
-      _acorn_i=$((_acorn_i + 1))
-      _acorn_transcript=$(_acorn_latest_antigravity_transcript)
-      [ -n "$_acorn_transcript" ] || sleep 0.05
-    done
-    [ -n "$_acorn_transcript" ] || exit 0
-
-    _acorn_watch_dir=$(mktemp -d "${TMPDIR:-/tmp}/acorn-antigravity-watcher.XXXXXX") || exit 0
-    _acorn_watch_fifo="$_acorn_watch_dir/events"
-    if ! mkfifo "$_acorn_watch_fifo"; then
-      rmdir "$_acorn_watch_dir" >/dev/null 2>&1 || true
-      exit 0
-    fi
-    _acorn_tail_pid=""
-    _acorn_cleanup_watcher() {
-      if [ -n "$_acorn_tail_pid" ]; then
-        kill "$_acorn_tail_pid" >/dev/null 2>&1 || true
-        wait "$_acorn_tail_pid" 2>/dev/null || true
-        _acorn_tail_pid=""
+    _acorn_marker="$ACORN_AGENT_STATE_DIR/antigravity.id"
+    _acorn_owner_brain_id=""
+    _acorn_owner_watcher_pid=""
+    _acorn_stop_owner_watcher() {
+      if [ -n "$_acorn_owner_watcher_pid" ]; then
+        kill "$_acorn_owner_watcher_pid" >/dev/null 2>&1 || true
+        wait "$_acorn_owner_watcher_pid" 2>/dev/null || true
+        _acorn_owner_watcher_pid=""
       fi
-      rm -rf "$_acorn_watch_dir"
     }
-    trap _acorn_cleanup_watcher EXIT
+    _acorn_cleanup_owner_watcher() {
+      _acorn_stop_owner_watcher
+    }
+    trap _acorn_cleanup_owner_watcher EXIT
     trap 'exit 0' HUP INT TERM
 
-    tail -n 0 -F "$_acorn_transcript" > "$_acorn_watch_fifo" 2>/dev/null &
-    _acorn_tail_pid=$!
-    while IFS= read -r _acorn_line; do
-      case "$_acorn_line" in
-        *'"type":"USER_INPUT"'*)
-          "$_acorn_notify" start >/dev/null 2>&1 || true
-          ;;
-        *'"type":"PLANNER_RESPONSE"'*'"status":"DONE"'*)
-          if printf '%s\n' "$_acorn_line" | grep -qE '"tool_calls"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'; then
-            "$_acorn_notify" start >/dev/null 2>&1 || true
-          else
-            "$_acorn_notify" needs_input >/dev/null 2>&1 || true
-          fi
-          ;;
-        *'"status":"ERROR"'*)
-          "$_acorn_notify" error >/dev/null 2>&1 || true
-          ;;
-      esac
-    done < "$_acorn_watch_fifo"
+    while :; do
+      _acorn_next_brain_id=""
+      if [ -r "$_acorn_marker" ]; then
+        _acorn_next_brain_id=$(sed -n '1p' "$_acorn_marker" 2>/dev/null | tr -d '\r\n')
+      fi
+      if ! printf '%s\n' "$_acorn_next_brain_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$'; then
+        _acorn_next_brain_id=""
+      fi
+
+      if [ "$_acorn_next_brain_id" != "$_acorn_owner_brain_id" ]; then
+        _acorn_stop_owner_watcher
+        _acorn_owner_brain_id="$_acorn_next_brain_id"
+      fi
+
+      if [ -n "$_acorn_owner_watcher_pid" ] && ! kill -0 "$_acorn_owner_watcher_pid" 2>/dev/null; then
+        wait "$_acorn_owner_watcher_pid" 2>/dev/null || true
+        _acorn_owner_watcher_pid=""
+      fi
+      if [ -n "$_acorn_owner_brain_id" ] && [ -z "$_acorn_owner_watcher_pid" ]; then
+        _acorn_transcript=$(_acorn_antigravity_transcript_for_id "$_acorn_owner_brain_id" 2>/dev/null || true)
+        if [ -n "$_acorn_transcript" ]; then
+          _acorn_watch_antigravity_transcript \
+            "$_acorn_transcript" \
+            "$_acorn_owner_brain_id" \
+            "$_acorn_notify" &
+          _acorn_owner_watcher_pid=$!
+        fi
+      fi
+      # The authoritative Rust owner scan updates this marker on a two-second
+      # cadence. Half-second polling keeps /new handoff responsive without
+      # spawning shell helpers continuously while an agent sits idle.
+      sleep 0.5
+    done
   ) &
   ACORN_ANTIGRAVITY_WATCHER_PID=$!
 
   "$REAL_BIN" "$@"
   ACORN_ANTIGRAVITY_STATUS=$?
 
-  "$ACORN_AGENT_WRAPPER_DIR/acorn-antigravity-notify" stop >/dev/null 2>&1 || true
   if [ -n "${ACORN_ANTIGRAVITY_WATCHER_PID-}" ]; then
     kill "$ACORN_ANTIGRAVITY_WATCHER_PID" >/dev/null 2>&1 || true
     wait "$ACORN_ANTIGRAVITY_WATCHER_PID" 2>/dev/null || true
@@ -1209,8 +1242,12 @@ while [ "$(wc -l < "$ACORN_NOTIFY_CAPTURE" 2>/dev/null || echo 0)" -lt 2 ] && [ 
   sleep 0.05
 done
 
+# Clear the pre-binding decoy before making the second conversation the owner.
+# A watcher that incorrectly selected host-wide newest already emitted it;
+# the owner-bound watcher has never attached to this file.
+: > "$ACORN_TEST_AGY_SECOND_TRANSCRIPT"
 printf '%s\n' "$ACORN_TEST_AGY_SECOND_ID" > "$ACORN_AGENT_STATE_DIR/antigravity.id"
-sleep 0.3
+sleep 0.7
 printf '%s\n' '{"type":"USER_INPUT","status":"DONE"}' >> "$ACORN_TEST_AGY_SECOND_TRANSCRIPT"
 printf '%s\n' '{"type":"PLANNER_RESPONSE","status":"DONE","content":"second"}' >> "$ACORN_TEST_AGY_SECOND_TRANSCRIPT"
 
@@ -1889,8 +1926,7 @@ done
     fn antigravity_wrapper_follows_the_bound_owner_across_new_conversations() {
         const FIRST_ID: &str = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
         const SECOND_ID: &str = "019f631f-0bfc-76f1-9c1d-334be74958ca";
-        let (notifications, tail_alive) =
-            antigravity_wrapper_notifications_across_owner_rotation();
+        let (notifications, tail_alive) = antigravity_wrapper_notifications_across_owner_rotation();
 
         assert_eq!(
             notifications,
