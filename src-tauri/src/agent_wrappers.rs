@@ -147,15 +147,18 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     chmod 600 "$CODEX_TUI_SESSION_LOG_PATH" >/dev/null 2>&1 || true
     _acorn_codex_owns_log=1
   fi
-  export CODEX_TUI_RECORD_SESSION=1
   _acorn_lifetime_fifo="$_acorn_lifetime_dir/owner"
   if ! (umask 077; mkfifo "$_acorn_lifetime_fifo") ||
      ! chmod 600 "$_acorn_lifetime_fifo" ||
      ! exec 9<>"$_acorn_lifetime_fifo"; then
     rm -rf "$_acorn_lifetime_dir"
+    if [ "$_acorn_codex_owns_log" = "1" ]; then
+      unset CODEX_TUI_SESSION_LOG_PATH
+    fi
     _acorn_run_codex "$@"
     exit $?
   fi
+  export CODEX_TUI_RECORD_SESSION=1
 
   _acorn_codex_wrapper_pid=$$
   (
@@ -239,6 +242,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     kill "$ACORN_CODEX_WATCHER_PID" >/dev/null 2>&1 || true
     wait "$ACORN_CODEX_WATCHER_PID" 2>/dev/null || true
   fi
+  rm -rf "$_acorn_lifetime_dir"
   exit "$ACORN_CODEX_STATUS"
 fi
 
