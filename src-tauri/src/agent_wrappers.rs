@@ -814,6 +814,9 @@ mod tests {
             &real_dir.join("tail"),
             r#"#!/bin/sh
 printf '%s\n' "$$" > "$ACORN_TEST_TAIL_PID"
+if [ -n "${ACORN_TEST_TAIL_PARENT_PID-}" ]; then
+  printf '%s\n' "$PPID" > "$ACORN_TEST_TAIL_PARENT_PID"
+fi
 if [ "${1-}" = "-n" ] && [ "${2-}" = "0" ]; then
   shift 2
   set -- -n +1 "$@"
@@ -848,6 +851,147 @@ exec "$ACORN_TEST_REAL_TAIL" "$@"
             let _ = Command::new("kill").arg(&tail_pid).status();
         }
         tail_alive
+    }
+
+    #[cfg(unix)]
+    fn process_is_alive(pid: &str) -> bool {
+        Command::new("kill")
+            .args(["-0", pid])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    #[cfg(unix)]
+    fn wrapper_watcher_survives_direct_termination(provider: &str) -> (bool, bool) {
+        let base = ScratchDir::new(&format!("{provider}-direct-termination"));
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        let state_dir = base.path().join("agent-state");
+        let gemini_dir = base.path().join("gemini");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&state_dir).unwrap();
+
+        let tail_pid_path = base.path().join("tail.pid");
+        let tail_parent_pid_path = base.path().join("tail-parent.pid");
+        let real_pid_path = base.path().join("real.pid");
+        let real_tail = install_tail_probe(&real_dir);
+        let owner_id = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+        let session_log_path = base.path().join("session.jsonl");
+        let transcript = gemini_dir
+            .join("antigravity-cli")
+            .join("brain")
+            .join(owner_id)
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+
+        match provider {
+            CODEX_WRAPPER_NAME => {
+                write_executable(
+                    &real_dir.join(provider),
+                    r#"#!/bin/sh
+: > "$CODEX_TUI_SESSION_LOG_PATH"
+printf '%s\n' "$$" > "$ACORN_TEST_REAL_PID"
+while :; do sleep 1; done
+"#,
+                )
+                .unwrap();
+            }
+            ANTIGRAVITY_WRAPPER_NAME => {
+                fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+                fs::write(&transcript, "").unwrap();
+                fs::write(state_dir.join("antigravity.id"), format!("{owner_id}\n")).unwrap();
+                write_executable(
+                    &real_dir.join(provider),
+                    r#"#!/bin/sh
+printf '%s\n' "$$" > "$ACORN_TEST_REAL_PID"
+while :; do sleep 1; done
+"#,
+                )
+                .unwrap();
+            }
+            _ => panic!("unsupported watcher provider: {provider}"),
+        }
+
+        let mut wrapper = Command::new(wrapper_dir.join(provider));
+        wrapper
+            .env("PATH", format!("{}:/usr/bin:/bin", real_dir.display()))
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_STATE_DIR", &state_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_TEST_REAL_TAIL", real_tail)
+            .env("ACORN_TEST_TAIL_PID", &tail_pid_path)
+            .env("ACORN_TEST_TAIL_PARENT_PID", &tail_parent_pid_path)
+            .env("ACORN_TEST_REAL_PID", &real_pid_path)
+            .env("CODEX_TUI_SESSION_LOG_PATH", &session_log_path)
+            .env("GEMINI_DIR", &gemini_dir)
+            .env_remove("ANTIGRAVITY_DIR")
+            .env_remove("ACORN_AGENT_INVOCATION_TOKEN")
+            .env_remove("ACORN_AGENT_INVOCATION_DEPTH")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut wrapper = wrapper.spawn().unwrap();
+
+        let started = Instant::now();
+        while (!tail_pid_path.exists() || !tail_parent_pid_path.exists() || !real_pid_path.exists())
+            && started.elapsed() < Duration::from_secs(5)
+        {
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(tail_pid_path.exists(), "{provider} tail did not start");
+        assert!(
+            tail_parent_pid_path.exists(),
+            "{provider} watcher pid was not captured"
+        );
+        assert!(
+            real_pid_path.exists(),
+            "{provider} real process did not start"
+        );
+
+        Command::new("kill")
+            .args(["-TERM", &wrapper.id().to_string()])
+            .status()
+            .unwrap();
+        let stopped = Instant::now();
+        while wrapper.try_wait().unwrap().is_none() && stopped.elapsed() < Duration::from_secs(2) {
+            thread::sleep(Duration::from_millis(25));
+        }
+        let _ = wrapper.kill();
+        let _ = wrapper.wait();
+
+        let tail_pid = fs::read_to_string(&tail_pid_path)
+            .unwrap()
+            .trim()
+            .to_string();
+        let tail_parent_pid = fs::read_to_string(&tail_parent_pid_path)
+            .unwrap()
+            .trim()
+            .to_string();
+        let stopped = Instant::now();
+        while (process_is_alive(&tail_pid) || process_is_alive(&tail_parent_pid))
+            && stopped.elapsed() < Duration::from_secs(2)
+        {
+            thread::sleep(Duration::from_millis(25));
+        }
+        let tail_alive = process_is_alive(&tail_pid);
+        let watcher_alive = process_is_alive(&tail_parent_pid);
+
+        for pid in [
+            tail_pid,
+            tail_parent_pid,
+            fs::read_to_string(real_pid_path)
+                .unwrap()
+                .trim()
+                .to_string(),
+        ] {
+            let _ = Command::new("kill").arg("-KILL").arg(pid).status();
+        }
+
+        (tail_alive, watcher_alive)
     }
 
     fn run_wrapper_with_timeout(
@@ -1625,6 +1769,25 @@ done
                 "{script} rejected its top-level invocation hook",
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watcher_processes_exit_when_their_wrapper_is_terminated_directly() {
+        let outcomes = [CODEX_WRAPPER_NAME, ANTIGRAVITY_WRAPPER_NAME].map(|provider| {
+            (
+                provider,
+                wrapper_watcher_survives_direct_termination(provider),
+            )
+        });
+        assert_eq!(
+            outcomes,
+            [
+                (CODEX_WRAPPER_NAME, (false, false)),
+                (ANTIGRAVITY_WRAPPER_NAME, (false, false)),
+            ],
+            "direct wrapper termination must not orphan a watcher or tail",
+        );
     }
 
     #[test]
