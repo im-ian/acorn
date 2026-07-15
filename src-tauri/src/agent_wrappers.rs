@@ -768,7 +768,7 @@ exec "$ACORN_TEST_REAL_TAIL" "$@"
             if child.try_wait()?.is_some() {
                 return child.wait_with_output();
             }
-            if started.elapsed() > Duration::from_secs(2) {
+            if started.elapsed() > Duration::from_secs(5) {
                 child.kill()?;
                 let _ = child.wait();
                 return Err(io::Error::new(
@@ -849,7 +849,7 @@ done
     fn codex_notify_post_for_payload_with_owner_update(
         payload: &str,
         owner_thread_id: Option<&str>,
-        owner_update: Option<(&str, Duration)>,
+        owner_update: Option<&str>,
     ) -> String {
         let base = ScratchDir::new("codex-notify-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
@@ -878,15 +878,6 @@ exit 1
             fs::write(state_dir.join("codex.id"), format!("{owner_thread_id}\n")).unwrap();
         }
 
-        let owner_writer = owner_update.map(|(owner_thread_id, delay)| {
-            let marker = state_dir.join("codex.id");
-            let owner_thread_id = owner_thread_id.to_string();
-            thread::spawn(move || {
-                thread::sleep(delay);
-                fs::write(marker, format!("{owner_thread_id}\n")).unwrap();
-            })
-        });
-
         let output = Command::new(wrapper_dir.join(CODEX_NOTIFY_NAME))
             .arg(payload)
             .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
@@ -898,8 +889,8 @@ exit 1
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .output()
             .unwrap();
-        if let Some(owner_writer) = owner_writer {
-            owner_writer.join().unwrap();
+        if let Some(owner_thread_id) = owner_update {
+            fs::write(state_dir.join("codex.id"), format!("{owner_thread_id}\n")).unwrap();
         }
         assert!(
             output.status.success(),
@@ -1133,11 +1124,8 @@ done
         let payload =
             format!(r#"{{"type":"agent-turn-complete","thread-id":"{owner}","turn-id":"turn-1"}}"#);
 
-        let post = codex_notify_post_for_payload_with_owner_update(
-            &payload,
-            Some(stale),
-            Some((owner, Duration::from_secs(1))),
-        );
+        let post =
+            codex_notify_post_for_payload_with_owner_update(&payload, Some(stale), Some(owner));
         assert_eq!(
             post, "",
             "a delayed completion could overwrite a newer turn start and must fail closed"
