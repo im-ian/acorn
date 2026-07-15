@@ -840,6 +840,61 @@ mod tests {
     }
 
     #[test]
+    fn first_native_codex_tool_after_restart_binds_the_later_completion() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.hook_provider = Some(SessionAgentProvider::Codex);
+        session.hook_active = true;
+        session.status = SessionStatus::Working;
+        let session_id = session.id;
+        sessions.insert(session);
+
+        let turn_id = "019f6338-6250-7303-88a6-a7add31dba1d";
+        let apply = |event: AgentHookEventKind, source: &str, turn_id: &str| {
+            apply_agent_hook_event(
+                &sessions,
+                AgentHookEvent {
+                    session_id,
+                    provider: SessionAgentProvider::Codex,
+                    event,
+                    message: None,
+                    source: Some(source.to_string()),
+                    turn_id: Some(turn_id.to_string()),
+                },
+            )
+        };
+
+        apply(AgentHookEventKind::Start, "tool", turn_id)
+            .expect("the first native tool after restart establishes the current turn");
+        assert_eq!(sessions.hook_turn_id(&session_id).as_deref(), Some(turn_id));
+
+        let stale_turn = "019f6338-6250-7303-88a6-a7add31dba1e";
+        let revision = sessions.hook_revision(&session_id);
+        apply(AgentHookEventKind::NeedsInput, "hook", stale_turn)
+            .expect_err("a later completion from another turn remains stale");
+        assert_eq!(sessions.hook_revision(&session_id), revision);
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+
+        apply(AgentHookEventKind::NeedsInput, "hook", turn_id)
+            .expect("the completion for the restart-bound turn applies");
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
     fn legacy_codex_completion_cannot_override_a_bound_native_turn() {
         let sessions = acorn_session::SessionStore::new();
         let mut session = Session::new(
