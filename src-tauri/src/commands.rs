@@ -8714,6 +8714,14 @@ mod tests {
             "ACORN_AGENT_INVOCATION_ROOT".to_string(),
             "caller-root".to_string(),
         );
+        env.insert(
+            "ACORN_AGENT_INVOCATION_TOKEN".to_string(),
+            "ancestor-owner".to_string(),
+        );
+        env.insert(
+            "ACORN_AGENT_INVOCATION_DEPTH".to_string(),
+            "3".to_string(),
+        );
 
         inject_agent_hook_env(&mut env, &session, Some(&hooks));
 
@@ -8734,6 +8742,8 @@ mod tests {
             Some(&"1".to_string()),
             "the PTY boundary must overwrite caller input with a fresh root marker",
         );
+        assert!(!env.contains_key("ACORN_AGENT_INVOCATION_TOKEN"));
+        assert!(!env.contains_key("ACORN_AGENT_INVOCATION_DEPTH"));
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_PROVIDER"),
             Some(&"codex".to_string())

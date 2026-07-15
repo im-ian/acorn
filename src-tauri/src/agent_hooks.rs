@@ -797,6 +797,96 @@ mod tests {
         );
     }
 
+    #[test]
+    fn first_native_codex_completion_after_restart_bootstraps_the_turn_id() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.hook_provider = Some(SessionAgentProvider::Codex);
+        session.hook_active = true;
+        session.status = SessionStatus::Working;
+        let session_id = session.id;
+        sessions.insert(session);
+
+        assert_eq!(sessions.hook_revision(&session_id), 0);
+        assert_eq!(sessions.hook_turn_id(&session_id), None);
+
+        let event = AgentHookEvent {
+            session_id,
+            provider: SessionAgentProvider::Codex,
+            event: AgentHookEventKind::NeedsInput,
+            message: None,
+            source: Some("hook".to_string()),
+            turn_id: Some("019f6338-6250-7303-88a6-a7add31dba1d".to_string()),
+        };
+        apply_agent_hook_event(&sessions, event)
+            .expect("the first native event after restart establishes the current turn");
+
+        assert_eq!(
+            sessions.hook_turn_id(&session_id).as_deref(),
+            Some("019f6338-6250-7303-88a6-a7add31dba1d")
+        );
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
+    fn legacy_codex_completion_cannot_override_a_bound_native_turn() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        let session_id = session.id;
+        sessions.insert(session);
+
+        apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event: AgentHookEventKind::Start,
+                message: None,
+                source: Some("turn".to_string()),
+                turn_id: Some("019f6338-6250-7303-88a6-a7add31dba1d".to_string()),
+            },
+        )
+        .expect("native turn starts");
+
+        let error = apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event: AgentHookEventKind::NeedsInput,
+                message: None,
+                source: Some("legacy".to_string()),
+                turn_id: None,
+            },
+        )
+        .expect_err("an unscoped legacy callback must not end a native turn");
+
+        assert!(error.contains("legacy Codex completion"), "{error}");
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+    }
+
     fn post(hooks: &AgentHookServer, token: &str, body: &str) -> String {
         let mut stream = TcpStream::connect(addr_from_url(hooks.hook_url())).expect("connect hook");
         write!(

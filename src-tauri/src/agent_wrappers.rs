@@ -1210,6 +1210,7 @@ done
     #[cfg(unix)]
     enum WrapperInvocationContext {
         Root,
+        RootWithInheritedOwner,
         Nested,
         LegacyInherited,
     }
@@ -1259,6 +1260,12 @@ done
         match context {
             WrapperInvocationContext::Root => {
                 command.env("ACORN_AGENT_INVOCATION_ROOT", "1");
+            }
+            WrapperInvocationContext::RootWithInheritedOwner => {
+                command
+                    .env("ACORN_AGENT_INVOCATION_ROOT", "1")
+                    .env("ACORN_AGENT_INVOCATION_TOKEN", "inherited-invocation")
+                    .env("ACORN_AGENT_INVOCATION_DEPTH", "7");
             }
             WrapperInvocationContext::Nested => {
                 command
@@ -1741,12 +1748,20 @@ done
         assert!(wrapper.contains("_acorn_wrapper_dir=${0%/*}"));
         assert!(wrapper.contains("--enable hooks"));
         assert!(!wrapper.contains("--enable codex_hooks"));
+        assert!(wrapper.contains("UserPromptSubmit"));
+        assert!(wrapper.contains("PreToolUse"));
+        assert!(wrapper.contains("PermissionRequest"));
+        assert!(wrapper.contains("Stop"));
+        assert!(wrapper.contains("trusted_hash"));
+        assert!(wrapper.contains("/<session-flags>/config.toml"));
+        assert!(!wrapper.contains("SubagentStop"));
+        assert!(!wrapper.contains("dangerously-bypass-hook-trust"));
         assert!(wrapper
             .contains("notify=[\\\"bash\\\",\\\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\\\"]"));
         assert!(wrapper.contains("CODEX_TUI_RECORD_SESSION=1"));
         assert!(wrapper.contains("ACORN_AGENT_HOOK_URL"));
-        assert!(wrapper.contains("\"$_acorn_notify\" start turn"));
-        assert!(wrapper.contains("\"$_acorn_notify\" start tool"));
+        assert!(wrapper.contains("\"$_acorn_notify\" start preview"));
+        assert!(!wrapper.contains("kind\":\"codex_event"));
 
         let notify = fs::read_to_string(dir.join("acorn-codex-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"codex\""));
@@ -1771,11 +1786,74 @@ done
         let line = r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
         let (notifications, tail_alive) = codex_wrapper_notifications_for_tui_line(line);
 
-        assert_eq!(notifications, "start turn\n");
+        assert_eq!(notifications, "start preview\n");
         assert!(
             !tail_alive,
             "the transcript tail must exit with the wrapper"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_native_hooks_report_main_turn_ids_and_ignore_subagents() {
+        let turn_id = "019f6338-6250-7303-88a6-a7add31dba1d";
+        let owner_fields = serde_json::json!({
+            "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+            "turn_id": turn_id,
+            "agent_id": null,
+            "agent_type": null,
+        });
+
+        for (hook_event_name, expected_event, expected_source) in [
+            ("UserPromptSubmit", "start", "turn"),
+            ("PreToolUse", "start", "tool"),
+            ("PermissionRequest", "needs_input", "hook"),
+        ] {
+            let mut payload = owner_fields.clone();
+            payload["hook_event_name"] = hook_event_name.into();
+            let posted = notify_payload_for_input(
+                CODEX_NOTIFY_NAME,
+                &[],
+                &payload.to_string(),
+                None,
+            )
+            .unwrap_or_else(|| panic!("{hook_event_name} did not post"));
+            assert_eq!(posted["event"], expected_event, "{hook_event_name}");
+            assert_eq!(posted["source"], expected_source, "{hook_event_name}");
+            assert_eq!(posted["turn_id"], turn_id, "{hook_event_name}");
+        }
+
+        let stop = serde_json::json!({
+            "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+            "turn_id": turn_id,
+            "hook_event_name": "Stop",
+        });
+        let posted = notify_payload_for_input(
+            CODEX_NOTIFY_NAME,
+            &[],
+            &stop.to_string(),
+            None,
+        )
+        .expect("main Stop posts");
+        assert_eq!(posted["event"], "needs_input");
+        assert_eq!(posted["turn_id"], turn_id);
+
+        for hook_event_name in ["UserPromptSubmit", "PreToolUse", "PermissionRequest"] {
+            let mut payload = owner_fields.clone();
+            payload["hook_event_name"] = hook_event_name.into();
+            payload["agent_id"] = "019f6322-41e5-7882-a99a-d186dff6739c".into();
+            payload["agent_type"] = "worker".into();
+            assert_eq!(
+                notify_payload_for_input(
+                    CODEX_NOTIFY_NAME,
+                    &[],
+                    &payload.to_string(),
+                    None,
+                ),
+                None,
+                "subagent {hook_event_name} must not own the Acorn session",
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -1920,6 +1998,37 @@ done
             assert!(
                 !stdout.contains("arg=--settings\n") && !stdout.contains("arg=--enable\n"),
                 "nested {provider} installed Acorn hooks: {stdout}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_pty_root_replaces_an_inherited_invocation_owner() {
+        for provider in [
+            CODEX_WRAPPER_NAME,
+            CLAUDE_WRAPPER_NAME,
+            ANTIGRAVITY_WRAPPER_NAME,
+        ] {
+            let output = run_hooked_wrapper_for_invocation_ownership(
+                provider,
+                WrapperInvocationContext::RootWithInheritedOwner,
+            );
+            assert!(
+                output.status.success(),
+                "{provider} wrapper failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(stdout.contains("hook_session=session-1\n"), "{provider}: {stdout}");
+            assert!(stdout.contains("invocation_depth=1\n"), "{provider}: {stdout}");
+            assert!(
+                !stdout.contains("invocation_token=inherited-invocation\n"),
+                "{provider} reused an ancestor's owner token: {stdout}",
+            );
+            assert!(
+                stdout.contains("arg=--enable\n") || stdout.contains("arg=--settings\n") || provider == ANTIGRAVITY_WRAPPER_NAME,
+                "fresh {provider} root did not install its Acorn integration: {stdout}",
             );
         }
     }
