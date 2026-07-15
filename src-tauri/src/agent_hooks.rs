@@ -1078,11 +1078,11 @@ fn write_response(stream: &mut TcpStream, code: u16, reason: &str) -> io::Result
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_agent_hook_event, AgentHookApplyOutcome, AgentHookEvent, AgentHookEventKind,
-        AgentHookReducer, AgentHookServer,
+        apply_agent_hook_event, dispatch_connection, AgentHookApplyOutcome, AgentHookEvent,
+        AgentHookEventKind, AgentHookReducer, AgentHookServer, HookEventHandler,
     };
     use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionStatus};
-    use std::io::{Read, Write};
+    use std::io::{self, Read, Write};
     use std::net::{SocketAddr, TcpStream};
     use std::sync::{mpsc, Arc, Barrier};
     use std::time::Duration;
@@ -1115,6 +1115,50 @@ mod tests {
         assert!(
             TcpStream::connect(addr).is_err(),
             "hook listener remained reachable after server drop"
+        );
+    }
+
+    #[test]
+    fn hook_connection_falls_back_inline_when_worker_spawn_fails() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let token = "test-token".to_string();
+        let (tx, rx) = mpsc::channel();
+        let handler: HookEventHandler = Arc::new(move |event| {
+            tx.send(event).expect("send event");
+        });
+        let session_id = Uuid::new_v4();
+        let body = format!(
+            "{{\"session_id\":\"{session_id}\",\"provider\":\"codex\",\"event\":\"start\"}}"
+        );
+
+        let client = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).expect("connect hook");
+            write!(
+                stream,
+                "POST /agent-hook HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Acorn-Agent-Hook-Token: test-token\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .expect("write request");
+            let mut response = String::new();
+            stream.read_to_string(&mut response).expect("read response");
+            response
+        });
+
+        let (stream, _) = listener.accept().expect("accept hook");
+        dispatch_connection(stream, token, handler, |_, _, _| {
+            Err(io::Error::other("forced worker spawn failure"))
+        });
+
+        assert!(client
+            .join()
+            .expect("client thread")
+            .starts_with("HTTP/1.1 204 No Content"));
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1))
+                .expect("event delivered")
+                .session_id,
+            session_id
         );
     }
 
