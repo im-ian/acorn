@@ -5,6 +5,8 @@ import {
   WORKSPACE_CANVAS_MIN_NODE_WIDTH,
   WORKSPACE_CANVAS_MIN_ZOOM,
   fitWorkspaceCanvasViewport,
+  centerWorkspaceCanvasViewportFromMinimapPoint,
+  layoutWorkspaceCanvasMinimap,
   normalizeWorkspaceCanvasState,
   reconcileWorkspaceCanvasState,
   revealWorkspaceCanvasNode,
@@ -110,5 +112,39 @@ describe("workspaceCanvas", () => {
         { width: 1_000, height: 700 },
       ),
     ).toEqual({ offset: { x: -348, y: 0 }, zoom: 1 });
+  });
+
+  it("maps nodes and the viewport into a minimap and recenters from it", () => {
+    const viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
+    const layout = layoutWorkspaceCanvasMinimap(
+      {
+        first: { x: 0, y: 0, width: 100, height: 100, zIndex: 1 },
+        second: { x: 300, y: 200, width: 100, height: 100, zIndex: 2 },
+      },
+      viewport,
+      { width: 200, height: 100 },
+      { width: 200, height: 100 },
+      0,
+    );
+
+    expect(layout.bounds).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+    expect(layout.scale).toBeCloseTo(1 / 3);
+    expect(layout.nodeRects.first.x).toBeCloseTo(100 / 3);
+    expect(layout.nodeRects.first.width).toBeCloseTo(100 / 3);
+    expect(layout.nodeRects.second.x).toBeCloseTo(400 / 3);
+    expect(layout.nodeRects.second.y).toBeCloseTo(200 / 3);
+    expect(layout.viewportRect.width).toBeCloseTo(200 / 3);
+    expect(layout.viewportRect.height).toBeCloseTo(100 / 3);
+
+    const centered = centerWorkspaceCanvasViewportFromMinimapPoint(
+      viewport,
+      { width: 200, height: 100 },
+      layout,
+      { x: 150, y: 250 / 3 },
+    );
+    expect(centered).toEqual({
+      offset: { x: -250, y: -200 },
+      zoom: 1,
+    });
   });
 });

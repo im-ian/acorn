@@ -7,12 +7,19 @@ const PROJECT = {
   position: 0,
 };
 
-function session(id: string) {
+const OTHER_PROJECT = {
+  repo_path: "/tmp/other",
+  name: "other",
+  created_at: "2026-01-01T00:00:00Z",
+  position: 1,
+};
+
+function session(id: string, repoPath = PROJECT.repo_path) {
   return {
     id,
     name: id,
-    repo_path: "/tmp/demo",
-    worktree_path: `/tmp/demo/.worktrees/${id}`,
+    repo_path: repoPath,
+    worktree_path: `${repoPath}/.worktrees/${id}`,
     branch: `feat/${id}`,
     isolated: false,
     status: "ready",
@@ -188,6 +195,124 @@ test.describe("workspace canvas mode", () => {
     await expect(page.getByTestId("workspace-canvas-world")).toHaveAttribute(
       "data-canvas-zoom",
       String(saved.zoom),
+    );
+  });
+
+  test("uses the minimap to navigate only the active project sessions", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT, OTHER_PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("alpha"),
+      session("beta"),
+      session("gamma", OTHER_PROJECT.repo_path),
+    ]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const canvas = page.getByTestId("workspace-canvas");
+    const overview = page.getByRole("region", { name: "Canvas overview" });
+    await expect(overview).toBeVisible();
+    await expect(
+      overview.getByTestId("workspace-canvas-minimap-node"),
+    ).toHaveCount(2);
+    await expect(
+      overview.getByRole("button", { name: "Show alpha on canvas" }),
+    ).toBeVisible();
+    await expect(
+      overview.getByRole("button", { name: "Show beta on canvas" }),
+    ).toBeVisible();
+    await expect(
+      overview.getByRole("button", { name: "Show gamma on canvas" }),
+    ).toHaveCount(0);
+
+    const world = page.getByTestId("workspace-canvas-world");
+    const initialOffset = Number(
+      await world.getAttribute("data-canvas-offset-x"),
+    );
+    await canvas.dispatchEvent("wheel", { deltaX: 1_800, deltaY: 0 });
+    await expect
+      .poll(async () =>
+        Number(await world.getAttribute("data-canvas-offset-x")),
+      )
+      .toBeLessThan(initialOffset - 1_000);
+    const offscreenOffset = Number(
+      await world.getAttribute("data-canvas-offset-x"),
+    );
+
+    await overview
+      .getByRole("button", { name: "Show beta on canvas" })
+      .click();
+
+    await expect(
+      canvas.getByRole("button", { name: "Move beta" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(canvas.locator('[data-canvas-session-id="beta"]')).toBeInViewport();
+    await expect
+      .poll(async () =>
+        Number(await world.getAttribute("data-canvas-offset-x")),
+      )
+      .not.toBe(offscreenOffset);
+  });
+
+  test("undoes a reset without remounting the live terminal", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [session("alpha"), session("beta")]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const alpha = page.locator('[data-canvas-session-id="alpha"]');
+    const moveAlpha = alpha.getByRole("button", { name: "Move alpha" });
+    await moveAlpha.press("Shift+ArrowRight");
+    await moveAlpha.press("Shift+ArrowDown");
+    await page.getByRole("button", { name: "Zoom in" }).click();
+
+    const world = page.getByTestId("workspace-canvas-world");
+    const beforeReset = {
+      x: await alpha.getAttribute("data-canvas-node-x"),
+      y: await alpha.getAttribute("data-canvas-node-y"),
+      zoom: await world.getAttribute("data-canvas-zoom"),
+    };
+    expect(beforeReset.x).not.toBe("48");
+    expect(beforeReset.zoom).not.toBe("1");
+
+    const terminalSlot = alpha.locator(
+      '[data-canvas-terminal-body="alpha"] [data-acorn-terminal-slot="alpha"]',
+    );
+    await expect(terminalSlot).toBeAttached();
+    await page.getByRole("button", { name: "Reset terminal layout" }).click();
+
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "48");
+    await expect(alpha).toHaveAttribute("data-canvas-node-y", "48");
+    await expect(world).toHaveAttribute("data-canvas-zoom", "1");
+
+    const undo = page.getByRole("status").filter({
+      hasText: "Terminal layout reset. Undo",
+    });
+    await expect(undo).toBeVisible();
+    await undo.click();
+
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", beforeReset.x!);
+    await expect(alpha).toHaveAttribute("data-canvas-node-y", beforeReset.y!);
+    await expect(world).toHaveAttribute("data-canvas-zoom", beforeReset.zoom!);
+    await expect(terminalSlot).toBeAttached();
+
+    await page.reload();
+    await expect(page.locator('[data-canvas-session-id="alpha"]')).toHaveAttribute(
+      "data-canvas-node-x",
+      beforeReset.x!,
+    );
+    await expect(page.getByTestId("workspace-canvas-world")).toHaveAttribute(
+      "data-canvas-zoom",
+      beforeReset.zoom!,
     );
   });
 });
