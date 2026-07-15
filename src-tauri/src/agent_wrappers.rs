@@ -756,7 +756,7 @@ exec "$ACORN_TEST_REAL_TAIL" "$@"
     }
 
     #[cfg(unix)]
-    fn codex_wrapper_notifications_for_tui_line(line: &str) -> (String, String, bool) {
+    fn codex_wrapper_notifications_for_tui_line(line: &str) -> (String, bool) {
         let base = ScratchDir::new("codex-tui-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let real_dir = base.path().join("real-bin");
@@ -764,9 +764,7 @@ exec "$ACORN_TEST_REAL_TAIL" "$@"
 
         let capture_path = base.path().join("notifications.log");
         let session_log_path = base.path().join("session.jsonl");
-        let state_dir = base.path().join("agent-state");
         let tail_pid_path = base.path().join("tail.pid");
-        fs::create_dir_all(&state_dir).unwrap();
         let real_tail = install_tail_probe(&real_dir);
         write_executable(
             &wrapper_dir.join("acorn-codex-notify"),
@@ -800,7 +798,6 @@ done
             .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
-            .env("ACORN_AGENT_STATE_DIR", &state_dir)
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .env("ACORN_TEST_TUI_LINE", line)
             .env("ACORN_TEST_REAL_TAIL", real_tail)
@@ -814,7 +811,6 @@ done
 
         (
             fs::read_to_string(capture_path).unwrap_or_default(),
-            fs::read_to_string(state_dir.join("codex.id")).unwrap_or_default(),
             tail_process_survived_wrapper(&tail_pid_path),
         )
     }
@@ -1006,23 +1002,10 @@ done
     #[cfg(unix)]
     #[test]
     fn codex_wrapper_maps_current_tui_user_turn_to_turn_start() {
-        let owner = "019f637b-44c9-73d0-a103-db4b271a5861";
-        let line = format!(
-            "{}\n{}",
-            format_args!(
-                r#"{{"ts":"2026-07-14T05:31:15.812Z","dir":"to_tui","kind":"app_event","variant":"AppendMessageHistoryEntry {{ thread_id: ThreadId {{ uuid: {owner} }}, text: \"Fix the bug.\" }}"}}"#
-            ),
-            r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#
-        );
-        let (notifications, owner_marker, tail_alive) =
-            codex_wrapper_notifications_for_tui_line(&line);
+        let line = r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
+        let (notifications, tail_alive) = codex_wrapper_notifications_for_tui_line(line);
 
         assert_eq!(notifications, "start turn\n");
-        assert_eq!(
-            owner_marker,
-            format!("{owner}\n"),
-            "the root TUI thread must bind before its completion hook can arrive"
-        );
         assert!(
             !tail_alive,
             "the transcript tail must exit with the wrapper"
