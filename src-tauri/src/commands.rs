@@ -332,9 +332,17 @@ fn inject_agent_hook_env(
     // provider, so descendants cannot promote themselves to hook owners.
     // A control session can launch another Acorn app from inside an existing
     // provider invocation. The new PTY is nevertheless a fresh ownership
-    // boundary, so do not inherit the outer wrapper's token or nesting depth.
+    // boundary, so do not inherit the outer wrapper's token, nesting depth,
+    // or Codex recorder. Preserve recorder variables when there was no outer
+    // Acorn invocation marker because those may be caller-owned settings.
+    let inherited_agent_invocation = effective_env.contains_key("ACORN_AGENT_INVOCATION_TOKEN")
+        || effective_env.contains_key("ACORN_AGENT_INVOCATION_DEPTH");
     effective_env.remove("ACORN_AGENT_INVOCATION_TOKEN");
     effective_env.remove("ACORN_AGENT_INVOCATION_DEPTH");
+    if inherited_agent_invocation {
+        effective_env.remove("CODEX_TUI_RECORD_SESSION");
+        effective_env.remove("CODEX_TUI_SESSION_LOG_PATH");
+    }
     effective_env.insert("ACORN_AGENT_INVOCATION_ROOT".to_string(), "1".to_string());
     effective_env
         .entry("ACORN_AGENT_HOOK_URL".to_string())

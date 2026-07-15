@@ -424,6 +424,9 @@ fn request_complete(request: &[u8]) -> Result<bool, ReadRequestError> {
         }
         return Ok(false);
     };
+    if header_end.saturating_add(4) > MAX_HEADER_BYTES {
+        return Err(ReadRequestError::TooLarge);
+    }
     let head = String::from_utf8_lossy(&request[..header_end]);
     let content_length = header_value(&head, "content-length")
         .and_then(|v| v.parse::<usize>().ok())
