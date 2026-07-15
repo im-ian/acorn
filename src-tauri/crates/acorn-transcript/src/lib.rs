@@ -3922,11 +3922,11 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
-    /// Antigravity `/new` keeps the same `agy` process alive and creates
-    /// a fresh brain conversation; a dormant anchor must roll forward to
-    /// the hot one, and only when agy is the sole live instance.
+    /// Antigravity `/new` keeps the same `agy` process alive and creates a
+    /// fresh brain conversation. Built-in subagents also create hot brains,
+    /// so only the CLI owner cursor may authorize a rotation successor.
     #[test]
-    fn find_recent_antigravity_jsonl_rotates_to_hot_brain() {
+    fn antigravity_rotation_selects_cached_owner_among_hot_brains() {
         use std::fs::{self, File};
 
         let root =
@@ -3943,11 +3943,14 @@ mod tests {
             t
         };
         let a_id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
-        let b_id = "28a49f9d-4b8f-419c-9d8a-bf0854310e03";
+        let new_owner_id = "28a49f9d-4b8f-419c-9d8a-bf0854310e03";
+        let subagent_id = "39b50aae-5c90-42ad-ae9b-c01965421f14";
         let a = make_brain(a_id);
         std::thread::sleep(Duration::from_millis(1100));
-        let b = make_brain(b_id);
-        let now = fs::metadata(&b).unwrap().modified().unwrap();
+        let new_owner = make_brain(new_owner_id);
+        std::thread::sleep(Duration::from_millis(1100));
+        let subagent = make_brain(subagent_id);
+        let now = fs::metadata(&subagent).unwrap().modified().unwrap();
         let a_mtime = now - Duration::from_secs(60);
         set_mtime(&a, a_mtime);
         let process_start = a_mtime;
@@ -3958,27 +3961,85 @@ mod tests {
             process_start,
             now,
             true,
+            Some(new_owner_id),
             &HashSet::new(),
         );
         assert_eq!(
             picked.map(|(_, id)| id).as_deref(),
-            Some(b_id),
-            "dormant antigravity anchor must roll forward to the hot brain"
+            Some(new_owner_id),
+            "the cached owner must win even when a newer subagent brain is hot"
         );
 
-        let pinned = find_recent_antigravity_jsonl(
+        for owner_cursor in [None, Some(a_id), Some("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")] {
+            let pinned = find_recent_antigravity_jsonl(
+                &[brain.clone()],
+                SystemTime::UNIX_EPOCH,
+                process_start,
+                now,
+                true,
+                owner_cursor,
+                &HashSet::new(),
+            );
+            assert_eq!(
+                pinned.map(|(_, id)| id).as_deref(),
+                Some(a_id),
+                "missing, unchanged, or unknown owner cursor must pin the anchor"
+            );
+        }
+
+        let multiple_agents = find_recent_antigravity_jsonl(
             &[brain],
             SystemTime::UNIX_EPOCH,
             process_start,
             now,
             false,
+            Some(new_owner_id),
             &HashSet::new(),
         );
+        assert_eq!(multiple_agents.map(|(_, id)| id).as_deref(), Some(a_id));
+
+        assert!(new_owner.is_file());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn antigravity_owner_cursor_reads_exact_cwd_and_valid_uuid() {
+        use std::fs;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-agcursor-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let cache = root.join("antigravity-cli").join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        let cwd = root.join("repo");
+        let other = root.join("repo-other");
+        let id = "28a49f9d-4b8f-419c-9d8a-bf0854310e03";
+        let cursors = std::collections::HashMap::from([
+            (cwd.to_string_lossy().into_owned(), id.to_string()),
+            (
+                other.to_string_lossy().into_owned(),
+                "not-a-uuid".to_string(),
+            ),
+        ]);
+        fs::write(
+            cache.join("last_conversations.json"),
+            serde_json::to_vec(&cursors).unwrap(),
+        )
+        .unwrap();
+
         assert_eq!(
-            pinned.map(|(_, id)| id).as_deref(),
-            Some(a_id),
-            "rotation must stay off when agy is not the sole live instance"
+            antigravity_owner_cursor_id(Some(&root), &cwd).as_deref(),
+            Some(id)
         );
+        assert_eq!(antigravity_owner_cursor_id(Some(&root), &other), None);
+        assert_eq!(
+            antigravity_owner_cursor_id(Some(&root), &root.join("missing")),
+            None
+        );
+        fs::write(cache.join("last_conversations.json"), "not-json").unwrap();
+        assert_eq!(antigravity_owner_cursor_id(Some(&root), &cwd), None);
 
         fs::remove_dir_all(&root).unwrap();
     }
