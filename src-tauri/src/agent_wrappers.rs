@@ -82,7 +82,9 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     export CODEX_TUI_SESSION_LOG_PATH="${TMPDIR:-/tmp}/acorn-codex-session-$$_${_acorn_codex_ts}.jsonl"
   fi
 
+  _acorn_codex_wrapper_pid=$$
   (
+    _acorn_wrapper_pid="$_acorn_codex_wrapper_pid"
     _acorn_log="$CODEX_TUI_SESSION_LOG_PATH"
     _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify"
     _acorn_last_turn_id=""
@@ -91,10 +93,12 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     _acorn_approval_fallback_seq=0
 
     _acorn_i=0
-    while [ ! -f "$_acorn_log" ] && [ "$_acorn_i" -lt 200 ]; do
+    while kill -0 "$_acorn_wrapper_pid" 2>/dev/null &&
+          [ ! -f "$_acorn_log" ] && [ "$_acorn_i" -lt 200 ]; do
       _acorn_i=$((_acorn_i + 1))
       sleep 0.05
     done
+    kill -0 "$_acorn_wrapper_pid" 2>/dev/null || exit 0
     [ -f "$_acorn_log" ] || exit 0
 
     _acorn_watch_dir=$(mktemp -d "${TMPDIR:-/tmp}/acorn-codex-watcher.XXXXXX") || exit 0
@@ -104,7 +108,13 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
       exit 0
     fi
     _acorn_tail_pid=""
+    _acorn_parent_guard_pid=""
     _acorn_cleanup_watcher() {
+      if [ -n "$_acorn_parent_guard_pid" ]; then
+        kill "$_acorn_parent_guard_pid" >/dev/null 2>&1 || true
+        wait "$_acorn_parent_guard_pid" 2>/dev/null || true
+        _acorn_parent_guard_pid=""
+      fi
       if [ -n "$_acorn_tail_pid" ]; then
         kill "$_acorn_tail_pid" >/dev/null 2>&1 || true
         wait "$_acorn_tail_pid" 2>/dev/null || true
@@ -117,6 +127,14 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
 
     tail -n 0 -F "$_acorn_log" > "$_acorn_watch_fifo" 2>/dev/null &
     _acorn_tail_pid=$!
+    (
+      trap - EXIT HUP INT TERM
+      while kill -0 "$_acorn_wrapper_pid" 2>/dev/null; do
+        sleep 0.1
+      done
+      kill "$_acorn_tail_pid" >/dev/null 2>&1 || true
+    ) &
+    _acorn_parent_guard_pid=$!
     while IFS= read -r _acorn_line; do
       case "$_acorn_line" in
         *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
@@ -512,7 +530,9 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
    { [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ] ||
      { [ -n "${ACORN_AGENT_HOOK_URL-}" ] && [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ]; }; } &&
    [ -x "$ACORN_AGENT_WRAPPER_DIR/acorn-antigravity-notify" ]; then
+  _acorn_antigravity_wrapper_pid=$$
   (
+    _acorn_wrapper_pid="$_acorn_antigravity_wrapper_pid"
     _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-antigravity-notify"
     _acorn_marker="$ACORN_AGENT_STATE_DIR/antigravity.id"
     _acorn_owner_brain_id=""
@@ -531,6 +551,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     trap 'exit 0' HUP INT TERM
 
     while :; do
+      kill -0 "$_acorn_wrapper_pid" 2>/dev/null || exit 0
       _acorn_next_brain_id=""
       if [ -r "$_acorn_marker" ]; then
         _acorn_next_brain_id=$(sed -n '1p' "$_acorn_marker" 2>/dev/null | tr -d '\r\n')
@@ -988,7 +1009,12 @@ while :; do sleep 1; done
                 .trim()
                 .to_string(),
         ] {
-            let _ = Command::new("kill").arg("-KILL").arg(pid).status();
+            let _ = Command::new("kill")
+                .arg("-KILL")
+                .arg(pid)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
         }
 
         (tail_alive, watcher_alive)
