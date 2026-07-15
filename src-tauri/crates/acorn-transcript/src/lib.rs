@@ -759,10 +759,20 @@ fn claude_resume_id_from_args(args: &[String]) -> Option<String> {
 }
 
 fn codex_resume_id_from_args(args: &[String]) -> Option<String> {
-    let resume_index = codex_resume_subcommand_index(args)?;
-    args.get(resume_index + 1)
-        .filter(|arg| is_uuid_v4_shape(arg))
-        .cloned()
+    let mut index = codex_resume_subcommand_index(args)? + 1;
+    while let Some(arg) = args.get(index).map(String::as_str) {
+        if arg == "--" {
+            return args
+                .get(index + 1)
+                .filter(|candidate| is_uuid_v4_shape(candidate))
+                .cloned();
+        }
+        if !arg.starts_with('-') {
+            return is_uuid_v4_shape(arg).then(|| arg.to_string());
+        }
+        index = codex_option_end(args, index, true)?;
+    }
+    None
 }
 
 /// Return whether `args` select Codex's top-level `resume` subcommand.
@@ -787,65 +797,66 @@ fn codex_resume_subcommand_index(args: &[String]) -> Option<usize> {
             return None;
         }
 
-        if matches!(
-            arg,
-            "--strict-config"
-                | "--oss"
-                | "--dangerously-bypass-approvals-and-sandbox"
-                | "--dangerously-bypass-hook-trust"
-                | "--search"
-                | "--no-alt-screen"
-        ) {
-            index += 1;
-            continue;
-        }
-
         if matches!(arg, "-h" | "--help" | "-V" | "--version") {
             return None;
         }
-
-        const VALUE_OPTIONS: &[&str] = &[
-            "-c",
-            "--config",
-            "--enable",
-            "--disable",
-            "--remote",
-            "--remote-auth-token-env",
-            "-i",
-            "--image",
-            "-m",
-            "--model",
-            "--local-provider",
-            "-p",
-            "--profile",
-            "-s",
-            "--sandbox",
-            "-C",
-            "--cd",
-            "--add-dir",
-            "-a",
-            "--ask-for-approval",
-        ];
-        if VALUE_OPTIONS.contains(&arg) {
-            args.get(index + 1)?;
-            index += 2;
-            continue;
-        }
-        if VALUE_OPTIONS.iter().any(|option| {
-            option.starts_with("--")
-                && arg
-                    .strip_prefix(option)
-                    .is_some_and(|suffix| suffix.starts_with('='))
-        }) || ["-c", "-i", "-m", "-p", "-s", "-C", "-a"]
-            .iter()
-            .any(|option| arg.starts_with(option) && arg.len() > option.len())
-        {
-            index += 1;
-            continue;
-        }
-        return None;
+        index = codex_option_end(args, index, false)?;
     }
     None
+}
+
+fn codex_option_end(args: &[String], index: usize, after_resume: bool) -> Option<usize> {
+    let arg = args.get(index)?.as_str();
+    let is_flag = matches!(
+        arg,
+        "--strict-config"
+            | "--oss"
+            | "--dangerously-bypass-approvals-and-sandbox"
+            | "--yolo"
+            | "--dangerously-bypass-hook-trust"
+            | "--search"
+            | "--no-alt-screen"
+    ) || (after_resume
+        && matches!(arg, "--last" | "--all" | "--include-non-interactive"));
+    if is_flag {
+        return Some(index + 1);
+    }
+
+    const VALUE_OPTIONS: &[&str] = &[
+        "-c",
+        "--config",
+        "--enable",
+        "--disable",
+        "--remote",
+        "--remote-auth-token-env",
+        "-i",
+        "--image",
+        "-m",
+        "--model",
+        "--local-provider",
+        "-p",
+        "--profile",
+        "-s",
+        "--sandbox",
+        "-C",
+        "--cd",
+        "--add-dir",
+        "-a",
+        "--ask-for-approval",
+    ];
+    if VALUE_OPTIONS.contains(&arg) {
+        args.get(index + 1)?;
+        return Some(index + 2);
+    }
+    let has_attached_value = VALUE_OPTIONS.iter().any(|option| {
+        option.starts_with("--")
+            && arg
+                .strip_prefix(option)
+                .is_some_and(|suffix| suffix.starts_with('='))
+    }) || ["-c", "-i", "-m", "-p", "-s", "-C", "-a"]
+        .iter()
+        .any(|option| arg.starts_with(option) && arg.len() > option.len());
+    has_attached_value.then_some(index + 1)
 }
 
 fn codex_rollout_scope_for_mapping(
