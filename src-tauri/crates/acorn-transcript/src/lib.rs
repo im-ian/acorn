@@ -603,16 +603,22 @@ where
     F: FnMut(Pid) -> Option<AgentKind>,
 {
     let mut out = Vec::new();
-    let mut stack = vec![(root, false)];
-    while let Some((pid, below_agent_boundary)) = stack.pop() {
+    let mut stack = vec![(root, false, None)];
+    while let Some((pid, below_agent_boundary, contiguous_parent_kind)) = stack.pop() {
         let mut next_below_agent_boundary = below_agent_boundary;
-        if let Some(kind) = kind_for_pid(pid) {
-            let role = if scope == MappingScope::SessionOwners && below_agent_boundary {
-                AgentProcessRole::Quarantine
-            } else {
-                AgentProcessRole::Emit
-            };
-            out.push(AgentProcessMatch { pid, kind, role });
+        let kind = kind_for_pid(pid);
+        let same_provider_launcher = scope == MappingScope::SessionOwners
+            && kind.is_some()
+            && kind == contiguous_parent_kind;
+        if let Some(kind) = kind {
+            if !same_provider_launcher {
+                let role = if scope == MappingScope::SessionOwners && below_agent_boundary {
+                    AgentProcessRole::Quarantine
+                } else {
+                    AgentProcessRole::Emit
+                };
+                out.push(AgentProcessMatch { pid, kind, role });
+            }
             next_below_agent_boundary =
                 below_agent_boundary || scope == MappingScope::SessionOwners;
         }
@@ -620,7 +626,7 @@ where
             stack.extend(
                 kids.iter()
                     .copied()
-                    .map(|kid| (kid, next_below_agent_boundary)),
+                    .map(|kid| (kid, next_below_agent_boundary, kind)),
             );
         }
     }
