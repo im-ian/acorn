@@ -2430,6 +2430,189 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
+    #[test]
+    fn find_recent_codex_owner_jsonl_does_not_rotate_to_same_process_subagent() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxsubagent-owner-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+        let parent_id = "019e2001-3250-76b0-8410-2e073b38a2e1";
+        let child_id = "019e2001-3250-76b0-8410-2e073b38a2e2";
+
+        let write_rollout = |id: &str, source: serde_json::Value, parent: Option<&str>| {
+            let path = day.join(format!("rollout-2026-06-10T10-00-00-{id}.jsonl"));
+            let mut file = File::create(&path).unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "type": "session_meta",
+                    "payload": {
+                        "id": id,
+                        "cwd": cwd,
+                        "originator": "codex-tui",
+                        "source": source,
+                        "parent_thread_id": parent,
+                    }
+                })
+            )
+            .unwrap();
+            path
+        };
+
+        let parent = write_rollout(parent_id, serde_json::json!("cli"), None);
+        std::thread::sleep(Duration::from_millis(1100));
+        let child = write_rollout(
+            child_id,
+            serde_json::json!({
+                "subagent": {
+                    "thread_spawn": {
+                        "parent_thread_id": parent_id,
+                        "depth": 1
+                    }
+                }
+            }),
+            Some(parent_id),
+        );
+        let now = fs::metadata(&child).unwrap().modified().unwrap();
+        let process_start = now - Duration::from_secs(DORMANT_TRANSCRIPT_SECS + 120);
+        set_mtime(&parent, process_start + Duration::from_secs(1));
+
+        let picked = find_recent_codex_owner_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some(parent_id),
+            "a hot same-process subagent must not look like a /new owner rotation"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn completed_codex_owner_resolution_ignores_subagent_rollout() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxsubagent-complete-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+        let parent_id = "019e2001-3250-76b0-8410-2e073b38a2f1";
+        let child_id = "019e2001-3250-76b0-8410-2e073b38a2f2";
+
+        for (id, source, parent) in [
+            (parent_id, serde_json::json!("cli"), None),
+            (
+                child_id,
+                serde_json::json!({
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": parent_id,
+                            "depth": 1
+                        }
+                    }
+                }),
+                Some(parent_id),
+            ),
+        ] {
+            let path = day.join(format!("rollout-2026-06-10T10-00-00-{id}.jsonl"));
+            let mut file = File::create(path).unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "type": "session_meta",
+                    "payload": {
+                        "id": id,
+                        "cwd": cwd,
+                        "originator": "codex-tui",
+                        "source": source,
+                        "parent_thread_id": parent,
+                    }
+                })
+            )
+            .unwrap();
+        }
+        let process_start = SystemTime::now() - Duration::from_secs(5);
+
+        let resolved = find_completed_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+        );
+        assert_eq!(
+            resolved.map(|(_, id)| id).as_deref(),
+            Some(parent_id),
+            "a child rollout must not make the owner fallback ambiguous"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn explicit_codex_resume_can_select_subagent_rollout() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxsubagent-explicit-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let child_id = "019e2001-3250-76b0-8410-2e073b38a2f3";
+        let day = codex_day_dirs_for_uuid(&sessions, child_id)
+            .into_iter()
+            .next()
+            .unwrap();
+        fs::create_dir_all(&day).unwrap();
+        let child = day.join(format!("rollout-2026-06-10T10-00-00-{child_id}.jsonl"));
+        let mut file = File::create(&child).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": child_id,
+                    "cwd": "/tmp/repo",
+                    "originator": "codex-tui",
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "019e2001-3250-76b0-8410-2e073b38a2f1",
+                                "depth": 1
+                            }
+                        }
+                    }
+                }
+            })
+        )
+        .unwrap();
+
+        let resolved = find_codex_jsonl_for_uuid(Some(&sessions), child_id, &HashSet::new());
+        assert_eq!(resolved, Some((child, child_id.to_string())));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     /// Backs `find_agent_run_transcript`, the path-returning form the
     /// status poll's codex marker fallback consumes: the resolver must
     /// hand back the rollout path alongside the id.

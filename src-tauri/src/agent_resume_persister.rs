@@ -447,4 +447,51 @@ mod tests {
 
         fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn codex_declared_parent_bypasses_dormant_echo_gate() {
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-subagent-rollback-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let parent_id = "019e2001-3250-76b0-8410-2e073b38a2f1";
+        let parent = dir.join("parent.jsonl");
+        fs::write(
+            &parent,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{parent_id}\",\"source\":\"cli\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        let child = dir.join("child.jsonl");
+        fs::write(
+            &child,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"source\":{{\"subagent\":{{\"thread_spawn\":{{\"parent_thread_id\":\"{parent_id}\",\"depth\":1}}}}}}}}}}\n"
+            ),
+        )
+        .unwrap();
+        let now = fs::metadata(&child).unwrap().modified().unwrap();
+        set_mtime(
+            &parent,
+            now - Duration::from_secs(acorn_transcript::DORMANT_TRANSCRIPT_SECS + 60),
+        );
+
+        assert!(
+            rollback_is_dormant_echo(&child, &parent, now),
+            "generic rollback detection sees a dormant backwards move"
+        );
+        assert!(
+            !rollback_is_dormant_echo_for_kind(AgentKind::Codex, &child, &parent, parent_id, now,),
+            "a child marker must be allowed to self-heal to its declared parent"
+        );
+        assert!(
+            rollback_is_dormant_echo_for_kind(AgentKind::Claude, &child, &parent, parent_id, now,),
+            "the Codex ownership repair must not weaken other providers' rollback guard"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

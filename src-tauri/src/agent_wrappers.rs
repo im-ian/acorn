@@ -697,6 +697,76 @@ done
         fs::read_to_string(capture_path).unwrap_or_default()
     }
 
+    #[cfg(unix)]
+    fn codex_notify_post_for_payload(payload: &str, owner_thread_id: Option<&str>) -> String {
+        codex_notify_post_for_payload_with_owner_update(payload, owner_thread_id, None)
+    }
+
+    #[cfg(unix)]
+    fn codex_notify_post_for_payload_with_owner_update(
+        payload: &str,
+        owner_thread_id: Option<&str>,
+        owner_update: Option<(&str, Duration)>,
+    ) -> String {
+        let base = ScratchDir::new("codex-notify-event");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let fake_bin = base.path().join("fake-bin");
+        let state_dir = base.path().join("agent-state");
+        fs::create_dir_all(&fake_bin).unwrap();
+        fs::create_dir_all(&state_dir).unwrap();
+
+        let capture_path = base.path().join("curl.log");
+        write_executable(
+            &fake_bin.join("curl"),
+            r#"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-d" ]; then
+    shift
+    printf '%s\n' "$1" > "$ACORN_NOTIFY_CAPTURE"
+    exit 0
+  fi
+  shift
+done
+exit 1
+"#,
+        )
+        .unwrap();
+        if let Some(owner_thread_id) = owner_thread_id {
+            fs::write(state_dir.join("codex.id"), format!("{owner_thread_id}\n")).unwrap();
+        }
+
+        let owner_writer = owner_update.map(|(owner_thread_id, delay)| {
+            let marker = state_dir.join("codex.id");
+            let owner_thread_id = owner_thread_id.to_string();
+            thread::spawn(move || {
+                thread::sleep(delay);
+                fs::write(marker, format!("{owner_thread_id}\n")).unwrap();
+            })
+        });
+
+        let output = Command::new(wrapper_dir.join(CODEX_NOTIFY_NAME))
+            .arg(payload)
+            .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_STATE_DIR", &state_dir)
+            .env("ACORN_NOTIFY_CAPTURE", &capture_path)
+            .output()
+            .unwrap();
+        if let Some(owner_writer) = owner_writer {
+            owner_writer.join().unwrap();
+        }
+        assert!(
+            output.status.success(),
+            "notify helper failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        fs::read_to_string(capture_path).unwrap_or_default()
+    }
+
     #[test]
     fn writes_codex_wrapper_and_notify_helper() {
         let base = ScratchDir::new("codex");
@@ -738,6 +808,77 @@ done
         assert_eq!(
             codex_wrapper_notifications_for_tui_line(line),
             "start turn\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_notify_ignores_nested_thread_completion() {
+        let payload = r#"{"type":"agent-turn-complete","thread-id":"019f6322-41e5-7882-a99a-d186dff6739c","turn-id":"turn-1"}"#;
+
+        assert_eq!(
+            codex_notify_post_for_payload(payload, Some("019f631f-0bfc-76f1-9c1d-334be74958ca"),),
+            "",
+            "a child thread must not mark its parent Acorn session as waiting"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_notify_accepts_owner_thread_completion() {
+        let owner = "019f631f-0bfc-76f1-9c1d-334be74958ca";
+        let decoy = "019f6322-41e5-7882-a99a-d186dff6739c";
+        let payload = format!(
+            r#"{{"type":"agent-turn-complete","thread-id":"{owner}","turn-id":"turn-1","input-messages":["literal \"thread-id\":\"{decoy}\""]}}"#
+        );
+
+        let post = codex_notify_post_for_payload(&payload, Some(owner));
+        assert_eq!(
+            post,
+            "{\"session_id\":\"session-1\",\"provider\":\"codex\",\"event\":\"needs_input\",\"source\":\"hook\"}\n",
+            "the owner thread completion must still mark the session as waiting"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_notify_waits_for_delayed_owner_binding() {
+        let owner = "019f631f-0bfc-76f1-9c1d-334be74958ca";
+        let stale = "019f6322-41e5-7882-a99a-d186dff6739c";
+        let payload =
+            format!(r#"{{"type":"agent-turn-complete","thread-id":"{owner}","turn-id":"turn-1"}}"#);
+
+        let post = codex_notify_post_for_payload_with_owner_update(
+            &payload,
+            Some(stale),
+            Some((owner, Duration::from_millis(100))),
+        );
+        assert!(
+            post.contains(r#""event":"needs_input""#),
+            "a valid fast completion must wait for the persister's owner update: {post}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_notify_ignores_completion_without_owner_binding() {
+        let payload = r#"{"type":"agent-turn-complete","thread-id":"019f631f-0bfc-76f1-9c1d-334be74958ca","turn-id":"turn-1"}"#;
+
+        assert_eq!(
+            codex_notify_post_for_payload(payload, None),
+            "",
+            "completion must fail closed until Acorn knows the session owner"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_notify_keeps_explicit_needs_input_without_owner_binding() {
+        let post = codex_notify_post_for_payload("needs_input", None);
+
+        assert!(
+            post.contains(r#""event":"needs_input""#),
+            "only legacy completion events require an owner binding: {post}"
         );
     }
 
