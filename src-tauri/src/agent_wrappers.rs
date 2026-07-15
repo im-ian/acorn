@@ -53,7 +53,14 @@ fi
 # keep the invocation token only as a nesting marker and cannot reuse the
 # outer session's hook channel. A tokenless process with hook env is a provider
 # that survived an app update; any new wrapper below it must also fail closed.
-if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
+if [ "${ACORN_AGENT_INVOCATION_ROOT-}" = "1" ]; then
+  unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_INVOCATION_TOKEN ACORN_AGENT_INVOCATION_DEPTH
+  if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+    _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
+    export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
+    export ACORN_AGENT_INVOCATION_DEPTH=1
+  fi
+elif [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   _acorn_invocation_depth="${ACORN_AGENT_INVOCATION_DEPTH-1}"
   case "$_acorn_invocation_depth" in
     ''|*[!0-9]*) _acorn_invocation_depth=1 ;;
@@ -61,14 +68,6 @@ if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   export ACORN_AGENT_INVOCATION_DEPTH=$((_acorn_invocation_depth + 1))
   unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
   exec "$REAL_BIN" "$@"
-fi
-if [ "${ACORN_AGENT_INVOCATION_ROOT-}" = "1" ]; then
-  unset ACORN_AGENT_INVOCATION_ROOT
-  if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
-    _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
-    export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
-    export ACORN_AGENT_INVOCATION_DEPTH=1
-  fi
 elif [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
   unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
   exec "$REAL_BIN" "$@"
@@ -83,6 +82,16 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
    { [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ] ||
      { [ -n "${ACORN_AGENT_HOOK_URL-}" ] && [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ]; }; } &&
    [ -x "$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify" ]; then
+  # Codex requires command hooks to carry their exact trusted fingerprint.
+  # Keep this session-scoped: user/project config remains untouched, and the
+  # legacy notify callback below remains available to older Codex releases.
+  _acorn_codex_hooks='hooks={UserPromptSubmit=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],PreToolUse=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],PermissionRequest=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],Stop=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],state={"/<session-flags>/config.toml:pre_tool_use:0:0"={enabled=true,trusted_hash="sha256:b7f07d6514fc12ca8e976ae4bd5b6e61ca13d61c174616789ab3b4464200b1d3"},"/<session-flags>/config.toml:permission_request:0:0"={enabled=true,trusted_hash="sha256:074c27d6eb1e0c1aad3e4fd979c6f80b6ffe5a00a9d2993c857850e7e55b2d64"},"/<session-flags>/config.toml:user_prompt_submit:0:0"={enabled=true,trusted_hash="sha256:71869cae863c34d6bc113940040d9e5e3f0d6173e1f8ff50c77d2c479ecd70a1"},"/<session-flags>/config.toml:stop:0:0"={enabled=true,trusted_hash="sha256:9162891a8f1d1790bc6752f46c9ca2a7e8cc0c6440d496ba9331eecc20a16865"}}}'
+  _acorn_run_codex() {
+    "$REAL_BIN" --enable hooks \
+      -c "$_acorn_codex_hooks" \
+      -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" \
+      "$@"
+  }
   export CODEX_TUI_RECORD_SESSION=1
   if [ -z "${CODEX_TUI_SESSION_LOG_PATH-}" ]; then
     _acorn_codex_ts="$(date +%s 2>/dev/null || echo "$$")"
@@ -93,14 +102,14 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
   # closes its inherited copy and blocks on the read end, so wrapper exit is
   # delivered by kernel EOF without a polling process.
   if ! _acorn_lifetime_dir=$(mktemp -d "${TMPDIR:-/tmp}/acorn-codex-lifetime.XXXXXX"); then
-    exec "$REAL_BIN" --enable hooks -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@"
-    exit 127
+    _acorn_run_codex "$@"
+    exit $?
   fi
   _acorn_lifetime_fifo="$_acorn_lifetime_dir/owner"
   if ! mkfifo "$_acorn_lifetime_fifo" || ! exec 9<>"$_acorn_lifetime_fifo"; then
     rm -rf "$_acorn_lifetime_dir"
-    exec "$REAL_BIN" --enable hooks -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@"
-    exit 127
+    _acorn_run_codex "$@"
+    exit $?
   fi
 
   _acorn_codex_wrapper_pid=$$
@@ -111,10 +120,6 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     _acorn_wrapper_pid="$_acorn_codex_wrapper_pid"
     _acorn_log="$CODEX_TUI_SESSION_LOG_PATH"
     _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify"
-    _acorn_last_turn_id=""
-    _acorn_last_approval_id=""
-    _acorn_last_exec_call_id=""
-    _acorn_approval_fallback_seq=0
 
     _acorn_i=0
     while kill -0 "$_acorn_wrapper_pid" 2>/dev/null &&
@@ -161,46 +166,17 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     while IFS= read -r _acorn_line; do
       case "$_acorn_line" in
         *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
-          "$_acorn_notify" start turn >/dev/null 2>&1 || true
-          ;;
-        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)
-          _acorn_turn_id=$(printf '%s\n' "$_acorn_line" | awk -F'"turn_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          [ -n "$_acorn_turn_id" ] || _acorn_turn_id="task_started"
-          if [ "$_acorn_turn_id" != "$_acorn_last_turn_id" ]; then
-            _acorn_last_turn_id="$_acorn_turn_id"
-            "$_acorn_notify" start turn >/dev/null 2>&1 || true
-          fi
-          ;;
-        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)
-          _acorn_approval_id=$(printf '%s\n' "$_acorn_line" | awk -F'"id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          [ -n "$_acorn_approval_id" ] || _acorn_approval_id=$(printf '%s\n' "$_acorn_line" | awk -F'"approval_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          [ -n "$_acorn_approval_id" ] || _acorn_approval_id=$(printf '%s\n' "$_acorn_line" | awk -F'"call_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          if [ -z "$_acorn_approval_id" ]; then
-            _acorn_approval_fallback_seq=$((_acorn_approval_fallback_seq + 1))
-            _acorn_approval_id="approval_request_${_acorn_approval_fallback_seq}"
-          fi
-          if [ "$_acorn_approval_id" != "$_acorn_last_approval_id" ]; then
-            _acorn_last_approval_id="$_acorn_approval_id"
-            "$_acorn_notify" needs_input >/dev/null 2>&1 || true
-          fi
-          ;;
-        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"exec_command_begin"'*)
-          _acorn_exec_call_id=$(printf '%s\n' "$_acorn_line" | awk -F'"call_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          if [ -n "$_acorn_exec_call_id" ]; then
-            if [ "$_acorn_exec_call_id" != "$_acorn_last_exec_call_id" ]; then
-              _acorn_last_exec_call_id="$_acorn_exec_call_id"
-              "$_acorn_notify" start tool >/dev/null 2>&1 || true
-            fi
-          else
-            "$_acorn_notify" start tool >/dev/null 2>&1 || true
-          fi
+          "$_acorn_notify" start preview >/dev/null 2>&1 || true
           ;;
       esac
     done < "$_acorn_watch_fifo"
   ) &
   ACORN_CODEX_WATCHER_PID=$!
 
-  "$REAL_BIN" --enable hooks -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@" 9>&-
+  "$REAL_BIN" --enable hooks \
+    -c "$_acorn_codex_hooks" \
+    -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" \
+    "$@" 9>&-
   ACORN_CODEX_STATUS=$?
   exec 9>&-
 
@@ -218,18 +194,18 @@ const CODEX_NOTIFY_BODY: &str = r#"#!/bin/sh
 input="${1-}"
 source="${2-hook}"
 case "$source" in
-  hook|turn|tool) ;;
+  hook|turn|tool|preview|legacy) ;;
   *) source="hook" ;;
 esac
 if [ -z "$input" ]; then
   input=$(cat 2>/dev/null || true)
 fi
+compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
 
 if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   [ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
 else
   [ -z "${ACORN_AGENT_INVOCATION_DEPTH-}" ] || exit 0
-  compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
   legacy_thread_id=$(printf '%s\n' "$compact_input" | grep -oE '(^|[,{])[[:space:]]*"thread-id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
   printf '%s\n' "$legacy_thread_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
   legacy_owner_thread_id=""
@@ -241,25 +217,50 @@ fi
 
 event="$input"
 case "$event" in
-  start|stop|needs_input|error)
+  start)
+    case "$source" in
+      turn|tool|hook) source="preview" ;;
+    esac
+    ;;
+  needs_input|stop|error)
+    source="legacy"
     ;;
   *)
     event=""
-    hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+    native_turn_id=""
+    hook_event_name=$(printf '%s\n' "$compact_input" | grep -oE '(^|[,{])[[:space:]]*"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
+    case "$hook_event_name" in
+      UserPromptSubmit|PreToolUse|PermissionRequest)
+        # These events also fire for subagents. Native owner events carry
+        # explicit null agent fields; fail closed if either field is absent or
+        # identifies a child agent. Stop is registered separately from
+        # SubagentStop and therefore needs no field filter.
+        printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"agent_id"[[:space:]]*:[[:space:]]*null([[:space:]]*[,}])' || exit 0
+        printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"agent_type"[[:space:]]*:[[:space:]]*null([[:space:]]*[,}])' || exit 0
+        ;;
+    esac
+    case "$hook_event_name" in
+      UserPromptSubmit|PreToolUse|PermissionRequest|Stop)
+        native_turn_id=$(printf '%s\n' "$compact_input" | grep -oE '(^|[,{])[[:space:]]*"turn_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
+        printf '%s\n' "$native_turn_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
+        ;;
+    esac
     # A completed turn leaves Codex resting and awaiting the user's next
     # instruction, so turn completion maps to needs_input like approval and
     # question events. Ready is reserved for sessions with no pending
     # conversation — the status poll derives it once the agent exits.
     case "$hook_event_name" in
-      Start|UserPromptSubmit) event="start" ;;
-      Stop) event="needs_input" ;;
-      PermissionRequest) event="needs_input" ;;
+      Start) event="start"; source="preview" ;;
+      UserPromptSubmit) event="start"; source="turn" ;;
+      PreToolUse) event="start"; source="tool" ;;
+      Stop) event="needs_input"; source="hook" ;;
+      PermissionRequest) event="needs_input"; source="hook" ;;
       Error) event="error" ;;
     esac
     if [ -z "$event" ]; then
       codex_type=$(printf '%s\n' "$input" | grep -oE '"type"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
       case "$codex_type" in
-        task_started) event="start" ;;
+        task_started) event="start"; source="preview" ;;
         agent-turn-complete)
           completion_thread_id=$(printf '%s\n' "$input" | grep -oE '"thread-id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
           printf '%s\n' "$completion_thread_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
@@ -275,9 +276,10 @@ case "$event" in
           fi
           [ "$owner_thread_id" = "$completion_thread_id" ] || exit 0
           event="needs_input"
+          source="legacy"
           ;;
-        task_complete|turn_complete) event="needs_input" ;;
-        exec_approval_request|apply_patch_approval_request|request_user_input) event="needs_input" ;;
+        task_complete|turn_complete) event="needs_input"; source="legacy" ;;
+        exec_approval_request|apply_patch_approval_request|request_user_input) event="needs_input"; source="legacy" ;;
       esac
     fi
     [ -n "$event" ] || exit 0
@@ -303,7 +305,11 @@ fi
 [ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
-payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source")
+if [ -n "${native_turn_id-}" ]; then
+  payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s","turn_id":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source" "$native_turn_id")
+else
+  payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source")
+fi
 curl -sf -X POST \
   -H 'Content-Type: application/json' \
   -H "X-Acorn-Agent-Hook-Token: $hook_token" \
@@ -359,7 +365,14 @@ fi
 # keep the invocation token only as a nesting marker and cannot reuse the
 # outer session's hook channel. A tokenless process with hook env is a provider
 # that survived an app update; any new wrapper below it must also fail closed.
-if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
+if [ "${ACORN_AGENT_INVOCATION_ROOT-}" = "1" ]; then
+  unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_INVOCATION_TOKEN ACORN_AGENT_INVOCATION_DEPTH
+  if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+    _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
+    export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
+    export ACORN_AGENT_INVOCATION_DEPTH=1
+  fi
+elif [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   _acorn_invocation_depth="${ACORN_AGENT_INVOCATION_DEPTH-1}"
   case "$_acorn_invocation_depth" in
     ''|*[!0-9]*) _acorn_invocation_depth=1 ;;
@@ -367,14 +380,6 @@ if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   export ACORN_AGENT_INVOCATION_DEPTH=$((_acorn_invocation_depth + 1))
   unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
   exec "$REAL_BIN" "$@"
-fi
-if [ "${ACORN_AGENT_INVOCATION_ROOT-}" = "1" ]; then
-  unset ACORN_AGENT_INVOCATION_ROOT
-  if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
-    _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
-    export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
-    export ACORN_AGENT_INVOCATION_DEPTH=1
-  fi
 elif [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
   unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
   exec "$REAL_BIN" "$@"
@@ -559,7 +564,14 @@ fi
 # keep the invocation token only as a nesting marker and cannot reuse the
 # outer session's hook channel. A tokenless process with hook env is a provider
 # that survived an app update; any new wrapper below it must also fail closed.
-if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
+if [ "${ACORN_AGENT_INVOCATION_ROOT-}" = "1" ]; then
+  unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_INVOCATION_TOKEN ACORN_AGENT_INVOCATION_DEPTH
+  if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+    _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
+    export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
+    export ACORN_AGENT_INVOCATION_DEPTH=1
+  fi
+elif [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   _acorn_invocation_depth="${ACORN_AGENT_INVOCATION_DEPTH-1}"
   case "$_acorn_invocation_depth" in
     ''|*[!0-9]*) _acorn_invocation_depth=1 ;;
@@ -567,14 +579,6 @@ if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   export ACORN_AGENT_INVOCATION_DEPTH=$((_acorn_invocation_depth + 1))
   unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
   exec "$REAL_BIN" "$@"
-fi
-if [ "${ACORN_AGENT_INVOCATION_ROOT-}" = "1" ]; then
-  unset ACORN_AGENT_INVOCATION_ROOT
-  if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
-    _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
-    export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
-    export ACORN_AGENT_INVOCATION_DEPTH=1
-  fi
 elif [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
   unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
   exec "$REAL_BIN" "$@"
@@ -1811,13 +1815,9 @@ done
         ] {
             let mut payload = owner_fields.clone();
             payload["hook_event_name"] = hook_event_name.into();
-            let posted = notify_payload_for_input(
-                CODEX_NOTIFY_NAME,
-                &[],
-                &payload.to_string(),
-                None,
-            )
-            .unwrap_or_else(|| panic!("{hook_event_name} did not post"));
+            let posted =
+                notify_payload_for_input(CODEX_NOTIFY_NAME, &[], &payload.to_string(), None)
+                    .unwrap_or_else(|| panic!("{hook_event_name} did not post"));
             assert_eq!(posted["event"], expected_event, "{hook_event_name}");
             assert_eq!(posted["source"], expected_source, "{hook_event_name}");
             assert_eq!(posted["turn_id"], turn_id, "{hook_event_name}");
@@ -1828,13 +1828,8 @@ done
             "turn_id": turn_id,
             "hook_event_name": "Stop",
         });
-        let posted = notify_payload_for_input(
-            CODEX_NOTIFY_NAME,
-            &[],
-            &stop.to_string(),
-            None,
-        )
-        .expect("main Stop posts");
+        let posted = notify_payload_for_input(CODEX_NOTIFY_NAME, &[], &stop.to_string(), None)
+            .expect("main Stop posts");
         assert_eq!(posted["event"], "needs_input");
         assert_eq!(posted["turn_id"], turn_id);
 
@@ -1844,12 +1839,7 @@ done
             payload["agent_id"] = "019f6322-41e5-7882-a99a-d186dff6739c".into();
             payload["agent_type"] = "worker".into();
             assert_eq!(
-                notify_payload_for_input(
-                    CODEX_NOTIFY_NAME,
-                    &[],
-                    &payload.to_string(),
-                    None,
-                ),
+                notify_payload_for_input(CODEX_NOTIFY_NAME, &[], &payload.to_string(), None,),
                 None,
                 "subagent {hook_event_name} must not own the Acorn session",
             );
@@ -1880,7 +1870,7 @@ done
         let post = codex_notify_post_for_payload(&payload, Some(owner));
         assert_eq!(
             post,
-            "{\"session_id\":\"session-1\",\"provider\":\"codex\",\"event\":\"needs_input\",\"source\":\"hook\"}\n",
+            "{\"session_id\":\"session-1\",\"provider\":\"codex\",\"event\":\"needs_input\",\"source\":\"legacy\"}\n",
             "the owner thread completion must still mark the session as waiting"
         );
     }
@@ -1916,12 +1906,15 @@ done
     #[cfg(unix)]
     #[test]
     fn codex_notify_keeps_explicit_needs_input_without_owner_binding() {
-        let post = codex_notify_post_for_payload("needs_input", None);
+        let posted = notify_payload_for_input(CODEX_NOTIFY_NAME, &["needs_input"], "", None)
+            .expect("an explicit legacy attention event posts without a native boundary");
 
-        assert!(
-            post.contains(r#""event":"needs_input""#),
-            "only legacy completion events require an owner binding: {post}"
-        );
+        assert_eq!(posted["event"], "needs_input");
+        assert_eq!(posted["source"], "legacy");
+        let preview = notify_payload_for_input(CODEX_NOTIFY_NAME, &["start", "turn"], "", None)
+            .expect("a surviving watcher start remains a compatibility preview");
+        assert_eq!(preview["event"], "start");
+        assert_eq!(preview["source"], "preview");
     }
 
     #[cfg(unix)]
@@ -2020,14 +2013,22 @@ done
                 String::from_utf8_lossy(&output.stderr)
             );
             let stdout = String::from_utf8_lossy(&output.stdout);
-            assert!(stdout.contains("hook_session=session-1\n"), "{provider}: {stdout}");
-            assert!(stdout.contains("invocation_depth=1\n"), "{provider}: {stdout}");
+            assert!(
+                stdout.contains("hook_session=session-1\n"),
+                "{provider}: {stdout}"
+            );
+            assert!(
+                stdout.contains("invocation_depth=1\n"),
+                "{provider}: {stdout}"
+            );
             assert!(
                 !stdout.contains("invocation_token=inherited-invocation\n"),
                 "{provider} reused an ancestor's owner token: {stdout}",
             );
             assert!(
-                stdout.contains("arg=--enable\n") || stdout.contains("arg=--settings\n") || provider == ANTIGRAVITY_WRAPPER_NAME,
+                stdout.contains("arg=--enable\n")
+                    || stdout.contains("arg=--settings\n")
+                    || provider == ANTIGRAVITY_WRAPPER_NAME,
                 "fresh {provider} root did not install its Acorn integration: {stdout}",
             );
         }

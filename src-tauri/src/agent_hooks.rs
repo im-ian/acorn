@@ -83,28 +83,80 @@ pub fn apply_agent_hook_event(
         }
     }
 
-    // A user submission is the new owner boundary even before Codex assigns
-    // it a turn id. Clear the previous id first so an asynchronous legacy
-    // completion cannot win the gap between UserTurn and task_started.
-    if event.provider == SessionAgentProvider::Codex
-        && event.event == AgentHookEventKind::Start
-        && event.source.as_deref() == Some("turn")
-    {
-        sessions.begin_hook_turn(&event.session_id, event.turn_id.as_deref());
+    // The TUI recorder is an asynchronous compatibility preview and can lag
+    // behind native UserPromptSubmit or Stop. PTY writes and native hooks own
+    // the real transition, so a delayed preview must never overwrite them.
+    if event.provider == SessionAgentProvider::Codex && event.source.as_deref() == Some("preview") {
+        return Ok(session.status);
     }
 
-    let scoped_codex_completion = if event.provider == SessionAgentProvider::Codex
+    let is_codex = event.provider == SessionAgentProvider::Codex;
+    let is_codex_native_source =
+        is_codex && matches!(event.source.as_deref(), Some("turn" | "tool" | "hook"));
+    let scoped_codex_turn_id = is_codex_native_source
+        .then_some(event.turn_id.as_deref())
+        .flatten()
+        .map(str::trim)
+        .filter(|turn_id| !turn_id.is_empty());
+    let is_codex_user_boundary = is_codex
+        && event.event == AgentHookEventKind::Start
+        && event.source.as_deref() == Some("turn");
+
+    // UserPromptSubmit is the authoritative owner boundary. The asynchronous
+    // TUI preview only makes Working visible sooner: allowing a delayed
+    // preview to clear this id could erase a native hook that already arrived.
+    if is_codex_user_boundary {
+        sessions.begin_hook_turn(&event.session_id, scoped_codex_turn_id);
+    } else if let Some(turn_id) = scoped_codex_turn_id {
+        let current_turn_id = sessions.hook_turn_id(&event.session_id);
+        let has_turn_boundary = sessions.has_hook_turn_boundary(&event.session_id);
+        match current_turn_id.as_deref() {
+            Some(current_turn_id) if current_turn_id != turn_id => {
+                return Err(format!(
+                    "stale Codex turn event for {}: current {}, got {}",
+                    event.session_id, current_turn_id, turn_id
+                ));
+            }
+            None if !has_turn_boundary
+                || (event.event == AgentHookEventKind::Start
+                    && event.source.as_deref() == Some("tool")) =>
+            {
+                // Runtime turn ownership is intentionally not persisted. The
+                // first trusted scoped event after an app restart reattaches
+                // the still-running turn; a PreToolUse may arrive before Stop.
+                // A tool start may also fill a pending id-less user boundary.
+                sessions.begin_hook_turn(&event.session_id, Some(turn_id));
+            }
+            _ => {}
+        }
+    }
+
+    if is_codex
         && event.event == AgentHookEventKind::NeedsInput
-        && event.source.as_deref() != Some("transcript")
+        && event.source.as_deref() == Some("legacy")
+        && sessions.has_hook_turn_boundary(&event.session_id)
     {
-        event
-            .turn_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|turn_id| !turn_id.is_empty())
-    } else {
-        None
-    };
+        return Err(format!(
+            "legacy Codex completion cannot override a native turn for {}",
+            event.session_id
+        ));
+    }
+
+    if is_codex_native_source
+        && event.event == AgentHookEventKind::NeedsInput
+        && scoped_codex_turn_id.is_none()
+        && sessions.has_hook_turn_boundary(&event.session_id)
+    {
+        return Err(format!(
+            "unscoped Codex completion cannot override a native turn for {}",
+            event.session_id
+        ));
+    }
+
+    let scoped_codex_completion = (is_codex_native_source
+        && event.event == AgentHookEventKind::NeedsInput)
+        .then_some(scoped_codex_turn_id)
+        .flatten();
     if let Some(turn_id) = scoped_codex_completion {
         let current_turn_id = sessions.hook_turn_id(&event.session_id);
         if current_turn_id.as_deref() != Some(turn_id) {
@@ -123,8 +175,9 @@ pub fn apply_agent_hook_event(
     // authoritative hook would make a missed line, owner rotation, or watcher
     // restart permanently hide the fresher transcript classification.
     // See `poll_defers_to_hook` in `commands`.
-    let hook_revision = (event.source.as_deref() != Some("transcript"))
-        .then(|| sessions.mark_hook_active(&event.session_id, event.provider));
+    let is_authoritative_hook = event.source.as_deref() != Some("transcript");
+    let hook_revision =
+        is_authoritative_hook.then(|| sessions.mark_hook_active(&event.session_id, event.provider));
 
     // The Codex JSONL watcher tags task and exec starts separately. This
     // runtime-only turn evidence lets the process poll distinguish a real
@@ -737,8 +790,70 @@ mod tests {
 
         assert_eq!(sessions.hook_revision(&session_id), 0);
         assert!(!sessions.is_hook_confirmed_this_run(&session_id));
-        assert!(sessions.has_hook_turn_boundary(&session_id));
+        assert!(!sessions.has_hook_turn_boundary(&session_id));
         assert_eq!(sessions.hook_turn_id(&session_id), None);
+
+        let turn_id = "019f6338-6250-7303-88a6-a7add31dba1d";
+        apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event: AgentHookEventKind::Start,
+                message: None,
+                source: Some("turn".to_string()),
+                turn_id: Some(turn_id.to_string()),
+            },
+        )
+        .expect("the native prompt establishes the turn");
+        let native_revision = sessions.hook_revision(&session_id);
+
+        apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event: AgentHookEventKind::Start,
+                message: None,
+                source: Some("preview".to_string()),
+                turn_id: None,
+            },
+        )
+        .expect("a delayed preview remains harmless");
+        assert_eq!(sessions.hook_revision(&session_id), native_revision);
+        assert_eq!(sessions.hook_turn_id(&session_id).as_deref(), Some(turn_id));
+
+        apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event: AgentHookEventKind::NeedsInput,
+                message: None,
+                source: Some("hook".to_string()),
+                turn_id: Some(turn_id.to_string()),
+            },
+        )
+        .expect("the native stop completes the turn");
+        let stop_revision = sessions.hook_revision(&session_id);
+
+        apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event: AgentHookEventKind::Start,
+                message: None,
+                source: Some("preview".to_string()),
+                turn_id: None,
+            },
+        )
+        .expect("a preview delayed past Stop remains harmless");
+        assert_eq!(sessions.hook_revision(&session_id), stop_revision);
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
     }
 
     #[test]
@@ -973,6 +1088,21 @@ mod tests {
         .expect_err("an unscoped legacy callback must not end a native turn");
 
         assert!(error.contains("legacy Codex completion"), "{error}");
+        let revision = sessions.hook_revision(&session_id);
+        let error = apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event: AgentHookEventKind::NeedsInput,
+                message: None,
+                source: Some("hook".to_string()),
+                turn_id: None,
+            },
+        )
+        .expect_err("an unscoped hook callback must not bypass native turn ownership");
+        assert!(error.contains("unscoped Codex completion"), "{error}");
+        assert_eq!(sessions.hook_revision(&session_id), revision);
         assert_eq!(
             sessions.get(&session_id).expect("session").status,
             SessionStatus::Working

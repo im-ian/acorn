@@ -330,6 +330,11 @@ fn inject_agent_hook_env(
     // This marker is the one-shot proof that a wrapper was reached directly
     // from a newly spawned Acorn PTY. Wrappers consume it before launching the
     // provider, so descendants cannot promote themselves to hook owners.
+    // A control session can launch another Acorn app from inside an existing
+    // provider invocation. The new PTY is nevertheless a fresh ownership
+    // boundary, so do not inherit the outer wrapper's token or nesting depth.
+    effective_env.remove("ACORN_AGENT_INVOCATION_TOKEN");
+    effective_env.remove("ACORN_AGENT_INVOCATION_DEPTH");
     effective_env.insert("ACORN_AGENT_INVOCATION_ROOT".to_string(), "1".to_string());
     effective_env
         .entry("ACORN_AGENT_HOOK_URL".to_string())
@@ -8718,10 +8723,7 @@ mod tests {
             "ACORN_AGENT_INVOCATION_TOKEN".to_string(),
             "ancestor-owner".to_string(),
         );
-        env.insert(
-            "ACORN_AGENT_INVOCATION_DEPTH".to_string(),
-            "3".to_string(),
-        );
+        env.insert("ACORN_AGENT_INVOCATION_DEPTH".to_string(), "3".to_string());
 
         inject_agent_hook_env(&mut env, &session, Some(&hooks));
 

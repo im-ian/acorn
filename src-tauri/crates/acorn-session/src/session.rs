@@ -504,9 +504,10 @@ impl SessionStore {
     }
 
     /// Reset per-turn tool evidence and bind the Codex turn id when Codex
-    /// reports a new task boundary. None is meaningful: the user's next turn
-    /// has begun, but Codex has not emitted its id yet, so any completion for
-    /// the previous id is stale.
+    /// reports a new task boundary. An empty sentinel is meaningful: the
+    /// user's next turn has begun, but Codex has not emitted its id yet, so
+    /// any completion for the previous id is stale. Keeping that boundary in
+    /// the map also distinguishes it from runtime state lost on app restart.
     pub fn begin_hook_turn(&self, id: &Uuid, turn_id: Option<&str>) {
         self.hook_tool_started_at.remove(id);
         match turn_id.map(str::trim).filter(|turn_id| !turn_id.is_empty()) {
@@ -514,7 +515,7 @@ impl SessionStore {
                 self.hook_turn_ids.insert(*id, turn_id.to_string());
             }
             None => {
-                self.hook_turn_ids.remove(id);
+                self.hook_turn_ids.insert(*id, String::new());
             }
         }
     }
@@ -523,6 +524,13 @@ impl SessionStore {
         self.hook_turn_ids
             .get(id)
             .map(|turn_id| turn_id.value().clone())
+            .filter(|turn_id| !turn_id.is_empty())
+    }
+
+    /// Whether this app run has observed a Codex turn boundary, including a
+    /// user submission for which Codex has not assigned a turn id yet.
+    pub fn has_hook_turn_boundary(&self, id: &Uuid) -> bool {
+        self.hook_turn_ids.contains_key(id)
     }
 
     /// Record the first exec tool observed in the current Codex turn. Keeping
