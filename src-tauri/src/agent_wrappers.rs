@@ -136,8 +136,8 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
   fi
   chmod 700 "$_acorn_lifetime_dir" >/dev/null 2>&1 || true
   # A successful capability probe only proves that Codex accepts the hook
-  # config. The notifier confirms each callback against the current receiver;
-  # the JSONL watcher suppresses only that callback's compatibility mapping.
+  # config. The notifier writes a short-lived, one-shot confirmation for each
+  # callback; the JSONL watcher suppresses only its matching duplicate.
   if [ "$_acorn_codex_native_hooks" = "1" ]; then
     export ACORN_CODEX_NATIVE_ACTIVE_FILE="$_acorn_lifetime_dir/native-active"
   else
@@ -180,7 +180,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     _acorn_native_hooks="$_acorn_codex_native_hooks"
     _acorn_native_active_file="${ACORN_CODEX_NATIVE_ACTIVE_FILE-}"
 
-    _acorn_native_confirmation_matches() {
+    _acorn_consume_native_confirmation() {
       [ -n "$_acorn_native_active_file" ] || return 1
       _acorn_native_capability="${1-}"
       [ -n "$_acorn_native_capability" ] || return 1
@@ -195,8 +195,41 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
         _acorn_current_hook_token="${ACORN_AGENT_HOOK_TOKEN-}"
       fi
       [ -n "$_acorn_current_hook_token" ] || return 1
-      _acorn_confirmed_hook_token=$(sed -n '1p' "$_acorn_native_capability_file" 2>/dev/null | tr -d '\r\n')
-      [ "$_acorn_confirmed_hook_token" = "$_acorn_current_hook_token" ]
+      IFS=' ' read -r _acorn_confirmed_hook_token _acorn_confirmed_at _acorn_marker_extra < "$_acorn_native_capability_file" || return 1
+      [ "$_acorn_confirmed_hook_token" = "$_acorn_current_hook_token" ] || return 1
+      [ -z "$_acorn_marker_extra" ] || return 1
+      case "$_acorn_confirmed_at" in
+        ''|*[!0-9]*) return 1 ;;
+      esac
+      _acorn_now=$(date +%s 2>/dev/null) || return 1
+      case "$_acorn_now" in
+        ''|*[!0-9]*) return 1 ;;
+      esac
+      _acorn_confirmation_age=$((_acorn_now - _acorn_confirmed_at))
+      if [ "$_acorn_confirmation_age" -lt 0 ] || [ "$_acorn_confirmation_age" -gt 10 ]; then
+        rm -f "$_acorn_native_capability_file" >/dev/null 2>&1 || true
+        return 1
+      fi
+      rm -f "$_acorn_native_capability_file" >/dev/null 2>&1
+    }
+
+    _acorn_clear_native_confirmations() {
+      _acorn_current_hook_token=""
+      if [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] &&
+         [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ]; then
+        _acorn_current_hook_token=$(sed -n '2p' "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" 2>/dev/null | tr -d '\r\n')
+      fi
+      if [ -z "$_acorn_current_hook_token" ]; then
+        _acorn_current_hook_token="${ACORN_AGENT_HOOK_TOKEN-}"
+      fi
+      [ -n "$_acorn_current_hook_token" ] || return 0
+      for _acorn_native_capability in "$@"; do
+        _acorn_native_capability_file="$_acorn_native_active_file.$_acorn_native_capability"
+        IFS=' ' read -r _acorn_confirmed_hook_token _acorn_ignored < "$_acorn_native_capability_file" 2>/dev/null || continue
+        if [ "$_acorn_confirmed_hook_token" = "$_acorn_current_hook_token" ]; then
+          rm -f "$_acorn_native_capability_file" >/dev/null 2>&1 || true
+        fi
+      done
     }
 
     _acorn_watch_dir="$_acorn_lifetime_dir/watcher"
@@ -240,27 +273,29 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
       case "$_acorn_line" in
         *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
           if [ "$_acorn_native_hooks" = "1" ] &&
-             _acorn_native_confirmation_matches turn; then
+             _acorn_consume_native_confirmation turn; then
             "$_acorn_notify" start preview >/dev/null 2>&1 || true
           else
+            _acorn_clear_native_confirmations tool permission stop
             "$_acorn_notify" start transcript >/dev/null 2>&1 || true
           fi
           ;;
         *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)
           if [ "$_acorn_native_hooks" != "1" ] ||
-             ! _acorn_native_confirmation_matches turn; then
+             ! _acorn_consume_native_confirmation turn; then
+            _acorn_clear_native_confirmations tool permission stop
             "$_acorn_notify" start transcript >/dev/null 2>&1 || true
           fi
           ;;
         *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)
           if [ "$_acorn_native_hooks" != "1" ] ||
-             ! _acorn_native_confirmation_matches permission; then
+             ! _acorn_consume_native_confirmation permission; then
             "$_acorn_notify" needs_input transcript >/dev/null 2>&1 || true
           fi
           ;;
         *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"exec_command_begin"'*)
           if [ "$_acorn_native_hooks" != "1" ] ||
-             ! _acorn_native_confirmation_matches tool; then
+             ! _acorn_consume_native_confirmation tool; then
             "$_acorn_notify" start transcript >/dev/null 2>&1 || true
           fi
           ;;
@@ -310,7 +345,7 @@ _acorn_current_hook_token() {
   printf '%s\n' "$_acorn_resolved_hook_token"
 }
 
-_acorn_native_confirmation_matches() {
+_acorn_consume_native_confirmation() {
   [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] || return 1
   _acorn_native_capability="${1-}"
   [ -n "$_acorn_native_capability" ] || return 1
@@ -318,8 +353,22 @@ _acorn_native_confirmation_matches() {
   [ -r "$_acorn_native_capability_file" ] || return 1
   _acorn_expected_hook_token=$(_acorn_current_hook_token)
   [ -n "$_acorn_expected_hook_token" ] || return 1
-  _acorn_confirmed_hook_token=$(sed -n '1p' "$_acorn_native_capability_file" 2>/dev/null | tr -d '\r\n')
-  [ "$_acorn_confirmed_hook_token" = "$_acorn_expected_hook_token" ]
+  IFS=' ' read -r _acorn_confirmed_hook_token _acorn_confirmed_at _acorn_marker_extra < "$_acorn_native_capability_file" || return 1
+  [ "$_acorn_confirmed_hook_token" = "$_acorn_expected_hook_token" ] || return 1
+  [ -z "$_acorn_marker_extra" ] || return 1
+  case "$_acorn_confirmed_at" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  _acorn_now=$(date +%s 2>/dev/null) || return 1
+  case "$_acorn_now" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  _acorn_confirmation_age=$((_acorn_now - _acorn_confirmed_at))
+  if [ "$_acorn_confirmation_age" -lt 0 ] || [ "$_acorn_confirmation_age" -gt 10 ]; then
+    rm -f "$_acorn_native_capability_file" >/dev/null 2>&1 || true
+    return 1
+  fi
+  rm -f "$_acorn_native_capability_file" >/dev/null 2>&1
 }
 
 if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
@@ -365,41 +414,44 @@ if [ "$native_contract" = "1" ]; then
       "$hook_url" 2>/dev/null)
   curl_status=$?
 
-  if [ "$curl_status" -eq 0 ] && [ "$hook_status" = "204" ]; then
-    marker_capability=""
-    case "$hook_event_name" in
-      UserPromptSubmit) marker_capability="turn" ;;
-      PreToolUse) marker_capability="tool" ;;
-      PermissionRequest) marker_capability="permission" ;;
-      Stop) marker_capability="stop" ;;
-    esac
+  marker_capability=""
+  case "$hook_event_name" in
+    UserPromptSubmit) marker_capability="turn" ;;
+    PreToolUse) marker_capability="tool" ;;
+    PermissionRequest) marker_capability="permission" ;;
+    Stop) marker_capability="stop" ;;
+  esac
+
+  if [ "$curl_status" -eq 0 ] &&
+     { [ "$hook_status" = "202" ] || [ "$hook_status" = "204" ] || [ "$hook_status" = "409" ]; }; then
     if [ -n "$marker_capability" ] && [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ]; then
+      if [ "$hook_status" = "204" ] && [ "$marker_capability" = "turn" ]; then
+        for prior_capability in tool permission stop; do
+          prior_file="$ACORN_CODEX_NATIVE_ACTIVE_FILE.$prior_capability"
+          IFS=' ' read -r prior_token _acorn_ignored < "$prior_file" 2>/dev/null || continue
+          if [ "$prior_token" = "$hook_token" ]; then
+            rm -f "$prior_file" >/dev/null 2>&1 || true
+          fi
+        done
+      fi
       marker_file="$ACORN_CODEX_NATIVE_ACTIVE_FILE.$marker_capability"
       marker_tmp="$marker_file.tmp.$$"
-      if (umask 077; printf '%s\n' "$hook_token" > "$marker_tmp") 2>/dev/null &&
+      marker_timestamp=$(date +%s 2>/dev/null || echo 0)
+      if (umask 077; printf '%s %s\n' "$hook_token" "$marker_timestamp" > "$marker_tmp") 2>/dev/null &&
          mv -f "$marker_tmp" "$marker_file" 2>/dev/null; then
         :
       else
         rm -f "$marker_tmp" >/dev/null 2>&1 || true
       fi
     fi
-  elif [ "$curl_status" -eq 0 ] && [ "$hook_status" = "202" ]; then
-    :
   elif [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ]; then
-    marker_capability=""
-    case "$hook_event_name" in
-      UserPromptSubmit) marker_capability="turn" ;;
-      PreToolUse) marker_capability="tool" ;;
-      PermissionRequest) marker_capability="permission" ;;
-      Stop) marker_capability="stop" ;;
-    esac
     marker_files="turn tool permission stop"
     if [ -n "$marker_capability" ]; then
       marker_files="$marker_capability"
     fi
     for marker_capability in $marker_files; do
       marker_file="$ACORN_CODEX_NATIVE_ACTIVE_FILE.$marker_capability"
-      marker_token=$(sed -n '1p' "$marker_file" 2>/dev/null | tr -d '\r\n')
+      IFS=' ' read -r marker_token _acorn_ignored < "$marker_file" 2>/dev/null || continue
       if [ "$marker_token" = "$hook_token" ]; then
         rm -f "$marker_file" >/dev/null 2>&1 || true
       fi
@@ -418,7 +470,7 @@ case "$event" in
   needs_input|stop|error)
     if [ "$source" != "transcript" ]; then
       if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] &&
-         ! _acorn_native_confirmation_matches stop; then
+         ! _acorn_consume_native_confirmation stop; then
         source="transcript"
       else
         source="legacy"
@@ -476,7 +528,7 @@ case "$event" in
           [ "$owner_thread_id" = "$completion_thread_id" ] || exit 0
           event="needs_input"
           if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] &&
-             ! _acorn_native_confirmation_matches stop; then
+             ! _acorn_consume_native_confirmation stop; then
             source="transcript"
           else
             source="legacy"
@@ -485,7 +537,7 @@ case "$event" in
         task_complete|turn_complete)
           event="needs_input"
           if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] &&
-             ! _acorn_native_confirmation_matches stop; then
+             ! _acorn_consume_native_confirmation stop; then
             source="transcript"
           else
             source="legacy"
@@ -494,7 +546,7 @@ case "$event" in
         exec_approval_request|apply_patch_approval_request|request_user_input)
           event="needs_input"
           if [ -n "${ACORN_CODEX_NATIVE_ACTIVE_FILE-}" ] &&
-             ! _acorn_native_confirmation_matches permission; then
+             ! _acorn_consume_native_confirmation permission; then
             source="transcript"
           else
             source="legacy"
@@ -1117,7 +1169,7 @@ mod tests {
     use super::*;
     use std::process::Command;
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     struct ScratchDir(PathBuf);
 
@@ -1594,7 +1646,7 @@ while [ ! -s "$ACORN_TEST_TAIL_PID" ] && [ "$_acorn_i" -lt 100 ]; do
 done
 [ -s "$ACORN_TEST_TAIL_PID" ] || exit 1
 if [ -n "$ACORN_TEST_NATIVE_CAPABILITY" ] && [ -n "$ACORN_TEST_NATIVE_CONFIRMATION" ]; then
-  (umask 077; printf '%s\n' "$ACORN_TEST_NATIVE_CONFIRMATION" > "$ACORN_CODEX_NATIVE_ACTIVE_FILE.$ACORN_TEST_NATIVE_CAPABILITY")
+  (umask 077; printf '%s %s\n' "$ACORN_TEST_NATIVE_CONFIRMATION" "$(date +%s)" > "$ACORN_CODEX_NATIVE_ACTIVE_FILE.$ACORN_TEST_NATIVE_CAPABILITY")
 fi
 printf '%s\n' "$ACORN_TEST_TUI_LINE" >> "$CODEX_TUI_SESSION_LOG_PATH"
 _acorn_i=0
@@ -1712,9 +1764,13 @@ exit 1
             fs::write(state_dir.join("codex.id"), format!("{owner_thread_id}\n")).unwrap();
         }
         if let Some(native_capability) = native_capability {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             fs::write(
                 format!("{}.{native_capability}", active_file.display()),
-                "token-1\n",
+                format!("token-1 {now}\n"),
             )
             .unwrap();
         }
@@ -2619,7 +2675,10 @@ done
             capability_file("permission").is_file(),
             "PermissionRequest must confirm only permission delivery"
         );
-        assert!(!capability_file("stop").exists());
+        assert!(
+            capability_file("stop").exists(),
+            "one callback must not alter another capability's confirmation"
+        );
 
         run_notify("UserPromptSubmit", "0", "204");
         assert!(

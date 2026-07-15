@@ -531,11 +531,16 @@ fn parse_raw_codex_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentH
         "Stop" => (AgentHookEventKind::NeedsInput, "hook", false),
         other => return Err(format!("unsupported Codex hook event: {other}")),
     };
-    if requires_explicit_owner
-        && (!payload.get("agent_id").is_some_and(Value::is_null)
-            || !payload.get("agent_type").is_some_and(Value::is_null))
-    {
-        return Ok(None);
+    if requires_explicit_owner {
+        match (payload.get("agent_id"), payload.get("agent_type")) {
+            (Some(Value::Null), Some(Value::Null)) => {}
+            (Some(Value::String(_)), Some(Value::String(_))) => return Ok(None),
+            _ => {
+                return Err(
+                    "Codex hook payload has malformed or incomplete agent ownership".to_string(),
+                )
+            }
+        }
     }
 
     Ok(Some(AgentHookEvent {
