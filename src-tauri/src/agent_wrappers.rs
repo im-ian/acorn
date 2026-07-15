@@ -85,7 +85,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
   (
     _acorn_log="$CODEX_TUI_SESSION_LOG_PATH"
     _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify"
-    _acorn_owner_turn_armed=0
+    _acorn_last_turn_id=""
     _acorn_last_approval_id=""
     _acorn_last_exec_call_id=""
     _acorn_approval_fallback_seq=0
@@ -121,21 +121,13 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
       case "$_acorn_line" in
         *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
           "$_acorn_notify" start turn >/dev/null 2>&1 || true
-          _acorn_owner_turn_armed=1
           ;;
         *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)
           _acorn_turn_id=$(printf '%s\n' "$_acorn_line" | awk -F'"turn_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          if [ "$_acorn_owner_turn_armed" -eq 1 ] &&
-             printf '%s\n' "$_acorn_turn_id" | grep -Eq '^[[:alnum:]_.:-]+$'; then
-            _acorn_owner_turn_armed=0
-            "$_acorn_notify" start turn "$_acorn_turn_id" >/dev/null 2>&1 || true
-          fi
-          ;;
-        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_complete"'*|\
-        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"turn_complete"'*)
-          _acorn_turn_id=$(printf '%s\n' "$_acorn_line" | awk -F'"turn_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
-          if printf '%s\n' "$_acorn_turn_id" | grep -Eq '^[[:alnum:]_.:-]+$'; then
-            "$_acorn_notify" needs_input turn "$_acorn_turn_id" >/dev/null 2>&1 || true
+          [ -n "$_acorn_turn_id" ] || _acorn_turn_id="task_started"
+          if [ "$_acorn_turn_id" != "$_acorn_last_turn_id" ]; then
+            _acorn_last_turn_id="$_acorn_turn_id"
+            "$_acorn_notify" start turn >/dev/null 2>&1 || true
           fi
           ;;
         *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)
@@ -186,14 +178,10 @@ const CODEX_NOTIFY_BODY: &str = r#"#!/bin/sh
 
 input="${1-}"
 source="${2-hook}"
-turn_id="${3-}"
 case "$source" in
   hook|turn|tool) ;;
   *) source="hook" ;;
 esac
-if ! printf '%s\n' "$turn_id" | grep -Eq '^[[:alnum:]_.:-]+$'; then
-  turn_id=""
-fi
 if [ -z "$input" ]; then
   input=$(cat 2>/dev/null || true)
 fi
@@ -233,9 +221,6 @@ case "$event" in
             owner_thread_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/codex.id" 2>/dev/null | tr -d '\r\n')
           fi
           [ "$owner_thread_id" = "$completion_thread_id" ] || exit 0
-          completion_turn_id=$(printf '%s\n' "$input" | grep -oE '"turn-id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
-          printf '%s\n' "$completion_turn_id" | grep -Eq '^[[:alnum:]_.:-]+$' || exit 0
-          turn_id="$completion_turn_id"
           event="needs_input"
           ;;
         task_complete|turn_complete) event="needs_input" ;;
@@ -265,11 +250,7 @@ fi
 [ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
-if [ -n "$turn_id" ]; then
-  payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s","turn_id":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source" "$turn_id")
-else
-  payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source")
-fi
+payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source")
 curl -sf -X POST \
   -H 'Content-Type: application/json' \
   -H "X-Acorn-Agent-Hook-Token: $hook_token" \
@@ -960,14 +941,6 @@ done
 
     #[cfg(unix)]
     fn codex_wrapper_notifications_for_tui_line(line: &str) -> (String, bool) {
-        codex_wrapper_notifications_for_tui_lines(line, 1)
-    }
-
-    #[cfg(unix)]
-    fn codex_wrapper_notifications_for_tui_lines(
-        lines: &str,
-        expected_notifications: usize,
-    ) -> (String, bool) {
         let base = ScratchDir::new("codex-tui-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
         let real_dir = base.path().join("real-bin");
@@ -979,13 +952,7 @@ done
         let real_tail = install_tail_probe(&real_dir);
         write_executable(
             &wrapper_dir.join("acorn-codex-notify"),
-            r#"#!/bin/sh
-printf '%s %s' "$1" "$2" >> "$ACORN_NOTIFY_CAPTURE"
-if [ -n "${3-}" ]; then
-  printf ' %s' "$3" >> "$ACORN_NOTIFY_CAPTURE"
-fi
-printf '\n' >> "$ACORN_NOTIFY_CAPTURE"
-"#,
+            "#!/bin/sh\nprintf '%s %s\\n' \"$1\" \"$2\" >> \"$ACORN_NOTIFY_CAPTURE\"\n",
         )
         .unwrap();
         write_executable(
@@ -998,9 +965,9 @@ while [ ! -s "$ACORN_TEST_TAIL_PID" ] && [ "$_acorn_i" -lt 100 ]; do
   sleep 0.05
 done
 [ -s "$ACORN_TEST_TAIL_PID" ] || exit 1
-printf '%s\n' "$ACORN_TEST_TUI_LINES" >> "$CODEX_TUI_SESSION_LOG_PATH"
+printf '%s\n' "$ACORN_TEST_TUI_LINE" >> "$CODEX_TUI_SESSION_LOG_PATH"
 _acorn_i=0
-while [ "$(wc -l < "$ACORN_NOTIFY_CAPTURE" 2>/dev/null || echo 0)" -lt "$ACORN_TEST_EXPECTED_NOTIFICATIONS" ] && [ "$_acorn_i" -lt 100 ]; do
+while [ ! -s "$ACORN_NOTIFY_CAPTURE" ] && [ "$_acorn_i" -lt 50 ]; do
   _acorn_i=$((_acorn_i + 1))
   sleep 0.02
 done
@@ -1016,11 +983,7 @@ done
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
-            .env("ACORN_TEST_TUI_LINES", lines)
-            .env(
-                "ACORN_TEST_EXPECTED_NOTIFICATIONS",
-                expected_notifications.to_string(),
-            )
+            .env("ACORN_TEST_TUI_LINE", line)
             .env("ACORN_TEST_REAL_TAIL", real_tail)
             .env("ACORN_TEST_TAIL_PID", &tail_pid_path)
             .env("CODEX_TUI_SESSION_LOG_PATH", &session_log_path)
@@ -1482,67 +1445,6 @@ done
 
     #[cfg(unix)]
     #[test]
-    fn codex_wrapper_binds_only_the_first_task_started_after_each_user_turn() {
-        let first_owner = "turn-owner-1";
-        let child = "turn-child-1";
-        let second_owner = "turn-owner-2";
-        let user_turn = r#"{"dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[]}}}"#;
-        let task_started = |turn_id: &str| {
-            r#"{"dir":"to_tui","kind":"codex_event","msg":{"type":"task_started","turn_id":"TURN_ID"}}"#
-                .replace("TURN_ID", turn_id)
-        };
-        let lines = [
-            user_turn.to_string(),
-            task_started(first_owner),
-            task_started(child),
-            user_turn.to_string(),
-            task_started(second_owner),
-        ]
-        .join("\n");
-        let (notifications, tail_alive) = codex_wrapper_notifications_for_tui_lines(&lines, 4);
-
-        assert_eq!(
-            notifications,
-            format!(
-                "start turn\nstart turn {first_owner}\nstart turn\nstart turn {second_owner}\n"
-            ),
-            "a child task_started must not replace the active owner turn",
-        );
-        assert!(
-            !tail_alive,
-            "the transcript tail must exit with the wrapper"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn codex_wrapper_scopes_tui_completions_to_their_turn_ids() {
-        let task_turn = "turn-1";
-        let complete_turn = "turn:2.3";
-        let completion = |kind: &str, turn_id: &str| {
-            r#"{"dir":"to_tui","kind":"codex_event","msg":{"type":"EVENT_KIND","turn_id":"TURN_ID"}}"#
-                .replace("EVENT_KIND", kind)
-                .replace("TURN_ID", turn_id)
-        };
-        let lines = [
-            completion("task_complete", task_turn),
-            completion("turn_complete", complete_turn),
-        ]
-        .join("\n");
-        let (notifications, tail_alive) = codex_wrapper_notifications_for_tui_lines(&lines, 2);
-
-        assert_eq!(
-            notifications,
-            format!("needs_input turn {task_turn}\nneeds_input turn {complete_turn}\n"),
-        );
-        assert!(
-            !tail_alive,
-            "the transcript tail must exit with the wrapper"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn codex_notify_ignores_nested_thread_completion() {
         let payload = r#"{"type":"agent-turn-complete","thread-id":"019f6322-41e5-7882-a99a-d186dff6739c","turn-id":"turn-1"}"#;
 
@@ -1565,44 +1467,9 @@ done
         let post = codex_notify_post_for_payload(&payload, Some(owner));
         assert_eq!(
             post,
-            "{\"session_id\":\"session-1\",\"provider\":\"codex\",\"event\":\"needs_input\",\"source\":\"hook\",\"turn_id\":\"turn-1\"}\n",
+            "{\"session_id\":\"session-1\",\"provider\":\"codex\",\"event\":\"needs_input\",\"source\":\"hook\"}\n",
             "the owner thread completion must still mark the session as waiting"
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn codex_notify_requires_a_json_safe_turn_id_for_legacy_completion() {
-        let owner = "019f631f-0bfc-76f1-9c1d-334be74958ca";
-        for payload in [
-            format!(r#"{{"type":"agent-turn-complete","thread-id":"{owner}"}}"#),
-            format!(
-                r#"{{"type":"agent-turn-complete","thread-id":"{owner}","turn-id":"bad\"id"}}"#
-            ),
-        ] {
-            assert_eq!(
-                codex_notify_post_for_payload(&payload, Some(owner)),
-                "",
-                "legacy completion without a safe turn id must fail closed: {payload}",
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn codex_notify_includes_optional_turn_id_for_ordered_tui_events() {
-        let turn_id = "turn:1.2-safe";
-        let scoped =
-            notify_payload_for_input(CODEX_NOTIFY_NAME, &["start", "turn", turn_id], "", None)
-                .expect("scoped turn event");
-        assert_eq!(
-            scoped.get("turn_id").and_then(|value| value.as_str()),
-            Some(turn_id)
-        );
-
-        let unscoped = notify_payload_for_input(CODEX_NOTIFY_NAME, &["start", "turn"], "", None)
-            .expect("unscoped turn event");
-        assert_eq!(unscoped.get("turn_id"), None);
     }
 
     #[cfg(unix)]
