@@ -492,6 +492,45 @@ mod tests {
     }
 
     #[test]
+    fn transcript_observations_do_not_disable_authoritative_status_polling() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Antigravity".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Antigravity);
+        let session_id = session.id;
+        sessions.insert(session);
+
+        let status = apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Antigravity,
+                event: AgentHookEventKind::NeedsInput,
+                message: None,
+                source: Some("transcript".to_string()),
+            },
+        )
+        .expect("transcript observation applies");
+
+        assert_eq!(status, SessionStatus::WaitingForInput);
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+        assert!(
+            !sessions.is_hook_active(&session_id),
+            "a transcript-derived event must not make the poll defer to itself"
+        );
+        assert_eq!(sessions.hook_provider(&session_id), None);
+    }
+
+    #[test]
     fn apply_agent_hook_event_accepts_provider_switch_from_resting_session() {
         let sessions = acorn_session::SessionStore::new();
         let mut session = Session::new(
