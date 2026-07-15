@@ -2208,11 +2208,8 @@ function SessionDisplaySection({
 }: {
   sessionDisplay: AcornSettings["sessionDisplay"];
   patch: (
-    patch: Partial<
-      Omit<AcornSettings["sessionDisplay"], "metadata" | "icons">
-    > & {
+    patch: Partial<Omit<AcornSettings["sessionDisplay"], "metadata">> & {
       metadata?: Partial<AcornSettings["sessionDisplay"]["metadata"]>;
-      icons?: Partial<AcornSettings["sessionDisplay"]["icons"]>;
     },
   ) => void;
 }) {
@@ -2284,49 +2281,6 @@ function SessionDisplaySection({
             )}
             checked={sessionDisplay.metadata.status}
             onChange={(v) => patch({ metadata: { status: v } })}
-          />
-        </div>
-      </Field>
-      <Field
-        label={st(t, "settings.appearance.sessionDisplay.icons.label")}
-        hint={st(t, "settings.appearance.sessionDisplay.icons.hint")}
-      >
-        <div className="flex flex-col gap-1">
-          <CheckboxRow
-            label={st(
-              t,
-              "settings.appearance.sessionDisplay.icons.statusDot.label",
-            )}
-            description={st(
-              t,
-              "settings.appearance.sessionDisplay.icons.statusDot.description",
-            )}
-            checked={sessionDisplay.icons.statusDot}
-            onChange={(v) => patch({ icons: { statusDot: v } })}
-          />
-          <CheckboxRow
-            label={st(
-              t,
-              "settings.appearance.sessionDisplay.icons.agentProvider.label",
-            )}
-            description={st(
-              t,
-              "settings.appearance.sessionDisplay.icons.agentProvider.description",
-            )}
-            checked={sessionDisplay.icons.agentProvider}
-            onChange={(v) => patch({ icons: { agentProvider: v } })}
-          />
-          <CheckboxRow
-            label={st(
-              t,
-              "settings.appearance.sessionDisplay.icons.sessionKind.label",
-            )}
-            description={st(
-              t,
-              "settings.appearance.sessionDisplay.icons.sessionKind.description",
-            )}
-            checked={sessionDisplay.icons.sessionKind}
-            onChange={(v) => patch({ icons: { sessionKind: v } })}
           />
         </div>
       </Field>

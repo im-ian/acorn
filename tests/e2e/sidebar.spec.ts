@@ -3097,28 +3097,42 @@ test.describe("sidebar: project lifecycle", () => {
     expect(localCall?.parentPane).not.toBeNull();
   });
 
-  test("local chat sessions show agent provider icons", async ({
+  test("removed icon preferences cannot hide inline session icons", async ({
     page,
     tauri,
   }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessionDisplay: {
+            icons: {
+              statusDot: false,
+              agentProvider: false,
+              sessionKind: false,
+            },
+          },
+        }),
+      );
+    });
     await tauri.handle("list_projects", () => []);
     await tauri.handle("list_sessions", () => [
       {
         id: "local-codex",
         name: "codex",
         repo_path: "/Users/tester",
-        worktree_path: "/Users/tester",
-        branch: "HEAD",
-        isolated: false,
+        worktree_path: "/Users/tester/.acorn/worktrees/codex",
+        branch: "feature/codex",
+        isolated: true,
         project_scoped: false,
         status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
-        kind: "regular",
+        kind: "control",
         owner: { kind: "user" },
         position: null,
-        in_worktree: false,
+        in_worktree: true,
         agent_provider: "codex",
       },
     ]);
@@ -3127,6 +3141,10 @@ test.describe("sidebar: project lifecycle", () => {
 
     const chats = page.getByRole("region", { name: "Local terminal sessions" });
     await expect(chats.getByRole("img", { name: "Codex" })).toBeVisible();
+    await expect(chats.getByLabel("worktree", { exact: true })).toBeVisible();
+    await expect(
+      chats.getByLabel("control session", { exact: true }),
+    ).toBeVisible();
     await expect(
       chats.getByRole("button", { name: /codex/i }),
     ).toBeVisible();

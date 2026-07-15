@@ -277,9 +277,6 @@ export function StatusBar() {
   const showAgentTokenUsage = useSettings(
     (s) => s.settings.statusBar.showAgentTokenUsage,
   );
-  const showAgentProviderIcons = useSettings(
-    (s) => s.settings.sessionDisplay.icons.agentProvider,
-  );
   const showMemory = useSettings((s) => s.settings.statusBar.showMemory);
   const active = sessions.find((s) => s.id === activeSessionId);
   const activeTokenProvider: AgentTokenProvider | null = active
@@ -443,7 +440,6 @@ export function StatusBar() {
               <span className="text-fg-muted/50">|</span>
               <AgentTokenUsageBadge
                 provider={activeTokenProvider}
-                showProviderIcon={showAgentProviderIcons}
                 snapshot={tokenUsage}
               />
             </>
@@ -485,11 +481,9 @@ const TOKEN_WINDOWS: AgentTokenWindow[] = ["five_hour", "weekly"];
 
 function AgentTokenUsageBadge({
   provider,
-  showProviderIcon,
   snapshot,
 }: {
   provider: AgentTokenProvider;
-  showProviderIcon: boolean;
   snapshot: AgentTokenUsageSnapshot | null;
 }) {
   const t = useTranslation();
@@ -502,11 +496,7 @@ function AgentTokenUsageBadge({
         data-testid="agent-token-usage"
         className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded px-1 text-fg-muted"
       >
-        {showProviderIcon ? (
-          <AgentProviderIcon provider={provider} />
-        ) : (
-          <Gauge size={12} />
-        )}
+        <AgentProviderIcon provider={provider} />
         {summary}
       </span>
     </Tooltip>

@@ -254,7 +254,6 @@ async function bootCapturePage(page: Page, sceneName: SceneName) {
         sessionDisplay: {
           title: "name",
           metadata: { branch: true, workingDirectory: false, status: true },
-          icons: { statusDot: true, agentProvider: true, sessionKind: true },
           showDetailsOnHover: true
         }
       }));
