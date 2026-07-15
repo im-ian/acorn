@@ -375,6 +375,11 @@ pub struct SessionStore {
     /// Runtime-only: after an app restart, process-tree arbitration stays
     /// conservative until a fresh tagged tool event arrives.
     hook_tool_started_at: DashMap<Uuid, SystemTime>,
+    /// Codex turn currently owned by each Acorn session. Runtime-only and
+    /// deliberately cleared as soon as a new user turn starts, before Codex
+    /// assigns that turn an id. This lets delayed completion notifications
+    /// fail closed instead of overwriting the new turn's Working status.
+    hook_turn_ids: DashMap<Uuid, String>,
 }
 
 impl SessionStore {
@@ -479,11 +484,12 @@ impl SessionStore {
     /// the session's persisted `hook_active` flag so hook ownership survives
     /// an app restart. The persisted flag is idempotent; the runtime revision
     /// advances for every event.
-    pub fn mark_hook_active(&self, id: &Uuid, provider: SessionAgentProvider) {
-        {
+    pub fn mark_hook_active(&self, id: &Uuid, provider: SessionAgentProvider) -> u64 {
+        let revision = {
             let mut revision = self.hook_revisions.entry(*id).or_default();
             *revision = revision.saturating_add(1);
-        }
+            *revision
+        };
         self.hook_confirmed.insert(*id);
         if let Some(mut entry) = self.inner.get_mut(id) {
             if !entry.hook_active {
@@ -494,11 +500,29 @@ impl SessionStore {
             entry.hook_provider = Some(provider);
             entry.agent_provider = Some(provider);
         }
+        revision
     }
 
-    /// Reset per-turn tool evidence when Codex reports a new task boundary.
-    pub fn begin_hook_turn(&self, id: &Uuid) {
+    /// Reset per-turn tool evidence and bind the Codex turn id when Codex
+    /// reports a new task boundary. None is meaningful: the user's next turn
+    /// has begun, but Codex has not emitted its id yet, so any completion for
+    /// the previous id is stale.
+    pub fn begin_hook_turn(&self, id: &Uuid, turn_id: Option<&str>) {
         self.hook_tool_started_at.remove(id);
+        match turn_id.map(str::trim).filter(|turn_id| !turn_id.is_empty()) {
+            Some(turn_id) => {
+                self.hook_turn_ids.insert(*id, turn_id.to_string());
+            }
+            None => {
+                self.hook_turn_ids.remove(id);
+            }
+        }
+    }
+
+    pub fn hook_turn_id(&self, id: &Uuid) -> Option<String> {
+        self.hook_turn_ids
+            .get(id)
+            .map(|turn_id| turn_id.value().clone())
     }
 
     /// Record the first exec tool observed in the current Codex turn. Keeping
@@ -690,6 +714,7 @@ impl SessionStore {
         self.hook_confirmed.remove(id);
         self.hook_revisions.remove(id);
         self.hook_tool_started_at.remove(id);
+        self.hook_turn_ids.remove(id);
         self.inner
             .remove(id)
             .map(|(_, v)| v)
@@ -819,12 +844,17 @@ mod tests {
         store.mark_hook_tool_started_at(&session.id, started_at);
         assert_eq!(store.hook_tool_started_at(&session.id), Some(started_at));
 
-        store.begin_hook_turn(&session.id);
+        store.begin_hook_turn(&session.id, Some("turn-1"));
         assert_eq!(store.hook_tool_started_at(&session.id), None);
+        assert_eq!(store.hook_turn_id(&session.id).as_deref(), Some("turn-1"));
+
+        store.begin_hook_turn(&session.id, None);
+        assert_eq!(store.hook_turn_id(&session.id), None);
 
         store.mark_hook_tool_started_at(&session.id, started_at);
         store.remove(&session.id).expect("session exists");
         assert_eq!(store.hook_tool_started_at(&session.id), None);
+        assert_eq!(store.hook_turn_id(&session.id), None);
     }
 
     #[test]

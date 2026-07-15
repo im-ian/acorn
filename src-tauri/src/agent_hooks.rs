@@ -25,6 +25,7 @@ pub struct AgentHookEvent {
     pub event: AgentHookEventKind,
     pub message: Option<String>,
     pub source: Option<String>,
+    pub turn_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -82,6 +83,38 @@ pub fn apply_agent_hook_event(
         }
     }
 
+    // A user submission is the new owner boundary even before Codex assigns
+    // it a turn id. Clear the previous id first so an asynchronous legacy
+    // completion cannot win the gap between UserTurn and task_started.
+    if event.provider == SessionAgentProvider::Codex
+        && event.event == AgentHookEventKind::Start
+        && event.source.as_deref() == Some("turn")
+    {
+        sessions.begin_hook_turn(&event.session_id, event.turn_id.as_deref());
+    }
+
+    let scoped_codex_completion = if event.provider == SessionAgentProvider::Codex
+        && event.event == AgentHookEventKind::NeedsInput
+        && event.source.as_deref() != Some("transcript")
+    {
+        event
+            .turn_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|turn_id| !turn_id.is_empty())
+    } else {
+        None
+    };
+    if let Some(turn_id) = scoped_codex_completion {
+        let current_turn_id = sessions.hook_turn_id(&event.session_id);
+        if current_turn_id.as_deref() != Some(turn_id) {
+            return Err(format!(
+                "stale Codex turn completion for {}: current {:?}, got {}",
+                event.session_id, current_turn_id, turn_id
+            ));
+        }
+    }
+
     // Mark native hook channels live so the transcript-tail status poll
     // defers turn-boundary classification to them instead of clobbering a
     // just-set resting status (Ready/WaitingForInput) back to Working on its
@@ -90,29 +123,43 @@ pub fn apply_agent_hook_event(
     // authoritative hook would make a missed line, owner rotation, or watcher
     // restart permanently hide the fresher transcript classification.
     // See `poll_defers_to_hook` in `commands`.
-    if event.source.as_deref() != Some("transcript") {
-        sessions.mark_hook_active(&event.session_id, event.provider);
-    }
+    let hook_revision = (event.source.as_deref() != Some("transcript"))
+        .then(|| sessions.mark_hook_active(&event.session_id, event.provider));
 
     // The Codex JSONL watcher tags task and exec starts separately. This
     // runtime-only turn evidence lets the process poll distinguish a real
     // background command from helpers that live for the whole Codex session.
     // Generic native hook events intentionally do not reset this marker: they
     // arrive through a separate channel and can race the ordered JSONL tail.
-    if event.provider == SessionAgentProvider::Codex && event.event == AgentHookEventKind::Start {
-        match event.source.as_deref() {
-            Some("turn") => sessions.begin_hook_turn(&event.session_id),
-            Some("tool") => {
-                sessions.mark_hook_tool_started_at(&event.session_id, SystemTime::now())
-            }
-            _ => {}
-        }
+    if event.provider == SessionAgentProvider::Codex
+        && event.event == AgentHookEventKind::Start
+        && event.source.as_deref() == Some("tool")
+    {
+        sessions.mark_hook_tool_started_at(&event.session_id, SystemTime::now());
     }
 
     let status = event.event.session_status();
-    sessions
-        .refresh_status(&event.session_id, status)
-        .map_err(|err| err.to_string())?;
+    if let (Some(turn_id), Some(revision)) = (scoped_codex_completion, hook_revision) {
+        if sessions.hook_turn_id(&event.session_id).as_deref() != Some(turn_id) {
+            return Err(format!(
+                "stale Codex turn completion for {}: owner changed before apply",
+                event.session_id
+            ));
+        }
+        let applied = sessions
+            .refresh_status_if_hook_revision(&event.session_id, session.status, revision, status)
+            .map_err(|err| err.to_string())?;
+        if !applied {
+            return Err(format!(
+                "stale Codex turn completion for {}: superseded before apply",
+                event.session_id
+            ));
+        }
+    } else {
+        sessions
+            .refresh_status(&event.session_id, status)
+            .map_err(|err| err.to_string())?;
+    }
     Ok(status)
 }
 
@@ -478,6 +525,7 @@ mod tests {
                 event: AgentHookEventKind::NeedsInput,
                 message: None,
                 source: Some("hook".to_string()),
+                turn_id: None,
             },
         )
         .expect("event applies");
@@ -520,6 +568,7 @@ mod tests {
                 event: AgentHookEventKind::NeedsInput,
                 message: None,
                 source: Some("transcript".to_string()),
+                turn_id: None,
             },
         )
         .expect("transcript observation applies");
@@ -561,6 +610,7 @@ mod tests {
                 event: AgentHookEventKind::Start,
                 message: None,
                 source: Some("hook".to_string()),
+                turn_id: None,
             },
         )
         .expect("resting provider switch applies");
@@ -600,6 +650,7 @@ mod tests {
                 event: AgentHookEventKind::Start,
                 message: None,
                 source: Some("hook".to_string()),
+                turn_id: None,
             },
         )
         .expect_err("nested provider event is rejected");
@@ -634,6 +685,7 @@ mod tests {
                     event,
                     message: None,
                     source: Some(source.to_string()),
+                    turn_id: None,
                 },
             )
             .expect("event applies")
@@ -686,7 +738,10 @@ mod tests {
 
         let error = apply_json(event("needs_input", "hook", Some("turn-1")))
             .expect_err("a delayed completion from the previous turn is stale");
-        assert!(error.contains("stale Codex turn"), "unexpected error: {error}");
+        assert!(
+            error.contains("stale Codex turn"),
+            "unexpected error: {error}"
+        );
         assert_eq!(
             sessions.get(&session_id).expect("session").status,
             SessionStatus::Working
@@ -732,7 +787,10 @@ mod tests {
 
         let error = apply("needs_input", Some("turn-1"))
             .expect_err("the previous completion must not win the new-turn race");
-        assert!(error.contains("stale Codex turn"), "unexpected error: {error}");
+        assert!(
+            error.contains("stale Codex turn"),
+            "unexpected error: {error}"
+        );
         assert_eq!(
             sessions.get(&session_id).expect("session").status,
             SessionStatus::Working
