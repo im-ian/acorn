@@ -2118,6 +2118,71 @@ mod tests {
     }
 
     #[test]
+    fn logical_agent_counts_collapse_launchers_but_keep_nested_invocations() {
+        let cwd = PathBuf::from("/repo");
+        let other_cwd = PathBuf::from("/other");
+        let processes = vec![
+            (Pid::from_u32(10), None, AgentKind::Codex, Some(cwd.clone())),
+            (
+                Pid::from_u32(11),
+                Some(Pid::from_u32(10)),
+                AgentKind::Codex,
+                Some(cwd.clone()),
+            ),
+            (
+                Pid::from_u32(12),
+                Some(Pid::from_u32(10)),
+                AgentKind::Codex,
+                Some(cwd.clone()),
+            ),
+            (
+                Pid::from_u32(13),
+                Some(Pid::from_u32(12)),
+                AgentKind::Codex,
+                Some(cwd.clone()),
+            ),
+            (
+                Pid::from_u32(15),
+                Some(Pid::from_u32(14)),
+                AgentKind::Codex,
+                Some(cwd.clone()),
+            ),
+            (
+                Pid::from_u32(20),
+                None,
+                AgentKind::Claude,
+                Some(cwd.clone()),
+            ),
+            (
+                Pid::from_u32(21),
+                Some(Pid::from_u32(20)),
+                AgentKind::Claude,
+                Some(cwd.clone()),
+            ),
+            (
+                Pid::from_u32(22),
+                None,
+                AgentKind::Claude,
+                Some(other_cwd.clone()),
+            ),
+            (Pid::from_u32(30), None, AgentKind::Antigravity, None),
+            (
+                Pid::from_u32(31),
+                Some(Pid::from_u32(30)),
+                AgentKind::Antigravity,
+                None,
+            ),
+        ];
+
+        let (claude, codex, antigravity) = logical_agent_process_counts(&processes);
+
+        assert_eq!(codex.get(&cwd), Some(&2));
+        assert_eq!(claude.get(&cwd), Some(&1));
+        assert_eq!(claude.get(&other_cwd), Some(&1));
+        assert_eq!(antigravity, 1);
+    }
+
+    #[test]
     fn session_owner_scope_preserves_sibling_top_level_agents() {
         let root = Pid::from_u32(1);
         let codex = Pid::from_u32(2);
