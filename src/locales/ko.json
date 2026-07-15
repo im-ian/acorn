@@ -1486,6 +1486,8 @@
       "copyAbsolutePath": "절대 경로 복사",
       "openDetail": "상세 열기",
       "openInBrowser": "브라우저에서 열기",
+      "openSession": "세션 열기",
+      "openSessionWithName": "세션 열기({name})",
       "copyPrNumber": "PR 번호 복사",
       "copyIssueNumber": "이슈 번호 복사",
       "copyUrl": "URL 복사",

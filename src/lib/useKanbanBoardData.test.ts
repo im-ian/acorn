@@ -38,11 +38,13 @@ import {
   pickPullRequestForBranch,
   pickPullRequestForBranches,
   pruneKanbanRepoRequestSequences,
-  readKanbanPrBranchLinks,
   summarizeDiffStats,
   useKanbanBoardData,
-  writeKanbanPrBranchLinks,
 } from "./useKanbanBoardData";
+import {
+  readSessionPullRequestBranchLinks,
+  writeSessionPullRequestBranchLinks,
+} from "./sessionPullRequestLinks";
 import type { PullRequestInfo, PullRequestListing, Session } from "./types";
 
 function deferred<T>() {
@@ -140,18 +142,18 @@ describe("kanban PR branch links", () => {
   beforeEach(() => localStorage.clear());
 
   it("persists the PR branch independently from the live checkout", () => {
-    writeKanbanPrBranchLinks({
+    writeSessionPullRequestBranchLinks({
       session: { repoPath: "/repo", headBranch: "feat/x" },
     });
 
-    expect(readKanbanPrBranchLinks()).toEqual({
+    expect(readSessionPullRequestBranchLinks()).toEqual({
       session: { repoPath: "/repo", headBranch: "feat/x" },
     });
   });
 
   it("ignores corrupt persisted links", () => {
     localStorage.setItem("acorn:workspace-kanban:pr-branch-links:v1", "{");
-    expect(readKanbanPrBranchLinks()).toEqual({});
+    expect(readSessionPullRequestBranchLinks()).toEqual({});
   });
 });
 
