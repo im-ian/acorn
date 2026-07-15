@@ -2016,7 +2016,7 @@ printf '%s\n' "$@" > "$ACORN_ARGS_CAPTURE"
         fs::create_dir_all(&real_dir).unwrap();
         write_executable(
             &real_dir.join("codex"),
-            "#!/bin/sh\nprintf 'record=%s\\nlog=%s\\n' \"${CODEX_TUI_RECORD_SESSION-}\" \"${CODEX_TUI_SESSION_LOG_PATH-}\"\n",
+            "#!/bin/sh\nprintf 'record=%s\\nlog=%s\\nnative=%s\\n' \"${CODEX_TUI_RECORD_SESSION-}\" \"${CODEX_TUI_SESSION_LOG_PATH-}\" \"${ACORN_CODEX_NATIVE_ACTIVE_FILE-}\"\n",
         )
         .unwrap();
 
@@ -2030,12 +2030,16 @@ printf '%s\n' "$@" > "$ACORN_ARGS_CAPTURE"
             .env("ACORN_AGENT_INVOCATION_DEPTH", "1")
             .env("CODEX_TUI_RECORD_SESSION", "1")
             .env("CODEX_TUI_SESSION_LOG_PATH", "/tmp/outer-codex.jsonl")
+            .env("ACORN_CODEX_NATIVE_ACTIVE_FILE", "/tmp/outer-native-active")
             .env_remove("ACORN_AGENT_INVOCATION_ROOT")
             .output()
             .unwrap();
 
         assert!(output.status.success());
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "record=\nlog=\n");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "record=\nlog=\nnative=\n"
+        );
     }
 
     #[cfg(unix)]

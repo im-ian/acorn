@@ -8737,6 +8737,10 @@ mod tests {
             "CODEX_TUI_SESSION_LOG_PATH".to_string(),
             "/tmp/outer-codex.jsonl".to_string(),
         );
+        env.insert(
+            "ACORN_CODEX_NATIVE_ACTIVE_FILE".to_string(),
+            "/tmp/outer-native-active".to_string(),
+        );
 
         inject_agent_hook_env(&mut env, &session, Some(&hooks));
 
@@ -8761,6 +8765,7 @@ mod tests {
         assert!(!env.contains_key("ACORN_AGENT_INVOCATION_DEPTH"));
         assert!(!env.contains_key("CODEX_TUI_RECORD_SESSION"));
         assert!(!env.contains_key("CODEX_TUI_SESSION_LOG_PATH"));
+        assert!(!env.contains_key("ACORN_CODEX_NATIVE_ACTIVE_FILE"));
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_PROVIDER"),
             Some(&"codex".to_string())
