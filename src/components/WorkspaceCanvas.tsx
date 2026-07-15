@@ -7,6 +7,7 @@ import {
   RotateCcw,
   Scan,
   Terminal as TerminalIcon,
+  Undo2,
 } from "lucide-react";
 import {
   memo,
@@ -26,6 +27,7 @@ import {
 import { basename } from "../lib/pathUtils";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import type { Session, SessionStatus } from "../lib/types";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   WORKSPACE_CANVAS_MAX_ZOOM,
@@ -46,6 +48,7 @@ import {
 import { useAppStore } from "../store";
 import { Button, IconButton, StatusDot, type StatusTone } from "./ui";
 import { Tooltip } from "./Tooltip";
+import { WorkspaceCanvasMinimap } from "./WorkspaceCanvasMinimap";
 
 type WorkspaceCanvasTranslationKey = Extract<
   TranslationKey,
@@ -130,6 +133,7 @@ export function WorkspaceCanvas({
   sessions,
 }: WorkspaceCanvasProps) {
   const t = useTranslation();
+  const showToast = useToasts((state) => state.show);
   const rootRef = useRef<HTMLElement | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const cancelPanRef = useRef<(() => void) | null>(null);
@@ -148,17 +152,27 @@ export function WorkspaceCanvas({
     () => terminalSessions.map((session) => session.id),
     [terminalSessions],
   );
-  const reconciliationIds =
-    sessions.length === 0 ? workspaceSessionIds : sessionIds;
-  const reconciliationIdsKey = reconciliationIds.join("\0");
+  const reconciliationIdsKey = (
+    sessions.length === 0 ? workspaceSessionIds : sessionIds
+  ).join("\0");
+  const reconciliationIds = useMemo(
+    () =>
+      reconciliationIdsKey.length > 0
+        ? reconciliationIdsKey.split("\0")
+        : [],
+    [reconciliationIdsKey],
+  );
   const [canvas, setCanvas] = useState<WorkspaceCanvasState>(() => {
     return reconcileWorkspaceCanvasState(persisted, reconciliationIds);
   });
   const canvasRef = useRef(canvas);
-  const containerSizeRef = useRef<WorkspaceCanvasSize>({
+  const resetUndoRef = useRef<WorkspaceCanvasState | null>(null);
+  const [canUndoReset, setCanUndoReset] = useState(false);
+  const [containerSize, setContainerSize] = useState<WorkspaceCanvasSize>({
     width: 0,
     height: 0,
   });
+  const containerSizeRef = useRef<WorkspaceCanvasSize>(containerSize);
   const workspaceLabel =
     useAppStore((state) => activeWorkspaceLabel(state, workspaceId)) ??
     t("workspace.mode.canvas");
@@ -166,6 +180,12 @@ export function WorkspaceCanvas({
   const applyCanvas = useCallback((next: WorkspaceCanvasState) => {
     canvasRef.current = next;
     setCanvas(next);
+  }, []);
+
+  const clearResetUndo = useCallback(() => {
+    if (!resetUndoRef.current) return;
+    resetUndoRef.current = null;
+    setCanUndoReset(false);
   }, []);
 
   const persistCanvas = useCallback(
@@ -201,12 +221,13 @@ export function WorkspaceCanvas({
       const current = canvasRef.current;
       const next = updater(current);
       if (workspaceCanvasStatesEqual(current, next)) return current;
+      clearResetUndo();
       applyCanvas(next);
       if (persist === "now") persistCanvas(next);
       if (persist === "soon") schedulePersist(next);
       return next;
     },
-    [applyCanvas, persistCanvas, schedulePersist],
+    [applyCanvas, clearResetUndo, persistCanvas, schedulePersist],
   );
 
   const fitAll = useCallback(
@@ -240,15 +261,21 @@ export function WorkspaceCanvas({
     const current = canvasRef.current;
     const next = reconcileWorkspaceCanvasState(current, reconciliationIds);
     if (workspaceCanvasStatesEqual(current, next)) return;
+    clearResetUndo();
     applyCanvas(next);
     persistCanvas(next);
-  }, [applyCanvas, persistCanvas, reconciliationIds, reconciliationIdsKey]);
+  }, [applyCanvas, clearResetUndo, persistCanvas, reconciliationIds]);
 
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const updateSize = (size: WorkspaceCanvasSize) => {
       containerSizeRef.current = size;
+      setContainerSize((current) =>
+        current.width === size.width && current.height === size.height
+          ? current
+          : size,
+      );
     };
     updateSize({ width: root.clientWidth, height: root.clientHeight });
     if (typeof ResizeObserver === "undefined") return;
@@ -466,10 +493,28 @@ export function WorkspaceCanvas({
   }, []);
 
   const resetLayout = useCallback(() => {
-    const next = resetWorkspaceCanvasState(sessionIds);
+    const previous = canvasRef.current;
+    const next = resetWorkspaceCanvasState(reconciliationIds);
+    if (workspaceCanvasStatesEqual(previous, next)) return;
+    resetUndoRef.current = previous;
+    setCanUndoReset(true);
     applyCanvas(next);
     persistCanvas(next);
-  }, [applyCanvas, persistCanvas, sessionIds]);
+    showToast(canvasText(t, "workspace.canvas.resetComplete"));
+  }, [applyCanvas, persistCanvas, reconciliationIds, showToast, t]);
+
+  const undoReset = useCallback(() => {
+    const previous = resetUndoRef.current;
+    if (!previous) return;
+    resetUndoRef.current = null;
+    setCanUndoReset(false);
+    const restored = reconcileWorkspaceCanvasState(
+      previous,
+      reconciliationIds,
+    );
+    applyCanvas(restored);
+    persistCanvas(restored);
+  }, [applyCanvas, persistCanvas, reconciliationIds]);
 
   const worldStyle: CSSProperties = {
     transform: `translate3d(${canvas.viewport.offset.x}px, ${canvas.viewport.offset.y}px, 0) scale(${canvas.viewport.zoom})`,
@@ -635,11 +680,47 @@ export function WorkspaceCanvas({
             <RotateCcw size={12} />
           </IconButton>
         </Tooltip>
+        {canUndoReset ? (
+          <Button
+            aria-label={canvasText(t, "workspace.canvas.undoReset")}
+            size="xs"
+            variant="accentSoft"
+            onClick={undoReset}
+          >
+            <Undo2 size={12} />
+            {canvasText(t, "workspace.canvas.undoReset")}
+          </Button>
+        ) : null}
       </div>
 
-      <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-full border border-border/80 bg-bg/75 px-3 py-1 font-mono text-[10px] text-fg-muted shadow-lg backdrop-blur">
-        {canvasText(t, "workspace.canvas.hint")}
-      </div>
+      {terminalSessions.length > 0 ? (
+        <WorkspaceCanvasMinimap
+          sessions={terminalSessions}
+          nodes={canvas.nodes}
+          viewport={canvas.viewport}
+          canvasSize={containerSize}
+          activeSessionId={activeSessionId}
+          regionLabel={canvasText(t, "workspace.canvas.overviewLabel")}
+          title={canvasText(t, "workspace.canvas.overviewTitle")}
+          sessionLabel={(name) =>
+            canvasText(t, "workspace.canvas.overviewSession", { name })
+          }
+          keyboardHint={canvasText(t, "workspace.canvas.overviewHint")}
+          collapseLabel={canvasText(t, "workspace.canvas.overviewCollapse")}
+          expandLabel={canvasText(t, "workspace.canvas.overviewExpand")}
+          onActivateSession={activateNode}
+          onViewportChange={(viewport, commit) =>
+            setViewport(viewport, commit ? "now" : "soon")
+          }
+          onCommitNavigation={() => persistCanvas(canvasRef.current)}
+        />
+      ) : null}
+
+      {containerSize.width >= 600 && containerSize.height >= 360 ? (
+        <div className="pointer-events-none absolute bottom-3 left-3 z-20 rounded-full border border-border/80 bg-bg/75 px-3 py-1 font-mono text-[10px] text-fg-muted shadow-lg backdrop-blur">
+          {canvasText(t, "workspace.canvas.hint")}
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -4,7 +4,10 @@ import {
   WORKSPACE_CANVAS_MIN_NODE_HEIGHT,
   WORKSPACE_CANVAS_MIN_NODE_WIDTH,
   WORKSPACE_CANVAS_MIN_ZOOM,
+  findWorkspaceCanvasMinimapNodeAtPoint,
   fitWorkspaceCanvasViewport,
+  centerWorkspaceCanvasViewportFromMinimapPoint,
+  layoutWorkspaceCanvasMinimap,
   normalizeWorkspaceCanvasState,
   reconcileWorkspaceCanvasState,
   revealWorkspaceCanvasNode,
@@ -110,5 +113,131 @@ describe("workspaceCanvas", () => {
         { width: 1_000, height: 700 },
       ),
     ).toEqual({ offset: { x: -348, y: 0 }, zoom: 1 });
+  });
+
+  it("maps nodes and the viewport into a minimap and recenters from it", () => {
+    const viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
+    const layout = layoutWorkspaceCanvasMinimap(
+      {
+        first: { x: 0, y: 0, width: 100, height: 100, zIndex: 1 },
+        second: { x: 300, y: 200, width: 100, height: 100, zIndex: 2 },
+      },
+      viewport,
+      { width: 200, height: 100 },
+      { width: 200, height: 100 },
+      0,
+    );
+
+    expect(layout.bounds).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+    expect(layout.scale).toBeCloseTo(1 / 3);
+    expect(layout.nodeRects.first.x).toBeCloseTo(100 / 3);
+    expect(layout.nodeRects.first.width).toBeCloseTo(100 / 3);
+    expect(layout.nodeRects.second.x).toBeCloseTo(400 / 3);
+    expect(layout.nodeRects.second.y).toBeCloseTo(200 / 3);
+    expect(layout.viewportRect.width).toBeCloseTo(200 / 3);
+    expect(layout.viewportRect.height).toBeCloseTo(100 / 3);
+
+    const centered = centerWorkspaceCanvasViewportFromMinimapPoint(
+      viewport,
+      { width: 200, height: 100 },
+      layout,
+      { x: 150, y: 250 / 3 },
+    );
+    expect(centered).toEqual({
+      offset: { x: -250, y: -200 },
+      zoom: 1,
+    });
+  });
+
+  it("includes a distant viewport in minimap bounds and stays finite before measurement", () => {
+    const nodes = {
+      first: { x: -200, y: -100, width: 100, height: 100, zIndex: 1 },
+    };
+    const viewport = { offset: { x: -1_000, y: -500 }, zoom: 1 };
+    const distant = layoutWorkspaceCanvasMinimap(
+      nodes,
+      viewport,
+      { width: 200, height: 100 },
+      { width: 160, height: 96 },
+    );
+
+    expect(distant.bounds).toEqual({
+      x: -200,
+      y: -100,
+      width: 1_400,
+      height: 700,
+    });
+
+    const unmeasured = layoutWorkspaceCanvasMinimap(
+      nodes,
+      viewport,
+      { width: 0, height: 0 },
+      { width: 160, height: 96 },
+    );
+    const centered = centerWorkspaceCanvasViewportFromMinimapPoint(
+      viewport,
+      { width: 0, height: 0 },
+      unmeasured,
+      { x: 80, y: 48 },
+    );
+    expect(
+      [
+        unmeasured.scale,
+        unmeasured.origin.x,
+        unmeasured.origin.y,
+        unmeasured.viewportRect.x,
+        unmeasured.viewportRect.y,
+        centered.offset.x,
+        centered.offset.y,
+      ].every(Number.isFinite),
+    ).toBe(true);
+  });
+
+  it("chooses the nearest visible marker when dense minimap targets overlap", () => {
+    const nodes = {
+      first: { x: 0, y: 0, width: 620, height: 400, zIndex: 1 },
+      second: { x: 660, y: 0, width: 620, height: 400, zIndex: 2 },
+      top: { x: 0, y: 440, width: 620, height: 400, zIndex: 4 },
+      underneath: { x: 0, y: 440, width: 620, height: 400, zIndex: 3 },
+    };
+    const rects = {
+      first: { x: 20, y: 20, width: 4, height: 4 },
+      second: { x: 30, y: 20, width: 4, height: 4 },
+      top: { x: 50, y: 50, width: 6, height: 6 },
+      underneath: { x: 50, y: 50, width: 6, height: 6 },
+    };
+
+    expect(
+      findWorkspaceCanvasMinimapNodeAtPoint(
+        ["first", "second"],
+        nodes,
+        rects,
+        { x: 22, y: 22 },
+      ),
+    ).toBe("first");
+    expect(
+      findWorkspaceCanvasMinimapNodeAtPoint(
+        ["first", "second"],
+        nodes,
+        rects,
+        { x: 32, y: 22 },
+      ),
+    ).toBe("second");
+    expect(
+      findWorkspaceCanvasMinimapNodeAtPoint(
+        ["underneath", "top"],
+        nodes,
+        rects,
+        { x: 53, y: 53 },
+      ),
+    ).toBe("top");
+    expect(
+      findWorkspaceCanvasMinimapNodeAtPoint(
+        ["first", "second"],
+        nodes,
+        rects,
+        { x: 100, y: 80 },
+      ),
+    ).toBeNull();
   });
 });
