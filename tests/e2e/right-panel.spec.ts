@@ -528,6 +528,83 @@ test.describe("right panel: tab switching", () => {
     ).toBeVisible();
   });
 
+  test("right-clicking a pull request opens the session for its head branch", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "main-session",
+        name: "Main work",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        position: 0,
+      },
+      {
+        id: "pr-session",
+        name: "PR work",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo/.acorn/worktrees/pr-work",
+        branch: "feature/pr-session",
+        isolated: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:06Z",
+        last_message: null,
+        position: 1,
+      },
+    ]);
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 91,
+          title: "Open the matching session",
+          state: "OPEN",
+          author: "im-ian",
+          head_branch: "feature/pr-session",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/91",
+          updated_at: "2026-05-19T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "PRs" }).click();
+
+    const prRow = page
+      .getByText("Open the matching session")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await prRow.click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Open session (PR work)" })
+      .click();
+
+    await expect(
+      page.locator('[data-tab-drag-handle="pr-session"]').locator(".."),
+    ).toHaveClass(/acorn-tab-active-bg/);
+  });
+
   test("posting from the pull request detail modal appends a conversation comment", async ({
     page,
     tauri,

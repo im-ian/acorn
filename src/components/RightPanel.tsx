@@ -38,6 +38,7 @@ import {
   MinusCircle,
   Play,
   Search,
+  SquareTerminal,
   Trash2,
   X,
 } from "lucide-react";
@@ -55,6 +56,8 @@ import {
 } from "../lib/hotkeys";
 import { joinPath } from "../lib/paths";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
+import { findSessionsForPullRequest } from "../lib/sessionContext";
+import { readSessionPullRequestBranchLinks } from "../lib/sessionPullRequestLinks";
 import {
   onPullRequestMutation,
   pullRequestMutationAffectsOpenContext,
@@ -2730,6 +2733,8 @@ function usePrRowActions(
   onMutated?: () => void,
 ) {
   const t = useTranslation();
+  const sessions = useAppStore((s) => s.sessions);
+  const openSessionSurface = useAppStore((s) => s.openSessionSurface);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -2895,6 +2900,42 @@ function usePrRowActions(
     setMenu({ x: e.clientX, y: e.clientY, pr });
   }
 
+  const matchingSessions = menu
+    ? findSessionsForPullRequest(
+        sessions,
+        repoPath,
+        menu.pr.head_branch,
+        readSessionPullRequestBranchLinks(),
+      )
+    : [];
+
+  const openSessionMenuItem: ContextMenuItem =
+    matchingSessions.length === 1
+      ? {
+          label: rtf(t, "rightPanel.menu.openSessionWithName", {
+            name: matchingSessions[0].name,
+          }),
+          icon: <SquareTerminal size={12} />,
+          onClick: () => openSessionSurface(matchingSessions[0].id),
+        }
+      : matchingSessions.length > 1
+        ? {
+            type: "submenu",
+            label: rt(t, "rightPanel.menu.openSession"),
+            icon: <SquareTerminal size={12} />,
+            children: matchingSessions.map((session) => ({
+              label: session.name,
+              icon: <SquareTerminal size={12} />,
+              onClick: () => openSessionSurface(session.id),
+            })),
+          }
+        : {
+            label: rt(t, "rightPanel.menu.openSession"),
+            icon: <SquareTerminal size={12} />,
+            disabled: true,
+            onClick: () => undefined,
+          };
+
   const overlays = (
     <>
       <ContextMenu
@@ -2914,6 +2955,7 @@ function usePrRowActions(
                   icon: <ExternalLink size={12} />,
                   onClick: () => void openPrInBrowser(menu.pr),
                 },
+                openSessionMenuItem,
                 { type: "separator" },
                 {
                   label: rt(t, "rightPanel.menu.copyPrNumber"),
