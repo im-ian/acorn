@@ -824,6 +824,10 @@ fn handle_connection(
     token: &str,
     handler: &HookEventHandler,
 ) -> io::Result<()> {
+    // Accepted sockets can inherit the listener's nonblocking mode. Restore
+    // blocking reads so a temporarily empty receive buffer is not mistaken
+    // for the end of an HTTP request.
+    stream.set_nonblocking(false)?;
     if let Ok(addr) = stream.peer_addr() {
         if !addr.ip().is_loopback() {
             let status = HttpStatus::Forbidden;
