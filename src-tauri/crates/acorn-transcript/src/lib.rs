@@ -110,6 +110,13 @@ enum MappingScope {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodexRolloutScope {
+    AnyTerminal,
+    SessionOwner,
+    ResumedOwner,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AgentProcessRole {
     Emit,
     Quarantine,
@@ -258,6 +265,26 @@ pub fn find_agent_run_transcript(
     }
 }
 
+/// Resolve a Codex rollout for an explicit `codex resume` invocation whose
+/// picker/flag did not expose the selected UUID in argv. A rollout retains its
+/// original `source.subagent` metadata when the user deliberately resumes it
+/// as a top-level conversation, so this narrow path allows such a writer.
+pub fn find_resumed_codex_run_transcript(
+    cwd: &Path,
+    process_start: SystemTime,
+) -> Option<(PathBuf, String)> {
+    let now = SystemTime::now();
+    let recency_cutoff = now
+        .checked_sub(Duration::from_secs(RECENCY_WINDOW_SECS))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    find_completed_resumed_codex_jsonl(
+        cwd,
+        codex_sessions_root().as_deref(),
+        recency_cutoff,
+        process_start,
+    )
+}
+
 fn scan_live_mappings(
     sessions: &[SessionPid],
     scope: MappingScope,
@@ -340,6 +367,7 @@ fn scan_live_mappings(
         cwd: PathBuf,
         start_time: SystemTime,
         explicit_transcript_id: Option<String>,
+        codex_resume_requested: bool,
         role: AgentProcessRole,
     }
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -377,6 +405,8 @@ fn scan_live_mappings(
                         AgentKind::Codex => codex_resume_id_from_process(proc),
                         AgentKind::Antigravity => None,
                     };
+                    let codex_resume_requested = process_match.kind == AgentKind::Codex
+                        && codex_resume_requested_from_process(proc);
                     candidates.push(Candidate {
                         session_id: session.session_id,
                         kind: process_match.kind,
@@ -384,6 +414,7 @@ fn scan_live_mappings(
                         cwd,
                         start_time,
                         explicit_transcript_id,
+                        codex_resume_requested,
                         role: process_match.role,
                     });
                 }
@@ -402,8 +433,21 @@ fn scan_live_mappings(
         }
     }
 
-    // Newest agent process first so it claims the newest matching transcript.
-    candidates.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+    // Codex owner scans must let the top-level process claim its transcript
+    // before descendant processes reserve theirs. A shell wrapper, node shim,
+    // and native binary can all contain a `codex` argv entry and therefore look
+    // like nested agent processes. Other providers and all-descendant scans
+    // retain newest-first ordering.
+    candidates.sort_by(|a, b| {
+        let is_codex_owner = |candidate: &Candidate| {
+            scope == MappingScope::SessionOwners
+                && candidate.kind == AgentKind::Codex
+                && candidate.role == AgentProcessRole::Emit
+        };
+        is_codex_owner(b)
+            .cmp(&is_codex_owner(a))
+            .then_with(|| b.start_time.cmp(&a.start_time))
+    });
 
     for c in candidates {
         let mut reserved = assigned.clone();
@@ -453,15 +497,39 @@ fn scan_live_mappings(
                     .as_deref()
                     .and_then(|id| find_codex_jsonl_for_uuid(codex_root.as_deref(), id, &assigned))
                     .or_else(|| {
-                        find_recent_codex_jsonl(
-                            &c.cwd,
-                            codex_root.as_deref(),
-                            recency_cutoff,
-                            c.start_time,
-                            now,
-                            allow_rotation,
-                            &reserved,
-                        )
+                        match codex_rollout_scope_for_mapping(
+                            scope,
+                            c.role,
+                            c.codex_resume_requested,
+                        ) {
+                            CodexRolloutScope::SessionOwner => find_recent_codex_owner_jsonl(
+                                &c.cwd,
+                                codex_root.as_deref(),
+                                recency_cutoff,
+                                c.start_time,
+                                now,
+                                allow_rotation,
+                                &reserved,
+                            ),
+                            CodexRolloutScope::ResumedOwner => find_recent_resumed_codex_jsonl(
+                                &c.cwd,
+                                codex_root.as_deref(),
+                                recency_cutoff,
+                                c.start_time,
+                                now,
+                                allow_rotation,
+                                &reserved,
+                            ),
+                            CodexRolloutScope::AnyTerminal => find_recent_codex_jsonl(
+                                &c.cwd,
+                                codex_root.as_deref(),
+                                recency_cutoff,
+                                c.start_time,
+                                now,
+                                allow_rotation,
+                                &reserved,
+                            ),
+                        }
                     })
             }
             AgentKind::Antigravity => {
@@ -666,6 +734,15 @@ fn codex_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
     codex_resume_id_from_args(&args)
 }
 
+fn codex_resume_requested_from_process(proc: &sysinfo::Process) -> bool {
+    let args = proc
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    codex_resume_requested_from_args(&args)
+}
+
 fn claude_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
     let args = proc
         .cmd()
@@ -685,6 +762,24 @@ fn codex_resume_id_from_args(args: &[String]) -> Option<String> {
     args.windows(2).find_map(|pair| {
         (pair[0] == "resume" && is_uuid_v4_shape(&pair[1])).then(|| pair[1].clone())
     })
+}
+
+fn codex_resume_requested_from_args(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "resume")
+}
+
+fn codex_rollout_scope_for_mapping(
+    scope: MappingScope,
+    role: AgentProcessRole,
+    codex_resume_requested: bool,
+) -> CodexRolloutScope {
+    if scope != MappingScope::SessionOwners || role != AgentProcessRole::Emit {
+        CodexRolloutScope::AnyTerminal
+    } else if codex_resume_requested {
+        CodexRolloutScope::ResumedOwner
+    } else {
+        CodexRolloutScope::SessionOwner
+    }
 }
 
 fn claude_projects_root() -> Option<PathBuf> {
@@ -952,6 +1047,71 @@ fn find_recent_codex_jsonl(
     allow_rotation: bool,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
+    find_recent_codex_jsonl_with_scope(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        CodexRolloutScope::AnyTerminal,
+    )
+}
+
+fn find_recent_codex_owner_jsonl(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+) -> Option<(PathBuf, String)> {
+    find_recent_codex_jsonl_with_scope(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        CodexRolloutScope::SessionOwner,
+    )
+}
+
+fn find_recent_resumed_codex_jsonl(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+) -> Option<(PathBuf, String)> {
+    find_recent_codex_jsonl_with_scope(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        CodexRolloutScope::ResumedOwner,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_recent_codex_jsonl_with_scope(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+    scope: CodexRolloutScope,
+) -> Option<(PathBuf, String)> {
     // Codex rollouts live under <root>/<year>/<month>/<day>/. The
     // filename does NOT encode the cwd (unlike claude), so we read each
     // candidate's first JSONL line and match its `payload.cwd` against
@@ -986,7 +1146,7 @@ fn find_recent_codex_jsonl(
         let Some(head) = read_codex_rollout_head(&path) else {
             continue;
         };
-        if head.cwd != cwd || !head.is_terminal_writer() {
+        if head.cwd != cwd || !head.is_writer_for_scope(scope) {
             continue;
         }
         let birth = meta.created().unwrap_or(mtime);
@@ -997,6 +1157,9 @@ fn find_recent_codex_jsonl(
             uuid,
         });
     }
+    if scope == CodexRolloutScope::ResumedOwner {
+        retain_resumed_codex_roots(&mut candidates, root, process_start);
+    }
     pick_anchor_or_rotate(candidates, process_start, now, allow_rotation)
 }
 
@@ -1006,9 +1169,40 @@ fn find_completed_codex_jsonl(
     recency_cutoff: SystemTime,
     process_start: SystemTime,
 ) -> Option<(PathBuf, String)> {
+    find_completed_codex_jsonl_with_scope(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        CodexRolloutScope::SessionOwner,
+    )
+}
+
+fn find_completed_resumed_codex_jsonl(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+) -> Option<(PathBuf, String)> {
+    find_completed_codex_jsonl_with_scope(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        CodexRolloutScope::ResumedOwner,
+    )
+}
+
+fn find_completed_codex_jsonl_with_scope(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    scope: CodexRolloutScope,
+) -> Option<(PathBuf, String)> {
     let root = sessions_root?;
     let day_dir = newest_subdir(&newest_subdir(&newest_subdir(root)?)?)?;
-    let mut candidates: Vec<(PathBuf, SystemTime, String)> = Vec::new();
+    let mut candidates: Vec<TranscriptCandidate> = Vec::new();
     for entry in std::fs::read_dir(&day_dir).ok()?.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
@@ -1022,19 +1216,27 @@ fn find_completed_codex_jsonl(
         let Some(head) = read_codex_rollout_head(&path) else {
             continue;
         };
-        if head.cwd != cwd || !head.is_terminal_writer() {
+        if head.cwd != cwd || !head.is_writer_for_scope(scope) {
             continue;
         }
         let Some(uuid) = extract_uuid_from_path(&path) else {
             continue;
         };
-        let created = meta.created().unwrap_or(mtime);
-        candidates.push((path, created, uuid));
+        let birth = meta.created().unwrap_or(mtime);
+        candidates.push(TranscriptCandidate {
+            path,
+            birth,
+            mtime,
+            uuid,
+        });
     }
-    candidates.sort_by_key(|candidate| time_distance(candidate.1, process_start));
+    if scope == CodexRolloutScope::ResumedOwner {
+        retain_resumed_codex_roots(&mut candidates, root, process_start);
+    }
+    candidates.sort_by_key(|candidate| time_distance(candidate.birth, process_start));
     if candidates.len() == 1 {
-        let (path, _, id) = candidates.pop()?;
-        Some((path, id))
+        let candidate = candidates.pop()?;
+        Some((candidate.path, candidate.uuid))
     } else {
         None
     }
@@ -1150,6 +1352,7 @@ fn find_completed_antigravity_jsonl(
 struct CodexRolloutHead {
     cwd: PathBuf,
     originator: Option<String>,
+    is_subagent: bool,
 }
 
 /// Rollout writers that share `~/.codex/sessions` with the terminal CLI but
@@ -1166,11 +1369,102 @@ impl CodexRolloutHead {
             .as_deref()
             .is_none_or(|originator| !CODEX_GUI_HOST_ORIGINATORS.contains(&originator))
     }
+
+    fn is_session_owner_writer(&self) -> bool {
+        self.is_terminal_writer() && !self.is_subagent
+    }
+
+    fn is_writer_for_scope(&self, scope: CodexRolloutScope) -> bool {
+        match scope {
+            CodexRolloutScope::SessionOwner => self.is_session_owner_writer(),
+            CodexRolloutScope::AnyTerminal | CodexRolloutScope::ResumedOwner => {
+                self.is_terminal_writer()
+            }
+        }
+    }
 }
 
-/// Read `cwd` (and `originator` when present) from a codex rollout's leading
-/// `session_meta` line. Both live at the top level in old formats and under
-/// `payload` in current ones.
+/// Return the owner declared by a Codex sub-agent rollout. Marker repair uses
+/// this relationship narrowly; arbitrary backwards transcript moves still
+/// pass the normal dormant-echo guard.
+pub fn codex_rollout_parent_thread_id(path: &Path) -> Option<String> {
+    use std::io::{BufRead, BufReader};
+    let file = std::fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    for line in reader.lines().map_while(Result::ok).take(20) {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        for scope in [Some(&value), value.get("payload")] {
+            let Some(scope) = scope else { continue };
+            let (is_subagent, parent_thread_id) = codex_subagent_metadata(scope);
+            if is_subagent && parent_thread_id.is_some() {
+                return parent_thread_id;
+            }
+        }
+    }
+    None
+}
+
+/// A deliberately resumed sub-agent rollout becomes the root conversation for
+/// this terminal run, but it keeps its original `source.subagent` metadata.
+/// Historical ancestors remain candidates so normal birth anchoring selects
+/// the youngest pre-existing rollout. Only descendants born by this process
+/// are removed. Process start times are second-granularity on supported hosts,
+/// so require a full second of separation before classifying a rollout as new.
+fn retain_resumed_codex_roots(
+    candidates: &mut Vec<TranscriptCandidate>,
+    sessions_root: &Path,
+    process_start: SystemTime,
+) {
+    let candidate_ids = candidates
+        .iter()
+        .map(|candidate| candidate.uuid.clone())
+        .collect::<HashSet<_>>();
+    candidates.retain(|candidate| {
+        let born_this_run = candidate
+            .birth
+            .duration_since(process_start)
+            .is_ok_and(|elapsed| elapsed >= Duration::from_secs(1));
+        !born_this_run
+            || !codex_rollout_has_candidate_ancestor(&candidate.path, &candidate_ids, sessions_root)
+    });
+}
+
+fn codex_rollout_has_candidate_ancestor(
+    rollout: &Path,
+    candidate_ids: &HashSet<String>,
+    sessions_root: &Path,
+) -> bool {
+    const MAX_ANCESTOR_DEPTH: usize = 16;
+
+    let mut current = rollout.to_path_buf();
+    let mut seen = HashSet::new();
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        let Some(parent_uuid) = codex_rollout_parent_thread_id(&current) else {
+            return false;
+        };
+        if !seen.insert(parent_uuid.clone()) {
+            return true;
+        }
+        if candidate_ids.contains(&parent_uuid) {
+            return true;
+        }
+        let Some((parent_path, _)) =
+            find_codex_jsonl_for_uuid(Some(sessions_root), &parent_uuid, &HashSet::new())
+        else {
+            return false;
+        };
+        current = parent_path;
+    }
+    true
+}
+
+/// Read owner metadata from a codex rollout's leading `session_meta` line.
+/// Fields live at the top level in old formats and under `payload` in current
+/// ones. Current sub-agent sources encode their parent beneath
+/// `source.subagent`; the payload-level parent id is retained as a fallback
+/// for compatible writers.
 fn read_codex_rollout_head(path: &Path) -> Option<CodexRolloutHead> {
     use std::io::{BufRead, BufReader};
     let f = std::fs::File::open(path).ok()?;
@@ -1185,17 +1479,46 @@ fn read_codex_rollout_head(path: &Path) -> Option<CodexRolloutHead> {
         for scope in [Some(&v), v.get("payload")] {
             let Some(scope) = scope else { continue };
             if let Some(cwd) = scope.get("cwd").and_then(|c| c.as_str()) {
+                let (is_subagent, _) = codex_subagent_metadata(scope);
                 return Some(CodexRolloutHead {
                     cwd: PathBuf::from(cwd),
                     originator: scope
                         .get("originator")
                         .and_then(|o| o.as_str())
                         .map(str::to_string),
+                    is_subagent,
                 });
             }
         }
     }
     None
+}
+
+fn codex_subagent_metadata(scope: &serde_json::Value) -> (bool, Option<String>) {
+    let source = scope.get("source");
+    let subagent_source = source.and_then(|source| source.get("subagent"));
+    let is_subagent =
+        subagent_source.is_some() || source.and_then(|source| source.as_str()) == Some("subagent");
+    let parent_thread_id = subagent_source
+        .and_then(find_parent_thread_id)
+        .or_else(|| {
+            is_subagent
+                .then(|| scope.get("parent_thread_id").and_then(|id| id.as_str()))
+                .flatten()
+        })
+        .map(str::to_string);
+    (is_subagent, parent_thread_id)
+}
+
+fn find_parent_thread_id(value: &serde_json::Value) -> Option<&str> {
+    match value {
+        serde_json::Value::Object(fields) => fields
+            .get("parent_thread_id")
+            .and_then(|value| value.as_str())
+            .or_else(|| fields.values().find_map(find_parent_thread_id)),
+        serde_json::Value::Array(values) => values.iter().find_map(find_parent_thread_id),
+        _ => None,
+    }
 }
 
 fn read_agent_transcript_cwd(path: &Path) -> Option<PathBuf> {
@@ -1490,6 +1813,43 @@ mod tests {
         let args = vec!["codex".to_string(), "resume".to_string(), id.to_string()];
 
         assert_eq!(codex_resume_id_from_args(&args).as_deref(), Some(id));
+    }
+
+    #[test]
+    fn codex_resume_mode_allows_explicitly_resumed_subagent_owner() {
+        for args in [
+            vec!["codex".into(), "resume".into()],
+            vec!["codex".into(), "resume".into(), "--last".into()],
+            vec!["codex".into(), "resume".into(), "named-session".into()],
+        ] {
+            assert!(codex_resume_requested_from_args(&args));
+        }
+        assert!(!codex_resume_requested_from_args(&["codex".into()]));
+
+        assert_eq!(
+            codex_rollout_scope_for_mapping(
+                MappingScope::SessionOwners,
+                AgentProcessRole::Emit,
+                false,
+            ),
+            CodexRolloutScope::SessionOwner,
+        );
+        assert_eq!(
+            codex_rollout_scope_for_mapping(
+                MappingScope::SessionOwners,
+                AgentProcessRole::Emit,
+                true,
+            ),
+            CodexRolloutScope::ResumedOwner,
+        );
+        assert_eq!(
+            codex_rollout_scope_for_mapping(
+                MappingScope::SessionOwners,
+                AgentProcessRole::Quarantine,
+                false,
+            ),
+            CodexRolloutScope::AnyTerminal,
+        );
     }
 
     #[test]
@@ -2562,6 +2922,121 @@ mod tests {
             resolved.map(|(_, id)| id).as_deref(),
             Some(parent_id),
             "a child rollout must not make the owner fallback ambiguous"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn completed_resumed_codex_resolution_accepts_subagent_rollout() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxsubagent-resumed-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+        let parent_id = "019e2001-3250-76b0-8410-2e073b38a2f1";
+        let parent = day.join(format!("rollout-2026-06-10T09-59-59-{parent_id}.jsonl"));
+        let mut parent_file = File::create(&parent).unwrap();
+        writeln!(
+            parent_file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": parent_id,
+                    "cwd": cwd,
+                    "originator": "codex-tui",
+                    "source": "cli"
+                }
+            })
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        let child_id = "019e2001-3250-76b0-8410-2e073b38a2f3";
+        let child = day.join(format!("rollout-2026-06-10T10-00-00-{child_id}.jsonl"));
+        let mut file = File::create(&child).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": child_id,
+                    "cwd": cwd,
+                    "originator": "codex-tui",
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": parent_id,
+                                "depth": 1
+                            }
+                        }
+                    }
+                }
+            })
+        )
+        .unwrap();
+        let process_start = SystemTime::now();
+        std::thread::sleep(Duration::from_millis(1100));
+        let nested_id = "019e2001-3250-76b0-8410-2e073b38a2f4";
+        let nested = day.join(format!("rollout-2026-06-10T10-00-01-{nested_id}.jsonl"));
+        let mut nested_file = File::create(&nested).unwrap();
+        writeln!(
+            nested_file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": nested_id,
+                    "cwd": cwd,
+                    "originator": "codex-tui",
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": child_id,
+                                "depth": 2
+                            }
+                        }
+                    }
+                }
+            })
+        )
+        .unwrap();
+        let now = fs::metadata(&nested).unwrap().modified().unwrap();
+        set_mtime(&child, now);
+        set_mtime(&parent, process_start - Duration::from_secs(1));
+
+        let resolved = find_completed_resumed_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+        );
+        assert_eq!(
+            resolved,
+            Some((child.clone(), child_id.to_string())),
+            "a newer child of the resumed rollout must not take over the owner marker"
+        );
+
+        set_mtime(&parent, now);
+        let live = find_recent_resumed_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            live,
+            Some((child, child_id.to_string())),
+            "a hot historical parent and newer child must not displace the resumed boundary"
         );
 
         fs::remove_dir_all(&root).unwrap();

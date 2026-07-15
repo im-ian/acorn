@@ -163,10 +163,26 @@ case "$event" in
       Error) event="error" ;;
     esac
     if [ -z "$event" ]; then
-      codex_type=$(printf '%s\n' "$input" | grep -oE '"type"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+      codex_type=$(printf '%s\n' "$input" | grep -oE '"type"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
       case "$codex_type" in
         task_started) event="start" ;;
-        agent-turn-complete|task_complete|turn_complete) event="needs_input" ;;
+        agent-turn-complete)
+          completion_thread_id=$(printf '%s\n' "$input" | grep -oE '"thread-id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
+          printf '%s\n' "$completion_thread_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
+
+          # Legacy Codex notify runs for sub-agent turns too. Only the thread
+          # Acorn already bound as this terminal session's owner may transition
+          # the whole session to Waiting. Fail closed on a missing or stale
+          # marker: retrying could deliver this completion after a newer turn
+          # has started and overwrite Working with a stale Waiting state.
+          owner_thread_id=""
+          if [ -n "${ACORN_AGENT_STATE_DIR-}" ] && [ -r "$ACORN_AGENT_STATE_DIR/codex.id" ]; then
+            owner_thread_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/codex.id" 2>/dev/null | tr -d '\r\n')
+          fi
+          [ "$owner_thread_id" = "$completion_thread_id" ] || exit 0
+          event="needs_input"
+          ;;
+        task_complete|turn_complete) event="needs_input" ;;
         exec_approval_request|apply_patch_approval_request|request_user_input) event="needs_input" ;;
       esac
     fi
@@ -790,8 +806,9 @@ exit 1
         assert!(notify.contains("\"source\":\"%s\""));
         // A completed turn awaits the user's next instruction, so turn
         // completion maps to needs_input like approval and question events.
-        assert!(notify
-            .contains("agent-turn-complete|task_complete|turn_complete) event=\"needs_input\""));
+        assert!(notify.contains("agent-turn-complete)"));
+        assert!(notify.contains("owner_thread_id"));
+        assert!(notify.contains("task_complete|turn_complete) event=\"needs_input\""));
         assert!(notify.contains("Stop) event=\"needs_input\""));
         assert!(notify.contains(
             "exec_approval_request|apply_patch_approval_request|request_user_input) event=\"needs_input\""
@@ -842,7 +859,7 @@ exit 1
 
     #[cfg(unix)]
     #[test]
-    fn codex_notify_waits_for_delayed_owner_binding() {
+    fn codex_notify_drops_completion_when_owner_binding_is_delayed() {
         let owner = "019f631f-0bfc-76f1-9c1d-334be74958ca";
         let stale = "019f6322-41e5-7882-a99a-d186dff6739c";
         let payload =
@@ -851,11 +868,11 @@ exit 1
         let post = codex_notify_post_for_payload_with_owner_update(
             &payload,
             Some(stale),
-            Some((owner, Duration::from_millis(100))),
+            Some((owner, Duration::from_secs(1))),
         );
-        assert!(
-            post.contains(r#""event":"needs_input""#),
-            "a valid fast completion must wait for the persister's owner update: {post}"
+        assert_eq!(
+            post, "",
+            "a delayed completion could overwrite a newer turn start and must fail closed"
         );
     }
 
