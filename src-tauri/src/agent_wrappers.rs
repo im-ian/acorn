@@ -316,6 +316,14 @@ case "$hook_event_name" in
       # existing Working state and any concurrent attention request.
       event=""
     else
+      completion_session_id=$(printf '%s\n' "$input" | grep -oE '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
+      printf '%s\n' "$completion_session_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
+
+      owner_session_id=""
+      if [ -n "${ACORN_AGENT_STATE_DIR-}" ] && [ -r "$ACORN_AGENT_STATE_DIR/claude.id" ]; then
+        owner_session_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/claude.id" 2>/dev/null | tr -d '\r\n')
+      fi
+      [ "$owner_session_id" = "$completion_session_id" ] || exit 0
       event="needs_input"
     fi
     ;;
@@ -488,13 +496,26 @@ exec "$REAL_BIN" "$@"
 
 const ANTIGRAVITY_NOTIFY_BODY: &str = r#"#!/bin/sh
 input="${1-}"
+completion_brain_id="${2-}"
 if [ -z "$input" ]; then
   input=$(cat 2>/dev/null || true)
 fi
 
+source="hook"
 event="$input"
 case "$event" in
-  start|stop|needs_input|error)
+  start|error)
+    source="transcript"
+    ;;
+  stop|needs_input)
+    source="transcript"
+    printf '%s\n' "$completion_brain_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
+
+    owner_brain_id=""
+    if [ -n "${ACORN_AGENT_STATE_DIR-}" ] && [ -r "$ACORN_AGENT_STATE_DIR/antigravity.id" ]; then
+      owner_brain_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/antigravity.id" 2>/dev/null | tr -d '\r\n')
+    fi
+    [ "$owner_brain_id" = "$completion_brain_id" ] || exit 0
     ;;
   *)
     event=""
@@ -519,6 +540,14 @@ case "$event" in
           # Stop is a pause, not a new turn boundary.
           event=""
         else
+          completion_brain_id=$(printf '%s\n' "$input" | grep -oE '"conversationId"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
+          printf '%s\n' "$completion_brain_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
+
+          owner_brain_id=""
+          if [ -n "${ACORN_AGENT_STATE_DIR-}" ] && [ -r "$ACORN_AGENT_STATE_DIR/antigravity.id" ]; then
+            owner_brain_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/antigravity.id" 2>/dev/null | tr -d '\r\n')
+          fi
+          [ "$owner_brain_id" = "$completion_brain_id" ] || exit 0
           event="needs_input"
         fi
         ;;
@@ -548,7 +577,7 @@ fi
 [ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
-payload=$(printf '{"session_id":"%s","provider":"antigravity","event":"%s","source":"hook"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event")
+payload=$(printf '{"session_id":"%s","provider":"antigravity","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source")
 curl -sf -X POST \
   -H 'Content-Type: application/json' \
   -H "X-Acorn-Agent-Hook-Token: $hook_token" \
