@@ -902,7 +902,7 @@ mod tests {
             }),
         ] {
             let response = post_raw_codex_hook(&hooks, session_id, &body.to_string());
-            assert!(response.starts_with("HTTP/1.1 204 No Content"));
+            assert!(response.starts_with("HTTP/1.1 202 Accepted"));
             assert!(
                 rx.try_recv().is_err(),
                 "unscoped or child event reached the owner handler"
@@ -917,6 +917,26 @@ mod tests {
         .to_string();
         let response = post_raw_codex_hook(&hooks, session_id, &invalid_turn);
         assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    }
+
+    #[test]
+    fn hook_server_reports_when_an_owner_event_cannot_be_applied() {
+        let hooks = AgentHookServer::start_with_result_handler(|_| {
+            Err("session is not ready to accept hook events".to_string())
+        })
+        .expect("hook server starts");
+        let session_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+            "turn_id": "019f6338-6250-7303-88a6-a7add31dba1d",
+            "hook_event_name": "UserPromptSubmit",
+            "agent_id": null,
+            "agent_type": null,
+        })
+        .to_string();
+
+        let response = post_raw_codex_hook(&hooks, session_id, &body);
+        assert!(response.starts_with("HTTP/1.1 409 Conflict"));
     }
 
     #[test]

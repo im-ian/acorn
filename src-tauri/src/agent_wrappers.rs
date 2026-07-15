@@ -1457,10 +1457,16 @@ done
     #[cfg(unix)]
     fn codex_wrapper_notifications_for_tui_line(
         line: &str,
-        confirm_native_hook: bool,
+        native_confirmation: Option<&str>,
     ) -> (String, bool) {
         let base = ScratchDir::new("codex-tui-event");
         let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        write_agent_hook_endpoint_at(
+            &wrapper_dir,
+            "http://127.0.0.1:1/agent-hook",
+            "token-1",
+        )
+        .unwrap();
         let real_dir = base.path().join("real-bin");
         fs::create_dir_all(&real_dir).unwrap();
 
@@ -1490,8 +1496,8 @@ while [ ! -s "$ACORN_TEST_TAIL_PID" ] && [ "$_acorn_i" -lt 100 ]; do
   sleep 0.05
 done
 [ -s "$ACORN_TEST_TAIL_PID" ] || exit 1
-if [ "$ACORN_TEST_CONFIRM_NATIVE" = "1" ]; then
-  (umask 077; : > "$ACORN_CODEX_NATIVE_ACTIVE_FILE")
+if [ -n "$ACORN_TEST_NATIVE_CONFIRMATION" ]; then
+  (umask 077; printf '%s\n' "$ACORN_TEST_NATIVE_CONFIRMATION" > "$ACORN_CODEX_NATIVE_ACTIVE_FILE")
 fi
 printf '%s\n' "$ACORN_TEST_TUI_LINE" >> "$CODEX_TUI_SESSION_LOG_PATH"
 _acorn_i=0
@@ -1514,8 +1520,8 @@ done
             .env("ACORN_NOTIFY_CAPTURE", &capture_path)
             .env("ACORN_TEST_TUI_LINE", line)
             .env(
-                "ACORN_TEST_CONFIRM_NATIVE",
-                if confirm_native_hook { "1" } else { "0" },
+                "ACORN_TEST_NATIVE_CONFIRMATION",
+                native_confirmation.unwrap_or_default(),
             )
             .env("ACORN_TEST_REAL_TAIL", real_tail)
             .env("ACORN_TEST_TAIL_PID", &tail_pid_path)
@@ -2308,7 +2314,7 @@ done
     #[test]
     fn codex_wrapper_maps_current_tui_user_turn_to_turn_start() {
         let line = r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
-        let (notifications, tail_alive) = codex_wrapper_notifications_for_tui_line(line, false);
+        let (notifications, tail_alive) = codex_wrapper_notifications_for_tui_line(line, None);
 
         assert_eq!(notifications, "start transcript\n");
         assert!(
@@ -2321,9 +2327,24 @@ done
     #[test]
     fn codex_wrapper_downgrades_tui_events_after_native_hook_confirmation() {
         let line = r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
-        let (notifications, tail_alive) = codex_wrapper_notifications_for_tui_line(line, true);
+        let (notifications, tail_alive) =
+            codex_wrapper_notifications_for_tui_line(line, Some("token-1"));
 
         assert_eq!(notifications, "start preview\n");
+        assert!(
+            !tail_alive,
+            "the transcript tail must exit with the wrapper"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_ignores_native_confirmation_from_an_old_receiver() {
+        let line = r#"{"ts":"2026-07-14T05:31:15.813Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Fix the bug."}]}}}"#;
+        let (notifications, tail_alive) =
+            codex_wrapper_notifications_for_tui_line(line, Some("old-token"));
+
+        assert_eq!(notifications, "start transcript\n");
         assert!(
             !tail_alive,
             "the transcript tail must exit with the wrapper"
@@ -2342,11 +2363,11 @@ done
         fs::create_dir_all(&fake_bin).unwrap();
         write_executable(
             &fake_bin.join("curl"),
-            "#!/bin/sh\ncat >/dev/null\nexit \"$ACORN_TEST_CURL_STATUS\"\n",
+            "#!/bin/sh\ncat >/dev/null\nprintf '%s' \"$ACORN_TEST_HTTP_STATUS\"\nexit \"$ACORN_TEST_CURL_STATUS\"\n",
         )
         .unwrap();
 
-        let run_notify = |curl_status: &str| {
+        let run_notify = |hook_event_name: &str, curl_status: &str, http_status: &str| {
             let mut child = Command::new(wrapper_dir.join(CODEX_NOTIFY_NAME))
                 .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
                 .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
@@ -2359,6 +2380,7 @@ done
                 .env("ACORN_CODEX_VERSION", "0.144.4")
                 .env("ACORN_CODEX_NATIVE_ACTIVE_FILE", &active_file)
                 .env("ACORN_TEST_CURL_STATUS", curl_status)
+                .env("ACORN_TEST_HTTP_STATUS", http_status)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -2368,21 +2390,60 @@ done
                 .stdin
                 .take()
                 .unwrap()
-                .write_all(br#"{"hook_event_name":"Stop","turn_id":"019f6338-6250-7303-88a6-a7add31dba1d"}"#)
+                .write_all(
+                    serde_json::json!({
+                        "hook_event_name": hook_event_name,
+                        "turn_id": "019f6338-6250-7303-88a6-a7add31dba1d",
+                        "agent_id": null,
+                        "agent_type": null,
+                    })
+                    .to_string()
+                    .as_bytes(),
+                )
                 .unwrap();
             assert!(child.wait().unwrap().success());
         };
 
-        run_notify("0");
-        assert!(
-            active_file.is_file(),
-            "a delivered native hook must confirm the runtime channel"
-        );
-
-        run_notify("1");
+        run_notify("UserPromptSubmit", "0", "204");
         assert!(
             !active_file.exists(),
-            "a rejected native hook must reactivate the transcript fallback"
+            "one lifecycle category must not confirm the full native channel"
+        );
+
+        run_notify("Stop", "0", "204");
+        assert!(
+            active_file.is_file(),
+            "applied start and completion hooks must confirm the runtime channel"
+        );
+        assert_eq!(fs::read_to_string(&active_file).unwrap(), "token-1\n");
+
+        run_notify("PermissionRequest", "0", "202");
+        assert!(
+            active_file.is_file(),
+            "an ignored child hook must not revoke an existing confirmation"
+        );
+
+        fs::remove_file(&active_file).unwrap();
+        let _ = fs::remove_file(format!("{}.start", active_file.display()));
+        let _ = fs::remove_file(format!("{}.needs-input", active_file.display()));
+        run_notify("PermissionRequest", "0", "202");
+        assert!(
+            !active_file.exists(),
+            "an ignored child hook must not confirm the runtime channel"
+        );
+
+        fs::write(&active_file, "token-1\n").unwrap();
+        run_notify("Stop", "0", "409");
+        assert!(
+            !active_file.exists(),
+            "a rejected owner hook must reactivate the transcript fallback"
+        );
+
+        fs::write(&active_file, "token-1\n").unwrap();
+        run_notify("Stop", "1", "000");
+        assert!(
+            !active_file.exists(),
+            "a failed native request must reactivate the transcript fallback"
         );
     }
 
