@@ -38,12 +38,6 @@ const CHAT_SESSION_STATE_CHANGED_EVENT: &str = "acorn:chat-session-state-changed
 const WORKTREE_IN_USE_BY_OTHER_SESSIONS: &str =
     "Close other sessions using this worktree before removing it.";
 const CODEX_TOOL_PROCESS_START_TOLERANCE: std::time::Duration = std::time::Duration::from_secs(1);
-const CODEX_IGNORED_ACTIVITY_HELPER_BASENAMES: &[&str] = &[
-    "node_repl",
-    "SkyComputerUseClient",
-    "codex-code-mode-host",
-    "acorn-codex-notify",
-];
 
 async fn run_blocking<T, F>(label: &'static str, f: F) -> AppResult<T>
 where
@@ -333,6 +327,15 @@ fn inject_agent_hook_env(
         return;
     };
 
+    // This marker is the one-shot proof that a wrapper was reached directly
+    // from a newly spawned Acorn PTY. Wrappers consume it before launching the
+    // provider, so descendants cannot promote themselves to hook owners.
+    // A control session can launch another Acorn app from inside an existing
+    // provider invocation. The new PTY is nevertheless a fresh ownership
+    // boundary, so do not inherit the outer wrapper's token or nesting depth.
+    effective_env.remove("ACORN_AGENT_INVOCATION_TOKEN");
+    effective_env.remove("ACORN_AGENT_INVOCATION_DEPTH");
+    effective_env.insert("ACORN_AGENT_INVOCATION_ROOT".to_string(), "1".to_string());
     effective_env
         .entry("ACORN_AGENT_HOOK_URL".to_string())
         .or_insert_with(|| hooks.hook_url().to_string());
@@ -5403,16 +5406,13 @@ fn detect_session_statuses_blocking(
             let live_agent_kind = live_agent.map(|(kind, _)| kind);
             let codex_tool_started_at =
                 parsed_id.and_then(|uuid| state.sessions.hook_tool_started_at(&uuid));
-            let codex_permission_waiting_at =
-                parsed_id.and_then(|uuid| state.sessions.codex_permission_waiting_at(&uuid));
-            let codex_activity_started_at = codex_permission_waiting_at.or(codex_tool_started_at);
             let live_codex_tool_child = matches!(live_agent_kind, Some(AgentKind::Codex))
                 && root_pid_value.is_some_and(|pid| {
                     live_codex_has_tool_descendant(
                         &sys,
                         &children,
                         Pid::from_u32(pid),
-                        codex_activity_started_at,
+                        codex_tool_started_at,
                     )
                 });
             // Resolve the live transcript via the persister's resume markers
@@ -5537,7 +5537,6 @@ fn detect_session_statuses_blocking(
                     hook_status,
                     live_agent_kind,
                     live_codex_tool_child,
-                    codex_permission_waiting_at.is_some(),
                 )
             } else {
                 detection.status
@@ -5702,9 +5701,17 @@ fn codex_live_transcript_fallback(
     let proc = sys.process(pid)?;
     let cwd = proc.cwd()?;
     let process_start = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(proc.start_time());
-    let Some((path, id)) =
+    let process_args = proc
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let resolved = if acorn_transcript::codex_resume_requested_from_args(&process_args) {
+        acorn_transcript::find_resumed_codex_run_transcript(cwd, process_start)
+    } else {
         acorn_transcript::find_agent_run_transcript(cwd, AgentKind::Codex, process_start)
-    else {
+    };
+    let Some((path, id)) = resolved else {
         tracing::debug!(
             %session_id,
             pid = pid.as_u32(),
@@ -5881,7 +5888,7 @@ fn live_codex_has_tool_descendant(
         },
         |pid| {
             sys.process(pid)
-                .is_some_and(is_codex_ignored_activity_process)
+                .is_some_and(is_codex_persistent_helper_process)
         },
         |pid| {
             sys.process(pid).is_some_and(|proc| {
@@ -5897,12 +5904,10 @@ fn hook_status_with_live_tool_activity(
     hook_status: SessionStatus,
     live_agent_kind: Option<AgentKind>,
     live_tool_child: bool,
-    permission_waiting: bool,
 ) -> SessionStatus {
     if live_tool_child
         && matches!(live_agent_kind, Some(AgentKind::Codex))
-        && (hook_status == SessionStatus::Ready
-            || (hook_status == SessionStatus::WaitingForInput && permission_waiting))
+        && hook_status == SessionStatus::Ready
     {
         SessionStatus::Working
     } else {
@@ -5910,17 +5915,10 @@ fn hook_status_with_live_tool_activity(
     }
 }
 
-fn is_codex_ignored_activity_process(proc: &sysinfo::Process) -> bool {
-    CODEX_IGNORED_ACTIVITY_HELPER_BASENAMES
-        .iter()
-        .any(|basename| process_basename_matches(proc, basename))
-}
-
-#[cfg(test)]
-fn is_codex_ignored_activity_basename(candidate: &str) -> bool {
-    CODEX_IGNORED_ACTIVITY_HELPER_BASENAMES
-        .iter()
-        .any(|target| process_basename_part_matches(candidate, target))
+fn is_codex_persistent_helper_process(proc: &sysinfo::Process) -> bool {
+    process_basename_matches(proc, "node_repl")
+        || process_basename_matches(proc, "SkyComputerUseClient")
+        || process_basename_matches(proc, "codex-code-mode-host")
 }
 
 /// BFS from `root` that returns on the FIRST pid the callback classifies.
@@ -6321,14 +6319,6 @@ mod status_hint_tests {
             |pid| pid == helper,
             |pid| pid == helper_child,
         ));
-    }
-
-    #[test]
-    fn acorn_codex_notifier_is_ignored_as_tool_activity() {
-        assert!(is_codex_ignored_activity_basename(
-            "/tmp/agent-wrappers/acorn-codex-notify"
-        ));
-        assert!(!is_codex_ignored_activity_basename("curl"));
     }
 
     #[test]
@@ -7072,12 +7062,11 @@ mod tests {
     }
 
     #[test]
-    fn live_tool_activity_resumes_only_a_codex_permission_wait() {
+    fn live_tool_activity_preserves_explicit_waiting() {
         assert_eq!(
             super::hook_status_with_live_tool_activity(
                 acorn_session::SessionStatus::WaitingForInput,
                 Some(super::AgentKind::Claude),
-                true,
                 true,
             ),
             acorn_session::SessionStatus::WaitingForInput
@@ -7085,9 +7074,8 @@ mod tests {
         assert_eq!(
             super::hook_status_with_live_tool_activity(
                 acorn_session::SessionStatus::WaitingForInput,
-                Some(super::AgentKind::Codex),
+                Some(super::AgentKind::Claude),
                 false,
-                true,
             ),
             acorn_session::SessionStatus::WaitingForInput
         );
@@ -7096,7 +7084,6 @@ mod tests {
                 acorn_session::SessionStatus::Ready,
                 Some(super::AgentKind::Codex),
                 true,
-                false,
             ),
             acorn_session::SessionStatus::Working
         );
@@ -7105,18 +7092,16 @@ mod tests {
                 acorn_session::SessionStatus::WaitingForInput,
                 Some(super::AgentKind::Codex),
                 true,
-                false,
             ),
             acorn_session::SessionStatus::WaitingForInput
         );
         assert_eq!(
             super::hook_status_with_live_tool_activity(
                 acorn_session::SessionStatus::WaitingForInput,
-                Some(super::AgentKind::Codex),
-                true,
+                Some(super::AgentKind::Antigravity),
                 true,
             ),
-            acorn_session::SessionStatus::Working
+            acorn_session::SessionStatus::WaitingForInput
         );
     }
 
@@ -8730,6 +8715,15 @@ mod tests {
             "ACORN_AGENT_HOOK_TOKEN".to_string(),
             "caller-token".to_string(),
         );
+        env.insert(
+            "ACORN_AGENT_INVOCATION_ROOT".to_string(),
+            "caller-root".to_string(),
+        );
+        env.insert(
+            "ACORN_AGENT_INVOCATION_TOKEN".to_string(),
+            "ancestor-owner".to_string(),
+        );
+        env.insert("ACORN_AGENT_INVOCATION_DEPTH".to_string(), "3".to_string());
 
         inject_agent_hook_env(&mut env, &session, Some(&hooks));
 
@@ -8745,6 +8739,13 @@ mod tests {
             env.get("ACORN_AGENT_HOOK_SESSION_ID"),
             Some(&session.id.to_string())
         );
+        assert_eq!(
+            env.get("ACORN_AGENT_INVOCATION_ROOT"),
+            Some(&"1".to_string()),
+            "the PTY boundary must overwrite caller input with a fresh root marker",
+        );
+        assert!(!env.contains_key("ACORN_AGENT_INVOCATION_TOKEN"));
+        assert!(!env.contains_key("ACORN_AGENT_INVOCATION_DEPTH"));
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_PROVIDER"),
             Some(&"codex".to_string())
@@ -8766,6 +8767,7 @@ mod tests {
         let mut env = HashMap::new();
         inject_agent_hook_env(&mut env, &session, None);
         assert!(!env.contains_key("ACORN_AGENT_HOOK_URL"));
+        assert!(!env.contains_key("ACORN_AGENT_INVOCATION_ROOT"));
     }
 
     #[test]
@@ -8801,6 +8803,10 @@ mod tests {
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_SESSION_ID"),
             Some(&session.id.to_string())
+        );
+        assert_eq!(
+            env.get("ACORN_AGENT_INVOCATION_ROOT"),
+            Some(&"1".to_string())
         );
         // Provider is unknown at spawn; the per-provider notify script reports
         // its own provider, so the provider-specific var stays unset here.

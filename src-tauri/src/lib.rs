@@ -356,21 +356,10 @@ pub fn run() {
             let state = app.state::<AppState>();
             let hook_app = app.handle().clone();
             let hook_sessions = state.sessions.clone();
-            let hook_reducer =
-                std::sync::Arc::new(agent_hooks::AgentHookReducer::new(hook_sessions.clone()));
-            let hook_pipeline_lock = std::sync::Arc::new(parking_lot::Mutex::new(()));
             match agent_hooks::AgentHookServer::start_with_handler(move |event| {
-                let _pipeline_guard = hook_pipeline_lock.lock();
                 let session_id = event.session_id;
-                let provider = event.provider;
-                let source = event.source.clone();
-                let lifecycle_id = event.lifecycle_id.clone();
-                let provider_session_id = event.provider_session_id.clone();
-                let provider_turn_id = event.provider_turn_id.clone();
-                let provider_tool_id = event.provider_tool_id.clone();
-                let provider_version = event.provider_version.clone();
-                match hook_reducer.apply(event) {
-                    Ok(agent_hooks::AgentHookApplyOutcome::Applied(status)) => {
+                match agent_hooks::apply_agent_hook_event(&hook_sessions, event) {
+                    Ok(status) => {
                         if let Err(err) = persistence::save_sessions(&hook_sessions.list()) {
                             tracing::warn!(error = %err, "agent hook persist status failed");
                         }
@@ -383,33 +372,7 @@ pub fn run() {
                                 "agent hook status emit failed",
                             );
                         }
-                        tracing::debug!(
-                            %session_id,
-                            ?provider,
-                            ?status,
-                            source,
-                            lifecycle_id,
-                            provider_session_id,
-                            provider_turn_id,
-                            provider_tool_id,
-                            provider_version,
-                            "agent hook status applied"
-                        );
-                    }
-                    Ok(agent_hooks::AgentHookApplyOutcome::Ignored { status, reason }) => {
-                        tracing::debug!(
-                            %session_id,
-                            ?provider,
-                            ?status,
-                            reason,
-                            source,
-                            lifecycle_id,
-                            provider_session_id,
-                            provider_turn_id,
-                            provider_tool_id,
-                            provider_version,
-                            "agent hook event ignored"
-                        );
+                        tracing::debug!(%session_id, ?status, "agent hook status applied");
                     }
                     Err(err) => {
                         tracing::warn!(%session_id, error = %err, "agent hook event rejected");
