@@ -367,6 +367,7 @@ pub fn run() {
                 let lifecycle_id = event.lifecycle_id.clone();
                 let provider_session_id = event.provider_session_id.clone();
                 let provider_turn_id = event.provider_turn_id.clone();
+                let provider_tool_id = event.provider_tool_id.clone();
                 let provider_version = event.provider_version.clone();
                 match hook_reducer.apply(event) {
                     Ok(agent_hooks::AgentHookApplyOutcome::Applied(status)) => {
@@ -390,6 +391,7 @@ pub fn run() {
                             lifecycle_id,
                             provider_session_id,
                             provider_turn_id,
+                            provider_tool_id,
                             provider_version,
                             "agent hook status applied"
                         );
@@ -404,6 +406,7 @@ pub fn run() {
                             lifecycle_id,
                             provider_session_id,
                             provider_turn_id,
+                            provider_tool_id,
                             provider_version,
                             "agent hook event ignored"
                         );

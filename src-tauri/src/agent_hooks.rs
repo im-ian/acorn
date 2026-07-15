@@ -36,6 +36,8 @@ pub struct AgentHookEvent {
     #[serde(default)]
     pub provider_turn_id: Option<String>,
     #[serde(default)]
+    pub provider_tool_id: Option<String>,
+    #[serde(default)]
     pub provider_version: Option<String>,
 }
 
@@ -159,6 +161,7 @@ struct CodexTurn {
     native_prompt_seen: bool,
     jsonl_user_seen: bool,
     jsonl_task_seen: bool,
+    completed_native_tool_ids: VecDeque<String>,
 }
 
 struct FinishedCodexTurn {
@@ -275,12 +278,21 @@ impl CodexLane {
             last_finished: None,
             recent_finished_turn_ids: VecDeque::new(),
         });
-        invocation.reduce(signal, event.provider_turn_id.as_deref())
+        invocation.reduce(
+            signal,
+            event.provider_turn_id.as_deref(),
+            event.provider_tool_id.as_deref(),
+        )
     }
 }
 
 impl CodexInvocation {
-    fn reduce(&mut self, signal: CodexSignal, provider_turn_id: Option<&str>) -> CodexReduction {
+    fn reduce(
+        &mut self,
+        signal: CodexSignal,
+        provider_turn_id: Option<&str>,
+        provider_tool_id: Option<&str>,
+    ) -> CodexReduction {
         if provider_turn_id.is_some_and(|id| self.is_finished(id)) {
             let id = provider_turn_id.expect("finished turn id is present");
             let resumes_latest_tentative_stop = self.turn.is_none()
@@ -307,11 +319,18 @@ impl CodexInvocation {
             CodexSignal::NativeStop | CodexSignal::LegacyCompletion => {
                 self.finish_turn(provider_turn_id)
             }
-            CodexSignal::NativePermission | CodexSignal::JsonlApproval => {
-                self.await_permission(provider_turn_id)
+            CodexSignal::NativePermission => self.await_permission(provider_turn_id),
+            CodexSignal::JsonlApproval => {
+                if self.is_completed_native_tool(provider_turn_id, provider_tool_id) {
+                    CodexReduction::Ignore("late JSONL approval for completed native tool")
+                } else {
+                    self.await_permission(provider_turn_id)
+                }
             }
-            CodexSignal::NativeToolComplete => self.resume_from_tool(provider_turn_id, false),
-            CodexSignal::JsonlTool => self.resume_from_tool(provider_turn_id, true),
+            CodexSignal::NativeToolComplete => {
+                self.resume_from_tool(provider_turn_id, false, provider_tool_id)
+            }
+            CodexSignal::JsonlTool => self.resume_from_tool(provider_turn_id, true, None),
             CodexSignal::JsonlUser => self.observe_jsonl_start(provider_turn_id, true),
             CodexSignal::JsonlTask => self.observe_jsonl_start(provider_turn_id, false),
         }
@@ -408,6 +427,7 @@ impl CodexInvocation {
         &mut self,
         provider_turn_id: Option<&str>,
         mark_tool_started: bool,
+        completed_native_tool_id: Option<&str>,
     ) -> CodexReduction {
         if self.turn.is_none() && provider_turn_id.is_none() && self.last_finished.is_some() {
             return CodexReduction::Ignore("unidentified tool event after finished turn");
@@ -425,6 +445,9 @@ impl CodexInvocation {
         let turn = self.turn.as_mut().expect("turn established");
         attach_turn_id(turn, provider_turn_id);
         turn.phase = CodexTurnPhase::Working;
+        if let Some(tool_id) = completed_native_tool_id {
+            push_bounded(&mut turn.completed_native_tool_ids, tool_id.to_string(), 16);
+        }
         CodexReduction::Apply(CodexStoreEffects {
             begin_turn,
             mark_tool_started,
@@ -501,6 +524,23 @@ impl CodexInvocation {
             .iter()
             .any(|finished| finished == provider_turn_id)
     }
+
+    fn is_completed_native_tool(
+        &self,
+        provider_turn_id: Option<&str>,
+        provider_tool_id: Option<&str>,
+    ) -> bool {
+        let Some(provider_tool_id) = provider_tool_id else {
+            return false;
+        };
+        self.turn.as_ref().is_some_and(|turn| {
+            !turn_ids_conflict(turn.provider_turn_id.as_deref(), provider_turn_id)
+                && turn
+                    .completed_native_tool_ids
+                    .iter()
+                    .any(|completed| completed == provider_tool_id)
+        })
+    }
 }
 
 fn new_codex_turn(provider_turn_id: Option<&str>, native_prompt_seen: bool) -> CodexTurn {
@@ -510,6 +550,7 @@ fn new_codex_turn(provider_turn_id: Option<&str>, native_prompt_seen: bool) -> C
         native_prompt_seen,
         jsonl_user_seen: false,
         jsonl_task_seen: false,
+        completed_native_tool_ids: VecDeque::new(),
     }
 }
 
@@ -949,6 +990,13 @@ fn parse_raw_codex_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentH
             &payload,
             &["/turn_id", "/turn-id", "/msg/turn_id", "/payload/turn_id"],
         ),
+        provider_tool_id: match source {
+            "native_tool_complete" => codex_payload_string(&payload, &["/tool_use_id"]),
+            "jsonl_approval" => {
+                codex_payload_string(&payload, &["/call_id", "/msg/call_id", "/payload/call_id"])
+            }
+            _ => None,
+        },
         provider_version,
     }))
 }
@@ -1358,6 +1406,7 @@ mod tests {
                 lifecycle_id: None,
                 provider_session_id: None,
                 provider_turn_id: None,
+                provider_tool_id: None,
                 provider_version: None,
             },
         )
@@ -1406,6 +1455,7 @@ mod tests {
                 lifecycle_id: None,
                 provider_session_id: None,
                 provider_turn_id: None,
+                provider_tool_id: None,
                 provider_version: None,
             },
         )
@@ -1449,6 +1499,7 @@ mod tests {
                 lifecycle_id: None,
                 provider_session_id: None,
                 provider_turn_id: None,
+                provider_tool_id: None,
                 provider_version: None,
             },
         )
@@ -1487,6 +1538,7 @@ mod tests {
                     lifecycle_id: None,
                     provider_session_id: None,
                     provider_turn_id: None,
+                    provider_tool_id: None,
                     provider_version: None,
                 },
             )
@@ -1889,6 +1941,7 @@ mod tests {
                 lifecycle_id: None,
                 provider_session_id: None,
                 provider_turn_id: None,
+                provider_tool_id: None,
                 provider_version: None,
             })
             .expect("old event is classified");
@@ -2003,6 +2056,7 @@ mod tests {
                 lifecycle_id: Some("run-1".to_string()),
                 provider_session_id: Some("provider-session".to_string()),
                 provider_turn_id: Some("turn-1".to_string()),
+                provider_tool_id: Some("tool-1".to_string()),
                 provider_version: Some("0.144.4".to_string()),
             })
             .expect_err("tool event cannot switch provider ownership");

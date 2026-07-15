@@ -1271,11 +1271,7 @@ done
             thread::sleep(Duration::from_millis(20));
         }
 
-        let session_log = PathBuf::from(
-            fs::read_to_string(&log_path_capture)
-                .unwrap()
-                .trim(),
-        );
+        let session_log = PathBuf::from(fs::read_to_string(&log_path_capture).unwrap().trim());
         let runtime_dir = session_log.parent().expect("recorder has parent");
         let log_mode = fs::metadata(&session_log).unwrap().permissions().mode() & 0o777;
         let dir_mode = fs::metadata(runtime_dir).unwrap().permissions().mode() & 0o777;
