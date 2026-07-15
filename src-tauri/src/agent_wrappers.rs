@@ -79,7 +79,27 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     done
     [ -f "$_acorn_log" ] || exit 0
 
-    tail -n 0 -F "$_acorn_log" 2>/dev/null | while IFS= read -r _acorn_line; do
+    _acorn_watch_dir=$(mktemp -d "${TMPDIR:-/tmp}/acorn-codex-watcher.XXXXXX") || exit 0
+    _acorn_watch_fifo="$_acorn_watch_dir/events"
+    if ! mkfifo "$_acorn_watch_fifo"; then
+      rmdir "$_acorn_watch_dir" >/dev/null 2>&1 || true
+      exit 0
+    fi
+    _acorn_tail_pid=""
+    _acorn_cleanup_watcher() {
+      if [ -n "$_acorn_tail_pid" ]; then
+        kill "$_acorn_tail_pid" >/dev/null 2>&1 || true
+        wait "$_acorn_tail_pid" 2>/dev/null || true
+        _acorn_tail_pid=""
+      fi
+      rm -rf "$_acorn_watch_dir"
+    }
+    trap _acorn_cleanup_watcher EXIT
+    trap 'exit 0' HUP INT TERM
+
+    tail -n 0 -F "$_acorn_log" > "$_acorn_watch_fifo" 2>/dev/null &
+    _acorn_tail_pid=$!
+    while IFS= read -r _acorn_line; do
       case "$_acorn_line" in
         *'"dir":"from_tui"'*'"kind":"op"'*'"payload":{"UserTurn"'*)
           "$_acorn_notify" start turn >/dev/null 2>&1 || true
@@ -117,7 +137,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
           fi
           ;;
       esac
-    done
+    done < "$_acorn_watch_fifo"
   ) &
   ACORN_CODEX_WATCHER_PID=$!
 
@@ -403,7 +423,27 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     done
     [ -n "$_acorn_transcript" ] || exit 0
 
-    tail -n 0 -F "$_acorn_transcript" 2>/dev/null | while IFS= read -r _acorn_line; do
+    _acorn_watch_dir=$(mktemp -d "${TMPDIR:-/tmp}/acorn-antigravity-watcher.XXXXXX") || exit 0
+    _acorn_watch_fifo="$_acorn_watch_dir/events"
+    if ! mkfifo "$_acorn_watch_fifo"; then
+      rmdir "$_acorn_watch_dir" >/dev/null 2>&1 || true
+      exit 0
+    fi
+    _acorn_tail_pid=""
+    _acorn_cleanup_watcher() {
+      if [ -n "$_acorn_tail_pid" ]; then
+        kill "$_acorn_tail_pid" >/dev/null 2>&1 || true
+        wait "$_acorn_tail_pid" 2>/dev/null || true
+        _acorn_tail_pid=""
+      fi
+      rm -rf "$_acorn_watch_dir"
+    }
+    trap _acorn_cleanup_watcher EXIT
+    trap 'exit 0' HUP INT TERM
+
+    tail -n 0 -F "$_acorn_transcript" > "$_acorn_watch_fifo" 2>/dev/null &
+    _acorn_tail_pid=$!
+    while IFS= read -r _acorn_line; do
       case "$_acorn_line" in
         *'"type":"USER_INPUT"'*)
           "$_acorn_notify" start >/dev/null 2>&1 || true
@@ -419,7 +459,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
           "$_acorn_notify" error >/dev/null 2>&1 || true
           ;;
       esac
-    done
+    done < "$_acorn_watch_fifo"
   ) &
   ACORN_ANTIGRAVITY_WATCHER_PID=$!
 
