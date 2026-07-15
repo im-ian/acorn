@@ -536,6 +536,121 @@ mod tests {
     }
 
     #[test]
+    fn raw_codex_native_payloads_are_normalized_in_rust() {
+        let (tx, rx) = mpsc::channel();
+        let hooks = AgentHookServer::start_with_handler(move |event| {
+            tx.send(event).expect("send event");
+        })
+        .expect("hook server starts");
+        let session_id = Uuid::new_v4();
+        let turn_id = "019f6338-6250-7303-88a6-a7add31dba1d";
+
+        for (hook_event_name, expected_event, expected_source) in [
+            ("UserPromptSubmit", AgentHookEventKind::Start, "turn"),
+            ("PreToolUse", AgentHookEventKind::Start, "tool"),
+            ("PermissionRequest", AgentHookEventKind::NeedsInput, "hook"),
+        ] {
+            let body = serde_json::json!({
+                "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+                "turn_id": turn_id,
+                "hook_event_name": hook_event_name,
+                "agent_id": null,
+                "agent_type": null,
+            })
+            .to_string();
+            let response = post_raw_codex_hook(&hooks, session_id, &body);
+            assert!(
+                response.starts_with("HTTP/1.1 204 No Content"),
+                "unexpected {hook_event_name} response: {response:?}"
+            );
+            let event = rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("native event delivered");
+            assert_eq!(event.session_id, session_id);
+            assert_eq!(event.event, expected_event);
+            assert_eq!(event.source.as_deref(), Some(expected_source));
+            assert_eq!(event.turn_id.as_deref(), Some(turn_id));
+        }
+
+        let stop = serde_json::json!({
+            "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+            "turn_id": turn_id,
+            "hook_event_name": "Stop",
+        })
+        .to_string();
+        let response = post_raw_codex_hook(&hooks, session_id, &stop);
+        assert!(response.starts_with("HTTP/1.1 204 No Content"));
+        let event = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Stop delivered");
+        assert_eq!(event.event, AgentHookEventKind::NeedsInput);
+        assert_eq!(event.source.as_deref(), Some("hook"));
+        assert_eq!(event.turn_id.as_deref(), Some(turn_id));
+    }
+
+    #[test]
+    fn raw_codex_native_payloads_fail_closed_for_unscoped_or_invalid_owners() {
+        let (tx, rx) = mpsc::channel();
+        let hooks = AgentHookServer::start_with_handler(move |event| {
+            tx.send(event).expect("send event");
+        })
+        .expect("hook server starts");
+        let session_id = Uuid::new_v4();
+
+        for body in [
+            serde_json::json!({
+                "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+                "turn_id": "019f6338-6250-7303-88a6-a7add31dba1d",
+                "hook_event_name": "UserPromptSubmit",
+                "agent_id": null,
+            }),
+            serde_json::json!({
+                "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+                "turn_id": "019f6338-6250-7303-88a6-a7add31dba1d",
+                "hook_event_name": "PermissionRequest",
+                "agent_id": "019f6322-41e5-7882-a99a-d186dff6739c",
+                "agent_type": "worker",
+            }),
+        ] {
+            let response = post_raw_codex_hook(&hooks, session_id, &body.to_string());
+            assert!(response.starts_with("HTTP/1.1 204 No Content"));
+            assert!(
+                rx.try_recv().is_err(),
+                "unscoped or child event reached the owner handler"
+            );
+        }
+
+        let invalid_turn = serde_json::json!({
+            "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+            "turn_id": "not-a-turn-id",
+            "hook_event_name": "Stop",
+        })
+        .to_string();
+        let response = post_raw_codex_hook(&hooks, session_id, &invalid_turn);
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    }
+
+    #[test]
+    fn hook_server_accepts_large_documented_codex_payloads() {
+        let hooks = AgentHookServer::start().expect("hook server starts");
+        let body = serde_json::json!({
+            "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+            "turn_id": "019f6338-6250-7303-88a6-a7add31dba1d",
+            "hook_event_name": "UserPromptSubmit",
+            "agent_id": null,
+            "agent_type": null,
+            "prompt": "x".repeat(32 * 1024),
+        })
+        .to_string();
+
+        let response = post_raw_codex_hook(&hooks, Uuid::new_v4(), &body);
+        assert!(
+            response.starts_with("HTTP/1.1 204 No Content"),
+            "unexpected large-payload response: {response:?}"
+        );
+    }
+
+    #[test]
     fn hook_event_kind_maps_to_session_status() {
         assert_eq!(
             AgentHookEventKind::Start.session_status(),
@@ -1117,6 +1232,20 @@ mod tests {
             body.len()
         )
         .expect("write request");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read response");
+        response
+    }
+
+    fn post_raw_codex_hook(hooks: &AgentHookServer, session_id: Uuid, body: &str) -> String {
+        let mut stream = TcpStream::connect(addr_from_url(hooks.hook_url())).expect("connect hook");
+        write!(
+            stream,
+            "POST /agent-hook HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Acorn-Agent-Hook-Token: {}\r\nX-Acorn-Agent-Hook-Provider: codex\r\nX-Acorn-Agent-Hook-Session-Id: {session_id}\r\nX-Acorn-Agent-Hook-Source: native\r\nX-Acorn-Codex-Lifecycle-Id: lifecycle-1\r\nX-Acorn-Codex-Version: 0.144.4\r\nContent-Length: {}\r\n\r\n{body}",
+            hooks.token(),
+            body.len()
+        )
+        .expect("write raw Codex request");
         let mut response = String::new();
         stream.read_to_string(&mut response).expect("read response");
         response

@@ -1763,6 +1763,218 @@ done
         )
     }
 
+    #[cfg(unix)]
+    fn codex_wrapper_args_for_version(version: &str, probe_fails: bool) -> Vec<String> {
+        let base = ScratchDir::new("codex-native-capability");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        fs::create_dir_all(&real_dir).unwrap();
+
+        let capture_path = base.path().join("args.log");
+        let session_log_path = base.path().join("session.jsonl");
+        write_executable(
+            &real_dir.join("codex"),
+            r#"#!/bin/sh
+if [ "${1-}" = "--version" ]; then
+  printf 'codex-cli %s\n' "$ACORN_TEST_CODEX_VERSION"
+  exit 0
+fi
+for _acorn_arg in "$@"; do
+  if [ "$_acorn_arg" = "features" ]; then
+    [ "$ACORN_TEST_CODEX_PROBE_FAIL" = "1" ] && exit 1
+    exit 0
+  fi
+done
+printf '%s\n' "$@" > "$ACORN_ARGS_CAPTURE"
+"#,
+        )
+        .unwrap();
+
+        let status = Command::new(wrapper_dir.join(CODEX_WRAPPER_NAME))
+            .arg("sentinel-user-arg")
+            .env("PATH", format!("{}:/usr/bin:/bin", real_dir.display()))
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_ROOT", "1")
+            .env("ACORN_TEST_CODEX_VERSION", version)
+            .env(
+                "ACORN_TEST_CODEX_PROBE_FAIL",
+                if probe_fails { "1" } else { "0" },
+            )
+            .env("ACORN_ARGS_CAPTURE", &capture_path)
+            .env("CODEX_TUI_SESSION_LOG_PATH", &session_log_path)
+            .env_remove("ACORN_AGENT_INVOCATION_TOKEN")
+            .env_remove("ACORN_AGENT_INVOCATION_DEPTH")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        fs::read_to_string(capture_path)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_gates_native_hooks_by_version_and_capability() {
+        let supported = codex_wrapper_args_for_version("0.144.4", false);
+        assert!(supported.iter().any(|arg| arg == "--enable"));
+        assert!(supported.iter().any(|arg| arg == "hooks"));
+        assert!(supported.iter().any(|arg| arg.starts_with("hooks={")));
+        assert!(supported.iter().any(|arg| arg == "sentinel-user-arg"));
+
+        for (version, probe_fails) in [("0.134.9", false), ("0.144.4", true)] {
+            let fallback = codex_wrapper_args_for_version(version, probe_fails);
+            assert!(fallback.iter().any(|arg| arg.starts_with("notify=")));
+            assert!(!fallback.iter().any(|arg| arg == "--enable"));
+            assert!(!fallback.iter().any(|arg| arg.starts_with("hooks={")));
+            assert!(fallback.iter().any(|arg| arg == "sentinel-user-arg"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_native_hook_version_gate_covers_the_supported_boundary() {
+        for version in ["0.135.0", "1.0.0"] {
+            assert!(codex_wrapper_args_for_version(version, false)
+                .iter()
+                .any(|arg| arg == "--enable"));
+        }
+        for version in ["0.134.99", "unknown"] {
+            assert!(!codex_wrapper_args_for_version(version, false)
+                .iter()
+                .any(|arg| arg == "--enable"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nested_codex_clears_the_outer_recorder_environment() {
+        let base = ScratchDir::new("nested-codex-recorder");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        fs::create_dir_all(&real_dir).unwrap();
+        write_executable(
+            &real_dir.join("codex"),
+            "#!/bin/sh\nprintf 'record=%s\\nlog=%s\\n' \"${CODEX_TUI_RECORD_SESSION-}\" \"${CODEX_TUI_SESSION_LOG_PATH-}\"\n",
+        )
+        .unwrap();
+
+        let output = Command::new(wrapper_dir.join(CODEX_WRAPPER_NAME))
+            .env("PATH", format!("{}:/usr/bin:/bin", real_dir.display()))
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_TOKEN", "outer-owner")
+            .env("ACORN_AGENT_INVOCATION_DEPTH", "1")
+            .env("CODEX_TUI_RECORD_SESSION", "1")
+            .env("CODEX_TUI_SESSION_LOG_PATH", "/tmp/outer-codex.jsonl")
+            .env_remove("ACORN_AGENT_INVOCATION_ROOT")
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "record=\nlog=\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_keeps_owned_recording_artifacts_private_and_cleans_them() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let base = ScratchDir::new("codex-recording-permissions");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        let shared_tmp = base.path().join("shared-tmp");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&shared_tmp).unwrap();
+        fs::set_permissions(&shared_tmp, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let log_path_capture = base.path().join("log-path");
+        let release_path = base.path().join("release-codex");
+        write_executable(
+            &real_dir.join("codex"),
+            r#"#!/bin/sh
+if [ "${1-}" = "--version" ]; then
+  printf 'codex-cli 0.144.4\n'
+  exit 0
+fi
+for _acorn_arg in "$@"; do
+  [ "$_acorn_arg" = "features" ] && exit 0
+done
+: > "$CODEX_TUI_SESSION_LOG_PATH"
+printf '%s\n' "$CODEX_TUI_SESSION_LOG_PATH" > "$ACORN_LOG_PATH_CAPTURE"
+while [ ! -e "$ACORN_TEST_RELEASE" ]; do
+  sleep 0.02
+done
+"#,
+        )
+        .unwrap();
+
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "umask 022; exec \"$1\" sentinel", "sh"])
+            .arg(wrapper_dir.join(CODEX_WRAPPER_NAME))
+            .env("PATH", format!("{}:/usr/bin:/bin", real_dir.display()))
+            .env("TMPDIR", &shared_tmp)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_ROOT", "1")
+            .env("ACORN_LOG_PATH_CAPTURE", &log_path_capture)
+            .env("ACORN_TEST_RELEASE", &release_path)
+            .env_remove("ACORN_AGENT_INVOCATION_TOKEN")
+            .env_remove("ACORN_AGENT_INVOCATION_DEPTH")
+            .env_remove("CODEX_TUI_SESSION_LOG_PATH")
+            .env_remove("CODEX_TUI_RECORD_SESSION")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let started = Instant::now();
+        while !log_path_capture.is_file() {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("Codex wrapper exited before publishing its recorder path: {status}");
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("Codex wrapper did not publish its recorder path");
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let session_log = PathBuf::from(fs::read_to_string(&log_path_capture).unwrap().trim());
+        let runtime_dir = session_log
+            .parent()
+            .expect("recorder has parent")
+            .to_path_buf();
+        let log_mode = fs::metadata(&session_log).unwrap().permissions().mode() & 0o777;
+        let dir_mode = fs::metadata(&runtime_dir).unwrap().permissions().mode() & 0o777;
+
+        assert_ne!(
+            runtime_dir, shared_tmp,
+            "recorder must not live in shared temp"
+        );
+        assert_eq!(dir_mode, 0o700, "recorder directory must be private");
+        assert_eq!(log_mode, 0o600, "session JSONL must be owner-only");
+
+        fs::write(&release_path, b"release").unwrap();
+        assert!(child.wait().unwrap().success());
+        assert!(
+            !runtime_dir.exists(),
+            "owned recorder directory must be removed after Codex exits"
+        );
+    }
+
     #[test]
     fn writes_codex_wrapper_and_notify_helper() {
         let base = ScratchDir::new("codex");
