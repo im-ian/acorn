@@ -1021,6 +1021,15 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_done_planner_with_tool_calls_maps_to_working() {
+        let tail = r#"{"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"invoke_subagent","args":{}}]}"#;
+        assert_eq!(
+            classify(AgentKind::Antigravity, tail, true),
+            Some(TurnState::Working),
+        );
+    }
+
+    #[test]
     fn antigravity_non_planner_done_maps_to_working() {
         let tail = r#"{"type":"TOOL_CALL","status":"DONE","content":"done"}"#;
         assert_eq!(

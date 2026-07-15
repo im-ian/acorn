@@ -783,6 +783,75 @@ exit 1
         fs::read_to_string(capture_path).unwrap_or_default()
     }
 
+    #[cfg(unix)]
+    fn antigravity_wrapper_notifications_for_turn(
+        planner_with_tools: &str,
+        final_planner: &str,
+    ) -> String {
+        let base = ScratchDir::new("antigravity-turn");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        let gemini_dir = base.path().join("gemini");
+        let transcript = gemini_dir
+            .join("antigravity-cli")
+            .join("brain")
+            .join("019e4818-7c15-4e60-9b3b-898a1c7803d6")
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+
+        let capture_path = base.path().join("notifications.log");
+        write_executable(
+            &wrapper_dir.join(ANTIGRAVITY_NOTIFY_NAME),
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$ACORN_NOTIFY_CAPTURE\"\n",
+        )
+        .unwrap();
+        write_executable(
+            &real_dir.join("agy"),
+            r#"#!/bin/sh
+: > "$ACORN_TEST_AGY_TRANSCRIPT"
+sleep 0.2
+printf '%s\n' "$ACORN_TEST_AGY_USER_LINE" >> "$ACORN_TEST_AGY_TRANSCRIPT"
+sleep 0.2
+printf '%s\n' "$ACORN_TEST_AGY_PLANNER_WITH_TOOLS" >> "$ACORN_TEST_AGY_TRANSCRIPT"
+sleep 0.2
+printf '%s\n' "$ACORN_TEST_AGY_FINAL_PLANNER" >> "$ACORN_TEST_AGY_TRANSCRIPT"
+_acorn_i=0
+while [ "$(wc -l < "$ACORN_NOTIFY_CAPTURE" 2>/dev/null || echo 0)" -lt 3 ] && [ "$_acorn_i" -lt 100 ]; do
+  _acorn_i=$((_acorn_i + 1))
+  sleep 0.05
+done
+"#,
+        )
+        .unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", real_dir.display());
+        let status = Command::new(wrapper_dir.join(ANTIGRAVITY_WRAPPER_NAME))
+            .env("PATH", path)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_NOTIFY_CAPTURE", &capture_path)
+            .env("ACORN_TEST_AGY_TRANSCRIPT", &transcript)
+            .env(
+                "ACORN_TEST_AGY_USER_LINE",
+                r#"{"type":"USER_INPUT","status":"DONE"}"#,
+            )
+            .env("ACORN_TEST_AGY_PLANNER_WITH_TOOLS", planner_with_tools)
+            .env("ACORN_TEST_AGY_FINAL_PLANNER", final_planner)
+            .env("GEMINI_DIR", &gemini_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "agy wrapper failed with {status}");
+
+        fs::read_to_string(capture_path).unwrap_or_default()
+    }
+
     #[test]
     fn writes_codex_wrapper_and_notify_helper() {
         let base = ScratchDir::new("codex");
@@ -1187,6 +1256,20 @@ exit 1
         assert!(notify.contains("PermissionRequest"));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antigravity_wrapper_keeps_working_for_planner_tool_calls() {
+        let notifications = antigravity_wrapper_notifications_for_turn(
+            r#"{"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"invoke_subagent","args":{}}]}"#,
+            r#"{"type":"PLANNER_RESPONSE","status":"DONE","content":"finished"}"#,
+        );
+
+        assert_eq!(
+            notifications, "start\nstart\nneeds_input\nstop\n",
+            "an intermediate planner response must keep the parent turn working"
+        );
     }
 
     #[test]
