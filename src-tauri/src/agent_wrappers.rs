@@ -2115,6 +2115,102 @@ done
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_clears_owned_recorder_when_fifo_setup_fails() {
+        let base = ScratchDir::new("codex-recorder-fifo-failure");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        let shared_tmp = base.path().join("shared-tmp");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&shared_tmp).unwrap();
+
+        write_executable(
+            &real_dir.join("codex"),
+            r#"#!/bin/sh
+if [ "${1-}" = "--version" ]; then
+  printf 'codex-cli 0.144.4\n'
+  exit 0
+fi
+for _acorn_arg in "$@"; do
+  [ "$_acorn_arg" = "features" ] && exit 0
+done
+printf 'record=%s\nlog=%s\n' "${CODEX_TUI_RECORD_SESSION-}" "${CODEX_TUI_SESSION_LOG_PATH-}"
+"#,
+        )
+        .unwrap();
+        write_executable(&real_dir.join("mkfifo"), "#!/bin/sh\nexit 1\n").unwrap();
+
+        let output = Command::new(wrapper_dir.join(CODEX_WRAPPER_NAME))
+            .env("PATH", format!("{}:/usr/bin:/bin", real_dir.display()))
+            .env("TMPDIR", &shared_tmp)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_ROOT", "1")
+            .env_remove("ACORN_AGENT_INVOCATION_TOKEN")
+            .env_remove("ACORN_AGENT_INVOCATION_DEPTH")
+            .env_remove("CODEX_TUI_SESSION_LOG_PATH")
+            .env_remove("CODEX_TUI_RECORD_SESSION")
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "record=\nlog=\n");
+        assert!(fs::read_dir(&shared_tmp).unwrap().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_cleans_runtime_dir_when_watcher_init_fails() {
+        let base = ScratchDir::new("codex-watcher-init-failure");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        let shared_tmp = base.path().join("shared-tmp");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&shared_tmp).unwrap();
+
+        write_executable(
+            &real_dir.join("codex"),
+            r#"#!/bin/sh
+if [ "${1-}" = "--version" ]; then
+  printf 'codex-cli 0.144.4\n'
+  exit 0
+fi
+for _acorn_arg in "$@"; do
+  [ "$_acorn_arg" = "features" ] && exit 0
+done
+/bin/sleep 0.3
+"#,
+        )
+        .unwrap();
+        write_executable(&real_dir.join("mkdir"), "#!/bin/sh\nexit 1\n").unwrap();
+
+        let status = Command::new(wrapper_dir.join(CODEX_WRAPPER_NAME))
+            .env("PATH", format!("{}:/usr/bin:/bin", real_dir.display()))
+            .env("TMPDIR", &shared_tmp)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_ROOT", "1")
+            .env_remove("ACORN_AGENT_INVOCATION_TOKEN")
+            .env_remove("ACORN_AGENT_INVOCATION_DEPTH")
+            .env_remove("CODEX_TUI_SESSION_LOG_PATH")
+            .env_remove("CODEX_TUI_RECORD_SESSION")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+
+        assert!(status.success());
+        assert!(
+            fs::read_dir(&shared_tmp).unwrap().next().is_none(),
+            "watcher initialization failure leaked its private runtime directory"
+        );
+    }
+
     #[test]
     fn writes_codex_wrapper_and_notify_helper() {
         let base = ScratchDir::new("codex");
