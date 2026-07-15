@@ -130,6 +130,7 @@ import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
 import { WorkspaceCanvas } from "./WorkspaceCanvas";
+import { WorkSummaryView } from "./WorkSummaryView";
 
 const STATUS_TONE: Record<SessionStatus, StatusTone> = {
   ready: "neutral",
@@ -268,7 +269,7 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
               }
             />
           </div>
-          <KanbanFilePreviewOverlay />
+          <WorkspaceTabPreviewOverlay />
         </div>
       ) : null}
       {isCanvas ? (
@@ -279,7 +280,7 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
             workspaceSessionIds={workspaceSessionIds}
             sessions={sessions}
           />
-          <KanbanFilePreviewOverlay />
+          <WorkspaceTabPreviewOverlay />
         </div>
       ) : null}
       {/*
@@ -298,30 +299,36 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
   );
 }
 
-function KanbanFilePreviewOverlay() {
+function WorkspaceTabPreviewOverlay() {
   const t = useTranslation();
   const closeShortcut = useSettings((s) =>
     formatHotkey(s.settings.shortcuts.closeTab),
   );
   const activeTabId = useAppStore((s) => s.activeTabId);
   const workspaceTabs = useAppStore((s) => s.workspaceTabs);
+  const sessionsById = useAppStore(selectSessionsById);
   const closeWorkspaceTab = useAppStore((s) => s.closeWorkspaceTab);
   const closeTerminalPopup = useAppStore((s) => s.closeTerminalPopup);
+  const openCodeViewerTab = useAppStore((s) => s.openCodeViewerTab);
   const updateCodeViewerTabViewState = useAppStore(
     (s) => s.updateCodeViewerTabViewState,
   );
   const tab = activeTabId ? workspaceTabs[activeTabId] : undefined;
 
   useEffect(() => {
-    if (tab?.kind === "code") closeTerminalPopup();
+    if (tab) closeTerminalPopup();
   }, [closeTerminalPopup, tab?.id, tab?.kind]);
 
-  if (!tab || tab.kind !== "code") return null;
+  if (!tab) return null;
 
   return (
     <div
       className="absolute inset-0 z-40 flex items-center justify-center bg-bg/45 p-4 backdrop-blur-[1px]"
-      data-testid="kanban-file-preview-overlay"
+      data-testid={
+        tab.kind === "code"
+          ? "kanban-file-preview-overlay"
+          : "workspace-work-summary-overlay"
+      }
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) closeWorkspaceTab(tab.id);
       }}
@@ -350,16 +357,28 @@ function KanbanFilePreviewOverlay() {
           </Tooltip>
         </header>
         <div className="min-h-0 flex-1">
-          <FileViewer
-            key={tab.id}
-            path={tab.path}
-            target={tab.target}
-            viewState={tab.viewState}
-            onViewStateChange={(patch) =>
-              updateCodeViewerTabViewState(tab.id, patch)
-            }
-            isActive
-          />
+          {tab.kind === "code" ? (
+            <FileViewer
+              key={tab.id}
+              path={tab.path}
+              target={tab.target}
+              viewState={tab.viewState}
+              onViewStateChange={(patch) =>
+                updateCodeViewerTabViewState(tab.id, patch)
+              }
+              isActive
+            />
+          ) : (
+            <WorkSummaryView
+              key={tab.id}
+              tab={tab}
+              session={
+                tab.sessionId ? sessionsById.get(tab.sessionId) ?? null : null
+              }
+              isActive
+              onOpenFile={(path) => openCodeViewerTab(path, tab.repoPath)}
+            />
+          )}
         </div>
       </section>
     </div>
@@ -1200,7 +1219,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
-  const setWorkspaceViewMode = useAppStore((s) => s.setWorkspaceViewMode);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const sessionSilenced = useAppStore((s) =>
     Boolean(s.silencedSessionIds[session.id]),
@@ -1341,11 +1359,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
         icon: <BarChart3 size={12} />,
         onClick: () => {
           selectSession(session.id);
-          void openWorkSummaryTab({ sessionId: session.id })
-            .then(() => setWorkspaceViewMode("panes"))
-            .catch((err: unknown) => {
-              console.error("[WorkspaceMain] open work summary failed", err);
-            });
+          void openWorkSummaryTab({ sessionId: session.id });
         },
       },
       {
@@ -1435,7 +1449,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
       session.worktree_path,
       showToast,
       setSessionSilenced,
-      setWorkspaceViewMode,
       t,
       transcriptPath,
       worktreeName,
@@ -1815,7 +1828,6 @@ function KanbanTerminalPopover({
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const selectSession = useAppStore((s) => s.selectSession);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
-  const setWorkspaceViewMode = useAppStore((s) => s.setWorkspaceViewMode);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const sessionSilenced = useAppStore((s) =>
     Boolean(s.silencedSessionIds[session.id]),
@@ -1970,11 +1982,7 @@ function KanbanTerminalPopover({
         icon: <BarChart3 size={12} />,
         onClick: () => {
           selectSession(session.id);
-          void openWorkSummaryTab({ sessionId: session.id })
-            .then(() => setWorkspaceViewMode("panes"))
-            .catch((err: unknown) => {
-              console.error("[WorkspaceMain] open work summary failed", err);
-            });
+          void openWorkSummaryTab({ sessionId: session.id });
         },
       },
       {
@@ -2070,7 +2078,6 @@ function KanbanTerminalPopover({
       session.worktree_path,
       showToast,
       setSessionSilenced,
-      setWorkspaceViewMode,
       t,
       transcriptPath,
       worktreeName,
