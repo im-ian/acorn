@@ -403,12 +403,12 @@ exec "$REAL_BIN" "$@"
 
 const CLAUDE_NOTIFY_BODY: &str = r#"#!/bin/sh
 input=$(cat 2>/dev/null || true)
+compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
 
 if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
   [ "${ACORN_AGENT_INVOCATION_DEPTH-}" = "1" ] || exit 0
 else
   [ -z "${ACORN_AGENT_INVOCATION_DEPTH-}" ] || exit 0
-  compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
   legacy_session_id=$(printf '%s\n' "$compact_input" | grep -oE '(^|[,{])[[:space:]]*"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1p' | grep -oE '"[^"]*"$' | tr -d '"')
   printf '%s\n' "$legacy_session_id" | grep -Eq '^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$' || exit 0
   legacy_owner_session_id=""
@@ -416,6 +416,14 @@ else
     legacy_owner_session_id=$(sed -n '1p' "$ACORN_AGENT_STATE_DIR/claude.id" 2>/dev/null | tr -d '\r\n')
   fi
   [ "$legacy_owner_session_id" = "$legacy_session_id" ] || exit 0
+fi
+
+# Claude includes a non-empty agent_id only when this configured hook fires
+# inside a subagent. Child prompts, attention requests, and Stop events do not
+# own the parent Acorn terminal and must not transition its aggregate status.
+# A top-level `claude --agent` may still carry agent_type without agent_id.
+if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"agent_id"[[:space:]]*:[[:space:]]*"[^"]+"'; then
+  exit 0
 fi
 
 hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
@@ -428,7 +436,6 @@ event=""
 case "$hook_event_name" in
   SessionStart|UserPromptSubmit) event="start" ;;
   Stop)
-    compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
     if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"(background_tasks|session_crons)"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'; then
       # This is a pause, not a new start. Sending nothing preserves both the
       # existing Working state and any concurrent attention request.
@@ -2538,12 +2545,7 @@ done
                 "session_crons": [],
             });
             assert_eq!(
-                notify_payload_for_input(
-                    CLAUDE_NOTIFY_NAME,
-                    &[],
-                    &payload.to_string(),
-                    None,
-                ),
+                notify_payload_for_input(CLAUDE_NOTIFY_NAME, &[], &payload.to_string(), None,),
                 None,
                 "a child {hook_event_name} must not transition its parent session",
             );
