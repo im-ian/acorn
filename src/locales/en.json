@@ -1486,6 +1486,8 @@
       "copyAbsolutePath": "Copy absolute path",
       "openDetail": "Open detail",
       "openInBrowser": "Open in browser",
+      "openSession": "Open session",
+      "openSessionWithName": "Open session ({name})",
       "copyPrNumber": "Copy PR number",
       "copyIssueNumber": "Copy issue number",
       "copyUrl": "Copy URL",
