@@ -108,21 +108,28 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
     _acorn_codex_native_hooks=1
   fi
 
-  export CODEX_TUI_RECORD_SESSION=1
+  _acorn_runtime_dir=""
+  _acorn_runtime_dir=$(
+    umask 077
+    mktemp -d "${TMPDIR:-/tmp}/acorn-codex-watch.XXXXXX" 2>/dev/null
+  ) || _acorn_runtime_dir=""
   _acorn_codex_owns_log=0
-  if [ -z "${CODEX_TUI_SESSION_LOG_PATH-}" ]; then
-    _acorn_codex_ts="$(date +%s 2>/dev/null || echo "$$")"
-    export CODEX_TUI_SESSION_LOG_PATH="${TMPDIR:-/tmp}/acorn-codex-session-$$_${_acorn_codex_ts}.jsonl"
+  if [ -z "${CODEX_TUI_SESSION_LOG_PATH-}" ] && [ -n "$_acorn_runtime_dir" ]; then
+    export CODEX_TUI_SESSION_LOG_PATH="$_acorn_runtime_dir/session.jsonl"
     _acorn_codex_owns_log=1
   fi
 
-  _acorn_log="$CODEX_TUI_SESSION_LOG_PATH"
+  _acorn_log="${CODEX_TUI_SESSION_LOG_PATH-}"
   _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify"
-  _acorn_fifo="${TMPDIR:-/tmp}/acorn-codex-watch-${ACORN_CODEX_LIFECYCLE_ID}.fifo"
+  _acorn_fifo=""
+  if [ -n "$_acorn_runtime_dir" ]; then
+    _acorn_fifo="$_acorn_runtime_dir/events.fifo"
+  fi
   ACORN_CODEX_TAIL_PID=""
   ACORN_CODEX_WATCHER_PID=""
 
   _acorn_cleanup_codex() {
+    exec 9>&- 2>/dev/null || true
     if [ -n "$ACORN_CODEX_TAIL_PID" ]; then
       kill "$ACORN_CODEX_TAIL_PID" >/dev/null 2>&1 || true
       wait "$ACORN_CODEX_TAIL_PID" 2>/dev/null || true
@@ -132,19 +139,38 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
       wait "$ACORN_CODEX_WATCHER_PID" 2>/dev/null || true
       ACORN_CODEX_WATCHER_PID=""
     fi
-    rm -f "$_acorn_fifo"
+    if [ -n "$_acorn_fifo" ]; then
+      rm -f "$_acorn_fifo"
+    fi
     if [ "$_acorn_codex_owns_log" = "1" ]; then
       rm -f "$CODEX_TUI_SESSION_LOG_PATH"
       _acorn_codex_owns_log=0
+    fi
+    if [ -n "$_acorn_runtime_dir" ]; then
+      rmdir "$_acorn_runtime_dir" >/dev/null 2>&1 || true
+      _acorn_runtime_dir=""
     fi
   }
   trap '_acorn_cleanup_codex; exit 129' 1
   trap '_acorn_cleanup_codex; exit 130' 2
   trap '_acorn_cleanup_codex; exit 143' 15
 
-  if : >>"$_acorn_log" 2>/dev/null; then
-    rm -f "$_acorn_fifo"
-    if mkfifo "$_acorn_fifo" && exec 9<>"$_acorn_fifo"; then
+  _acorn_watch_log=0
+  if [ -n "$_acorn_log" ] && [ -n "$_acorn_fifo" ]; then
+    if [ "$_acorn_codex_owns_log" = "1" ]; then
+      if (umask 077; : >"$_acorn_log") 2>/dev/null; then
+        _acorn_watch_log=1
+      fi
+    else
+      # A caller-provided recorder may not exist yet. `tail -F` follows it
+      # after Codex creates the parent directory and file.
+      _acorn_watch_log=1
+    fi
+  fi
+
+  if [ "$_acorn_watch_log" = "1" ]; then
+    export CODEX_TUI_RECORD_SESSION=1
+    if (umask 077; mkfifo "$_acorn_fifo") && exec 9<>"$_acorn_fifo"; then
       (
         exec 9>&-
         exec tail -n 0 -F "$_acorn_log" >"$_acorn_fifo" 2>/dev/null
