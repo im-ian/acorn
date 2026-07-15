@@ -1293,20 +1293,24 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
         disabled: !canRegenerateTitle,
       },
       {
-        label: openLabel,
-        icon:
-          session.mode === "chat" ? (
-            <MessageSquareText size={12} />
-          ) : (
-            <TerminalIcon size={12} />
-          ),
-        onClick: () => {
-          const anchor = document.querySelector<HTMLElement>(
-            `[data-kanban-session-id="${cssAttributeEscape(session.id)}"]`,
-          );
-          if (anchor) onOpen(session.id, anchor);
-        },
+        label: manualDone
+          ? t("workspace.kanban.actions.restoreFromDone")
+          : t("workspace.kanban.actions.markAsDone"),
+        icon: <CheckCircle2 size={12} />,
+        onClick: () => onToggleManualDone(session.id),
       },
+      {
+        label: sidebarText(
+          t,
+          sessionSilenced
+            ? "sidebar.actions.resumeNotifications"
+            : "sidebar.actions.silenceNotifications",
+        ),
+        icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
+        onClick: () => setSessionSilenced(session.id, !sessionSilenced),
+      },
+      { type: "separator" },
+      workspaceContextMenuGroupTitle(t, "open"),
       {
         label: sidebarText(t, "sidebar.actions.openWorkSummary"),
         icon: <BarChart3 size={12} />,
@@ -1319,24 +1323,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
             });
         },
       },
-      {
-        label: sidebarText(
-          t,
-          sessionSilenced
-            ? "sidebar.actions.resumeNotifications"
-            : "sidebar.actions.silenceNotifications",
-        ),
-        icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
-        onClick: () => setSessionSilenced(session.id, !sessionSilenced),
-      },
-      {
-        label: manualDone
-          ? t("workspace.kanban.actions.restoreFromDone")
-          : t("workspace.kanban.actions.markAsDone"),
-        icon: <CheckCircle2 size={12} />,
-        onClick: () => onToggleManualDone(session.id),
-      },
-      workspaceContextMenuGroupTitle(t, "open"),
       {
         label: sidebarText(t, "sidebar.actions.openWorktreeInEditor"),
         icon: <PencilLine size={12} />,
@@ -1358,6 +1344,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
           });
         },
       },
+      { type: "separator" },
       workspaceContextMenuGroupTitle(t, "copy"),
       {
         type: "submenu",
@@ -1396,6 +1383,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
           },
         ],
       },
+      { type: "separator" },
       workspaceContextMenuGroupTitle(t, "danger"),
       {
         label: sidebarText(t, "sidebar.actions.removeSessionMenu"),
@@ -1410,9 +1398,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
       generateSessionTitle,
       isGeneratingTitle,
       manualDone,
-      onOpen,
       onToggleManualDone,
-      openLabel,
       openWorkSummaryTab,
       renameSession,
       requestRemoveSession,
@@ -1420,7 +1406,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
       sessionSilenced,
       session.branch,
       session.id,
-      session.mode,
       session.name,
       session.worktree_path,
       showToast,

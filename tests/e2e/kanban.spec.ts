@@ -1041,27 +1041,22 @@ test.describe("workspace kanban mode", () => {
       clientX: shellMenuTargetBox.x + shellMenuTargetBox.width / 2,
       clientY: shellMenuTargetBox.y + shellMenuTargetBox.height / 2,
     });
+    const cardMenu = page.getByRole("menu");
+    await expect(cardMenu.getByRole("menuitem")).toHaveText([
+      "Rename",
+      "Regenerate Name",
+      "Mark as done",
+      "Silence Notifications",
+      "Open Work Summary",
+      "Open Worktree in Editor",
+      "Reveal in Finder",
+      "Copy",
+      "Remove Session",
+    ]);
+    await expect(cardMenu.getByRole("separator")).toHaveCount(3);
     await expect(
-      page.getByRole("menuitem", { name: "Open shell" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("menuitem", { name: "Rename" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("menuitem", { name: "Regenerate Name" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("menuitem", { name: "Open Work Summary" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("menuitem", { name: "Silence Notifications" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("menuitem", { name: "Reveal in Finder" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("menuitem", { name: "Remove Session" }),
-    ).toBeVisible();
+      cardMenu.getByRole("menuitem", { name: "Open shell", exact: true }),
+    ).toHaveCount(0);
     await page.keyboard.press("Escape");
 
     await board.getByRole("button", { name: "Open shell" }).click();
