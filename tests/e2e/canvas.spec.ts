@@ -200,6 +200,17 @@ test.describe("workspace canvas mode", () => {
     await expect(page.getByTestId("workspace-view-status")).toContainText(
       "Canvas",
     );
+    const canvasWorld = page.getByTestId("workspace-canvas-world");
+    const offsetBeforeChatScroll = await canvasWorld.getAttribute(
+      "data-canvas-offset-y",
+    );
+    await chatNode
+      .getByRole("textbox", { name: "Chat message" })
+      .dispatchEvent("wheel", { deltaY: 120 });
+    await expect(canvasWorld).toHaveAttribute(
+      "data-canvas-offset-y",
+      offsetBeforeChatScroll ?? "0",
+    );
 
     const callsAfterChat = await page.evaluate(
       () =>

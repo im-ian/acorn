@@ -312,6 +312,24 @@ describe("WorkspaceMain", () => {
         "[data-testid='workspace-canvas-minimap-node']",
       ),
     ).toHaveLength(2);
+
+    const world = document.querySelector<HTMLElement>(
+      "[data-testid='workspace-canvas-world']",
+    )!;
+    const offsetBeforeChatScroll = world.dataset.canvasOffsetY;
+    const chatScroll = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 120,
+    });
+    act(() =>
+      chatNode!
+        .querySelector('[data-testid="mock-chat-pane"]')!
+        .dispatchEvent(chatScroll),
+    );
+
+    expect(chatScroll.defaultPrevented).toBe(false);
+    expect(world.dataset.canvasOffsetY).toBe(offsetBeforeChatScroll);
   });
 
   it("preserves saved nodes while sessions are transiently empty at startup", () => {

@@ -392,7 +392,7 @@ export function WorkspaceCanvas({
       if (!(target instanceof Element)) return;
       if (target.closest("[data-workspace-canvas-toolbar]")) return;
       const explicitZoom = event.ctrlKey || event.metaKey;
-      if (target.closest("[data-canvas-terminal-body]") && !explicitZoom) {
+      if (target.closest("[data-canvas-session-body]") && !explicitZoom) {
         return;
       }
       event.preventDefault();
