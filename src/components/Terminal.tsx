@@ -125,6 +125,11 @@ interface TerminalProps {
    * activate triggers a `fit()` + `refresh()` cycle so the buffer redraws.
    */
   isActive?: boolean;
+  /**
+   * Keeps a visible terminal current while coalescing its output more than the
+   * foreground terminal. Hidden terminals still use the slowest cadence.
+   */
+  reduceOutputCadence?: boolean;
   isFocusedPane?: boolean;
   autoFocusOnActive?: boolean;
 }
@@ -578,6 +583,7 @@ export function Terminal({
   agentProvider = null,
   pasteAgentProvider = null,
   isActive = true,
+  reduceOutputCadence = false,
   isFocusedPane = true,
   autoFocusOnActive = false,
 }: TerminalProps): ReactElement {
@@ -586,6 +592,7 @@ export function Terminal({
   const fitRef = useRef<FitAddon | null>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
   const isActiveRef = useRef(isActive);
+  const reduceOutputCadenceRef = useRef(reduceOutputCadence);
   const outputWriterRef = useRef<TerminalOutputWriter | null>(null);
   const pasteAgentProviderRef =
     useRef<SessionAgentProvider | null>(pasteAgentProvider);
@@ -599,12 +606,21 @@ export function Terminal({
   const fontSmoothing = useSettings(
     (s) => s.settings.terminal.fontSmoothing,
   );
+  const canvasInactiveTerminalRenderIntervalMs = useSettings(
+    (s) => s.settings.terminal.canvasInactiveTerminalRenderIntervalMs,
+  );
+  const backgroundOutputDelayMsRef = useRef(
+    canvasInactiveTerminalRenderIntervalMs,
+  );
 
   isActiveRef.current = isActive;
+  reduceOutputCadenceRef.current = reduceOutputCadence;
+  backgroundOutputDelayMsRef.current =
+    canvasInactiveTerminalRenderIntervalMs;
 
   useEffect(() => {
     if (isActive) outputWriterRef.current?.flushSoon();
-  }, [isActive]);
+  }, [isActive, reduceOutputCadence]);
 
   useEffect(() => {
     pasteAgentProviderRef.current = pasteAgentProvider;
@@ -2448,7 +2464,11 @@ export function Terminal({
         // output even when the terminal was hidden during the write.
         scheduleContextDispatch();
       },
-      isActive: () => isActiveRef.current,
+      isActive: () =>
+        isActiveRef.current && !reduceOutputCadenceRef.current,
+      isBackground: () =>
+        isActiveRef.current && reduceOutputCadenceRef.current,
+      backgroundDelayMs: () => backgroundOutputDelayMsRef.current,
     });
     outputWriterRef.current = outputWriter;
     const waitForOutputWriterIdleBeforeSave = async () => {

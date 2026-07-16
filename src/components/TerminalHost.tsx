@@ -347,6 +347,9 @@ function PortaledTerminal({ session }: { session: Session }) {
       agentProvider={resolveSessionAgentProvider(session)}
       pasteAgentProvider={session.agent_provider ?? null}
       isActive={visibleTargetKey !== null}
+      reduceOutputCadence={
+        terminalTargetIsCanvas(visibleTargetKey) && !isFocusedPane
+      }
       isFocusedPane={isFocusedPane}
       autoFocusOnActive={terminalTargetIsPopover(visibleTargetKey)}
     />,
