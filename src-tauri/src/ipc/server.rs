@@ -397,7 +397,7 @@ fn handle_promote_self<R: Runtime>(
         Err(err) => return err,
     };
     if !already_control {
-        if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
+        if let Err(err) = persistence::save_sessions(&state.sessions) {
             tracing::warn!(error = %err, "ipc: persist after promote-self failed");
         }
         if let Err(err) = app.emit(
@@ -769,7 +769,7 @@ fn handle_new_session<R: Runtime>(
         .unwrap_or("project")
         .to_string();
     state.projects.ensure(repo, basename);
-    if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
+    if let Err(err) = persistence::save_sessions(&state.sessions) {
         tracing::warn!(error = %err, "ipc: persist sessions after new-session failed");
     }
     // Nudge the frontend so the new session appears in the sidebar
@@ -846,7 +846,7 @@ fn handle_kill_session<R: Runtime>(
             };
         }
     }
-    if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
+    if let Err(err) = persistence::save_sessions(&state.sessions) {
         tracing::warn!(error = %err, "ipc: persist after kill-session failed");
     }
     for session in &sessions_to_remove {

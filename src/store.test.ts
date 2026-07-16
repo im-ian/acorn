@@ -2333,6 +2333,43 @@ describe("cycleProject", () => {
 });
 
 describe("reconcile via refreshSessions", () => {
+  it("preserves an ephemeral agent status source when list_sessions omits it", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          agent_status_source: "transcript_fallback",
+        }),
+      ],
+    );
+    mockApi.listSessions.mockResolvedValueOnce([session("a1", REPO_A)]);
+
+    await useAppStore.getState().refreshSessions();
+
+    expect(useAppStore.getState().sessions[0]?.agent_status_source).toBe(
+      "transcript_fallback",
+    );
+  });
+
+  it("clears an omitted agent status source when list_sessions changes status", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          status: "working",
+          agent_status_source: "hook",
+        }),
+      ],
+    );
+    mockApi.listSessions.mockResolvedValueOnce([
+      session("a1", REPO_A, { status: "ready" }),
+    ]);
+
+    await useAppStore.getState().refreshSessions();
+
+    expect(useAppStore.getState().sessions[0]?.agent_status_source).toBeUndefined();
+  });
+
   it("drops removed sessions from the pane that held them", async () => {
     // Single-pane variant — this exercises filter-out without depending on
     // the cross-pane collapse path, which has a runtime-specific divergence
@@ -2488,6 +2525,69 @@ describe("pollSessionStatuses", () => {
     const sessions = useAppStore.getState().sessions;
     expect(sessions.find((s) => s.id === "a1")?.status).toBe("waiting_for_input");
     expect(sessions.find((s) => s.id === "a2")?.status).toBe("working");
+  });
+
+  it("merges the agent status source reported by status polling", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A, { agent_status_source: "hook" })],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "working",
+        agent_status_source: "transcript_fallback",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.agent_status_source).toBe(
+      "transcript_fallback",
+    );
+  });
+
+  it("clears a stale agent status source when status polling reports null", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          agent_status_source: "transcript_fallback",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "ready",
+        agent_status_source: null,
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.agent_status_source).toBeNull();
+  });
+
+  it("clears an omitted agent status source when a legacy poll changes status", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          status: "working",
+          agent_status_source: "hook",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      { id: "a1", status: "ready", branch: null },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.agent_status_source).toBeNull();
   });
 
   it("polls only the requested existing session ids", async () => {

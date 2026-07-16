@@ -55,15 +55,30 @@ pub enum StatusReason {
     ShellPrompt,
 }
 
+/// Evidence that actually produced this detection. A resolved transcript path
+/// is not itself transcript evidence: read failures and meta-only tails retain
+/// the previous observation instead of claiming JSONL fallback authority.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StatusEvidence {
+    Transcript,
+    Process,
+    Previous,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct StatusDetection {
     pub status: SessionStatus,
     pub reason: Option<StatusReason>,
+    pub evidence: StatusEvidence,
 }
 
 impl StatusDetection {
-    fn new(status: SessionStatus, reason: Option<StatusReason>) -> Self {
-        Self { status, reason }
+    fn new(status: SessionStatus, reason: Option<StatusReason>, evidence: StatusEvidence) -> Self {
+        Self {
+            status,
+            reason,
+            evidence,
+        }
     }
 }
 
@@ -106,7 +121,7 @@ pub fn detect_with_reason(
     shell_hint: Option<ShellHint>,
 ) -> StatusDetection {
     if matches!(shell_hint, Some(ShellHint::Idle) | None) {
-        return StatusDetection::new(SessionStatus::Ready, None);
+        return StatusDetection::new(SessionStatus::Ready, None, StatusEvidence::Process);
     }
 
     let (path, kind) = match transcript {
@@ -119,15 +134,19 @@ pub fn detect_with_reason(
         .and_then(|tail| latest_turn_state(kind, &tail.text, tail.read_full));
 
     match classified {
-        Some(TurnState::Ready) => {
-            StatusDetection::new(SessionStatus::Ready, Some(StatusReason::TurnComplete))
+        Some(TurnState::Ready) => StatusDetection::new(
+            SessionStatus::Ready,
+            Some(StatusReason::TurnComplete),
+            StatusEvidence::Transcript,
+        ),
+        Some(TurnState::Working) => {
+            StatusDetection::new(SessionStatus::Working, None, StatusEvidence::Transcript)
         }
-        Some(TurnState::Working) => StatusDetection::new(SessionStatus::Working, None),
         // Transcript exists but the tail held no turn lines; keep
         // whatever the caller previously observed instead of regressing
         // to Ready. The next poll that lands on a real turn line corrects
         // it.
-        None => StatusDetection::new(previous, None),
+        None => StatusDetection::new(previous, None, StatusEvidence::Previous),
     }
 }
 
@@ -138,11 +157,17 @@ fn map_shell_hint(hint: Option<ShellHint>) -> SessionStatus {
 
 fn detect_shell_hint(hint: Option<ShellHint>) -> StatusDetection {
     match hint {
-        Some(ShellHint::Running) => StatusDetection::new(SessionStatus::Working, None),
-        Some(ShellHint::NeedsInput) => {
-            StatusDetection::new(SessionStatus::Ready, Some(StatusReason::ShellPrompt))
+        Some(ShellHint::Running) => {
+            StatusDetection::new(SessionStatus::Working, None, StatusEvidence::Process)
         }
-        Some(ShellHint::Idle) | None => StatusDetection::new(SessionStatus::Ready, None),
+        Some(ShellHint::NeedsInput) => StatusDetection::new(
+            SessionStatus::Ready,
+            Some(StatusReason::ShellPrompt),
+            StatusEvidence::Process,
+        ),
+        Some(ShellHint::Idle) | None => {
+            StatusDetection::new(SessionStatus::Ready, None, StatusEvidence::Process)
+        }
     }
 }
 
@@ -409,10 +434,10 @@ mod tests {
 
     #[test]
     fn detect_uses_shell_hint_when_no_transcript() {
-        assert_eq!(
-            detect(None, SessionStatus::Ready, Some(ShellHint::Running)),
-            SessionStatus::Working
-        );
+        let detection = detect_with_reason(None, SessionStatus::Ready, Some(ShellHint::Running));
+
+        assert_eq!(detection.status, SessionStatus::Working);
+        assert_eq!(detection.evidence, StatusEvidence::Process);
     }
 
     #[test]
@@ -459,21 +484,41 @@ mod tests {
             r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#,
         );
 
-        assert_eq!(
-            detect_with_reason(
-                Some((path, AgentKind::Codex)),
-                SessionStatus::Working,
-                Some(ShellHint::Running),
-            ),
-            StatusDetection::new(SessionStatus::Ready, Some(StatusReason::TurnComplete)),
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Codex)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
         );
+
+        assert_eq!(detection.status, SessionStatus::Ready);
+        assert_eq!(detection.reason, Some(StatusReason::TurnComplete));
+        assert_eq!(detection.evidence, StatusEvidence::Transcript);
+    }
+
+    #[test]
+    fn detect_preserves_previous_evidence_when_transcript_has_no_turn() {
+        let path = write_status_transcript(&meta_lines().join("\n"));
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Claude)),
+            SessionStatus::WaitingForInput,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::WaitingForInput);
+        assert_eq!(detection.reason, None);
+        assert_eq!(detection.evidence, StatusEvidence::Previous);
     }
 
     #[test]
     fn detect_reports_ready_with_shell_prompt_reason() {
         assert_eq!(
             detect_with_reason(None, SessionStatus::Working, Some(ShellHint::NeedsInput)),
-            StatusDetection::new(SessionStatus::Ready, Some(StatusReason::ShellPrompt)),
+            StatusDetection::new(
+                SessionStatus::Ready,
+                Some(StatusReason::ShellPrompt),
+                StatusEvidence::Process,
+            ),
         );
     }
 
