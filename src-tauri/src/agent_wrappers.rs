@@ -446,6 +446,7 @@ exec "$REAL_BIN" "$@"
 
 const CLAUDE_NOTIFY_BODY: &str = r#"#!/bin/sh
 input=$(cat 2>/dev/null || true)
+[ -n "$input" ] || exit 0
 compact_input=$(printf '%s\n' "$input" | tr '\r\n' '  ')
 
 if [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
@@ -461,36 +462,10 @@ else
   [ "$legacy_owner_session_id" = "$legacy_session_id" ] || exit 0
 fi
 
-# Claude includes a non-empty agent_id only when this configured hook fires
-# inside a subagent. Child prompts, attention requests, and Stop events do not
-# own the parent Acorn terminal and must not transition its aggregate status.
-# A top-level `claude --agent` may still carry agent_type without agent_id.
-if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"agent_id"[[:space:]]*:[[:space:]]*"[^"]+"'; then
-  exit 0
-fi
-
-hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
-
-event=""
-# Claude can emit Stop while background tasks or session crons are still able
-# to wake the parent turn. Keep those sessions Working; only a Stop with no
-# pending background work is actually awaiting the user's next prompt. The
-# field-boundary regex cannot match JSON-escaped decoy text inside strings.
-case "$hook_event_name" in
-  SessionStart|UserPromptSubmit) event="start" ;;
-  Stop)
-    if printf '%s\n' "$compact_input" | grep -qE '(^|[,{])[[:space:]]*"(background_tasks|session_crons)"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'; then
-      # This is a pause, not a new start. Sending nothing preserves both the
-      # existing Working state and any concurrent attention request.
-      event=""
-    else
-      event="needs_input"
-    fi
-    ;;
-  Notification|PermissionRequest) event="needs_input" ;;
-  Error) event="error" ;;
-esac
-[ -n "$event" ] || exit 0
+# Forward the raw hook payload; Rust owns classification. Subagent
+# filtering, Stop-with-background-work suppression, and the event mapping
+# live in `parse_raw_claude_hook_request`, where real JSON parsing replaces
+# the field-boundary regexes this script used to carry.
 
 # Resolve the hook endpoint at send time. Each app launch rewrites the
 # endpoint file with that run's server URL + token (the hook server binds a
@@ -511,11 +486,13 @@ fi
 [ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
-payload=$(printf '{"session_id":"%s","provider":"claude","event":"%s","source":"hook"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event")
-curl -sf -X POST \
+printf '%s' "$input" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
   -H 'Content-Type: application/json' \
   -H "X-Acorn-Agent-Hook-Token: $hook_token" \
-  -d "$payload" \
+  -H 'X-Acorn-Agent-Hook-Provider: claude' \
+  -H "X-Acorn-Agent-Hook-Session-Id: $ACORN_AGENT_HOOK_SESSION_ID" \
+  -H 'X-Acorn-Agent-Hook-Source: native' \
+  --data-binary @- \
   "$hook_url" >/dev/null 2>&1 || true
 "#;
 
@@ -2897,12 +2874,16 @@ done
         assert!(wrapper.contains("exec \"$REAL_BIN\" \"$@\""));
 
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
-        assert!(notify.contains("\"provider\":\"claude\""));
-        assert!(notify.contains("SessionStart|UserPromptSubmit) event=\"start\""));
-        assert!(!notify.contains("SubagentStop"));
-        assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
+        assert!(notify.contains("X-Acorn-Agent-Hook-Provider: claude"));
+        assert!(notify.contains("X-Acorn-Agent-Hook-Session-Id: $ACORN_AGENT_HOOK_SESSION_ID"));
+        assert!(notify.contains("X-Acorn-Agent-Hook-Source: native"));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
-        assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
+        assert!(notify.contains("--data-binary @-"));
+        // Classification (subagent filter, Stop suppression, event mapping)
+        // moved to Rust — the script must not re-grow shell-side event logic.
+        assert!(!notify.contains("hook_event_name"));
+        assert!(!notify.contains("agent_id"));
+        assert!(!notify.contains("background_tasks"));
 
         let settings = fs::read_to_string(dir.join("acorn-claude-settings.json")).unwrap();
         let notify_path = dir.join("acorn-claude-notify").display().to_string();
@@ -2980,91 +2961,35 @@ done
         }
     }
 
+    #[cfg(unix)]
     #[test]
-    fn claude_notify_maps_runtime_hook_events() {
-        let base = ScratchDir::new("events");
-        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
-        let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
-        assert!(notify.contains("SessionStart|UserPromptSubmit) event=\"start\""));
-        assert!(!notify.contains("SubagentStop"));
-        assert!(notify.contains("Notification|PermissionRequest) event=\"needs_input\""));
-        assert!(notify.contains("Error) event=\"error\""));
+    fn claude_notify_forwards_raw_payload_for_owner_invocations() {
+        // Classification (subagent filter, Stop suppression, event mapping)
+        // lives in `parse_raw_claude_hook_request`; the script's only job is
+        // to deliver the payload byte-for-byte with transport attribution.
+        let payload = serde_json::json!({
+            "hook_event_name": "Stop",
+            "session_id": "019e4818-7c15-4e60-9b3b-898a1c7803d6",
+            "agent_id": "019f6338-6250-7303-88a6-a7add31dba1d",
+            "background_tasks": [{"id": "agent-1", "status": "running"}],
+        });
+        let posted = notify_payload_for_input(CLAUDE_NOTIFY_NAME, &[], &payload.to_string(), None)
+            .expect("an owner invocation must forward the payload");
+        assert_eq!(posted, payload);
     }
 
     #[cfg(unix)]
     #[test]
-    fn claude_stop_with_background_work_emits_no_transition() {
-        let payloads = [
-            serde_json::json!({
-                "hook_event_name": "Stop",
-                "background_tasks": [{"id": "agent-1", "type": "agent", "status": "running"}],
-                "session_crons": [],
-            }),
-            serde_json::json!({
-                "hook_event_name": "Stop",
-                "background_tasks": [{"id": "shell-1", "type": "shell", "status": "pending"}],
-                "session_crons": [],
-            }),
-            serde_json::json!({
-                "hook_event_name": "Stop",
-                "background_tasks": [],
-                "session_crons": [{"id": "cron-1", "schedule": "in 1m", "recurring": false}],
-            }),
-            serde_json::json!({
-                "hook_event_name": "Stop",
-                "background_tasks": [],
-                "session_crons": [{"id": "cron-2", "schedule": "*/5 * * * *", "recurring": true}],
-            }),
-        ];
+    fn claude_notify_gates_nested_and_legacy_invocations() {
+        let stop =
+            r#"{"hook_event_name":"Stop","session_id":"019e4818-7c15-4e60-9b3b-898a1c7803d6"}"#;
 
-        for payload in payloads {
-            let pretty = serde_json::to_string_pretty(&payload).unwrap();
-            assert_eq!(
-                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &pretty),
-                None,
-                "{pretty}",
-            );
-        }
-    }
+        // A top-level hook posts without waiting for the asynchronous
+        // claude.id marker.
+        assert!(notify_payload_for_input(CLAUDE_NOTIFY_NAME, &[], stop, None).is_some());
 
-    #[cfg(unix)]
-    #[test]
-    fn claude_stop_waits_only_when_no_background_work_remains() {
-        let payloads = [
-            serde_json::json!({
-                "hook_event_name": "Stop",
-                "session_id": "019e4818-7c15-4e60-9b3b-898a1c7803d6",
-                "background_tasks": [],
-                "session_crons": [],
-            }),
-            serde_json::json!({
-                "hook_event_name": "Stop",
-                "background_tasks": [],
-                "session_crons": [],
-                "last_assistant_message": "decoy: \"background_tasks\":[{\"status\":\"running\"}]",
-            }),
-        ];
-
-        for payload in payloads {
-            let body = serde_json::to_string(&payload).unwrap();
-            assert_eq!(
-                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &body).as_deref(),
-                Some("needs_input"),
-                "{body}",
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn claude_native_stop_uses_synchronous_wrapper_ownership() {
-        let stop = r#"{"hook_event_name":"Stop","background_tasks":[],"session_crons":[]}"#;
-
-        assert_eq!(
-            notify_event_for_stdin(CLAUDE_NOTIFY_NAME, stop).as_deref(),
-            Some("needs_input"),
-            "a top-level hook must not wait for the asynchronous claude.id marker",
-        );
+        // A nested wrapper stays silent even with a matching conversation
+        // marker — depth gating happens before any payload inspection.
         assert_eq!(
             notify_payload_for_input_with_invocation(
                 CLAUDE_NOTIFY_NAME,
@@ -3076,116 +3001,33 @@ done
             None,
             "a matching conversation marker cannot authorize a nested wrapper",
         );
-    }
 
-    #[cfg(unix)]
-    #[test]
-    fn claude_subagent_hooks_cannot_transition_the_parent_session() {
-        for hook_event_name in [
-            "UserPromptSubmit",
-            "Notification",
-            "PermissionRequest",
-            "Stop",
-        ] {
-            let payload = serde_json::json!({
-                "hook_event_name": hook_event_name,
-                "agent_id": "019f6338-6250-7303-88a6-a7add31dba1d",
-                "agent_type": "Explore",
-                "background_tasks": [],
-                "session_crons": [],
-            });
-            assert_eq!(
-                notify_payload_for_input(CLAUDE_NOTIFY_NAME, &[], &payload.to_string(), None,),
+        // A tokenless legacy owner (provider that survived an app update)
+        // posts only when the payload conversation matches its marker.
+        assert!(notify_payload_for_input_with_invocation(
+            CLAUDE_NOTIFY_NAME,
+            &[],
+            stop,
+            Some(("claude.id", "019e4818-7c15-4e60-9b3b-898a1c7803d6")),
+            None,
+        )
+        .is_some());
+        assert_eq!(
+            notify_payload_for_input_with_invocation(
+                CLAUDE_NOTIFY_NAME,
+                &[],
+                stop,
+                Some(("claude.id", "11111111-2222-4333-8444-555555555555")),
                 None,
-                "a child {hook_event_name} must not transition its parent session",
-            );
-        }
-
-        let top_level_agent = serde_json::json!({
-            "hook_event_name": "PermissionRequest",
-            "agent_type": "reviewer",
-        });
-        assert_eq!(
-            notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &top_level_agent.to_string()).as_deref(),
-            Some("needs_input"),
-            "top-level --agent sessions have agent_type without a child agent_id",
-        );
-
-        let decoy = serde_json::json!({
-            "hook_event_name": "PermissionRequest",
-            "message": "literal decoys: {\"agent_id\":\"not-a-real-field\",\"hook_event_name\":\"Stop\"}",
-        });
-        assert_eq!(
-            notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &decoy.to_string()).as_deref(),
-            Some("needs_input"),
-            "escaped message text must not look like a top-level child id",
+            ),
+            None,
+            "a mismatched legacy owner marker must fail closed",
         );
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn claude_explicit_attention_events_do_not_require_owner_binding() {
-        for payload in [
-            serde_json::json!({"hook_event_name": "PermissionRequest"}),
-            serde_json::json!({
-                "hook_event_name": "Notification",
-                "notification_type": "agent_needs_input",
-            }),
-        ] {
-            assert_eq!(
-                notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &payload.to_string()).as_deref(),
-                Some("needs_input"),
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn claude_background_hooks_cannot_erase_pending_attention() {
-        let background_stop = serde_json::json!({
-            "hook_event_name": "Stop",
-            "background_tasks": [{"id": "agent-1", "status": "running"}],
-            "session_crons": [],
-        });
-        let subagent_stop = serde_json::json!({
-            "hook_event_name": "SubagentStop",
-            "background_tasks": [],
-            "session_crons": [],
-        });
-        let permission = serde_json::json!({"hook_event_name": "PermissionRequest"});
-        let notification = serde_json::json!({
-            "hook_event_name": "Notification",
-            "notification_type": "agent_needs_input",
-        });
-        let final_stop = serde_json::json!({
-            "hook_event_name": "Stop",
-            "background_tasks": [],
-            "session_crons": [],
-        });
-
-        let events = [
-            permission,
-            background_stop.clone(),
-            subagent_stop,
-            notification,
-            background_stop,
-            final_stop,
-        ]
-        .into_iter()
-        .map(|payload| notify_event_for_stdin(CLAUDE_NOTIFY_NAME, &payload.to_string()))
-        .collect::<Vec<_>>();
-        assert_eq!(
-            events,
-            [
-                Some("needs_input".into()),
-                None,
-                None,
-                Some("needs_input".into()),
-                None,
-                Some("needs_input".into()),
-            ]
-        );
-    }
+    // The Stop/background, subagent-filter, decoy, and attention-ordering
+    // scenarios that used to run against this script live in
+    // `agent_hooks::tests` now — classification moved to Rust wholesale.
 
     #[test]
     fn writes_hook_endpoint_file_atomically_with_owner_only_perms() {
