@@ -177,6 +177,18 @@ pub fn bind_session_marker(session_id: uuid::Uuid, kind: AgentKind, uuid: &str) 
     bind_marker_in_state_dir(&state_dir, kind, uuid)
 }
 
+/// Bind a provider-owned conversation identifier as the session's durable
+/// marker. Provider hooks identify the active conversation directly, so
+/// transcript activity heuristics must not reject this update.
+pub fn bind_provider_session_marker(
+    session_id: uuid::Uuid,
+    kind: AgentKind,
+    uuid: &str,
+) -> io::Result<()> {
+    let state_dir = agent_resume::ensure_session_state_dir(session_id)?;
+    bind_provider_marker_in_state_dir(&state_dir, kind, uuid)
+}
+
 /// Serializes marker writes across the background tick and the status
 /// poll's fallback. The read-check-write below is not atomic on its own;
 /// two threads interleaving could skip the dormant-echo arbitration and
@@ -187,6 +199,29 @@ fn marker_bind_lock() -> &'static Mutex<()> {
 }
 
 fn bind_marker_in_state_dir(state_dir: &Path, kind: AgentKind, uuid: &str) -> io::Result<()> {
+    bind_marker_in_state_dir_with_policy(state_dir, kind, uuid, MarkerBindPolicy::Inferred)
+}
+
+fn bind_provider_marker_in_state_dir(
+    state_dir: &Path,
+    kind: AgentKind,
+    uuid: &str,
+) -> io::Result<()> {
+    bind_marker_in_state_dir_with_policy(state_dir, kind, uuid, MarkerBindPolicy::ProviderDeclared)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MarkerBindPolicy {
+    Inferred,
+    ProviderDeclared,
+}
+
+fn bind_marker_in_state_dir_with_policy(
+    state_dir: &Path,
+    kind: AgentKind,
+    uuid: &str,
+    policy: MarkerBindPolicy,
+) -> io::Result<()> {
     let _guard = marker_bind_lock()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -201,10 +236,12 @@ fn bind_marker_in_state_dir(state_dir: &Path, kind: AgentKind, uuid: &str) -> io
     // scan can echo the abandoned original once the new transcript
     // goes idle; writing that echo would oscillate the marker. Skip
     // only the dormant-echo case so the marker never flaps.
-    if let Some(prev) = previous.as_deref() {
-        if marker_rollback_is_dormant_echo(kind, prev, uuid) {
-            return Ok(());
-        }
+    if policy == MarkerBindPolicy::Inferred
+        && previous
+            .as_deref()
+            .is_some_and(|prev| marker_rollback_is_dormant_echo(kind, prev, uuid))
+    {
+        return Ok(());
     }
     write_if_changed(&id_file, &format!("{uuid}\n"))
 }
