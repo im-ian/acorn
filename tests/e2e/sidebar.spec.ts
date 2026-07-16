@@ -2183,10 +2183,18 @@ test.describe("sidebar: project lifecycle", () => {
     });
   });
 
-  test("project workspace sessions can move out next to root sessions by drag and drop", async ({
+  test("project workspace sessions can move across priority groups into the project root", async ({
     page,
     tauri,
   }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          interface: { prioritizeNeedsInputTabs: true },
+        }),
+      );
+    });
     await tauri.handle("list_projects", () => [
       {
         repo_path: "/tmp/demo",
@@ -2224,7 +2232,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "ready",
+          status: "waiting_for_input",
           created_at: "2026-01-01T00:00:01Z",
           updated_at: "2026-01-01T00:00:01Z",
           last_message: null,
@@ -2271,7 +2279,7 @@ test.describe("sidebar: project lifecycle", () => {
       .getByRole("button", { name: /^root main · Ready/ })
       .first();
     const child = sidebar
-      .getByRole("button", { name: /^child main · Ready/ })
+      .getByRole("button", { name: /^child main · Waiting for input/ })
       .first();
 
     await dragBetween(page, child, frontend);
@@ -3971,7 +3979,7 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(projects.last()).toHaveAccessibleName("Project beta");
   });
 
-  test("settings can move waiting and error project tabs to the top", async ({
+  test("priority sorting preserves drag order within each status group", async ({
     page,
     tauri,
   }) => {
@@ -4144,6 +4152,20 @@ test.describe("sidebar: project lifecycle", () => {
       })
       .toBe("priority-order");
 
+    await dragBetween(page, needs, errored);
+
+    await expect
+      .poll(async () => {
+        const readyBox = await ready.boundingBox();
+        const erroredBox = await errored.boundingBox();
+        const needsBox = await needs.boundingBox();
+        if (!readyBox || !erroredBox || !needsBox) return "missing";
+        return needsBox.y < erroredBox.y && erroredBox.y < readyBox.y
+          ? "reordered-priority-group"
+          : "different";
+      })
+      .toBe("reordered-priority-group");
+
     await pressHotkey(page, { mod: true, key: "," });
     await settings
       .getByRole("checkbox", {
@@ -4158,7 +4180,7 @@ test.describe("sidebar: project lifecycle", () => {
         const erroredBox = await errored.boundingBox();
         const needsBox = await needs.boundingBox();
         if (!readyBox || !erroredBox || !needsBox) return "missing";
-        return readyBox.y < erroredBox.y && erroredBox.y < needsBox.y
+        return readyBox.y < needsBox.y && needsBox.y < erroredBox.y
           ? "manual-order"
           : "different";
       })
