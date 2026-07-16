@@ -169,6 +169,50 @@ test.describe("command palette", () => {
     ).toBeVisible();
   });
 
+  test("opens a selected chat session in kanban", async ({ page, tauri }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "chat-1",
+        name: "chat-one",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "default",
+        kind: "regular",
+        mode: "chat",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+    await pressHotkey(page, { mod: true, key: "p" });
+    await page.getByRole("option", { name: /Switch to chat-one/i }).click();
+
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Kanban",
+    );
+    await expect(page.getByTestId("kanban-terminal-popover")).toBeVisible();
+    await expect(page.getByTestId("chat-popover-body")).toBeVisible();
+  });
+
   test("opens unread session activity in the destination workspace mode", async ({
     page,
     tauri,

@@ -5,6 +5,7 @@ import {
   CirclePlus,
   GitBranch,
   Maximize2,
+  MessageSquareText,
   Minus,
   PanelsTopLeft,
   Plus,
@@ -58,6 +59,7 @@ import {
 } from "../lib/workspaceCanvas";
 import { useAppStore } from "../store";
 import { Button, IconButton, StatusDot, type StatusTone } from "./ui";
+import { ChatPane } from "./ChatPane";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { Tooltip } from "./Tooltip";
 import { WorkspaceCanvasMinimap } from "./WorkspaceCanvasMinimap";
@@ -81,9 +83,7 @@ const STATUS_ICON_CLASS: Record<SessionStatus, string> = {
   errored: "text-danger",
 };
 
-const CANVAS_SESSION_CREATE_ACTIONS = PROJECT_SESSION_CREATE_ACTIONS.filter(
-  (action) => action.mode === "terminal",
-);
+const CANVAS_SESSION_CREATE_ACTIONS = PROJECT_SESSION_CREATE_ACTIONS;
 
 const VIEWPORT_SAVE_DEBOUNCE_MS = 220;
 const WHEEL_ZOOM_SENSITIVITY = 0.0015;
@@ -128,7 +128,7 @@ function canvasSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
     case "control":
       return <Bot size={12} />;
     case "chat":
-      return null;
+      return <MessageSquareText size={12} />;
   }
 }
 
@@ -140,7 +140,7 @@ function dispatchCanvasSessionCreate(action: ProjectSessionCreateAction) {
         ? "acorn:new-isolated-session"
         : action.id === "control"
           ? "acorn:new-control-session"
-          : null;
+          : "acorn:new-chat-session";
   if (eventName) window.dispatchEvent(new CustomEvent(eventName));
 }
 
@@ -193,13 +193,10 @@ export function WorkspaceCanvas({
   const setWorkspaceCanvasState = useAppStore(
     (state) => state.setWorkspaceCanvasState,
   );
-  const terminalSessions = useMemo(
-    () => sessions.filter((session) => session.mode !== "chat"),
-    [sessions],
-  );
+  const canvasSessions = sessions;
   const sessionIds = useMemo(
-    () => terminalSessions.map((session) => session.id),
-    [terminalSessions],
+    () => canvasSessions.map((session) => session.id),
+    [canvasSessions],
   );
   const reconciliationIdsKey = (
     sessions.length === 0 ? workspaceSessionIds : sessionIds
@@ -395,7 +392,7 @@ export function WorkspaceCanvas({
       if (!(target instanceof Element)) return;
       if (target.closest("[data-workspace-canvas-toolbar]")) return;
       const explicitZoom = event.ctrlKey || event.metaKey;
-      if (target.closest("[data-canvas-terminal-body]") && !explicitZoom) {
+      if (target.closest("[data-canvas-session-body]") && !explicitZoom) {
         return;
       }
       event.preventDefault();
@@ -590,7 +587,7 @@ export function WorkspaceCanvas({
   }, [applyCanvas, persistCanvas, reconciliationIds]);
 
   const contextSession = contextMenu?.sessionId
-    ? terminalSessions.find((session) => session.id === contextMenu.sessionId) ??
+    ? canvasSessions.find((session) => session.id === contextMenu.sessionId) ??
       null
     : null;
   const sessionCreateMenuItems = useMemo<ContextMenuItem[]>(
@@ -613,26 +610,26 @@ export function WorkspaceCanvas({
   const contextMenuItems = useMemo<ContextMenuItem[]>(() => {
     const items: ContextMenuItem[] = [];
     if (contextSession) {
-      items.push(
-        {
-          type: "group-title",
-          label: canvasText(t, "workspace.canvas.contextSession"),
-        },
-        {
+      items.push({
+        type: "group-title",
+        label: canvasText(t, "workspace.canvas.contextSession"),
+      });
+      if (contextSession.mode !== "chat") {
+        items.push({
           label: canvasText(t, "workspace.canvas.expandSession", {
             name: contextSession.name,
           }),
           icon: <Maximize2 size={12} />,
           onClick: () => openExpanded(contextSession.id),
-        },
-        {
-          label: canvasText(t, "workspace.canvas.openInPanes", {
-            name: contextSession.name,
-          }),
-          icon: <PanelsTopLeft size={12} />,
-          onClick: () => openInPanes(contextSession.id),
-        },
-      );
+        });
+      }
+      items.push({
+        label: canvasText(t, "workspace.canvas.openInPanes", {
+          name: contextSession.name,
+        }),
+        icon: <PanelsTopLeft size={12} />,
+        onClick: () => openInPanes(contextSession.id),
+      });
     }
     items.push(...sessionCreateMenuItems);
     items.push(
@@ -643,13 +640,13 @@ export function WorkspaceCanvas({
       {
         label: canvasText(t, "workspace.canvas.fit"),
         icon: <Scan size={12} />,
-        disabled: terminalSessions.length === 0,
+        disabled: canvasSessions.length === 0,
         onClick: () => fitAll(),
       },
       {
         label: canvasText(t, "workspace.canvas.reset"),
         icon: <RotateCcw size={12} />,
-        disabled: terminalSessions.length === 0,
+        disabled: canvasSessions.length === 0,
         onClick: resetLayout,
       },
     );
@@ -662,7 +659,7 @@ export function WorkspaceCanvas({
     resetLayout,
     sessionCreateMenuItems,
     t,
-    terminalSessions.length,
+    canvasSessions.length,
   ]);
 
   const openCanvasContextMenu = useCallback(
@@ -671,7 +668,7 @@ export function WorkspaceCanvas({
       if (!(target instanceof Element)) return;
       if (
         target.closest("[data-workspace-canvas-toolbar]") ||
-        target.closest("[data-canvas-terminal-body]")
+        target.closest("[data-canvas-session-body]")
       ) {
         return;
       }
@@ -721,11 +718,11 @@ export function WorkspaceCanvas({
         data-canvas-offset-x={canvas.viewport.offset.x}
         data-canvas-offset-y={canvas.viewport.offset.y}
       >
-        {terminalSessions.map((session) => {
+        {canvasSessions.map((session) => {
           const node = canvas.nodes[session.id];
           if (!node) return null;
           return (
-            <WorkspaceCanvasTerminalNode
+            <WorkspaceCanvasSessionNode
               key={session.id}
               session={session}
               node={node}
@@ -743,7 +740,7 @@ export function WorkspaceCanvas({
         })}
       </div>
 
-      {terminalSessions.length === 0 ? (
+      {canvasSessions.length === 0 ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <div className="pointer-events-auto flex flex-col items-center gap-2 rounded-xl border border-border bg-bg/85 px-4 py-3 text-xs text-fg-muted shadow-lg backdrop-blur">
             <span>{canvasText(t, "workspace.canvas.empty")}</span>
@@ -773,11 +770,11 @@ export function WorkspaceCanvas({
           <span className="shrink-0 text-[10px] text-fg-muted">
             {canvasText(
               t,
-              terminalSessions.length === 1
-                ? "workspace.canvas.terminalCountOne"
-                : "workspace.canvas.terminalCountOther",
+              canvasSessions.length === 1
+                ? "workspace.canvas.sessionCountOne"
+                : "workspace.canvas.sessionCountOther",
               {
-                count: terminalSessions.length,
+                count: canvasSessions.length,
               },
             )}
           </span>
@@ -884,9 +881,9 @@ export function WorkspaceCanvas({
         ) : null}
       </div>
 
-      {terminalSessions.length > 0 ? (
+      {canvasSessions.length > 0 ? (
         <WorkspaceCanvasMinimap
-          sessions={terminalSessions}
+          sessions={canvasSessions}
           nodes={canvas.nodes}
           viewport={canvas.viewport}
           canvasSize={containerSize}
@@ -925,7 +922,7 @@ export function WorkspaceCanvas({
   );
 }
 
-interface WorkspaceCanvasTerminalNodeProps {
+interface WorkspaceCanvasSessionNodeProps {
   session: Session;
   node: WorkspaceCanvasNode;
   zoom: number;
@@ -939,8 +936,8 @@ interface WorkspaceCanvasTerminalNodeProps {
   t: Translator;
 }
 
-const WorkspaceCanvasTerminalNode = memo(
-  function WorkspaceCanvasTerminalNode({
+const WorkspaceCanvasSessionNode = memo(
+  function WorkspaceCanvasSessionNode({
     session,
     node,
     zoom,
@@ -950,7 +947,7 @@ const WorkspaceCanvasTerminalNode = memo(
     onCommit,
     onExpand,
     t,
-  }: WorkspaceCanvasTerminalNodeProps) {
+  }: WorkspaceCanvasSessionNodeProps) {
     const bodyRef = useRef<HTMLDivElement | null>(null);
     const cancelGestureRef = useRef<(() => void) | null>(null);
     const provider = resolveSessionAgentProvider(session);
@@ -1151,7 +1148,17 @@ const WorkspaceCanvasTerminalNode = memo(
                   size="sm"
                   pulse={session.status === "working"}
                 />
-                <TerminalIcon size={12} className="shrink-0 text-fg-muted" />
+                {session.mode === "chat" ? (
+                  <MessageSquareText
+                    size={12}
+                    className="shrink-0 text-fg-muted"
+                  />
+                ) : (
+                  <TerminalIcon
+                    size={12}
+                    className="shrink-0 text-fg-muted"
+                  />
+                )}
               </>
             )}
             <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
@@ -1164,30 +1171,50 @@ const WorkspaceCanvasTerminalNode = memo(
               </span>
             ) : null}
           </button>
-          <Tooltip
-            label={canvasText(t, "workspace.canvas.expandSession", {
-              name: session.name,
-            })}
-            side="bottom"
-          >
-            <IconButton
-              aria-label={canvasText(t, "workspace.canvas.expandSession", {
+          {session.mode === "chat" ? null : (
+            <Tooltip
+              label={canvasText(t, "workspace.canvas.expandSession", {
                 name: session.name,
               })}
-              size="xs"
-              data-testid="workspace-canvas-node-expand"
-              onClick={onExpand}
+              side="bottom"
             >
-              <Maximize2 size={12} />
-            </IconButton>
-          </Tooltip>
+              <IconButton
+                aria-label={canvasText(t, "workspace.canvas.expandSession", {
+                  name: session.name,
+                })}
+                size="xs"
+                data-testid="workspace-canvas-node-expand"
+                onClick={onExpand}
+              >
+                <Maximize2 size={12} />
+              </IconButton>
+            </Tooltip>
+          )}
         </header>
-        <div
-          ref={bodyRef}
-          className="relative min-h-0 flex-1 cursor-text overflow-hidden bg-bg"
-          data-canvas-terminal-body={session.id}
-          data-testid="workspace-canvas-terminal-body"
-        />
+        {session.mode === "chat" ? (
+          <div
+            ref={bodyRef}
+            className="relative min-h-0 flex-1 overflow-hidden bg-bg"
+            data-canvas-chat-body={session.id}
+            data-canvas-session-body={session.id}
+            data-testid="workspace-canvas-chat-body"
+          >
+            <ChatPane
+              sessionId={session.id}
+              isActive={active}
+              repoPath={session.worktree_path}
+              session={session}
+            />
+          </div>
+        ) : (
+          <div
+            ref={bodyRef}
+            className="relative min-h-0 flex-1 cursor-text overflow-hidden bg-bg"
+            data-canvas-session-body={session.id}
+            data-canvas-terminal-body={session.id}
+            data-testid="workspace-canvas-terminal-body"
+          />
+        )}
         <button
           type="button"
           aria-label={canvasText(t, "workspace.canvas.resizeSession", {

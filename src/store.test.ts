@@ -326,6 +326,29 @@ describe("needs-input navigation", () => {
 
     expect(useAppStore.getState().activeSessionId).toBe("a3");
   });
+
+  it("opens a chat waiting for input in kanban without changing modes", async () => {
+    const chat = session("chat", REPO_A, {
+      mode: "chat",
+      status: "waiting_for_input",
+    });
+    await seed([project(REPO_A, 0)], [chat]);
+    useAppStore.getState().addSessionNotification(
+      notification("chat-notification", {
+        sessionId: "chat",
+        sessionName: "chat",
+        repoPath: REPO_A,
+      }),
+    );
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+
+    expect(useAppStore.getState().selectLatestNeedsInputSession()).toBe(true);
+
+    const state = useAppStore.getState();
+    expect(state.workspaceViewMode).toBe("kanban");
+    expect(state.activeSessionId).toBe("chat");
+    expect(state.terminalPopupSessionId).toBe("chat");
+  });
 });
 
 describe("sessionNotifications", () => {
@@ -3438,6 +3461,25 @@ describe("createSession", () => {
       null,
       false,
     );
+  });
+
+  it("opens a newly-created chat in kanban without leaving kanban", async () => {
+    const existing = session("existing", REPO_A);
+    const chat = session("chat", REPO_A, { mode: "chat" });
+    await seed([project(REPO_A, 0)], [existing]);
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+    mockApi.createSession.mockResolvedValueOnce(chat);
+    mockApi.listSessions.mockResolvedValueOnce([existing, chat]);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+
+    await useAppStore
+      .getState()
+      .createSession("chat", REPO_A, false, "regular", null, true, "chat");
+
+    const state = useAppStore.getState();
+    expect(state.workspaceViewMode).toBe("kanban");
+    expect(state.activeSessionId).toBe("chat");
+    expect(state.terminalPopupSessionId).toBe("chat");
   });
 
   it("emits the guide event the first time a control session is created", async () => {
