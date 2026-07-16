@@ -119,6 +119,13 @@ export const NOTIFICATION_HISTORY_LIMIT_MAX = 100;
 export const MOUNTED_TERMINAL_LIMIT_MIN = 1;
 export const MOUNTED_TERMINAL_LIMIT_DEFAULT = 8;
 export const MOUNTED_TERMINAL_LIMIT_MAX = 64;
+export const CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_OPTIONS = [
+  16, 40, 80, 120,
+] as const;
+export type CanvasInactiveTerminalRenderIntervalMs =
+  (typeof CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_OPTIONS)[number];
+export const CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_DEFAULT: CanvasInactiveTerminalRenderIntervalMs =
+  40;
 export const TERMINAL_FONT_SIZE_MIN = 8;
 export const TERMINAL_FONT_SIZE_MAX = 32;
 export const TERMINAL_FONT_SIZE_STEP = 0.25;
@@ -312,6 +319,11 @@ export interface AcornSettings {
      * selection back to the PTY. Default off because it is an input gesture.
      */
     rightClickPasteSelection: boolean;
+    /**
+     * Output batching interval for visible, unselected canvas terminals.
+     * The selected terminal continues to render on animation frames.
+     */
+    canvasInactiveTerminalRenderIntervalMs: CanvasInactiveTerminalRenderIntervalMs;
     /**
      * Upper bound on simultaneously-mounted terminal sessions. Visible
      * terminals are always exempt, so this only evicts off-screen daemon
@@ -536,6 +548,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     lineHeight: 1.0,
     linkActivation: "click",
     rightClickPasteSelection: false,
+    canvasInactiveTerminalRenderIntervalMs:
+      CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_DEFAULT,
     maxMountedTerminals: MOUNTED_TERMINAL_LIMIT_DEFAULT,
     detachOffscreenTerminals: true,
   },
@@ -682,6 +696,10 @@ const VALID_WEIGHTS = new Set<TerminalFontWeight>([
 const VALID_PR_INTERVALS = new Set<number>(
   PR_REFRESH_INTERVAL_OPTIONS.map((o) => o.value),
 );
+const VALID_CANVAS_INACTIVE_TERMINAL_RENDER_INTERVALS =
+  new Set<CanvasInactiveTerminalRenderIntervalMs>(
+    CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_OPTIONS,
+  );
 
 const VALID_BG_FITS = new Set<BackgroundFit>(["cover", "contain", "tile"]);
 const VALID_TOAST_POSITIONS = new Set<ToastPosition>(["top", "bottom"]);
@@ -822,6 +840,21 @@ export function normalizeMountedTerminalLimit(
     MOUNTED_TERMINAL_LIMIT_MIN,
     Math.min(MOUNTED_TERMINAL_LIMIT_MAX, Math.round(v)),
   );
+}
+
+function normalizeCanvasInactiveTerminalRenderInterval(
+  v: unknown,
+  fallback: CanvasInactiveTerminalRenderIntervalMs,
+): CanvasInactiveTerminalRenderIntervalMs {
+  if (
+    typeof v === "number" &&
+    VALID_CANVAS_INACTIVE_TERMINAL_RENDER_INTERVALS.has(
+      v as CanvasInactiveTerminalRenderIntervalMs,
+    )
+  ) {
+    return v as CanvasInactiveTerminalRenderIntervalMs;
+  }
+  return fallback;
 }
 
 function normalizePrInterval(v: unknown, fallback: number): number {
@@ -1281,6 +1314,15 @@ function loadSettings(): AcornSettings {
             ? (terminalRaw as { rightClickPasteSelection: boolean })
                 .rightClickPasteSelection
             : DEFAULT_SETTINGS.terminal.rightClickPasteSelection,
+        canvasInactiveTerminalRenderIntervalMs:
+          normalizeCanvasInactiveTerminalRenderInterval(
+            (
+              terminalRaw as {
+                canvasInactiveTerminalRenderIntervalMs?: unknown;
+              }
+            ).canvasInactiveTerminalRenderIntervalMs,
+            DEFAULT_SETTINGS.terminal.canvasInactiveTerminalRenderIntervalMs,
+          ),
         maxMountedTerminals: normalizeMountedTerminalLimit(
           (terminalRaw as { maxMountedTerminals?: unknown })
             .maxMountedTerminals,
@@ -1629,6 +1671,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
               : typeof patch.rightClickPasteSelection === "boolean"
                 ? patch.rightClickPasteSelection
                 : s.settings.terminal.rightClickPasteSelection,
+          canvasInactiveTerminalRenderIntervalMs:
+            patch.canvasInactiveTerminalRenderIntervalMs === undefined
+              ? s.settings.terminal.canvasInactiveTerminalRenderIntervalMs
+              : normalizeCanvasInactiveTerminalRenderInterval(
+                  patch.canvasInactiveTerminalRenderIntervalMs,
+                  s.settings.terminal.canvasInactiveTerminalRenderIntervalMs,
+                ),
           detachOffscreenTerminals:
             patch.detachOffscreenTerminals === undefined
               ? s.settings.terminal.detachOffscreenTerminals

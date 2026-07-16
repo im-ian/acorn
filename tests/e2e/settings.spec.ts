@@ -306,6 +306,38 @@ test.describe("settings modal", () => {
       .toBe("subpixel");
   });
 
+  test("changes the inactive canvas refresh rate and persists it", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Terminal|터미널)$/ }).click();
+
+    const select = modal.getByRole("combobox", {
+      name: /^(Inactive canvas refresh rate|비활성 캔버스 새로고침 빈도)$/,
+    });
+    await expect(select).toContainText(/Balanced · ~25 FPS|균형 · 약 25 FPS/);
+
+    await select.click();
+    await page
+      .getByRole("option", { name: /^(Reduced · ~12 FPS|낮음 · 약 12 FPS)/ })
+      .click();
+
+    await expect(select).toContainText(/Reduced · ~12 FPS|낮음 · 약 12 FPS/);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw
+            ? JSON.parse(raw).terminal?.canvasInactiveTerminalRenderIntervalMs
+            : null;
+        }),
+      )
+      .toBe(80);
+  });
+
   test("registers terminal font presets and applies them later", async ({
     page,
   }) => {

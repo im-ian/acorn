@@ -698,6 +698,33 @@ describe("SettingsModal font controls", () => {
     expect(patchTerminal).toHaveBeenCalledWith({ fontSmoothing: "subpixel" });
   });
 
+  it("patches the inactive canvas terminal refresh rate from the Terminal tab", async () => {
+    const patchTerminal = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchTerminal,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openTerminalTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const select = getComboboxByLabel("Inactive canvas refresh rate");
+    expect(select.textContent).toContain("Balanced · ~25 FPS (default)");
+
+    clickElement(select);
+    clickOption("Reduced · ~12 FPS");
+
+    expect(patchTerminal).toHaveBeenCalledWith({
+      canvasInactiveTerminalRenderIntervalMs: 80,
+    });
+  });
+
   it("patches terminal right-click selection paste from the Terminal tab", async () => {
     const patchTerminal = vi.fn();
     useSettings.setState({

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_OPTIONS,
+  CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_DEFAULT,
+  CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_OPTIONS,
   DEFAULT_SETTINGS,
   DEFAULT_SESSION_TITLE_PROMPT,
   MOUNTED_TERMINAL_LIMIT_DEFAULT,
@@ -758,6 +760,89 @@ describe("terminal.maxMountedTerminals settings", () => {
     expect(useSettings.getState().settings.terminal.detachOffscreenTerminals).toBe(
       true,
     );
+  });
+});
+
+describe("terminal.canvasInactiveTerminalRenderIntervalMs settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("defaults to the balanced 40ms interval", () => {
+    expect(CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_OPTIONS).toEqual([
+      16, 40, 80, 120,
+    ]);
+    expect(CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_DEFAULT).toBe(40);
+    expect(
+      DEFAULT_SETTINGS.terminal.canvasInactiveTerminalRenderIntervalMs,
+    ).toBe(40);
+  });
+
+  it("loads supported intervals and rejects unsupported persisted values", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        terminal: { canvasInactiveTerminalRenderIntervalMs: 80 },
+      }),
+    );
+
+    vi.resetModules();
+    let settingsModule = await import("./settings");
+    expect(
+      settingsModule.useSettings.getState().settings.terminal
+        .canvasInactiveTerminalRenderIntervalMs,
+    ).toBe(80);
+
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        terminal: { canvasInactiveTerminalRenderIntervalMs: 41 },
+      }),
+    );
+    vi.resetModules();
+    settingsModule = await import("./settings");
+    expect(
+      settingsModule.useSettings.getState().settings.terminal
+        .canvasInactiveTerminalRenderIntervalMs,
+    ).toBe(40);
+  });
+
+  it("patches and persists a supported interval", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings
+      .getState()
+      .patchTerminal({ canvasInactiveTerminalRenderIntervalMs: 120 });
+
+    expect(
+      useSettings.getState().settings.terminal
+        .canvasInactiveTerminalRenderIntervalMs,
+    ).toBe(120);
+    expect(
+      JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null").terminal
+        .canvasInactiveTerminalRenderIntervalMs,
+    ).toBe(120);
   });
 });
 
