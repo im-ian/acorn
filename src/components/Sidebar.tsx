@@ -825,7 +825,7 @@ export function Sidebar() {
     });
     // While `prioritizeNeedsInputTabs` is on, rows are displayed grouped by
     // priority and the sort re-applies on every render, so a slot in the other
-    // group is one the drop could never keep.
+    // group of the same reorder container is one the drop could never keep.
     if (!prioritizeNeedsInputTabs) return collisions;
     return refuseCrossPriorityGroupDrop(dragPriorityIndex, activeId, collisions);
   };

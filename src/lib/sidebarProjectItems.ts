@@ -186,7 +186,8 @@ export function isPriorityDropAllowed(
 }
 
 /**
- * Drop a drag that landed on a row in the other priority group.
+ * Drop a drag that landed on a row in the other priority group of the same
+ * reorder container.
  *
  * Takes ranked collisions and returns them untouched, or nothing at all. It
  * deliberately does not withhold the offending row from the ranking: a withheld

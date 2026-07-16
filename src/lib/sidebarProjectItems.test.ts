@@ -249,7 +249,7 @@ describe("sidebar project items", () => {
     ).toBeNull();
   });
 
-  it("indexes drag ids by the priority group they are displayed in", () => {
+  it("indexes drag ids by priority group and reorder container", () => {
     const index = buildDragPriorityIndex([project()]);
 
     expect(index.get("session:needs-root")).toEqual({
