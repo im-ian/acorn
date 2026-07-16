@@ -113,6 +113,28 @@ test.describe("status bar", () => {
     await expect(tooltip.locator("svg")).toHaveCount(3);
   });
 
+  test("identifies degraded transcript lifecycle fallback in the status tooltip", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      {
+        ...BASE_SESSION,
+        status: "working",
+        agent_provider: "codex",
+        agent_status_source: "transcript_fallback",
+      },
+    ]);
+
+    await page.goto("/");
+
+    await expect(page.locator('footer span[title*="Transcript fallback"]')).toHaveAttribute(
+      "title",
+      "working · Transcript fallback (degraded)",
+    );
+  });
+
   test("shows only Codex token usage for an active Codex tab", async ({
     page,
     tauri,

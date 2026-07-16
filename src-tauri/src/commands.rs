@@ -7087,6 +7087,52 @@ mod tests {
     }
 
     #[test]
+    fn agent_status_source_distinguishes_hook_and_degraded_fallbacks() {
+        use super::AgentStatusSource;
+
+        assert_eq!(
+            super::agent_status_source(
+                Some(super::AgentKind::Codex),
+                true,
+                false,
+                true,
+            ),
+            Some(AgentStatusSource::Hook)
+        );
+        assert_eq!(
+            super::agent_status_source(
+                Some(super::AgentKind::Codex),
+                true,
+                true,
+                true,
+            ),
+            Some(AgentStatusSource::TranscriptFallback)
+        );
+        assert_eq!(
+            super::agent_status_source(
+                Some(super::AgentKind::Claude),
+                false,
+                false,
+                true,
+            ),
+            Some(AgentStatusSource::TranscriptFallback)
+        );
+        assert_eq!(
+            super::agent_status_source(
+                Some(super::AgentKind::Antigravity),
+                false,
+                false,
+                false,
+            ),
+            Some(AgentStatusSource::ProcessFallback)
+        );
+        assert_eq!(
+            super::agent_status_source(None, false, false, true),
+            None
+        );
+    }
+
+    #[test]
     fn live_tool_activity_only_resumes_a_codex_permission_wait() {
         assert_eq!(
             super::hook_status_with_live_tool_activity(

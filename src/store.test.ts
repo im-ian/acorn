@@ -2490,6 +2490,27 @@ describe("pollSessionStatuses", () => {
     expect(sessions.find((s) => s.id === "a2")?.status).toBe("working");
   });
 
+  it("merges the agent status source reported by status polling", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A, { agent_status_source: "hook" })],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "working",
+        agent_status_source: "transcript_fallback",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.agent_status_source).toBe(
+      "transcript_fallback",
+    );
+  });
+
   it("polls only the requested existing session ids", async () => {
     await seed(
       [project(REPO_A, 0)],
