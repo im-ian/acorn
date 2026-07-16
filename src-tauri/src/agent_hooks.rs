@@ -1773,11 +1773,13 @@ struct SpooledTransportMeta {
 
 /// Drain the notify scripts' spool directory: events POSTed while no app
 /// instance was listening land there instead of being dropped. Files are
-/// named `<unix-ts>-<pid>.json`, so a lexicographic sort approximates
-/// arrival order (sub-second ordering between two writers is unknowable —
-/// the reducer's stale-event rejection absorbs that). Every file is
-/// consumed regardless of outcome so a malformed or permanently rejected
-/// event can never wedge the replay.
+/// named `<unix-ts>-<pid>.json` and replay in numeric (timestamp, pid)
+/// order. Ordering within one second is best-effort — pid order is not
+/// arrival order — so a mis-ordered same-second pair can leave a stale
+/// status until the session's next live event corrects it; the pre-spool
+/// behavior was losing both events outright. Every file is consumed
+/// regardless of outcome so a malformed or permanently rejected event can
+/// never wedge the replay.
 pub fn replay_spooled_hook_events<F>(spool_dir: &std::path::Path, handler: F) -> usize
 where
     F: Fn(AgentHookEvent) -> AgentHookHandlerOutcome,
@@ -1790,7 +1792,7 @@ where
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
         .collect();
-    files.sort();
+    files.sort_by_key(|path| spool_replay_order_key(path));
     let mut replayed = 0;
     for path in files {
         match parse_spooled_hook_event(&path) {
@@ -1810,6 +1812,22 @@ where
         let _ = std::fs::remove_file(&path);
     }
     replayed
+}
+
+/// Numeric sort key for `<unix-ts>-<pid>.json` spool names: a string sort
+/// would order `"21000"` before `"3000"` on a same-second tie. Unparseable
+/// names sort last, tie-broken by the full path for determinism.
+fn spool_replay_order_key(path: &std::path::Path) -> (u64, u64, std::path::PathBuf) {
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("");
+    let (ts, pid) = stem.split_once('-').unwrap_or((stem, ""));
+    (
+        ts.parse::<u64>().unwrap_or(u64::MAX),
+        pid.parse::<u64>().unwrap_or(u64::MAX),
+        path.to_path_buf(),
+    )
 }
 
 fn parse_spooled_hook_event(path: &std::path::Path) -> Result<Option<AgentHookEvent>, String> {
@@ -2907,6 +2925,53 @@ mod tests {
         assert!(
             leftover.is_empty(),
             "all spooled events must be consumed: {leftover:?}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replay_spool_order_is_numeric_not_lexicographic() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-spool-order-{}", Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let session_id = Uuid::new_v4();
+        let claude_uuid = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+        let meta =
+            format!(r#"{{"provider":"claude","session_id":"{session_id}","source":"native"}}"#);
+        let start_body = serde_json::json!({
+            "session_id": claude_uuid,
+            "hook_event_name": "UserPromptSubmit",
+        });
+        let stop_body = serde_json::json!({
+            "session_id": claude_uuid,
+            "hook_event_name": "Stop",
+            "background_tasks": [],
+            "session_crons": [],
+        });
+        // Same second; pid 9 wrote first, pid 100 second. A string sort
+        // would replay "…-100.json" before "…-9.json" and end on Start.
+        std::fs::write(
+            dir.join("1700000001-9.json"),
+            format!("{meta}\n{start_body}"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("1700000001-100.json"),
+            format!("{meta}\n{stop_body}"),
+        )
+        .unwrap();
+
+        let seen = Mutex::new(Vec::new());
+        let replayed = super::replay_spooled_hook_events(&dir, |event| {
+            seen.lock().unwrap().push(event.event);
+            AgentHookHandlerOutcome::Applied
+        });
+
+        assert_eq!(replayed, 2);
+        assert_eq!(
+            seen.into_inner().unwrap(),
+            vec![AgentHookEventKind::Start, AgentHookEventKind::NeedsInput],
+            "same-second ties must break on numeric pid order",
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
