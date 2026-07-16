@@ -83,11 +83,16 @@ export interface ProjectTopLevelDragPlan {
 /**
  * Resolve a sidebar drag into the manual order to persist.
  *
- * `prioritizeNeedsInputTabs` only changes how the list is displayed — the saved
- * order stays manual. So the drag has to be resolved against the displayed
- * list: the drop indices the user aimed at are positions in that list, and
- * scoring them against the unsorted order records the move in the wrong slot,
- * which the next render then sorts straight back to where it started.
+ * The move is scored against the saved order, never the order on screen: with
+ * `prioritizeNeedsInputTabs` on those differ, and rewriting the saved order to
+ * match the screen would bake a snapshot of today's waiting tabs into the
+ * manual order the setting promises to keep intact.
+ *
+ * Scoring against the saved order is safe because drags are confined to a
+ * single priority group (see [[isSameDragPriorityGroup]]): the priority sort is
+ * a stable partition, so moving a row among its own kind changes only that
+ * group's internal order — which lands identically whether the move is scored
+ * on screen or in the saved order.
  *
  * Returns null when the drag is a no-op or references an item that is not on
  * the project's top level.
@@ -95,15 +100,10 @@ export interface ProjectTopLevelDragPlan {
 export function planProjectTopLevelDrag(
   project: ProjectFolderProjectGroup,
   order: readonly string[],
-  prioritizeNeedsInputTabs: boolean,
   activeItemId: string,
   overItemId: string,
 ): ProjectTopLevelDragPlan | null {
-  const items = buildProjectTopLevelItems(
-    project,
-    order,
-    prioritizeNeedsInputTabs,
-  );
+  const items = buildProjectTopLevelItems(project, order);
   const fromIdx = items.findIndex((item) => item.id === activeItemId);
   const toIdx = items.findIndex((item) => item.id === overItemId);
   if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return null;

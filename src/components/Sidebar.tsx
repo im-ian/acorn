@@ -842,7 +842,6 @@ export function Sidebar() {
     const plan = planProjectTopLevelDrag(
       project,
       projectItemOrders[project.repoPath] ?? [],
-      prioritizeNeedsInputTabs,
       activeItemId,
       overItemId,
     );
@@ -882,7 +881,6 @@ export function Sidebar() {
     const items = buildProjectTopLevelItems(
       project,
       projectItemOrders[project.repoPath] ?? [],
-      prioritizeNeedsInputTabs,
     ).filter((item) => item.id !== activeId);
     const overIdx = items.findIndex(
       (item) => item.id === overId && item.type === "session",

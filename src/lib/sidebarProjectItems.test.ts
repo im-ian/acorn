@@ -161,16 +161,42 @@ describe("sidebar project items", () => {
     ]);
   });
 
-  it("plans a drag against the order the user sees, not the saved order", () => {
-    const manualOrder = [
+  const MANUAL_ORDER = [
+    "session:idle-root",
+    "session:failed-root",
+    "session:needs-root",
+    "session:running-root",
+    "folder:idle-folder",
+    "folder:needs-folder",
+  ];
+
+  it("plans a drag without floating priority items into the saved order", () => {
+    // running-root and idle-root are both ready work, so the collision filter
+    // allows this drag. Only those two may move; the waiting and errored rows
+    // keep their saved slots rather than being rewritten to where the priority
+    // sort happens to show them today.
+    const planned = planProjectTopLevelDrag(
+      project(),
+      MANUAL_ORDER,
+      "session:running-root",
+      "session:idle-root",
+    );
+
+    expect(planned?.nextOrder).toEqual([
+      "session:running-root",
       "session:idle-root",
       "session:failed-root",
       "session:needs-root",
-      "session:running-root",
       "folder:idle-folder",
       "folder:needs-folder",
-    ];
-    const displayed = buildProjectTopLevelItems(project(), manualOrder, true);
+    ]);
+  });
+
+  it("lands a same-group drag exactly where the user dropped it", () => {
+    // The plan is scored against the saved order while the user drags in the
+    // sorted one. For a drag inside a single priority group the two must agree,
+    // otherwise the sort yanks the row back on the next render.
+    const displayed = buildProjectTopLevelItems(project(), MANUAL_ORDER, true);
     expect(displayed.map((item) => item.id)).toEqual([
       "session:failed-root",
       "session:needs-root",
@@ -180,23 +206,19 @@ describe("sidebar project items", () => {
       "folder:idle-folder",
     ]);
 
-    // Drag running-root from the bottom of the ready group up onto needs-root.
-    // The priority sort pins needs-root above it, but running-root must still
-    // land ahead of idle-root once the list re-renders.
     const planned = planProjectTopLevelDrag(
       project(),
-      manualOrder,
-      true,
+      MANUAL_ORDER,
       "session:running-root",
-      "session:needs-root",
+      "session:idle-root",
     );
-
-    expect(planned).not.toBeNull();
     const redisplayed = buildProjectTopLevelItems(
       project(),
       planned!.nextOrder,
       true,
     ).map((item) => item.id);
+
+    // What the user saw: running-root picked up and dropped onto idle-root.
     expect(redisplayed).toEqual([
       "session:failed-root",
       "session:needs-root",
@@ -211,8 +233,7 @@ describe("sidebar project items", () => {
     expect(
       planProjectTopLevelDrag(
         project(),
-        ["session:idle-root", "session:running-root"],
-        false,
+        MANUAL_ORDER,
         "session:idle-root",
         "session:idle-root",
       ),
@@ -220,8 +241,7 @@ describe("sidebar project items", () => {
     expect(
       planProjectTopLevelDrag(
         project(),
-        ["session:idle-root", "session:running-root"],
-        false,
+        MANUAL_ORDER,
         "session:idle-root",
         "session:not-a-real-item",
       ),
