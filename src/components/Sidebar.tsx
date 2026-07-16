@@ -796,9 +796,12 @@ export function Sidebar() {
     () => projectGroups.map((p) => projectDragId(p.repoPath)),
     [projectGroups],
   );
+  // Project rows only: local terminal rows are displayed in their saved order,
+  // so confining their drags to a priority group would cost slots and buy
+  // nothing.
   const dragPriorityIndex = useMemo(
-    () => buildDragPriorityIndex(allWorkspaceGroups),
-    [allWorkspaceGroups],
+    () => buildDragPriorityIndex(projectGroups),
+    [projectGroups],
   );
   // Scoped collision detection: only consider droppables sharing the active
   // item's namespace. Without this, dragging a project over an expanded

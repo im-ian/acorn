@@ -117,8 +117,13 @@ export function planProjectTopLevelDrag(
  * Map every draggable sidebar row id to the priority group it is displayed in:
  * true for rows the priority sort floats to the top, false for the rest.
  *
- * Ids that are not rows — the folder and project drop zones — are absent, so
- * callers can tell "different group" apart from "not a row at all".
+ * Pass only groups whose rows are actually displayed with the priority sort
+ * applied. An unindexed id is read as "unconstrained" rather than "other
+ * group", so rows that are displayed in their saved order keep every drop slot.
+ *
+ * Ids that are not rows — the folder and project drop zones — are absent for
+ * the same reason: dropping onto them moves a session between workspaces
+ * instead of reordering it, which the priority sort has no say over.
  */
 export function buildDragPriorityIndex(
   groups: readonly ProjectFolderProjectGroup[],
