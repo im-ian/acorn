@@ -952,7 +952,8 @@
       "regionLabel": "Workspace canvas",
       "toolbarLabel": "Canvas controls",
       "empty": "No terminal sessions on this canvas. Chat sessions stay available in Panes.",
-      "hint": "Drag empty space or middle-drag to pan · Pinch or modifier-scroll to zoom · Alt skips snapping",
+      "hint": "Right-click for session actions · Drag empty space or middle-drag to pan · Pinch or modifier-scroll to zoom · Alt skips snapping",
+      "showHelp": "Show canvas controls help",
       "terminalCountOne": "1 terminal",
       "terminalCountOther": "{count} terminals",
       "zoomOut": "Zoom out",
@@ -968,8 +969,12 @@
       "overviewCollapse": "Collapse canvas overview",
       "overviewExpand": "Expand canvas overview",
       "newSession": "New session",
+      "contextSession": "Session",
+      "contextCreateSession": "Create session",
+      "contextLayout": "Layout",
       "moveSession": "Move {name}",
       "resizeSession": "Resize {name}",
+      "expandSession": "Expand {name}",
       "openInPanes": "Open {name} in panes"
     },
     "kanban": {
