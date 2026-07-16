@@ -429,6 +429,24 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn provider_declared_bind_replaces_the_existing_marker() {
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-provider-bind-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("claude.id");
+        let previous = "019f2001-bbbb-76b0-8410-2e073b38a2c2";
+        let resumed = "019e2001-aaaa-76b0-8410-2e073b38a2c1";
+        fs::write(&marker, format!("{previous}\n")).unwrap();
+
+        bind_provider_marker_in_state_dir(&dir, AgentKind::Claude, resumed).unwrap();
+
+        assert_eq!(read_trimmed(&marker).as_deref(), Some(resumed));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// Two writers race the same marker (background tick vs status-poll
     /// fallback). The bind lock must serialize them: every call succeeds
     /// and the surviving value is one of the written uuids, never a torn
