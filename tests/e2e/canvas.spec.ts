@@ -217,6 +217,9 @@ test.describe("workspace canvas mode", () => {
       mode: "chat",
     });
 
+    await canvas
+      .getByRole("button", { name: "Show canvas-created on canvas" })
+      .click();
     await node
       .getByTestId("workspace-canvas-node-drag-handle")
       .click({ button: "right" });
@@ -669,14 +672,14 @@ test.describe("workspace canvas mode", () => {
     await terminalSlot.evaluate((element) =>
       element.setAttribute("data-canvas-terminal-identity", "preserved"),
     );
-    await page.getByRole("button", { name: "Reset terminal layout" }).click();
+    await page.getByRole("button", { name: "Reset session layout" }).click();
 
     await expect(alpha).toHaveAttribute("data-canvas-node-x", "48");
     await expect(alpha).toHaveAttribute("data-canvas-node-y", "48");
     await expect(world).toHaveAttribute("data-canvas-zoom", "1");
 
     await expect(
-      page.getByRole("status").filter({ hasText: "Terminal layout reset." }),
+      page.getByRole("status").filter({ hasText: "Session layout reset." }),
     ).toBeVisible();
     const undo = page.getByRole("button", { name: "Undo reset" });
     await expect(undo).toBeVisible();

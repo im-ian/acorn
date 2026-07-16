@@ -2665,6 +2665,12 @@ export const useAppStore = create<AppStateModel>()(
   selectLatestNeedsInputSession() {
     const sessionId = latestNeedsInputSessionId(get());
     if (!sessionId) return false;
+    const session = get().sessions.find(
+      (candidate) => candidate.id === sessionId,
+    );
+    if (session?.mode === "chat") {
+      return get().openSessionSurface(sessionId);
+    }
     get().selectSession(sessionId);
     if (get().workspaceViewMode === "kanban") {
       get().setWorkspaceViewMode("panes");
@@ -2976,13 +2982,13 @@ export const useAppStore = create<AppStateModel>()(
       // Focuses the new session's xterm via the focus-session dispatch in
       // `selectSession` (rAF-deferred past TerminalHost's portal reattach).
       get().selectSession(created.id);
-      if (
-        mode === "terminal" &&
-        get().workspaceViewMode === "kanban" &&
-        useSettings.getState().settings.interface
-          .openKanbanTerminalOnSessionCreate
-      ) {
-        get().openTerminalPopup(created.id);
+      if (get().workspaceViewMode === "kanban") {
+        const shouldOpenSurface =
+          mode === "chat" ||
+          (mode === "terminal" &&
+            useSettings.getState().settings.interface
+              .openKanbanTerminalOnSessionCreate);
+        if (shouldOpenSurface) get().openTerminalPopup(created.id);
       }
       // First-run guidance for control sessions. Gated on a localStorage
       // flag so power users only see it once. App.tsx hosts the modal.

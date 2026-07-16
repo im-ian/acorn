@@ -288,8 +288,10 @@ describe("WorkspaceMain", () => {
       chatNode!.querySelector('button[aria-label="Expand chat"]'),
     ).toBeNull();
     expect(
-      chatNode!.querySelector('[data-testid="mock-chat-pane"]'),
-    ).toHaveAttribute("data-active", "false");
+      chatNode!
+        .querySelector('[data-testid="mock-chat-pane"]')
+        ?.getAttribute("data-active"),
+    ).toBe("false");
 
     act(() =>
       chatNode!
@@ -301,8 +303,10 @@ describe("WorkspaceMain", () => {
 
     expect(useAppStore.getState().activeSessionId).toBe("chat");
     expect(
-      chatNode!.querySelector('[data-testid="mock-chat-pane"]'),
-    ).toHaveAttribute("data-active", "true");
+      chatNode!
+        .querySelector('[data-testid="mock-chat-pane"]')
+        ?.getAttribute("data-active"),
+    ).toBe("true");
     expect(
       queryCanvasMinimap()!.querySelectorAll(
         "[data-testid='workspace-canvas-minimap-node']",
@@ -453,7 +457,7 @@ describe("WorkspaceMain", () => {
     );
 
     const reset = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Reset terminal layout"]',
+      'button[aria-label="Reset session layout"]',
     );
     expect(reset).not.toBeNull();
     act(() => reset!.click());
@@ -464,7 +468,7 @@ describe("WorkspaceMain", () => {
     const toasts = useToasts.getState().toasts;
     const resetToast = toasts[toasts.length - 1];
     expect(resetToast?.message).toBe(
-      "Terminal layout reset. Undo is available in the toolbar.",
+      "Session layout reset. Undo is available in the toolbar.",
     );
     expect(resetToast?.action).toBeNull();
 
@@ -493,7 +497,7 @@ describe("WorkspaceMain", () => {
     act(() =>
       document
         .querySelector<HTMLButtonElement>(
-          'button[aria-label="Reset terminal layout"]',
+          'button[aria-label="Reset session layout"]',
         )!
         .click(),
     );
@@ -527,7 +531,7 @@ describe("WorkspaceMain", () => {
     act(() =>
       document
         .querySelector<HTMLButtonElement>(
-          'button[aria-label="Reset terminal layout"]',
+          'button[aria-label="Reset session layout"]',
         )!
         .click(),
     );
