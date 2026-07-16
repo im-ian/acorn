@@ -1,6 +1,10 @@
 import {
+  Bot,
+  ChevronDown,
+  CircleHelp,
   CirclePlus,
   GitBranch,
+  Maximize2,
   Minus,
   PanelsTopLeft,
   Plus,
@@ -18,14 +22,21 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   AgentProviderIcon,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
+import { formatHotkey } from "../lib/hotkeys";
 import { basename } from "../lib/pathUtils";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import {
+  PROJECT_SESSION_CREATE_ACTIONS,
+  type ProjectSessionCreateAction,
+} from "../lib/projectSessionCreateActions";
+import { useSettings } from "../lib/settings";
 import type { Session, SessionStatus } from "../lib/types";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
@@ -47,6 +58,7 @@ import {
 } from "../lib/workspaceCanvas";
 import { useAppStore } from "../store";
 import { Button, IconButton, StatusDot, type StatusTone } from "./ui";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { Tooltip } from "./Tooltip";
 import { WorkspaceCanvasMinimap } from "./WorkspaceCanvasMinimap";
 
@@ -61,6 +73,17 @@ const STATUS_TONE: Record<SessionStatus, StatusTone> = {
   waiting_for_input: "warning",
   errored: "danger",
 };
+
+const STATUS_ICON_CLASS: Record<SessionStatus, string> = {
+  ready: "text-fg-muted",
+  working: "text-accent",
+  waiting_for_input: "text-warning",
+  errored: "text-danger",
+};
+
+const CANVAS_SESSION_CREATE_ACTIONS = PROJECT_SESSION_CREATE_ACTIONS.filter(
+  (action) => action.mode === "terminal",
+);
 
 const VIEWPORT_SAVE_DEBOUNCE_MS = 220;
 const WHEEL_ZOOM_SENSITIVITY = 0.0015;
@@ -94,6 +117,31 @@ function canvasElementScale(element: HTMLElement): number {
   if (element.offsetWidth <= 0 || rect.width <= 0) return 1;
   const scale = rect.width / element.offsetWidth;
   return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
+function canvasSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
+  switch (id) {
+    case "terminal":
+      return <CirclePlus size={12} />;
+    case "isolated":
+      return <GitBranch size={12} />;
+    case "control":
+      return <Bot size={12} />;
+    case "chat":
+      return null;
+  }
+}
+
+function dispatchCanvasSessionCreate(action: ProjectSessionCreateAction) {
+  const eventName =
+    action.id === "terminal"
+      ? "acorn:new-session"
+      : action.id === "isolated"
+        ? "acorn:new-isolated-session"
+        : action.id === "control"
+          ? "acorn:new-control-session"
+          : null;
+  if (eventName) window.dispatchEvent(new CustomEvent(eventName));
 }
 
 type AppStateSnapshot = ReturnType<typeof useAppStore.getState>;
@@ -134,6 +182,7 @@ export function WorkspaceCanvas({
 }: WorkspaceCanvasProps) {
   const t = useTranslation();
   const showToast = useToasts((state) => state.show);
+  const shortcuts = useSettings((state) => state.settings.shortcuts);
   const rootRef = useRef<HTMLElement | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const cancelPanRef = useRef<(() => void) | null>(null);
@@ -168,6 +217,15 @@ export function WorkspaceCanvas({
   const canvasRef = useRef(canvas);
   const resetUndoRef = useRef<WorkspaceCanvasState | null>(null);
   const [canUndoReset, setCanUndoReset] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    sessionId: string | null;
+  } | null>(null);
+  const [createMenu, setCreateMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
   const [containerSize, setContainerSize] = useState<WorkspaceCanvasSize>({
     width: 0,
     height: 0,
@@ -492,6 +550,21 @@ export function WorkspaceCanvas({
     store.setWorkspaceViewMode("panes");
   }, []);
 
+  const openExpanded = useCallback(
+    (sessionId: string) => {
+      activateNode(sessionId);
+      useAppStore.getState().openTerminalPopup(sessionId);
+      requestAnimationFrame(() => {
+        window.dispatchEvent(
+          new CustomEvent("acorn:focus-session", {
+            detail: { sessionId },
+          }),
+        );
+      });
+    },
+    [activateNode],
+  );
+
   const resetLayout = useCallback(() => {
     const previous = canvasRef.current;
     const next = resetWorkspaceCanvasState(reconciliationIds);
@@ -516,6 +589,105 @@ export function WorkspaceCanvas({
     persistCanvas(restored);
   }, [applyCanvas, persistCanvas, reconciliationIds]);
 
+  const contextSession = contextMenu?.sessionId
+    ? terminalSessions.find((session) => session.id === contextMenu.sessionId) ??
+      null
+    : null;
+  const sessionCreateMenuItems = useMemo<ContextMenuItem[]>(
+    () => [
+      {
+        type: "group-title",
+        label: canvasText(t, "workspace.canvas.contextCreateSession"),
+      },
+      ...CANVAS_SESSION_CREATE_ACTIONS.map((action) => ({
+        label: t(action.labelKey),
+        icon: canvasSessionCreateIcon(action.id),
+        shortcut: action.hotkeyId
+          ? formatHotkey(shortcuts[action.hotkeyId])
+          : undefined,
+        onClick: () => dispatchCanvasSessionCreate(action),
+      })),
+    ],
+    [shortcuts, t],
+  );
+  const contextMenuItems = useMemo<ContextMenuItem[]>(() => {
+    const items: ContextMenuItem[] = [];
+    if (contextSession) {
+      items.push(
+        {
+          type: "group-title",
+          label: canvasText(t, "workspace.canvas.contextSession"),
+        },
+        {
+          label: canvasText(t, "workspace.canvas.expandSession", {
+            name: contextSession.name,
+          }),
+          icon: <Maximize2 size={12} />,
+          onClick: () => openExpanded(contextSession.id),
+        },
+        {
+          label: canvasText(t, "workspace.canvas.openInPanes", {
+            name: contextSession.name,
+          }),
+          icon: <PanelsTopLeft size={12} />,
+          onClick: () => openInPanes(contextSession.id),
+        },
+      );
+    }
+    items.push(...sessionCreateMenuItems);
+    items.push(
+      {
+        type: "group-title",
+        label: canvasText(t, "workspace.canvas.contextLayout"),
+      },
+      {
+        label: canvasText(t, "workspace.canvas.fit"),
+        icon: <Scan size={12} />,
+        disabled: terminalSessions.length === 0,
+        onClick: () => fitAll(),
+      },
+      {
+        label: canvasText(t, "workspace.canvas.reset"),
+        icon: <RotateCcw size={12} />,
+        disabled: terminalSessions.length === 0,
+        onClick: resetLayout,
+      },
+    );
+    return items;
+  }, [
+    contextSession,
+    fitAll,
+    openExpanded,
+    openInPanes,
+    resetLayout,
+    sessionCreateMenuItems,
+    t,
+    terminalSessions.length,
+  ]);
+
+  const openCanvasContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (
+        target.closest("[data-workspace-canvas-toolbar]") ||
+        target.closest("[data-canvas-terminal-body]")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      setCreateMenu(null);
+      const node = target.closest<HTMLElement>("[data-canvas-session-id]");
+      setContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        sessionId: node?.dataset.canvasSessionId ?? null,
+      });
+    },
+    [],
+  );
+
   const worldStyle: CSSProperties = {
     transform: `translate3d(${canvas.viewport.offset.x}px, ${canvas.viewport.offset.y}px, 0) scale(${canvas.viewport.zoom})`,
     transformOrigin: "0 0",
@@ -538,6 +710,7 @@ export function WorkspaceCanvas({
       data-testid="workspace-canvas"
       data-workspace-canvas
       onPointerDown={startPan}
+      onContextMenu={openCanvasContextMenu}
     >
       <div className="pointer-events-none absolute inset-0" style={gridStyle} />
       <div
@@ -563,7 +736,7 @@ export function WorkspaceCanvas({
               onCommit={(purpose, snap) =>
                 commitNode(session.id, purpose, snap)
               }
-              onOpenInPanes={() => openInPanes(session.id)}
+              onExpand={() => openExpanded(session.id)}
               t={t}
             />
           );
@@ -609,20 +782,25 @@ export function WorkspaceCanvas({
             )}
           </span>
         </span>
-        <Tooltip
-          label={canvasText(t, "workspace.canvas.newSession")}
-          side="bottom"
+        <Button
+          size="xs"
+          aria-label={canvasText(t, "workspace.canvas.contextCreateSession")}
+          aria-haspopup="menu"
+          aria-expanded={createMenu !== null}
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            setContextMenu(null);
+            setCreateMenu((current) =>
+              current === null
+                ? { x: rect.left, y: rect.bottom + 4 }
+                : null,
+            );
+          }}
         >
-          <IconButton
-            aria-label={canvasText(t, "workspace.canvas.newSession")}
-            size="xs"
-            onClick={() =>
-              window.dispatchEvent(new CustomEvent("acorn:new-session"))
-            }
-          >
-            <CirclePlus size={12} />
-          </IconButton>
-        </Tooltip>
+          <CirclePlus size={12} />
+          {canvasText(t, "workspace.canvas.contextCreateSession")}
+          <ChevronDown size={12} aria-hidden="true" />
+        </Button>
         <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
         <Tooltip
           label={canvasText(t, "workspace.canvas.zoomOut")}
@@ -680,6 +858,19 @@ export function WorkspaceCanvas({
             <RotateCcw size={12} />
           </IconButton>
         </Tooltip>
+        <Tooltip
+          label={canvasText(t, "workspace.canvas.hint")}
+          side="bottom"
+          delay={250}
+          multiline
+        >
+          <IconButton
+            aria-label={canvasText(t, "workspace.canvas.showHelp")}
+            size="xs"
+          >
+            <CircleHelp size={12} />
+          </IconButton>
+        </Tooltip>
         {canUndoReset ? (
           <Button
             aria-label={canvasText(t, "workspace.canvas.undoReset")}
@@ -716,11 +907,20 @@ export function WorkspaceCanvas({
         />
       ) : null}
 
-      {containerSize.width >= 600 && containerSize.height >= 360 ? (
-        <div className="pointer-events-none absolute bottom-3 left-3 z-20 rounded-full border border-border/80 bg-bg/75 px-3 py-1 font-mono text-[10px] text-fg-muted shadow-lg backdrop-blur">
-          {canvasText(t, "workspace.canvas.hint")}
-        </div>
-      ) : null}
+      <ContextMenu
+        open={createMenu !== null}
+        x={createMenu?.x ?? 0}
+        y={createMenu?.y ?? 0}
+        items={sessionCreateMenuItems}
+        onClose={() => setCreateMenu(null)}
+      />
+      <ContextMenu
+        open={contextMenu !== null}
+        x={contextMenu?.x ?? 0}
+        y={contextMenu?.y ?? 0}
+        items={contextMenuItems}
+        onClose={() => setContextMenu(null)}
+      />
     </section>
   );
 }
@@ -735,7 +935,7 @@ interface WorkspaceCanvasTerminalNodeProps {
     updater: (node: WorkspaceCanvasNode) => WorkspaceCanvasNode,
   ) => void;
   onCommit: (purpose: "move" | "resize", snap: boolean) => void;
-  onOpenInPanes: () => void;
+  onExpand: () => void;
   t: Translator;
 }
 
@@ -748,7 +948,7 @@ const WorkspaceCanvasTerminalNode = memo(
     onActivate,
     onUpdate,
     onCommit,
-    onOpenInPanes,
+    onExpand,
     t,
   }: WorkspaceCanvasTerminalNodeProps) {
     const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -939,18 +1139,20 @@ const WorkspaceCanvasTerminalNode = memo(
             onFocus={onActivate}
             aria-pressed={active}
           >
-            <StatusDot
-              tone={STATUS_TONE[session.status]}
-              size="sm"
-              pulse={session.status === "working"}
-            />
             {provider ? (
               <AgentProviderIcon
                 provider={provider}
-                className="size-3 text-fg-muted"
+                className={`size-3 animate-pulse ${STATUS_ICON_CLASS[session.status]}`}
               />
             ) : (
-              <TerminalIcon size={12} className="shrink-0 text-fg-muted" />
+              <>
+                <StatusDot
+                  tone={STATUS_TONE[session.status]}
+                  size="sm"
+                  pulse={session.status === "working"}
+                />
+                <TerminalIcon size={12} className="shrink-0 text-fg-muted" />
+              </>
             )}
             <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
               {session.name}
@@ -963,19 +1165,20 @@ const WorkspaceCanvasTerminalNode = memo(
             ) : null}
           </button>
           <Tooltip
-            label={canvasText(t, "workspace.canvas.openInPanes", {
+            label={canvasText(t, "workspace.canvas.expandSession", {
               name: session.name,
             })}
             side="bottom"
           >
             <IconButton
-              aria-label={canvasText(t, "workspace.canvas.openInPanes", {
+              aria-label={canvasText(t, "workspace.canvas.expandSession", {
                 name: session.name,
               })}
               size="xs"
-              onClick={onOpenInPanes}
+              data-testid="workspace-canvas-node-expand"
+              onClick={onExpand}
             >
-              <PanelsTopLeft size={12} />
+              <Maximize2 size={12} />
             </IconButton>
           </Tooltip>
         </header>
