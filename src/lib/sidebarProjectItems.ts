@@ -89,7 +89,7 @@ export interface ProjectTopLevelDragPlan {
  * manual order the setting promises to keep intact.
  *
  * Scoring against the saved order is safe because drags are confined to a
- * single priority group (see [[isSameDragPriorityGroup]]): the priority sort is
+ * single priority group (see [[isPriorityDropAllowed]]): the priority sort is
  * a stable partition, so moving a row among its own kind changes only that
  * group's internal order — which lands identically whether the move is scored
  * on screen or in the saved order.
@@ -114,8 +114,9 @@ export function planProjectTopLevelDrag(
 }
 
 /**
- * Map every draggable sidebar row id to the priority group it is displayed in:
- * true for rows the priority sort floats to the top, false for the rest.
+ * Map every draggable sidebar row id to its priority group and reorder
+ * container. The container distinguishes reordering inside one sorted list
+ * from moving a session between workspaces.
  *
  * Pass only groups whose rows are actually displayed with the priority sort
  * applied. An unindexed id is read as "unconstrained" rather than "other
@@ -125,22 +126,35 @@ export function planProjectTopLevelDrag(
  * the same reason: dropping onto them moves a session between workspaces
  * instead of reordering it, which the priority sort has no say over.
  */
+export interface DragPriorityPlacement {
+  containerId: string;
+  isPrioritized: boolean;
+}
+
 export function buildDragPriorityIndex(
   groups: readonly ProjectFolderProjectGroup[],
-): Map<string, boolean> {
-  const index = new Map<string, boolean>();
+): Map<string, DragPriorityPlacement> {
+  const index = new Map<string, DragPriorityPlacement>();
   for (const group of groups) {
+    const topLevelContainerId = `project:${group.repoPath}`;
     for (const folderGroup of group.folders) {
+      const isDefaultFolder = isDefaultProjectFolder(folderGroup.folder);
       // The default folder is flattened into top-level session rows and never
       // drawn as a folder row, so it has no drag id to index.
-      if (!isDefaultProjectFolder(folderGroup.folder)) {
-        index.set(
-          sidebarFolderItemId(folderGroup.folder.id),
-          folderGroupHasPriorityStatus(folderGroup),
-        );
+      if (!isDefaultFolder) {
+        index.set(sidebarFolderItemId(folderGroup.folder.id), {
+          containerId: topLevelContainerId,
+          isPrioritized: folderGroupHasPriorityStatus(folderGroup),
+        });
       }
+      const sessionContainerId = isDefaultFolder
+        ? topLevelContainerId
+        : `folder:${folderGroup.folder.id}`;
       for (const session of folderGroup.sessions) {
-        index.set(sidebarSessionItemId(session.id), hasPriorityStatus(session));
+        index.set(sidebarSessionItemId(session.id), {
+          containerId: sessionContainerId,
+          isPrioritized: hasPriorityStatus(session),
+        });
       }
     }
   }
@@ -151,20 +165,24 @@ export function buildDragPriorityIndex(
  * Whether a row may be dropped onto another while the priority sort is on.
  *
  * The sort re-floats waiting and errored rows on every render, so a drop that
- * crosses the group boundary can never hold its slot — it snaps back the
- * instant it lands. Refusing the drop keeps the boundary honest instead.
+ * crosses the group boundary inside one container can never hold its slot — it
+ * snaps back the instant it lands. Across containers, the workspace move still
+ * has meaning and the destination sort decides the row's final position.
  *
  * Ids missing from the index are drop zones rather than rows, and stay open.
  */
-export function isSameDragPriorityGroup(
-  index: ReadonlyMap<string, boolean>,
+export function isPriorityDropAllowed(
+  index: ReadonlyMap<string, DragPriorityPlacement>,
   activeId: string,
   overId: string,
 ): boolean {
   const active = index.get(activeId);
   const over = index.get(overId);
   if (active === undefined || over === undefined) return true;
-  return active === over;
+  return (
+    active.containerId !== over.containerId ||
+    active.isPrioritized === over.isPrioritized
+  );
 }
 
 /**
@@ -180,13 +198,13 @@ export function isSameDragPriorityGroup(
  * the slot it is dropped in and there is nothing to refuse.
  */
 export function refuseCrossPriorityGroupDrop<T extends { id: string | number }>(
-  index: ReadonlyMap<string, boolean>,
+  index: ReadonlyMap<string, DragPriorityPlacement>,
   activeId: string,
   collisions: T[],
 ): T[] {
   const target = collisions[0];
   if (!target) return collisions;
-  return isSameDragPriorityGroup(index, activeId, String(target.id))
+  return isPriorityDropAllowed(index, activeId, String(target.id))
     ? collisions
     : [];
 }
