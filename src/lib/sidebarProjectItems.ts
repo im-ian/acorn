@@ -131,10 +131,14 @@ export function buildDragPriorityIndex(
   const index = new Map<string, boolean>();
   for (const group of groups) {
     for (const folderGroup of group.folders) {
-      index.set(
-        sidebarFolderItemId(folderGroup.folder.id),
-        folderGroup.sessions.some(hasPriorityStatus),
-      );
+      // The default folder is flattened into top-level session rows and never
+      // drawn as a folder row, so it has no drag id to index.
+      if (!isDefaultProjectFolder(folderGroup.folder)) {
+        index.set(
+          sidebarFolderItemId(folderGroup.folder.id),
+          folderGroupHasPriorityStatus(folderGroup),
+        );
+      }
       for (const session of folderGroup.sessions) {
         index.set(sidebarSessionItemId(session.id), hasPriorityStatus(session));
       }
@@ -163,6 +167,30 @@ export function isSameDragPriorityGroup(
   return active === over;
 }
 
+/**
+ * Drop a drag that landed on a row in the other priority group.
+ *
+ * Takes ranked collisions and returns them untouched, or nothing at all. It
+ * deliberately does not withhold the offending row from the ranking: a withheld
+ * candidate leaves no hole, it hands the slot to whatever ranked next — for a
+ * session row typically a neighbouring folder's drop zone, which would file the
+ * session away into a folder the user never pointed at.
+ *
+ * Call only while the priority sort is on; with the sort off every row keeps
+ * the slot it is dropped in and there is nothing to refuse.
+ */
+export function refuseCrossPriorityGroupDrop<T extends { id: string | number }>(
+  index: ReadonlyMap<string, boolean>,
+  activeId: string,
+  collisions: T[],
+): T[] {
+  const target = collisions[0];
+  if (!target) return collisions;
+  return isSameDragPriorityGroup(index, activeId, String(target.id))
+    ? collisions
+    : [];
+}
+
 export function orderSessionsByPriority(
   sessions: readonly Session[],
   prioritizeNeedsInputTabs: boolean,
@@ -179,7 +207,12 @@ function orderItemsByPriority(
 
 function itemHasPriorityStatus(item: ProjectTopLevelItem): boolean {
   if (item.type === "session") return hasPriorityStatus(item.session);
-  return item.folderGroup.sessions.some(hasPriorityStatus);
+  return folderGroupHasPriorityStatus(item.folderGroup);
+}
+
+/** A folder joins the priority group as soon as one session inside it does. */
+function folderGroupHasPriorityStatus(folderGroup: ProjectFolderGroup): boolean {
+  return folderGroup.sessions.some(hasPriorityStatus);
 }
 
 function hasPriorityStatus(session: Session): boolean {

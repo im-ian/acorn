@@ -6,6 +6,7 @@ import {
   orderSessionsByPriority,
   orderProjectTopLevelItems,
   planProjectTopLevelDrag,
+  refuseCrossPriorityGroupDrop,
 } from "./sidebarProjectItems";
 import {
   makeDefaultProjectFolder,
@@ -283,6 +284,66 @@ describe("sidebar project items", () => {
     expect(
       isSameDragPriorityGroup(index, "session:idle-root", "session:folder:needs-folder"),
     ).toBe(true);
+  });
+
+  describe("refuseCrossPriorityGroupDrop", () => {
+    const index = buildDragPriorityIndex([project()]);
+    const collisionsFor = (...ids: string[]) => ids.map((id) => ({ id }));
+
+    it("refuses the drop when the winning row is in the other group", () => {
+      const collisions = collisionsFor(
+        "session:needs-root",
+        "session:running-root",
+      );
+
+      expect(
+        refuseCrossPriorityGroupDrop(index, "session:idle-root", collisions),
+      ).toEqual([]);
+    });
+
+    it("keeps every candidate when the winning row shares the group", () => {
+      const collisions = collisionsFor(
+        "session:running-root",
+        "session:needs-root",
+      );
+
+      expect(
+        refuseCrossPriorityGroupDrop(index, "session:idle-root", collisions),
+      ).toBe(collisions);
+    });
+
+    // Refusing must not rewrite the ranking: dropping the winner would promote
+    // whatever ranked next — typically a folder drop zone — and file the
+    // session into a folder the user never aimed at.
+    it("refuses rather than promoting the runner-up", () => {
+      const collisions = collisionsFor(
+        "session:needs-root",
+        "session:folder:idle-folder",
+      );
+
+      expect(
+        refuseCrossPriorityGroupDrop(index, "session:idle-root", collisions),
+      ).toEqual([]);
+    });
+
+    it("leaves drop zones and unindexed rows alone", () => {
+      const dropZone = collisionsFor("session:folder:needs-folder");
+      expect(
+        refuseCrossPriorityGroupDrop(index, "session:idle-root", dropZone),
+      ).toBe(dropZone);
+
+      // Local terminal rows are absent from the index and must stay draggable.
+      const localRow = collisionsFor("session:local-1");
+      expect(
+        refuseCrossPriorityGroupDrop(index, "session:local-2", localRow),
+      ).toBe(localRow);
+    });
+
+    it("has nothing to refuse when nothing collided", () => {
+      expect(
+        refuseCrossPriorityGroupDrop(index, "session:idle-root", []),
+      ).toEqual([]);
+    });
   });
 
   it("can move waiting and error sessions above ready work", () => {

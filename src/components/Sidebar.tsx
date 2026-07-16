@@ -117,9 +117,9 @@ import {
 import {
   buildDragPriorityIndex,
   buildProjectTopLevelItems,
-  isSameDragPriorityGroup,
   orderSessionsByPriority,
   planProjectTopLevelDrag,
+  refuseCrossPriorityGroupDrop,
   type ProjectTopLevelFolderItem,
   type ProjectTopLevelSessionItem,
 } from "../lib/sidebarProjectItems";
@@ -825,20 +825,9 @@ export function Sidebar() {
     });
     // While `prioritizeNeedsInputTabs` is on, rows are displayed grouped by
     // priority and the sort re-applies on every render, so a slot in the other
-    // group is one the drop could never keep. Refuse the row the drag actually
-    // landed on rather than dropping it from the candidates: a withheld
-    // candidate does not leave a hole, it hands the slot to whatever ranked
-    // next — usually a neighbouring workspace's drop zone, which would file the
-    // session away into a folder the user never aimed at.
-    const target = collisions[0];
-    if (
-      prioritizeNeedsInputTabs &&
-      target &&
-      !isSameDragPriorityGroup(dragPriorityIndex, activeId, String(target.id))
-    ) {
-      return [];
-    }
-    return collisions;
+    // group is one the drop could never keep.
+    if (!prioritizeNeedsInputTabs) return collisions;
+    return refuseCrossPriorityGroupDrop(dragPriorityIndex, activeId, collisions);
   };
 
   function onDragStart(event: DragStartEvent) {
