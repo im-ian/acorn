@@ -326,6 +326,29 @@ describe("needs-input navigation", () => {
 
     expect(useAppStore.getState().activeSessionId).toBe("a3");
   });
+
+  it("opens a chat waiting for input in kanban without changing modes", async () => {
+    const chat = session("chat", REPO_A, {
+      mode: "chat",
+      status: "waiting_for_input",
+    });
+    await seed([project(REPO_A, 0)], [chat]);
+    useAppStore.getState().addSessionNotification(
+      notification("chat-notification", {
+        sessionId: "chat",
+        sessionName: "chat",
+        repoPath: REPO_A,
+      }),
+    );
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+
+    expect(useAppStore.getState().selectLatestNeedsInputSession()).toBe(true);
+
+    const state = useAppStore.getState();
+    expect(state.workspaceViewMode).toBe("kanban");
+    expect(state.activeSessionId).toBe("chat");
+    expect(state.terminalPopupSessionId).toBe("chat");
+  });
 });
 
 describe("sessionNotifications", () => {
