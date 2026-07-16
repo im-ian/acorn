@@ -1,7 +1,7 @@
 {
   "name": "acorn",
   "private": true,
-  "version": "1.26.2",
+  "version": "1.27.0",
   "packageManager": "pnpm@9.15.0",
   "type": "module",
   "scripts": {
