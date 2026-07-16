@@ -974,7 +974,8 @@
       "regionLabel": "작업공간 캔버스",
       "toolbarLabel": "캔버스 도구",
       "empty": "이 캔버스에 터미널 세션이 없습니다. 채팅 세션은 패널에서 계속 사용할 수 있습니다.",
-      "hint": "빈 공간 또는 가운데 버튼 드래그: 이동 · 핀치/보조키+스크롤: 확대·축소 · Alt: 스냅 해제",
+      "hint": "우클릭: 세션 메뉴 · 빈 공간 또는 가운데 버튼 드래그: 이동 · 핀치/보조키+스크롤: 확대·축소 · Alt: 스냅 해제",
+      "showHelp": "캔버스 조작 도움말 보기",
       "terminalCountOne": "터미널 1개",
       "terminalCountOther": "터미널 {count}개",
       "zoomOut": "축소",
@@ -990,8 +991,12 @@
       "overviewCollapse": "캔버스 미니맵 접기",
       "overviewExpand": "캔버스 미니맵 펼치기",
       "newSession": "새 세션",
+      "contextSession": "세션",
+      "contextCreateSession": "세션 만들기",
+      "contextLayout": "레이아웃",
       "moveSession": "{name} 이동",
       "resizeSession": "{name} 크기 조절",
+      "expandSession": "{name} 크게 보기",
       "openInPanes": "패널에서 {name} 열기"
     },
     "kanban": {

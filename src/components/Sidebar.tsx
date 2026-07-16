@@ -115,9 +115,11 @@ import {
   type ProjectFolderProjectGroup,
 } from "../lib/projectFolders";
 import {
+  buildDragPriorityIndex,
   buildProjectTopLevelItems,
-  orderProjectTopLevelItems,
   orderSessionsByPriority,
+  planProjectTopLevelDrag,
+  refuseCrossPriorityGroupDrop,
   type ProjectTopLevelFolderItem,
   type ProjectTopLevelSessionItem,
 } from "../lib/sidebarProjectItems";
@@ -794,6 +796,13 @@ export function Sidebar() {
     () => projectGroups.map((p) => projectDragId(p.repoPath)),
     [projectGroups],
   );
+  // Project rows only: local terminal rows are displayed in their saved order,
+  // so confining their drags to a priority group would cost slots and buy
+  // nothing.
+  const dragPriorityIndex = useMemo(
+    () => buildDragPriorityIndex(projectGroups),
+    [projectGroups],
+  );
   // Scoped collision detection: only consider droppables sharing the active
   // item's namespace. Without this, dragging a project over an expanded
   // project's child session row makes `over.id` resolve to the session,
@@ -810,7 +819,15 @@ export function Sidebar() {
       }
       return id.startsWith(SESSION_DRAG_PREFIX);
     });
-    return closestCenter({ ...args, droppableContainers: filtered });
+    const collisions = closestCenter({
+      ...args,
+      droppableContainers: filtered,
+    });
+    // While `prioritizeNeedsInputTabs` is on, rows are displayed grouped by
+    // priority and the sort re-applies on every render, so a slot in the other
+    // group of the same reorder container is one the drop could never keep.
+    if (!prioritizeNeedsInputTabs) return collisions;
+    return refuseCrossPriorityGroupDrop(dragPriorityIndex, activeId, collisions);
   };
 
   function onDragStart(event: DragStartEvent) {
@@ -822,16 +839,14 @@ export function Sidebar() {
     activeItemId: string,
     overItemId: string,
   ): boolean {
-    const items = buildProjectTopLevelItems(
+    const plan = planProjectTopLevelDrag(
       project,
       projectItemOrders[project.repoPath] ?? [],
+      activeItemId,
+      overItemId,
     );
-    const ids = items.map((item) => item.id);
-    const fromIdx = ids.indexOf(activeItemId);
-    const toIdx = ids.indexOf(overItemId);
-    if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return false;
-    const nextIds = arrayMove(ids, fromIdx, toIdx);
-    const nextItems = orderProjectTopLevelItems(items, nextIds);
+    if (!plan) return false;
+    const { nextOrder: nextIds, nextItems } = plan;
     setProjectItemOrders((prev) =>
       stringArraysEqual(prev[project.repoPath] ?? [], nextIds)
         ? prev
