@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 const SCENES = [
   "workspace",
   "kanban",
+  "canvas",
   "pr-modal",
   "chat-session",
   "control-session",
@@ -29,7 +30,7 @@ Options:
 
 Examples:
   pnpm run capture:readme
-  pnpm run capture:readme -- workspace kanban pr-modal chat-session staged-diff
+  pnpm run capture:readme -- workspace kanban canvas pr-modal chat-session staged-diff
   pnpm run capture:readme -- --out /tmp/acorn-captures --headed
   pnpm run capture:readme -- --port 1425
 `);
