@@ -60,6 +60,7 @@ import { WhatsNewModal } from "./WhatsNewModal";
 import { Tooltip } from "./Tooltip";
 import {
   AGENT_OPTIONS,
+  CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_OPTIONS,
   DEFAULT_SESSION_TITLE_PROMPT,
   MOUNTED_TERMINAL_LIMIT_MAX,
   MOUNTED_TERMINAL_LIMIT_MIN,
@@ -84,6 +85,7 @@ import {
   TOAST_POSITION_OPTIONS,
   type KanbanTerminalPopoverDefaultSize,
   type KanbanTerminalPopoverPlacement,
+  type CanvasInactiveTerminalRenderIntervalMs,
   type SelectedAgent,
   type SessionTitleSource,
   type AcornSettings,
@@ -598,6 +600,62 @@ function terminalFontSmoothingLabel(
   }
 }
 
+function canvasInactiveRefreshRateOption(
+  t: SettingsTranslator,
+  value: CanvasInactiveTerminalRenderIntervalMs,
+): SelectOption {
+  switch (value) {
+    case 16:
+      return {
+        value,
+        label: st(
+          t,
+          "settings.terminal.canvasInactiveRefreshRate.options.fullSpeed.label",
+        ),
+        description: st(
+          t,
+          "settings.terminal.canvasInactiveRefreshRate.options.fullSpeed.description",
+        ),
+      };
+    case 40:
+      return {
+        value,
+        label: st(
+          t,
+          "settings.terminal.canvasInactiveRefreshRate.options.balanced.label",
+        ),
+        description: st(
+          t,
+          "settings.terminal.canvasInactiveRefreshRate.options.balanced.description",
+        ),
+      };
+    case 80:
+      return {
+        value,
+        label: st(
+          t,
+          "settings.terminal.canvasInactiveRefreshRate.options.reduced.label",
+        ),
+        description: st(
+          t,
+          "settings.terminal.canvasInactiveRefreshRate.options.reduced.description",
+        ),
+      };
+    case 120:
+      return {
+        value,
+        label: st(
+          t,
+          "settings.terminal.canvasInactiveRefreshRate.options.minimal.label",
+        ),
+        description: st(
+          t,
+          "settings.terminal.canvasInactiveRefreshRate.options.minimal.description",
+        ),
+      };
+  }
+}
+
 function TerminalSettings() {
   const settings = useSettings((s) => s.settings);
   const applyTerminalFontPreset = useSettings((s) => s.applyTerminalFontPreset);
@@ -814,6 +872,29 @@ function TerminalSettings() {
           step={TERMINAL_LINE_HEIGHT_STEP}
           format={(n) => n.toFixed(2)}
           onChange={(n) => patchTerminal({ lineHeight: n })}
+        />
+      </Field>
+      <Field
+        label={st(t, "settings.terminal.canvasInactiveRefreshRate.label")}
+        hint={st(t, "settings.terminal.canvasInactiveRefreshRate.hint")}
+      >
+        <Select
+          value={settings.terminal.canvasInactiveTerminalRenderIntervalMs}
+          onChange={(event) =>
+            patchTerminal({
+              canvasInactiveTerminalRenderIntervalMs: Number(
+                event.target.value,
+              ) as CanvasInactiveTerminalRenderIntervalMs,
+            })
+          }
+          options={CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_OPTIONS.map(
+            (value) => canvasInactiveRefreshRateOption(t, value),
+          )}
+          className="w-64"
+          aria-label={st(
+            t,
+            "settings.terminal.canvasInactiveRefreshRate.label",
+          )}
         />
       </Field>
       <Field

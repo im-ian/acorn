@@ -26,16 +26,19 @@ vi.mock("./Terminal", async () => {
     Terminal: ({
       sessionId,
       isActive,
+      reduceOutputCadence,
       autoFocusOnActive,
     }: {
       sessionId: string;
       isActive?: boolean;
+      reduceOutputCadence?: boolean;
       autoFocusOnActive?: boolean;
     }) =>
       React.createElement("div", {
         "data-testid": "terminal",
         "data-session-id": sessionId,
         "data-active": String(Boolean(isActive)),
+        "data-reduced-output-cadence": String(Boolean(reduceOutputCadence)),
         "data-auto-focus-on-active": String(Boolean(autoFocusOnActive)),
       }),
   };
@@ -128,6 +131,16 @@ function terminalRows(): Array<{ id: string; active: boolean }> {
       active: el.dataset.active === "true",
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function reducedOutputCadenceSessionIds(): string[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "[data-reduced-output-cadence='true']",
+    ),
+  )
+    .map((el) => el.dataset.sessionId ?? "")
+    .sort();
 }
 
 function installWorkspaceSessions(ids: string[]): void {
@@ -384,6 +397,11 @@ describe("TerminalHost", () => {
       { id: "first", active: true },
       { id: "second", active: true },
     ]);
+    expect(reducedOutputCadenceSessionIds()).toEqual(["second"]);
+
+    await focusSession("second");
+    expect(reducedOutputCadenceSessionIds()).toEqual(["first"]);
+    await focusSession("first");
 
     await act(async () => {
       useAppStore.setState({ workspaceViewMode: "panes" });

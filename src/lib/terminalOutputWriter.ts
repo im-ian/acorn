@@ -11,8 +11,11 @@ interface TerminalOutputWriterOptions {
   write: (bytes: Uint8Array, onParsed: () => void) => void;
   afterWrite: () => void;
   isActive: () => boolean;
+  isBackground?: () => boolean;
   activeBatchBytes?: number;
+  backgroundBatchBytes?: number;
   inactiveBatchBytes?: number;
+  backgroundDelayMs?: number | (() => number);
   inactiveDelayMs?: number;
   maxQueuedBytes?: number;
   requestFrame?: (callback: FrameRequestCallback) => number;
@@ -22,7 +25,9 @@ interface TerminalOutputWriterOptions {
 }
 
 const DEFAULT_ACTIVE_BATCH_BYTES = 512 * 1024;
+const DEFAULT_BACKGROUND_BATCH_BYTES = 256 * 1024;
 const DEFAULT_INACTIVE_BATCH_BYTES = 128 * 1024;
+const DEFAULT_BACKGROUND_DELAY_MS = 40;
 const DEFAULT_INACTIVE_DELAY_MS = 80;
 const DEFAULT_MAX_QUEUED_BYTES = 4 * 1024 * 1024;
 
@@ -61,12 +66,19 @@ function takeBatch(
   };
 }
 
+function resolveDelayMs(value: number | (() => number)): number {
+  return typeof value === "function" ? value() : value;
+}
+
 export function createTerminalOutputWriter({
   write,
   afterWrite,
   isActive,
+  isBackground = () => false,
   activeBatchBytes = DEFAULT_ACTIVE_BATCH_BYTES,
+  backgroundBatchBytes = DEFAULT_BACKGROUND_BATCH_BYTES,
   inactiveBatchBytes = DEFAULT_INACTIVE_BATCH_BYTES,
+  backgroundDelayMs = DEFAULT_BACKGROUND_DELAY_MS,
   inactiveDelayMs = DEFAULT_INACTIVE_DELAY_MS,
   maxQueuedBytes = DEFAULT_MAX_QUEUED_BYTES,
   requestFrame = window.requestAnimationFrame.bind(window),
@@ -143,10 +155,13 @@ export function createTerminalOutputWriter({
       return;
     }
 
-    timer = setTimeoutFn(() => {
-      timer = null;
-      flush();
-    }, inactiveDelayMs);
+    timer = setTimeoutFn(
+      () => {
+        timer = null;
+        flush();
+      },
+      isBackground() ? resolveDelayMs(backgroundDelayMs) : inactiveDelayMs,
+    );
   };
 
   const flush = () => {
@@ -157,10 +172,16 @@ export function createTerminalOutputWriter({
     const useUrgentBudget = urgentFlush || closing || queuedBytes >= maxQueuedBytes;
     urgentFlush = false;
     const maxBytes = useUrgentBudget
-      ? Math.max(activeBatchBytes, inactiveBatchBytes)
+      ? Math.max(
+          activeBatchBytes,
+          backgroundBatchBytes,
+          inactiveBatchBytes,
+        )
       : isActive()
         ? activeBatchBytes
-        : inactiveBatchBytes;
+        : isBackground()
+          ? backgroundBatchBytes
+          : inactiveBatchBytes;
     const batch = takeBatch(queue, maxBytes);
     if (!batch) {
       resolveIdleIfReady();
