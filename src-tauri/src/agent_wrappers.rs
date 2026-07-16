@@ -14,6 +14,7 @@ const CLAUDE_SETTINGS_NAME: &str = "acorn-claude-settings.json";
 const ANTIGRAVITY_WRAPPER_NAME: &str = "agy";
 const ANTIGRAVITY_NOTIFY_NAME: &str = "acorn-antigravity-notify";
 const HOOK_ENDPOINT_NAME: &str = "agent-hook-endpoint";
+const HOOK_SPOOL_DIR_NAME: &str = "agent-hook-spool";
 
 const CODEX_WRAPPER_BODY: &str = r#"#!/bin/sh
 _acorn_wrapper_dir="${ACORN_AGENT_WRAPPER_DIR-}"
@@ -310,6 +311,28 @@ if [ "$source" = "legacy_completion" ]; then
   fi
 fi
 
+# Spool this event when the POST fails: a wrapper-owned PTY outlives the
+# app, and a dropped POST here is a lost lifecycle transition. Line 1 is
+# the transport metadata the POST carried; the rest is the raw body. The
+# app drains and replays this directory on its next boot.
+_acorn_spool_event() {
+  [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] || return 0
+  _acorn_spool_dir="$ACORN_AGENT_WRAPPER_DIR/agent-hook-spool"
+  (umask 077; mkdir -p "$_acorn_spool_dir") 2>/dev/null || return 0
+  set -- "$_acorn_spool_dir"/*.json
+  if [ "$#" -ge 512 ] && [ -e "$1" ]; then
+    return 0
+  fi
+  _acorn_spool_tmp="$_acorn_spool_dir/.tmp-$$"
+  {
+    printf '%s\n' "$_acorn_spool_meta"
+    printf '%s' "$_acorn_spool_body"
+  } > "$_acorn_spool_tmp" 2>/dev/null || { rm -f "$_acorn_spool_tmp" 2>/dev/null; return 0; }
+  chmod 600 "$_acorn_spool_tmp" 2>/dev/null || true
+  mv "$_acorn_spool_tmp" "$_acorn_spool_dir/$(date +%s 2>/dev/null || echo 0)-$$.json" 2>/dev/null ||
+    rm -f "$_acorn_spool_tmp" 2>/dev/null
+}
+
 # Resolve the current app instance at send time so daemon-owned terminals
 # survive app restarts without retaining a stale port or token.
 hook_url=""
@@ -322,11 +345,16 @@ if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
   hook_url="${ACORN_AGENT_HOOK_URL-}"
   hook_token="${ACORN_AGENT_HOOK_TOKEN-}"
 fi
-[ -n "$hook_url" ] || exit 0
-[ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
 if [ "$raw_contract" = "1" ]; then
+  _acorn_spool_meta=$(printf '{"provider":"codex","session_id":"%s","source":"%s","lifecycle_id":"%s","version":"%s","native_hooks_enabled":"%s"}' \
+    "$ACORN_AGENT_HOOK_SESSION_ID" "$source" "${ACORN_CODEX_LIFECYCLE_ID-}" "${ACORN_CODEX_VERSION-unknown}" "${ACORN_CODEX_NATIVE_HOOKS_ENABLED-0}")
+  _acorn_spool_body="$input"
+  if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
+    _acorn_spool_event
+    exit 0
+  fi
   printf '%s' "$input" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
     -H 'Content-Type: application/json' \
     -H "X-Acorn-Agent-Hook-Token: $hook_token" \
@@ -337,7 +365,7 @@ if [ "$raw_contract" = "1" ]; then
     -H "X-Acorn-Codex-Version: ${ACORN_CODEX_VERSION-unknown}" \
     -H "X-Acorn-Codex-Native-Hooks-Enabled: ${ACORN_CODEX_NATIVE_HOOKS_ENABLED-0}" \
     --data-binary @- \
-    "$hook_url" >/dev/null 2>&1 || true
+    "$hook_url" >/dev/null 2>&1 || _acorn_spool_event
   exit 0
 fi
 
@@ -353,11 +381,17 @@ case "${source:-hook}" in
   *) source="hook" ;;
 esac
 payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "${source:-hook}")
+_acorn_spool_meta='{}'
+_acorn_spool_body="$payload"
+if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
+  _acorn_spool_event
+  exit 0
+fi
 printf '%s' "$payload" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
   -H 'Content-Type: application/json' \
   -H "X-Acorn-Agent-Hook-Token: $hook_token" \
   --data-binary @- \
-  "$hook_url" >/dev/null 2>&1 || true
+  "$hook_url" >/dev/null 2>&1 || _acorn_spool_event
 "#;
 
 // Claude Code wrapper.
@@ -465,6 +499,28 @@ fi
 # Forward the raw hook payload with transport attribution. Rust owns
 # structured classification, including subagent filtering and Stop handling.
 
+# Spool this event when the POST fails: a wrapper-owned PTY outlives the
+# app, and a dropped POST here is a lost lifecycle transition. Line 1 is
+# the transport metadata the POST carried; the rest is the raw body. The
+# app drains and replays this directory on its next boot.
+_acorn_spool_event() {
+  [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] || return 0
+  _acorn_spool_dir="$ACORN_AGENT_WRAPPER_DIR/agent-hook-spool"
+  (umask 077; mkdir -p "$_acorn_spool_dir") 2>/dev/null || return 0
+  set -- "$_acorn_spool_dir"/*.json
+  if [ "$#" -ge 512 ] && [ -e "$1" ]; then
+    return 0
+  fi
+  _acorn_spool_tmp="$_acorn_spool_dir/.tmp-$$"
+  {
+    printf '%s\n' "$_acorn_spool_meta"
+    printf '%s' "$_acorn_spool_body"
+  } > "$_acorn_spool_tmp" 2>/dev/null || { rm -f "$_acorn_spool_tmp" 2>/dev/null; return 0; }
+  chmod 600 "$_acorn_spool_tmp" 2>/dev/null || true
+  mv "$_acorn_spool_tmp" "$_acorn_spool_dir/$(date +%s 2>/dev/null || echo 0)-$$.json" 2>/dev/null ||
+    rm -f "$_acorn_spool_tmp" 2>/dev/null
+}
+
 # Resolve the hook endpoint at send time. Each app launch rewrites the
 # endpoint file with that run's server URL + token (the hook server binds a
 # fresh port and token per run), so an agent session that outlives an app
@@ -480,9 +536,13 @@ if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
   hook_url="${ACORN_AGENT_HOOK_URL-}"
   hook_token="${ACORN_AGENT_HOOK_TOKEN-}"
 fi
-[ -n "$hook_url" ] || exit 0
-[ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
+_acorn_spool_meta=$(printf '{"provider":"claude","session_id":"%s","source":"native"}' "$ACORN_AGENT_HOOK_SESSION_ID")
+_acorn_spool_body="$input"
+if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
+  _acorn_spool_event
+  exit 0
+fi
 
 printf '%s' "$input" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
   -H 'Content-Type: application/json' \
@@ -491,7 +551,7 @@ printf '%s' "$input" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
   -H "X-Acorn-Agent-Hook-Session-Id: $ACORN_AGENT_HOOK_SESSION_ID" \
   -H 'X-Acorn-Agent-Hook-Source: native' \
   --data-binary @- \
-  "$hook_url" >/dev/null 2>&1 || true
+  "$hook_url" >/dev/null 2>&1 || _acorn_spool_event
 "#;
 
 const ANTIGRAVITY_WRAPPER_BODY: &str = r#"#!/bin/sh
@@ -779,6 +839,28 @@ case "$event" in
     ;;
 esac
 
+# Spool this event when the POST fails: a wrapper-owned PTY outlives the
+# app, and a dropped POST here is a lost lifecycle transition. Line 1 is
+# the transport metadata the POST carried; the rest is the raw body. The
+# app drains and replays this directory on its next boot.
+_acorn_spool_event() {
+  [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] || return 0
+  _acorn_spool_dir="$ACORN_AGENT_WRAPPER_DIR/agent-hook-spool"
+  (umask 077; mkdir -p "$_acorn_spool_dir") 2>/dev/null || return 0
+  set -- "$_acorn_spool_dir"/*.json
+  if [ "$#" -ge 512 ] && [ -e "$1" ]; then
+    return 0
+  fi
+  _acorn_spool_tmp="$_acorn_spool_dir/.tmp-$$"
+  {
+    printf '%s\n' "$_acorn_spool_meta"
+    printf '%s' "$_acorn_spool_body"
+  } > "$_acorn_spool_tmp" 2>/dev/null || { rm -f "$_acorn_spool_tmp" 2>/dev/null; return 0; }
+  chmod 600 "$_acorn_spool_tmp" 2>/dev/null || true
+  mv "$_acorn_spool_tmp" "$_acorn_spool_dir/$(date +%s 2>/dev/null || echo 0)-$$.json" 2>/dev/null ||
+    rm -f "$_acorn_spool_tmp" 2>/dev/null
+}
+
 # Resolve the hook endpoint at send time. Each app launch rewrites the
 # endpoint file with that run's server URL + token (the hook server binds a
 # fresh port and token per run), so an agent session that outlives an app
@@ -794,16 +876,20 @@ if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
   hook_url="${ACORN_AGENT_HOOK_URL-}"
   hook_token="${ACORN_AGENT_HOOK_TOKEN-}"
 fi
-[ -n "$hook_url" ] || exit 0
-[ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
 payload=$(printf '{"session_id":"%s","provider":"antigravity","event":"%s","source":"%s"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event" "$source")
-curl -sf -X POST \
+_acorn_spool_meta='{}'
+_acorn_spool_body="$payload"
+if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
+  _acorn_spool_event
+  exit 0
+fi
+curl -sf --connect-timeout 1 --max-time 1 -X POST \
   -H 'Content-Type: application/json' \
   -H "X-Acorn-Agent-Hook-Token: $hook_token" \
   -d "$payload" \
-  "$hook_url" >/dev/null 2>&1 || true
+  "$hook_url" >/dev/null 2>&1 || _acorn_spool_event
 "#;
 
 pub fn ensure_agent_wrapper_dir() -> io::Result<PathBuf> {
@@ -836,6 +922,13 @@ fn write_agent_hook_endpoint_at(dir: &Path, url: &str, token: &str) -> io::Resul
     // previous endpoint or the new one, never a torn file.
     fs::rename(&tmp, &path)?;
     Ok(path)
+}
+
+/// Directory where the notify scripts spool hook events they could not
+/// deliver (no app instance listening). Drained through
+/// `agent_hooks::replay_spooled_hook_events` on the next app boot.
+pub fn agent_hook_spool_dir() -> io::Result<PathBuf> {
+    Ok(ensure_agent_wrapper_dir()?.join(HOOK_SPOOL_DIR_NAME))
 }
 
 /// Best-effort removal of a stale endpoint file. Called when this run has no
@@ -3024,6 +3117,149 @@ done
 
     // Classifier behavior lives in `agent_hooks::tests`; wrapper tests cover
     // transport and invocation attribution only.
+
+    #[test]
+    fn notify_scripts_spool_undeliverable_events() {
+        let base = ScratchDir::new("spool-content");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        for name in [
+            "acorn-claude-notify",
+            "acorn-codex-notify",
+            "acorn-antigravity-notify",
+        ] {
+            let notify = fs::read_to_string(dir.join(name)).unwrap();
+            assert!(
+                notify.contains("agent-hook-spool"),
+                "{name} must spool undeliverable events"
+            );
+            assert!(
+                notify.contains("|| _acorn_spool_event"),
+                "{name} must spool on POST failure"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    fn run_claude_notify_with_curl(curl_body: &str, payload: &str) -> (ScratchDir, PathBuf) {
+        use std::io::Write as _;
+
+        let base = ScratchDir::new("spool-run");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let fake_bin = base.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_executable(&fake_bin.join("curl"), curl_body).unwrap();
+
+        let mut child = Command::new(wrapper_dir.join(CLAUDE_NOTIFY_NAME))
+            .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env(
+                "ACORN_AGENT_HOOK_SESSION_ID",
+                "11111111-2222-4333-8444-555555555555",
+            )
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_TOKEN", "owner-invocation")
+            .env("ACORN_AGENT_INVOCATION_DEPTH", "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "notify failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let spool_dir = wrapper_dir.join("agent-hook-spool");
+        (base, spool_dir)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_notify_spools_event_when_post_fails() {
+        let payload =
+            r#"{"hook_event_name":"Stop","session_id":"019e4818-7c15-4e60-9b3b-898a1c7803d6"}"#;
+        let (_scratch, spool_dir) = run_claude_notify_with_curl("#!/bin/sh\nexit 7\n", payload);
+
+        let files: Vec<PathBuf> = fs::read_dir(&spool_dir)
+            .expect("spool dir must exist after a failed POST")
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        assert_eq!(files.len(), 1, "exactly one event must be spooled");
+        let content = fs::read_to_string(&files[0]).unwrap();
+        let (meta, body) = content.split_once('\n').expect("meta line + body");
+        let meta: serde_json::Value = serde_json::from_str(meta).expect("meta must be JSON");
+        assert_eq!(meta["provider"], "claude");
+        assert_eq!(meta["session_id"], "11111111-2222-4333-8444-555555555555");
+        assert_eq!(meta["source"], "native");
+        assert_eq!(body, payload, "the raw payload must be preserved verbatim");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_notify_does_not_spool_on_successful_post() {
+        let payload = r#"{"hook_event_name":"Stop"}"#;
+        let (_scratch, spool_dir) =
+            run_claude_notify_with_curl("#!/bin/sh\ncat >/dev/null\nexit 0\n", payload);
+
+        let spooled = fs::read_dir(&spool_dir)
+            .map(|entries| entries.flatten().count())
+            .unwrap_or(0);
+        assert_eq!(spooled, 0, "a delivered event must not be spooled");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_notify_spool_respects_file_cap() {
+        let payload = r#"{"hook_event_name":"Stop"}"#;
+        let base = ScratchDir::new("spool-cap");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let spool_dir = wrapper_dir.join("agent-hook-spool");
+        fs::create_dir_all(&spool_dir).unwrap();
+        for index in 0..512 {
+            fs::write(spool_dir.join(format!("1700000000-{index}.json")), "{}\n{}").unwrap();
+        }
+        let fake_bin = base.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_executable(&fake_bin.join("curl"), "#!/bin/sh\nexit 7\n").unwrap();
+
+        use std::io::Write as _;
+        let mut child = Command::new(wrapper_dir.join(CLAUDE_NOTIFY_NAME))
+            .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env(
+                "ACORN_AGENT_HOOK_SESSION_ID",
+                "11111111-2222-4333-8444-555555555555",
+            )
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:1/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "token-1")
+            .env("ACORN_AGENT_INVOCATION_TOKEN", "owner-invocation")
+            .env("ACORN_AGENT_INVOCATION_DEPTH", "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        assert!(child.wait_with_output().unwrap().status.success());
+
+        let count = fs::read_dir(&spool_dir).unwrap().flatten().count();
+        assert_eq!(count, 512, "a full spool must drop the event, not grow");
+    }
 
     #[test]
     fn writes_hook_endpoint_file_atomically_with_owner_only_perms() {

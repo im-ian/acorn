@@ -1751,6 +1751,129 @@ fn validate_request(request: &[u8], token: &str, handler: &HookEventHandler) -> 
     }
 }
 
+/// Transport metadata line at the head of a spooled hook event file — the
+/// headers the original POST carried. An empty object means the body is a
+/// self-describing normalized envelope (Antigravity, legacy Codex shape)
+/// that parses through the generic header-less branch.
+#[derive(Debug, Default, Deserialize)]
+struct SpooledTransportMeta {
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    lifecycle_id: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    native_hooks_enabled: Option<String>,
+}
+
+/// Drain the notify scripts' spool directory: events POSTed while no app
+/// instance was listening land there instead of being dropped. Files are
+/// named `<unix-ts>-<pid>.json` and replay in numeric (timestamp, pid)
+/// order. Ordering within one second is best-effort — pid order is not
+/// arrival order — so a mis-ordered same-second pair can leave a stale
+/// status until the session's next live event corrects it; the pre-spool
+/// behavior was losing both events outright. Every file is consumed
+/// regardless of outcome so a malformed or permanently rejected event can
+/// never wedge the replay.
+pub fn replay_spooled_hook_events<F>(spool_dir: &std::path::Path, handler: F) -> usize
+where
+    F: Fn(AgentHookEvent) -> AgentHookHandlerOutcome,
+{
+    let Ok(entries) = std::fs::read_dir(spool_dir) else {
+        return 0;
+    };
+    let mut files: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    files.sort_by_key(|path| spool_replay_order_key(path));
+    let mut replayed = 0;
+    for path in files {
+        match parse_spooled_hook_event(&path) {
+            Ok(Some(event)) => {
+                handler(event);
+                replayed += 1;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "spooled agent hook event rejected",
+                );
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+    replayed
+}
+
+/// Numeric sort key for `<unix-ts>-<pid>.json` spool names: a string sort
+/// would order `"21000"` before `"3000"` on a same-second tie. Unparseable
+/// names sort last, tie-broken by the full path for determinism.
+fn spool_replay_order_key(path: &std::path::Path) -> (u64, u64, std::path::PathBuf) {
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("");
+    let (ts, pid) = stem.split_once('-').unwrap_or((stem, ""));
+    (
+        ts.parse::<u64>().unwrap_or(u64::MAX),
+        pid.parse::<u64>().unwrap_or(u64::MAX),
+        path.to_path_buf(),
+    )
+}
+
+fn parse_spooled_hook_event(path: &std::path::Path) -> Result<Option<AgentHookEvent>, String> {
+    let metadata = std::fs::metadata(path).map_err(|err| err.to_string())?;
+    if metadata.len() > MAX_BODY_BYTES as u64 {
+        return Err("spooled event exceeds size limit".to_string());
+    }
+    let raw = std::fs::read(path).map_err(|err| err.to_string())?;
+    let meta_end = raw
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or_else(|| "missing transport metadata line".to_string())?;
+    let meta: SpooledTransportMeta =
+        serde_json::from_slice(&raw[..meta_end]).map_err(|err| err.to_string())?;
+    let head = synthetic_request_head(&meta)?;
+    parse_agent_hook_request(&head, &raw[meta_end + 1..])
+}
+
+/// Rebuild the HTTP request head the spooled POST would have carried so a
+/// replayed event travels the exact same parse path as a live one.
+fn synthetic_request_head(meta: &SpooledTransportMeta) -> Result<String, String> {
+    let mut head = String::from("POST /agent-hook HTTP/1.1");
+    for (name, value) in [
+        ("x-acorn-agent-hook-provider", &meta.provider),
+        ("x-acorn-agent-hook-session-id", &meta.session_id),
+        ("x-acorn-agent-hook-source", &meta.source),
+        ("x-acorn-codex-lifecycle-id", &meta.lifecycle_id),
+        ("x-acorn-codex-version", &meta.version),
+        (
+            "x-acorn-codex-native-hooks-enabled",
+            &meta.native_hooks_enabled,
+        ),
+    ] {
+        if let Some(value) = value {
+            if value.chars().any(char::is_control) {
+                return Err(format!("control characters in spooled {name}"));
+            }
+            head.push_str("\r\n");
+            head.push_str(name);
+            head.push_str(": ");
+            head.push_str(value);
+        }
+    }
+    Ok(head)
+}
+
 fn parse_agent_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentHookEvent>, String> {
     match header_value(head, "x-acorn-agent-hook-provider") {
         Some("codex") => parse_raw_codex_hook_request(head, body),
@@ -2710,6 +2833,182 @@ mod tests {
         ));
         assert!(!reducer.lanes.contains_key(&removed_id));
         assert_eq!(reducer.lanes.len(), 1);
+    }
+
+    #[test]
+    fn replay_spooled_hook_events_drains_in_order_and_consumes_files() {
+        let dir = std::env::temp_dir().join(format!("acorn-spool-{}", Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let session_id = Uuid::new_v4();
+        let claude_uuid = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+
+        let meta =
+            format!(r#"{{"provider":"claude","session_id":"{session_id}","source":"native"}}"#);
+        let start_body = serde_json::json!({
+            "session_id": claude_uuid,
+            "hook_event_name": "UserPromptSubmit",
+        });
+        let stop_body = serde_json::json!({
+            "session_id": claude_uuid,
+            "hook_event_name": "Stop",
+            "background_tasks": [],
+            "session_crons": [],
+        });
+        std::fs::write(
+            dir.join("1700000001-100.json"),
+            format!("{meta}\n{start_body}"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("1700000002-101.json"),
+            format!("{meta}\n{stop_body}"),
+        )
+        .unwrap();
+        // A subagent event is classified away, not replayed — but consumed.
+        let child_body = serde_json::json!({
+            "session_id": claude_uuid,
+            "hook_event_name": "Stop",
+            "agent_id": "019f6338-6250-7303-88a6-a7add31dba1d",
+        });
+        std::fs::write(
+            dir.join("1700000003-102.json"),
+            format!("{meta}\n{child_body}"),
+        )
+        .unwrap();
+        // Malformed metadata is rejected and consumed.
+        std::fs::write(dir.join("1700000004-103.json"), "not-json\n{}").unwrap();
+        // Header-injection through metadata values fails closed and is consumed.
+        std::fs::write(
+            dir.join("1700000005-104.json"),
+            format!(
+                "{}\n{}",
+                r#"{"provider":"claude","session_id":"x\r\nx-acorn-agent-hook-provider: codex","source":"native"}"#,
+                start_body
+            ),
+        )
+        .unwrap();
+        // A header-less envelope parses through the generic branch.
+        let envelope = serde_json::json!({
+            "session_id": session_id,
+            "provider": "antigravity",
+            "event": "needs_input",
+            "source": "transcript",
+        });
+        std::fs::write(dir.join("1700000006-105.json"), format!("{{}}\n{envelope}")).unwrap();
+        // In-flight tmp files are not picked up.
+        std::fs::write(dir.join(".tmp-106"), "partial").unwrap();
+
+        let seen = Mutex::new(Vec::new());
+        let replayed = super::replay_spooled_hook_events(&dir, |event| {
+            seen.lock().unwrap().push(event);
+            AgentHookHandlerOutcome::Applied
+        });
+
+        assert_eq!(replayed, 3);
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen[0].event, AgentHookEventKind::Start);
+        assert_eq!(seen[0].provider, SessionAgentProvider::Claude);
+        assert_eq!(seen[0].session_id, session_id);
+        assert_eq!(seen[0].provider_session_id.as_deref(), Some(claude_uuid));
+        assert_eq!(seen[0].source.as_deref(), Some("native"));
+        assert_eq!(seen[1].event, AgentHookEventKind::NeedsInput);
+        assert_eq!(seen[2].provider, SessionAgentProvider::Antigravity);
+        assert_eq!(seen[2].source.as_deref(), Some("transcript"));
+        let leftover: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".json"))
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "all spooled events must be consumed: {leftover:?}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replay_spool_order_is_numeric_not_lexicographic() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-spool-order-{}", Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let session_id = Uuid::new_v4();
+        let claude_uuid = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+        let meta =
+            format!(r#"{{"provider":"claude","session_id":"{session_id}","source":"native"}}"#);
+        let start_body = serde_json::json!({
+            "session_id": claude_uuid,
+            "hook_event_name": "UserPromptSubmit",
+        });
+        let stop_body = serde_json::json!({
+            "session_id": claude_uuid,
+            "hook_event_name": "Stop",
+            "background_tasks": [],
+            "session_crons": [],
+        });
+        // Same second; pid 9 wrote first, pid 100 second. A string sort
+        // would replay "…-100.json" before "…-9.json" and end on Start.
+        std::fs::write(
+            dir.join("1700000001-9.json"),
+            format!("{meta}\n{start_body}"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("1700000001-100.json"),
+            format!("{meta}\n{stop_body}"),
+        )
+        .unwrap();
+
+        let seen = Mutex::new(Vec::new());
+        let replayed = super::replay_spooled_hook_events(&dir, |event| {
+            seen.lock().unwrap().push(event.event);
+            AgentHookHandlerOutcome::Applied
+        });
+
+        assert_eq!(replayed, 2);
+        assert_eq!(
+            seen.into_inner().unwrap(),
+            vec![AgentHookEventKind::Start, AgentHookEventKind::NeedsInput],
+            "same-second ties must break on numeric pid order",
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replay_spooled_codex_meta_reconstructs_transport_headers() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-spool-codex-{}", Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let session_id = Uuid::new_v4();
+        let meta = format!(
+            r#"{{"provider":"codex","session_id":"{session_id}","source":"native","lifecycle_id":"123_456","version":"0.144.4","native_hooks_enabled":"1"}}"#
+        );
+        let body = serde_json::json!({
+            "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+            "turn_id": "019f6338-6250-7303-88a6-a7add31dba1d",
+            "hook_event_name": "UserPromptSubmit",
+        });
+        std::fs::write(dir.join("1700000001-100.json"), format!("{meta}\n{body}")).unwrap();
+
+        let seen = Mutex::new(Vec::new());
+        let replayed = super::replay_spooled_hook_events(&dir, |event| {
+            seen.lock().unwrap().push(event);
+            AgentHookHandlerOutcome::Applied
+        });
+
+        assert_eq!(replayed, 1);
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen[0].session_id, session_id);
+        assert_eq!(seen[0].provider, SessionAgentProvider::Codex);
+        assert_eq!(seen[0].event, AgentHookEventKind::Start);
+        assert_eq!(seen[0].source.as_deref(), Some("native_prompt"));
+        assert_eq!(seen[0].lifecycle_id.as_deref(), Some("123_456"));
+        assert_eq!(
+            seen[0].provider_turn_id.as_deref(),
+            Some("019f6338-6250-7303-88a6-a7add31dba1d")
+        );
+        assert_eq!(seen[0].native_hooks_enabled, Some(true));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
