@@ -85,9 +85,11 @@ test.describe("workspace canvas mode", () => {
       w.__canvasCreateCalls = [...(w.__canvasCreateCalls ?? []), input];
       const repoPath =
         typeof input.repoPath === "string" ? input.repoPath : "/tmp/demo";
+      const mode = input.mode === "chat" ? "chat" : "terminal";
+      const id = mode === "chat" ? "canvas-chat" : "canvas-created";
       const created = {
-        id: "canvas-created",
-        name: "canvas-created",
+        id,
+        name: id,
         repo_path: repoPath,
         worktree_path: repoPath,
         branch: "main",
@@ -99,7 +101,7 @@ test.describe("workspace canvas mode", () => {
         last_message: null,
         title_source: "manual",
         kind: "regular",
-        mode: "terminal",
+        mode,
         owner: { kind: "user" },
         position: null,
         in_worktree: false,
@@ -136,7 +138,7 @@ test.describe("workspace canvas mode", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "New chat session", exact: true }),
-    ).toHaveCount(0);
+    ).toBeVisible();
     await page.keyboard.press("Escape");
 
     const createButton = canvas.getByRole("button", {
@@ -181,6 +183,39 @@ test.describe("workspace canvas mode", () => {
     await expect(
       node.locator('[data-acorn-terminal-slot="canvas-created"]'),
     ).toBeAttached();
+
+    await createButton.click();
+    await page
+      .getByRole("menuitem", { name: "New chat session", exact: true })
+      .click();
+
+    const chatNode = canvas.locator('[data-canvas-session-id="canvas-chat"]');
+    await expect(chatNode).toBeVisible();
+    await expect(
+      chatNode.getByRole("textbox", { name: "Chat message" }),
+    ).toBeVisible();
+    await expect(
+      chatNode.getByRole("button", { name: "Expand canvas-chat" }),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Canvas",
+    );
+
+    const callsAfterChat = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __canvasCreateCalls?: Array<Record<string, unknown>>;
+          }
+        ).__canvasCreateCalls ?? [],
+    );
+    expect(callsAfterChat).toHaveLength(2);
+    expect(callsAfterChat[1]).toMatchObject({
+      repoPath: "/tmp/demo",
+      isolated: false,
+      kind: "regular",
+      mode: "chat",
+    });
 
     await node
       .getByTestId("workspace-canvas-node-drag-handle")

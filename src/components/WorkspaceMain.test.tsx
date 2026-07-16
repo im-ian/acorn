@@ -12,6 +12,25 @@ vi.mock("./LayoutRenderer", async () => {
   };
 });
 
+vi.mock("./ChatPane", async () => {
+  const React = await vi.importActual<typeof import("react")>("react");
+  return {
+    ChatPane: ({
+      sessionId,
+      isActive,
+    }: {
+      sessionId: string;
+      isActive?: boolean;
+    }) =>
+      React.createElement("textarea", {
+        "aria-label": "Chat message",
+        "data-active": String(Boolean(isActive)),
+        "data-chat-session-id": sessionId,
+        "data-testid": "mock-chat-pane",
+      }),
+  };
+});
+
 import { WorkspaceMain } from "./WorkspaceMain";
 import { useAppStore, type WorkspaceViewMode } from "../store";
 import { DEFAULT_SETTINGS, useSettings } from "../lib/settings";
@@ -66,7 +85,10 @@ function queryCanvasMinimap(): HTMLElement | null {
   );
 }
 
-function installCanvasSessions(ids: string[]): void {
+function installCanvasSessions(
+  ids: string[],
+  modes: Partial<Record<string, Session["mode"]>> = {},
+): void {
   const sessions: Session[] = ids.map((id) => ({
     id,
     name: id,
@@ -80,6 +102,7 @@ function installCanvasSessions(ids: string[]): void {
     last_message: null,
     title_source: "default",
     kind: "regular",
+    mode: modes[id] ?? "terminal",
     owner: { kind: "user" },
     position: null,
     in_worktree: false,
@@ -247,6 +270,44 @@ describe("WorkspaceMain", () => {
     expect(
       useAppStore.getState().workspaces[REPO].canvas?.nodes.alpha,
     ).toMatchObject({ width: 700, height: 460 });
+  });
+
+  it("renders chat sessions as interactive canvas nodes", () => {
+    installCanvasSessions(["terminal", "chat"], { chat: "chat" });
+    render("canvas");
+
+    const chatNode = document.querySelector<HTMLElement>(
+      '[data-canvas-session-id="chat"]',
+    );
+    expect(chatNode).not.toBeNull();
+    expect(
+      chatNode!.querySelector('[data-chat-session-id="chat"]'),
+    ).not.toBeNull();
+    expect(chatNode!.querySelector("[data-canvas-terminal-body]")).toBeNull();
+    expect(
+      chatNode!.querySelector('button[aria-label="Expand chat"]'),
+    ).toBeNull();
+    expect(
+      chatNode!.querySelector('[data-testid="mock-chat-pane"]'),
+    ).toHaveAttribute("data-active", "false");
+
+    act(() =>
+      chatNode!
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="workspace-canvas-node-drag-handle"]',
+        )!
+        .click(),
+    );
+
+    expect(useAppStore.getState().activeSessionId).toBe("chat");
+    expect(
+      chatNode!.querySelector('[data-testid="mock-chat-pane"]'),
+    ).toHaveAttribute("data-active", "true");
+    expect(
+      queryCanvasMinimap()!.querySelectorAll(
+        "[data-testid='workspace-canvas-minimap-node']",
+      ),
+    ).toHaveLength(2);
   });
 
   it("preserves saved nodes while sessions are transiently empty at startup", () => {

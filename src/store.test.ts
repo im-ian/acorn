@@ -3440,6 +3440,25 @@ describe("createSession", () => {
     );
   });
 
+  it("opens a newly-created chat in kanban without leaving kanban", async () => {
+    const existing = session("existing", REPO_A);
+    const chat = session("chat", REPO_A, { mode: "chat" });
+    await seed([project(REPO_A, 0)], [existing]);
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+    mockApi.createSession.mockResolvedValueOnce(chat);
+    mockApi.listSessions.mockResolvedValueOnce([existing, chat]);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+
+    await useAppStore
+      .getState()
+      .createSession("chat", REPO_A, false, "regular", null, true, "chat");
+
+    const state = useAppStore.getState();
+    expect(state.workspaceViewMode).toBe("kanban");
+    expect(state.activeSessionId).toBe("chat");
+    expect(state.terminalPopupSessionId).toBe("chat");
+  });
+
   it("emits the guide event the first time a control session is created", async () => {
     const events: Event[] = [];
     const listener = (e: Event) => events.push(e);
