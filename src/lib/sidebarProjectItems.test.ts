@@ -312,6 +312,14 @@ describe("sidebar project items", () => {
       ).toBe(collisions);
     });
 
+    it("allows a cross-group row drop when it moves between containers", () => {
+      const collisions = collisionsFor("session:idle-root");
+
+      expect(
+        refuseCrossPriorityGroupDrop(index, "session:nested-needs", collisions),
+      ).toBe(collisions);
+    });
+
     // Refusing must not rewrite the ranking: dropping the winner would promote
     // whatever ranked next — typically a folder drop zone — and file the
     // session into a folder the user never aimed at.
