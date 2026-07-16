@@ -906,6 +906,11 @@
       "waitingForInput": "입력 대기",
       "errored": "오류"
     },
+    "agentStatusSource": {
+      "hook": "네이티브 훅",
+      "transcript_fallback": "트랜스크립트 폴백(기능 저하)",
+      "process_fallback": "프로세스 폴백(기능 저하)"
+    },
     "sessionStatusReason": {
       "turn_complete": "에이전트 응답 완료",
       "shell_prompt": "셸 프롬프트 감지"

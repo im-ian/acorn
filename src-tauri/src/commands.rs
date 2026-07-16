@@ -27,7 +27,8 @@ use acorn_session::scrollback;
 use acorn_session::status as session_status;
 use acorn_session::status::StatusReason as SessionStatusReason;
 use acorn_session::{
-    Project, Session, SessionAgentProvider, SessionKind, SessionMode, SessionOwner, SessionStatus,
+    AgentStatusSource, Project, Session, SessionAgentProvider, SessionKind, SessionMode,
+    SessionOwner, SessionStatus,
 };
 use acorn_transcript::{assistant_message_text, collapse_preview};
 
@@ -2514,11 +2515,15 @@ fn is_style_suffix_base(word: &str) -> bool {
 }
 
 fn persist(state: &AppState) {
-    if let Err(e) = persistence::save_sessions(&state.sessions.list()) {
-        tracing::warn!("failed to persist sessions: {e}");
-    }
+    persist_sessions(state);
     if let Err(e) = persistence::save_projects(&state.projects.list()) {
         tracing::warn!("failed to persist projects: {e}");
+    }
+}
+
+fn persist_sessions(state: &AppState) {
+    if let Err(e) = persistence::save_sessions(&state.sessions) {
+        tracing::warn!("failed to persist sessions: {e}");
     }
 }
 
@@ -5105,6 +5110,7 @@ pub struct SessionStatusEntry {
     pub id: String,
     pub status: SessionStatus,
     pub status_reason: Option<SessionStatusReason>,
+    pub agent_status_source: Option<AgentStatusSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -5252,18 +5258,28 @@ fn poll_defers_to_hook(
     hook_provider.map_or(true, |provider| provider == live_agent_kind)
 }
 
+fn fallback_agent_status_source(
+    live_agent_kind: Option<AgentKind>,
+    evidence: session_status::StatusEvidence,
+    previous_source: Option<AgentStatusSource>,
+) -> Option<AgentStatusSource> {
+    live_agent_kind?;
+    match evidence {
+        session_status::StatusEvidence::Transcript => Some(AgentStatusSource::TranscriptFallback),
+        session_status::StatusEvidence::Process => Some(AgentStatusSource::ProcessFallback),
+        session_status::StatusEvidence::Previous => previous_source,
+    }
+}
+
 /// Recover a turn boundary that was crossed while the app was closed.
 ///
 /// `hook_active` persists across restarts, so right after boot the poll
-/// already defers to the persisted hook-set status. But a hooked agent whose
-/// turn *ended* while no app instance was listening lost that turn-end event
-/// forever — the store still says Working and, since a resting agent emits no
-/// further events, nothing would ever correct it. Until the first hook event
-/// of this run confirms the channel, allow exactly the one transition hooks
-/// can no longer report: Working -> WaitingForInput backed by a real
-/// turn-complete marker in the transcript (a finished turn leaves the agent
-/// awaiting the user's next instruction, which is what the lost turn-end
-/// hook would have reported).
+/// already defers to the persisted hook-set status. Durable hook delivery
+/// normally replays events received while the app is unavailable, but the
+/// transcript remains the bounded compatibility signal for records that
+/// predate durable delivery or could not be retained. Until the first hook
+/// event of this run confirms the channel, allow exactly one recovery:
+/// Working -> WaitingForInput backed by a real turn-complete marker.
 ///
 /// One-directional on purpose: while the app is closed nobody can submit a
 /// prompt to the session, so a resting status cannot regress to Working
@@ -5288,6 +5304,24 @@ fn detect_session_statuses_blocking(
     state: AppState,
     ids: Vec<String>,
 ) -> AppResult<Vec<SessionStatusEntry>> {
+    // Fence every poll write against lifecycle events that arrive while the
+    // process table and transcripts are being inspected. The clear-on-exit
+    // path advances this generation before a later invocation can claim the
+    // same provider again.
+    let lifecycle_snapshots_before_refresh: HashMap<
+        Uuid,
+        (SessionStatus, Option<AgentStatusSource>, u64, u64),
+    > = ids
+        .iter()
+        .filter_map(|id| Uuid::parse_str(id).ok())
+        .filter_map(|id| {
+            state
+                .sessions
+                .lifecycle_snapshot(&id)
+                .ok()
+                .map(|snapshot| (id, snapshot))
+        })
+        .collect();
     // One process-table snapshot covers every session in this poll. cwd is
     // refreshed because the live PTY descendant cwd drives branch detection
     // — a non-isolated session whose terminal `cd`'d into a git worktree
@@ -5323,6 +5357,7 @@ fn detect_session_statuses_blocking(
 
     let mut promoted_auto_title = false;
     let mut reconciled_hook_status = false;
+    let mut cleared_hook_ownership = false;
     let entries: Vec<SessionStatusEntry> = ids
         .into_iter()
         .map(|id| {
@@ -5332,10 +5367,19 @@ fn detect_session_statuses_blocking(
             // `session_status::detect` for the full rationale).
             let parsed_id = Uuid::parse_str(&id).ok();
             let session = parsed_id.and_then(|uuid| state.sessions.get(&uuid).ok());
-            let previous = session
-                .as_ref()
-                .map(|s| s.status)
+            let initial_lifecycle =
+                parsed_id.and_then(|uuid| lifecycle_snapshots_before_refresh.get(&uuid).copied());
+            let previous = initial_lifecycle
+                .map(|(status, _, _, _)| status)
+                .or_else(|| session.as_ref().map(|session| session.status))
                 .unwrap_or(SessionStatus::Ready);
+            let previous_source = initial_lifecycle.and_then(|(_, source, _, _)| source);
+            let observed_hook_revision = initial_lifecycle
+                .map(|(_, _, revision, _)| revision)
+                .unwrap_or(0);
+            let observed_lifecycle_revision = initial_lifecycle
+                .map(|(_, _, _, revision)| revision)
+                .unwrap_or(0);
             if matches!(session.as_ref().map(|s| s.mode), Some(SessionMode::Chat)) {
                 let git_context = session
                     .as_ref()
@@ -5352,6 +5396,7 @@ fn detect_session_statuses_blocking(
                     id,
                     status: previous,
                     status_reason: None,
+                    agent_status_source: None,
                     last_message: conversation_preview
                         .as_ref()
                         .and_then(|p| p.last_agent_message.clone()),
@@ -5413,6 +5458,37 @@ fn detect_session_statuses_blocking(
             let live_agent = root_pid_value
                 .and_then(|pid| live_agent_in_descendants(&sys, &children, Pid::from_u32(pid)));
             let live_agent_kind = live_agent.map(|(kind, _)| kind);
+            let hook_active_before_clear = parsed_id
+                .map(|uuid| state.sessions.is_hook_active(&uuid))
+                .unwrap_or(false);
+            let hook_provider_before_clear =
+                parsed_id.and_then(|uuid| state.sessions.hook_provider(&uuid));
+            let hook_ownership_cleared = hook_active_before_clear
+                && !poll_defers_to_hook(
+                    hook_active_before_clear,
+                    hook_provider_before_clear,
+                    live_agent_kind,
+                )
+                && parsed_id.is_some_and(|uuid| {
+                    state
+                        .sessions
+                        .clear_hook_ownership_if_revision(
+                            &uuid,
+                            observed_hook_revision,
+                            observed_lifecycle_revision,
+                        )
+                        .unwrap_or(false)
+                });
+            cleared_hook_ownership |= hook_ownership_cleared;
+            let (expected_poll_source, expected_poll_lifecycle_revision) = if hook_ownership_cleared
+            {
+                parsed_id
+                    .and_then(|uuid| state.sessions.lifecycle_snapshot(&uuid).ok())
+                    .map(|(_, source, _, lifecycle_revision)| (source, lifecycle_revision))
+                    .unwrap_or((None, observed_lifecycle_revision))
+            } else {
+                (previous_source, observed_lifecycle_revision)
+            };
             let codex_tool_started_at =
                 parsed_id.and_then(|uuid| state.sessions.hook_tool_started_at(&uuid));
             let codex_permission_waiting_at =
@@ -5506,62 +5582,121 @@ fn detect_session_statuses_blocking(
                 hook_provider,
                 live_agent_kind,
             );
+            let mut metadata_write_allowed = true;
+            let metadata_expected_lifecycle_revision;
+            let metadata_expected_source;
             // When a live hooked agent owns the status, keep the hook-set value
             // instead of the stale transcript reading. Re-read it fresh: a hook
             // may have written during this poll's process-table / transcript
             // I/O, and reusing the `previous` captured before that I/O would
             // clobber the newer hook status back to an old value.
-            let status = if defer_to_hook {
-                let stored = parsed_id
-                    .and_then(|uuid| state.sessions.get(&uuid).ok())
-                    .map(|s| s.status)
-                    .unwrap_or(previous);
-                // A turn that ended while the app was closed lost its
-                // turn-end hook event; recover it from the transcript until
-                // the first event of this run re-confirms the channel (see
-                // `hook_boot_reconciled_status`). The this-run flag is read
-                // here — after the poll's I/O — so an event landing during
-                // that window disables the recovery before it can clobber
-                // the fresher hook write.
-                let hook_revision = parsed_id
-                    .map(|uuid| state.sessions.hook_revision(&uuid))
-                    .unwrap_or(0);
+            let (status, agent_status_source, status_reason) = if defer_to_hook {
+                let (stored, stored_source, hook_revision, lifecycle_revision) = parsed_id
+                    .and_then(|uuid| state.sessions.lifecycle_snapshot(&uuid).ok())
+                    .unwrap_or((
+                        previous,
+                        previous_source,
+                        observed_hook_revision,
+                        observed_lifecycle_revision,
+                    ));
+                // Reconcile only while this app instance has not received a
+                // native event. The revision/source checks make the status
+                // and diagnostic provenance one conditional write.
+                let reconciliation_requested =
+                    hook_boot_reconciled_status(stored, hook_revision > 0, detection);
                 let reconciled = parsed_id.and_then(|uuid| {
-                    hook_boot_reconciled_status(stored, hook_revision > 0, detection).and_then(
-                        |reconciled| {
-                            state
-                                .sessions
-                                .refresh_status_if_hook_revision(
-                                    &uuid,
-                                    stored,
-                                    hook_revision,
-                                    reconciled,
-                                )
-                                .ok()
-                                .filter(|applied| *applied)
-                                .map(|_| reconciled)
-                        },
-                    )
+                    reconciliation_requested.and_then(|reconciled| {
+                        state
+                            .sessions
+                            .refresh_status_and_source_if_lifecycle_revision(
+                                &uuid,
+                                stored,
+                                stored_source,
+                                lifecycle_revision,
+                                reconciled,
+                                Some(AgentStatusSource::TranscriptFallback),
+                            )
+                            .ok()
+                            .flatten()
+                            .map(|_| reconciled)
+                    })
                 });
+                if reconciliation_requested.is_some() && reconciled.is_none() {
+                    metadata_write_allowed = false;
+                }
                 reconciled_hook_status |= reconciled.is_some();
-                let hook_status = parsed_id
-                    .and_then(|uuid| state.sessions.get(&uuid).ok())
-                    .map(|session| session.status)
-                    .or(reconciled)
-                    .unwrap_or(stored);
+                let (hook_status, current_source, _, current_lifecycle_revision) = parsed_id
+                    .and_then(|uuid| state.sessions.lifecycle_snapshot(&uuid).ok())
+                    .unwrap_or((
+                        reconciled.unwrap_or(stored),
+                        reconciled
+                            .map(|_| AgentStatusSource::TranscriptFallback)
+                            .or(stored_source),
+                        hook_revision,
+                        lifecycle_revision,
+                    ));
                 // Codex can finish its main turn while a background command
                 // remains alive. Its persistent helpers are filtered below.
                 // Keep the permission boundary until a lifecycle event
                 // changes the store; this poll result is intentionally not
                 // written over a hook-owned Waiting status.
-                hook_status_with_live_tool_activity(
+                let visible_status = hook_status_with_live_tool_activity(
                     hook_status,
                     live_agent_kind,
                     live_codex_tool_child,
                     codex_permission_waiting_at.is_some(),
-                )
+                );
+                metadata_expected_lifecycle_revision = current_lifecycle_revision;
+                metadata_expected_source = current_source;
+                let visible_source = if visible_status != hook_status {
+                    Some(AgentStatusSource::ProcessFallback)
+                } else {
+                    // Runtime provenance is intentionally not persisted. Right
+                    // after restart a persisted hook owner therefore remains
+                    // unknown until replay, reconciliation, or a fresh native
+                    // event establishes the source; do not guess `Hook` here.
+                    current_source
+                };
+                (visible_status, visible_source, None)
             } else {
-                detection.status
+                let candidate_source = fallback_agent_status_source(
+                    live_agent_kind,
+                    detection.evidence,
+                    expected_poll_source,
+                );
+                let applied_lifecycle_revision = match parsed_id {
+                    Some(uuid) => state
+                        .sessions
+                        .refresh_status_and_source_if_lifecycle_revision(
+                            &uuid,
+                            previous,
+                            expected_poll_source,
+                            expected_poll_lifecycle_revision,
+                            detection.status,
+                            candidate_source,
+                        )
+                        .ok()
+                        .flatten(),
+                    None => Some(expected_poll_lifecycle_revision),
+                };
+                if let Some(applied_lifecycle_revision) = applied_lifecycle_revision {
+                    metadata_expected_lifecycle_revision = applied_lifecycle_revision;
+                    metadata_expected_source = candidate_source;
+                    (detection.status, candidate_source, detection.reason)
+                } else {
+                    metadata_write_allowed = false;
+                    let (latest_status, latest_source, _, latest_lifecycle_revision) = parsed_id
+                        .and_then(|uuid| state.sessions.lifecycle_snapshot(&uuid).ok())
+                        .unwrap_or((
+                            detection.status,
+                            candidate_source,
+                            observed_hook_revision,
+                            expected_poll_lifecycle_revision,
+                        ));
+                    metadata_expected_lifecycle_revision = latest_lifecycle_revision;
+                    metadata_expected_source = latest_source;
+                    (latest_status, latest_source, None)
+                }
             };
             // Branch source priority:
             //  1. deepest PTY descendant cwd — reflects `cd` + `git checkout`
@@ -5577,29 +5712,25 @@ fn detect_session_statuses_blocking(
             let git_context = live_git_context.or(fallback_git_context);
             let branch = git_context.as_ref().map(|(branch, _)| branch.clone());
             let git_context_path = git_context.map(|(_, path)| path);
-            // Mirror the detected status into the in-memory store so persisted
-            // sessions reflect liveness on next save. Best-effort: ignore errors
-            // (e.g. UUID parse failure for a stale id from the frontend).
+            // Keep live-agent metadata on the same lifecycle fence as the
+            // status/source write. A native or fallback event that landed
+            // during this poll must retain its newer provider claim.
             if let Some(uuid) = parsed_id {
-                // Deferring means a hook owns the status; leave the store value
-                // untouched so a hook write racing this poll's I/O survives.
-                if !defer_to_hook {
-                    let _ = state.sessions.refresh_status(&uuid, status);
+                if metadata_write_allowed {
+                    let _ = state.sessions.refresh_agent_state_if_lifecycle_revision(
+                        &uuid,
+                        metadata_expected_lifecycle_revision,
+                        metadata_expected_source,
+                        agent_provider,
+                        agent_transcript_id.clone(),
+                    );
                 }
-                let _ = state.sessions.refresh_agent_state(
-                    &uuid,
-                    agent_provider,
-                    agent_transcript_id.clone(),
-                );
             }
             SessionStatusEntry {
                 id,
                 status,
-                status_reason: if defer_to_hook {
-                    None
-                } else {
-                    detection.reason
-                },
+                status_reason,
+                agent_status_source,
                 last_message: transcript_preview,
                 last_user_message: conversation_preview
                     .as_ref()
@@ -5624,14 +5755,22 @@ fn detect_session_statuses_blocking(
         .collect();
     // Promotion must survive an app restart — without the save a session
     // would silently fall back to ineligible until the agent runs again.
-    if status_poll_needs_persist(promoted_auto_title, reconciled_hook_status) {
-        persist(&state);
+    if status_poll_needs_persist(
+        promoted_auto_title,
+        reconciled_hook_status,
+        cleared_hook_ownership,
+    ) {
+        persist_sessions(&state);
     }
     Ok(entries)
 }
 
-fn status_poll_needs_persist(promoted_auto_title: bool, reconciled_hook_status: bool) -> bool {
-    promoted_auto_title || reconciled_hook_status
+fn status_poll_needs_persist(
+    promoted_auto_title: bool,
+    reconciled_hook_status: bool,
+    cleared_hook_ownership: bool,
+) -> bool {
+    promoted_auto_title || reconciled_hook_status || cleared_hook_ownership
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7087,47 +7226,48 @@ mod tests {
     }
 
     #[test]
-    fn agent_status_source_distinguishes_hook_and_degraded_fallbacks() {
+    fn fallback_agent_status_source_tracks_the_evidence_that_was_used() {
+        use super::session_status::StatusEvidence;
         use super::AgentStatusSource;
 
         assert_eq!(
-            super::agent_status_source(
+            super::fallback_agent_status_source(
                 Some(super::AgentKind::Codex),
-                true,
-                false,
-                true,
-            ),
-            Some(AgentStatusSource::Hook)
-        );
-        assert_eq!(
-            super::agent_status_source(
-                Some(super::AgentKind::Codex),
-                true,
-                true,
-                true,
+                StatusEvidence::Transcript,
+                Some(AgentStatusSource::ProcessFallback),
             ),
             Some(AgentStatusSource::TranscriptFallback)
         );
         assert_eq!(
-            super::agent_status_source(
+            super::fallback_agent_status_source(
                 Some(super::AgentKind::Claude),
-                false,
-                false,
-                true,
-            ),
-            Some(AgentStatusSource::TranscriptFallback)
-        );
-        assert_eq!(
-            super::agent_status_source(
-                Some(super::AgentKind::Antigravity),
-                false,
-                false,
-                false,
+                StatusEvidence::Process,
+                Some(AgentStatusSource::TranscriptFallback),
             ),
             Some(AgentStatusSource::ProcessFallback)
         );
         assert_eq!(
-            super::agent_status_source(None, false, false, true),
+            super::fallback_agent_status_source(
+                Some(super::AgentKind::Antigravity),
+                StatusEvidence::Previous,
+                Some(AgentStatusSource::TranscriptFallback),
+            ),
+            Some(AgentStatusSource::TranscriptFallback)
+        );
+        assert_eq!(
+            super::fallback_agent_status_source(
+                Some(super::AgentKind::Antigravity),
+                StatusEvidence::Previous,
+                None,
+            ),
+            None
+        );
+        assert_eq!(
+            super::fallback_agent_status_source(
+                None,
+                StatusEvidence::Transcript,
+                Some(AgentStatusSource::Hook),
+            ),
             None
         );
     }
@@ -7218,6 +7358,7 @@ mod tests {
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
+            evidence: super::session_status::StatusEvidence::Transcript,
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
@@ -7236,6 +7377,7 @@ mod tests {
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
+            evidence: super::session_status::StatusEvidence::Transcript,
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
@@ -7249,9 +7391,10 @@ mod tests {
 
     #[test]
     fn status_poll_persists_successful_boot_reconciliation() {
-        assert!(!super::status_poll_needs_persist(false, false));
-        assert!(super::status_poll_needs_persist(true, false));
-        assert!(super::status_poll_needs_persist(false, true));
+        assert!(!super::status_poll_needs_persist(false, false, false));
+        assert!(super::status_poll_needs_persist(true, false, false));
+        assert!(super::status_poll_needs_persist(false, true, false));
+        assert!(super::status_poll_needs_persist(false, false, true));
     }
 
     #[test]
@@ -7259,6 +7402,7 @@ mod tests {
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Working,
             reason: None,
+            evidence: super::session_status::StatusEvidence::Previous,
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
@@ -7275,6 +7419,7 @@ mod tests {
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
+            evidence: super::session_status::StatusEvidence::Transcript,
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
@@ -7294,6 +7439,7 @@ mod tests {
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
+            evidence: super::session_status::StatusEvidence::Transcript,
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
@@ -7312,6 +7458,7 @@ mod tests {
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Working,
             reason: None,
+            evidence: super::session_status::StatusEvidence::Previous,
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
@@ -7330,6 +7477,7 @@ mod tests {
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::ShellPrompt),
+            evidence: super::session_status::StatusEvidence::Process,
         };
         assert_eq!(
             super::hook_boot_reconciled_status(

@@ -1,10 +1,10 @@
 pub use acorn_agent::AgentKind as SessionAgentProvider;
 use chrono::{DateTime, Utc};
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 use uuid::Uuid;
 
@@ -142,6 +142,18 @@ pub enum SessionStatus {
     WaitingForInput,
     #[serde(rename = "errored", alias = "failed")]
     Errored,
+}
+
+/// Runtime authority that most recently classified a session's lifecycle
+/// status. This is intentionally kept outside the persisted [`Session`] row:
+/// after an app restart, Acorn must re-establish whether native hooks or a
+/// bounded fallback produced the current observation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStatusSource {
+    Hook,
+    TranscriptFallback,
+    ProcessFallback,
 }
 
 /// Distinguishes ordinary terminal sessions from "control" sessions, which
@@ -347,6 +359,37 @@ impl Session {
 }
 
 #[derive(Default)]
+struct HookRuntimeState {
+    confirmed: bool,
+    revision: u64,
+    lifecycle_revision: u64,
+    status_source: Option<AgentStatusSource>,
+    tool_started_at: Option<SystemTime>,
+    turn_id: Option<String>,
+    permission_waiting_at: Option<SystemTime>,
+}
+
+impl HookRuntimeState {
+    fn advance_revision(&mut self) -> u64 {
+        self.revision = self.revision.saturating_add(1);
+        self.revision
+    }
+
+    fn advance_lifecycle_revision(&mut self) -> u64 {
+        self.lifecycle_revision = self.lifecycle_revision.saturating_add(1);
+        self.lifecycle_revision
+    }
+
+    fn clear_ownership_evidence(&mut self) {
+        self.confirmed = false;
+        self.status_source = None;
+        self.tool_started_at = None;
+        self.turn_id = None;
+        self.permission_waiting_at = None;
+    }
+}
+
+#[derive(Default)]
 pub struct SessionStore {
     inner: DashMap<Uuid, Session>,
     /// Sessions that reported at least one agent lifecycle hook event
@@ -360,33 +403,26 @@ pub struct SessionStore {
     /// process-liveness edge after no agent remains.
     ///
     /// Hook activity itself also persists across restarts via the session's
-    /// `hook_active` field; this set distinguishes "confirmed live this run"
+    /// `hook_active` field; this ledger distinguishes "confirmed live this run"
     /// (an event actually arrived at this app instance's hook server) from
     /// "was hook-owned before the restart", which the poll's boot
-    /// reconciliation needs — a turn that ended while the app was closed
-    /// lost its turn-end event forever and must be recovered from the
-    /// transcript exactly once.
-    hook_confirmed: DashSet<Uuid>,
-    /// Per-session lifecycle generation for this app run. Every hook event
-    /// advances the revision before touching the session row so conditional
-    /// status writes can reject observations made before a newer event.
-    hook_revisions: DashMap<Uuid, u64>,
-    /// Start of the first Codex exec tool observed in the current turn.
-    /// Runtime-only: after an app restart, process-tree arbitration stays
-    /// conservative until a fresh tagged tool event arrives.
-    hook_tool_started_at: DashMap<Uuid, SystemTime>,
-    /// Codex turn currently owned by each Acorn session. Runtime-only and
-    /// deliberately cleared as soon as a new user turn starts, before Codex
-    /// assigns that turn an id. This lets delayed completion notifications
-    /// fail closed instead of overwriting the new turn's Working status.
-    hook_turn_ids: DashMap<Uuid, String>,
-    /// Start of the current Codex approval wait. Runtime-only: process-tree
-    /// reconciliation may promote Waiting back to Working only for a tool
-    /// descendant that appeared after this boundary.
-    codex_permission_waiting_at: DashMap<Uuid, SystemTime>,
+    /// reconciliation needs when durable delivery has no retained event for
+    /// the boundary. In that case the transcript is consulted once as a
+    /// bounded compatibility signal.
+    /// Runtime lifecycle state is kept behind one lock so revision checks,
+    /// source transitions, and ownership evidence can be changed atomically.
+    /// Methods that also touch `inner` always acquire this ledger first and a
+    /// session row second.
+    hook_runtime: Mutex<HashMap<Uuid, HookRuntimeState>>,
 }
 
 impl SessionStore {
+    fn lock_hook_runtime(&self) -> MutexGuard<'_, HashMap<Uuid, HookRuntimeState>> {
+        self.hook_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
@@ -430,19 +466,25 @@ impl SessionStore {
     }
 
     pub fn update_status(&self, id: &Uuid, status: SessionStatus) -> SessionResult<Session> {
+        let mut runtime = self.lock_hook_runtime();
         let mut entry = self
             .inner
             .get_mut(id)
             .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         entry.status = status;
         entry.updated_at = Utc::now();
+        let state = runtime.entry(*id).or_default();
+        state.status_source = None;
+        state.advance_lifecycle_revision();
         Ok(entry.clone())
     }
 
-    /// Update status without bumping `updated_at`. No-op if the status is
-    /// unchanged. Used by the periodic liveness probe so polling doesn't
-    /// reshuffle the sidebar's most-recent-first ordering.
+    /// Apply an unattributed status without bumping `updated_at`. Explicit
+    /// writes clear runtime provenance and always advance the lifecycle fence,
+    /// even when the visible status is unchanged, so a stale poll cannot
+    /// overwrite them or report an authority that did not produce the value.
     pub fn refresh_status(&self, id: &Uuid, status: SessionStatus) -> SessionResult<Session> {
+        let mut runtime = self.lock_hook_runtime();
         let mut entry = self
             .inner
             .get_mut(id)
@@ -450,14 +492,78 @@ impl SessionStore {
         if entry.status != status {
             entry.status = status;
         }
+        let state = runtime.entry(*id).or_default();
+        state.status_source = None;
+        state.advance_lifecycle_revision();
         Ok(entry.clone())
     }
 
     pub fn hook_revision(&self, id: &Uuid) -> u64 {
-        self.hook_revisions
+        self.lock_hook_runtime()
             .get(id)
-            .map(|revision| *revision)
+            .map(|state| state.revision)
             .unwrap_or(0)
+    }
+
+    pub fn agent_status_source(&self, id: &Uuid) -> Option<AgentStatusSource> {
+        self.lock_hook_runtime()
+            .get(id)
+            .and_then(|state| state.status_source)
+    }
+
+    /// Read the lifecycle state that poll arbitration compares as one
+    /// snapshot. Holding the runtime ledger while cloning the session row
+    /// prevents a reducer from pairing a newer source with an older status.
+    pub fn lifecycle_snapshot(
+        &self,
+        id: &Uuid,
+    ) -> SessionResult<(SessionStatus, Option<AgentStatusSource>, u64, u64)> {
+        let runtime = self.lock_hook_runtime();
+        let entry = self
+            .inner
+            .get(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let state = runtime.get(id);
+        Ok((
+            entry.status,
+            state.and_then(|state| state.status_source),
+            state.map(|state| state.revision).unwrap_or(0),
+            state.map(|state| state.lifecycle_revision).unwrap_or(0),
+        ))
+    }
+
+    /// Record or clear lifecycle authority without changing the session
+    /// status. Reducers should prefer [`Self::refresh_status_with_source`] so
+    /// their paired status/source transition is observed under one critical
+    /// section.
+    pub fn mark_agent_status_source(&self, id: &Uuid, source: Option<AgentStatusSource>) {
+        let mut runtime = self.lock_hook_runtime();
+        if !self.inner.contains_key(id) {
+            return;
+        }
+        let state = runtime.entry(*id).or_default();
+        state.status_source = source;
+        state.advance_lifecycle_revision();
+    }
+
+    /// Refresh status and its runtime authority together without bumping
+    /// `updated_at`.
+    pub fn refresh_status_with_source(
+        &self,
+        id: &Uuid,
+        status: SessionStatus,
+        source: Option<AgentStatusSource>,
+    ) -> SessionResult<Session> {
+        let mut runtime = self.lock_hook_runtime();
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        entry.status = status;
+        let state = runtime.entry(*id).or_default();
+        state.status_source = source;
+        state.advance_lifecycle_revision();
+        Ok(entry.clone())
     }
 
     /// Refresh status only when both the stored state and hook generation
@@ -471,40 +577,161 @@ impl SessionStore {
         expected_hook_revision: u64,
         status: SessionStatus,
     ) -> SessionResult<bool> {
+        let mut runtime = self.lock_hook_runtime();
         let mut entry = self
             .inner
             .get_mut(id)
             .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
-        if entry.status != expected_status || self.hook_revision(id) != expected_hook_revision {
+        let state = runtime.entry(*id).or_default();
+        if entry.status != expected_status || state.revision != expected_hook_revision {
             return Ok(false);
         }
         entry.status = status;
+        state.advance_lifecycle_revision();
         Ok(true)
+    }
+
+    /// Refresh status and lifecycle authority only if the complete state
+    /// observed by a poll is still current. Comparing both source and hook
+    /// generation rejects stale polls after a fallback transition, because
+    /// fallback events deliberately do not advance the native hook revision.
+    pub fn refresh_status_and_source_if_hook_revision(
+        &self,
+        id: &Uuid,
+        expected_status: SessionStatus,
+        expected_source: Option<AgentStatusSource>,
+        expected_hook_revision: u64,
+        status: SessionStatus,
+        source: Option<AgentStatusSource>,
+    ) -> SessionResult<bool> {
+        let mut runtime = self.lock_hook_runtime();
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let state = runtime.entry(*id).or_default();
+        if entry.status != expected_status
+            || state.status_source != expected_source
+            || state.revision != expected_hook_revision
+        {
+            return Ok(false);
+        }
+        entry.status = status;
+        state.status_source = source;
+        state.advance_lifecycle_revision();
+        Ok(true)
+    }
+
+    /// Apply a poll-derived status/source pair only while no lifecycle writer
+    /// has run since the poll captured its snapshot. The monotonic lifecycle
+    /// revision closes ABA races where fallback events return to the same
+    /// visible status and source before a slow poll completes.
+    pub fn refresh_status_and_source_if_lifecycle_revision(
+        &self,
+        id: &Uuid,
+        expected_status: SessionStatus,
+        expected_source: Option<AgentStatusSource>,
+        expected_lifecycle_revision: u64,
+        status: SessionStatus,
+        source: Option<AgentStatusSource>,
+    ) -> SessionResult<Option<u64>> {
+        let mut runtime = self.lock_hook_runtime();
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let state = runtime.entry(*id).or_default();
+        if entry.status != expected_status
+            || state.status_source != expected_source
+            || state.lifecycle_revision != expected_lifecycle_revision
+        {
+            return Ok(None);
+        }
+        entry.status = status;
+        state.status_source = source;
+        Ok(Some(state.advance_lifecycle_revision()))
     }
 
     /// Record that `id` reported an agent lifecycle hook event, marking its
     /// hook channel live so the status poll defers turn-boundary
-    /// classification to hooks (see the `hook_confirmed` field). Also stamps
+    /// classification to hooks (see [`Self::is_hook_confirmed_this_run`]). Also stamps
     /// the session's persisted `hook_active` flag so hook ownership survives
     /// an app restart. The persisted flag is idempotent; the runtime revision
     /// advances for every event.
     pub fn mark_hook_active(&self, id: &Uuid, provider: SessionAgentProvider) -> u64 {
-        let revision = {
-            let mut revision = self.hook_revisions.entry(*id).or_default();
-            *revision = revision.saturating_add(1);
-            *revision
+        let mut runtime = self.lock_hook_runtime();
+        let Some(mut entry) = self.inner.get_mut(id) else {
+            return runtime.get(id).map(|state| state.revision).unwrap_or(0);
         };
-        self.hook_confirmed.insert(*id);
-        if let Some(mut entry) = self.inner.get_mut(id) {
-            if !entry.hook_active {
-                // Deliberately no `updated_at` bump — hook telemetry must
-                // not reshuffle the sidebar's most-recent-first ordering.
-                entry.hook_active = true;
-            }
-            entry.hook_provider = Some(provider);
-            entry.agent_provider = Some(provider);
+        let state = runtime.entry(*id).or_default();
+        let revision = state.advance_revision();
+        state.advance_lifecycle_revision();
+        state.confirmed = true;
+        state.status_source = Some(AgentStatusSource::Hook);
+        if !entry.hook_active {
+            // Deliberately no `updated_at` bump — hook telemetry must
+            // not reshuffle the sidebar's most-recent-first ordering.
+            entry.hook_active = true;
         }
+        entry.hook_provider = Some(provider);
+        entry.agent_provider = Some(provider);
         revision
+    }
+
+    /// Apply a native lifecycle transition and claim hook ownership as one
+    /// transaction. Reducers use this instead of publishing hook provenance
+    /// before the corresponding status is visible.
+    pub fn apply_native_status(
+        &self,
+        id: &Uuid,
+        provider: SessionAgentProvider,
+        status: SessionStatus,
+    ) -> SessionResult<u64> {
+        let mut runtime = self.lock_hook_runtime();
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let state = runtime.entry(*id).or_default();
+        let revision = state.advance_revision();
+        state.advance_lifecycle_revision();
+        state.confirmed = true;
+        state.status_source = Some(AgentStatusSource::Hook);
+        entry.status = status;
+        entry.hook_active = true;
+        entry.hook_provider = Some(provider);
+        entry.agent_provider = Some(provider);
+        Ok(revision)
+    }
+
+    /// Clear persisted and runtime hook ownership only when the caller's
+    /// lifecycle generation is still current. The revision advances before
+    /// releasing the ledger so any observation made before this clear cannot
+    /// later re-apply stale status or provider metadata.
+    pub fn clear_hook_ownership_if_revision(
+        &self,
+        id: &Uuid,
+        expected_hook_revision: u64,
+        expected_lifecycle_revision: u64,
+    ) -> SessionResult<bool> {
+        let mut runtime = self.lock_hook_runtime();
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let state = runtime.entry(*id).or_default();
+        if state.revision != expected_hook_revision
+            || state.lifecycle_revision != expected_lifecycle_revision
+        {
+            return Ok(false);
+        }
+
+        state.advance_revision();
+        state.advance_lifecycle_revision();
+        state.clear_ownership_evidence();
+        entry.hook_active = false;
+        entry.hook_provider = None;
+        Ok(true)
     }
 
     /// Reset per-turn tool evidence and bind the Codex turn id when Codex
@@ -513,63 +740,78 @@ impl SessionStore {
     /// any completion for the previous id is stale. Keeping that boundary in
     /// the map also distinguishes it from runtime state lost on app restart.
     pub fn begin_hook_turn(&self, id: &Uuid, turn_id: Option<&str>) {
-        self.hook_tool_started_at.remove(id);
-        self.codex_permission_waiting_at.remove(id);
-        match turn_id.map(str::trim).filter(|turn_id| !turn_id.is_empty()) {
-            Some(turn_id) => {
-                self.hook_turn_ids.insert(*id, turn_id.to_string());
-            }
-            None => {
-                self.hook_turn_ids.insert(*id, String::new());
-            }
-        }
+        let mut runtime = self.lock_hook_runtime();
+        let state = runtime.entry(*id).or_default();
+        state.tool_started_at = None;
+        state.permission_waiting_at = None;
+        state.turn_id = Some(
+            turn_id
+                .map(str::trim)
+                .filter(|turn_id| !turn_id.is_empty())
+                .unwrap_or_default()
+                .to_string(),
+        );
     }
 
     pub fn hook_turn_id(&self, id: &Uuid) -> Option<String> {
-        self.hook_turn_ids
+        self.lock_hook_runtime()
             .get(id)
-            .map(|turn_id| turn_id.value().clone())
+            .and_then(|state| state.turn_id.clone())
             .filter(|turn_id| !turn_id.is_empty())
     }
 
     /// Whether this app run has observed a Codex turn boundary, including a
     /// user submission for which Codex has not assigned a turn id yet.
     pub fn has_hook_turn_boundary(&self, id: &Uuid) -> bool {
-        self.hook_turn_ids.contains_key(id)
+        self.lock_hook_runtime()
+            .get(id)
+            .and_then(|state| state.turn_id.as_ref())
+            .is_some()
     }
 
     /// Record the first exec tool observed in the current Codex turn. Keeping
     /// the earliest timestamp ensures a background process launched by an
     /// earlier tool still counts after later tools run in the same turn.
     pub fn mark_hook_tool_started_at(&self, id: &Uuid, started_at: SystemTime) {
-        self.hook_tool_started_at.entry(*id).or_insert(started_at);
+        let mut runtime = self.lock_hook_runtime();
+        runtime
+            .entry(*id)
+            .or_default()
+            .tool_started_at
+            .get_or_insert(started_at);
     }
 
     pub fn hook_tool_started_at(&self, id: &Uuid) -> Option<SystemTime> {
-        self.hook_tool_started_at
+        self.lock_hook_runtime()
             .get(id)
-            .map(|started_at| *started_at)
+            .and_then(|state| state.tool_started_at)
     }
 
     pub fn mark_codex_permission_waiting_at(&self, id: &Uuid, requested_at: SystemTime) {
-        self.codex_permission_waiting_at.insert(*id, requested_at);
+        self.lock_hook_runtime()
+            .entry(*id)
+            .or_default()
+            .permission_waiting_at = Some(requested_at);
     }
 
     pub fn codex_permission_waiting_at(&self, id: &Uuid) -> Option<SystemTime> {
-        self.codex_permission_waiting_at
+        self.lock_hook_runtime()
             .get(id)
-            .map(|requested_at| *requested_at)
+            .and_then(|state| state.permission_waiting_at)
     }
 
     pub fn clear_codex_permission_waiting(&self, id: &Uuid) {
-        self.codex_permission_waiting_at.remove(id);
+        if let Some(state) = self.lock_hook_runtime().get_mut(id) {
+            state.permission_waiting_at = None;
+        }
     }
 
     /// Whether `id` has ever reported an agent lifecycle hook event — either
     /// this run or (via the persisted `hook_active` session flag) in a
     /// previous one.
     pub fn is_hook_active(&self, id: &Uuid) -> bool {
-        self.hook_confirmed.contains(id)
+        let runtime = self.lock_hook_runtime();
+        runtime.get(id).is_some_and(|state| state.confirmed)
             || self
                 .inner
                 .get(id)
@@ -587,7 +829,9 @@ impl SessionStore {
     /// is set; the status poll uses that gap to reconcile a turn boundary
     /// that was crossed while the app was closed.
     pub fn is_hook_confirmed_this_run(&self, id: &Uuid) -> bool {
-        self.hook_confirmed.contains(id)
+        self.lock_hook_runtime()
+            .get(id)
+            .is_some_and(|state| state.confirmed)
     }
 
     /// Refresh derived live-agent metadata without bumping `updated_at`.
@@ -608,6 +852,58 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
+    /// Refresh process-derived provider metadata only while both the native
+    /// hook generation and lifecycle authority still match the poll's
+    /// observation. This prevents a stale process scan from overwriting a
+    /// provider claimed by a newer hook or fallback event.
+    pub fn refresh_agent_state_if_hook_revision(
+        &self,
+        id: &Uuid,
+        expected_hook_revision: u64,
+        expected_source: Option<AgentStatusSource>,
+        provider: Option<SessionAgentProvider>,
+        transcript_id: Option<String>,
+    ) -> SessionResult<bool> {
+        let runtime = self.lock_hook_runtime();
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let state = runtime.get(id);
+        let revision = state.map(|state| state.revision).unwrap_or(0);
+        let source = state.and_then(|state| state.status_source);
+        if revision != expected_hook_revision || source != expected_source {
+            return Ok(false);
+        }
+        entry.agent_provider = provider;
+        entry.agent_transcript_id = transcript_id;
+        Ok(true)
+    }
+
+    pub fn refresh_agent_state_if_lifecycle_revision(
+        &self,
+        id: &Uuid,
+        expected_lifecycle_revision: u64,
+        expected_source: Option<AgentStatusSource>,
+        provider: Option<SessionAgentProvider>,
+        transcript_id: Option<String>,
+    ) -> SessionResult<bool> {
+        let runtime = self.lock_hook_runtime();
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let state = runtime.get(id);
+        let lifecycle_revision = state.map(|state| state.lifecycle_revision).unwrap_or(0);
+        let source = state.and_then(|state| state.status_source);
+        if lifecycle_revision != expected_lifecycle_revision || source != expected_source {
+            return Ok(false);
+        }
+        entry.agent_provider = provider;
+        entry.agent_transcript_id = transcript_id;
+        Ok(true)
+    }
+
     /// Record provider identity from a non-authoritative owner observation
     /// before its native hook arrives. A provider-specific transcript can
     /// prove which agent owns the PTY without proving lifecycle status, so a
@@ -618,26 +914,29 @@ impl SessionStore {
         id: &Uuid,
         provider: SessionAgentProvider,
     ) -> SessionResult<Session> {
+        let mut runtime = self.lock_hook_runtime();
         let mut entry = self
             .inner
             .get_mut(id)
             .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let switches_provider = entry
+            .agent_provider
+            .is_some_and(|current| current != provider)
+            || entry
+                .hook_provider
+                .is_some_and(|current| current != provider);
         entry.agent_provider = Some(provider);
-        let clears_previous_hook = entry.hook_provider != Some(provider);
-        if clears_previous_hook {
+        if switches_provider {
             entry.hook_provider = None;
             entry.hook_active = false;
+            let state = runtime.entry(*id).or_default();
+            if state.confirmed {
+                state.advance_revision();
+            }
+            state.advance_lifecycle_revision();
+            state.clear_ownership_evidence();
         }
-        let updated = entry.clone();
-        drop(entry);
-
-        if clears_previous_hook {
-            self.hook_confirmed.remove(id);
-            self.hook_tool_started_at.remove(id);
-            self.hook_turn_ids.remove(id);
-            self.codex_permission_waiting_at.remove(id);
-        }
-        Ok(updated)
+        Ok(entry.clone())
     }
 
     /// Flip the explicit auto-title opt-in. Used by the status poll to
@@ -770,15 +1069,14 @@ impl SessionStore {
     }
 
     pub fn remove(&self, id: &Uuid) -> SessionResult<Session> {
-        self.hook_confirmed.remove(id);
-        self.hook_revisions.remove(id);
-        self.hook_tool_started_at.remove(id);
-        self.hook_turn_ids.remove(id);
-        self.codex_permission_waiting_at.remove(id);
-        self.inner
+        let mut runtime = self.lock_hook_runtime();
+        let removed = self
+            .inner
             .remove(id)
             .map(|(_, v)| v)
-            .ok_or_else(|| SessionError::NotFound(id.to_string()))
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        runtime.remove(id);
+        Ok(removed)
     }
 
     /// Assign explicit positions (0..N) to the sessions listed in `order`,
@@ -904,14 +1202,24 @@ mod tests {
         store.begin_hook_turn(&session.id, Some("turn-1"));
         store.mark_hook_tool_started_at(&session.id, observed_at);
         store.mark_codex_permission_waiting_at(&session.id, observed_at);
+        let first_lifecycle_revision = store
+            .lifecycle_snapshot(&session.id)
+            .expect("session exists")
+            .3;
 
         assert_eq!(
             store.agent_status_source(&session.id),
             Some(AgentStatusSource::Hook)
         );
-        assert!(store
-            .clear_hook_ownership_if_revision(&session.id, first_revision)
-            .expect("session exists"));
+        assert!(
+            store
+                .clear_hook_ownership_if_revision(
+                    &session.id,
+                    first_revision,
+                    first_lifecycle_revision,
+                )
+                .expect("session exists")
+        );
         assert!(!store.is_hook_active(&session.id));
         assert!(!store.is_hook_confirmed_this_run(&session.id));
         assert_eq!(store.hook_provider(&session.id), None);
@@ -927,9 +1235,15 @@ mod tests {
         store.begin_hook_turn(&session.id, Some("turn-2"));
 
         assert!(replacement_revision > cleared_revision);
-        assert!(!store
-            .clear_hook_ownership_if_revision(&session.id, first_revision)
-            .expect("session exists"));
+        assert!(
+            !store
+                .clear_hook_ownership_if_revision(
+                    &session.id,
+                    first_revision,
+                    first_lifecycle_revision,
+                )
+                .expect("session exists")
+        );
         assert!(store.is_hook_active(&session.id));
         assert!(store.is_hook_confirmed_this_run(&session.id));
         assert_eq!(
@@ -1049,6 +1363,239 @@ mod tests {
     }
 
     #[test]
+    fn status_and_source_refresh_requires_the_complete_observed_state() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        store
+            .refresh_status_with_source(
+                &session.id,
+                SessionStatus::Working,
+                Some(AgentStatusSource::ProcessFallback),
+            )
+            .expect("session exists");
+        let revision = store.hook_revision(&session.id);
+
+        assert!(!store
+            .refresh_status_and_source_if_hook_revision(
+                &session.id,
+                SessionStatus::Working,
+                Some(AgentStatusSource::Hook),
+                revision,
+                SessionStatus::WaitingForInput,
+                Some(AgentStatusSource::TranscriptFallback),
+            )
+            .expect("session exists"));
+        assert_eq!(
+            store.agent_status_source(&session.id),
+            Some(AgentStatusSource::ProcessFallback)
+        );
+
+        assert!(store
+            .refresh_status_and_source_if_hook_revision(
+                &session.id,
+                SessionStatus::Working,
+                Some(AgentStatusSource::ProcessFallback),
+                revision,
+                SessionStatus::WaitingForInput,
+                Some(AgentStatusSource::TranscriptFallback),
+            )
+            .expect("session exists"));
+        assert_eq!(
+            store.get(&session.id).expect("session exists").status,
+            SessionStatus::WaitingForInput
+        );
+        assert_eq!(
+            store.agent_status_source(&session.id),
+            Some(AgentStatusSource::TranscriptFallback)
+        );
+
+        store.mark_hook_active(&session.id, SessionAgentProvider::Codex);
+        assert!(!store
+            .refresh_status_and_source_if_hook_revision(
+                &session.id,
+                SessionStatus::WaitingForInput,
+                Some(AgentStatusSource::TranscriptFallback),
+                revision,
+                SessionStatus::Ready,
+                None,
+            )
+            .expect("session exists"));
+        assert_eq!(
+            store.agent_status_source(&session.id),
+            Some(AgentStatusSource::Hook)
+        );
+    }
+
+    #[test]
+    fn lifecycle_revision_rejects_an_aba_fallback_write() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        store
+            .refresh_status_with_source(
+                &session.id,
+                SessionStatus::Working,
+                Some(AgentStatusSource::TranscriptFallback),
+            )
+            .expect("session exists");
+        let (_, source, _, lifecycle_revision) = store
+            .lifecycle_snapshot(&session.id)
+            .expect("session exists");
+
+        store
+            .refresh_status_with_source(
+                &session.id,
+                SessionStatus::WaitingForInput,
+                Some(AgentStatusSource::TranscriptFallback),
+            )
+            .expect("session exists");
+        store
+            .refresh_status_with_source(
+                &session.id,
+                SessionStatus::Working,
+                Some(AgentStatusSource::TranscriptFallback),
+            )
+            .expect("session exists");
+
+        assert_eq!(
+            store
+                .refresh_status_and_source_if_lifecycle_revision(
+                    &session.id,
+                    SessionStatus::Working,
+                    source,
+                    lifecycle_revision,
+                    SessionStatus::Ready,
+                    None,
+                )
+                .expect("session exists"),
+            None
+        );
+        assert_eq!(
+            store.get(&session.id).expect("session exists").status,
+            SessionStatus::Working
+        );
+    }
+
+    #[test]
+    fn explicit_status_writes_clear_source_and_fence_stale_polls() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        store
+            .apply_native_status(
+                &session.id,
+                SessionAgentProvider::Codex,
+                SessionStatus::Working,
+            )
+            .expect("session exists");
+        let (status, source, _, lifecycle_revision) = store
+            .lifecycle_snapshot(&session.id)
+            .expect("session exists");
+
+        store
+            .update_status(&session.id, SessionStatus::Ready)
+            .expect("session exists");
+        let (_, updated_source, _, updated_lifecycle_revision) = store
+            .lifecycle_snapshot(&session.id)
+            .expect("session exists");
+        assert_eq!(updated_source, None);
+        assert!(updated_lifecycle_revision > lifecycle_revision);
+        assert_eq!(
+            store
+                .refresh_status_and_source_if_lifecycle_revision(
+                    &session.id,
+                    status,
+                    source,
+                    lifecycle_revision,
+                    SessionStatus::WaitingForInput,
+                    Some(AgentStatusSource::TranscriptFallback),
+                )
+                .expect("session exists"),
+            None
+        );
+
+        store
+            .refresh_status_with_source(
+                &session.id,
+                SessionStatus::WaitingForInput,
+                Some(AgentStatusSource::TranscriptFallback),
+            )
+            .expect("session exists");
+        let (_, _, _, fallback_lifecycle_revision) = store
+            .lifecycle_snapshot(&session.id)
+            .expect("session exists");
+        store
+            .refresh_status(&session.id, SessionStatus::Working)
+            .expect("session exists");
+        let (_, refreshed_source, _, refreshed_lifecycle_revision) = store
+            .lifecycle_snapshot(&session.id)
+            .expect("session exists");
+        assert_eq!(refreshed_source, None);
+        assert!(refreshed_lifecycle_revision > fallback_lifecycle_revision);
+    }
+
+    #[test]
+    fn conditional_agent_state_refresh_checks_revision_and_source() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        store.mark_agent_status_source(&session.id, Some(AgentStatusSource::ProcessFallback));
+        let revision = store.hook_revision(&session.id);
+
+        assert!(!store
+            .refresh_agent_state_if_hook_revision(
+                &session.id,
+                revision,
+                Some(AgentStatusSource::Hook),
+                Some(SessionAgentProvider::Codex),
+                Some("codex-stale".to_string()),
+            )
+            .expect("session exists"));
+        assert_eq!(
+            store
+                .get(&session.id)
+                .expect("session exists")
+                .agent_provider,
+            None
+        );
+
+        assert!(store
+            .refresh_agent_state_if_hook_revision(
+                &session.id,
+                revision,
+                Some(AgentStatusSource::ProcessFallback),
+                Some(SessionAgentProvider::Codex),
+                Some("codex-current".to_string()),
+            )
+            .expect("session exists"));
+        store.mark_hook_active(&session.id, SessionAgentProvider::Claude);
+
+        assert!(!store
+            .refresh_agent_state_if_hook_revision(
+                &session.id,
+                revision,
+                Some(AgentStatusSource::ProcessFallback),
+                None,
+                None,
+            )
+            .expect("session exists"));
+        let stored = store.get(&session.id).expect("session exists");
+        assert_eq!(stored.agent_provider, Some(SessionAgentProvider::Claude));
+        assert_eq!(stored.agent_transcript_id.as_deref(), Some("codex-current"));
+    }
+
+    #[test]
+    fn agent_status_source_serializes_as_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&AgentStatusSource::TranscriptFallback)
+                .expect("source serializes"),
+            "\"transcript_fallback\""
+        );
+        assert_eq!(
+            serde_json::from_str::<AgentStatusSource>("\"process_fallback\"")
+                .expect("source deserializes"),
+            AgentStatusSource::ProcessFallback
+        );
+    }
+
+    #[test]
     fn hook_activity_persists_on_session_and_survives_reload() {
         let store = SessionStore::new();
         let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
@@ -1115,6 +1662,7 @@ mod tests {
         store.begin_hook_turn(&session.id, Some("turn-1"));
         store.mark_hook_tool_started_at(&session.id, SystemTime::now());
         store.mark_codex_permission_waiting_at(&session.id, SystemTime::now());
+        let hook_revision = store.hook_revision(&session.id);
 
         let switched = store
             .prepare_agent_provider_switch(&session.id, SessionAgentProvider::Antigravity)
@@ -1127,6 +1675,8 @@ mod tests {
         assert_eq!(switched.hook_provider, None);
         assert!(!switched.hook_active);
         assert!(!store.is_hook_confirmed_this_run(&session.id));
+        assert_eq!(store.agent_status_source(&session.id), None);
+        assert!(store.hook_revision(&session.id) > hook_revision);
         assert_eq!(store.hook_turn_id(&session.id), None);
         assert_eq!(store.hook_tool_started_at(&session.id), None);
         assert_eq!(store.codex_permission_waiting_at(&session.id), None);

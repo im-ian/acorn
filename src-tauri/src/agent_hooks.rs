@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use acorn_session::{SessionAgentProvider, SessionStatus, SessionStore};
+use acorn_session::{AgentStatusSource, SessionAgentProvider, SessionStatus, SessionStore};
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -161,6 +161,12 @@ impl AgentHookReducer {
             }
         };
         if event.provider != SessionAgentProvider::Codex {
+            if transcript_fallback_duplicates_native_status(&self.sessions, &session, &event) {
+                return Ok(AgentHookApplyOutcome::Ignored {
+                    status: session.status,
+                    reason: "transcript fallback duplicates native status",
+                });
+            }
             validate_agent_hook_session(&session, &event, false)?;
             let transcript_provider_switch = event.source.as_deref() == Some("transcript")
                 && event_can_switch_provider(&event)
@@ -1217,6 +1223,39 @@ fn push_scoped_session_bounded(
     values.push_back(value);
 }
 
+fn transcript_fallback_duplicates_native_status(
+    sessions: &SessionStore,
+    session: &acorn_session::Session,
+    event: &AgentHookEvent,
+) -> bool {
+    if event.provider != SessionAgentProvider::Antigravity
+        || event.source.as_deref() != Some("transcript")
+        || session.hook_provider != Some(event.provider)
+        || !sessions.is_hook_confirmed_this_run(&event.session_id)
+    {
+        return false;
+    }
+
+    sessions.agent_status_source(&event.session_id) == Some(AgentStatusSource::Hook)
+        && session.status == event.event.session_status()
+}
+
+fn is_fallback_observation(event: &AgentHookEvent) -> bool {
+    event.source.as_deref() == Some("transcript")
+        || (event.provider == SessionAgentProvider::Codex
+            && matches!(
+                event.source.as_deref(),
+                Some(
+                    "legacy"
+                        | "jsonl_user"
+                        | "jsonl_task"
+                        | "jsonl_tool"
+                        | "jsonl_approval"
+                        | "legacy_completion"
+                )
+            ))
+}
+
 pub fn apply_agent_hook_event(
     sessions: &SessionStore,
     event: AgentHookEvent,
@@ -1256,6 +1295,12 @@ pub fn apply_agent_hook_event(
     // behind native UserPromptSubmit or Stop. PTY writes and native hooks own
     // the real transition, so a delayed preview must never overwrite them.
     if event.provider == SessionAgentProvider::Codex && event.source.as_deref() == Some("preview") {
+        return Ok(session.status);
+    }
+
+    if event.provider != SessionAgentProvider::Codex
+        && transcript_fallback_duplicates_native_status(sessions, &session, &event)
+    {
         return Ok(session.status);
     }
 
@@ -1336,17 +1381,7 @@ pub fn apply_agent_hook_event(
         }
     }
 
-    // Mark native hook channels live so the transcript-tail status poll
-    // defers turn-boundary classification to them instead of clobbering a
-    // just-set resting status (Ready/WaitingForInput) back to Working on its
-    // next tick. Transcript-derived wrapper observations are only a low-latency
-    // preview of the same data the poll reads. Treating those as an
-    // authoritative hook would make a missed line, owner rotation, or watcher
-    // restart permanently hide the fresher transcript classification.
-    // See `poll_defers_to_hook` in `commands`.
-    let is_authoritative_hook = event.source.as_deref() != Some("transcript");
-    let hook_revision =
-        is_authoritative_hook.then(|| sessions.mark_hook_active(&event.session_id, event.provider));
+    let is_authoritative_hook = !is_fallback_observation(&event);
 
     // The Codex JSONL watcher tags task and exec starts separately. This
     // runtime-only turn evidence lets the process poll distinguish a real
@@ -1361,25 +1396,25 @@ pub fn apply_agent_hook_event(
     }
 
     let status = event.event.session_status();
-    if let (Some(turn_id), Some(revision)) = (scoped_codex_completion, hook_revision) {
+    if let Some(turn_id) = scoped_codex_completion {
         if sessions.hook_turn_id(&event.session_id).as_deref() != Some(turn_id) {
             return Err(format!(
                 "stale Codex turn completion for {}: owner changed before apply",
                 event.session_id
             ));
         }
-        let applied = sessions
-            .refresh_status_if_hook_revision(&event.session_id, session.status, revision, status)
+    }
+    if is_authoritative_hook {
+        sessions
+            .apply_native_status(&event.session_id, event.provider, status)
             .map_err(|err| err.to_string())?;
-        if !applied {
-            return Err(format!(
-                "stale Codex turn completion for {}: superseded before apply",
-                event.session_id
-            ));
-        }
     } else {
         sessions
-            .refresh_status(&event.session_id, status)
+            .refresh_status_with_source(
+                &event.session_id,
+                status,
+                Some(AgentStatusSource::TranscriptFallback),
+            )
             .map_err(|err| err.to_string())?;
     }
     Ok(status)
@@ -1436,20 +1471,7 @@ fn apply_validated_agent_hook_event(
     event: AgentHookEvent,
     effects: CodexStoreEffects,
 ) -> Result<SessionStatus, AgentHookApplyError> {
-    let is_codex_fallback = event.provider == SessionAgentProvider::Codex
-        && matches!(
-            event.source.as_deref(),
-            Some(
-                "jsonl_user" | "jsonl_task" | "jsonl_tool" | "jsonl_approval" | "legacy_completion"
-            )
-        );
-    let is_transcript_observation = event.source.as_deref() == Some("transcript");
-    if !is_codex_fallback && !is_transcript_observation {
-        // Advance the hook generation before touching turn evidence or status.
-        // Pollers use this revision to reject a write based on an older
-        // snapshot while a native hook event is being applied.
-        sessions.mark_hook_active(&event.session_id, event.provider);
-    }
+    let is_authoritative_hook = !is_fallback_observation(&event);
 
     if event.provider == SessionAgentProvider::Codex {
         if effects.begin_turn {
@@ -1469,9 +1491,19 @@ fn apply_validated_agent_hook_event(
     let status = effects
         .status_override
         .unwrap_or_else(|| event.event.session_status());
-    sessions
-        .refresh_status(&event.session_id, status)
-        .map_err(|err| AgentHookApplyError::Conflict(err.to_string()))?;
+    if is_authoritative_hook {
+        sessions
+            .apply_native_status(&event.session_id, event.provider, status)
+            .map_err(|err| AgentHookApplyError::Conflict(err.to_string()))?;
+    } else {
+        sessions
+            .refresh_status_with_source(
+                &event.session_id,
+                status,
+                Some(AgentStatusSource::TranscriptFallback),
+            )
+            .map_err(|err| AgentHookApplyError::Conflict(err.to_string()))?;
+    }
     Ok(status)
 }
 
@@ -3900,6 +3932,51 @@ mod tests {
     }
 
     #[test]
+    fn legacy_codex_completion_is_a_transcript_fallback_not_a_native_hook() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.status = SessionStatus::Working;
+        let session_id = session.id;
+        sessions.insert(session);
+        let reducer = AgentHookReducer::new(sessions.clone());
+
+        assert!(matches!(
+            reducer
+                .apply(AgentHookEvent {
+                    session_id,
+                    provider: SessionAgentProvider::Codex,
+                    event: AgentHookEventKind::NeedsInput,
+                    message: None,
+                    source: Some("legacy".to_string()),
+                    lifecycle_id: None,
+                    provider_session_id: None,
+                    provider_turn_id: None,
+                    provider_tool_id: None,
+                    provider_version: None,
+                    native_hooks_enabled: None,
+                    ownership: AgentHookOwnership::Owner,
+                })
+                .expect("legacy completion applies"),
+            AgentHookApplyOutcome::Applied(SessionStatus::WaitingForInput)
+        ));
+        assert_eq!(sessions.hook_revision(&session_id), 0);
+        assert!(!sessions.is_hook_confirmed_this_run(&session_id));
+        assert_eq!(sessions.hook_provider(&session_id), None);
+        assert_eq!(
+            sessions.agent_status_source(&session_id),
+            Some(AgentStatusSource::TranscriptFallback)
+        );
+    }
+
+    #[test]
     fn reducer_tracks_the_applied_status_source_across_native_and_fallback_events() {
         let (sessions, session_id, reducer) = codex_reducer_fixture();
 
@@ -4053,7 +4130,7 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_transcript_fallback_yields_to_confirmed_native_events() {
+    fn antigravity_transcript_fallback_ignores_native_duplicates_but_recovers_gaps() {
         let sessions = acorn_session::SessionStore::new();
         let mut session = Session::new(
             "Antigravity".to_string(),
@@ -4097,8 +4174,8 @@ mod tests {
 
         assert!(matches!(
             reducer
-                .apply(event(AgentHookEventKind::Start, "transcript"))
-                .expect("delayed transcript event is classified"),
+                .apply(event(AgentHookEventKind::NeedsInput, "transcript"))
+                .expect("matching transcript duplicate is classified"),
             AgentHookApplyOutcome::Ignored { .. }
         ));
         assert_eq!(
@@ -4108,6 +4185,17 @@ mod tests {
         assert_eq!(
             sessions.agent_status_source(&session_id),
             Some(AgentStatusSource::Hook)
+        );
+
+        assert!(matches!(
+            reducer
+                .apply(event(AgentHookEventKind::Start, "transcript"))
+                .expect("missing native transition falls back"),
+            AgentHookApplyOutcome::Applied(SessionStatus::Working)
+        ));
+        assert_eq!(
+            sessions.agent_status_source(&session_id),
+            Some(AgentStatusSource::TranscriptFallback)
         );
 
         let boot_sessions = acorn_session::SessionStore::new();

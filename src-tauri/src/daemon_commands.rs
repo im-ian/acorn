@@ -360,7 +360,7 @@ pub fn daemon_adopt_session(
     };
     state.sessions.insert(session);
 
-    if let Err(e) = crate::persistence::save_sessions(&state.sessions.list()) {
+    if let Err(e) = crate::persistence::save_sessions(&state.sessions) {
         tracing::warn!("failed to persist sessions after adopt: {e}");
     }
     if let Err(e) = crate::persistence::save_projects(&state.projects.list()) {
