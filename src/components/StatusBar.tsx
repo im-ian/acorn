@@ -35,6 +35,7 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
 import type {
+  AgentStatusSource,
   MemoryProcess,
   SessionNotification,
   SessionNotificationKind,
@@ -77,14 +78,37 @@ function sessionStatusReasonLabel(
   }
 }
 
+function agentStatusSourceLabel(
+  t: Translator,
+  source: AgentStatusSource | null | undefined,
+): string | null {
+  switch (source) {
+    case "hook":
+      return statusBarText(t, "statusBar.agentStatusSource.hook");
+    case "transcript_fallback":
+      return statusBarText(
+        t,
+        "statusBar.agentStatusSource.transcript_fallback",
+      );
+    case "process_fallback":
+      return statusBarText(t, "statusBar.agentStatusSource.process_fallback");
+    default:
+      return null;
+  }
+}
+
 function sessionStatusDetailLabel(
   t: Translator,
   status: SessionStatus,
   reason: SessionStatusReason | null | undefined,
+  source: AgentStatusSource | null | undefined,
 ): string {
   const label = statusBarText(t, SESSION_STATUS_KEYS[status]);
-  const reasonLabel = sessionStatusReasonLabel(t, reason);
-  return reasonLabel ? `${label} · ${reasonLabel}` : label;
+  const details = [
+    sessionStatusReasonLabel(t, reason),
+    agentStatusSourceLabel(t, source),
+  ].filter((detail): detail is string => detail !== null);
+  return [label, ...details].join(" · ");
 }
 
 function statusBarText(t: Translator, key: StatusBarTranslationKey): string {
@@ -351,6 +375,7 @@ export function StatusBar() {
                 t,
                 active.status,
                 active.status_reason,
+                active.agent_status_source,
               )}
             >
               {statusBarFormat(t, "statusBar.status", {

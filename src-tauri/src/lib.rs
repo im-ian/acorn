@@ -416,7 +416,7 @@ pub fn run() {
                 projects_dirty = true;
             }
             if sessions_dirty {
-                if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
+                if let Err(err) = persistence::save_sessions(&state.sessions) {
                     tracing::warn!("failed to persist sessions after project path cleanup: {err}");
                 }
             }
@@ -523,7 +523,7 @@ pub fn run() {
                         }
                     }
                 }
-                if let Err(err) = persistence::save_sessions(&hook_sessions.list()) {
+                if let Err(err) = persistence::save_sessions(&hook_sessions) {
                     tracing::warn!(error = %err, "agent hook persist status failed");
                 }
                 if let Err(err) = hook_app

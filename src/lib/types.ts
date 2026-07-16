@@ -6,6 +6,11 @@ export type SessionStatus =
 
 export type SessionStatusReason = "turn_complete" | "shell_prompt";
 
+export type AgentStatusSource =
+  | "hook"
+  | "transcript_fallback"
+  | "process_fallback";
+
 export type SessionNotificationKind = "waiting_for_input" | "errored";
 
 export interface SessionNotification {
@@ -122,6 +127,8 @@ export interface Session {
   status: SessionStatus;
   /** Ephemeral status-poll detail. Not persisted in backend sessions. */
   status_reason?: SessionStatusReason | null;
+  /** Ephemeral status control path reported by status polling. */
+  agent_status_source?: AgentStatusSource | null;
   /** Ephemeral time when the current status started. */
   status_started_at?: string | null;
   created_at: string;
