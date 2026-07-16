@@ -430,7 +430,11 @@ pub fn run() {
             let hook_reducer = std::sync::Arc::new(agent_hooks::AgentHookReducer::new(
                 hook_sessions.clone(),
             ));
-            match agent_hooks::AgentHookServer::start_with_outcome_handler(move |event| {
+            let hook_handler: std::sync::Arc<
+                dyn Fn(agent_hooks::AgentHookEvent) -> agent_hooks::AgentHookHandlerOutcome
+                    + Send
+                    + Sync,
+            > = std::sync::Arc::new(move |event: agent_hooks::AgentHookEvent| {
                 let session_id = event.session_id;
                 let provider = event.provider;
                 let source = event.source.clone();
@@ -547,6 +551,29 @@ pub fn run() {
                     "agent hook status applied",
                 );
                 agent_hooks::AgentHookHandlerOutcome::Applied
+            });
+            // Drain events the notify scripts spooled while no app instance
+            // was listening. Runs before the hook server starts, so no live
+            // POST can interleave with the replay; anything spooled after
+            // this scan is picked up on the next boot.
+            match agent_wrappers::agent_hook_spool_dir() {
+                Ok(spool_dir) => {
+                    let replay_handler = hook_handler.clone();
+                    let replayed = agent_hooks::replay_spooled_hook_events(
+                        &spool_dir,
+                        move |event| replay_handler(event),
+                    );
+                    if replayed > 0 {
+                        tracing::info!(replayed, "replayed spooled agent hook events");
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "agent hook spool dir unavailable");
+                }
+            }
+            let server_handler = hook_handler.clone();
+            match agent_hooks::AgentHookServer::start_with_outcome_handler(move |event| {
+                server_handler(event)
             }) {
                 Ok(server) => {
                     // Publish only after normalized sessions and backfilled
