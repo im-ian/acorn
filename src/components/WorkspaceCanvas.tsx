@@ -13,6 +13,7 @@ import {
   Scan,
   Terminal as TerminalIcon,
   Undo2,
+  X,
 } from "lucide-react";
 import {
   memo,
@@ -192,6 +193,9 @@ export function WorkspaceCanvas({
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   const setWorkspaceCanvasState = useAppStore(
     (state) => state.setWorkspaceCanvasState,
+  );
+  const requestRemoveSession = useAppStore(
+    (state) => state.requestRemoveSession,
   );
   const canvasSessions = sessions;
   const sessionIds = useMemo(
@@ -630,6 +634,11 @@ export function WorkspaceCanvas({
         icon: <PanelsTopLeft size={12} />,
         onClick: () => openInPanes(contextSession.id),
       });
+      items.push({
+        label: canvasText(t, "workspace.canvas.closeSession"),
+        icon: <X size={12} />,
+        onClick: () => requestRemoveSession(contextSession.id),
+      });
     }
     items.push(...sessionCreateMenuItems);
     items.push(
@@ -656,6 +665,7 @@ export function WorkspaceCanvas({
     fitAll,
     openExpanded,
     openInPanes,
+    requestRemoveSession,
     resetLayout,
     sessionCreateMenuItems,
     t,
@@ -734,6 +744,7 @@ export function WorkspaceCanvas({
                 commitNode(session.id, purpose, snap)
               }
               onExpand={() => openExpanded(session.id)}
+              onClose={() => requestRemoveSession(session.id)}
               t={t}
             />
           );
@@ -933,6 +944,7 @@ interface WorkspaceCanvasSessionNodeProps {
   ) => void;
   onCommit: (purpose: "move" | "resize", snap: boolean) => void;
   onExpand: () => void;
+  onClose: () => void;
   t: Translator;
 }
 
@@ -946,6 +958,7 @@ const WorkspaceCanvasSessionNode = memo(
     onUpdate,
     onCommit,
     onExpand,
+    onClose,
     t,
   }: WorkspaceCanvasSessionNodeProps) {
     const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -1190,6 +1203,25 @@ const WorkspaceCanvasSessionNode = memo(
               </IconButton>
             </Tooltip>
           )}
+          <Tooltip
+            label={canvasText(t, "workspace.canvas.closeSessionButton", {
+              name: session.name,
+            })}
+            side="bottom"
+          >
+            <IconButton
+              aria-label={canvasText(
+                t,
+                "workspace.canvas.closeSessionButton",
+                { name: session.name },
+              )}
+              size="xs"
+              data-testid="workspace-canvas-node-close"
+              onClick={onClose}
+            >
+              <X size={12} />
+            </IconButton>
+          </Tooltip>
         </header>
         {session.mode === "chat" ? (
           <div
