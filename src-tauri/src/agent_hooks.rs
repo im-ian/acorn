@@ -2209,7 +2209,9 @@ mod tests {
         AgentHookEvent, AgentHookEventKind, AgentHookHandlerOutcome, AgentHookOwnership,
         AgentHookReducer, AgentHookServer, HookEventHandler, MAX_HEADER_BYTES,
     };
-    use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionStatus};
+    use acorn_session::{
+        AgentStatusSource, Session, SessionAgentProvider, SessionKind, SessionStatus,
+    };
     use std::io::{self, Read, Write};
     use std::net::{SocketAddr, TcpStream};
     use std::sync::{mpsc, Arc, Mutex};
@@ -3898,6 +3900,38 @@ mod tests {
     }
 
     #[test]
+    fn reducer_tracks_the_applied_status_source_across_native_and_fallback_events() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+
+        assert!(matches!(
+            apply_codex(&reducer, session_id, "native_prompt", Some("turn-1")),
+            AgentHookApplyOutcome::Applied(SessionStatus::Working)
+        ));
+        assert_eq!(
+            sessions.agent_status_source(&session_id),
+            Some(AgentStatusSource::Hook)
+        );
+
+        assert!(matches!(
+            apply_codex(&reducer, session_id, "jsonl_approval", Some("turn-1")),
+            AgentHookApplyOutcome::Applied(SessionStatus::WaitingForInput)
+        ));
+        assert_eq!(
+            sessions.agent_status_source(&session_id),
+            Some(AgentStatusSource::TranscriptFallback)
+        );
+
+        assert!(matches!(
+            apply_codex(&reducer, session_id, "native_tool_start", Some("turn-1")),
+            AgentHookApplyOutcome::Applied(SessionStatus::Working)
+        ));
+        assert_eq!(
+            sessions.agent_status_source(&session_id),
+            Some(AgentStatusSource::Hook)
+        );
+    }
+
+    #[test]
     fn reducer_native_tool_ignores_late_matching_fallback_approval() {
         let (sessions, session_id, reducer) = codex_reducer_fixture();
         apply_codex(&reducer, session_id, "native_prompt", Some("turn-1"));
@@ -4016,6 +4050,109 @@ mod tests {
         assert_eq!(sessions.hook_revision(&session_id), 0);
         assert!(!sessions.is_hook_confirmed_this_run(&session_id));
         assert_eq!(sessions.hook_provider(&session_id), None);
+    }
+
+    #[test]
+    fn antigravity_transcript_fallback_yields_to_confirmed_native_events() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Antigravity".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Antigravity);
+        let session_id = session.id;
+        sessions.insert(session);
+        let reducer = AgentHookReducer::new(sessions.clone());
+
+        let event = |event, source: &str| AgentHookEvent {
+            session_id,
+            provider: SessionAgentProvider::Antigravity,
+            event,
+            message: None,
+            source: Some(source.to_string()),
+            lifecycle_id: None,
+            provider_session_id: None,
+            provider_turn_id: None,
+            provider_tool_id: None,
+            provider_version: None,
+            native_hooks_enabled: None,
+            ownership: AgentHookOwnership::Owner,
+        };
+
+        assert!(matches!(
+            reducer
+                .apply(event(AgentHookEventKind::NeedsInput, "hook"))
+                .expect("native event applies"),
+            AgentHookApplyOutcome::Applied(SessionStatus::WaitingForInput)
+        ));
+        assert!(sessions.is_hook_confirmed_this_run(&session_id));
+        assert_eq!(
+            sessions.agent_status_source(&session_id),
+            Some(AgentStatusSource::Hook)
+        );
+
+        assert!(matches!(
+            reducer
+                .apply(event(AgentHookEventKind::Start, "transcript"))
+                .expect("delayed transcript event is classified"),
+            AgentHookApplyOutcome::Ignored { .. }
+        ));
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+        assert_eq!(
+            sessions.agent_status_source(&session_id),
+            Some(AgentStatusSource::Hook)
+        );
+
+        let boot_sessions = acorn_session::SessionStore::new();
+        let mut persisted = Session::new(
+            "Antigravity".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        persisted.status = SessionStatus::WaitingForInput;
+        persisted.agent_provider = Some(SessionAgentProvider::Antigravity);
+        persisted.hook_active = true;
+        persisted.hook_provider = Some(SessionAgentProvider::Antigravity);
+        let boot_session_id = persisted.id;
+        boot_sessions.insert(persisted);
+        let boot_reducer = AgentHookReducer::new(boot_sessions.clone());
+        let boot_fallback = AgentHookEvent {
+            session_id: boot_session_id,
+            provider: SessionAgentProvider::Antigravity,
+            event: AgentHookEventKind::Start,
+            message: None,
+            source: Some("transcript".to_string()),
+            lifecycle_id: None,
+            provider_session_id: None,
+            provider_turn_id: None,
+            provider_tool_id: None,
+            provider_version: None,
+            native_hooks_enabled: None,
+            ownership: AgentHookOwnership::Owner,
+        };
+
+        assert!(!boot_sessions.is_hook_confirmed_this_run(&boot_session_id));
+        assert!(matches!(
+            boot_reducer
+                .apply(boot_fallback)
+                .expect("unconfirmed boot fallback applies"),
+            AgentHookApplyOutcome::Applied(SessionStatus::Working)
+        ));
+        assert!(!boot_sessions.is_hook_confirmed_this_run(&boot_session_id));
+        assert_eq!(
+            boot_sessions.agent_status_source(&boot_session_id),
+            Some(AgentStatusSource::TranscriptFallback)
+        );
     }
 
     #[test]

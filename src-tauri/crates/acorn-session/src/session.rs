@@ -895,6 +895,56 @@ mod tests {
     }
 
     #[test]
+    fn hook_ownership_clear_is_revision_safe_and_clears_runtime_evidence() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        let observed_at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(123_456);
+
+        let first_revision = store.mark_hook_active(&session.id, SessionAgentProvider::Codex);
+        store.begin_hook_turn(&session.id, Some("turn-1"));
+        store.mark_hook_tool_started_at(&session.id, observed_at);
+        store.mark_codex_permission_waiting_at(&session.id, observed_at);
+
+        assert_eq!(
+            store.agent_status_source(&session.id),
+            Some(AgentStatusSource::Hook)
+        );
+        assert!(store
+            .clear_hook_ownership_if_revision(&session.id, first_revision)
+            .expect("session exists"));
+        assert!(!store.is_hook_active(&session.id));
+        assert!(!store.is_hook_confirmed_this_run(&session.id));
+        assert_eq!(store.hook_provider(&session.id), None);
+        assert_eq!(store.agent_status_source(&session.id), None);
+        assert_eq!(store.hook_turn_id(&session.id), None);
+        assert_eq!(store.hook_tool_started_at(&session.id), None);
+        assert_eq!(store.codex_permission_waiting_at(&session.id), None);
+
+        let cleared_revision = store.hook_revision(&session.id);
+        assert!(cleared_revision > first_revision);
+        let replacement_revision =
+            store.mark_hook_active(&session.id, SessionAgentProvider::Claude);
+        store.begin_hook_turn(&session.id, Some("turn-2"));
+
+        assert!(replacement_revision > cleared_revision);
+        assert!(!store
+            .clear_hook_ownership_if_revision(&session.id, first_revision)
+            .expect("session exists"));
+        assert!(store.is_hook_active(&session.id));
+        assert!(store.is_hook_confirmed_this_run(&session.id));
+        assert_eq!(
+            store.hook_provider(&session.id),
+            Some(SessionAgentProvider::Claude)
+        );
+        assert_eq!(
+            store.agent_status_source(&session.id),
+            Some(AgentStatusSource::Hook)
+        );
+        assert_eq!(store.hook_turn_id(&session.id).as_deref(), Some("turn-2"));
+        assert_eq!(store.hook_revision(&session.id), replacement_revision);
+    }
+
+    #[test]
     fn hook_tool_activity_is_scoped_to_a_turn_and_cleared_on_remove() {
         let store = SessionStore::new();
         let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
