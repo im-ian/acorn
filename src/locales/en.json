@@ -997,7 +997,9 @@
       "moveSession": "Move {name}",
       "resizeSession": "Resize {name}",
       "expandSession": "Expand {name}",
-      "openInPanes": "Open {name} in panes"
+      "openInPanes": "Open {name} in panes",
+      "closeSession": "Close session",
+      "closeSessionButton": "Close {name}"
     },
     "kanban": {
       "title": "Workspace kanban",
