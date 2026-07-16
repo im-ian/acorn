@@ -3,6 +3,7 @@ import {
   buildProjectTopLevelItems,
   orderSessionsByPriority,
   orderProjectTopLevelItems,
+  planProjectTopLevelDrag,
 } from "./sidebarProjectItems";
 import {
   makeDefaultProjectFolder,
@@ -156,6 +157,73 @@ describe("sidebar project items", () => {
       "folder:idle-folder",
       "folder:needs-folder",
     ]);
+  });
+
+  it("plans a drag against the order the user sees, not the saved order", () => {
+    const manualOrder = [
+      "session:idle-root",
+      "session:failed-root",
+      "session:needs-root",
+      "session:running-root",
+      "folder:idle-folder",
+      "folder:needs-folder",
+    ];
+    const displayed = buildProjectTopLevelItems(project(), manualOrder, true);
+    expect(displayed.map((item) => item.id)).toEqual([
+      "session:failed-root",
+      "session:needs-root",
+      "folder:needs-folder",
+      "session:idle-root",
+      "session:running-root",
+      "folder:idle-folder",
+    ]);
+
+    // Drag running-root from the bottom of the ready group up onto needs-root.
+    // The priority sort pins needs-root above it, but running-root must still
+    // land ahead of idle-root once the list re-renders.
+    const planned = planProjectTopLevelDrag(
+      project(),
+      manualOrder,
+      true,
+      "session:running-root",
+      "session:needs-root",
+    );
+
+    expect(planned).not.toBeNull();
+    const redisplayed = buildProjectTopLevelItems(
+      project(),
+      planned!.nextOrder,
+      true,
+    ).map((item) => item.id);
+    expect(redisplayed).toEqual([
+      "session:failed-root",
+      "session:needs-root",
+      "folder:needs-folder",
+      "session:running-root",
+      "session:idle-root",
+      "folder:idle-folder",
+    ]);
+  });
+
+  it("reports no drag plan when the item does not move", () => {
+    expect(
+      planProjectTopLevelDrag(
+        project(),
+        ["session:idle-root", "session:running-root"],
+        false,
+        "session:idle-root",
+        "session:idle-root",
+      ),
+    ).toBeNull();
+    expect(
+      planProjectTopLevelDrag(
+        project(),
+        ["session:idle-root", "session:running-root"],
+        false,
+        "session:idle-root",
+        "session:not-a-real-item",
+      ),
+    ).toBeNull();
   });
 
   it("can move waiting and error sessions above ready work", () => {

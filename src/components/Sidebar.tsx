@@ -116,8 +116,8 @@ import {
 } from "../lib/projectFolders";
 import {
   buildProjectTopLevelItems,
-  orderProjectTopLevelItems,
   orderSessionsByPriority,
+  planProjectTopLevelDrag,
   type ProjectTopLevelFolderItem,
   type ProjectTopLevelSessionItem,
 } from "../lib/sidebarProjectItems";
@@ -822,16 +822,15 @@ export function Sidebar() {
     activeItemId: string,
     overItemId: string,
   ): boolean {
-    const items = buildProjectTopLevelItems(
+    const plan = planProjectTopLevelDrag(
       project,
       projectItemOrders[project.repoPath] ?? [],
+      prioritizeNeedsInputTabs,
+      activeItemId,
+      overItemId,
     );
-    const ids = items.map((item) => item.id);
-    const fromIdx = ids.indexOf(activeItemId);
-    const toIdx = ids.indexOf(overItemId);
-    if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return false;
-    const nextIds = arrayMove(ids, fromIdx, toIdx);
-    const nextItems = orderProjectTopLevelItems(items, nextIds);
+    if (!plan) return false;
+    const { nextOrder: nextIds, nextItems } = plan;
     setProjectItemOrders((prev) =>
       stringArraysEqual(prev[project.repoPath] ?? [], nextIds)
         ? prev
@@ -866,6 +865,7 @@ export function Sidebar() {
     const items = buildProjectTopLevelItems(
       project,
       projectItemOrders[project.repoPath] ?? [],
+      prioritizeNeedsInputTabs,
     ).filter((item) => item.id !== activeId);
     const overIdx = items.findIndex(
       (item) => item.id === overId && item.type === "session",

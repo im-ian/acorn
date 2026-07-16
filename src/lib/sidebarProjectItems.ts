@@ -75,6 +75,44 @@ export function orderProjectTopLevelItems(
   return prioritizeNeedsInputTabs ? orderItemsByPriority(ordered) : ordered;
 }
 
+export interface ProjectTopLevelDragPlan {
+  nextOrder: string[];
+  nextItems: ProjectTopLevelItem[];
+}
+
+/**
+ * Resolve a sidebar drag into the manual order to persist.
+ *
+ * `prioritizeNeedsInputTabs` only changes how the list is displayed — the saved
+ * order stays manual. So the drag has to be resolved against the displayed
+ * list: the drop indices the user aimed at are positions in that list, and
+ * scoring them against the unsorted order records the move in the wrong slot,
+ * which the next render then sorts straight back to where it started.
+ *
+ * Returns null when the drag is a no-op or references an item that is not on
+ * the project's top level.
+ */
+export function planProjectTopLevelDrag(
+  project: ProjectFolderProjectGroup,
+  order: readonly string[],
+  prioritizeNeedsInputTabs: boolean,
+  activeItemId: string,
+  overItemId: string,
+): ProjectTopLevelDragPlan | null {
+  const items = buildProjectTopLevelItems(
+    project,
+    order,
+    prioritizeNeedsInputTabs,
+  );
+  const fromIdx = items.findIndex((item) => item.id === activeItemId);
+  const toIdx = items.findIndex((item) => item.id === overItemId);
+  if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return null;
+  const nextItems = [...items];
+  const [moved] = nextItems.splice(fromIdx, 1);
+  nextItems.splice(toIdx, 0, moved);
+  return { nextOrder: nextItems.map((item) => item.id), nextItems };
+}
+
 export function orderSessionsByPriority(
   sessions: readonly Session[],
   prioritizeNeedsInputTabs: boolean,
