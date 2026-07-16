@@ -807,11 +807,6 @@ export function Sidebar() {
   // item's namespace. Without this, dragging a project over an expanded
   // project's child session row makes `over.id` resolve to the session,
   // which gets dropped on the floor by onDragEnd.
-  //
-  // While `prioritizeNeedsInputTabs` is on, rows are also displayed grouped by
-  // priority, and the sort re-applies on every render — so a slot in the other
-  // group is one the drop could never keep. Withhold those slots rather than
-  // open them and snap the row back on release.
   const scopedCollision: CollisionDetection = (args) => {
     const activeId = String(args.active.id);
     const filtered = args.droppableContainers.filter((c) => {
@@ -819,18 +814,31 @@ export function Sidebar() {
       if (activeId.startsWith(PROJECT_DRAG_PREFIX)) {
         return id.startsWith(PROJECT_DRAG_PREFIX);
       }
-      if (
-        prioritizeNeedsInputTabs &&
-        !isSameDragPriorityGroup(dragPriorityIndex, activeId, id)
-      ) {
-        return false;
-      }
       if (activeId.startsWith(FOLDER_DRAG_PREFIX)) {
         return id.startsWith(FOLDER_DRAG_PREFIX) || isSessionRowDragId(id);
       }
       return id.startsWith(SESSION_DRAG_PREFIX);
     });
-    return closestCenter({ ...args, droppableContainers: filtered });
+    const collisions = closestCenter({
+      ...args,
+      droppableContainers: filtered,
+    });
+    // While `prioritizeNeedsInputTabs` is on, rows are displayed grouped by
+    // priority and the sort re-applies on every render, so a slot in the other
+    // group is one the drop could never keep. Refuse the row the drag actually
+    // landed on rather than dropping it from the candidates: a withheld
+    // candidate does not leave a hole, it hands the slot to whatever ranked
+    // next — usually a neighbouring workspace's drop zone, which would file the
+    // session away into a folder the user never aimed at.
+    const target = collisions[0];
+    if (
+      prioritizeNeedsInputTabs &&
+      target &&
+      !isSameDragPriorityGroup(dragPriorityIndex, activeId, String(target.id))
+    ) {
+      return [];
+    }
+    return collisions;
   };
 
   function onDragStart(event: DragStartEvent) {
