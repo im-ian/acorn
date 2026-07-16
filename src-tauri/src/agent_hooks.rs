@@ -136,15 +136,30 @@ impl AgentHookReducer {
         &self,
         event: AgentHookEvent,
     ) -> Result<AgentHookApplyOutcome, AgentHookApplyError> {
+        // Lane creation is the only growth point of this map, so prune dead
+        // entries here: a session removed mid-run stops receiving events and
+        // would otherwise leave its lane resident for the app lifetime
+        // (`SessionStore::remove` cannot reach this map).
+        if !self.lanes.contains_key(&event.session_id) {
+            self.lanes.retain(|id, _| self.sessions.get(id).is_ok());
+        }
         let lane = self
             .lanes
             .entry(event.session_id)
             .or_insert_with(|| Arc::new(Mutex::new(HookLane::default())))
             .clone();
         let mut lane = lane.lock();
-        let session = self.sessions.get(&event.session_id).map_err(|_| {
-            AgentHookApplyError::Unavailable(format!("session not found: {}", event.session_id))
-        })?;
+        let session = match self.sessions.get(&event.session_id) {
+            Ok(session) => session,
+            Err(_) => {
+                // An event for a removed session must not re-grow the map.
+                self.lanes.remove(&event.session_id);
+                return Err(AgentHookApplyError::Unavailable(format!(
+                    "session not found: {}",
+                    event.session_id
+                )));
+            }
+        };
         if event.provider != SessionAgentProvider::Codex {
             validate_agent_hook_session(&session, &event, false)?;
             let transcript_provider_switch = event.source.as_deref() == Some("transcript")
@@ -2631,6 +2646,72 @@ mod tests {
 
         let response = post_raw_claude_hook(&hooks, session_id, "not-json");
         assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    }
+
+    #[test]
+    fn reducer_prunes_lanes_for_removed_sessions() {
+        fn claude_start(session_id: Uuid) -> AgentHookEvent {
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Claude,
+                event: AgentHookEventKind::Start,
+                message: None,
+                source: Some("native".to_string()),
+                lifecycle_id: None,
+                provider_session_id: None,
+                provider_turn_id: None,
+                provider_tool_id: None,
+                provider_version: None,
+                native_hooks_enabled: None,
+                ownership: AgentHookOwnership::Owner,
+            }
+        }
+        fn new_session(name: &str) -> Session {
+            Session::new(
+                name.to_string(),
+                "/tmp/repo".into(),
+                "/tmp/repo".into(),
+                "main".to_string(),
+                false,
+                SessionKind::Regular,
+            )
+        }
+
+        let sessions = acorn_session::SessionStore::new();
+        let removed = new_session("removed");
+        let removed_id = removed.id;
+        sessions.insert(removed);
+        let reducer = AgentHookReducer::new(sessions.clone());
+
+        reducer
+            .apply(claude_start(removed_id))
+            .expect("first event creates the lane");
+        assert_eq!(reducer.lanes.len(), 1);
+
+        sessions.remove(&removed_id).expect("session removed");
+
+        // A new session's first event prunes lanes left by removed sessions.
+        let kept = new_session("kept");
+        let kept_id = kept.id;
+        sessions.insert(kept);
+        reducer
+            .apply(claude_start(kept_id))
+            .expect("event for the live session applies");
+        assert_eq!(
+            reducer.lanes.len(),
+            1,
+            "the dead lane must be pruned when a new lane is created"
+        );
+        assert!(reducer.lanes.contains_key(&kept_id));
+
+        // A late event for the removed session is rejected without
+        // re-growing the map.
+        assert!(matches!(
+            reducer.apply(claude_start(removed_id)),
+            Err(super::AgentHookApplyError::Unavailable(_))
+        ));
+        assert!(!reducer.lanes.contains_key(&removed_id));
+        assert_eq!(reducer.lanes.len(), 1);
     }
 
     #[test]
