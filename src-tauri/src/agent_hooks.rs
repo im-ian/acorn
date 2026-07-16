@@ -1739,11 +1739,98 @@ fn validate_request(request: &[u8], token: &str, handler: &HookEventHandler) -> 
 fn parse_agent_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentHookEvent>, String> {
     match header_value(head, "x-acorn-agent-hook-provider") {
         Some("codex") => parse_raw_codex_hook_request(head, body),
+        Some("claude") => parse_raw_claude_hook_request(head, body),
         Some(provider) => Err(format!("unsupported raw hook provider: {provider}")),
         None => serde_json::from_slice::<AgentHookEvent>(body)
             .map(Some)
             .map_err(|err| err.to_string()),
     }
+}
+
+/// Normalize a raw Claude Code hook payload forwarded verbatim by
+/// `acorn-claude-notify`. The shell script used to classify events with
+/// field-boundary regexes; real JSON parsing here is immune to escaped
+/// decoy text and keeps the drop rules reviewable next to the reducer.
+fn parse_raw_claude_hook_request(
+    head: &str,
+    body: &[u8],
+) -> Result<Option<AgentHookEvent>, String> {
+    let session_id = header_value(head, "x-acorn-agent-hook-session-id")
+        .ok_or_else(|| "missing Acorn session id".to_string())?
+        .parse::<Uuid>()
+        .map_err(|_| "invalid Acorn session id".to_string())?;
+    let raw_source = header_value(head, "x-acorn-agent-hook-source")
+        .ok_or_else(|| "missing Claude hook source".to_string())?;
+    if raw_source != "native" {
+        return Err(format!("unsupported Claude hook source: {raw_source}"));
+    }
+    let payload = serde_json::from_slice::<Value>(body).map_err(|err| err.to_string())?;
+
+    // Claude includes a non-empty agent_id only when this configured hook
+    // fires inside a subagent. Child prompts, attention requests, and Stop
+    // events do not own the parent Acorn terminal and must not transition
+    // its aggregate status. A top-level `claude --agent` still carries
+    // agent_type without agent_id and stays an owner.
+    if payload
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.trim().is_empty())
+    {
+        return Ok(None);
+    }
+
+    let hook_event_name = payload
+        .get("hook_event_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Claude hook payload has no hook_event_name".to_string())?;
+    let event = match hook_event_name {
+        "SessionStart" | "UserPromptSubmit" => AgentHookEventKind::Start,
+        // Claude can emit Stop while background tasks or session crons are
+        // still able to wake the parent turn. Those sessions stay Working;
+        // only a Stop with no pending background work is actually awaiting
+        // the user's next prompt.
+        "Stop" if claude_stop_has_pending_background_work(&payload) => return Ok(None),
+        "Stop" => AgentHookEventKind::NeedsInput,
+        "Notification" | "PermissionRequest" => AgentHookEventKind::NeedsInput,
+        "Error" => AgentHookEventKind::Error,
+        // The settings file registers exactly the events above; anything
+        // else is a future Claude addition we have no mapping for yet.
+        _ => return Ok(None),
+    };
+
+    // Claude's own conversation UUID. Downstream this binds the session's
+    // durable transcript marker, replacing cwd+mtime inference as the
+    // primary pairing signal.
+    let provider_session_id = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .and_then(|value| normalized_id(Some(value)))
+        .filter(|value| value.len() <= 512)
+        .map(str::to_string);
+
+    Ok(Some(AgentHookEvent {
+        session_id,
+        provider: SessionAgentProvider::Claude,
+        event,
+        message: None,
+        source: Some("native".to_string()),
+        lifecycle_id: None,
+        provider_session_id,
+        provider_turn_id: None,
+        provider_tool_id: None,
+        provider_version: None,
+        native_hooks_enabled: None,
+        ownership: AgentHookOwnership::Owner,
+    }))
+}
+
+fn claude_stop_has_pending_background_work(payload: &Value) -> bool {
+    ["background_tasks", "session_crons"].iter().any(|key| {
+        payload
+            .get(*key)
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+    })
 }
 
 fn parse_raw_codex_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentHookEvent>, String> {
@@ -2337,6 +2424,213 @@ mod tests {
                 .as_deref(),
             Some("not-a-turn-id")
         );
+    }
+
+    #[test]
+    fn raw_claude_native_payloads_are_normalized_in_rust() {
+        let (tx, rx) = mpsc::channel();
+        let hooks = AgentHookServer::start_with_handler(move |event| {
+            tx.send(event).expect("send event");
+        })
+        .expect("hook server starts");
+        let session_id = Uuid::new_v4();
+        let claude_uuid = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
+
+        for (hook_event_name, expected_event) in [
+            ("SessionStart", AgentHookEventKind::Start),
+            ("UserPromptSubmit", AgentHookEventKind::Start),
+            ("Notification", AgentHookEventKind::NeedsInput),
+            ("PermissionRequest", AgentHookEventKind::NeedsInput),
+            ("Error", AgentHookEventKind::Error),
+        ] {
+            let body = serde_json::json!({
+                "session_id": claude_uuid,
+                "transcript_path": format!("/home/user/.claude/projects/repo/{claude_uuid}.jsonl"),
+                "hook_event_name": hook_event_name,
+            })
+            .to_string();
+            let response = post_raw_claude_hook(&hooks, session_id, &body);
+            assert!(
+                response.starts_with("HTTP/1.1 204 No Content"),
+                "unexpected {hook_event_name} response: {response:?}"
+            );
+            let event = rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("native event delivered");
+            assert_eq!(event.session_id, session_id);
+            assert_eq!(event.provider, SessionAgentProvider::Claude);
+            assert_eq!(event.event, expected_event, "{hook_event_name}");
+            assert_eq!(event.source.as_deref(), Some("native"));
+            assert_eq!(event.provider_session_id.as_deref(), Some(claude_uuid));
+            assert_eq!(event.ownership, super::AgentHookOwnership::Owner);
+        }
+
+        let stop = serde_json::json!({
+            "session_id": claude_uuid,
+            "hook_event_name": "Stop",
+            "background_tasks": [],
+            "session_crons": [],
+        })
+        .to_string();
+        let response = post_raw_claude_hook(&hooks, session_id, &stop);
+        assert!(response.starts_with("HTTP/1.1 204 No Content"));
+        let event = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Stop delivered");
+        assert_eq!(event.event, AgentHookEventKind::NeedsInput);
+    }
+
+    #[test]
+    fn raw_claude_stop_with_background_work_emits_no_transition() {
+        let (tx, rx) = mpsc::channel();
+        let hooks = AgentHookServer::start_with_handler(move |event| {
+            tx.send(event).expect("send event");
+        })
+        .expect("hook server starts");
+        let session_id = Uuid::new_v4();
+
+        for payload in [
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "background_tasks": [{"id": "agent-1", "type": "agent", "status": "running"}],
+                "session_crons": [],
+            }),
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "background_tasks": [],
+                "session_crons": [{"id": "cron-1", "schedule": "in 1m", "recurring": false}],
+            }),
+        ] {
+            let response = post_raw_claude_hook(&hooks, session_id, &payload.to_string());
+            assert!(
+                response.starts_with("HTTP/1.1 202 Accepted"),
+                "a Stop with pending background work is a pause, got {response:?}"
+            );
+            assert!(
+                rx.try_recv().is_err(),
+                "a background pause must not reach the reducer"
+            );
+        }
+
+        // Decoy text inside a string field must not suppress the real wait.
+        let decoy = serde_json::json!({
+            "hook_event_name": "Stop",
+            "background_tasks": [],
+            "session_crons": [],
+            "last_assistant_message": "decoy: \"background_tasks\":[{\"status\":\"running\"}]",
+        });
+        let response = post_raw_claude_hook(&hooks, session_id, &decoy.to_string());
+        assert!(response.starts_with("HTTP/1.1 204 No Content"));
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1))
+                .expect("clean Stop delivered")
+                .event,
+            AgentHookEventKind::NeedsInput
+        );
+    }
+
+    #[test]
+    fn raw_claude_subagent_events_cannot_transition_the_parent_session() {
+        let (tx, rx) = mpsc::channel();
+        let hooks = AgentHookServer::start_with_handler(move |event| {
+            tx.send(event).expect("send event");
+        })
+        .expect("hook server starts");
+        let session_id = Uuid::new_v4();
+
+        for hook_event_name in [
+            "UserPromptSubmit",
+            "Notification",
+            "PermissionRequest",
+            "Stop",
+        ] {
+            let payload = serde_json::json!({
+                "hook_event_name": hook_event_name,
+                "agent_id": "019f6338-6250-7303-88a6-a7add31dba1d",
+                "agent_type": "Explore",
+                "background_tasks": [],
+                "session_crons": [],
+            });
+            let response = post_raw_claude_hook(&hooks, session_id, &payload.to_string());
+            assert!(
+                response.starts_with("HTTP/1.1 202 Accepted"),
+                "a child {hook_event_name} must not transition its parent session"
+            );
+            assert!(rx.try_recv().is_err());
+        }
+
+        // A top-level `claude --agent` carries agent_type without agent_id.
+        let top_level_agent = serde_json::json!({
+            "hook_event_name": "PermissionRequest",
+            "agent_type": "reviewer",
+        });
+        let response = post_raw_claude_hook(&hooks, session_id, &top_level_agent.to_string());
+        assert!(response.starts_with("HTTP/1.1 204 No Content"));
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1))
+                .expect("owner event delivered")
+                .event,
+            AgentHookEventKind::NeedsInput
+        );
+
+        // Empty and null agent_id are owner shapes, not children.
+        for agent_id in [serde_json::json!(""), serde_json::Value::Null] {
+            let payload = serde_json::json!({
+                "hook_event_name": "UserPromptSubmit",
+                "agent_id": agent_id,
+            });
+            let response = post_raw_claude_hook(&hooks, session_id, &payload.to_string());
+            assert!(response.starts_with("HTTP/1.1 204 No Content"));
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(1))
+                    .expect("owner event delivered")
+                    .event,
+                AgentHookEventKind::Start
+            );
+        }
+
+        // Escaped decoy text must not read as a child id.
+        let decoy = serde_json::json!({
+            "hook_event_name": "PermissionRequest",
+            "message": "literal decoys: {\"agent_id\":\"not-a-real-field\",\"hook_event_name\":\"Stop\"}",
+        });
+        let response = post_raw_claude_hook(&hooks, session_id, &decoy.to_string());
+        assert!(response.starts_with("HTTP/1.1 204 No Content"));
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1))
+                .expect("decoy-carrying owner event delivered")
+                .event,
+            AgentHookEventKind::NeedsInput
+        );
+    }
+
+    #[test]
+    fn raw_claude_unknown_or_malformed_events_fail_safe() {
+        let (tx, rx) = mpsc::channel();
+        let hooks = AgentHookServer::start_with_handler(move |event| {
+            tx.send(event).expect("send event");
+        })
+        .expect("hook server starts");
+        let session_id = Uuid::new_v4();
+
+        // Events without a mapping (future Claude additions) are dropped,
+        // not errors — the registered settings only name the known five.
+        for hook_event_name in ["SubagentStop", "PostToolUse", "SessionEnd"] {
+            let payload = serde_json::json!({"hook_event_name": hook_event_name});
+            let response = post_raw_claude_hook(&hooks, session_id, &payload.to_string());
+            assert!(
+                response.starts_with("HTTP/1.1 202 Accepted"),
+                "unmapped {hook_event_name} must be dropped, got {response:?}"
+            );
+            assert!(rx.try_recv().is_err());
+        }
+
+        let missing_name = serde_json::json!({"session_id": "x"});
+        let response = post_raw_claude_hook(&hooks, session_id, &missing_name.to_string());
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+
+        let response = post_raw_claude_hook(&hooks, session_id, "not-json");
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
     }
 
     #[test]
@@ -4282,6 +4576,20 @@ mod tests {
 
     fn post_raw_codex_hook(hooks: &AgentHookServer, session_id: Uuid, body: &str) -> String {
         post_raw_codex_source(hooks, session_id, "native", body)
+    }
+
+    fn post_raw_claude_hook(hooks: &AgentHookServer, session_id: Uuid, body: &str) -> String {
+        let mut stream = TcpStream::connect(addr_from_url(hooks.hook_url())).expect("connect hook");
+        write!(
+            stream,
+            "POST /agent-hook HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Acorn-Agent-Hook-Token: {}\r\nX-Acorn-Agent-Hook-Provider: claude\r\nX-Acorn-Agent-Hook-Session-Id: {session_id}\r\nX-Acorn-Agent-Hook-Source: native\r\nContent-Length: {}\r\n\r\n{body}",
+            hooks.token(),
+            body.len()
+        )
+        .expect("write raw Claude request");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read response");
+        response
     }
 
     fn post_raw_codex_source(
