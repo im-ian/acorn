@@ -2005,9 +2005,6 @@ test.describe("workspace kanban mode", () => {
 
     const chatCard = board.locator('[data-kanban-session-id="created-1"]');
     await expect(chatCard).toBeVisible();
-    await expect(page.getByTestId("kanban-terminal-popover")).toHaveCount(0);
-
-    await chatCard.click();
 
     const popover = page.getByTestId("kanban-terminal-popover");
     await expect(popover).toBeVisible();

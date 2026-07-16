@@ -85,9 +85,11 @@ test.describe("workspace canvas mode", () => {
       w.__canvasCreateCalls = [...(w.__canvasCreateCalls ?? []), input];
       const repoPath =
         typeof input.repoPath === "string" ? input.repoPath : "/tmp/demo";
+      const mode = input.mode === "chat" ? "chat" : "terminal";
+      const id = mode === "chat" ? "canvas-chat" : "canvas-created";
       const created = {
-        id: "canvas-created",
-        name: "canvas-created",
+        id,
+        name: id,
         repo_path: repoPath,
         worktree_path: repoPath,
         branch: "main",
@@ -99,7 +101,7 @@ test.describe("workspace canvas mode", () => {
         last_message: null,
         title_source: "manual",
         kind: "regular",
-        mode: "terminal",
+        mode,
         owner: { kind: "user" },
         position: null,
         in_worktree: false,
@@ -136,7 +138,7 @@ test.describe("workspace canvas mode", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "New chat session", exact: true }),
-    ).toHaveCount(0);
+    ).toBeVisible();
     await page.keyboard.press("Escape");
 
     const createButton = canvas.getByRole("button", {
@@ -182,6 +184,53 @@ test.describe("workspace canvas mode", () => {
       node.locator('[data-acorn-terminal-slot="canvas-created"]'),
     ).toBeAttached();
 
+    await createButton.click();
+    await page
+      .getByRole("menuitem", { name: "New chat session", exact: true })
+      .click();
+
+    const chatNode = canvas.locator('[data-canvas-session-id="canvas-chat"]');
+    await expect(chatNode).toBeVisible();
+    await expect(
+      chatNode.getByRole("textbox", { name: "Chat message" }),
+    ).toBeVisible();
+    await expect(
+      chatNode.getByRole("button", { name: "Expand canvas-chat" }),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Canvas",
+    );
+    const canvasWorld = page.getByTestId("workspace-canvas-world");
+    const offsetBeforeChatScroll = await canvasWorld.getAttribute(
+      "data-canvas-offset-y",
+    );
+    await chatNode
+      .getByRole("textbox", { name: "Chat message" })
+      .dispatchEvent("wheel", { deltaY: 120 });
+    await expect(canvasWorld).toHaveAttribute(
+      "data-canvas-offset-y",
+      offsetBeforeChatScroll ?? "0",
+    );
+
+    const callsAfterChat = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __canvasCreateCalls?: Array<Record<string, unknown>>;
+          }
+        ).__canvasCreateCalls ?? [],
+    );
+    expect(callsAfterChat).toHaveLength(2);
+    expect(callsAfterChat[1]).toMatchObject({
+      repoPath: "/tmp/demo",
+      isolated: false,
+      kind: "regular",
+      mode: "chat",
+    });
+
+    await canvas
+      .getByRole("button", { name: "Show canvas-created on canvas" })
+      .click();
     await node
       .getByTestId("workspace-canvas-node-drag-handle")
       .click({ button: "right" });
@@ -634,14 +683,14 @@ test.describe("workspace canvas mode", () => {
     await terminalSlot.evaluate((element) =>
       element.setAttribute("data-canvas-terminal-identity", "preserved"),
     );
-    await page.getByRole("button", { name: "Reset terminal layout" }).click();
+    await page.getByRole("button", { name: "Reset session layout" }).click();
 
     await expect(alpha).toHaveAttribute("data-canvas-node-x", "48");
     await expect(alpha).toHaveAttribute("data-canvas-node-y", "48");
     await expect(world).toHaveAttribute("data-canvas-zoom", "1");
 
     await expect(
-      page.getByRole("status").filter({ hasText: "Terminal layout reset." }),
+      page.getByRole("status").filter({ hasText: "Session layout reset." }),
     ).toBeVisible();
     const undo = page.getByRole("button", { name: "Undo reset" });
     await expect(undo).toBeVisible();

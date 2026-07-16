@@ -215,7 +215,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   }
 
   function handleSelectSession(id: string) {
-    useAppStore.getState().selectSession(id);
+    useAppStore.getState().openSessionSurface(id);
     close();
   }
 
