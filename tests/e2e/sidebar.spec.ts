@@ -2183,10 +2183,18 @@ test.describe("sidebar: project lifecycle", () => {
     });
   });
 
-  test("project workspace sessions can move out next to root sessions by drag and drop", async ({
+  test("project workspace sessions can move across priority groups into the project root", async ({
     page,
     tauri,
   }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          interface: { prioritizeNeedsInputTabs: true },
+        }),
+      );
+    });
     await tauri.handle("list_projects", () => [
       {
         repo_path: "/tmp/demo",
@@ -2224,7 +2232,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "ready",
+          status: "waiting_for_input",
           created_at: "2026-01-01T00:00:01Z",
           updated_at: "2026-01-01T00:00:01Z",
           last_message: null,
@@ -2271,7 +2279,7 @@ test.describe("sidebar: project lifecycle", () => {
       .getByRole("button", { name: /^root main · Ready/ })
       .first();
     const child = sidebar
-      .getByRole("button", { name: /^child main · Ready/ })
+      .getByRole("button", { name: /^child main · Waiting for input/ })
       .first();
 
     await dragBetween(page, child, frontend);
