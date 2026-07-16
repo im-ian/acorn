@@ -236,14 +236,25 @@ fn bind_marker_in_state_dir_with_policy(
     // scan can echo the abandoned original once the new transcript
     // goes idle; writing that echo would oscillate the marker. Skip
     // only the dormant-echo case so the marker never flaps.
-    if policy == MarkerBindPolicy::Inferred
-        && previous
-            .as_deref()
-            .is_some_and(|prev| marker_rollback_is_dormant_echo(kind, prev, uuid))
-    {
+    if marker_update_is_blocked(policy, previous.as_deref(), uuid, |prev, next| {
+        marker_rollback_is_dormant_echo(kind, prev, next)
+    }) {
         return Ok(());
     }
     write_if_changed(&id_file, &format!("{uuid}\n"))
+}
+
+fn marker_update_is_blocked<F>(
+    policy: MarkerBindPolicy,
+    previous: Option<&str>,
+    next: &str,
+    dormant_echo: F,
+) -> bool
+where
+    F: FnOnce(&str, &str) -> bool,
+{
+    policy == MarkerBindPolicy::Inferred
+        && previous.is_some_and(|previous| dormant_echo(previous, next))
 }
 
 fn id_filename(kind: AgentKind) -> &'static str {
@@ -477,6 +488,19 @@ mod tests {
         let previous = "019f2001-bbbb-76b0-8410-2e073b38a2c2";
         let resumed = "019e2001-aaaa-76b0-8410-2e073b38a2c1";
         fs::write(&marker, format!("{previous}\n")).unwrap();
+
+        assert!(marker_update_is_blocked(
+            MarkerBindPolicy::Inferred,
+            Some(previous),
+            resumed,
+            |_, _| true,
+        ));
+        assert!(!marker_update_is_blocked(
+            MarkerBindPolicy::ProviderDeclared,
+            Some(previous),
+            resumed,
+            |_, _| true,
+        ));
 
         bind_provider_marker_in_state_dir(&dir, AgentKind::Claude, resumed).unwrap();
 
