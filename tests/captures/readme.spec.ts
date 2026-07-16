@@ -8,6 +8,7 @@ const CAPTURE_DIR = process.env.ACORN_CAPTURE_DIR ?? "assets/screenshots";
 const DEFAULT_SCENES = [
   "workspace",
   "kanban",
+  "canvas",
   "pr-modal",
   "chat-session",
   "control-session",
@@ -86,6 +87,71 @@ const scenes: CaptureScene[] = [
         page.locator('[data-kanban-session-id="file-explorer-review"]')
           .getByTestId("workspace-kanban-card-pr"),
       ).toBeVisible();
+
+      await board
+        .getByRole("button", { name: "Open kanban-capture" })
+        .click();
+      const popover = page.getByTestId("kanban-terminal-popover");
+      await expect(popover).toBeVisible();
+      await expect(
+        popover.locator(
+          '[data-terminal-popover-body="kanban-capture"] [data-acorn-terminal-slot="kanban-capture"] .acorn-terminal-shell',
+        ),
+      ).toBeVisible();
+
+      const dragHandle = popover.getByTestId(
+        "kanban-terminal-popover-drag-handle",
+      );
+      const [popoverBox, dragHandleBox] = await Promise.all([
+        popover.boundingBox(),
+        dragHandle.boundingBox(),
+      ]);
+      if (!popoverBox || !dragHandleBox) {
+        throw new Error("Kanban terminal popover is not measurable");
+      }
+      const targetLeft = (page.viewportSize()!.width - popoverBox.width) / 2;
+      const targetTop = page.viewportSize()!.height - popoverBox.height - 40;
+      await page.mouse.move(
+        dragHandleBox.x + dragHandleBox.width / 2,
+        dragHandleBox.y + dragHandleBox.height / 2,
+      );
+      await page.mouse.down();
+      await page.mouse.move(
+        dragHandleBox.x +
+          dragHandleBox.width / 2 +
+          targetLeft -
+          popoverBox.x,
+        dragHandleBox.y +
+          dragHandleBox.height / 2 +
+          targetTop -
+          popoverBox.y,
+      );
+      await page.mouse.up();
+      await expect
+        .poll(async () => (await popover.boundingBox())?.y ?? 0)
+        .toBeGreaterThan(500);
+    },
+  },
+  {
+    name: "canvas",
+    file: "canvas.png",
+    prepare: async (page) => {
+      const canvas = page.getByTestId("workspace-canvas");
+      await expect(canvas).toBeVisible();
+      await pressHotkey(page, { mod: true, key: "j" });
+      await expect(page.getByTestId("workspace-view-status")).toContainText(
+        "Canvas",
+      );
+      await expect(canvas.getByTestId("workspace-canvas-node")).toHaveCount(3);
+      await expect(
+        canvas.locator('[data-canvas-session-id="canvas-orchestrator"]'),
+      ).toContainText("canvas-orchestrator");
+      await expect(
+        canvas.locator(
+          '[data-canvas-terminal-body="canvas-orchestrator"] [data-acorn-terminal-slot="canvas-orchestrator"] .acorn-terminal-shell',
+        ),
+      ).toBeVisible();
+      await expect(canvas.getByTestId("workspace-canvas-minimap")).toBeVisible();
     },
   },
   {
@@ -279,7 +345,7 @@ async function bootCapturePage(page: Page, sceneName: SceneName) {
             },
             sortMode: "updated-desc",
             filterQuery: "",
-            manualDoneSessionIds: [],
+            manualDoneSessionIds: ["release-v1.25"],
           },
         })})
       );
@@ -299,7 +365,9 @@ async function bootCapturePage(page: Page, sceneName: SceneName) {
         ? /control-orchestrator/
         : sceneName === "kanban"
           ? /kanban-capture/
-        : /workspace-polish/;
+          : sceneName === "canvas"
+            ? /canvas-orchestrator/
+            : /workspace-polish/;
   await expect(
     page.locator("aside").getByRole("button", {
       name: expectedSidebarSession,
@@ -386,6 +454,49 @@ function appWorkspace(sceneName: SceneName) {
       },
       focusedPaneId: "kanban-root",
       viewMode: "kanban",
+      ...rightPanelWorkspaceState(),
+    };
+  }
+
+  if (sceneName === "canvas") {
+    const sessionIds = ["canvas-orchestrator", "canvas-ui", "canvas-tests"];
+    return {
+      layout: { kind: "pane", id: "canvas-root" },
+      panes: {
+        "canvas-root": paneState(
+          "canvas-root",
+          sessionIds,
+          "canvas-orchestrator",
+        ),
+      },
+      focusedPaneId: "canvas-root",
+      viewMode: "canvas",
+      canvas: {
+        viewport: { offset: { x: 36, y: 44 }, zoom: 0.8 },
+        nodes: {
+          "canvas-orchestrator": {
+            x: 48,
+            y: 76,
+            width: 720,
+            height: 860,
+            zIndex: 3,
+          },
+          "canvas-ui": {
+            x: 820,
+            y: 36,
+            width: 620,
+            height: 380,
+            zIndex: 1,
+          },
+          "canvas-tests": {
+            x: 880,
+            y: 476,
+            width: 560,
+            height: 420,
+            zIndex: 2,
+          },
+        },
+      },
       ...rightPanelWorkspaceState(),
     };
   }
@@ -1262,6 +1373,61 @@ function captureMockHandlersSource(sceneName: SceneName) {
     }
 
     function terminalText(id) {
+      if (id === "kanban-capture") {
+        return [
+          "$ codex",
+          "Task: make Kanban progress legible at a glance",
+          "",
+          "✓ Idle · Working · Waiting · Review · Done",
+          "✓ PR and diff context attached to review cards",
+          "✓ Lifecycle board stays visible",
+          "",
+          "$ pnpm exec playwright test tests/e2e/kanban.spec.ts",
+          "PASS  kanban lifecycle + terminal popover",
+        ].join("\\r\\n") + "\\r\\n";
+      }
+      if (id === "canvas-orchestrator") {
+        return [
+          "$ codex",
+          "Task: compose the release workspace on canvas",
+          "",
+          "Three live sessions, one spatial workspace",
+          "",
+          "✓ arrange terminals around the task",
+          "✓ resize the primary implementation session",
+          "✓ navigate the workspace from the minimap",
+          "",
+          "$ git status --short",
+          " M src/components/WorkspaceCanvas.tsx",
+          " M tests/e2e/canvas.spec.ts",
+          "",
+          "Waiting for final visual review...",
+        ].join("\\r\\n") + "\\r\\n";
+      }
+      if (id === "canvas-ui") {
+        return [
+          "$ claude --continue canvas-ui",
+          "Polishing canvas navigation",
+          "",
+          "Editing WorkspaceCanvasMinimap.tsx",
+          "Adding fit-to-view and reset undo",
+          "",
+          "$ pnpm run typecheck",
+          "PASS WorkspaceCanvas.tsx",
+          "PASS WorkspaceCanvasMinimap.tsx",
+        ].join("\\r\\n") + "\\r\\n";
+      }
+      if (id === "canvas-tests") {
+        return [
+          "$ pnpm exec playwright test tests/e2e/canvas.spec.ts",
+          "",
+          "✓ moves and resizes terminal nodes",
+          "✓ restores zoom and viewport position",
+          "✓ navigates sessions from the minimap",
+          "",
+          "12 passed (8.4s)",
+        ].join("\\r\\n") + "\\r\\n";
+      }
       if (id === "control-orchestrator") {
         return [
           "$ acorn-ipc promote --self",
@@ -1502,8 +1668,7 @@ function seedSessions(sceneName: SceneName) {
           agent: "claude",
           position: 0,
         }),
-        last_user_message: "Plan the next release milestone",
-        last_agent_message: "Reviewing open issues and recent feedback",
+        agent_transcript_id: null,
       },
       {
         ...session("kanban-capture", "kanban-capture", REPOS.app, "feat/kanban-capture", {
@@ -1530,7 +1695,7 @@ function seedSessions(sceneName: SceneName) {
           REPOS.app,
           "feat/file-explorer-review",
           {
-            status: "waiting_for_input",
+            status: "ready",
             agent: "codex",
             position: 3,
             isolated: true,
@@ -1553,6 +1718,45 @@ function seedSessions(sceneName: SceneName) {
         last_user_message: "Prepare the v1.25 release",
         last_agent_message: "PR merged and release notes published",
       },
+      ...baseSessions.filter((candidate) => candidate.repo_path !== REPOS.app),
+    ];
+  }
+
+  if (sceneName === "canvas") {
+    return [
+      session(
+        "canvas-orchestrator",
+        "canvas-orchestrator",
+        REPOS.app,
+        "feat/canvas-workspace",
+        {
+          status: "waiting_for_input",
+          agent: "codex",
+          position: 0,
+        },
+      ),
+      session("canvas-ui", "canvas-ui", REPOS.app, "feat/canvas-minimap", {
+        status: "working",
+        agent: "claude",
+        position: 1,
+        isolated: true,
+        inWorktree: true,
+        cwd: `${REPOS.app}/.acorn/worktrees/canvas-ui`,
+      }),
+      session(
+        "canvas-tests",
+        "canvas-tests",
+        REPOS.app,
+        "test/canvas-layout",
+        {
+          status: "ready",
+          agent: "codex",
+          position: 2,
+          isolated: true,
+          inWorktree: true,
+          cwd: `${REPOS.app}/.acorn/worktrees/canvas-tests`,
+        },
+      ),
       ...baseSessions.filter((candidate) => candidate.repo_path !== REPOS.app),
     ];
   }
