@@ -242,6 +242,92 @@ test.describe("workspace canvas mode", () => {
     );
   });
 
+  test("closes sessions from the canvas context menu and title button", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __canvasRemovedIds?: string[] };
+      const removedIds = w.__canvasRemovedIds ?? [];
+      return ["alpha", "beta"]
+        .filter((id) => !removedIds.includes(id))
+        .map((id) => ({
+          id,
+          name: id,
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+          title_source: "default",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: null,
+          in_worktree: false,
+        }));
+    });
+    await tauri.handle("remove_session", (args) => {
+      const w = window as unknown as {
+        __canvasRemoveCalls?: unknown[];
+        __canvasRemovedIds?: string[];
+      };
+      const id = (args as { id: string }).id;
+      w.__canvasRemoveCalls = [...(w.__canvasRemoveCalls ?? []), args];
+      w.__canvasRemovedIds = [...(w.__canvasRemovedIds ?? []), id];
+      return null;
+    });
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const node = page.locator('[data-canvas-session-id="alpha"]');
+    await node
+      .getByTestId("workspace-canvas-node-drag-handle")
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Close session", exact: true })
+      .click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(
+      dialog.getByRole("heading", { name: "Remove session" }),
+    ).toBeVisible();
+    await dialog.getByRole("button", { name: "Remove", exact: true }).click();
+
+    await expect(node).toHaveCount(0);
+    const beta = page.locator('[data-canvas-session-id="beta"]');
+    await beta.getByRole("button", { name: "Close beta" }).click();
+    await expect(
+      dialog.getByRole("heading", { name: "Remove session" }),
+    ).toBeVisible();
+    await dialog.getByRole("button", { name: "Remove", exact: true }).click();
+
+    await expect(beta).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __canvasRemoveCalls?: Array<{
+                  id: string;
+                  removeWorktree: boolean;
+                }>;
+              }
+            ).__canvasRemoveCalls ?? [],
+        ),
+      )
+      .toEqual([
+        { id: "alpha", removeWorktree: false },
+        { id: "beta", removeWorktree: false },
+      ]);
+  });
+
   test("moves, resizes, zooms, and restores live terminal nodes", async ({
     page,
     tauri,
