@@ -35,6 +35,164 @@ function session(id: string, repoPath = PROJECT.repo_path) {
 }
 
 test.describe("workspace canvas mode", () => {
+  test("uses a pulsing live-agent icon instead of the status dot", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      {
+        ...session("alpha"),
+        status: "waiting_for_input",
+        agent_provider: "codex",
+      },
+      session("beta"),
+    ]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const alpha = page.locator('[data-canvas-session-id="alpha"]');
+    const liveAgent = alpha.getByRole("img", { name: "Codex" });
+    await expect(liveAgent).toBeVisible();
+    await expect(liveAgent).toHaveClass(/animate-pulse/);
+    await expect(alpha.locator("header .rounded-full")).toHaveCount(0);
+
+    const beta = page.locator('[data-canvas-session-id="beta"]');
+    await expect(beta.locator("header .rounded-full")).toHaveCount(1);
+    await expect(beta.getByRole("img")).toHaveCount(0);
+  });
+
+  test("creates sessions from canvas menus and expands a terminal without leaving canvas", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __canvasSessions?: Array<Record<string, unknown>>;
+      };
+      w.__canvasSessions = w.__canvasSessions ?? [];
+      return w.__canvasSessions;
+    });
+    await tauri.handle("create_session", (args) => {
+      const input = args as Record<string, unknown>;
+      const w = window as unknown as {
+        __canvasCreateCalls?: Array<Record<string, unknown>>;
+        __canvasSessions?: Array<Record<string, unknown>>;
+      };
+      w.__canvasCreateCalls = [...(w.__canvasCreateCalls ?? []), input];
+      const repoPath =
+        typeof input.repoPath === "string" ? input.repoPath : "/tmp/demo";
+      const created = {
+        id: "canvas-created",
+        name: "canvas-created",
+        repo_path: repoPath,
+        worktree_path: repoPath,
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      };
+      w.__canvasSessions = [...(w.__canvasSessions ?? []), created];
+      return created;
+    });
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const canvas = page.getByTestId("workspace-canvas");
+    const canvasBox = await canvas.boundingBox();
+    if (!canvasBox) throw new Error("Canvas is not visible");
+    await canvas.click({
+      button: "right",
+      position: { x: canvasBox.width / 2, y: canvasBox.height / 2 },
+    });
+    await expect(
+      page.getByRole("menuitem", { name: "New session", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", {
+        name: "New worktree session",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", {
+        name: "New control session",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "New chat session", exact: true }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    const createButton = canvas.getByRole("button", {
+      name: "Create session",
+    });
+    await createButton.click();
+    await page
+      .getByRole("menuitem", { name: "New session", exact: true })
+      .click();
+
+    const node = canvas.locator(
+      '[data-canvas-session-id="canvas-created"]',
+    );
+    await expect(node).toBeVisible();
+    const calls = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __canvasCreateCalls?: Array<Record<string, unknown>>;
+          }
+        ).__canvasCreateCalls ?? [],
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      repoPath: "/tmp/demo",
+      isolated: false,
+      kind: "regular",
+    });
+
+    await node.getByRole("button", { name: "Expand canvas-created" }).click();
+    const popover = page.getByTestId("kanban-terminal-popover");
+    await expect(popover).toBeVisible();
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Canvas",
+    );
+    await expect(
+      popover.locator('[data-acorn-terminal-slot="canvas-created"]'),
+    ).toBeAttached();
+
+    await popover.getByRole("button", { name: "Close" }).click();
+    await expect(popover).toHaveCount(0);
+    await expect(
+      node.locator('[data-acorn-terminal-slot="canvas-created"]'),
+    ).toBeAttached();
+
+    await node
+      .getByTestId("workspace-canvas-node-drag-handle")
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Open canvas-created in panes" })
+      .click();
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Panes",
+    );
+  });
+
   test("moves, resizes, zooms, and restores live terminal nodes", async ({
     page,
     tauri,
@@ -50,6 +208,17 @@ test.describe("workspace canvas mode", () => {
     const nodes = canvas.getByTestId("workspace-canvas-node");
     const alpha = canvas.locator('[data-canvas-session-id="alpha"]');
     await expect(canvas).toBeVisible();
+    await expect(
+      canvas.getByText("Right-click for session actions", { exact: false }),
+    ).toHaveCount(0);
+    await canvas
+      .getByRole("button", { name: "Show canvas controls help" })
+      .hover();
+    await expect(page.getByRole("tooltip")).toContainText(
+      "Right-click for session actions",
+    );
+    await canvas.getByRole("button", { name: "Move alpha" }).hover();
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
     await expect(nodes).toHaveCount(2);
     await expect(
       alpha.locator(

@@ -253,8 +253,8 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
   });
 
   useEffect(() => {
-    if (!isKanban) closeTerminalPopup();
-  }, [closeTerminalPopup, isKanban]);
+    if (!isKanban && !isCanvas) closeTerminalPopup();
+  }, [closeTerminalPopup, isCanvas, isKanban]);
 
   return (
     <div className="h-full min-w-0 overflow-hidden" data-workspace-main>
@@ -280,6 +280,7 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
             workspaceSessionIds={workspaceSessionIds}
             sessions={sessions}
           />
+          <CanvasTerminalPopoverOverlay sessions={sessions} />
           <WorkspaceTabPreviewOverlay />
         </div>
       ) : null}
@@ -297,6 +298,56 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
       </div>
     </div>
   );
+}
+
+function CanvasTerminalPopoverOverlay({
+  sessions,
+}: {
+  sessions: readonly Session[];
+}) {
+  const terminalPopupSessionId = useAppStore((s) => s.terminalPopupSessionId);
+  const closeTerminalPopup = useAppStore((s) => s.closeTerminalPopup);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const session = terminalPopupSessionId
+    ? sessions.find((candidate) => candidate.id === terminalPopupSessionId) ??
+      null
+    : null;
+
+  useLayoutEffect(() => {
+    if (!terminalPopupSessionId) {
+      setAnchor((current) => (current ? null : current));
+      return;
+    }
+    if (!session) {
+      closeTerminalPopup();
+      return;
+    }
+    const nextAnchor = document.querySelector<HTMLElement>(
+      `[data-canvas-session-id="${cssAttributeEscape(terminalPopupSessionId)}"]`,
+    );
+    if (!nextAnchor) {
+      closeTerminalPopup();
+      return;
+    }
+    setAnchor((current) => (current === nextAnchor ? current : nextAnchor));
+  }, [closeTerminalPopup, session, terminalPopupSessionId]);
+
+  const close = useCallback(() => {
+    const returnFocus = anchor?.querySelector<HTMLElement>(
+      '[data-testid="workspace-canvas-node-expand"]',
+    );
+    closeTerminalPopup();
+    setAnchor(null);
+    if (returnFocus) requestAnimationFrame(() => returnFocus.focus());
+  }, [anchor, closeTerminalPopup]);
+
+  return session && anchor ? (
+    <KanbanTerminalPopover
+      session={session}
+      anchor={anchor}
+      onClose={close}
+    />
+  ) : null;
 }
 
 function WorkspaceTabPreviewOverlay() {
