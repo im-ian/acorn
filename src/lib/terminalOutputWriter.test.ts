@@ -99,6 +99,45 @@ describe("createTerminalOutputWriter", () => {
     expect(writer.pendingBytes()).toBe(0);
   });
 
+  it("flushes background output between active and hidden cadences", () => {
+    vi.useFakeTimers();
+    const written: string[] = [];
+    let backgroundDelayMs = 40;
+    const writer = createTerminalOutputWriter({
+      write: (chunk, onParsed) => {
+        written.push(text(chunk));
+        onParsed();
+      },
+      afterWrite: vi.fn(),
+      isActive: () => false,
+      isBackground: () => true,
+      backgroundBatchBytes: 6,
+      backgroundDelayMs: () => backgroundDelayMs,
+      setTimeoutFn: window.setTimeout.bind(window),
+      clearTimeoutFn: window.clearTimeout.bind(window),
+    });
+
+    writer.enqueue(bytes("ab"));
+    writer.enqueue(bytes("cd"));
+    writer.enqueue(bytes("ef"));
+
+    vi.advanceTimersByTime(39);
+    expect(written).toEqual([]);
+
+    vi.advanceTimersByTime(1);
+    expect(written).toEqual(["abcdef"]);
+    expect(writer.pendingBytes()).toBe(0);
+
+    backgroundDelayMs = 80;
+    writer.enqueue(bytes("gh"));
+    vi.advanceTimersByTime(79);
+    expect(written).toEqual(["abcdef"]);
+
+    vi.advanceTimersByTime(1);
+    expect(written).toEqual(["abcdef", "gh"]);
+    expect(writer.pendingBytes()).toBe(0);
+  });
+
   it("promotes pending inactive output to the next frame when flushed soon", () => {
     vi.useFakeTimers();
     const frames = createFrameScheduler();

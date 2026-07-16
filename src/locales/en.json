@@ -164,6 +164,28 @@
         "label": "Line height",
         "hint": "Cell-height multiplier. 1.00 packs rows flush; raise for more vertical breathing room. Range 1.00-2.00."
       },
+      "canvasInactiveRefreshRate": {
+        "label": "Inactive canvas refresh rate",
+        "hint": "How often visible but unselected canvas terminals render new output. The selected terminal always stays at full speed.",
+        "options": {
+          "fullSpeed": {
+            "label": "Full speed · ~60 FPS",
+            "description": "Nearly as smooth as the selected terminal, with the highest rendering cost."
+          },
+          "balanced": {
+            "label": "Balanced · ~25 FPS (default)",
+            "description": "A responsive balance for several concurrent sessions."
+          },
+          "reduced": {
+            "label": "Reduced · ~12 FPS",
+            "description": "Reduces rendering work in larger canvas workspaces."
+          },
+          "minimal": {
+            "label": "Minimal · ~8 FPS",
+            "description": "Lowest rendering cost; background output updates more visibly in steps."
+          }
+        }
+      },
       "maxMountedTerminals": {
         "label": "Resident terminal limit",
         "hint": "How many off-screen terminal views stay mounted in memory before daemon-backed sessions are detached. Visible terminals are always kept."
