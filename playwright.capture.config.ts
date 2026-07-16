@@ -14,7 +14,7 @@ export default defineConfig({
   use: {
     baseURL: BASE_URL,
     viewport: { width: 1600, height: 1000 },
-    deviceScaleFactor: 2,
+    deviceScaleFactor: 1,
     trace: "off",
     screenshot: "off",
     video: "off",
@@ -25,7 +25,7 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1600, height: 1000 },
-        deviceScaleFactor: 2,
+        deviceScaleFactor: 1,
       },
     },
   ],
