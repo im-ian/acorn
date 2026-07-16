@@ -115,7 +115,9 @@ import {
   type ProjectFolderProjectGroup,
 } from "../lib/projectFolders";
 import {
+  buildDragPriorityIndex,
   buildProjectTopLevelItems,
+  isSameDragPriorityGroup,
   orderSessionsByPriority,
   planProjectTopLevelDrag,
   type ProjectTopLevelFolderItem,
@@ -794,16 +796,31 @@ export function Sidebar() {
     () => projectGroups.map((p) => projectDragId(p.repoPath)),
     [projectGroups],
   );
+  const dragPriorityIndex = useMemo(
+    () => buildDragPriorityIndex(allWorkspaceGroups),
+    [allWorkspaceGroups],
+  );
   // Scoped collision detection: only consider droppables sharing the active
   // item's namespace. Without this, dragging a project over an expanded
   // project's child session row makes `over.id` resolve to the session,
   // which gets dropped on the floor by onDragEnd.
+  //
+  // While `prioritizeNeedsInputTabs` is on, rows are also displayed grouped by
+  // priority, and the sort re-applies on every render — so a slot in the other
+  // group is one the drop could never keep. Withhold those slots rather than
+  // open them and snap the row back on release.
   const scopedCollision: CollisionDetection = (args) => {
     const activeId = String(args.active.id);
     const filtered = args.droppableContainers.filter((c) => {
       const id = String(c.id);
       if (activeId.startsWith(PROJECT_DRAG_PREFIX)) {
         return id.startsWith(PROJECT_DRAG_PREFIX);
+      }
+      if (
+        prioritizeNeedsInputTabs &&
+        !isSameDragPriorityGroup(dragPriorityIndex, activeId, id)
+      ) {
+        return false;
       }
       if (activeId.startsWith(FOLDER_DRAG_PREFIX)) {
         return id.startsWith(FOLDER_DRAG_PREFIX) || isSessionRowDragId(id);

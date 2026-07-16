@@ -113,6 +113,51 @@ export function planProjectTopLevelDrag(
   return { nextOrder: nextItems.map((item) => item.id), nextItems };
 }
 
+/**
+ * Map every draggable sidebar row id to the priority group it is displayed in:
+ * true for rows the priority sort floats to the top, false for the rest.
+ *
+ * Ids that are not rows — the folder and project drop zones — are absent, so
+ * callers can tell "different group" apart from "not a row at all".
+ */
+export function buildDragPriorityIndex(
+  groups: readonly ProjectFolderProjectGroup[],
+): Map<string, boolean> {
+  const index = new Map<string, boolean>();
+  for (const group of groups) {
+    for (const folderGroup of group.folders) {
+      index.set(
+        sidebarFolderItemId(folderGroup.folder.id),
+        folderGroup.sessions.some(hasPriorityStatus),
+      );
+      for (const session of folderGroup.sessions) {
+        index.set(sidebarSessionItemId(session.id), hasPriorityStatus(session));
+      }
+    }
+  }
+  return index;
+}
+
+/**
+ * Whether a row may be dropped onto another while the priority sort is on.
+ *
+ * The sort re-floats waiting and errored rows on every render, so a drop that
+ * crosses the group boundary can never hold its slot — it snaps back the
+ * instant it lands. Refusing the drop keeps the boundary honest instead.
+ *
+ * Ids missing from the index are drop zones rather than rows, and stay open.
+ */
+export function isSameDragPriorityGroup(
+  index: ReadonlyMap<string, boolean>,
+  activeId: string,
+  overId: string,
+): boolean {
+  const active = index.get(activeId);
+  const over = index.get(overId);
+  if (active === undefined || over === undefined) return true;
+  return active === over;
+}
+
 export function orderSessionsByPriority(
   sessions: readonly Session[],
   prioritizeNeedsInputTabs: boolean,

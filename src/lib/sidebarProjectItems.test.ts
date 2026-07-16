@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDragPriorityIndex,
   buildProjectTopLevelItems,
+  isSameDragPriorityGroup,
   orderSessionsByPriority,
   orderProjectTopLevelItems,
   planProjectTopLevelDrag,
@@ -224,6 +226,43 @@ describe("sidebar project items", () => {
         "session:not-a-real-item",
       ),
     ).toBeNull();
+  });
+
+  it("indexes drag ids by the priority group they are displayed in", () => {
+    const index = buildDragPriorityIndex([project()]);
+
+    expect(index.get("session:needs-root")).toBe(true);
+    expect(index.get("session:failed-root")).toBe(true);
+    expect(index.get("session:idle-root")).toBe(false);
+    expect(index.get("session:running-root")).toBe(false);
+    // A folder joins the priority group as soon as one session inside it needs
+    // attention, matching how the folder row is displayed.
+    expect(index.get("folder:needs-folder")).toBe(true);
+    expect(index.get("folder:idle-folder")).toBe(false);
+    expect(index.get("session:nested-needs")).toBe(true);
+    expect(index.get("session:nested-idle")).toBe(false);
+  });
+
+  it("only pairs drag ids that share a priority group", () => {
+    const index = buildDragPriorityIndex([project()]);
+
+    expect(
+      isSameDragPriorityGroup(index, "session:idle-root", "session:running-root"),
+    ).toBe(true);
+    expect(
+      isSameDragPriorityGroup(index, "session:needs-root", "session:failed-root"),
+    ).toBe(true);
+    expect(
+      isSameDragPriorityGroup(index, "session:idle-root", "session:needs-root"),
+    ).toBe(false);
+    expect(
+      isSameDragPriorityGroup(index, "session:running-root", "folder:needs-folder"),
+    ).toBe(false);
+    // Drop zones (folder / project targets) carry no priority group, so they
+    // stay available as move targets.
+    expect(
+      isSameDragPriorityGroup(index, "session:idle-root", "session:folder:needs-folder"),
+    ).toBe(true);
   });
 
   it("can move waiting and error sessions above ready work", () => {
