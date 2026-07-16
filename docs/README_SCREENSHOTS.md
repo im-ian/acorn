@@ -8,6 +8,8 @@ pnpm run capture:readme
 
 The capture run starts Vite, injects the existing Tauri mock, seeds deterministic
 project/session/GitHub data, and writes PNGs to `assets/screenshots` by default.
+Captures use a 1600×1000 viewport at 1× scale so README assets stay sharp
+without shipping unnecessary 3200×2000 files.
 It does not use OS-level screen capture, a real Tauri app profile, a live shell,
 or the user's browser profile.
 
