@@ -177,6 +177,18 @@ pub fn bind_session_marker(session_id: uuid::Uuid, kind: AgentKind, uuid: &str) 
     bind_marker_in_state_dir(&state_dir, kind, uuid)
 }
 
+/// Bind a provider-owned conversation identifier as the session's durable
+/// marker. Provider hooks identify the active conversation directly, so
+/// transcript activity heuristics must not reject this update.
+pub fn bind_provider_session_marker(
+    session_id: uuid::Uuid,
+    kind: AgentKind,
+    uuid: &str,
+) -> io::Result<()> {
+    let state_dir = agent_resume::ensure_session_state_dir(session_id)?;
+    bind_provider_marker_in_state_dir(&state_dir, kind, uuid)
+}
+
 /// Serializes marker writes across the background tick and the status
 /// poll's fallback. The read-check-write below is not atomic on its own;
 /// two threads interleaving could skip the dormant-echo arbitration and
@@ -187,6 +199,29 @@ fn marker_bind_lock() -> &'static Mutex<()> {
 }
 
 fn bind_marker_in_state_dir(state_dir: &Path, kind: AgentKind, uuid: &str) -> io::Result<()> {
+    bind_marker_in_state_dir_with_policy(state_dir, kind, uuid, MarkerBindPolicy::Inferred)
+}
+
+fn bind_provider_marker_in_state_dir(
+    state_dir: &Path,
+    kind: AgentKind,
+    uuid: &str,
+) -> io::Result<()> {
+    bind_marker_in_state_dir_with_policy(state_dir, kind, uuid, MarkerBindPolicy::ProviderDeclared)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MarkerBindPolicy {
+    Inferred,
+    ProviderDeclared,
+}
+
+fn bind_marker_in_state_dir_with_policy(
+    state_dir: &Path,
+    kind: AgentKind,
+    uuid: &str,
+    policy: MarkerBindPolicy,
+) -> io::Result<()> {
     let _guard = marker_bind_lock()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -201,12 +236,25 @@ fn bind_marker_in_state_dir(state_dir: &Path, kind: AgentKind, uuid: &str) -> io
     // scan can echo the abandoned original once the new transcript
     // goes idle; writing that echo would oscillate the marker. Skip
     // only the dormant-echo case so the marker never flaps.
-    if let Some(prev) = previous.as_deref() {
-        if marker_rollback_is_dormant_echo(kind, prev, uuid) {
-            return Ok(());
-        }
+    if marker_update_is_blocked(policy, previous.as_deref(), uuid, |prev, next| {
+        marker_rollback_is_dormant_echo(kind, prev, next)
+    }) {
+        return Ok(());
     }
     write_if_changed(&id_file, &format!("{uuid}\n"))
+}
+
+fn marker_update_is_blocked<F>(
+    policy: MarkerBindPolicy,
+    previous: Option<&str>,
+    next: &str,
+    dormant_echo: F,
+) -> bool
+where
+    F: FnOnce(&str, &str) -> bool,
+{
+    policy == MarkerBindPolicy::Inferred
+        && previous.is_some_and(|previous| dormant_echo(previous, next))
 }
 
 fn id_filename(kind: AgentKind) -> &'static str {
@@ -426,6 +474,37 @@ mod tests {
             "a new uuid must replace the marker"
         );
 
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn provider_declared_bind_replaces_the_existing_marker() {
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-provider-bind-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("claude.id");
+        let previous = "019f2001-bbbb-76b0-8410-2e073b38a2c2";
+        let resumed = "019e2001-aaaa-76b0-8410-2e073b38a2c1";
+        fs::write(&marker, format!("{previous}\n")).unwrap();
+
+        assert!(marker_update_is_blocked(
+            MarkerBindPolicy::Inferred,
+            Some(previous),
+            resumed,
+            |_, _| true,
+        ));
+        assert!(!marker_update_is_blocked(
+            MarkerBindPolicy::ProviderDeclared,
+            Some(previous),
+            resumed,
+            |_, _| true,
+        ));
+
+        bind_provider_marker_in_state_dir(&dir, AgentKind::Claude, resumed).unwrap();
+
+        assert_eq!(read_trimmed(&marker).as_deref(), Some(resumed));
         fs::remove_dir_all(&dir).unwrap();
     }
 

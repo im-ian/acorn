@@ -462,10 +462,8 @@ else
   [ "$legacy_owner_session_id" = "$legacy_session_id" ] || exit 0
 fi
 
-# Forward the raw hook payload; Rust owns classification. Subagent
-# filtering, Stop-with-background-work suppression, and the event mapping
-# live in `parse_raw_claude_hook_request`, where real JSON parsing replaces
-# the field-boundary regexes this script used to carry.
+# Forward the raw hook payload with transport attribution. Rust owns
+# structured classification, including subagent filtering and Stop handling.
 
 # Resolve the hook endpoint at send time. Each app launch rewrites the
 # endpoint file with that run's server URL + token (the hook server binds a
@@ -2879,8 +2877,8 @@ done
         assert!(notify.contains("X-Acorn-Agent-Hook-Source: native"));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("--data-binary @-"));
-        // Classification (subagent filter, Stop suppression, event mapping)
-        // moved to Rust — the script must not re-grow shell-side event logic.
+        // The notify helper is transport-only; classification belongs to the
+        // structured Rust adapter.
         assert!(!notify.contains("hook_event_name"));
         assert!(!notify.contains("agent_id"));
         assert!(!notify.contains("background_tasks"));
@@ -2964,9 +2962,8 @@ done
     #[cfg(unix)]
     #[test]
     fn claude_notify_forwards_raw_payload_for_owner_invocations() {
-        // Classification (subagent filter, Stop suppression, event mapping)
-        // lives in `parse_raw_claude_hook_request`; the script's only job is
-        // to deliver the payload byte-for-byte with transport attribution.
+        // Owner payloads reach the Rust adapter unchanged apart from
+        // insignificant trailing JSON whitespace.
         let payload = serde_json::json!({
             "hook_event_name": "Stop",
             "session_id": "019e4818-7c15-4e60-9b3b-898a1c7803d6",
@@ -3025,9 +3022,8 @@ done
         );
     }
 
-    // The Stop/background, subagent-filter, decoy, and attention-ordering
-    // scenarios that used to run against this script live in
-    // `agent_hooks::tests` now — classification moved to Rust wholesale.
+    // Classifier behavior lives in `agent_hooks::tests`; wrapper tests cover
+    // transport and invocation attribution only.
 
     #[test]
     fn writes_hook_endpoint_file_atomically_with_owner_only_perms() {

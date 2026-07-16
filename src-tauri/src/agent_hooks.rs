@@ -1762,10 +1762,9 @@ fn parse_agent_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentHookE
     }
 }
 
-/// Normalize a raw Claude Code hook payload forwarded verbatim by
-/// `acorn-claude-notify`. The shell script used to classify events with
-/// field-boundary regexes; real JSON parsing here is immune to escaped
-/// decoy text and keeps the drop rules reviewable next to the reducer.
+/// Normalize a raw Claude Code hook payload forwarded by
+/// `acorn-claude-notify`. Structured top-level field parsing prevents
+/// escaped content from impersonating ownership or lifecycle fields.
 fn parse_raw_claude_hook_request(
     head: &str,
     body: &[u8],
@@ -1813,9 +1812,8 @@ fn parse_raw_claude_hook_request(
         _ => return Ok(None),
     };
 
-    // Claude's own conversation UUID. Downstream this binds the session's
-    // durable transcript marker, replacing cwd+mtime inference as the
-    // primary pairing signal.
+    // Claude's conversation UUID binds the session's durable transcript
+    // marker without cwd and mtime ambiguity.
     let provider_session_id = payload
         .get("session_id")
         .and_then(Value::as_str)

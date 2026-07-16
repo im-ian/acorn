@@ -496,17 +496,16 @@ pub fn run() {
                         return agent_hooks::AgentHookHandlerOutcome::Conflict;
                     }
                 };
-                // A Claude hook payload names its own conversation UUID —
-                // ground truth from the provider. Binding it here makes the
-                // durable marker authoritative from the first turn event,
-                // instead of waiting for the persister's cwd+mtime inference
-                // (which stays on as fallback and multi-process arbiter).
+                // Claude names the active conversation directly. Bind that
+                // provider-owned identifier without applying transcript mtime
+                // heuristics; the PTY-tree scan remains the fallback and
+                // multi-process arbiter when hooks are unavailable.
                 if provider == acorn_session::SessionAgentProvider::Claude {
                     if let Some(claude_uuid) = provider_session_id
                         .as_deref()
                         .filter(|id| uuid::Uuid::parse_str(id).is_ok())
                     {
-                        if let Err(err) = agent_resume_persister::bind_session_marker(
+                        if let Err(err) = agent_resume_persister::bind_provider_session_marker(
                             session_id,
                             acorn_agent::AgentKind::Claude,
                             claude_uuid,
