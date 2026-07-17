@@ -2899,9 +2899,23 @@ done
         write_executable(
             &real_dir.join("codex"),
             r#"#!/bin/sh
+if [ "${1-}" = "--version" ]; then
+  printf 'codex-cli 0.144.4\n'
+  exit 0
+fi
+for _acorn_arg in "$@"; do
+  [ "$_acorn_arg" = "features" ] && exit 0
+done
+_acorn_mode() {
+  if stat -f '%Lp' "$1" >/dev/null 2>&1; then
+    stat -f '%Lp' "$1"
+  else
+    stat -c '%a' "$1"
+  fi
+}
 printf '%s\n' "$CODEX_TUI_SESSION_LOG_PATH" > "$ACORN_TEST_CAPTURE"
-(stat -f %Lp "$CODEX_TUI_SESSION_LOG_PATH" 2>/dev/null || stat -c %a "$CODEX_TUI_SESSION_LOG_PATH") >> "$ACORN_TEST_CAPTURE"
-(stat -f %Lp "${CODEX_TUI_SESSION_LOG_PATH%/*}" 2>/dev/null || stat -c %a "${CODEX_TUI_SESSION_LOG_PATH%/*}") >> "$ACORN_TEST_CAPTURE"
+_acorn_mode "$CODEX_TUI_SESSION_LOG_PATH" >> "$ACORN_TEST_CAPTURE"
+_acorn_mode "${CODEX_TUI_SESSION_LOG_PATH%/*}" >> "$ACORN_TEST_CAPTURE"
 printf '{}\n' >> "$CODEX_TUI_SESSION_LOG_PATH"
 "#,
         )
@@ -2919,6 +2933,7 @@ printf '{}\n' >> "$CODEX_TUI_SESSION_LOG_PATH"
             .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
             .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:9/agent-hook")
             .env("ACORN_AGENT_HOOK_TOKEN", "test-token")
+            .env("ACORN_AGENT_INVOCATION_ROOT", "1")
             .env("ACORN_TEST_CAPTURE", &capture)
             .env_remove("CODEX_TUI_SESSION_LOG_PATH")
             .output()
@@ -3433,6 +3448,8 @@ cat >/dev/null
                 .env("PATH", &path)
                 .env("ACORN_AGENT_WRAPPER_DIR", &dir)
                 .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+                .env("ACORN_AGENT_INVOCATION_TOKEN", "owner-invocation")
+                .env("ACORN_AGENT_INVOCATION_DEPTH", "1")
                 .env("ACORN_TEST_CURL_ARGV", &argv_capture)
                 .env("ACORN_TEST_CURL_STDIN", &stdin_capture)
                 .env_remove("ACORN_AGENT_HOOK_URL")
