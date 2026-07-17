@@ -11,6 +11,15 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize every release version. Per-tag groups still allow an older and
+  # newer stable release to race after both inspect the same Latest pointer.
+  group: release
+  cancel-in-progress: false
+
 jobs:
   # Build the Vite frontend once and share `dist/` with every downstream
   # bundler job. The frontend output is identical across macOS targets,
@@ -23,19 +32,40 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 9.15.0
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+
+      - name: Validate release version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          node scripts/validate-release-version.mjs "$tag"
+          tag_commit=$(git rev-parse --verify "refs/tags/${tag}^{commit}")
+          head_commit=$(git rev-parse --verify HEAD)
+          if [[ "$head_commit" != "$tag_commit" ]]; then
+            echo "checked out $head_commit, but $tag resolves to $tag_commit" >&2
+            exit 1
+          fi
 
       - name: Install JS deps
         run: pnpm install --frozen-lockfile
@@ -44,7 +74,7 @@ jobs:
         run: pnpm run build
 
       - name: Upload frontend artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: frontend-dist
           path: dist/
@@ -56,8 +86,6 @@ jobs:
     runs-on: macos-latest
     needs: frontend
     timeout-minutes: 60
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -66,27 +94,31 @@ jobs:
           - x86_64-apple-darwin
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 9.15.0
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri
           # Per-target shared key (default key already factors in
@@ -104,7 +136,7 @@ jobs:
       # bumps). Wraps rustc to memoize per-crate compilation outputs.
       - name: Setup sccache
         continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       # Probe the GHA cache backend before trusting sccache. When the
       # Azure Edge layer behind `artifactcache.actions.githubusercontent.com`
@@ -140,7 +172,7 @@ jobs:
       # instead of compiling release sidecars and release-ci app binaries
       # back to back.
       - name: Download shared frontend bundle
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           name: frontend-dist
           path: dist/
@@ -169,7 +201,7 @@ jobs:
         # `frontend` job's artifact one step ago. The sidecar staging
         # script still runs per-target because it cross-compiles for each
         # apple triple.
-        run: pnpm run tauri build --target ${{ matrix.target }} --bundles app dmg --config '{"build":{"beforeBuildCommand":"TAURI_SIDECAR_FORCE_TARGET=1 TAURI_SIDECAR_PROFILE=release-ci pnpm run build:sidecar"}}' -- --profile release-ci
+        run: pnpm run tauri build --target ${{ matrix.target }} --bundles app dmg --config '{"build":{"beforeBuildCommand":"TAURI_SIDECAR_FORCE_TARGET=1 TAURI_SIDECAR_PROFILE=release-ci pnpm run build:sidecar"}}' -- --profile release-ci --locked
 
       - name: Stage release artifacts
         id: stage
@@ -199,32 +231,21 @@ jobs:
             *)         suffix="$target" ;;
           esac
 
-          # DMG (already arch-tagged by tauri — `Acorn_<ver>_<arch>.dmg`)
-          find "${bundle_dir}/dmg" -name "*.dmg" -maxdepth 2 -print0 \
-            | xargs -0 -I{} cp -v {} "$out/"
-
-          # Updater tarball + signature, renamed to add the arch suffix.
-          # The publish job's `latest.json` generator already greps for
-          # `aarch64` / `x86_64` in the filename, so once the names are
-          # tagged here it picks the right pair per platform.
-          while IFS= read -r -d '' f; do
-            base=$(basename "$f" .app.tar.gz)
-            cp -v "$f" "$out/${base}_${suffix}.app.tar.gz"
-          done < <(find "${bundle_dir}/macos" -name "*.app.tar.gz" -maxdepth 2 -print0)
-          while IFS= read -r -d '' f; do
-            base=$(basename "$f" .app.tar.gz.sig)
-            cp -v "$f" "$out/${base}_${suffix}.app.tar.gz.sig"
-          done < <(find "${bundle_dir}/macos" -name "*.app.tar.gz.sig" -maxdepth 2 -print0)
+          # Fail closed unless Tauri produced exactly one DMG and one matching
+          # updater tarball/signature pair, then stage the pair together with
+          # an architecture suffix before matrix artifacts are merged.
+          node scripts/release-artifacts.mjs stage "$bundle_dir" "$out" "$suffix"
 
           ls -la "$out/"
           echo "dir=$out" >> "$GITHUB_OUTPUT"
 
       - name: Upload bundle artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: bundles-${{ matrix.target }}
           path: ${{ steps.stage.outputs.dir }}/**
           if-no-files-found: error
+          retention-days: 1
 
   # Manual-only benchmark of nightly Rust + `-Z share-generics` + parallel
   # rustc against the same shared frontend. Skipped on tag pushes; trigger
@@ -238,13 +259,16 @@ jobs:
     needs: frontend
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 9.15.0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: pnpm
@@ -252,18 +276,19 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           name: frontend-dist
           path: dist/
 
       - name: Setup nightly Rust
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
         with:
+          toolchain: nightly
           targets: aarch64-apple-darwin
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri
           shared-key: nightly-aarch64
@@ -273,7 +298,7 @@ jobs:
         env:
           RUSTFLAGS: "-Z share-generics=y -Z threads=8"
           CARGO_INCREMENTAL: "0"
-        run: pnpm run tauri build --target aarch64-apple-darwin --bundles app --config '{"build":{"beforeBuildCommand":"TAURI_SIDECAR_FORCE_TARGET=1 TAURI_SIDECAR_PROFILE=release-ci pnpm run build:sidecar"}}' -- --profile release-ci
+        run: pnpm run tauri build --target aarch64-apple-darwin --bundles app --config '{"build":{"beforeBuildCommand":"TAURI_SIDECAR_FORCE_TARGET=1 TAURI_SIDECAR_PROFILE=release-ci pnpm run build:sidecar"}}' -- --profile release-ci --locked
 
   release:
     name: Publish GitHub Release + latest.json
@@ -284,17 +309,19 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
 
       - name: Download all bundles
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           path: bundles
           pattern: bundles-*
@@ -305,16 +332,62 @@ jobs:
 
       - name: Resolve tag + version
         id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
           else
             tag="${GITHUB_REF#refs/tags/}"
           fi
-          version="${tag#v}"
+          version=$(node scripts/validate-release-version.mjs "$tag")
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse existing release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          error_file=$(mktemp)
+          if ! release_json=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" 2>"$error_file"); then
+            if grep -q "HTTP 404" "$error_file"; then
+              exit 0
+            fi
+            cat "$error_file" >&2
+            exit 1
+          fi
+          asset_count=$(jq '.assets | length' <<<"$release_json")
+          if [[ "$asset_count" != "0" ]]; then
+            echo "release $TAG already has $asset_count asset(s); refusing a mutable or mixed rerun" >&2
+            exit 1
+          fi
+
+      - name: Enforce latest release order
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$TAG" == *-* ]]; then
+            echo "value=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          error_file=$(mktemp)
+          if ! current_tag=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>"$error_file"); then
+            if grep -q "HTTP 404" "$error_file"; then
+              echo "value=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            cat "$error_file" >&2
+            exit 1
+          fi
+          node scripts/validate-release-version.mjs --assert-newer "$TAG" "$current_tag"
+          echo "value=true" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         id: notes
@@ -350,22 +423,11 @@ jobs:
           # tauri.conf.json points at `releases/latest/download/latest.json`
           # which always resolves to the newest tag.
 
-          arm_tar=$(ls bundles/*.app.tar.gz | grep -E 'aarch64' | head -n1 || true)
-          arm_sig=$(ls bundles/*.app.tar.gz.sig | grep -E 'aarch64' | head -n1 || true)
-          x64_tar=$(ls bundles/*.app.tar.gz | grep -E 'x64|x86_64' | head -n1 || true)
-          x64_sig=$(ls bundles/*.app.tar.gz.sig | grep -E 'x64|x86_64' | head -n1 || true)
-
-          # If the bundle filenames don't carry the arch hint (older
-          # tauri builds put both into a single name), fall back to the
-          # only available file for both arches.
-          if [[ -z "$arm_tar" || -z "$x64_tar" ]]; then
-            single_tar=$(ls bundles/*.app.tar.gz | head -n1)
-            single_sig=$(ls bundles/*.app.tar.gz.sig | head -n1)
-            arm_tar="${arm_tar:-$single_tar}"
-            arm_sig="${arm_sig:-$single_sig}"
-            x64_tar="${x64_tar:-$single_tar}"
-            x64_sig="${x64_sig:-$single_sig}"
-          fi
+          node scripts/release-artifacts.mjs inspect bundles > artifact-set.json
+          arm_tar=$(jq -r .armTar artifact-set.json)
+          arm_sig=$(jq -r .armSignature artifact-set.json)
+          x64_tar=$(jq -r .x64Tar artifact-set.json)
+          x64_sig=$(jq -r .x64Signature artifact-set.json)
 
           base="https://github.com/${REPO}/releases/download/${TAG}"
           arm_url="${base}/$(basename "$arm_tar")"
@@ -394,7 +456,7 @@ jobs:
           cat latest.json
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.tag }}
@@ -407,10 +469,12 @@ jobs:
             bundles/*.app.tar.gz
             bundles/*.app.tar.gz.sig
             latest.json
+          fail_on_unmatched_files: true
+          overwrite_files: false
           # Stable releases must update GitHub's "Latest" pointer because the
           # app updater resolves latest.json through /releases/latest/download.
           # Keep prerelease tags out of that pointer.
-          make_latest: ${{ contains(steps.meta.outputs.tag, '-') && 'false' || 'true' }}
+          make_latest: ${{ steps.latest.outputs.value }}
           prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

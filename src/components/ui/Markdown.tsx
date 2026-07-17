@@ -7,6 +7,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "../../lib/cn";
 import { ImageLightbox } from "../ImageLightbox";
 import { Tooltip } from "../Tooltip";
+import { markdownImageUrlTransform, RemoteImage } from "./RemoteImage";
 
 // Sanitize schema for PR/comment markdown bodies — they routinely embed raw
 // HTML (image uploads, GitHub's `<img width="…">` snippets, details/summary).
@@ -24,6 +25,7 @@ const sanitizeSchema = {
       "height",
       "loading",
     ],
+    source: [],
     a: [
       ...(defaultSchema.attributes?.a ?? []),
       "href",
@@ -33,13 +35,24 @@ const sanitizeSchema = {
     ],
     input: [
       ...(defaultSchema.attributes?.input ?? []),
-      // Stamped by `rehypeTaskIndex` below so the React input component can
-      // map a click back to its source-order checkbox.
-      "dataTaskIndex",
+      // Stamped only on parser-generated GFM tasks by `rehypeTaskIndex` below,
+      // so raw HTML checkboxes cannot impersonate an editable task.
+      "acornTaskIndex",
+    ],
+  },
+  protocols: {
+    ...defaultSchema.protocols,
+    src: [
+      ...(defaultSchema.protocols?.src ?? []),
+      "data",
+      "blob",
+      "asset",
     ],
   },
   tagNames: [
-    ...(defaultSchema.tagNames ?? []),
+    ...(defaultSchema.tagNames ?? []).filter(
+      (tagName) => tagName !== "picture" && tagName !== "source",
+    ),
     "details",
     "summary",
   ],
@@ -47,9 +60,10 @@ const sanitizeSchema = {
 
 // Walks the HAST tree once (outside React's render cycle, so immune to
 // StrictMode double-invocation) and stamps each task-list checkbox input
-// with a `data-task-index` attribute reflecting its source-order position.
-// Runs after `rehypeRaw` (whose tree-rebuild strips positions) and before
-// `rehypeSanitize`, which is configured above to allow the data attr.
+// with an internal task index reflecting its parsed source order.
+// Runs before `rehypeRaw`: parser-generated GFM inputs already exist as HAST
+// elements, while attacker-authored HTML is still an opaque `raw` node. The
+// stamp survives raw-tree rebuilding and is allowlisted by `rehypeSanitize`.
 function rehypeTaskIndex() {
   return (tree: { children?: unknown[]; [k: string]: unknown }) => {
     let i = 0;
@@ -66,7 +80,7 @@ function rehypeTaskIndex() {
         n.tagName === "input" &&
         n.properties?.type === "checkbox"
       ) {
-        n.properties = { ...n.properties, dataTaskIndex: i++ };
+        n.properties = { ...n.properties, acornTaskIndex: i++ };
       }
       n.children?.forEach(walk);
     };
@@ -287,7 +301,7 @@ function MarkdownImpl({
       img({ src, alt, title, width, height }) {
         const url = typeof src === "string" ? src : undefined;
         const image = (
-          <img
+          <RemoteImage
             src={url}
             alt={alt ?? ""}
             width={width}
@@ -322,27 +336,35 @@ function MarkdownImpl({
             />
           );
         }
-        // `rehypeTaskIndex` stamps this on each checkbox input during the
-        // HAST tree walk — a single-pass numbering that survives StrictMode's
-        // double-invocation of the React renderer.
-        const indexRaw = (props as { "data-task-index"?: unknown })[
-          "data-task-index"
-        ];
+        // `rehypeTaskIndex` stamps only parser-generated GFM checkboxes during
+        // the pre-raw HAST walk. Raw HTML checkboxes have no valid index and
+        // remain disabled.
+        const indexRaw = (props as { acornTaskIndex?: unknown })
+          .acornTaskIndex;
+        // rehype-sanitize may stringify the generated number. The camelCase
+        // HAST-only property is still trustworthy: HTML parsing lowercases an
+        // attacker-authored attribute before the sanitizer allowlist runs.
         const index =
           typeof indexRaw === "number"
             ? indexRaw
             : typeof indexRaw === "string"
               ? Number(indexRaw)
               : -1;
+        const isEditableTask = Number.isInteger(index) && index >= 0;
         return (
           <input
             type="checkbox"
             checked={!!checked}
+            disabled={!isEditableTask}
+            readOnly={!isEditableTask}
             onChange={(e) => {
-              if (!Number.isFinite(index) || index < 0) return;
+              if (!isEditableTask) return;
               onTaskToggle(index, e.currentTarget.checked);
             }}
-            className="mr-1 cursor-pointer align-middle acorn-check"
+            className={cn(
+              "mr-1 align-middle acorn-check",
+              isEditableTask && "cursor-pointer",
+            )}
           />
         );
       },
@@ -361,10 +383,11 @@ function MarkdownImpl({
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
           rehypePlugins={[
-            rehypeRaw,
             rehypeTaskIndex,
+            rehypeRaw,
             [rehypeSanitize, sanitizeSchema],
           ]}
+          urlTransform={markdownImageUrlTransform}
           components={components}
         >
           {content}

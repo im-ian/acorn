@@ -5,6 +5,7 @@ import {
   readDir,
   readTextFile,
   remove,
+  stat,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
@@ -117,8 +118,153 @@ export function validateThemeCss(css: string): ValidateResult {
 const STYLE_ELEMENT_ID = "acorn-theme";
 const USER_THEMES_DIR = "themes";
 const INSTALLED_METADATA_FILE = "catalog.json";
+const MAX_THEME_CATALOG_BYTES = 256 * 1024;
+const MAX_INSTALLED_THEME_METADATA_BYTES = 256 * 1024;
 const MAX_THEME_CSS_BYTES = 1_000_000;
 const THEME_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function normalizeCssSecurityTokens(css: string): string {
+  // Match CSS Syntax preprocessing before scanning. In particular, CRLF is
+  // one newline, which can be consumed as the optional terminator of a hex
+  // escape (for example `u\\72\r\nl` becomes `url`).
+  const input = css
+    .replace(/\r\n?|\f/g, "\n")
+    .replace(/\0/g, "\ufffd");
+  let normalized = "";
+  let index = 0;
+
+  const consumeEscape = (): string => {
+    index += 1; // Backslash.
+    if (index >= input.length) return "";
+
+    if (index < input.length && /[0-9a-f]/i.test(input[index])) {
+      const start = index;
+      while (index < input.length && index - start < 6) {
+        if (!/[0-9a-f]/i.test(input[index])) break;
+        index += 1;
+      }
+      const codePoint = Number.parseInt(input.slice(start, index), 16);
+      if (/[\t\n ]/.test(input[index] ?? "")) index += 1;
+      return codePoint === 0 ||
+        codePoint > 0x10ffff ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff)
+        ? "\ufffd"
+        : String.fromCodePoint(codePoint);
+    }
+
+    const escaped = input[index];
+    index += 1;
+    // A newline is not a valid escape outside a string. Separating adjacent
+    // identifiers is conservative and avoids manufacturing a false token.
+    return escaped === "\n" ? " " : escaped;
+  };
+
+  const consumeString = (quote: string): void => {
+    index += 1;
+    while (index < input.length) {
+      const current = input[index];
+      if (current === quote) {
+        index += 1;
+        return;
+      }
+      // An unescaped newline ends a CSS string as a bad-string token. Leave it
+      // for the outer scanner so following declarations are still inspected.
+      if (current === "\n") return;
+      if (current === "\\") {
+        if (input[index + 1] === "\n") {
+          index += 2;
+        } else {
+          consumeEscape();
+        }
+        continue;
+      }
+      index += 1;
+    }
+  };
+
+  while (index < input.length) {
+    const current = input[index];
+    if (current === '"' || current === "'") {
+      // String contents cannot create a request by themselves. Keep a token
+      // boundary, while still detecting an enclosing @import outside it.
+      normalized += " ";
+      consumeString(current);
+      continue;
+    }
+    if (current === "/" && input[index + 1] === "*") {
+      index += 2;
+      const end = input.indexOf("*/", index);
+      if (end < 0) break;
+      index = end + 2;
+      continue;
+    }
+    if (current === "\\") {
+      normalized += consumeEscape();
+      continue;
+    }
+    normalized += current;
+    index += 1;
+  }
+
+  return normalized;
+}
+
+function containsCatalogNetworkPrimitive(css: string): boolean {
+  const normalized = normalizeCssSecurityTokens(css);
+  return (
+    /(?:^|[^\w-])(?:url|src|image|(?:-webkit-)?image-set)\s*\(/i.test(
+      normalized,
+    ) || /@\s*import\b/i.test(normalized)
+  );
+}
+
+async function readBoundedResponseText(
+  response: Response,
+  maxBytes: number,
+  label: string,
+): Promise<string> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && /^\d+$/.test(contentLength)) {
+    const declaredBytes = Number(contentLength);
+    if (Number.isSafeInteger(declaredBytes) && declaredBytes > maxBytes) {
+      throw new Error(`${label} is too large`);
+    }
+  }
+
+  if (!response.body) {
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > maxBytes) {
+      throw new Error(`${label} is too large`);
+    }
+    return text;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`${label} is too large`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
 
 export function applyTheme(id: string, css: string): void {
   let styleEl = document.getElementById(STYLE_ELEMENT_ID) as
@@ -207,7 +353,12 @@ export async function fetchThemeCatalog(): Promise<ThemeCatalogEntry[]> {
   if (!response.ok) {
     throw new Error(`Theme catalog request failed: ${response.status}`);
   }
-  return parseThemeCatalog(await response.json());
+  const body = await readBoundedResponseText(
+    response,
+    MAX_THEME_CATALOG_BYTES,
+    "Theme catalog",
+  );
+  return parseThemeCatalog(JSON.parse(body));
 }
 
 async function ensureThemesDir(): Promise<string> {
@@ -231,23 +382,25 @@ function installedMetadataFromUnknown(value: unknown): InstalledThemeMetadata {
     value.schemaVersion !== 1 ||
     !isRecord(value.installed)
   ) {
-    return emptyInstalledMetadata();
+    throw new Error("Invalid installed theme metadata");
   }
 
   const installed: Record<string, InstalledCatalogTheme> = {};
   for (const [id, entry] of Object.entries(value.installed)) {
-    if (!THEME_ID_PATTERN.test(id) || !isRecord(entry)) continue;
     if (
+      !THEME_ID_PATTERN.test(id) ||
+      !isRecord(entry) ||
       typeof entry.label !== "string" ||
+      entry.label.trim().length === 0 ||
       !isThemeMode(entry.mode) ||
       !Number.isSafeInteger(entry.version) ||
       (entry.version as number) < 1 ||
       entry.file !== `${id}.css`
     ) {
-      continue;
+      throw new Error(`Invalid installed theme metadata for ${id}`);
     }
     installed[id] = {
-      label: entry.label,
+      label: entry.label.trim(),
       mode: entry.mode,
       version: entry.version as number,
       file: entry.file,
@@ -259,14 +412,21 @@ function installedMetadataFromUnknown(value: unknown): InstalledThemeMetadata {
 async function readInstalledMetadata(
   dir: string,
 ): Promise<InstalledThemeMetadata> {
-  try {
-    const path = await join(dir, INSTALLED_METADATA_FILE);
-    if (!(await exists(path))) return emptyInstalledMetadata();
-    return installedMetadataFromUnknown(JSON.parse(await readTextFile(path)));
-  } catch (error) {
-    console.warn("[acorn] failed to read installed theme metadata", error);
-    return emptyInstalledMetadata();
+  const path = await join(dir, INSTALLED_METADATA_FILE);
+  if (!(await exists(path))) return emptyInstalledMetadata();
+
+  const info = await stat(path);
+  if (!info.isFile || info.size > MAX_INSTALLED_THEME_METADATA_BYTES) {
+    throw new Error("Installed theme metadata is too large or not regular");
   }
+  const contents = await readTextFile(path);
+  if (
+    new TextEncoder().encode(contents).byteLength >
+    MAX_INSTALLED_THEME_METADATA_BYTES
+  ) {
+    throw new Error("Installed theme metadata is too large");
+  }
+  return installedMetadataFromUnknown(JSON.parse(contents));
 }
 
 async function writeInstalledMetadata(
@@ -274,7 +434,14 @@ async function writeInstalledMetadata(
   metadata: InstalledThemeMetadata,
 ): Promise<void> {
   const path = await join(dir, INSTALLED_METADATA_FILE);
-  await writeTextFile(path, `${JSON.stringify(metadata, null, 2)}\n`);
+  const contents = `${JSON.stringify(metadata, null, 2)}\n`;
+  if (
+    new TextEncoder().encode(contents).byteLength >
+    MAX_INSTALLED_THEME_METADATA_BYTES
+  ) {
+    throw new Error("Installed theme metadata is too large");
+  }
+  await writeTextFile(path, contents);
 }
 
 export async function loadUserThemes(): Promise<AcornTheme[]> {
@@ -293,7 +460,32 @@ export async function loadUserThemes(): Promise<AcornTheme[]> {
 
       const id = entry.name.replace(/\.css$/, "");
       const path = await join(dir, entry.name);
+      const installed = metadata.installed[id];
+
+      if (installed?.file === entry.name) {
+        const info = await stat(path);
+        if (!info.isFile || info.size > MAX_THEME_CSS_BYTES) {
+          console.warn(
+            `[acorn] skipping catalog theme ${entry.name}: file is too large or not regular`,
+          );
+          continue;
+        }
+      }
+
       const css = await readTextFile(path);
+
+      if (installed?.file === entry.name) {
+        try {
+          assertCatalogThemeCss(id, css);
+        } catch (error) {
+          console.warn(
+            `[acorn] skipping catalog theme ${entry.name}:`,
+            error,
+          );
+          continue;
+        }
+      }
+
       const result = validateThemeCss(css);
 
       if (!result.ok) {
@@ -305,7 +497,6 @@ export async function loadUserThemes(): Promise<AcornTheme[]> {
         continue;
       }
 
-      const installed = metadata.installed[id];
       themes.push({
         id,
         label: installed?.label ?? humanize(id),
@@ -329,6 +520,9 @@ export async function loadUserThemes(): Promise<AcornTheme[]> {
 function assertCatalogThemeCss(id: string, css: string): void {
   if (new TextEncoder().encode(css).byteLength > MAX_THEME_CSS_BYTES) {
     throw new Error(`Theme ${id} is too large`);
+  }
+  if (containsCatalogNetworkPrimitive(css)) {
+    throw new Error(`Theme ${id} cannot load external CSS resources`);
   }
   const validation = validateThemeCss(css);
   if (!validation.ok) {
@@ -357,7 +551,11 @@ export async function installCatalogTheme(
     throw new Error(`Theme download failed: ${response.status}`);
   }
 
-  const css = await response.text();
+  const css = await readBoundedResponseText(
+    response,
+    MAX_THEME_CSS_BYTES,
+    `Theme ${catalogTheme.id}`,
+  );
   assertCatalogThemeCss(catalogTheme.id, css);
 
   const dir = await ensureThemesDir();

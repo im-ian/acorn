@@ -132,7 +132,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
   # A read/write FIFO descriptor is held only by this wrapper. The watcher
   # closes its inherited copy and blocks on the read end, so wrapper exit is
   # delivered by kernel EOF without a polling process.
-  if ! _acorn_lifetime_dir=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/acorn-codex-watch.XXXXXX"); then
+  if ! _acorn_lifetime_dir=$(umask 077; mktemp -d "$ACORN_AGENT_WRAPPER_DIR/codex-session.XXXXXX"); then
     _acorn_run_codex "$@"
     exit $?
   fi
@@ -231,6 +231,9 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
   exec 9>&-
 
   if [ -n "${ACORN_CODEX_WATCHER_PID-}" ]; then
+    # The watcher owns a `tail | while` pipeline. Stop its direct children
+    # first so they cannot survive the wrapper as orphaned background jobs.
+    pkill -TERM -P "$ACORN_CODEX_WATCHER_PID" >/dev/null 2>&1 || true
     kill "$ACORN_CODEX_WATCHER_PID" >/dev/null 2>&1 || true
     wait "$ACORN_CODEX_WATCHER_PID" 2>/dev/null || true
   fi
@@ -357,7 +360,7 @@ if [ "$raw_contract" = "1" ]; then
   fi
   printf '%s' "$input" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
     -H 'Content-Type: application/json' \
-    -H "X-Acorn-Agent-Hook-Token: $hook_token" \
+    -H @/dev/fd/3 \
     -H 'X-Acorn-Agent-Hook-Provider: codex' \
     -H "X-Acorn-Agent-Hook-Session-Id: $ACORN_AGENT_HOOK_SESSION_ID" \
     -H "X-Acorn-Agent-Hook-Source: $source" \
@@ -365,7 +368,9 @@ if [ "$raw_contract" = "1" ]; then
     -H "X-Acorn-Codex-Version: ${ACORN_CODEX_VERSION-unknown}" \
     -H "X-Acorn-Codex-Native-Hooks-Enabled: ${ACORN_CODEX_NATIVE_HOOKS_ENABLED-0}" \
     --data-binary @- \
-    "$hook_url" >/dev/null 2>&1 || _acorn_spool_event
+    "$hook_url" 3<<EOF >/dev/null 2>&1 || _acorn_spool_event
+X-Acorn-Agent-Hook-Token: $hook_token
+EOF
   exit 0
 fi
 
@@ -389,9 +394,11 @@ if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
 fi
 printf '%s' "$payload" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
   -H 'Content-Type: application/json' \
-  -H "X-Acorn-Agent-Hook-Token: $hook_token" \
+  -H @/dev/fd/3 \
   --data-binary @- \
-  "$hook_url" >/dev/null 2>&1 || _acorn_spool_event
+  "$hook_url" 3<<EOF >/dev/null 2>&1 || _acorn_spool_event
+X-Acorn-Agent-Hook-Token: $hook_token
+EOF
 "#;
 
 // Claude Code wrapper.
@@ -546,12 +553,14 @@ fi
 
 printf '%s' "$input" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
   -H 'Content-Type: application/json' \
-  -H "X-Acorn-Agent-Hook-Token: $hook_token" \
+  -H @/dev/fd/3 \
   -H 'X-Acorn-Agent-Hook-Provider: claude' \
   -H "X-Acorn-Agent-Hook-Session-Id: $ACORN_AGENT_HOOK_SESSION_ID" \
   -H 'X-Acorn-Agent-Hook-Source: native' \
   --data-binary @- \
-  "$hook_url" >/dev/null 2>&1 || _acorn_spool_event
+  "$hook_url" 3<<EOF >/dev/null 2>&1 || _acorn_spool_event
+X-Acorn-Agent-Hook-Token: $hook_token
+EOF
 "#;
 
 const ANTIGRAVITY_WRAPPER_BODY: &str = r#"#!/bin/sh
@@ -885,11 +894,13 @@ if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
   _acorn_spool_event
   exit 0
 fi
-curl -sf --connect-timeout 1 --max-time 1 -X POST \
+printf '%s' "$payload" | curl -sf --connect-timeout 1 --max-time 1 -X POST \
   -H 'Content-Type: application/json' \
-  -H "X-Acorn-Agent-Hook-Token: $hook_token" \
-  -d "$payload" \
-  "$hook_url" >/dev/null 2>&1 || _acorn_spool_event
+  -H @/dev/fd/3 \
+  --data-binary @- \
+  "$hook_url" 3<<EOF >/dev/null 2>&1 || _acorn_spool_event
+X-Acorn-Agent-Hook-Token: $hook_token
+EOF
 "#;
 
 pub fn ensure_agent_wrapper_dir() -> io::Result<PathBuf> {
@@ -2308,6 +2319,8 @@ done
         assert!(wrapper.contains(
             "unset CODEX_TUI_RECORD_SESSION CODEX_TUI_SESSION_LOG_PATH ACORN_CODEX_NATIVE_HOOKS_ENABLED"
         ));
+        assert!(wrapper.contains("mktemp -d \"$ACORN_AGENT_WRAPPER_DIR/codex-session.XXXXXX\""));
+        assert!(!wrapper.contains("${TMPDIR:-/tmp}/acorn-codex-session"));
         assert!(wrapper.contains("ACORN_AGENT_HOOK_URL"));
         assert!(wrapper.contains("\"$_acorn_notify\" \"\" jsonl_user"));
         assert!(wrapper.contains("\"$_acorn_notify\" \"\" jsonl_task"));
@@ -2873,6 +2886,63 @@ done
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn codex_wrapper_uses_and_cleans_up_a_private_session_log() {
+        let base = ScratchDir::new("codex-private-log");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        let public_tmp = base.path().join("public-tmp");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&public_tmp).unwrap();
+        let capture = base.path().join("capture.txt");
+        write_executable(
+            &real_dir.join("codex"),
+            r#"#!/bin/sh
+printf '%s\n' "$CODEX_TUI_SESSION_LOG_PATH" > "$ACORN_TEST_CAPTURE"
+(stat -f %Lp "$CODEX_TUI_SESSION_LOG_PATH" 2>/dev/null || stat -c %a "$CODEX_TUI_SESSION_LOG_PATH") >> "$ACORN_TEST_CAPTURE"
+(stat -f %Lp "${CODEX_TUI_SESSION_LOG_PATH%/*}" 2>/dev/null || stat -c %a "${CODEX_TUI_SESSION_LOG_PATH%/*}") >> "$ACORN_TEST_CAPTURE"
+printf '{}\n' >> "$CODEX_TUI_SESSION_LOG_PATH"
+"#,
+        )
+        .unwrap();
+
+        let path = format!(
+            "{}:{}:/usr/bin:/bin",
+            wrapper_dir.display(),
+            real_dir.display()
+        );
+        let output = Command::new(wrapper_dir.join("codex"))
+            .env("PATH", path)
+            .env("TMPDIR", &public_tmp)
+            .env("ACORN_AGENT_WRAPPER_DIR", &wrapper_dir)
+            .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+            .env("ACORN_AGENT_HOOK_URL", "http://127.0.0.1:9/agent-hook")
+            .env("ACORN_AGENT_HOOK_TOKEN", "test-token")
+            .env("ACORN_TEST_CAPTURE", &capture)
+            .env_remove("CODEX_TUI_SESSION_LOG_PATH")
+            .output()
+            .expect("run Codex wrapper");
+
+        assert!(
+            output.status.success(),
+            "wrapper failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let captured = fs::read_to_string(&capture).expect("read capture");
+        let mut lines = captured.lines();
+        let log_path = PathBuf::from(lines.next().expect("captured log path"));
+        assert!(log_path.starts_with(&wrapper_dir));
+        assert!(!log_path.starts_with(&public_tmp));
+        assert_eq!(lines.next(), Some("600"));
+        assert_eq!(lines.next(), Some("700"));
+        assert!(!log_path.exists(), "generated log should be removed");
+        assert!(
+            !log_path.parent().expect("log parent").exists(),
+            "generated private directory should be removed"
+        );
+    }
+
     #[test]
     fn wrappers_skip_their_own_dir_when_wrapper_env_is_absent() {
         let base = ScratchDir::new("self-skip");
@@ -3318,6 +3388,92 @@ done
             // Env fallback stays for the no-file case.
             assert!(notify.contains("hook_url=\"${ACORN_AGENT_HOOK_URL-}\""));
             assert!(notify.contains("hook_token=\"${ACORN_AGENT_HOOK_TOKEN-}\""));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn notify_scripts_stream_hook_token_to_curl_header_fd() {
+        use std::io::Write;
+        use std::process::Stdio;
+
+        const HOOK_URL: &str = "http://127.0.0.1:12345/agent-hook";
+        const HOOK_TOKEN: &str = "sentinel-hook-token-never-in-argv";
+
+        let base = ScratchDir::new("notify-token-stdin");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        write_agent_hook_endpoint_at(&dir, HOOK_URL, HOOK_TOKEN).unwrap();
+
+        let fake_bin = base.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_executable(
+            &fake_bin.join("curl"),
+            r#"#!/bin/sh
+printf '%s\n' "$@" > "$ACORN_TEST_CURL_ARGV"
+cat <&3 > "$ACORN_TEST_CURL_STDIN"
+cat >/dev/null
+"#,
+        )
+        .unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", fake_bin.display());
+        for (name, arg, input) in [
+            ("acorn-codex-notify", Some("start"), ""),
+            (
+                "acorn-claude-notify",
+                None,
+                r#"{"hook_event_name":"SessionStart"}"#,
+            ),
+            ("acorn-antigravity-notify", Some("start"), ""),
+        ] {
+            let argv_capture = base.path().join(format!("{name}.argv"));
+            let stdin_capture = base.path().join(format!("{name}.stdin"));
+            let mut command = Command::new(dir.join(name));
+            command
+                .env("PATH", &path)
+                .env("ACORN_AGENT_WRAPPER_DIR", &dir)
+                .env("ACORN_AGENT_HOOK_SESSION_ID", "session-1")
+                .env("ACORN_TEST_CURL_ARGV", &argv_capture)
+                .env("ACORN_TEST_CURL_STDIN", &stdin_capture)
+                .env_remove("ACORN_AGENT_HOOK_URL")
+                .env_remove("ACORN_AGENT_HOOK_TOKEN")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            if let Some(arg) = arg {
+                command.arg(arg);
+            }
+
+            let mut child = command.spawn().expect("run notify script");
+            child
+                .stdin
+                .take()
+                .expect("notify stdin")
+                .write_all(input.as_bytes())
+                .expect("write notify input");
+            let output = child.wait_with_output().expect("wait for notify script");
+            assert!(
+                output.status.success(),
+                "{name} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let argv = fs::read_to_string(&argv_capture).expect("read curl argv");
+            let header_stream =
+                fs::read_to_string(&stdin_capture).expect("read curl header stream");
+            assert!(
+                !argv.contains(HOOK_TOKEN),
+                "{name} exposed the hook token in curl argv: {argv}"
+            );
+            assert!(
+                argv.lines().any(|arg| arg == "@/dev/fd/3"),
+                "{name} must ask curl to read the secret header from a descriptor: {argv}"
+            );
+            assert_eq!(
+                header_stream,
+                format!("X-Acorn-Agent-Hook-Token: {HOOK_TOKEN}\n"),
+                "{name} must stream the token header to curl without argv exposure"
+            );
         }
     }
 

@@ -13,7 +13,7 @@
 //! which is a single short RPC round-trip per event and avoids managing two
 //! per-session sockets on the app side.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,6 +28,7 @@ use uuid::Uuid;
 use crate::pty_output::{self, PtyOutputRouter};
 use acorn_daemon::protocol::{ClientRole, Hello, StreamAttach, StreamFrame};
 use acorn_daemon::socket;
+use acorn_daemon::wire::read_response_frame_line;
 use acorn_pty::{transition_shell_hint, ShellHint};
 
 /// Per-session attachment handle. Dropping the handle does not stop the
@@ -174,7 +175,7 @@ pub fn attach<R: Runtime>(
     // check already succeeded, the rest is telemetry.
     let mut reader = BufReader::new(conn);
     let mut buf = String::new();
-    reader.read_line(&mut buf)?;
+    read_response_frame_line(&mut reader, &mut buf)?;
 
     let attach = StreamAttach {
         session_id,
@@ -234,8 +235,7 @@ fn pump_loop<R: Runtime>(
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        line.clear();
-        match reader.read_line(&mut line) {
+        match read_response_frame_line(&mut reader, &mut line) {
             Ok(0) => {
                 // Daemon closed the connection without an Exit frame —
                 // could be a daemon shutdown or a crash. Emit an Exit
@@ -265,8 +265,9 @@ fn pump_loop<R: Runtime>(
         let frame: StreamFrame = match serde_json::from_str(line.trim()) {
             Ok(f) => f,
             Err(err) => {
-                tracing::warn!(%session_id, error = %err, raw = %line.trim(), "bad daemon stream frame");
-                continue;
+                log_bad_daemon_stream_frame(session_id, line.len(), &err);
+                let _ = app.emit(&exit_event, ExitPayload { code: None });
+                break;
             }
         };
         match frame {
@@ -297,9 +298,39 @@ fn pump_loop<R: Runtime>(
     registry.drop_attachment_if_current(&session_id, &handle);
 }
 
+fn log_bad_daemon_stream_frame(session_id: Uuid, frame_bytes: usize, error: &serde_json::Error) {
+    // Protocol frames can contain terminal output and other sensitive data.
+    // Keep malformed payload bytes out of logs and fail the attachment closed
+    // after the caller records this bounded diagnostic.
+    tracing::warn!(%session_id, %frame_bytes, error = %error, "bad daemon stream frame");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    #[derive(Clone, Default)]
+    struct SharedLogWriter(Arc<StdMutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLogWriter {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
 
     fn test_attachment() -> Arc<StreamAttachment> {
         Arc::new(StreamAttachment {
@@ -350,5 +381,28 @@ mod tests {
         assert!(registry.attachment_matches_output_token(&id, Some(7)));
         assert!(!registry.attachment_matches_output_token(&id, Some(8)));
         assert!(registry.attachment_matches_output_token(&id, None));
+    }
+
+    #[test]
+    fn malformed_frame_log_omits_payload_contents() {
+        let raw = "{\"secret\":\"sentinel-escape-\u{1b}[31m";
+        let error = serde_json::from_str::<StreamFrame>(raw).unwrap_err();
+        let writer = SharedLogWriter::default();
+        let captured = Arc::clone(&writer.0);
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(writer)
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            log_bad_daemon_stream_frame(Uuid::nil(), raw.len(), &error);
+        });
+
+        let output = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+        assert!(output.contains("bad daemon stream frame"));
+        assert!(output.contains(&format!("frame_bytes={}", raw.len())));
+        assert!(!output.contains("sentinel-escape"));
+        assert!(!output.contains("[31m"));
     }
 }

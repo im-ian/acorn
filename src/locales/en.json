@@ -1103,6 +1103,9 @@
     "openInBrowser": "Open in browser",
     "close": "Close"
   },
+  "remoteImage": {
+    "load": "Load remote image"
+  },
   "mediaViewer": {
     "zoomControls": "Image zoom controls",
     "zoomIn": "Zoom in",
