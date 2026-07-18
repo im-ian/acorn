@@ -1,7 +1,11 @@
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -21,6 +25,16 @@ const EVENT_FS_CHANGED: &str = "acorn:fs-changed";
 const WATCH_BATCH_WINDOW: Duration = Duration::from_millis(75);
 const WATCH_EVENT_CAP: usize = 256;
 const WATCH_THROTTLE_GAP: Duration = Duration::from_millis(200);
+const WATCH_QUEUE_CAPACITY: usize = 1024;
+const MAX_GITIGNORE_BYTES: u64 = 1024 * 1024;
+const MAX_DIRECTORY_ENTRIES: usize = 10_000;
+const MAX_GITIGNORE_LINES: usize = 10_000;
+// Diff stats are informational. Treat unusually large repository inputs as
+// unknown instead of reading entire files or blobs into memory just to count.
+const MAX_DIFF_STAT_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_DIFF_STAT_LINES: u32 = 200_000;
+const MAX_DIFF_STAT_PATHS: usize = 5_000;
+const MAX_DIFF_STAT_CALLBACK_LINES: u32 = 500_000;
 
 const SUPERVISOR_INITIAL_BACKOFF: Duration = Duration::from_millis(800);
 const SUPERVISOR_MAX_BACKOFF: Duration = Duration::from_millis(12_800);
@@ -439,14 +453,65 @@ fn find_repo_root(start: &Path) -> Option<PathBuf> {
 fn build_gitignore(repo_root: &Path) -> Gitignore {
     let mut b = GitignoreBuilder::new(repo_root);
     let root_ignore = repo_root.join(".gitignore");
-    if root_ignore.exists() {
-        let _ = b.add(root_ignore);
-    }
+    add_bounded_gitignore_file(&mut b, &root_ignore);
     let exclude = repo_root.join(".git").join("info").join("exclude");
-    if exclude.exists() {
-        let _ = b.add(exclude);
-    }
+    add_bounded_gitignore_file(&mut b, &exclude);
     b.build().unwrap_or_else(|_| Gitignore::empty())
+}
+
+fn add_bounded_gitignore_file(builder: &mut GitignoreBuilder, path: &Path) {
+    // Repositories are untrusted input. Never let a linked special file (for
+    // example `/dev/zero`) or an oversized ignore file block the explorer.
+    let Ok(link_meta) = std::fs::symlink_metadata(path) else {
+        return;
+    };
+    if link_meta.file_type().is_symlink()
+        || !link_meta.is_file()
+        || link_meta.len() > MAX_GITIGNORE_BYTES
+    {
+        return;
+    }
+
+    let Ok(file) = File::open(path) else {
+        return;
+    };
+    let Ok(open_meta) = file.metadata() else {
+        return;
+    };
+    if !open_meta.is_file() || open_meta.len() > MAX_GITIGNORE_BYTES {
+        return;
+    }
+
+    // Re-check the byte limit while reading because the file can grow after
+    // metadata is inspected. Parsing happens only after all limits pass, so a
+    // rejected file cannot leave a partially populated matcher behind.
+    let mut bytes = Vec::with_capacity(open_meta.len() as usize);
+    if file
+        .take(MAX_GITIGNORE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() as u64 > MAX_GITIGNORE_BYTES
+    {
+        return;
+    }
+    let Ok(contents) = String::from_utf8(bytes) else {
+        return;
+    };
+    let lines: Vec<&str> = contents.lines().collect();
+    if lines.len() > MAX_GITIGNORE_LINES {
+        return;
+    }
+
+    for (index, line) in lines.into_iter().enumerate() {
+        // Match the ignore crate's file parser, including its first-line BOM
+        // handling, while retaining the source path in parse diagnostics.
+        let line = if index == 0 {
+            line.trim_start_matches('\u{feff}')
+        } else {
+            line
+        };
+        let _ = builder.add_line(Some(path.to_path_buf()), line);
+    }
 }
 
 fn is_hidden(name: &str) -> bool {
@@ -476,6 +541,22 @@ fn fs_list_dir_scoped(
     show_hidden: bool,
     respect_gitignore: bool,
 ) -> AppResult<ListResult> {
+    fs_list_dir_scoped_with_limit(
+        scope,
+        path,
+        show_hidden,
+        respect_gitignore,
+        MAX_DIRECTORY_ENTRIES,
+    )
+}
+
+fn fs_list_dir_scoped_with_limit(
+    scope: &FsScope,
+    path: String,
+    show_hidden: bool,
+    respect_gitignore: bool,
+    max_entries: usize,
+) -> AppResult<ListResult> {
     let dir = scope.authorize_existing(Path::new(&path))?.resolved;
     if !dir.is_dir() {
         return Err(AppError::InvalidPath(format!("not a directory: {path}")));
@@ -484,7 +565,12 @@ fn fs_list_dir_scoped(
     let gi = repo_root.as_deref().map(build_gitignore);
 
     let mut entries: Vec<FileEntry> = Vec::new();
-    for item in std::fs::read_dir(&dir)? {
+    for (index, item) in std::fs::read_dir(&dir)?.enumerate() {
+        if index >= max_entries {
+            return Err(AppError::Other(format!(
+                "directory contains more than {max_entries} entries"
+            )));
+        }
         let item = item?;
         let p = item.path();
         let name = match p.file_name().and_then(|n| n.to_str()) {
@@ -676,28 +762,8 @@ fn fs_open_default_scoped(scope: &FsScope, path: String) -> AppResult<()> {
     if !p.exists() {
         return Err(AppError::InvalidPath(format!("missing: {path}")));
     }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&scoped.requested)
-            .spawn()
-            .map_err(|e| AppError::Other(format!("open failed: {e}")))?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&scoped.requested)
-            .spawn()
-            .map_err(|e| AppError::Other(format!("xdg-open failed: {e}")))?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", ""])
-            .arg(&scoped.requested)
-            .spawn()
-            .map_err(|e| AppError::Other(format!("start failed: {e}")))?;
-    }
+    tauri_plugin_opener::open_path(&scoped.resolved, None::<&str>)
+        .map_err(|e| AppError::Other(format!("open failed: {e}")))?;
     Ok(())
 }
 
@@ -835,6 +901,11 @@ fn fs_git_diff_stats_scoped(
     repo_root: String,
     entries: Vec<GitDiffStatsRequest>,
 ) -> AppResult<HashMap<String, GitDiffStatsEntry>> {
+    if entries.len() > MAX_DIFF_STAT_PATHS {
+        return Err(AppError::Other(format!(
+            "diff stat path limit exceeded (maximum {MAX_DIFF_STAT_PATHS})"
+        )));
+    }
     let root = scope.authorize_existing(Path::new(&repo_root))?.resolved;
     if !root.exists() {
         return Err(AppError::InvalidPath(format!("missing: {repo_root}")));
@@ -883,7 +954,12 @@ fn fs_git_diff_stats_scoped(
 
     // Untracked / freshly-added: line count of the working-tree file.
     for (abs, path) in added {
-        let additions = std::fs::read(&path).map(|b| count_lines(&b)).unwrap_or(0);
+        let additions = count_file_lines_bounded(&path).ok_or_else(|| {
+            AppError::Other(format!(
+                "diff stats unavailable for oversized or unreadable file: {}",
+                path.display()
+            ))
+        })?;
         out.insert(
             abs,
             GitDiffStatsEntry {
@@ -899,9 +975,12 @@ fn fs_git_diff_stats_scoped(
         let deletions = head_tree
             .as_ref()
             .and_then(|t| t.get_path(Path::new(&rel)).ok())
-            .and_then(|e| e.to_object(&repo).ok())
-            .and_then(|o| o.as_blob().map(|b| count_lines(b.content())))
-            .unwrap_or(0);
+            .and_then(|e| count_blob_lines_bounded(&repo, e.id()))
+            .ok_or_else(|| {
+                AppError::Other(format!(
+                    "diff stats unavailable for oversized or unreadable blob: {rel}"
+                ))
+            })?;
         out.insert(
             abs,
             GitDiffStatsEntry {
@@ -915,43 +994,73 @@ fn fs_git_diff_stats_scoped(
     // pathspec, fan out via `foreach` line callbacks per delta path.
     if !diffable.is_empty() {
         let mut opts = git2::DiffOptions::new();
-        opts.include_untracked(true).recurse_untracked_dirs(false);
+        opts.include_untracked(true)
+            .recurse_untracked_dirs(false)
+            .disable_pathspec_match(true)
+            .max_size(MAX_DIFF_STAT_FILE_BYTES as i64);
         for (_, rel) in &diffable {
             opts.pathspec(rel);
         }
         match repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts)) {
             Ok(diff) => {
-                let mut per_path: HashMap<String, (u32, u32)> = HashMap::new();
+                let per_path: RefCell<HashMap<String, (u32, u32)>> = RefCell::new(HashMap::new());
+                let current_path: RefCell<Option<String>> = RefCell::new(None);
+                let mut callback_lines = 0u32;
+                let mut limit_hit = false;
                 let foreach_result = diff.foreach(
-                    &mut |_delta, _progress| true,
-                    None,
-                    None,
-                    Some(&mut |delta, _hunk, line| {
+                    &mut |delta, _progress| {
                         let rel = delta
                             .new_file()
                             .path()
                             .or_else(|| delta.old_file().path())
-                            .and_then(|p| p.to_str())
-                            .unwrap_or("")
-                            .to_string();
-                        if rel.is_empty() {
-                            return true;
+                            .and_then(|path| path.to_str())
+                            .filter(|path| !path.is_empty())
+                            .map(str::to_owned);
+                        if let Some(rel) = &rel {
+                            per_path.borrow_mut().entry(rel.clone()).or_default();
                         }
-                        let entry = per_path.entry(rel).or_default();
-                        match line.origin() {
-                            '+' => entry.0 = entry.0.saturating_add(1),
-                            '-' => entry.1 = entry.1.saturating_add(1),
-                            _ => {}
+                        *current_path.borrow_mut() = rel;
+                        true
+                    },
+                    None,
+                    None,
+                    Some(&mut |_delta, _hunk, line| {
+                        callback_lines = callback_lines.saturating_add(1);
+                        if callback_lines > MAX_DIFF_STAT_CALLBACK_LINES {
+                            limit_hit = true;
+                            return false;
+                        }
+                        let current_path = current_path.borrow();
+                        let Some(rel) = current_path.as_deref() else {
+                            return true;
+                        };
+                        let mut counts = per_path.borrow_mut();
+                        let Some(entry) = counts.get_mut(rel) else {
+                            return true;
+                        };
+                        let changed_line = matches!(line.origin(), '+' | '-');
+                        if changed_line && entry.0.saturating_add(entry.1) >= MAX_DIFF_STAT_LINES {
+                            limit_hit = true;
+                            return false;
+                        } else {
+                            match line.origin() {
+                                '+' => entry.0 = entry.0.saturating_add(1),
+                                '-' => entry.1 = entry.1.saturating_add(1),
+                                _ => {}
+                            }
                         }
                         true
                     }),
                 );
-                if let Err(err) = foreach_result {
-                    // Partial walk: per_path holds whatever landed before the
-                    // error. Surface so callers can see zero counts are not
-                    // "no changes" but "we lost track halfway".
-                    tracing::warn!(error = %err, "diff foreach interrupted; stats may be partial");
+                if limit_hit {
+                    return Err(AppError::Other(format!(
+                        "diff stat line limit exceeded (maximum {MAX_DIFF_STAT_LINES} per file, {MAX_DIFF_STAT_CALLBACK_LINES} total callbacks)"
+                    )));
                 }
+                if let Err(err) = foreach_result {
+                    return Err(err.into());
+                }
+                let per_path = per_path.into_inner();
                 for (abs, rel) in diffable {
                     let (a, d) = per_path.get(&rel).copied().unwrap_or((0, 0));
                     out.insert(
@@ -964,16 +1073,7 @@ fn fs_git_diff_stats_scoped(
                 }
             }
             Err(err) => {
-                tracing::warn!(error = %err, "diff_tree_to_workdir_with_index failed; diff stats zeroed");
-                for (abs, _rel) in diffable {
-                    out.insert(
-                        abs,
-                        GitDiffStatsEntry {
-                            additions: 0,
-                            deletions: 0,
-                        },
-                    );
-                }
+                return Err(err.into());
             }
         }
     }
@@ -981,15 +1081,90 @@ fn fs_git_diff_stats_scoped(
     Ok(out)
 }
 
-fn count_lines(bytes: &[u8]) -> u32 {
-    if bytes.is_empty() {
-        return 0;
+fn count_file_lines_bounded(path: &Path) -> Option<u32> {
+    let link_meta = std::fs::symlink_metadata(path).ok()?;
+    if link_meta.file_type().is_symlink()
+        || !link_meta.is_file()
+        || link_meta.len() > MAX_DIFF_STAT_FILE_BYTES
+    {
+        return None;
     }
-    let mut n = bytes.iter().filter(|&&b| b == b'\n').count() as u32;
-    if bytes.last() != Some(&b'\n') {
-        n += 1;
+
+    let file = File::open(path).ok()?;
+    let open_meta = file.metadata().ok()?;
+    if !open_meta.is_file() || open_meta.len() > MAX_DIFF_STAT_FILE_BYTES {
+        return None;
     }
-    n
+    count_lines_bounded(file, MAX_DIFF_STAT_FILE_BYTES, MAX_DIFF_STAT_LINES)
+        .ok()
+        .flatten()
+}
+
+fn count_blob_lines_bounded(repo: &Repository, oid: git2::Oid) -> Option<u32> {
+    // Inspect the object header before `find_blob` asks libgit2 to materialize
+    // the blob contents.
+    let odb = repo.odb().ok()?;
+    let (size, kind) = odb.read_header(oid).ok()?;
+    if kind != git2::ObjectType::Blob || u64::try_from(size).ok()? > MAX_DIFF_STAT_FILE_BYTES {
+        return None;
+    }
+    let blob = repo.find_blob(oid).ok()?;
+    if u64::try_from(blob.content().len()).ok()? > MAX_DIFF_STAT_FILE_BYTES {
+        return None;
+    }
+    count_lines_bounded(
+        blob.content(),
+        MAX_DIFF_STAT_FILE_BYTES,
+        MAX_DIFF_STAT_LINES,
+    )
+    .ok()
+    .flatten()
+}
+
+fn count_lines_bounded<R: Read>(
+    reader: R,
+    max_bytes: u64,
+    max_lines: u32,
+) -> std::io::Result<Option<u32>> {
+    let mut reader = reader.take(max_bytes.saturating_add(1));
+    let mut buffer = [0u8; 64 * 1024];
+    let mut bytes_read = 0u64;
+    let mut line_count = 0u32;
+    let mut saw_bytes = false;
+    let mut last_was_newline = false;
+
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        bytes_read = bytes_read.saturating_add(read as u64);
+        if bytes_read > max_bytes {
+            return Ok(None);
+        }
+        saw_bytes = true;
+        last_was_newline = buffer[read - 1] == b'\n';
+        let newlines = buffer[..read].iter().filter(|&&byte| byte == b'\n').count() as u32;
+        let Some(next_count) = line_count.checked_add(newlines) else {
+            return Ok(None);
+        };
+        if next_count > max_lines {
+            return Ok(None);
+        }
+        line_count = next_count;
+    }
+
+    if saw_bytes && !last_was_newline {
+        let Some(next_count) = line_count.checked_add(1) else {
+            return Ok(None);
+        };
+        if next_count > max_lines {
+            return Ok(None);
+        }
+        line_count = next_count;
+    }
+
+    Ok(Some(line_count))
 }
 
 fn classify_status(s: Status) -> &'static str {
@@ -1088,11 +1263,34 @@ fn fs_prepare_asset_scoped<R: Runtime>(
     if !scoped.resolved.is_file() {
         return Err(AppError::InvalidPath(format!("not a file: {path}")));
     }
+    validate_embeddable_asset(&scoped.requested, &scoped.resolved)?;
     let meta = std::fs::metadata(&scoped.resolved)?;
     app.asset_protocol_scope()
         .allow_file(&scoped.resolved)
         .map_err(|e| AppError::Other(format!("asset scope failed: {e}")))?;
     Ok(PrepareAssetResult { size: meta.len() })
+}
+
+fn validate_embeddable_asset(requested_path: &Path, resolved_path: &Path) -> AppResult<()> {
+    // The frontend chooses its renderer from the requested filename, so a
+    // symlink must not change whether the backend enforces PDF validation.
+    let is_pdf = requested_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"));
+    if !is_pdf {
+        return Ok(());
+    }
+
+    use std::io::Read;
+    let mut header = [0u8; 5];
+    let bytes_read = std::fs::File::open(resolved_path)?.read(&mut header)?;
+    if bytes_read != header.len() || header != *b"%PDF-" {
+        return Err(AppError::InvalidPath(
+            "refusing to embed a file with an invalid PDF header".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn fs_read_file_scoped(scope: &FsScope, path: String) -> AppResult<ReadFileResult> {
@@ -1152,12 +1350,20 @@ fn fs_git_diff_lines_scoped(scope: &FsScope, path: String) -> AppResult<Vec<Line
     let target = PathBuf::from(&path);
     let scoped = scope.authorize_existing(&target)?;
     let target = scoped.resolved;
-    if !target.is_file() {
+    let target_metadata = std::fs::metadata(&target)?;
+    if !target_metadata.is_file() {
         return Ok(Vec::new());
+    }
+    if target_metadata.len() > MAX_DIFF_STAT_FILE_BYTES {
+        return Err(AppError::Other(format!(
+            "diff line byte limit exceeded for {} (maximum {MAX_DIFF_STAT_FILE_BYTES} bytes)",
+            target.display()
+        )));
     }
     let repo = match Repository::discover(&target) {
         Ok(r) => r,
-        Err(_) => return Ok(Vec::new()),
+        Err(err) if err.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
     };
     let workdir = match repo.workdir() {
         Some(p) => p.to_path_buf(),
@@ -1169,18 +1375,55 @@ fn fs_git_diff_lines_scoped(scope: &FsScope, path: String) -> AppResult<Vec<Line
     };
 
     let mut opts = git2::DiffOptions::new();
-    opts.pathspec(&rel).context_lines(0).include_untracked(true);
-    let tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-    let diff = match repo.diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts)) {
-        Ok(d) => d,
-        Err(_) => return Ok(Vec::new()),
+    opts.pathspec(&rel)
+        .disable_pathspec_match(true)
+        .context_lines(0)
+        .include_untracked(true)
+        .recurse_untracked_dirs(false)
+        .max_size(MAX_DIFF_STAT_FILE_BYTES as i64);
+    let tree = match repo.head() {
+        Ok(head) => Some(head.peel_to_tree()?),
+        Err(err)
+            if matches!(
+                err.code(),
+                git2::ErrorCode::NotFound | git2::ErrorCode::UnbornBranch
+            ) =>
+        {
+            None
+        }
+        Err(err) => return Err(err.into()),
     };
+    let diff = repo.diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))?;
+    if diff.deltas().any(|delta| {
+        delta.old_file().size() > MAX_DIFF_STAT_FILE_BYTES
+            || delta.new_file().size() > MAX_DIFF_STAT_FILE_BYTES
+    }) {
+        return Err(AppError::Other(format!(
+            "diff line byte limit exceeded for {} (maximum {MAX_DIFF_STAT_FILE_BYTES} bytes)",
+            target.display()
+        )));
+    }
 
-    let mut out: Vec<LineDiffEntry> = Vec::new();
     let mut adds: Vec<u32> = Vec::new();
-    let mut dels: Vec<u32> = Vec::new();
-    let mut current_marker: Option<u32> = None;
-    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+    let mut dels = std::collections::HashSet::new();
+    let mut callback_lines = 0u32;
+    let mut changed_lines = 0u32;
+    let mut limit_hit = false;
+    let print_result = diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        callback_lines = callback_lines.saturating_add(1);
+        if callback_lines > MAX_DIFF_STAT_CALLBACK_LINES {
+            limit_hit = true;
+            return false;
+        }
+
+        if matches!(line.origin(), '+' | '-') {
+            if changed_lines >= MAX_DIFF_STAT_LINES {
+                limit_hit = true;
+                return false;
+            }
+            changed_lines = changed_lines.saturating_add(1);
+        }
+
         match line.origin() {
             '+' => {
                 if let Some(n) = line.new_lineno() {
@@ -1189,33 +1432,31 @@ fn fs_git_diff_lines_scoped(scope: &FsScope, path: String) -> AppResult<Vec<Line
             }
             '-' => {
                 if let Some(n) = line.old_lineno() {
-                    dels.push(n);
-                }
-                // Track the new-side anchor for "modified" classification.
-                if current_marker.is_none() {
-                    current_marker = line.new_lineno();
+                    dels.insert(n);
                 }
             }
-            _ => {
-                current_marker = None;
-            }
+            _ => {}
         }
         true
-    })
-    .ok();
+    });
+    if limit_hit {
+        return Err(AppError::Other(format!(
+            "diff line limit exceeded (maximum {MAX_DIFF_STAT_LINES} changed lines, {MAX_DIFF_STAT_CALLBACK_LINES} total callbacks)"
+        )));
+    }
+    print_result?;
 
     // Classify: a deleted-only hunk shows as a "deleted" anchor on the
     // line immediately AFTER the deletion; an added line that follows
     // a deletion in the same hunk shows as "modified"; pure additions
     // show as "added".
-    let del_set: std::collections::HashSet<u32> = dels.iter().copied().collect();
-    let add_set: std::collections::HashSet<u32> = adds.iter().copied().collect();
+    let mut out = Vec::with_capacity(adds.len().saturating_add(1));
     for n in adds.iter().copied() {
         // Heuristic: if the prior new-line was a deletion anchor or a
         // contiguous addition started at n, mark as modified vs added.
         // We classify all adds as `added` here; the frontend collapses
         // the visual to a single bar so the distinction is cosmetic.
-        let kind = if del_set.contains(&n) {
+        let kind = if dels.contains(&n) {
             "modified"
         } else {
             "added"
@@ -1234,7 +1475,6 @@ fn fs_git_diff_lines_scoped(scope: &FsScope, path: String) -> AppResult<Vec<Line
             kind: "deleted".into(),
         });
     }
-    let _ = add_set; // silence: kept for future "modified vs added" refinement
     Ok(out)
 }
 
@@ -1294,12 +1534,15 @@ pub fn fs_watch_set_root<R: Runtime>(
                 return Ok(());
             }
         }
-        let (tx, rx) = mpsc::channel();
-        let batcher = spawn_watch_batcher(app.clone(), root.clone(), rx);
+        let (tx, rx) = mpsc::sync_channel(WATCH_QUEUE_CAPACITY);
+        let queue_overflowed = Arc::new(AtomicBool::new(false));
+        let batcher =
+            spawn_watch_batcher(app.clone(), root.clone(), rx, Arc::clone(&queue_overflowed));
         let tx_for_cb = tx.clone();
+        let overflow_for_cb = Arc::clone(&queue_overflowed);
         drop(tx);
         let mut watcher: RecommendedWatcher = notify::recommended_watcher(move |res| {
-            let _ = tx_for_cb.send(res);
+            try_enqueue_watch_result(&tx_for_cb, &overflow_for_cb, res);
         })
         .map_err(|e| AppError::Other(format!("notify init failed: {e}")))?;
         watcher
@@ -1328,15 +1571,31 @@ fn spawn_watch_batcher<R: Runtime>(
     app: AppHandle<R>,
     root: PathBuf,
     rx: Receiver<notify::Result<Event>>,
+    queue_overflowed: Arc<AtomicBool>,
 ) -> WatchBatcher {
-    let thread = std::thread::spawn(move || run_watch_batcher(app, root, rx));
+    let thread = std::thread::spawn(move || run_watch_batcher(app, root, rx, queue_overflowed));
     WatchBatcher { _thread: thread }
+}
+
+fn try_enqueue_watch_result(
+    tx: &SyncSender<notify::Result<Event>>,
+    queue_overflowed: &AtomicBool,
+    result: notify::Result<Event>,
+) {
+    match tx.try_send(result) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) => {
+            queue_overflowed.store(true, AtomicOrdering::Release);
+        }
+        Err(TrySendError::Disconnected(_)) => {}
+    }
 }
 
 fn run_watch_batcher<R: Runtime>(
     app: AppHandle<R>,
     root: PathBuf,
     rx: Receiver<notify::Result<Event>>,
+    queue_overflowed: Arc<AtomicBool>,
 ) {
     let mut last_emit: Option<Instant> = None;
     let mut supervisor = SupervisorState::default();
@@ -1360,6 +1619,7 @@ fn run_watch_batcher<R: Runtime>(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
+        apply_watch_queue_overflow(&mut batch, &queue_overflowed);
 
         let Some(payload) = batch.finish() else {
             continue;
@@ -1378,6 +1638,14 @@ fn run_watch_batcher<R: Runtime>(
             tracing::warn!(error = %e, "fs-changed emit failed");
         }
     }
+}
+
+fn apply_watch_queue_overflow(batch: &mut WatchBatch, queue_overflowed: &AtomicBool) -> bool {
+    if !queue_overflowed.swap(false, AtomicOrdering::AcqRel) {
+        return false;
+    }
+    batch.request_root_refresh();
+    true
 }
 
 fn throttle_delay(last_emit: Option<Instant>, now: Instant) -> Duration {
@@ -1478,8 +1746,7 @@ impl WatchBatch {
 
     fn add_event(&mut self, event: Event) {
         if event.need_rescan() {
-            self.add_path(self.root.clone(), BatchedKind::Updated);
-            self.overflow = true;
+            self.request_root_refresh();
             return;
         }
 
@@ -1507,6 +1774,13 @@ impl WatchBatch {
             }
             self.add_path(path, kind);
         }
+    }
+
+    fn request_root_refresh(&mut self) {
+        self.seen.clear();
+        self.seen.insert(self.root.clone(), BatchedKind::Updated);
+        self.common_ancestor = Some(self.root.clone());
+        self.overflow = true;
     }
 
     fn add_path(&mut self, path: PathBuf, kind: BatchedKind) {
@@ -1722,6 +1996,19 @@ mod tests {
         repo
     }
 
+    fn commit_paths(repo: &git2::Repository, paths: &[&str]) {
+        let sig = git2::Signature::now("acorn-test", "test@acorn").unwrap();
+        let mut index = repo.index().unwrap();
+        for path in paths {
+            index.add_path(Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "commit", &tree, &[])
+            .unwrap();
+    }
+
     #[test]
     fn scope_from_state_ignores_local_session_roots() {
         let state = AppState::new();
@@ -1830,6 +2117,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_directories_over_the_entry_budget() {
+        let d = tmpdir();
+        fs::write(d.path().join("one.txt"), b"").unwrap();
+        fs::write(d.path().join("two.txt"), b"").unwrap();
+        fs::write(d.path().join("three.txt"), b"").unwrap();
+
+        let scope = scope_for(d.path());
+        let err = fs_list_dir_scoped_with_limit(
+            &scope,
+            d.path().to_string_lossy().into_owned(),
+            false,
+            false,
+            2,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("more than 2 entries"));
+    }
+
+    #[test]
     fn hides_dotfiles_by_default() {
         let d = tmpdir();
         fs::write(d.path().join(".env"), b"").unwrap();
@@ -1874,6 +2181,48 @@ mod tests {
         .unwrap();
         let off_names: Vec<_> = off.entries.iter().map(|e| e.name.clone()).collect();
         assert_eq!(off_names, vec!["build", "keep.txt", "secret.txt"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skips_symlinked_gitignore_files() {
+        use std::os::unix::fs::symlink;
+
+        let d = tmpdir();
+        fs::create_dir(d.path().join(".git")).unwrap();
+        let outside = tmpdir();
+        let outside_ignore = outside.path().join("ignore");
+        fs::write(&outside_ignore, b"secret.txt\n").unwrap();
+        symlink(&outside_ignore, d.path().join(".gitignore")).unwrap();
+        fs::write(d.path().join("secret.txt"), b"").unwrap();
+
+        let scope = scope_for(d.path());
+        let result =
+            fs_list_dir_scoped(&scope, d.path().to_string_lossy().into_owned(), false, true)
+                .unwrap();
+        assert!(result
+            .entries
+            .iter()
+            .any(|entry| entry.name == "secret.txt"));
+    }
+
+    #[test]
+    fn skips_oversized_gitignore_files() {
+        let d = tmpdir();
+        fs::create_dir(d.path().join(".git")).unwrap();
+        let mut oversized = b"secret.txt\n".to_vec();
+        oversized.resize(MAX_GITIGNORE_BYTES as usize + 1, b'#');
+        fs::write(d.path().join(".gitignore"), oversized).unwrap();
+        fs::write(d.path().join("secret.txt"), b"").unwrap();
+
+        let scope = scope_for(d.path());
+        let result =
+            fs_list_dir_scoped(&scope, d.path().to_string_lossy().into_owned(), false, true)
+                .unwrap();
+        assert!(result
+            .entries
+            .iter()
+            .any(|entry| entry.name == "secret.txt"));
     }
 
     #[test]
@@ -1946,6 +2295,47 @@ mod tests {
         batch.add_event(Event::new(EventKind::Any).set_flag(notify::event::Flag::Rescan));
 
         let payload = batch.finish().unwrap();
+        assert_eq!(payload.paths, vec![root.to_string_lossy().into_owned()]);
+        assert!(payload.overflow);
+        assert_eq!(
+            payload.refresh,
+            Some(FsRefreshHint {
+                kind: FsRefreshKind::Root,
+                path: root.to_string_lossy().into_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn watch_callback_queue_is_bounded_and_coalesces_overflow_to_one_root_refresh() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let (tx, rx) = mpsc::sync_channel(1);
+        let queue_overflowed = AtomicBool::new(false);
+
+        try_enqueue_watch_result(
+            &tx,
+            &queue_overflowed,
+            Ok(create_event(vec![root.join("first.rs")])),
+        );
+        try_enqueue_watch_result(
+            &tx,
+            &queue_overflowed,
+            Ok(create_event(vec![root.join("dropped.rs")])),
+        );
+
+        let queued = rx.try_recv().expect("the first event remains queued");
+        assert_eq!(
+            queued.expect("queued notify event").paths,
+            vec![root.join("first.rs")]
+        );
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(queue_overflowed.load(AtomicOrdering::Acquire));
+
+        let mut batch = new_batch(&root);
+        assert!(apply_watch_queue_overflow(&mut batch, &queue_overflowed));
+        assert!(!apply_watch_queue_overflow(&mut batch, &queue_overflowed));
+        let payload = batch.finish().expect("overflow refresh payload");
         assert_eq!(payload.paths, vec![root.to_string_lossy().into_owned()]);
         assert!(payload.overflow);
         assert_eq!(
@@ -2062,6 +2452,41 @@ mod tests {
         let res = fs_read_file_scoped(&scope, outside_file.to_string_lossy().into_owned()).unwrap();
 
         assert_eq!(res.content, "hello");
+    }
+
+    #[test]
+    fn embedded_pdf_requires_pdf_magic_bytes() {
+        let d = tmpdir();
+        let valid = d.path().join("valid.pdf");
+        let disguised_html = d.path().join("disguised.pdf");
+        fs::write(&valid, b"%PDF-1.7\n").unwrap();
+        fs::write(&disguised_html, b"<html><script></script></html>").unwrap();
+
+        assert!(validate_embeddable_asset(&valid, &valid).is_ok());
+        assert!(validate_embeddable_asset(&disguised_html, &disguised_html).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_pdf_symlink_validates_requested_extension() {
+        use std::os::unix::fs::symlink;
+
+        let d = tmpdir();
+        let html = d.path().join("payload.html");
+        let pdf_link = d.path().join("preview.pdf");
+        fs::write(&html, b"<html><script></script></html>").unwrap();
+        symlink(&html, &pdf_link).unwrap();
+
+        assert!(validate_embeddable_asset(&pdf_link, &html).is_err());
+    }
+
+    #[test]
+    fn embedded_non_pdf_asset_is_unchanged() {
+        let d = tmpdir();
+        let image = d.path().join("image.png");
+        fs::write(&image, b"not checked here").unwrap();
+
+        assert!(validate_embeddable_asset(&image, &image).is_ok());
     }
 
     #[test]
@@ -2464,6 +2889,90 @@ mod tests {
     }
 
     #[test]
+    fn bounded_line_counter_enforces_byte_and_line_limits() {
+        assert_eq!(
+            count_lines_bounded(std::io::Cursor::new(b"alpha\nbeta"), 10, 2).unwrap(),
+            Some(2)
+        );
+        assert_eq!(
+            count_lines_bounded(std::io::Cursor::new(Vec::<u8>::new()), 0, 0).unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            count_lines_bounded(std::io::Cursor::new(b"12345"), 4, 10).unwrap(),
+            None
+        );
+        assert_eq!(
+            count_lines_bounded(std::io::Cursor::new(b"a\nb\nc\n"), 16, 2).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn diff_stats_rejects_oversized_added_files_instead_of_reporting_zero() {
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        Repository::init(&repo_path).unwrap();
+        let oversized = repo_path.join("oversized.txt");
+        File::create(&oversized)
+            .unwrap()
+            .set_len(MAX_DIFF_STAT_FILE_BYTES + 1)
+            .unwrap();
+
+        let scope = scope_for(&repo_path);
+        let error = fs_git_diff_stats_scoped(
+            &scope,
+            repo_path.to_string_lossy().into_owned(),
+            vec![GitDiffStatsRequest {
+                path: oversized.to_string_lossy().into_owned(),
+                kind: "added".to_string(),
+            }],
+        )
+        .expect_err("oversized file should not look like a zero-line file");
+
+        assert!(error.to_string().contains("diff stats unavailable"));
+    }
+
+    #[test]
+    fn diff_stats_aborts_when_changed_line_limit_is_exceeded() {
+        use git2::Signature;
+
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        let repo = Repository::init(&repo_path).unwrap();
+        let changed = repo_path.join("many-lines.txt");
+        fs::write(&changed, "base\n").unwrap();
+
+        let sig = Signature::now("t", "t@t").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("many-lines.txt")).unwrap();
+            index.write().unwrap();
+            let tree_id = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
+        }
+
+        let mut contents = String::from("base\n");
+        contents.push_str(&"added\n".repeat(MAX_DIFF_STAT_LINES as usize + 1));
+        fs::write(&changed, contents).unwrap();
+
+        let scope = scope_for(&repo_path);
+        let error = fs_git_diff_stats_scoped(
+            &scope,
+            repo_path.to_string_lossy().into_owned(),
+            vec![GitDiffStatsRequest {
+                path: changed.to_string_lossy().into_owned(),
+                kind: "modified".to_string(),
+            }],
+        )
+        .expect_err("line-heavy diff should stop at the callback budget");
+
+        assert!(error.to_string().contains("diff stat line limit exceeded"));
+    }
+
+    #[test]
     fn diff_stats_handles_multiple_modified_paths_in_one_call() {
         use git2::{Repository, Signature};
 
@@ -2507,5 +3016,89 @@ mod tests {
         assert_eq!(stats[&x_key].deletions, 0);
         assert_eq!(stats[&y_key].additions, 0);
         assert_eq!(stats[&y_key].deletions, 1);
+    }
+
+    #[test]
+    fn diff_lines_returns_markers_for_requested_file() {
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        let repo = Repository::init(&repo_path).unwrap();
+        let changed = repo_path.join("normal.txt");
+        fs::write(&changed, "one\ntwo\nthree\n").unwrap();
+        commit_paths(&repo, &["normal.txt"]);
+        fs::write(&changed, "one\ntwo\nadded\nthree\n").unwrap();
+
+        let scope = scope_for(&repo_path);
+        let lines =
+            fs_git_diff_lines_scoped(&scope, changed.to_string_lossy().into_owned()).unwrap();
+        let markers: Vec<_> = lines
+            .iter()
+            .map(|entry| (entry.line, entry.kind.as_str()))
+            .collect();
+
+        assert_eq!(markers, vec![(3, "added")]);
+    }
+
+    #[test]
+    fn diff_lines_treats_glob_metacharacters_as_literal_filename() {
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        let repo = Repository::init(&repo_path).unwrap();
+        let target = repo_path.join("literal[ab].txt");
+        let glob_match = repo_path.join("literala.txt");
+        fs::write(&target, "one\ntwo\n").unwrap();
+        fs::write(&glob_match, "one\ntwo\n").unwrap();
+        commit_paths(&repo, &["literal[ab].txt", "literala.txt"]);
+
+        fs::write(&target, "one\nchanged\n").unwrap();
+        fs::write(&glob_match, "one\ntwo\nunrelated\nlines\n").unwrap();
+
+        let scope = scope_for(&repo_path);
+        let lines =
+            fs_git_diff_lines_scoped(&scope, target.to_string_lossy().into_owned()).unwrap();
+        let markers: Vec<_> = lines
+            .iter()
+            .map(|entry| (entry.line, entry.kind.as_str()))
+            .collect();
+
+        assert_eq!(markers, vec![(2, "modified")]);
+    }
+
+    #[test]
+    fn diff_lines_aborts_when_changed_line_limit_is_exceeded() {
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        let repo = Repository::init(&repo_path).unwrap();
+        let changed = repo_path.join("many-lines.txt");
+        fs::write(&changed, "base\n").unwrap();
+        commit_paths(&repo, &["many-lines.txt"]);
+
+        let mut contents = String::from("base\n");
+        contents.push_str(&"x\n".repeat(MAX_DIFF_STAT_LINES as usize + 1));
+        fs::write(&changed, contents).unwrap();
+
+        let scope = scope_for(&repo_path);
+        let error = fs_git_diff_lines_scoped(&scope, changed.to_string_lossy().into_owned())
+            .expect_err("line-heavy diff should stop at the changed-line budget");
+
+        assert!(error.to_string().contains("diff line limit exceeded"));
+    }
+
+    #[test]
+    fn diff_lines_rejects_oversized_worktree_file() {
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        Repository::init(&repo_path).unwrap();
+        let oversized = repo_path.join("oversized.txt");
+        File::create(&oversized)
+            .unwrap()
+            .set_len(MAX_DIFF_STAT_FILE_BYTES + 1)
+            .unwrap();
+
+        let scope = scope_for(&repo_path);
+        let error = fs_git_diff_lines_scoped(&scope, oversized.to_string_lossy().into_owned())
+            .expect_err("oversized file should stop before diff generation");
+
+        assert!(error.to_string().contains("diff line byte limit exceeded"));
     }
 }

@@ -133,4 +133,29 @@ describe("ChatMessageBody", () => {
     expect(container.textContent).toContain("const partial");
     expect(container.querySelector("[data-chat-code-block]")).toBeTruthy();
   });
+
+  it("waits for approval before loading a remote Markdown image", () => {
+    act(() => {
+      root.render(
+        <ChatMessageBody
+          content={"![Remote build](https://tracker.example/build.png)"}
+        />,
+      );
+    });
+
+    expect(container.querySelector("img")).toBeNull();
+    const load = container.querySelector<HTMLButtonElement>(
+      "[data-remote-image-placeholder]",
+    );
+    expect(load).not.toBeNull();
+
+    act(() => load!.click());
+
+    const image = container.querySelector("img");
+    expect(image?.getAttribute("src")).toBe(
+      "https://tracker.example/build.png",
+    );
+    expect(image?.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
 });

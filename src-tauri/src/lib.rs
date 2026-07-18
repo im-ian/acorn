@@ -242,7 +242,6 @@ pub fn run() {
     builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -797,9 +796,6 @@ pub fn run() {
             daemon_commands::daemon_restart,
             daemon_commands::daemon_shutdown,
             daemon_commands::daemon_list_sessions,
-            daemon_commands::daemon_spawn_session,
-            daemon_commands::daemon_send_input,
-            daemon_commands::daemon_resize,
             daemon_commands::daemon_kill_session,
             daemon_commands::daemon_forget_session,
             daemon_commands::daemon_forget_inactive_sessions,

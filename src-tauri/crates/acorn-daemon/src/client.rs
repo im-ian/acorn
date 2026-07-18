@@ -8,7 +8,7 @@
 //! its long-lived session-management traffic does not pay handshake
 //! overhead per request.
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufReader, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use interprocess::local_socket::Stream;
@@ -19,6 +19,7 @@ use super::protocol::{
     StatusSnapshot,
 };
 use super::socket;
+use super::wire::read_response_frame_line;
 
 /// Long-lived control-socket connection. Use this when the same caller
 /// will issue more than one request — the connection handshake happens
@@ -47,7 +48,7 @@ impl ControlConn {
         writer.flush()?;
         // Read server hello.
         let mut buf = String::new();
-        reader.read_line(&mut buf)?;
+        read_response_frame_line(&mut reader, &mut buf)?;
         // Currently we do not enforce server hello details — the server
         // already validated ours and will close the connection if its
         // own version is too far ahead. Future versions may inspect
@@ -71,7 +72,7 @@ impl ControlConn {
         )?;
         self.writer.flush()?;
         let mut buf = String::new();
-        if self.reader.read_line(&mut buf)? == 0 {
+        if read_response_frame_line(&mut self.reader, &mut buf)? == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "daemon closed",
@@ -97,7 +98,7 @@ pub fn one_shot(payload: ControlPayload) -> io::Result<ControlResponse> {
     )?;
     writer.flush()?;
     let mut buf = String::new();
-    reader.read_line(&mut buf)?;
+    read_response_frame_line(&mut reader, &mut buf)?;
     // Server hello consumed (not currently inspected).
 
     let req = ControlRequest { seq: 1, payload };
@@ -107,8 +108,7 @@ pub fn one_shot(payload: ControlPayload) -> io::Result<ControlResponse> {
         serde_json::to_string(&req).map_err(io::Error::other)?
     )?;
     writer.flush()?;
-    buf.clear();
-    if reader.read_line(&mut buf)? == 0 {
+    if read_response_frame_line(&mut reader, &mut buf)? == 0 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "daemon closed",

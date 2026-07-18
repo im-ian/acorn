@@ -184,6 +184,15 @@ test.describe("right panel: tab switching", () => {
     page,
     tauri,
   }) => {
+    let remoteImageRequests = 0;
+    await page.route("https://example.com/issue.png", async (route) => {
+      remoteImageRequests += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>',
+      });
+    });
     await seedActiveSession(tauri);
     await tauri.respond("list_issues", {
       kind: "ok",
@@ -257,9 +266,29 @@ test.describe("right panel: tab switching", () => {
     await expect(comments.nth(0)).toContainText("Older in-app issue comment.");
     await expect(comments.nth(1)).toContainText("Newer in-app issue comment.");
 
-    await dialog.getByRole("img", { name: "Issue screenshot" }).click();
+    await expect(
+      dialog.getByRole("img", { name: "Issue screenshot" }),
+    ).toHaveCount(0);
+    expect(remoteImageRequests).toBe(0);
+    await dialog
+      .getByRole("button", {
+        name: "Load remote image: example.com — Issue screenshot",
+      })
+      .click();
+    const issueScreenshot = dialog.getByRole("img", {
+      name: "Issue screenshot",
+    });
+    await expect(issueScreenshot).toHaveAttribute(
+      "referrerpolicy",
+      "no-referrer",
+    );
+    await expect.poll(() => remoteImageRequests).toBeGreaterThan(0);
+    await issueScreenshot.click();
     const imagePreview = page.getByRole("dialog", { name: "Image preview" });
     await expect(imagePreview).toBeVisible();
+    await expect(
+      imagePreview.getByRole("img", { name: "Issue screenshot" }),
+    ).toHaveAttribute("referrerpolicy", "no-referrer");
     await imagePreview
       .getByRole("button", { name: "Open in browser" })
       .hover();

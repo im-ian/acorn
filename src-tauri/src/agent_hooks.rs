@@ -20,6 +20,7 @@ const MAX_HEADER_BYTES: usize = 8 * 1024;
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_CONCURRENT_CONNECTIONS: usize = 32;
 
 type HookEventHandler =
     Arc<dyn Fn(AgentHookEvent) -> AgentHookHandlerOutcome + Send + Sync + 'static>;
@@ -1598,17 +1599,29 @@ fn run_listener(
     handler: HookEventHandler,
     running: Arc<AtomicBool>,
 ) {
+    let active_connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _addr)) => {
+                let Some(permit) = ConnectionPermit::try_acquire(
+                    Arc::clone(&active_connections),
+                    MAX_CONCURRENT_CONNECTIONS,
+                ) else {
+                    // Hook events are best effort and transcript polling is the
+                    // fallback. Drop overload without spawning another thread
+                    // or emitting attacker-amplifiable warning logs.
+                    drop(stream);
+                    continue;
+                };
                 dispatch_connection(
                     stream,
                     token.clone(),
                     handler.clone(),
-                    |stream, token, handler| {
+                    move |stream, token, handler| {
                         std::thread::Builder::new()
                             .name("acorn-agent-hook-conn".to_string())
                             .spawn(move || {
+                                let _permit = permit;
                                 if let Err(err) = handle_connection(stream, &token, &handler) {
                                     tracing::warn!(error = %err, "agent hook connection failed");
                                 }
@@ -1655,6 +1668,27 @@ fn dispatch_connection<F>(
                 );
             }
         }
+    }
+}
+
+struct ConnectionPermit {
+    active: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ConnectionPermit {
+    fn try_acquire(active: Arc<std::sync::atomic::AtomicUsize>, limit: usize) -> Option<Self> {
+        active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < limit).then_some(current + 1)
+            })
+            .ok()?;
+        Some(Self { active })
+    }
+}
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -2239,13 +2273,14 @@ mod tests {
     use super::{
         apply_agent_hook_event, dispatch_connection, handle_connection, AgentHookApplyOutcome,
         AgentHookEvent, AgentHookEventKind, AgentHookHandlerOutcome, AgentHookOwnership,
-        AgentHookReducer, AgentHookServer, HookEventHandler, MAX_HEADER_BYTES,
+        AgentHookReducer, AgentHookServer, ConnectionPermit, HookEventHandler, MAX_HEADER_BYTES,
     };
     use acorn_session::{
         AgentStatusSource, Session, SessionAgentProvider, SessionKind, SessionStatus,
     };
     use std::io::{self, Read, Write};
     use std::net::{SocketAddr, TcpStream};
+    use std::sync::atomic::Ordering;
     use std::sync::{mpsc, Arc, Mutex};
     use std::time::Duration;
     use uuid::Uuid;
@@ -2448,6 +2483,24 @@ mod tests {
 
         let valid = post(&hooks, hooks.token(), &body);
         assert!(valid.starts_with("HTTP/1.1 204 No Content"));
+    }
+
+    #[test]
+    fn hook_connection_permits_enforce_and_release_the_limit() {
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let first = ConnectionPermit::try_acquire(Arc::clone(&active), 2).unwrap();
+        let second = ConnectionPermit::try_acquire(Arc::clone(&active), 2).unwrap();
+
+        assert!(ConnectionPermit::try_acquire(Arc::clone(&active), 2).is_none());
+        assert_eq!(active.load(Ordering::Acquire), 2);
+
+        drop(first);
+        let replacement = ConnectionPermit::try_acquire(Arc::clone(&active), 2).unwrap();
+        assert_eq!(active.load(Ordering::Acquire), 2);
+
+        drop(second);
+        drop(replacement);
+        assert_eq!(active.load(Ordering::Acquire), 0);
     }
 
     #[test]

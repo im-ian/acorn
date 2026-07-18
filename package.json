@@ -3,6 +3,11 @@
   "private": true,
   "version": "1.27.0",
   "packageManager": "pnpm@9.15.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -34,7 +39,6 @@
     "@tauri-apps/plugin-notification": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-shell": "^2.3.5",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@xterm/addon-canvas": "^0.7.0",
     "@xterm/addon-fit": "^0.11.0",
@@ -46,7 +50,7 @@
     "cmdk": "^1.1.1",
     "lucide-react": "^1.14.0",
     "react": "^19.2.7",
-    "react-diff-viewer-continued": "^4.2.2",
+    "react-diff-viewer-continued": "^4.4.0",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^3",
@@ -60,17 +64,18 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
-    "@storybook/addon-docs": "10.4.3",
-    "@storybook/react-vite": "10.4.3",
+    "@storybook/addon-docs": "10.5.2",
+    "@storybook/react-vite": "10.5.2",
     "@tailwindcss/vite": "^4.3.1",
     "@tauri-apps/cli": "^2.11.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "@vitest/ui": "^4.1.9",
+    "esbuild": "^0.28.1",
     "jsdom": "^29.1.1",
     "postcss": "^8.5.15",
-    "storybook": "10.4.3",
+    "storybook": "10.5.2",
     "tailwindcss": "^4.3.1",
     "typescript": "~5.8.3",
     "vite": "^7.3.6",

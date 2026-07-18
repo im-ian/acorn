@@ -1,11 +1,78 @@
 use git2::{DiffOptions, Repository};
 use serde::Serialize;
-use std::collections::{HashMap, VecDeque};
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use crate::error::{AppError, AppResult};
 use crate::worktree::ensure_repo;
+
+// Repositories are untrusted input. These limits bound the local diff payload
+// before it is serialized across the Tauri boundary; ordinary source diffs
+// remain far below them, while oversized images use the existing no-preview UI.
+const MAX_DIFF_TEXT_FILE_BYTES: i64 = 8 * 1024 * 1024;
+const MAX_DIFF_FILES: usize = 5_000;
+const MAX_DIFF_PATCH_BYTES: usize = 16 * 1024 * 1024;
+const MAX_DIFF_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_DIFF_TOTAL_IMAGE_BYTES: usize = 24 * 1024 * 1024;
+
+// Commit repositories are untrusted too. Pagination and object budgets bound
+// the response page, while graph budgets keep pushed classification finite.
+const MAX_COMMIT_PAGE_SIZE: usize = 500;
+const MAX_COMMIT_OFFSET: usize = 100_000;
+const MAX_COMMIT_PAGE_OBJECT_BYTES: usize = 1024 * 1024;
+const MAX_COMMIT_PAGE_TOTAL_OBJECT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_REMOTE_TRACKING_REFS: usize = 2_048;
+const MAX_PUSHED_HISTORY_COMMITS: usize = 250_000;
+const MAX_PUSHED_HISTORY_PARENT_EDGES: usize = 1_000_000;
+const MAX_PUSHED_HISTORY_COMMIT_OBJECT_BYTES: usize = 1024 * 1024;
+const MAX_PUSHED_HISTORY_TOTAL_OBJECT_BYTES: usize = 128 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+struct DiffLimits {
+    max_files: usize,
+    max_patch_bytes: usize,
+    max_image_bytes: usize,
+    max_total_image_bytes: usize,
+}
+
+const LOCAL_DIFF_LIMITS: DiffLimits = DiffLimits {
+    max_files: MAX_DIFF_FILES,
+    max_patch_bytes: MAX_DIFF_PATCH_BYTES,
+    max_image_bytes: MAX_DIFF_IMAGE_BYTES,
+    max_total_image_bytes: MAX_DIFF_TOTAL_IMAGE_BYTES,
+};
+
+#[derive(Clone, Copy)]
+struct PushedHistoryLimits {
+    max_remote_refs: usize,
+    max_commits: usize,
+    max_parent_edges: usize,
+    max_commit_object_bytes: usize,
+    max_total_object_bytes: usize,
+}
+
+const LOCAL_PUSHED_HISTORY_LIMITS: PushedHistoryLimits = PushedHistoryLimits {
+    max_remote_refs: MAX_REMOTE_TRACKING_REFS,
+    max_commits: MAX_PUSHED_HISTORY_COMMITS,
+    max_parent_edges: MAX_PUSHED_HISTORY_PARENT_EDGES,
+    max_commit_object_bytes: MAX_PUSHED_HISTORY_COMMIT_OBJECT_BYTES,
+    max_total_object_bytes: MAX_PUSHED_HISTORY_TOTAL_OBJECT_BYTES,
+};
+
+#[derive(Clone, Copy)]
+struct CommitPageObjectLimits {
+    max_object_bytes: usize,
+    max_total_object_bytes: usize,
+}
+
+const LOCAL_COMMIT_PAGE_OBJECT_LIMITS: CommitPageObjectLimits = CommitPageObjectLimits {
+    max_object_bytes: MAX_COMMIT_PAGE_OBJECT_BYTES,
+    max_total_object_bytes: MAX_COMMIT_PAGE_TOTAL_OBJECT_BYTES,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CommitInfo {
@@ -249,16 +316,28 @@ fn resolve_ssh_hostname(alias: &str) -> Option<String> {
 }
 
 pub fn list_commits(repo_path: &Path, offset: usize, limit: usize) -> AppResult<Vec<CommitInfo>> {
+    validate_commit_page(offset, limit)?;
     let repo = ensure_repo(repo_path)?;
-    let pushed_set = pushed_oid_set(&repo);
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
 
     let mut walk = repo.revwalk()?;
     walk.push_head()?;
     walk.set_sorting(git2::Sort::TIME)?;
 
-    let mut out = Vec::with_capacity(limit);
+    let mut page_oids = Vec::with_capacity(limit);
     for oid in walk.skip(offset).take(limit) {
-        let oid = oid?;
+        page_oids.push(oid?);
+    }
+    if page_oids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    validate_commit_page_objects(&repo, &page_oids, LOCAL_COMMIT_PAGE_OBJECT_LIMITS)?;
+    let pushed_set = pushed_page_oids(&repo, &page_oids, LOCAL_PUSHED_HISTORY_LIMITS)?;
+    let mut out = Vec::with_capacity(page_oids.len());
+    for oid in page_oids {
         let commit = repo.find_commit(oid)?;
         let author = commit.author();
         out.push(CommitInfo {
@@ -275,38 +354,210 @@ pub fn list_commits(repo_path: &Path, offset: usize, limit: usize) -> AppResult<
     Ok(out)
 }
 
-/// Build the set of commit OIDs reachable from any remote-tracking branch.
-/// A commit is "pushed" if its OID is in this set. Computed in a single
-/// revwalk to avoid quadratic per-commit ancestry checks.
-fn pushed_oid_set(repo: &Repository) -> std::collections::HashSet<git2::Oid> {
-    let mut set = std::collections::HashSet::new();
-    let Ok(mut walk) = repo.revwalk() else {
-        return set;
-    };
-    let _ = walk.set_sorting(git2::Sort::TOPOLOGICAL);
+fn validate_commit_page(offset: usize, limit: usize) -> AppResult<()> {
+    if limit > MAX_COMMIT_PAGE_SIZE {
+        return Err(AppError::Other(format!(
+            "commit page limit exceeded (maximum {MAX_COMMIT_PAGE_SIZE})"
+        )));
+    }
+    if offset > MAX_COMMIT_OFFSET {
+        return Err(AppError::Other(format!(
+            "commit offset limit exceeded (maximum {MAX_COMMIT_OFFSET})"
+        )));
+    }
+    Ok(())
+}
 
-    let Ok(branches) = repo.branches(Some(git2::BranchType::Remote)) else {
-        return set;
-    };
-    let mut pushed_any = false;
-    for entry in branches.flatten() {
-        let (branch, _) = entry;
+fn validate_commit_page_objects(
+    repo: &Repository,
+    page_oids: &[git2::Oid],
+    limits: CommitPageObjectLimits,
+) -> AppResult<()> {
+    let odb = repo.odb()?;
+    let mut total_object_bytes = 0usize;
+    for oid in page_oids {
+        let (object_bytes, object_type) = odb.read_header(*oid)?;
+        if object_type != git2::ObjectType::Commit {
+            return Err(AppError::Other(format!(
+                "commit page contains non-commit object {oid}"
+            )));
+        }
+        if object_bytes > limits.max_object_bytes {
+            return Err(AppError::Other(format!(
+                "commit page object byte limit exceeded (maximum {})",
+                limits.max_object_bytes
+            )));
+        }
+        total_object_bytes = total_object_bytes
+            .checked_add(object_bytes)
+            .ok_or_else(|| AppError::Other("commit page object byte count overflow".to_string()))?;
+        if total_object_bytes > limits.max_total_object_bytes {
+            return Err(AppError::Other(format!(
+                "commit page total object byte limit exceeded (maximum {})",
+                limits.max_total_object_bytes
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Return only requested OIDs that are reachable from a remote-tracking ref.
+/// A bounded explicit walk avoids retaining the repository's entire remote
+/// history and errors instead of presenting an unproven negative result.
+fn pushed_page_oids(
+    repo: &Repository,
+    candidates: &[git2::Oid],
+    limits: PushedHistoryLimits,
+) -> AppResult<HashSet<git2::Oid>> {
+    let mut candidate_set = HashSet::new();
+    candidate_set
+        .try_reserve(candidates.len())
+        .map_err(|_| AppError::Other("failed to reserve pushed commit candidates".to_string()))?;
+    candidate_set.extend(candidates.iter().copied());
+    if candidate_set.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let branches = repo.branches(Some(git2::BranchType::Remote))?;
+    let mut remote_ref_count = 0usize;
+    let mut remote_tip_set = HashSet::new();
+    let mut remote_tips = Vec::new();
+    for entry in branches {
+        remote_ref_count = remote_ref_count
+            .checked_add(1)
+            .ok_or_else(|| AppError::Other("remote tracking ref count overflow".to_string()))?;
+        if remote_ref_count > limits.max_remote_refs {
+            return Err(AppError::Other(format!(
+                "remote tracking ref limit exceeded (maximum {})",
+                limits.max_remote_refs
+            )));
+        }
+
+        let (branch, _) = entry?;
         if branch.get().symbolic_target().is_some() {
             continue;
         }
-        if let Some(oid) = branch.get().target() {
-            if walk.push(oid).is_ok() {
-                pushed_any = true;
-            }
+        let oid = branch.get().target().ok_or_else(|| {
+            AppError::Other("remote tracking ref has no direct target".to_string())
+        })?;
+        if remote_tip_set.contains(&oid) {
+            continue;
+        }
+        remote_tip_set
+            .try_reserve(1)
+            .map_err(|_| AppError::Other("failed to reserve remote commit tips".to_string()))?;
+        remote_tips
+            .try_reserve(1)
+            .map_err(|_| AppError::Other("failed to reserve remote commit tips".to_string()))?;
+        remote_tip_set.insert(oid);
+        remote_tips.push(oid);
+    }
+    if remote_tips.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let mut pushed = HashSet::new();
+    pushed
+        .try_reserve(candidate_set.len())
+        .map_err(|_| AppError::Other("failed to reserve pushed commit results".to_string()))?;
+    for oid in &remote_tips {
+        if candidate_set.contains(oid) {
+            pushed.insert(*oid);
         }
     }
-    if !pushed_any {
-        return set;
+    if pushed.len() == candidate_set.len() {
+        return Ok(pushed);
     }
-    for oid in walk.flatten() {
-        set.insert(oid);
+
+    let mut seen = HashSet::new();
+    let mut pending = Vec::new();
+    for oid in remote_tips {
+        enqueue_pushed_history_commit(&mut seen, &mut pending, oid, limits.max_commits)?;
     }
-    set
+
+    let odb = repo.odb()?;
+    let mut parent_edges = 0usize;
+    let mut total_object_bytes = 0usize;
+
+    while let Some(oid) = pending.pop() {
+        if candidate_set.contains(&oid) {
+            pushed.insert(oid);
+            if pushed.len() == candidate_set.len() {
+                return Ok(pushed);
+            }
+        }
+
+        let (object_bytes, object_type) = odb.read_header(oid)?;
+        if object_type != git2::ObjectType::Commit {
+            return Err(AppError::Other(format!(
+                "remote tracking ref history contains non-commit object {oid}"
+            )));
+        }
+        if object_bytes > limits.max_commit_object_bytes {
+            return Err(AppError::Other(format!(
+                "remote commit object byte limit exceeded (maximum {})",
+                limits.max_commit_object_bytes
+            )));
+        }
+        total_object_bytes = total_object_bytes
+            .checked_add(object_bytes)
+            .ok_or_else(|| {
+                AppError::Other("remote commit object byte count overflow".to_string())
+            })?;
+        if total_object_bytes > limits.max_total_object_bytes {
+            return Err(AppError::Other(format!(
+                "remote commit history byte limit exceeded (maximum {})",
+                limits.max_total_object_bytes
+            )));
+        }
+
+        let commit = repo.find_commit(oid)?;
+        parent_edges = parent_edges
+            .checked_add(commit.parent_count())
+            .ok_or_else(|| {
+                AppError::Other("remote commit parent edge count overflow".to_string())
+            })?;
+        if parent_edges > limits.max_parent_edges {
+            return Err(AppError::Other(format!(
+                "remote commit parent edge limit exceeded (maximum {})",
+                limits.max_parent_edges
+            )));
+        }
+        for index in 0..commit.parent_count() {
+            enqueue_pushed_history_commit(
+                &mut seen,
+                &mut pending,
+                commit.parent_id(index)?,
+                limits.max_commits,
+            )?;
+        }
+    }
+
+    Ok(pushed)
+}
+
+fn enqueue_pushed_history_commit(
+    seen: &mut HashSet<git2::Oid>,
+    pending: &mut Vec<git2::Oid>,
+    oid: git2::Oid,
+    max_commits: usize,
+) -> AppResult<()> {
+    if seen.contains(&oid) {
+        return Ok(());
+    }
+    if seen.len() >= max_commits {
+        return Err(AppError::Other(format!(
+            "remote commit history limit exceeded (maximum {max_commits})"
+        )));
+    }
+    seen.try_reserve(1)
+        .map_err(|_| AppError::Other("failed to reserve remote commit history".to_string()))?;
+    pending
+        .try_reserve(1)
+        .map_err(|_| AppError::Other("failed to reserve remote commit history".to_string()))?;
+    seen.insert(oid);
+    pending.push(oid);
+    Ok(())
 }
 
 pub fn list_staged(repo_path: &Path) -> AppResult<Vec<StagedFile>> {
@@ -379,6 +630,7 @@ pub fn diff_for_commit(repo_path: &Path, sha: &str) -> AppResult<DiffPayload> {
     let parent_tree = parent.as_ref().map(|p| p.tree()).transpose()?;
     let commit_tree = commit.tree()?;
     let mut opts = DiffOptions::new();
+    opts.max_size(MAX_DIFF_TEXT_FILE_BYTES);
     let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), Some(&mut opts))?;
     collect_diff(&repo, &diff)
 }
@@ -398,8 +650,13 @@ fn diff_staged_with_pathspec(repo_path: &Path, pathspec: Option<&str>) -> AppRes
     let mut opts = DiffOptions::new();
     opts.include_untracked(true)
         .recurse_untracked_dirs(true)
-        .show_untracked_content(true);
+        .show_untracked_content(true)
+        .max_size(MAX_DIFF_TEXT_FILE_BYTES);
     if let Some(path) = pathspec {
+        // A repository may legitimately contain glob metacharacters in a
+        // filename. File-scoped requests must never expand those characters
+        // into additional diff paths.
+        opts.disable_pathspec_match(true);
         opts.pathspec(path);
     }
     let diff = repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))?;
@@ -432,11 +689,29 @@ fn validate_relative_git_path(path: &str) -> AppResult<()> {
 }
 
 fn collect_diff(repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload> {
-    use std::cell::RefCell;
-    let acc: RefCell<Vec<DiffFile>> = RefCell::new(Vec::new());
-    let current: RefCell<Option<DiffFile>> = RefCell::new(None);
+    collect_diff_with_limits(repo, diff, LOCAL_DIFF_LIMITS)
+}
 
-    diff.foreach(
+fn collect_diff_with_limits(
+    repo: &Repository,
+    diff: &git2::Diff,
+    limits: DiffLimits,
+) -> AppResult<DiffPayload> {
+    let delta_count = diff.deltas().len();
+    if delta_count > limits.max_files {
+        return Err(AppError::Other(format!(
+            "diff file limit exceeded (maximum {})",
+            limits.max_files
+        )));
+    }
+
+    let acc: RefCell<Vec<DiffFile>> = RefCell::new(Vec::with_capacity(delta_count));
+    let current: RefCell<Option<DiffFile>> = RefCell::new(None);
+    let patch_bytes = Cell::new(0usize);
+    let patch_limit_hit = Cell::new(false);
+    let mut image_bytes_remaining = limits.max_total_image_bytes;
+
+    let foreach_result = diff.foreach(
         &mut |delta, _| {
             if let Some(prev) = current.borrow_mut().take() {
                 acc.borrow_mut().push(prev);
@@ -447,8 +722,20 @@ fn collect_diff(repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload> 
             let is_image = is_image_path(path_for_type);
             let (old_image, new_image) = if is_image {
                 (
-                    image_data_uri(repo, delta.old_file().id(), old_path.as_deref()),
-                    image_data_uri_workdir(repo, delta.new_file().id(), new_path.as_deref()),
+                    image_data_uri_bounded(
+                        repo,
+                        delta.old_file().id(),
+                        old_path.as_deref(),
+                        limits.max_image_bytes,
+                        &mut image_bytes_remaining,
+                    ),
+                    image_data_uri_workdir_bounded(
+                        repo,
+                        delta.new_file().id(),
+                        new_path.as_deref(),
+                        limits.max_image_bytes,
+                        &mut image_bytes_remaining,
+                    ),
                 )
             } else {
                 (None, None)
@@ -468,8 +755,13 @@ fn collect_diff(repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload> 
             // Without this callback the patch stream contains only +/-/space
             // body lines, so the renderer has no per-line numbering anchor.
             // libgit2's `header()` already includes the trailing newline.
+            let raw_header = hunk.header();
+            if !reserve_patch_bytes(&patch_bytes, raw_header.len(), limits.max_patch_bytes) {
+                patch_limit_hit.set(true);
+                return false;
+            }
             if let Some(f) = current.borrow_mut().as_mut() {
-                let header = std::str::from_utf8(hunk.header()).unwrap_or("");
+                let header = std::str::from_utf8(raw_header).unwrap_or("");
                 f.patch.push_str(header);
             }
             true
@@ -477,23 +769,49 @@ fn collect_diff(repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload> 
         Some(&mut |_delta, _hunk, line| {
             if let Some(f) = current.borrow_mut().as_mut() {
                 let origin = line.origin();
-                let prefix = match origin {
-                    '+' | '-' | ' ' => format!("{origin}"),
-                    _ => String::new(),
+                let prefix = matches!(origin, '+' | '-' | ' ').then_some(origin);
+                let prefix_bytes = usize::from(prefix.is_some());
+                let Some(additional_bytes) = line.content().len().checked_add(prefix_bytes) else {
+                    patch_limit_hit.set(true);
+                    return false;
                 };
+                if !reserve_patch_bytes(&patch_bytes, additional_bytes, limits.max_patch_bytes) {
+                    patch_limit_hit.set(true);
+                    return false;
+                }
                 let content = std::str::from_utf8(line.content()).unwrap_or("");
-                f.patch.push_str(&prefix);
+                if let Some(prefix) = prefix {
+                    f.patch.push(prefix);
+                }
                 f.patch.push_str(content);
             }
             true
         }),
-    )?;
+    );
+    if patch_limit_hit.get() {
+        return Err(AppError::Other(format!(
+            "diff patch byte limit exceeded (maximum {})",
+            limits.max_patch_bytes
+        )));
+    }
+    foreach_result?;
     if let Some(prev) = current.borrow_mut().take() {
         acc.borrow_mut().push(prev);
     }
     Ok(DiffPayload {
         files: acc.into_inner(),
     })
+}
+
+fn reserve_patch_bytes(used: &Cell<usize>, additional: usize, limit: usize) -> bool {
+    let Some(total) = used.get().checked_add(additional) else {
+        return false;
+    };
+    if total > limit {
+        return false;
+    }
+    used.set(total);
+    true
 }
 
 fn is_image_path(path: &str) -> bool {
@@ -536,29 +854,89 @@ pub(crate) fn encode_data_uri(bytes: &[u8], path: &str) -> String {
     )
 }
 
-fn image_data_uri(repo: &Repository, oid: git2::Oid, path: Option<&str>) -> Option<String> {
+fn image_data_uri_bounded(
+    repo: &Repository,
+    oid: git2::Oid,
+    path: Option<&str>,
+    max_image_bytes: usize,
+    image_bytes_remaining: &mut usize,
+) -> Option<String> {
     let path = path?;
     if oid.is_zero() {
         return None;
     }
+    let allowed_bytes = max_image_bytes.min(*image_bytes_remaining);
+    let odb = repo.odb().ok()?;
+    let (size, kind) = odb.read_header(oid).ok()?;
+    if kind != git2::ObjectType::Blob || size > allowed_bytes {
+        return None;
+    }
     let blob = repo.find_blob(oid).ok()?;
-    Some(encode_data_uri(blob.content(), path))
+    if blob.content().len() > allowed_bytes {
+        return None;
+    }
+    let preview = encode_data_uri(blob.content(), path);
+    *image_bytes_remaining -= blob.content().len();
+    Some(preview)
 }
 
 /// Resolve image bytes for the "new" side of a diff.
 /// Falls back to reading the workdir file when the diff has no oid (untracked
 /// or staged-but-unwritten cases).
-fn image_data_uri_workdir(repo: &Repository, oid: git2::Oid, path: Option<&str>) -> Option<String> {
+fn image_data_uri_workdir_bounded(
+    repo: &Repository,
+    oid: git2::Oid,
+    path: Option<&str>,
+    max_image_bytes: usize,
+    image_bytes_remaining: &mut usize,
+) -> Option<String> {
     let path = path?;
     if !oid.is_zero() {
-        if let Ok(blob) = repo.find_blob(oid) {
-            return Some(encode_data_uri(blob.content(), path));
-        }
+        return image_data_uri_bounded(
+            repo,
+            oid,
+            Some(path),
+            max_image_bytes,
+            image_bytes_remaining,
+        );
     }
-    let workdir = repo.workdir()?;
-    let abs = workdir.join(path);
-    let bytes = std::fs::read(abs).ok()?;
-    Some(encode_data_uri(&bytes, path))
+    let allowed_bytes = max_image_bytes.min(*image_bytes_remaining);
+    let bytes = read_workdir_image(repo, path, allowed_bytes)?;
+    let preview = encode_data_uri(&bytes, path);
+    *image_bytes_remaining -= bytes.len();
+    Some(preview)
+}
+
+fn read_workdir_image(repo: &Repository, path: &str, max_bytes: usize) -> Option<Vec<u8>> {
+    validate_relative_git_path(path).ok()?;
+    let workdir = repo.workdir()?.canonicalize().ok()?;
+    let candidate = workdir.join(path);
+    let metadata = std::fs::symlink_metadata(&candidate).ok()?;
+    let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max_bytes_u64 {
+        return None;
+    }
+    let resolved = candidate.canonicalize().ok()?;
+    if !resolved.starts_with(&workdir) {
+        return None;
+    }
+    let file = File::open(resolved).ok()?;
+    let open_meta = file.metadata().ok()?;
+    if !open_meta.is_file() || open_meta.len() > max_bytes_u64 {
+        return None;
+    }
+
+    // Re-check while reading because a regular file may grow after metadata
+    // inspection. `take` also bounds unusual virtual files reporting size 0.
+    let capacity = usize::try_from(open_meta.len()).ok()?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(max_bytes_u64.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > max_bytes {
+        return None;
+    }
+    Some(bytes)
 }
 
 #[cfg(test)]
@@ -603,6 +981,40 @@ mod tests {
             .expect("commit")
     }
 
+    fn linear_history(repo: &git2::Repository) -> [git2::Oid; 4] {
+        let first_oid = commit_file(repo, "history.txt", "a\n", "first", &[]);
+        let first = repo.find_commit(first_oid).expect("first commit");
+        let second_oid = commit_file(repo, "history.txt", "b\n", "second", &[&first]);
+        drop(first);
+        let second = repo.find_commit(second_oid).expect("second commit");
+        let third_oid = commit_file(repo, "history.txt", "c\n", "third", &[&second]);
+        drop(second);
+        let third = repo.find_commit(third_oid).expect("third commit");
+        let fourth_oid = commit_file(repo, "history.txt", "d\n", "fourth", &[&third]);
+        drop(third);
+        [first_oid, second_oid, third_oid, fourth_oid]
+    }
+
+    fn set_remote_ref(repo: &git2::Repository, name: &str, oid: git2::Oid) {
+        repo.reference(
+            &format!("refs/remotes/origin/{name}"),
+            oid,
+            true,
+            "test remote ref",
+        )
+        .expect("create remote ref");
+    }
+
+    fn test_pushed_history_limits() -> PushedHistoryLimits {
+        PushedHistoryLimits {
+            max_remote_refs: 16,
+            max_commits: 32,
+            max_parent_edges: 64,
+            max_commit_object_bytes: 1024 * 1024,
+            max_total_object_bytes: 8 * 1024 * 1024,
+        }
+    }
+
     #[test]
     fn ssh_hostname_cache_bounds_successes_and_failures() {
         let mut cache = SshHostnameCache::with_capacity(2);
@@ -621,6 +1033,307 @@ mod tests {
     fn ssh_hostname_validation_rejects_oversized_cache_keys() {
         assert!(is_plain_hostname(&"a".repeat(255)));
         assert!(!is_plain_hostname(&"a".repeat(256)));
+    }
+
+    #[test]
+    fn commit_pagination_rejects_pathological_renderer_values() {
+        assert!(validate_commit_page(0, MAX_COMMIT_PAGE_SIZE).is_ok());
+        assert!(validate_commit_page(MAX_COMMIT_OFFSET, 50).is_ok());
+
+        let page_error = validate_commit_page(0, usize::MAX).unwrap_err();
+        assert!(page_error.to_string().contains("page limit exceeded"));
+
+        let offset_error = validate_commit_page(usize::MAX, 50).unwrap_err();
+        assert!(offset_error.to_string().contains("offset limit exceeded"));
+    }
+
+    #[test]
+    fn commit_page_object_budgets_enforce_individual_and_total_boundaries() {
+        let root = unique_temp_dir("commit-page-object-budgets");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let [first, second, _third, _fourth] = linear_history(&repo);
+        let odb = repo.odb().expect("object database");
+        let first_bytes = odb.read_header(first).expect("first header").0;
+        let second_bytes = odb.read_header(second).expect("second header").0;
+        let total_bytes = first_bytes
+            .checked_add(second_bytes)
+            .expect("small test object sizes");
+        let (largest_oid, largest_bytes) = if first_bytes >= second_bytes {
+            (first, first_bytes)
+        } else {
+            (second, second_bytes)
+        };
+
+        let exact = CommitPageObjectLimits {
+            max_object_bytes: largest_bytes,
+            max_total_object_bytes: total_bytes,
+        };
+        validate_commit_page_objects(&repo, &[first, second], exact)
+            .expect("objects exactly at page budgets");
+
+        let individual_limited = CommitPageObjectLimits {
+            max_object_bytes: largest_bytes - 1,
+            max_total_object_bytes: total_bytes,
+        };
+        let individual_error =
+            validate_commit_page_objects(&repo, &[largest_oid], individual_limited)
+                .expect_err("commit exceeds individual page object budget");
+        assert!(individual_error
+            .to_string()
+            .contains("commit page object byte limit"));
+
+        let total_limited = CommitPageObjectLimits {
+            max_object_bytes: largest_bytes,
+            max_total_object_bytes: total_bytes - 1,
+        };
+        let total_error = validate_commit_page_objects(&repo, &[first, second], total_limited)
+            .expect_err("commits exceed total page object budget");
+        assert!(total_error
+            .to_string()
+            .contains("commit page total object byte limit"));
+
+        drop(odb);
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn commit_page_object_validation_rejects_non_commit_oids() {
+        let root = unique_temp_dir("commit-page-non-commit");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let blob = repo.blob(b"not a commit").expect("create blob");
+
+        let error = validate_commit_page_objects(
+            &repo,
+            &[blob],
+            CommitPageObjectLimits {
+                max_object_bytes: 1024,
+                max_total_object_bytes: 1024,
+            },
+        )
+        .expect_err("page oid must be a commit");
+        assert!(error.to_string().contains("non-commit object"));
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn zero_sized_commit_page_skips_history_traversal() {
+        let root = unique_temp_dir("zero-commit-page");
+        git2::Repository::init(&root).expect("init repo");
+
+        assert!(list_commits(&root, 0, 0).unwrap().is_empty());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pushed_history_marks_only_remote_reachable_page_commits() {
+        let root = unique_temp_dir("pushed-history-exact");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let [first, second, third, _fourth] = linear_history(&repo);
+        set_remote_ref(&repo, "main", second);
+
+        let pushed = pushed_page_oids(&repo, &[third, second, first], test_pushed_history_limits())
+            .expect("classify page commits");
+        assert!(!pushed.contains(&third));
+        assert!(pushed.contains(&second));
+        assert!(pushed.contains(&first));
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pushed_history_without_remotes_returns_exact_negatives() {
+        let root = unique_temp_dir("pushed-history-no-remotes");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let commit = commit_file(&repo, "a.txt", "a\n", "only", &[]);
+        let limits = PushedHistoryLimits {
+            max_remote_refs: 0,
+            max_commits: 0,
+            max_parent_edges: 0,
+            max_commit_object_bytes: 0,
+            max_total_object_bytes: 0,
+        };
+
+        assert!(pushed_page_oids(&repo, &[commit], limits)
+            .expect("no remotes")
+            .is_empty());
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pushed_history_counts_symbolic_remote_refs_against_the_budget() {
+        let root = unique_temp_dir("pushed-history-ref-budget");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let commit = commit_file(&repo, "a.txt", "a\n", "only", &[]);
+        set_remote_ref(&repo, "main", commit);
+        set_remote_ref(&repo, "backup", commit);
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "test symbolic remote ref",
+        )
+        .expect("create symbolic remote ref");
+
+        let too_small = PushedHistoryLimits {
+            max_remote_refs: 2,
+            ..test_pushed_history_limits()
+        };
+        let error = pushed_page_oids(&repo, &[commit], too_small)
+            .expect_err("all remote iterator entries must count");
+        assert!(error.to_string().contains("remote tracking ref limit"));
+
+        let exact = PushedHistoryLimits {
+            max_remote_refs: 3,
+            ..test_pushed_history_limits()
+        };
+        assert!(pushed_page_oids(&repo, &[commit], exact)
+            .expect("exact remote ref budget")
+            .contains(&commit));
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pushed_history_enforces_unique_commit_and_parent_edge_budgets() {
+        let root = unique_temp_dir("pushed-history-graph-budgets");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let [_first, _second, third, fourth] = linear_history(&repo);
+        set_remote_ref(&repo, "main", third);
+
+        let commit_limited = PushedHistoryLimits {
+            max_commits: 2,
+            ..test_pushed_history_limits()
+        };
+        let commit_error = pushed_page_oids(&repo, &[fourth], commit_limited)
+            .expect_err("remote graph exceeds unique commit budget");
+        assert!(commit_error
+            .to_string()
+            .contains("remote commit history limit"));
+
+        let edge_limited = PushedHistoryLimits {
+            max_parent_edges: 1,
+            ..test_pushed_history_limits()
+        };
+        let edge_error = pushed_page_oids(&repo, &[fourth], edge_limited)
+            .expect_err("remote graph exceeds parent edge budget");
+        assert!(edge_error
+            .to_string()
+            .contains("remote commit parent edge limit"));
+
+        let exact = PushedHistoryLimits {
+            max_commits: 3,
+            max_parent_edges: 2,
+            ..test_pushed_history_limits()
+        };
+        assert!(pushed_page_oids(&repo, &[fourth], exact)
+            .expect("exact graph budgets")
+            .is_empty());
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pushed_history_enforces_commit_object_budgets() {
+        let root = unique_temp_dir("pushed-history-object-budgets");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let [first, second, third, fourth] = linear_history(&repo);
+        set_remote_ref(&repo, "main", third);
+        let odb = repo.odb().expect("object database");
+        let first_bytes = odb.read_header(first).expect("first header").0;
+        let second_bytes = odb.read_header(second).expect("second header").0;
+        let third_bytes = odb.read_header(third).expect("third header").0;
+
+        let per_object_limited = PushedHistoryLimits {
+            max_commit_object_bytes: third_bytes - 1,
+            ..test_pushed_history_limits()
+        };
+        let object_error = pushed_page_oids(&repo, &[fourth], per_object_limited)
+            .expect_err("remote commit exceeds per-object budget");
+        assert!(object_error
+            .to_string()
+            .contains("remote commit object byte limit"));
+
+        let total_bytes = first_bytes
+            .checked_add(second_bytes)
+            .and_then(|bytes| bytes.checked_add(third_bytes))
+            .expect("small test object sizes");
+        let cumulative_limited = PushedHistoryLimits {
+            max_commit_object_bytes: first_bytes.max(second_bytes).max(third_bytes),
+            max_total_object_bytes: total_bytes - 1,
+            ..test_pushed_history_limits()
+        };
+        let total_error = pushed_page_oids(&repo, &[fourth], cumulative_limited)
+            .expect_err("remote history exceeds cumulative object budget");
+        assert!(total_error
+            .to_string()
+            .contains("remote commit history byte limit"));
+
+        drop(odb);
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pushed_history_returns_early_after_all_candidates_are_found() {
+        let root = unique_temp_dir("pushed-history-early-success");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let [_first, second, third, _fourth] = linear_history(&repo);
+        set_remote_ref(&repo, "main", third);
+        set_remote_ref(&repo, "backup", second);
+        let limits = PushedHistoryLimits {
+            max_remote_refs: 2,
+            max_commits: 0,
+            max_parent_edges: 0,
+            max_commit_object_bytes: 0,
+            max_total_object_bytes: 0,
+        };
+
+        assert!(pushed_page_oids(&repo, &[third], limits)
+            .expect("tip candidate needs no ancestor traversal")
+            .contains(&third));
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pushed_history_rejects_non_commit_remote_targets() {
+        let root = unique_temp_dir("pushed-history-non-commit");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let commit = commit_file(&repo, "a.txt", "a\n", "only", &[]);
+        let blob = repo.blob(b"not a commit").expect("create blob");
+        set_remote_ref(&repo, "invalid", blob);
+
+        let error = pushed_page_oids(&repo, &[commit], test_pushed_history_limits())
+            .expect_err("non-commit remote target must fail closed");
+        assert!(error.to_string().contains("non-commit object"));
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn empty_commit_page_skips_invalid_remote_history() {
+        let root = unique_temp_dir("empty-page-skips-remote-history");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        commit_file(&repo, "a.txt", "a\n", "only", &[]);
+        let blob = repo.blob(b"not a commit").expect("create blob");
+        set_remote_ref(&repo, "invalid", blob);
+        drop(repo);
+
+        assert!(list_commits(&root, 1, 1)
+            .expect("empty page does not need pushed classification")
+            .is_empty());
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -674,6 +1387,27 @@ mod tests {
     }
 
     #[test]
+    fn diff_staged_file_treats_glob_metacharacters_literally() {
+        let root = unique_temp_dir("staged-file-literal-pathspec");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let first_oid = commit_file(&repo, "*.rs", "literal\n", "init literal", &[]);
+        let first = repo.find_commit(first_oid).expect("first commit");
+        let second_oid = commit_file(&repo, "other.rs", "other\n", "init other", &[&first]);
+        let _second = repo.find_commit(second_oid).expect("second commit");
+        fs::write(root.join("*.rs"), "literal\nchanged\n").expect("write literal glob file");
+        fs::write(root.join("other.rs"), "other\nchanged\n").expect("write other file");
+        drop(_second);
+        drop(first);
+        drop(repo);
+
+        let payload = diff_staged_file(&root, "*.rs").expect("diff for literal glob path");
+        assert_eq!(payload.files.len(), 1);
+        assert_eq!(payload.files[0].new_path.as_deref(), Some("*.rs"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn diff_staged_file_rejects_paths_outside_repo() {
         let root = unique_temp_dir("staged-file-path-validation");
         git2::Repository::init(&root).expect("init repo");
@@ -683,5 +1417,125 @@ mod tests {
         assert!(diff_staged_file(&root, "").is_err());
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn workdir_image_read_stays_inside_repo() {
+        let parent = unique_temp_dir("image-containment");
+        let root = parent.join("repo");
+        fs::create_dir_all(&root).expect("create repo dir");
+        fs::write(parent.join("outside.png"), b"outside").expect("write outside image");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        fs::write(root.join("inside.png"), b"inside").expect("write image");
+
+        assert_eq!(
+            read_workdir_image(&repo, "inside.png", MAX_DIFF_IMAGE_BYTES),
+            Some(b"inside".to_vec())
+        );
+        assert_eq!(
+            read_workdir_image(&repo, "../outside.png", MAX_DIFF_IMAGE_BYTES),
+            None
+        );
+
+        drop(repo);
+        std::fs::remove_dir_all(&parent).ok();
+    }
+
+    #[test]
+    fn workdir_image_read_rejects_files_over_the_byte_limit() {
+        let root = unique_temp_dir("image-byte-limit");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        fs::write(root.join("large.png"), b"12345").expect("write image");
+
+        assert_eq!(read_workdir_image(&repo, "large.png", 4), None);
+        assert_eq!(
+            read_workdir_image(&repo, "large.png", 5),
+            Some(b"12345".to_vec())
+        );
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn repository_image_preview_respects_per_image_and_aggregate_budgets() {
+        let root = unique_temp_dir("image-blob-budget");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let oid = repo.blob(b"image-bytes").expect("write blob");
+
+        let mut too_small = 10;
+        assert_eq!(
+            image_data_uri_bounded(&repo, oid, Some("asset.png"), 64, &mut too_small),
+            None
+        );
+        assert_eq!(too_small, 10);
+
+        let mut exact = 11;
+        let preview = image_data_uri_bounded(&repo, oid, Some("asset.png"), 64, &mut exact)
+            .expect("preview within budget");
+        assert!(preview.starts_with("data:image/png;base64,"));
+        assert_eq!(exact, 0);
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn collect_diff_enforces_file_and_patch_budgets() {
+        let root = unique_temp_dir("patch-byte-limit");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        commit_file(&repo, "a.txt", "alpha\n", "init", &[]);
+        fs::write(root.join("a.txt"), "alpha\nbravo\n").expect("modify file");
+        let head_tree = repo
+            .head()
+            .expect("head")
+            .peel_to_tree()
+            .expect("head tree");
+        let diff = repo
+            .diff_tree_to_workdir_with_index(Some(&head_tree), None)
+            .expect("workdir diff");
+
+        let file_limits = DiffLimits {
+            max_files: 0,
+            ..LOCAL_DIFF_LIMITS
+        };
+        let file_error = collect_diff_with_limits(&repo, &diff, file_limits)
+            .expect_err("diff with too many files should be rejected");
+        assert!(file_error.to_string().contains("file limit"));
+
+        let limits = DiffLimits {
+            max_patch_bytes: 4,
+            ..LOCAL_DIFF_LIMITS
+        };
+        let error = collect_diff_with_limits(&repo, &diff, limits)
+            .expect_err("oversized patch should be rejected");
+        assert!(error.to_string().contains("patch byte limit"));
+
+        drop(diff);
+        drop(head_tree);
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workdir_image_read_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("image-symlink");
+        let outside = unique_temp_dir("image-symlink-outside");
+        let outside_image = outside.join("secret.png");
+        fs::write(&outside_image, b"secret").expect("write outside image");
+        symlink(&outside_image, root.join("linked.png")).expect("create symlink");
+        let repo = git2::Repository::init(&root).expect("init repo");
+
+        assert_eq!(
+            read_workdir_image(&repo, "linked.png", MAX_DIFF_IMAGE_BYTES),
+            None
+        );
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 }
