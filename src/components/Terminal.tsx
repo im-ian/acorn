@@ -972,36 +972,8 @@ export function Terminal({
     const unlistenFns: UnlistenFn[] = [];
     let observedLinkedWorktreePath: string | null = null;
     let liveCwdProbeTimer: number | null = null;
-    let agentProbeTimer: number | null = null;
     let daemonSessionAliveAtMount = false;
     let replayScrollbackOnSpawn = true;
-    let agentImagePasteFallbackActive = providerSupportsImagePasteFallback(
-      pasteAgentProviderRef.current,
-    );
-
-    const refreshAgentDetection = () => {
-      void api
-        .detectSessionAgent(sessionId)
-        .then((agent) => {
-          if (disposed) return;
-          agentImagePasteFallbackActive =
-            providerSupportsImagePasteFallback(pasteAgentProviderRef.current) ||
-            detectionHasImagePasteFallbackProvider(agent);
-        })
-        .catch((err: unknown) => {
-          console.debug("[Terminal] agent detection failed", err);
-        });
-    };
-
-    const scheduleAgentDetection = () => {
-      if (disposed || agentProbeTimer !== null) return;
-      agentProbeTimer = window.setTimeout(() => {
-        agentProbeTimer = null;
-        if (disposed) return;
-        refreshAgentDetection();
-      }, 500);
-    };
-    refreshAgentDetection();
 
     const rememberLinkedWorktreeCwd = (path: string, source: string) => {
       void api
@@ -1238,18 +1210,13 @@ export function Terminal({
     let imagePasteFallbackSerial = 0;
     const IMAGE_PASTE_FALLBACK_DELAY_MS = 500;
     const agentImagePasteFallbackIsActive = async (): Promise<boolean> => {
-      if (
-        agentImagePasteFallbackActive ||
-        providerSupportsImagePasteFallback(pasteAgentProviderRef.current)
-      ) {
+      if (providerSupportsImagePasteFallback(pasteAgentProviderRef.current)) {
         return true;
       }
       try {
         const agent = await api.detectSessionAgent(sessionId);
         if (disposed) return false;
-        agentImagePasteFallbackActive =
-          detectionHasImagePasteFallbackProvider(agent);
-        return agentImagePasteFallbackActive;
+        return detectionHasImagePasteFallbackProvider(agent);
       } catch (err: unknown) {
         console.debug("[Terminal] agent detection failed", err);
         return false;
@@ -2498,7 +2465,6 @@ export function Terminal({
       // triggering our shell's OSC 7 prompt hook. Probe the live descendant
       // cwd on output bursts so exit adoption stays tied to this session.
       scheduleLiveCwdProbe();
-      scheduleAgentDetection();
     };
     let outputSubscriptionToken: number | null = null;
 
@@ -2915,9 +2881,6 @@ export function Terminal({
       resizeDisposable.dispose();
       if (liveCwdProbeTimer !== null) {
         window.clearTimeout(liveCwdProbeTimer);
-      }
-      if (agentProbeTimer !== null) {
-        window.clearTimeout(agentProbeTimer);
       }
       if (imagePasteFallbackTimer !== null) {
         window.clearTimeout(imagePasteFallbackTimer);

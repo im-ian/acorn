@@ -787,6 +787,16 @@ test.describe("terminal: spawn", () => {
         antigravity: null,
       };
     });
+    await tauri.handle("clipboard_snapshot", () => ({
+      supported: true,
+      changeCount: 1,
+      types: ["public.png"],
+      text: null,
+      hasImage: true,
+      mimeType: "image/png",
+      extension: "png",
+      dataB64: "AQID",
+    }));
 
     await page.goto("/");
     await page
@@ -832,27 +842,11 @@ test.describe("terminal: spawn", () => {
         }
       ).__imagePasteAgentActive = true;
       (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
-
-      const textarea = document.querySelector<HTMLTextAreaElement>(
-        ".xterm-helper-textarea",
+      window.dispatchEvent(
+        new CustomEvent("acorn:terminal-paste", {
+          detail: { sessionId: "s-term" },
+        }),
       );
-      if (!textarea) throw new Error("xterm helper textarea missing");
-      const image = new File([new Uint8Array([1, 2, 3])], "shot.png", {
-        type: "image/png",
-      });
-      const event = new ClipboardEvent("paste", {
-        bubbles: true,
-        cancelable: true,
-      });
-      Object.defineProperty(event, "clipboardData", {
-        value: {
-          getData: () => "",
-          files: { 0: image, length: 1 },
-          items: { length: 0 },
-          types: ["Files", "image/png"],
-        },
-      });
-      textarea.dispatchEvent(event);
     });
 
     await expect
