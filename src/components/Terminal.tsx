@@ -2528,7 +2528,6 @@ export function Terminal({
           if (disposed) return;
           ptyReady = false;
           lastPtyResize = null;
-          agentImagePasteFallbackActive = false;
           // Adopt only when Acorn queued an explicit worktree command, or
           // when this terminal itself was observed running inside a fresh
           // linked worktree. Plain user `exit` must not adopt unrelated
