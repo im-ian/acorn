@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.2.0). Must already exist on the branch you ran this from."
+        description: "Tag to release (e.g. v0.2.0). Must already exist on origin/main."
         required: true
         type: string
 
@@ -30,11 +30,18 @@ jobs:
     name: Build shared frontend bundle
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      release_commit: ${{ steps.release_source.outputs.commit }}
+      release_tag: ${{ steps.release_source.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          # Tag-push events already carry an immutable commit SHA. Manual
+          # runs resolve their requested tag once here; every downstream job
+          # then checks out the validated commit output instead of the tag.
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup pnpm
@@ -50,6 +57,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Validate release version
+        id: release_source
         env:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
@@ -66,6 +74,12 @@ jobs:
             echo "checked out $head_commit, but $tag resolves to $tag_commit" >&2
             exit 1
           fi
+          if ! git merge-base --is-ancestor "$head_commit" refs/remotes/origin/main; then
+            echo "release commit $head_commit is not reachable from origin/main" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "commit=$head_commit" >> "$GITHUB_OUTPUT"
 
       - name: Install JS deps
         run: pnpm install --frozen-lockfile
@@ -96,7 +110,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ needs.frontend.outputs.release_commit }}
           persist-credentials: false
 
       - name: Setup pnpm
@@ -261,7 +275,7 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ needs.frontend.outputs.release_commit }}
           persist-credentials: false
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
@@ -302,7 +316,7 @@ jobs:
 
   release:
     name: Publish GitHub Release + latest.json
-    needs: build
+    needs: [frontend, build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -311,9 +325,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ needs.frontend.outputs.release_commit }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify pinned release source
+        env:
+          EXPECTED_COMMIT: ${{ needs.frontend.outputs.release_commit }}
+          TAG: ${{ needs.frontend.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags origin \
+            "+refs/tags/${TAG}:refs/tags/${TAG}" \
+            "+refs/heads/main:refs/remotes/origin/main"
+          head_commit=$(git rev-parse --verify HEAD)
+          tag_commit=$(git rev-parse --verify "refs/tags/${TAG}^{commit}")
+          if [[ "$head_commit" != "$EXPECTED_COMMIT" || "$tag_commit" != "$EXPECTED_COMMIT" ]]; then
+            echo "release source moved: expected $EXPECTED_COMMIT, HEAD=$head_commit, $TAG=$tag_commit" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$EXPECTED_COMMIT" refs/remotes/origin/main; then
+            echo "release commit $EXPECTED_COMMIT is not reachable from origin/main" >&2
+            exit 1
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -333,16 +367,11 @@ jobs:
       - name: Resolve tag + version
         id: meta
         env:
-          INPUT_TAG: ${{ inputs.tag }}
+          TAG: ${{ needs.frontend.outputs.release_tag }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            tag="$INPUT_TAG"
-          else
-            tag="${GITHUB_REF#refs/tags/}"
-          fi
-          version=$(node scripts/validate-release-version.mjs "$tag")
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          version=$(node scripts/validate-release-version.mjs "$TAG")
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Refuse existing release assets
@@ -454,6 +483,19 @@ jobs:
              }' > latest.json
 
           cat latest.json
+
+      - name: Verify release tag did not move
+        env:
+          EXPECTED_COMMIT: ${{ needs.frontend.outputs.release_commit }}
+          TAG: ${{ needs.frontend.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+          tag_commit=$(git rev-parse --verify "refs/tags/${TAG}^{commit}")
+          if [[ "$tag_commit" != "$EXPECTED_COMMIT" ]]; then
+            echo "release tag moved: expected $TAG at $EXPECTED_COMMIT, found $tag_commit" >&2
+            exit 1
+          fi
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
