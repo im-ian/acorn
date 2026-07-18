@@ -762,6 +762,117 @@ test.describe("terminal: spawn", () => {
       .toEqual(["pnpm run dev"]);
   });
 
+  test("detects image-paste agents on demand instead of polling on output", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __agentProbeOutputChannelId?: number;
+      };
+      w.__agentProbeOutputChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("detect_session_agent", () => {
+      const w = window as unknown as {
+        __agentProbeCalls?: number;
+        __imagePasteAgentActive?: boolean;
+      };
+      w.__agentProbeCalls = (w.__agentProbeCalls ?? 0) + 1;
+      return {
+        claude: w.__imagePasteAgentActive ? "claude-session" : null,
+        codex: null,
+        antigravity: null,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __agentProbeOutputChannelId?: number })
+              .__agentProbeOutputChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__agentProbeOutputChannelId",
+      "streaming one\r\n",
+    );
+    await emitSubscribedPtyOutput(
+      page,
+      "__agentProbeOutputChannelId",
+      "streaming two\r\n",
+      1,
+    );
+    await page.waitForTimeout(650);
+
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __agentProbeCalls?: number })
+            .__agentProbeCalls ?? 0,
+      ),
+    ).toBe(0);
+
+    await page.evaluate(() => {
+      (
+        window as unknown as {
+          __imagePasteAgentActive?: boolean;
+          __ptyWrites?: string[];
+        }
+      ).__imagePasteAgentActive = true;
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        ".xterm-helper-textarea",
+      );
+      if (!textarea) throw new Error("xterm helper textarea missing");
+      const image = new File([new Uint8Array([1, 2, 3])], "shot.png", {
+        type: "image/png",
+      });
+      const event = new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(event, "clipboardData", {
+        value: {
+          getData: () => "",
+          files: { 0: image, length: 1 },
+          items: { length: 0 },
+          types: ["Files", "image/png"],
+        },
+      });
+      textarea.dispatchEvent(event);
+    });
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __agentProbeCalls?: number })
+              .__agentProbeCalls ?? 0,
+        ),
+      )
+      .toBe(1);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+        ),
+      )
+      .toEqual(["\x16"]);
+  });
+
   test("does not write selected terminal text on right-click by default", async ({
     page,
     tauri,
