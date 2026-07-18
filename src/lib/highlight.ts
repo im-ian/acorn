@@ -1,19 +1,25 @@
 import {
-  createHighlighter,
+  createBundledHighlighter,
+  type HighlighterGeneric,
+} from "@shikijs/core";
+import {
   createJavaScriptRegexEngine,
   defaultJavaScriptRegexConstructor,
-  type BundledLanguage,
-  type BundledTheme,
-  type Highlighter,
-} from "shiki";
+} from "@shikijs/engine-javascript";
 import type { ParsedLine } from "./diff";
+import {
+  HIGHLIGHT_LANGUAGE_LOADERS,
+  HIGHLIGHT_THEME_LOADERS,
+  type HighlightLanguage,
+  type HighlightTheme,
+} from "./highlightRegistry";
 import type { ThemeMode } from "./themes";
 
-const DARK_THEME: BundledTheme = "github-dark";
-const LIGHT_THEME: BundledTheme = "github-light-high-contrast";
-const THEMES: BundledTheme[] = [DARK_THEME, LIGHT_THEME];
+const DARK_THEME: HighlightTheme = "github-dark";
+const LIGHT_THEME: HighlightTheme = "github-light-high-contrast";
+const THEMES: HighlightTheme[] = [DARK_THEME, LIGHT_THEME];
 
-const EXT_LANG: Record<string, BundledLanguage> = {
+const EXT_LANG: Record<string, HighlightLanguage> = {
   ts: "typescript",
   tsx: "tsx",
   mts: "typescript",
@@ -66,7 +72,7 @@ const EXT_LANG: Record<string, BundledLanguage> = {
   xml: "xml",
 };
 
-const FILENAME_LANG: Record<string, BundledLanguage> = {
+const FILENAME_LANG: Record<string, HighlightLanguage> = {
   Dockerfile: "docker",
   Makefile: "make",
   "CMakeLists.txt": "cmake",
@@ -108,26 +114,36 @@ const jsEngine = createJavaScriptRegexEngine({
   regexConstructor: compileGrammarRegex,
 });
 
-let highlighterPromise: Promise<Highlighter> | null = null;
-const loadedLangs = new Set<BundledLanguage>();
-const loadingLang = new Map<BundledLanguage, Promise<void>>();
+const createHighlighter = createBundledHighlighter({
+  langs: HIGHLIGHT_LANGUAGE_LOADERS,
+  themes: HIGHLIGHT_THEME_LOADERS,
+  engine: () => jsEngine,
+});
 
-function getHighlighter(): Promise<Highlighter> {
+type AcornHighlighter = HighlighterGeneric<HighlightLanguage, HighlightTheme>;
+
+let highlighterPromise: Promise<AcornHighlighter> | null = null;
+const loadedLangs = new Set<HighlightLanguage>();
+const loadingLang = new Map<HighlightLanguage, Promise<void>>();
+
+function getHighlighter(): Promise<AcornHighlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
       themes: THEMES,
       langs: [],
-      engine: jsEngine,
     });
   }
   return highlighterPromise;
 }
 
-export function highlightThemeForMode(mode: ThemeMode): BundledTheme {
+export function highlightThemeForMode(mode: ThemeMode): HighlightTheme {
   return mode === "light" ? LIGHT_THEME : DARK_THEME;
 }
 
-async function ensureLang(h: Highlighter, lang: BundledLanguage): Promise<boolean> {
+async function ensureLang(
+  h: AcornHighlighter,
+  lang: HighlightLanguage,
+): Promise<boolean> {
   if (loadedLangs.has(lang)) return true;
   let pending = loadingLang.get(lang);
   if (!pending) {
@@ -148,7 +164,9 @@ async function ensureLang(h: Highlighter, lang: BundledLanguage): Promise<boolea
   return loadedLangs.has(lang);
 }
 
-export function langFromPath(path: string | null | undefined): BundledLanguage | null {
+export function langFromPath(
+  path: string | null | undefined,
+): HighlightLanguage | null {
   if (!path) return null;
   const display = path.includes(" → ") ? path.split(" → ").pop() ?? path : path;
   const base = display.split("/").filter(Boolean).pop() ?? display;
@@ -168,7 +186,7 @@ function escapeHtml(s: string): string {
 
 async function renderLines(
   src: string[],
-  lang: BundledLanguage,
+  lang: HighlightLanguage,
   mode: ThemeMode,
 ): Promise<string[]> {
   if (src.length === 0) return [];
@@ -197,7 +215,7 @@ async function renderLines(
  */
 export async function highlightCode(
   content: string,
-  lang: BundledLanguage | null,
+  lang: HighlightLanguage | null,
   mode: ThemeMode = "dark",
 ): Promise<(string | null)[]> {
   const lines = content.split("\n");
@@ -213,7 +231,7 @@ export async function highlightCode(
  */
 export async function highlightDiff(
   lines: ParsedLine[],
-  lang: BundledLanguage,
+  lang: HighlightLanguage,
   mode: ThemeMode = "dark",
 ): Promise<(string | null)[]> {
   const html: (string | null)[] = new Array(lines.length).fill(null);

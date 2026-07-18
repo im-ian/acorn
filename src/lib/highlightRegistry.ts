@@ -1,0 +1,50 @@
+export const HIGHLIGHT_LANGUAGE_LOADERS = {
+  bash: () => import("@shikijs/langs/bash"),
+  c: () => import("@shikijs/langs/c"),
+  cmake: () => import("@shikijs/langs/cmake"),
+  cpp: () => import("@shikijs/langs/cpp"),
+  csharp: () => import("@shikijs/langs/csharp"),
+  css: () => import("@shikijs/langs/css"),
+  dart: () => import("@shikijs/langs/dart"),
+  docker: () => import("@shikijs/langs/docker"),
+  fish: () => import("@shikijs/langs/fish"),
+  go: () => import("@shikijs/langs/go"),
+  graphql: () => import("@shikijs/langs/graphql"),
+  html: () => import("@shikijs/langs/html"),
+  java: () => import("@shikijs/langs/java"),
+  javascript: () => import("@shikijs/langs/javascript"),
+  json: () => import("@shikijs/langs/json"),
+  jsonc: () => import("@shikijs/langs/jsonc"),
+  jsx: () => import("@shikijs/langs/jsx"),
+  kotlin: () => import("@shikijs/langs/kotlin"),
+  less: () => import("@shikijs/langs/less"),
+  lua: () => import("@shikijs/langs/lua"),
+  make: () => import("@shikijs/langs/make"),
+  markdown: () => import("@shikijs/langs/markdown"),
+  mdx: () => import("@shikijs/langs/mdx"),
+  php: () => import("@shikijs/langs/php"),
+  proto: () => import("@shikijs/langs/proto"),
+  python: () => import("@shikijs/langs/python"),
+  ruby: () => import("@shikijs/langs/ruby"),
+  rust: () => import("@shikijs/langs/rust"),
+  scala: () => import("@shikijs/langs/scala"),
+  scss: () => import("@shikijs/langs/scss"),
+  sql: () => import("@shikijs/langs/sql"),
+  svelte: () => import("@shikijs/langs/svelte"),
+  swift: () => import("@shikijs/langs/swift"),
+  toml: () => import("@shikijs/langs/toml"),
+  tsx: () => import("@shikijs/langs/tsx"),
+  typescript: () => import("@shikijs/langs/typescript"),
+  vue: () => import("@shikijs/langs/vue"),
+  xml: () => import("@shikijs/langs/xml"),
+  yaml: () => import("@shikijs/langs/yaml"),
+} as const;
+
+export const HIGHLIGHT_THEME_LOADERS = {
+  "github-dark": () => import("@shikijs/themes/github-dark"),
+  "github-light-high-contrast": () =>
+    import("@shikijs/themes/github-light-high-contrast"),
+} as const;
+
+export type HighlightLanguage = keyof typeof HIGHLIGHT_LANGUAGE_LOADERS;
+export type HighlightTheme = keyof typeof HIGHLIGHT_THEME_LOADERS;
