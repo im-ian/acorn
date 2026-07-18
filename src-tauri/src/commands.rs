@@ -1,5 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::io::{self, BufRead};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -39,6 +39,20 @@ const CHAT_SESSION_STATE_CHANGED_EVENT: &str = "acorn:chat-session-state-changed
 const WORKTREE_IN_USE_BY_OTHER_SESSIONS: &str =
     "Close other sessions using this worktree before removing it.";
 const CODEX_TOOL_PROCESS_START_TOLERANCE: std::time::Duration = std::time::Duration::from_secs(1);
+const MAX_CODEX_REPAIR_TAIL_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_CLAUDE_FORK_PROJECT_ENTRIES: usize = 10_000;
+const MAX_CLAUDE_FORK_TRANSCRIPT_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy)]
+struct ClaudeForkLimits {
+    max_project_entries: usize,
+    max_transcript_bytes: u64,
+}
+
+const DEFAULT_CLAUDE_FORK_LIMITS: ClaudeForkLimits = ClaudeForkLimits {
+    max_project_entries: MAX_CLAUDE_FORK_PROJECT_ENTRIES,
+    max_transcript_bytes: MAX_CLAUDE_FORK_TRANSCRIPT_BYTES,
+};
 
 async fn run_blocking<T, F>(label: &'static str, f: F) -> AppResult<T>
 where
@@ -828,13 +842,11 @@ fn codex_provider_thread_cursor(state: &persistence::ChatSessionState) -> Option
 }
 
 fn latest_codex_agent_message_from_transcript(path: &Path) -> io::Result<Option<String>> {
-    let file = std::fs::File::open(path)?;
-    let reader = io::BufReader::new(file);
-    let lines = reader.lines().collect::<io::Result<Vec<_>>>()?;
+    let tail = acorn_transcript::read_tail(path, MAX_CODEX_REPAIR_TAIL_BYTES)?;
     let mut latest_agent_message = None;
     let mut saw_empty_final = false;
 
-    for line in lines.iter().rev() {
+    for line in tail.text.lines().rev() {
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -3983,79 +3995,277 @@ fn empty_agent_detection() -> AgentDetection {
 /// and are validated below:
 ///   - `parent_uuid` is checked to be a real UUID before any disk
 ///     lookup, blocking `..`-style filename injection.
-///   - `new_cwd` is slugified and the resulting directory path is
-///     verified to canonicalise under `~/.claude/projects/` before any
-///     `create_dir_all` runs, so a hostile cwd containing path-escape
-///     characters cannot make us materialise directories outside the
-///     claude project root.
+///   - `new_cwd` is slugified and accepted only as one path component;
+///     the destination directory is then verified beneath the canonical
+///     `~/.claude/projects/` root before it is used.
 #[tauri::command]
 pub fn prepare_claude_fork(parent_uuid: String, new_cwd: String) -> AppResult<()> {
+    let home = directories::UserDirs::new()
+        .map(|d| d.home_dir().to_path_buf())
+        .ok_or_else(|| AppError::Other("no home dir".into()))?;
+    prepare_claude_fork_in(
+        &home.join(".claude").join("projects"),
+        &parent_uuid,
+        Path::new(&new_cwd),
+        DEFAULT_CLAUDE_FORK_LIMITS,
+    )
+}
+
+fn prepare_claude_fork_in(
+    projects_root: &Path,
+    parent_uuid: &str,
+    new_cwd: &Path,
+    limits: ClaudeForkLimits,
+) -> AppResult<()> {
     if Uuid::parse_str(&parent_uuid).is_err() {
         return Err(AppError::Other(format!(
             "parent_uuid must be a valid UUID, got: {parent_uuid}"
         )));
     }
 
-    let home = directories::UserDirs::new()
-        .map(|d| d.home_dir().to_path_buf())
-        .ok_or_else(|| AppError::Other("no home dir".into()))?;
-    let projects_root = home.join(".claude").join("projects");
+    let root_metadata = std::fs::symlink_metadata(projects_root)?;
+    validate_claude_fork_directory(projects_root, &root_metadata, "projects root")?;
+    let canonical_root = projects_root.canonicalize()?;
+    let canonical_root_metadata = std::fs::symlink_metadata(&canonical_root)?;
+    validate_claude_fork_directory(
+        &canonical_root,
+        &canonical_root_metadata,
+        "canonical projects root",
+    )?;
+
     let filename = format!("{parent_uuid}.jsonl");
 
     // The parent transcript can live under any number of project
     // slugs depending on where the agent was originally launched, so
-    // walk the projects dir for the first matching filename instead of
-    // recomputing the parent slug from a cwd the caller may not have.
+    // inspect every raw project entry within the budget. Continuing after a
+    // match ensures an oversized directory cannot produce a partial result.
     let mut src: Option<PathBuf> = None;
-    if let Ok(entries) = std::fs::read_dir(&projects_root) {
-        for slug in entries.flatten() {
-            let candidate = slug.path().join(&filename);
-            if candidate.is_file() {
-                src = Some(candidate);
-                break;
-            }
+    for (index, entry) in std::fs::read_dir(&canonical_root)?.enumerate() {
+        if index >= limits.max_project_entries {
+            return Err(AppError::Other(format!(
+                "Claude projects directory exceeds {} entries",
+                limits.max_project_entries
+            )));
+        }
+
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let project_dir = entry.path();
+        let project_metadata = std::fs::symlink_metadata(&project_dir)?;
+        validate_claude_fork_directory(&project_dir, &project_metadata, "project directory")?;
+        let canonical_project = project_dir.canonicalize()?;
+        if canonical_project.parent() != Some(canonical_root.as_path()) {
+            return Err(AppError::InvalidPath(format!(
+                "Claude project directory escapes projects root: {}",
+                project_dir.display()
+            )));
+        }
+
+        let candidate = canonical_project.join(&filename);
+        let candidate_metadata = match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        };
+        validate_claude_fork_regular_file(&candidate, &candidate_metadata, "source transcript")?;
+        let canonical_candidate = candidate.canonicalize()?;
+        if canonical_candidate.parent() != Some(canonical_project.as_path())
+            || !canonical_candidate.starts_with(&canonical_root)
+        {
+            return Err(AppError::InvalidPath(format!(
+                "Claude source transcript escapes projects root: {}",
+                candidate.display()
+            )));
+        }
+        if src.is_none() {
+            src = Some(canonical_candidate);
         }
     }
     let Some(src) = src else {
         return Err(AppError::Other(format!(
             "parent transcript {parent_uuid} not found under {}",
-            projects_root.display()
+            canonical_root.display()
         )));
     };
 
-    let dst_slug = acorn_transcript::slug_for_cwd(std::path::Path::new(&new_cwd));
-    let dst_dir = projects_root.join(&dst_slug);
+    let source_path_metadata = std::fs::symlink_metadata(&src)?;
+    validate_claude_fork_regular_file(&src, &source_path_metadata, "source transcript")?;
+    validate_claude_fork_snapshot_size(&src, &source_path_metadata, limits)?;
+    let mut source = std::fs::File::open(&src)?;
+    let source_open_metadata = source.metadata()?;
+    validate_claude_fork_regular_file(&src, &source_open_metadata, "opened source transcript")?;
+    validate_claude_fork_snapshot_size(&src, &source_open_metadata, limits)?;
+    validate_same_claude_fork_file(&src, &source_path_metadata, &source_open_metadata)?;
+    let source_recheck_metadata = std::fs::symlink_metadata(&src)?;
+    validate_claude_fork_regular_file(&src, &source_recheck_metadata, "source transcript")?;
+    validate_same_claude_fork_file(&src, &source_recheck_metadata, &source_open_metadata)?;
+    let snapshot_len = source_open_metadata.len();
 
-    // Path-traversal guard: resolve both ends and verify the destination
-    // is a real descendant of `projects_root`. We rely on `parent()`
-    // climbing up — `projects_root` exists once `claude` has ever been
-    // run, but `dst_dir` may not, so canonicalize the parent and append
-    // the slug. A weird `new_cwd` (e.g. containing `..` segments that
-    // slugify to bare dashes) shouldn't matter given the per-char filter,
-    // but defense in depth is cheap.
-    if !dst_slug.starts_with('-') || dst_slug.contains('/') || dst_slug.contains("..") {
+    let dst_slug = acorn_transcript::slug_for_cwd(new_cwd);
+    let slug_path = Path::new(&dst_slug);
+    let mut slug_components = slug_path.components();
+    let is_single_normal_component = matches!(slug_components.next(), Some(Component::Normal(_)))
+        && slug_components.next().is_none();
+    if !dst_slug.starts_with('-') || dst_slug.contains("..") || !is_single_normal_component {
         return Err(AppError::Other(format!(
             "refusing to stage transcript under unsafe slug: {dst_slug}"
         )));
     }
-    let canonical_root = projects_root
-        .canonicalize()
-        .unwrap_or(projects_root.clone());
-    let prospective = canonical_root.join(&dst_slug);
-    if !prospective.starts_with(&canonical_root) {
-        return Err(AppError::Other(format!(
-            "destination {} escapes claude projects root {}",
-            prospective.display(),
-            canonical_root.display()
-        )));
+
+    let dst_dir = ensure_claude_fork_destination_directory(&canonical_root, &dst_slug)?;
+    let dst = dst_dir.join(&filename);
+    if claude_fork_destination_exists(&dst)? {
+        return Ok(());
     }
 
-    std::fs::create_dir_all(&dst_dir)?;
-    let dst = dst_dir.join(&filename);
-    if !dst.exists() {
-        std::fs::copy(&src, &dst).map_err(|e| AppError::Other(format!("copy transcript: {e}")))?;
+    // A create-new tempfile in the destination's parent keeps partial copies
+    // unreachable at the final name. Persist uses a same-filesystem atomic
+    // rename, which replaces a concurrently introduced link rather than
+    // following it to another target.
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".acorn-claude-fork-")
+        .suffix(".jsonl.tmp")
+        .tempfile_in(&dst_dir)?;
+    let copied = io::copy(
+        &mut (&mut source).take(snapshot_len),
+        temporary.as_file_mut(),
+    )?;
+    if copied != snapshot_len {
+        return Err(AppError::Other(format!(
+            "source transcript changed while copying: expected {snapshot_len} bytes, copied {copied}"
+        )));
+    }
+    temporary.as_file_mut().flush()?;
+
+    let rechecked_dst_dir = ensure_claude_fork_destination_directory(&canonical_root, &dst_slug)?;
+    if rechecked_dst_dir != dst_dir {
+        return Err(AppError::Other(format!(
+            "Claude destination directory changed while copying: {}",
+            dst_dir.display()
+        )));
+    }
+    if claude_fork_destination_exists(&dst)? {
+        return Ok(());
+    }
+
+    let persisted = temporary
+        .persist(&dst)
+        .map_err(|err| AppError::Other(format!("copy transcript: {}", err.error)))?;
+    let persisted_metadata = persisted.metadata()?;
+    validate_claude_fork_regular_file(&dst, &persisted_metadata, "destination transcript")?;
+    Ok(())
+}
+
+fn validate_claude_fork_directory(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    label: &str,
+) -> AppResult<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(AppError::InvalidPath(format!(
+            "Claude {label} must be a real directory: {}",
+            path.display()
+        )));
     }
     Ok(())
+}
+
+fn validate_claude_fork_regular_file(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    label: &str,
+) -> AppResult<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(AppError::InvalidPath(format!(
+            "Claude {label} must be a regular file: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_claude_fork_snapshot_size(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    limits: ClaudeForkLimits,
+) -> AppResult<()> {
+    if metadata.len() > limits.max_transcript_bytes {
+        return Err(AppError::Other(format!(
+            "Claude source transcript exceeds {} bytes: {}",
+            limits.max_transcript_bytes,
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_same_claude_fork_file(
+    path: &Path,
+    before: &std::fs::Metadata,
+    opened: &std::fs::Metadata,
+) -> AppResult<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if before.dev() != opened.dev() || before.ino() != opened.ino() {
+            return Err(AppError::InvalidPath(format!(
+                "Claude source transcript changed while opening: {}",
+                path.display()
+            )));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, before, opened);
+    }
+    Ok(())
+}
+
+fn ensure_claude_fork_destination_directory(
+    canonical_root: &Path,
+    dst_slug: &str,
+) -> AppResult<PathBuf> {
+    let dst_dir = canonical_root.join(dst_slug);
+    loop {
+        match std::fs::symlink_metadata(&dst_dir) {
+            Ok(metadata) => {
+                validate_claude_fork_directory(&dst_dir, &metadata, "destination directory")?;
+                break;
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                match std::fs::create_dir(&dst_dir) {
+                    Ok(()) => {}
+                    Err(create_err) if create_err.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(create_err) => return Err(create_err.into()),
+                }
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    let canonical_dst = dst_dir.canonicalize()?;
+    if canonical_dst.parent() != Some(canonical_root) {
+        return Err(AppError::InvalidPath(format!(
+            "Claude destination directory escapes projects root: {}",
+            dst_dir.display()
+        )));
+    }
+    let metadata = std::fs::symlink_metadata(&canonical_dst)?;
+    validate_claude_fork_directory(&canonical_dst, &metadata, "destination directory")?;
+    Ok(canonical_dst)
+}
+
+fn claude_fork_destination_exists(dst: &Path) -> AppResult<bool> {
+    match std::fs::symlink_metadata(dst) {
+        Ok(metadata) => {
+            validate_claude_fork_regular_file(dst, &metadata, "destination transcript")?;
+            Ok(true)
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err.into()),
+    }
 }
 
 /// Live-process snapshot of which agent transcripts (if any) the user is
@@ -4643,13 +4853,29 @@ fn write_control_marker(cwd: &std::path::Path, primer: &str) {
         "<!-- generated by Acorn on every control-session PTY spawn. \
          Safe to commit-ignore. -->\n\n# Control session\n\n{primer}\n",
     );
-    if let Err(err) = std::fs::write(&path, body) {
+    if let Err(err) = replace_control_marker(cwd, &path, body.as_bytes()) {
         tracing::warn!(
             path = %path.display(),
             error = %err,
             "failed to write .acorn-control.md marker",
         );
     }
+}
+
+fn replace_control_marker(cwd: &Path, path: &Path, body: &[u8]) -> io::Result<()> {
+    // The destination is repository-controlled and may already be a symlink or
+    // hard link. Write to an unpredictable create-new file in the same
+    // directory, then atomically replace the directory entry so the marker
+    // write never follows that link to another file.
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".acorn-control.md.")
+        .suffix(".tmp")
+        .tempfile_in(cwd)?;
+    temporary.write_all(body)?;
+    temporary
+        .persist(path)
+        .map_err(|persist_error| persist_error.error)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -5102,7 +5328,10 @@ pub async fn scrollback_orphan_clear(state: State<'_, AppState>) -> AppResult<us
 #[tauri::command]
 pub async fn read_session_todos(session_id: String, cwd: String) -> AppResult<Vec<TodoItem>> {
     let cwd = PathBuf::from(cwd);
-    todos::read_latest_todos(&session_id, &cwd)
+    run_blocking("read_session_todos", move || {
+        todos::read_latest_todos(&session_id, &cwd)
+    })
+    .await
 }
 
 #[derive(serde::Serialize)]
@@ -7869,6 +8098,35 @@ mod tests {
     }
 
     #[test]
+    fn backfill_empty_codex_assistant_message_does_not_scan_beyond_tail_budget() {
+        use std::io::Write as _;
+
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "다시 봐줘"),
+            chat_message("a1", crate::persistence::ChatRole::Assistant, ""),
+        ]);
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("rollout.jsonl");
+        let mut file = std::fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"event_msg","payload":{{"type":"task_complete","last_agent_message":"too old"}}}}"#
+        )
+        .unwrap();
+        file.set_len(super::MAX_CODEX_REPAIR_TAIL_BYTES + 1024)
+            .unwrap();
+        drop(file);
+
+        assert!(
+            !super::backfill_latest_empty_codex_assistant_message_from_path(
+                &mut state,
+                &transcript
+            )
+        );
+        assert_eq!(state.messages.last().unwrap().content, "");
+    }
+
+    #[test]
     fn chat_stream_parser_records_codex_token_count_metadata() {
         let mut parser = super::ChatCliOutputParser::new(super::ChatCliOutputMode::CodexJson);
         let mut chunks = Vec::new();
@@ -9398,6 +9656,325 @@ mod tests {
             super::chat_worktree_base_name_for_repo(repo, "123456789abc"),
             "momentry-worktree-123456789abc"
         );
+    }
+
+    const CLAUDE_FORK_TEST_UUID: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+    fn claude_fork_test_limits(
+        max_project_entries: usize,
+        max_transcript_bytes: u64,
+    ) -> super::ClaudeForkLimits {
+        super::ClaudeForkLimits {
+            max_project_entries,
+            max_transcript_bytes,
+        }
+    }
+
+    fn write_claude_fork_source(root: &Path, contents: &[u8]) -> PathBuf {
+        let project = root.join("-source-project");
+        std::fs::create_dir(&project).expect("create source project");
+        let source = project.join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl"));
+        std::fs::write(&source, contents).expect("write source transcript");
+        source
+    }
+
+    #[test]
+    fn prepare_claude_fork_atomically_copies_snapshot_and_keeps_regular_destination() {
+        let root = tempfile::tempdir().expect("temporary Claude projects root");
+        let source = write_claude_fork_source(root.path(), b"parent snapshot\n");
+        let new_cwd = Path::new("/tmp/acorn-fork-target");
+        let destination_dir = root.path().join(acorn_transcript::slug_for_cwd(new_cwd));
+        let destination = destination_dir.join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl"));
+        let limits = claude_fork_test_limits(8, 1024);
+
+        super::prepare_claude_fork_in(root.path(), CLAUDE_FORK_TEST_UUID, new_cwd, limits)
+            .expect("stage transcript");
+        assert_eq!(
+            std::fs::read(&destination).expect("read staged transcript"),
+            b"parent snapshot\n"
+        );
+        assert!(std::fs::read_dir(&destination_dir)
+            .expect("list destination directory")
+            .flatten()
+            .all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".acorn-claude-fork-")));
+
+        std::fs::write(&source, b"new source contents\n").expect("replace source contents");
+        std::fs::write(&destination, b"existing destination\n")
+            .expect("replace destination contents");
+        super::prepare_claude_fork_in(root.path(), CLAUDE_FORK_TEST_UUID, new_cwd, limits)
+            .expect("existing regular destination is idempotent");
+        assert_eq!(
+            std::fs::read(&destination).expect("read existing destination"),
+            b"existing destination\n"
+        );
+    }
+
+    #[test]
+    fn prepare_claude_fork_fails_closed_over_raw_project_entry_budget() {
+        let root = tempfile::tempdir().expect("temporary Claude projects root");
+        write_claude_fork_source(root.path(), b"parent snapshot\n");
+        std::fs::create_dir(root.path().join("-extra-project")).expect("create extra project");
+        let new_cwd = Path::new("/tmp/acorn-fork-over-budget");
+
+        let error = super::prepare_claude_fork_in(
+            root.path(),
+            CLAUDE_FORK_TEST_UUID,
+            new_cwd,
+            claude_fork_test_limits(1, 1024),
+        )
+        .expect_err("raw entry overflow must discard a partial match");
+
+        assert!(error.to_string().contains("exceeds 1 entries"));
+        assert!(!root
+            .path()
+            .join(acorn_transcript::slug_for_cwd(new_cwd))
+            .exists());
+    }
+
+    #[test]
+    fn prepare_claude_fork_rejects_oversized_source_snapshot() {
+        let root = tempfile::tempdir().expect("temporary Claude projects root");
+        write_claude_fork_source(root.path(), b"12345");
+        let new_cwd = Path::new("/tmp/acorn-fork-oversized");
+
+        let error = super::prepare_claude_fork_in(
+            root.path(),
+            CLAUDE_FORK_TEST_UUID,
+            new_cwd,
+            claude_fork_test_limits(4, 4),
+        )
+        .expect_err("oversized source must be rejected");
+
+        assert!(error.to_string().contains("exceeds 4 bytes"));
+        assert!(!root
+            .path()
+            .join(acorn_transcript::slug_for_cwd(new_cwd))
+            .exists());
+    }
+
+    #[test]
+    fn prepare_claude_fork_rejects_non_regular_source_and_destination() {
+        let root = tempfile::tempdir().expect("temporary Claude projects root");
+        let source_project = root.path().join("-source-project");
+        std::fs::create_dir(&source_project).expect("create source project");
+        std::fs::create_dir(source_project.join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl")))
+            .expect("create directory at source leaf");
+
+        let source_error = super::prepare_claude_fork_in(
+            root.path(),
+            CLAUDE_FORK_TEST_UUID,
+            Path::new("/tmp/acorn-fork-special-source"),
+            claude_fork_test_limits(4, 1024),
+        )
+        .expect_err("directory source must be rejected");
+        assert!(source_error.to_string().contains("must be a regular file"));
+
+        std::fs::remove_dir(source_project.join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl")))
+            .expect("remove directory source");
+        std::fs::write(
+            source_project.join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl")),
+            b"parent snapshot\n",
+        )
+        .expect("write regular source");
+        let new_cwd = Path::new("/tmp/acorn-fork-special-destination");
+        let destination_dir = root.path().join(acorn_transcript::slug_for_cwd(new_cwd));
+        std::fs::create_dir(&destination_dir).expect("create destination directory");
+        std::fs::create_dir(destination_dir.join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl")))
+            .expect("create directory at destination leaf");
+
+        let destination_error = super::prepare_claude_fork_in(
+            root.path(),
+            CLAUDE_FORK_TEST_UUID,
+            new_cwd,
+            claude_fork_test_limits(4, 1024),
+        )
+        .expect_err("directory destination must be rejected");
+        assert!(destination_error
+            .to_string()
+            .contains("must be a regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_claude_fork_rejects_linked_root_project_source_and_destination() {
+        use std::os::unix::fs::symlink;
+
+        let limits = claude_fork_test_limits(8, 1024);
+
+        let actual_root = tempfile::tempdir().expect("actual Claude projects root");
+        write_claude_fork_source(actual_root.path(), b"parent snapshot\n");
+        let root_parent = tempfile::tempdir().expect("configured root parent");
+        let linked_root = root_parent.path().join("projects");
+        symlink(actual_root.path(), &linked_root).expect("link projects root");
+        assert!(super::prepare_claude_fork_in(
+            &linked_root,
+            CLAUDE_FORK_TEST_UUID,
+            Path::new("/tmp/acorn-fork-linked-root"),
+            limits,
+        )
+        .is_err());
+
+        let linked_project_root = tempfile::tempdir().expect("linked project root");
+        let outside_project = tempfile::tempdir().expect("outside source project");
+        std::fs::write(
+            outside_project
+                .path()
+                .join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl")),
+            b"outside source\n",
+        )
+        .expect("write outside source");
+        symlink(
+            outside_project.path(),
+            linked_project_root.path().join("-linked-project"),
+        )
+        .expect("link source project");
+        assert!(super::prepare_claude_fork_in(
+            linked_project_root.path(),
+            CLAUDE_FORK_TEST_UUID,
+            Path::new("/tmp/acorn-fork-linked-project"),
+            limits,
+        )
+        .is_err());
+
+        let linked_source_root = tempfile::tempdir().expect("linked source root");
+        let source_project = linked_source_root.path().join("-source-project");
+        std::fs::create_dir(&source_project).expect("create source project");
+        let outside_source = tempfile::NamedTempFile::new().expect("outside source");
+        std::fs::write(outside_source.path(), b"outside source\n").expect("write outside source");
+        symlink(
+            outside_source.path(),
+            source_project.join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl")),
+        )
+        .expect("link source transcript");
+        assert!(super::prepare_claude_fork_in(
+            linked_source_root.path(),
+            CLAUDE_FORK_TEST_UUID,
+            Path::new("/tmp/acorn-fork-linked-source"),
+            limits,
+        )
+        .is_err());
+
+        let linked_destination_root = tempfile::tempdir().expect("linked destination root");
+        write_claude_fork_source(linked_destination_root.path(), b"parent snapshot\n");
+        let new_cwd = Path::new("/tmp/acorn-fork-linked-destination");
+        let destination_dir = linked_destination_root
+            .path()
+            .join(acorn_transcript::slug_for_cwd(new_cwd));
+        std::fs::create_dir(&destination_dir).expect("create destination directory");
+        let outside_destination = tempfile::NamedTempFile::new().expect("outside destination");
+        std::fs::write(outside_destination.path(), b"outside sentinel\n")
+            .expect("write destination sentinel");
+        symlink(
+            outside_destination.path(),
+            destination_dir.join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl")),
+        )
+        .expect("link destination transcript");
+
+        assert!(super::prepare_claude_fork_in(
+            linked_destination_root.path(),
+            CLAUDE_FORK_TEST_UUID,
+            new_cwd,
+            limits,
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read(outside_destination.path()).expect("read destination sentinel"),
+            b"outside sentinel\n"
+        );
+
+        let linked_destination_dir_root =
+            tempfile::tempdir().expect("linked destination directory root");
+        write_claude_fork_source(linked_destination_dir_root.path(), b"parent snapshot\n");
+        let new_cwd = Path::new("/tmp/acorn-fork-linked-destination-directory");
+        let outside_destination_dir = tempfile::tempdir().expect("outside destination directory");
+        symlink(
+            outside_destination_dir.path(),
+            linked_destination_dir_root
+                .path()
+                .join(acorn_transcript::slug_for_cwd(new_cwd)),
+        )
+        .expect("link destination directory");
+
+        assert!(super::prepare_claude_fork_in(
+            linked_destination_dir_root.path(),
+            CLAUDE_FORK_TEST_UUID,
+            new_cwd,
+            limits,
+        )
+        .is_err());
+        assert!(!outside_destination_dir
+            .path()
+            .join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl"))
+            .exists());
+    }
+
+    #[test]
+    fn control_marker_is_atomically_created_and_replaced() {
+        let directory = tempfile::tempdir().expect("temporary control cwd");
+        let marker = directory.path().join(".acorn-control.md");
+
+        super::write_control_marker(directory.path(), "first primer");
+        assert!(std::fs::read_to_string(&marker)
+            .expect("read first marker")
+            .contains("first primer"));
+
+        super::write_control_marker(directory.path(), "second primer");
+        let body = std::fs::read_to_string(&marker).expect("read replaced marker");
+        assert!(body.contains("second primer"));
+        assert!(!body.contains("first primer"));
+        assert!(std::fs::read_dir(directory.path())
+            .expect("list control cwd")
+            .flatten()
+            .all(|entry| !entry.file_name().to_string_lossy().ends_with(".tmp")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_marker_replacement_does_not_follow_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary control cwd");
+        let outside = tempfile::NamedTempFile::new().expect("outside sentinel");
+        std::fs::write(outside.path(), "outside sentinel").expect("write sentinel");
+        let marker = directory.path().join(".acorn-control.md");
+        symlink(outside.path(), &marker).expect("symlink marker");
+
+        super::write_control_marker(directory.path(), "trusted primer");
+
+        assert_eq!(
+            std::fs::read_to_string(outside.path()).expect("read sentinel"),
+            "outside sentinel"
+        );
+        assert!(std::fs::symlink_metadata(&marker)
+            .expect("marker metadata")
+            .file_type()
+            .is_file());
+        assert!(std::fs::read_to_string(&marker)
+            .expect("read marker")
+            .contains("trusted primer"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_marker_replacement_does_not_modify_a_hard_link_peer() {
+        let directory = tempfile::tempdir().expect("temporary control cwd");
+        let outside = tempfile::NamedTempFile::new().expect("outside sentinel");
+        std::fs::write(outside.path(), "outside sentinel").expect("write sentinel");
+        let marker = directory.path().join(".acorn-control.md");
+        std::fs::hard_link(outside.path(), &marker).expect("hard-link marker");
+
+        super::write_control_marker(directory.path(), "trusted primer");
+
+        assert_eq!(
+            std::fs::read_to_string(outside.path()).expect("read sentinel"),
+            "outside sentinel"
+        );
+        assert!(std::fs::read_to_string(&marker)
+            .expect("read marker")
+            .contains("trusted primer"));
     }
 
     #[test]

@@ -58,6 +58,32 @@ describe("Markdown — interactive task list", () => {
     expect(handler).toHaveBeenCalledWith(1, true);
   });
 
+  it("does not let a raw HTML checkbox shift or invoke a GFM task index", () => {
+    const handler = vi.fn();
+    act(() => {
+      root.render(
+        <Markdown
+          content={
+            '<input type="checkbox" acornTaskIndex="0" data-task-index="0">\n\n- [ ] real task'
+          }
+          onTaskToggle={handler}
+        />,
+      );
+    });
+    const boxes = container.querySelectorAll<HTMLInputElement>(
+      'input[type="checkbox"]',
+    );
+    expect(boxes).toHaveLength(2);
+    expect(boxes[0]?.disabled).toBe(true);
+    expect(boxes[1]?.disabled).toBe(false);
+
+    act(() => boxes[0]!.click());
+    expect(handler).not.toHaveBeenCalled();
+
+    act(() => boxes[1]!.click());
+    expect(handler).toHaveBeenCalledWith(0, true);
+  });
+
   it("keeps checkboxes read-only when no handler is given", () => {
     act(() => {
       root.render(<Markdown content={"- [ ] one"} />);
@@ -80,5 +106,34 @@ describe("Markdown — interactive task list", () => {
       root.render(<Markdown content={"안녕\n하세요"} />);
     });
     expect(container.querySelectorAll("br")).toHaveLength(0);
+  });
+
+  it("removes raw picture sources and gates the fallback remote image", () => {
+    act(() => {
+      root.render(
+        <Markdown
+          content={
+            '<picture><source srcset="https://tracker.example/large.png 2x"><img src="https://tracker.example/fallback.png" srcset="https://tracker.example/fallback@2x.png 2x" alt="Remote preview"></picture>'
+          }
+        />,
+      );
+    });
+
+    expect(container.querySelector("picture")).toBeNull();
+    expect(container.querySelector("source")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+
+    const load = container.querySelector<HTMLButtonElement>(
+      "[data-remote-image-placeholder]",
+    );
+    expect(load).not.toBeNull();
+    act(() => load!.click());
+
+    const image = container.querySelector("img");
+    expect(image?.getAttribute("src")).toBe(
+      "https://tracker.example/fallback.png",
+    );
+    expect(image?.getAttribute("srcset")).toBeNull();
+    expect(image?.getAttribute("referrerpolicy")).toBe("no-referrer");
   });
 });

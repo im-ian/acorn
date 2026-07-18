@@ -89,6 +89,7 @@ export function ImageLightbox({ image, onClose }: ImageLightboxProps) {
       <img
         src={image.src}
         alt={image.alt ?? ""}
+        referrerPolicy="no-referrer"
         onClick={(e) => e.stopPropagation()}
         className="max-h-[90vh] max-w-[90vw] cursor-default rounded border border-white/10 object-contain shadow-2xl"
       />

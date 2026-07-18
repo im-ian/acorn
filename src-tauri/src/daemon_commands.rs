@@ -8,9 +8,6 @@
 //! to the daemon when the user has the killswitch on. Frontend call
 //! sites do not have to know which side served them.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-
 use serde::Serialize;
 use tauri::State;
 use uuid::Uuid;
@@ -164,80 +161,6 @@ pub fn daemon_list_sessions(
         .collect())
 }
 
-/// Frontend → daemon spawn proxy. Invoked by the legacy `pty_spawn`
-/// command once daemon-routed spawning lands, and directly by tests
-/// that exercise the daemon path. Returns the session UUID the daemon
-/// assigned (always equal to `session_id` when supplied).
-#[allow(clippy::too_many_arguments)]
-#[tauri::command]
-pub fn daemon_spawn_session(
-    session_id: String,
-    name: String,
-    cwd: String,
-    command: String,
-    args: Vec<String>,
-    env: HashMap<String, String>,
-    cols: u16,
-    rows: u16,
-    kind: String,
-    repo_path: Option<String>,
-    branch: Option<String>,
-    agent_kind: Option<String>,
-    agent_resume_token: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let id = Uuid::parse_str(&session_id).map_err(|e| format!("invalid session id: {e}"))?;
-    let session_kind = parse_kind(&kind)?;
-    let agent = agent_kind.as_deref().and_then(parse_agent_kind);
-    let outcome = state
-        .daemon_bridge
-        .spawn(
-            id,
-            name,
-            PathBuf::from(cwd),
-            command,
-            args,
-            env,
-            cols,
-            rows,
-            session_kind,
-            repo_path.map(PathBuf::from),
-            branch,
-            agent,
-            agent_resume_token,
-        )
-        .map_err(|e| e.to_string())?;
-    Ok(outcome.session_id.to_string())
-}
-
-#[tauri::command]
-pub fn daemon_send_input(
-    target_session_id: String,
-    data_b64: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
-    let bytes = base64_decode(&data_b64)?;
-    state
-        .daemon_bridge
-        .send_input(id, &bytes)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn daemon_resize(
-    target_session_id: String,
-    cols: u16,
-    rows: u16,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
-    state
-        .daemon_bridge
-        .resize(id, cols, rows)
-        .map_err(|e| e.to_string())
-}
-
 #[tauri::command]
 pub fn daemon_kill_session(
     target_session_id: String,
@@ -369,27 +292,6 @@ pub fn daemon_adopt_session(
     Ok(())
 }
 
-fn parse_kind(kind: &str) -> Result<SessionKind, String> {
-    match kind {
-        "regular" => Ok(SessionKind::Regular),
-        "control" => Ok(SessionKind::Control),
-        other => Err(format!("unknown session kind: {other}")),
-    }
-}
-
-fn parse_agent_kind(s: &str) -> Option<AgentKind> {
-    match s {
-        "claude-code" => Some(AgentKind::ClaudeCode),
-        "aider" => Some(AgentKind::Aider),
-        "llm" => Some(AgentKind::Llm),
-        "open-interpreter" => Some(AgentKind::OpenInterpreter),
-        "codex" => Some(AgentKind::Codex),
-        "antigravity" => Some(AgentKind::Antigravity),
-        "unknown" => Some(AgentKind::Unknown),
-        _ => None,
-    }
-}
-
 fn agent_kind_to_str(k: AgentKind) -> String {
     match k {
         AgentKind::ClaudeCode => "claude-code".into(),
@@ -399,71 +301,5 @@ fn agent_kind_to_str(k: AgentKind) -> String {
         AgentKind::Codex => "codex".into(),
         AgentKind::Antigravity => "antigravity".into(),
         AgentKind::Unknown => "unknown".into(),
-    }
-}
-
-/// Same RFC 4648 decoder pattern as the daemon's own — duplicated to
-/// keep the frontend command layer dep-light.
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    fn val(c: u8) -> Result<u8, String> {
-        match c {
-            b'A'..=b'Z' => Ok(c - b'A'),
-            b'a'..=b'z' => Ok(26 + c - b'a'),
-            b'0'..=b'9' => Ok(52 + c - b'0'),
-            b'+' => Ok(62),
-            b'/' => Ok(63),
-            _ => Err(format!("non-base64 byte 0x{c:02x}")),
-        }
-    }
-    let bytes: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
-    if bytes.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    let mut chunks = bytes.chunks(4);
-    while let Some(chunk) = chunks.next() {
-        if chunk.len() != 4 {
-            return Err("bad base64 length".into());
-        }
-        let pad = chunk.iter().rev().take_while(|&&c| c == b'=').count();
-        let v0 = val(chunk[0])?;
-        let v1 = val(chunk[1])?;
-        let v2 = if pad >= 2 { 0 } else { val(chunk[2])? };
-        let v3 = if pad >= 1 { 0 } else { val(chunk[3])? };
-        let n =
-            (u32::from(v0) << 18) | (u32::from(v1) << 12) | (u32::from(v2) << 6) | u32::from(v3);
-        out.push((n >> 16) as u8);
-        if pad < 2 {
-            out.push((n >> 8) as u8);
-        }
-        if pad < 1 {
-            out.push(n as u8);
-        }
-    }
-    Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_kind_known_values() {
-        assert!(matches!(parse_kind("regular"), Ok(SessionKind::Regular)));
-        assert!(matches!(parse_kind("control"), Ok(SessionKind::Control)));
-        assert!(parse_kind("frobnicate").is_err());
-    }
-
-    #[test]
-    fn parse_agent_kind_known_values() {
-        assert!(matches!(
-            parse_agent_kind("claude-code"),
-            Some(AgentKind::ClaudeCode)
-        ));
-        assert!(matches!(
-            parse_agent_kind("antigravity"),
-            Some(AgentKind::Antigravity)
-        ));
-        assert!(parse_agent_kind("nope").is_none());
     }
 }

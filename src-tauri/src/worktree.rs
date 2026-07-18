@@ -1,6 +1,7 @@
 use git2::{BranchType, Repository, WorktreeAddOptions, WorktreePruneOptions};
 use serde::Serialize;
-use std::io::Write;
+use std::fs::{File, Metadata, OpenOptions};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -9,6 +10,7 @@ use crate::error::{AppError, AppResult};
 
 const ACORN_DIR: &str = ".acorn";
 const EXCLUDE_ENTRY: &str = ".acorn/";
+const MAX_GIT_EXCLUDE_BYTES: u64 = 1024 * 1024;
 const DELETED_WORKTREES_DIR: &str = ".acorn-deleted-worktrees";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -78,33 +80,141 @@ pub fn worktree_root(repo_path: &Path) -> PathBuf {
     repo_path.join(ACORN_DIR).join("worktrees")
 }
 
-fn ensure_git_excluded(repo_path: &Path) -> AppResult<()> {
-    let info_dir = repo_path.join(".git").join("info");
-    if !info_dir.exists() {
-        std::fs::create_dir_all(&info_dir)?;
-    }
+fn ensure_git_excluded(repo: &Repository) -> AppResult<()> {
+    // A linked worktree's `Repository::path()` is its per-worktree admin
+    // directory. Ignore rules live in the shared Git common directory, so use
+    // `commondir()` for both main and linked worktree repositories.
+    let common_dir = repo.commondir().canonicalize()?;
+    let info_dir = common_dir.join("info");
+    ensure_real_directory(&info_dir)?;
     let exclude_path = info_dir.join("exclude");
 
-    let already = std::fs::read_to_string(&exclude_path)
-        .map(|s| s.lines().any(|l| l.trim() == EXCLUDE_ENTRY))
-        .unwrap_or(false);
+    let mut file = open_git_exclude(&exclude_path)?;
+    let mut contents = Vec::with_capacity(
+        usize::try_from(file.metadata()?.len().min(MAX_GIT_EXCLUDE_BYTES)).unwrap_or(0),
+    );
+    (&mut file)
+        .take(MAX_GIT_EXCLUDE_BYTES + 1)
+        .read_to_end(&mut contents)?;
+    if contents.len() as u64 > MAX_GIT_EXCLUDE_BYTES {
+        return Err(AppError::InvalidPath(format!(
+            "Git exclude file exceeds {MAX_GIT_EXCLUDE_BYTES} bytes: {}",
+            exclude_path.display()
+        )));
+    }
+
+    let already = String::from_utf8_lossy(&contents)
+        .lines()
+        .any(|line| line.trim() == EXCLUDE_ENTRY);
     if already {
         return Ok(());
     }
 
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&exclude_path)?;
-    writeln!(f, "{EXCLUDE_ENTRY}")?;
+    writeln!(file, "{EXCLUDE_ENTRY}")?;
+    Ok(())
+}
+
+fn ensure_real_directory(path: &Path) -> AppResult<()> {
+    loop {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(AppError::InvalidPath(format!(
+                        "Git metadata path must be a real directory: {}",
+                        path.display()
+                    )));
+                }
+                return Ok(());
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => match std::fs::create_dir(path) {
+                Ok(()) => {}
+                Err(create_err) if create_err.kind() == ErrorKind::AlreadyExists => {}
+                Err(create_err) => return Err(create_err.into()),
+            },
+            Err(err) => return Err(err.into()),
+        }
+    }
+}
+
+fn open_git_exclude(path: &Path) -> AppResult<File> {
+    loop {
+        match std::fs::symlink_metadata(path) {
+            Ok(path_metadata) => {
+                validate_git_exclude_metadata(path, &path_metadata)?;
+                let file = OpenOptions::new().read(true).append(true).open(path)?;
+                let opened_metadata = file.metadata()?;
+                validate_git_exclude_metadata(path, &opened_metadata)?;
+                validate_same_file(path, &path_metadata, &opened_metadata)?;
+                return Ok(file);
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                match OpenOptions::new()
+                    .read(true)
+                    .append(true)
+                    .create_new(true)
+                    .open(path)
+                {
+                    Ok(file) => {
+                        validate_git_exclude_metadata(path, &file.metadata()?)?;
+                        return Ok(file);
+                    }
+                    Err(create_err) if create_err.kind() == ErrorKind::AlreadyExists => {}
+                    Err(create_err) => return Err(create_err.into()),
+                }
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+}
+
+fn validate_git_exclude_metadata(path: &Path, metadata: &Metadata) -> AppResult<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(AppError::InvalidPath(format!(
+            "Git exclude path must be a regular file: {}",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() > 1 {
+            return Err(AppError::InvalidPath(format!(
+                "Git exclude path must not be hard-linked: {}",
+                path.display()
+            )));
+        }
+    }
+    if metadata.len() > MAX_GIT_EXCLUDE_BYTES {
+        return Err(AppError::InvalidPath(format!(
+            "Git exclude file exceeds {MAX_GIT_EXCLUDE_BYTES} bytes: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_same_file(path: &Path, before: &Metadata, opened: &Metadata) -> AppResult<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    if before.dev() != opened.dev() || before.ino() != opened.ino() {
+        return Err(AppError::InvalidPath(format!(
+            "Git exclude file changed while opening: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_same_file(_path: &Path, _before: &Metadata, _opened: &Metadata) -> AppResult<()> {
     Ok(())
 }
 
 pub fn create_worktree(repo_path: &Path, name: &str) -> AppResult<PathBuf> {
     let repo = ensure_repo(repo_path)?;
-    ensure_git_excluded(repo_path).ok();
-    let root = worktree_root(repo_path);
-    std::fs::create_dir_all(&root)?;
+    ensure_git_excluded(&repo).ok();
+    let root = checked_worktree_root(repo_path, true)?;
     let target = root.join(name);
 
     if target.exists() {
@@ -242,7 +352,7 @@ pub fn stage_remove_worktree_at_path(
         }
     }
 
-    if is_acorn_managed_worktree_path(repo_path, worktree_path) {
+    if is_acorn_managed_worktree_path(repo_path, worktree_path)? {
         if worktree_path.exists() && is_linked_worktree_root(worktree_path) {
             std::fs::remove_dir_all(worktree_path)?;
             return Ok(None);
@@ -396,15 +506,74 @@ pub(crate) fn same_path(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn is_acorn_managed_worktree_path(repo_path: &Path, worktree_path: &Path) -> bool {
+fn is_acorn_managed_worktree_path(repo_path: &Path, worktree_path: &Path) -> AppResult<bool> {
     if worktree_path
         .components()
         .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
     {
-        return false;
+        return Ok(false);
     }
+    let root = checked_worktree_root(repo_path, false)?;
+    Ok(worktree_path.parent() == Some(root.as_path()) && worktree_path.file_name().is_some())
+}
+
+/// Validate Acorn's managed-worktree storage without following repository-
+/// controlled symlinks. A cloned repository can contain `.acorn` (or a
+/// `worktrees` entry beneath it) as a symlink; blindly creating or deleting
+/// through that path would escape the repository boundary.
+fn checked_worktree_root(repo_path: &Path, create: bool) -> AppResult<PathBuf> {
+    let canonical_repo = repo_path.canonicalize()?;
+    if !canonical_repo.is_dir() {
+        return Err(AppError::InvalidPath(format!(
+            "repository path is not a directory: {}",
+            repo_path.display()
+        )));
+    }
+
+    let acorn_dir = repo_path.join(ACORN_DIR);
     let root = worktree_root(repo_path);
-    worktree_path.parent() == Some(root.as_path()) && worktree_path.file_name().is_some()
+    if !checked_directory_component(&acorn_dir, create)? {
+        return Ok(root);
+    }
+    if !checked_directory_component(&root, create)? {
+        return Ok(root);
+    }
+
+    let canonical_root = root.canonicalize()?;
+    if !canonical_root.starts_with(&canonical_repo) {
+        return Err(AppError::InvalidPath(format!(
+            "managed worktree root escapes repository: {}",
+            root.display()
+        )));
+    }
+    Ok(root)
+}
+
+fn checked_directory_component(path: &Path, create: bool) -> AppResult<bool> {
+    loop {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(AppError::InvalidPath(format!(
+                        "managed worktree path component must be a real directory: {}",
+                        path.display()
+                    )));
+                }
+                return Ok(true);
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound && create => {
+                match std::fs::create_dir(path) {
+                    Ok(()) => {}
+                    Err(create_err) if create_err.kind() == ErrorKind::AlreadyExists => {}
+                    Err(create_err) => return Err(create_err.into()),
+                }
+                // Re-read with symlink_metadata after creation so a component
+                // that appeared concurrently is validated before use.
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        }
+    }
 }
 
 /// Returns `true` when `path` is the root of a *linked* git worktree.
@@ -476,6 +645,151 @@ mod tests {
             .unwrap_or_else(|_| panic!("set HEAD to {refname}"));
     }
 
+    fn git_exclude_path(repo: &Repository) -> PathBuf {
+        repo.commondir().join("info").join("exclude")
+    }
+
+    #[test]
+    fn ensure_git_excluded_creates_missing_file_and_keeps_existing_rules() {
+        let root = unique_temp_dir("git-exclude-normal");
+        let repo = Repository::init(&root).expect("init repo");
+        let exclude = git_exclude_path(&repo);
+        std::fs::remove_file(&exclude).ok();
+
+        ensure_git_excluded(&repo).expect("create missing exclude");
+        assert_eq!(
+            std::fs::read_to_string(&exclude).expect("read created exclude"),
+            format!("{EXCLUDE_ENTRY}\n")
+        );
+
+        std::fs::write(&exclude, "custom-rule\n").expect("write existing exclude");
+        ensure_git_excluded(&repo).expect("append Acorn rule");
+        ensure_git_excluded(&repo).expect("keep Acorn rule idempotent");
+        let contents = std::fs::read_to_string(&exclude).expect("read updated exclude");
+        assert!(contents.starts_with("custom-rule\n"));
+        assert_eq!(
+            contents
+                .lines()
+                .filter(|line| line.trim() == EXCLUDE_ENTRY)
+                .count(),
+            1
+        );
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_git_excluded_uses_common_dir_for_linked_worktree() {
+        let root = unique_temp_dir("git-exclude-linked");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "linked").expect("create linked worktree");
+        let linked_repo = Repository::open(&worktree_path).expect("open linked worktree");
+        let exclude = git_exclude_path(&linked_repo);
+        std::fs::write(&exclude, "shared-rule\n").expect("reset shared exclude");
+
+        ensure_git_excluded(&linked_repo).expect("update common exclude");
+
+        let contents = std::fs::read_to_string(root.join(".git/info/exclude"))
+            .expect("read main repository exclude");
+        assert!(contents.contains("shared-rule"));
+        assert!(contents.lines().any(|line| line.trim() == EXCLUDE_ENTRY));
+
+        drop(linked_repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_git_excluded_rejects_external_symlink_without_modifying_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("git-exclude-symlink");
+        let external = unique_temp_dir("git-exclude-symlink-external");
+        let sentinel = external.join("sentinel.txt");
+        std::fs::write(&sentinel, "do not modify\n").expect("write sentinel");
+        let repo = Repository::init(&root).expect("init repo");
+        let exclude = git_exclude_path(&repo);
+        std::fs::remove_file(&exclude).ok();
+        symlink(&sentinel, &exclude).expect("link exclude to sentinel");
+
+        let error = ensure_git_excluded(&repo).expect_err("symlink must be rejected");
+
+        assert!(matches!(error, AppError::InvalidPath(_)));
+        assert_eq!(
+            std::fs::read_to_string(&sentinel).expect("read sentinel"),
+            "do not modify\n"
+        );
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&external).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_git_excluded_rejects_external_hardlink_without_modifying_target() {
+        let root = unique_temp_dir("git-exclude-hardlink");
+        let external = unique_temp_dir("git-exclude-hardlink-external");
+        let sentinel = external.join("sentinel.txt");
+        std::fs::write(&sentinel, "do not modify\n").expect("write sentinel");
+        let repo = Repository::init(&root).expect("init repo");
+        let exclude = git_exclude_path(&repo);
+        std::fs::remove_file(&exclude).ok();
+        std::fs::hard_link(&sentinel, &exclude).expect("hard-link exclude to sentinel");
+
+        let error = ensure_git_excluded(&repo).expect_err("hardlink must be rejected");
+
+        assert!(matches!(error, AppError::InvalidPath(_)));
+        assert_eq!(
+            std::fs::read_to_string(&sentinel).expect("read sentinel"),
+            "do not modify\n"
+        );
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&external).ok();
+    }
+
+    #[test]
+    fn ensure_git_excluded_rejects_oversized_file() {
+        let root = unique_temp_dir("git-exclude-oversized");
+        let repo = Repository::init(&root).expect("init repo");
+        let exclude = git_exclude_path(&repo);
+        File::create(&exclude)
+            .expect("create exclude")
+            .set_len(MAX_GIT_EXCLUDE_BYTES + 1)
+            .expect("make exclude oversized");
+
+        let error = ensure_git_excluded(&repo).expect_err("oversized exclude must be rejected");
+
+        assert!(matches!(error, AppError::InvalidPath(_)));
+        assert_eq!(
+            std::fs::metadata(&exclude).expect("exclude metadata").len(),
+            MAX_GIT_EXCLUDE_BYTES + 1
+        );
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_git_excluded_rejects_non_regular_file() {
+        let root = unique_temp_dir("git-exclude-non-regular");
+        let repo = Repository::init(&root).expect("init repo");
+        let exclude = git_exclude_path(&repo);
+        std::fs::remove_file(&exclude).ok();
+        std::fs::create_dir(&exclude).expect("replace exclude with directory");
+
+        let error = ensure_git_excluded(&repo).expect_err("directory must be rejected");
+
+        assert!(matches!(error, AppError::InvalidPath(_)));
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn create_worktree_starts_new_branch_from_main_when_head_is_elsewhere() {
         let root = unique_temp_dir("base-main");
@@ -523,6 +837,53 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_worktree_rejects_symlinked_acorn_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("symlinked-acorn");
+        let external = unique_temp_dir("symlinked-acorn-external");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        symlink(&external, root.join(ACORN_DIR)).expect("symlink .acorn");
+
+        let error = create_worktree(&root, "worker").expect_err("symlink must be rejected");
+
+        assert!(matches!(error, AppError::InvalidPath(_)));
+        assert!(!external.join("worktrees").join("worker").exists());
+        let repo = Repository::open(&root).expect("reopen repo");
+        assert!(repo.find_branch("worker", BranchType::Local).is_err());
+
+        std::fs::remove_file(root.join(ACORN_DIR)).ok();
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&external).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_worktree_rejects_symlinked_worktrees_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("symlinked-worktrees");
+        let external = unique_temp_dir("symlinked-worktrees-external");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        std::fs::create_dir(root.join(ACORN_DIR)).expect("create .acorn");
+        symlink(&external, root.join(ACORN_DIR).join("worktrees")).expect("symlink worktrees");
+
+        let error = create_worktree(&root, "worker").expect_err("symlink must be rejected");
+
+        assert!(matches!(error, AppError::InvalidPath(_)));
+        assert!(!external.join("worker").exists());
+        let repo = Repository::open(&root).expect("reopen repo");
+        assert!(repo.find_branch("worker", BranchType::Local).is_err());
+
+        std::fs::remove_file(root.join(ACORN_DIR).join("worktrees")).ok();
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&external).ok();
     }
 
     #[test]
@@ -862,5 +1223,31 @@ mod tests {
             "stale fallback must not delete paths outside managed worktrees"
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_worktree_rejects_symlinked_managed_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("remove-symlinked-root");
+        let external = unique_temp_dir("remove-symlinked-root-external");
+        Repository::init(&root).expect("init repo");
+        let rogue = external.join("worktrees").join("rogue");
+        std::fs::create_dir_all(&rogue).expect("create outside worktree shape");
+        std::fs::write(rogue.join(".git"), "gitdir: /outside\n").expect("write linked marker");
+        symlink(&external, root.join(ACORN_DIR)).expect("symlink .acorn");
+        let requested = root.join(ACORN_DIR).join("worktrees").join("rogue");
+
+        let error = stage_remove_worktree_at_path(&root, &requested)
+            .expect_err("symlinked managed root must be rejected");
+
+        assert!(matches!(error, AppError::InvalidPath(_)));
+        assert!(rogue.exists());
+        assert!(rogue.join(".git").exists());
+
+        std::fs::remove_file(root.join(ACORN_DIR)).ok();
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&external).ok();
     }
 }

@@ -76,8 +76,8 @@ for entry in "${sidecars[@]}"; do
   fi
 done
 
-echo "build-sidecar: cargo build ${cargo_flags[*]}"
-cargo build "${cargo_flags[@]}"
+echo "build-sidecar: cargo build --locked ${cargo_flags[*]}"
+cargo build --locked "${cargo_flags[@]}"
 
 for entry in "${sidecars[@]}"; do
   bin="${entry%%:*}"

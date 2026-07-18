@@ -4,10 +4,21 @@
   "description": "Capability for the main window",
   "windows": ["main"],
   "permissions": [
-    "core:default",
+    "core:path:default",
+    "core:event:default",
+    "core:window:default",
+    "core:webview:default",
+    "core:app:default",
+    "core:resources:default",
     "core:window:allow-destroy",
-    "opener:allow-open-url",
-    "opener:allow-default-urls",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "http://*" },
+        { "url": "https://*" },
+        { "url": "mailto:*" }
+      ]
+    },
     {
       "identifier": "opener:allow-open-path",
       "allow": [
@@ -16,13 +27,13 @@
         { "path": "$APPLOCALDATA/themes/**/*" }
       ]
     },
-    "dialog:default",
-    "shell:default",
+    "dialog:allow-open",
     "fs:allow-exists",
     "fs:allow-mkdir",
     "fs:allow-read-dir",
     "fs:allow-read-text-file",
     "fs:allow-remove",
+    "fs:allow-stat",
     "fs:allow-write-file",
     "fs:allow-write-text-file",
     {
@@ -39,8 +50,11 @@
         "$APPLOCALDATA/themes/**/*"
       ]
     },
-    "notification:default",
-    "updater:default",
-    "process:default"
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "notification:allow-notify",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
+    "process:allow-restart"
   ]
 }

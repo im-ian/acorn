@@ -101,7 +101,6 @@ pub type BridgeResult<T> = Result<T, BridgeError>;
 /// `ControlResult::SessionSpawned` so callers can wire the pid into
 /// status polling without re-listing sessions.
 pub struct SpawnOutcome {
-    pub session_id: Uuid,
     pub pid: Option<u32>,
 }
 
@@ -342,9 +341,7 @@ impl DaemonBridge {
             agent_resume_token,
         };
         match Self::unpack_error(self.call(ControlPayload::SpawnSession { spec })?)? {
-            ControlResult::SessionSpawned { session_id, pid } => {
-                Ok(SpawnOutcome { session_id, pid })
-            }
+            ControlResult::SessionSpawned { pid, .. } => Ok(SpawnOutcome { pid }),
             other => Err(unexpected(other)),
         }
     }

@@ -20,7 +20,7 @@
 //! the macOS default and the only shell that needs file-side help.
 
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 const SHELL_INIT_DIR_NAME: &str = "shell-init";
@@ -28,6 +28,7 @@ const ZSHENV_NAME: &str = ".zshenv";
 const ZPROFILE_NAME: &str = ".zprofile";
 const ZSHRC_NAME: &str = ".zshrc";
 const ZLOGIN_NAME: &str = ".zlogin";
+const MAX_STAGED_INIT_BYTES: u64 = 64 * 1024;
 
 const ZSHENV_BODY: &str = include_str!("../shell-init/zshenv");
 const ZPROFILE_BODY: &str = include_str!("../shell-init/zprofile");
@@ -66,12 +67,41 @@ pub(crate) fn is_shell_init_dir(path: &Path) -> bool {
     let zshrc = path.join(ZSHRC_NAME);
     path.file_name()
         .is_some_and(|name| name == SHELL_INIT_DIR_NAME)
-        && fs::read_to_string(zshenv)
-            .map(|body| body.contains("Acorn zsh env init."))
-            .unwrap_or(false)
-        && fs::read_to_string(zshrc)
-            .map(|body| body.contains("Acorn zsh interactive init."))
-            .unwrap_or(false)
+        && bounded_regular_file_contains(&zshenv, "Acorn zsh env init.")
+        && bounded_regular_file_contains(&zshrc, "Acorn zsh interactive init.")
+}
+
+fn bounded_regular_file_contains(path: &Path, marker: &str) -> bool {
+    let Ok(link_metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if link_metadata.file_type().is_symlink()
+        || !link_metadata.is_file()
+        || link_metadata.len() > MAX_STAGED_INIT_BYTES
+    {
+        return false;
+    }
+
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let Ok(open_metadata) = file.metadata() else {
+        return false;
+    };
+    if !open_metadata.is_file() || open_metadata.len() > MAX_STAGED_INIT_BYTES {
+        return false;
+    }
+
+    let mut bytes = Vec::with_capacity(open_metadata.len() as usize);
+    if file
+        .take(MAX_STAGED_INIT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() as u64 > MAX_STAGED_INIT_BYTES
+    {
+        return false;
+    }
+    std::str::from_utf8(&bytes).is_ok_and(|body| body.contains(marker))
 }
 
 #[cfg(all(test, unix))]
@@ -175,6 +205,34 @@ mod tests {
         let dir = ensure_shell_init_dir_at(base.path()).unwrap();
         assert!(is_shell_init_dir(&dir));
         assert!(!is_shell_init_dir(base.path()));
+    }
+
+    #[test]
+    fn shell_init_detection_rejects_oversized_marker_file() {
+        let base = ScratchDir::new("detect-oversized");
+        let dir = ensure_shell_init_dir_at(base.path()).unwrap();
+        let zshenv = dir.join(ZSHENV_NAME);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&zshenv)
+            .unwrap()
+            .set_len(MAX_STAGED_INIT_BYTES + 1)
+            .unwrap();
+
+        assert!(!is_shell_init_dir(&dir));
+    }
+
+    #[test]
+    fn shell_init_detection_rejects_special_marker_file() {
+        use std::os::unix::fs::symlink;
+
+        let base = ScratchDir::new("detect-special");
+        let dir = ensure_shell_init_dir_at(base.path()).unwrap();
+        let zshenv = dir.join(ZSHENV_NAME);
+        fs::remove_file(&zshenv).unwrap();
+        symlink("/dev/zero", &zshenv).unwrap();
+
+        assert!(!is_shell_init_dir(&dir));
     }
 
     #[test]

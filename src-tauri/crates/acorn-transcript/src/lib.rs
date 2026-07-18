@@ -74,9 +74,81 @@ pub const DORMANT_TRANSCRIPT_SECS: u64 = 10;
 // would multiply that cost without changing the answer. A short hold
 // returns the cached result for repeat calls within this window.
 const SCAN_CACHE_TTL_MS: u64 = 300;
+const LIVE_SCAN_SESSION_LIMIT: usize = 2_000;
+const LIVE_AGENT_PROCESS_LIMIT: usize = 2_000;
+
+const PROVIDER_SCAN_LIMITS: ProviderScanLimits = ProviderScanLimits {
+    directory_entries: 10_000,
+    candidates: 2_000,
+    head_opens: 500,
+    head_bytes: 1024 * 1024,
+    line_bytes: 256 * 1024,
+    head_lines: 50,
+};
+
+#[derive(Clone, Copy)]
+struct ProviderScanLimits {
+    directory_entries: usize,
+    candidates: usize,
+    head_opens: usize,
+    head_bytes: usize,
+    line_bytes: usize,
+    head_lines: usize,
+}
+
+struct ProviderScanBudget {
+    limits: ProviderScanLimits,
+    directory_entries: usize,
+    candidates: usize,
+    head_opens: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderScanError {
+    LimitExceeded,
+    Incomplete,
+}
+
+type ProviderScanResult<T> = Result<T, ProviderScanError>;
+
+impl ProviderScanBudget {
+    fn new(limits: ProviderScanLimits) -> Self {
+        Self {
+            limits,
+            directory_entries: 0,
+            candidates: 0,
+            head_opens: 0,
+        }
+    }
+
+    fn charge_directory_entry(&mut self) -> ProviderScanResult<()> {
+        charge_limit(&mut self.directory_entries, self.limits.directory_entries)
+    }
+
+    fn charge_candidate(&mut self) -> ProviderScanResult<()> {
+        charge_limit(&mut self.candidates, self.limits.candidates)
+    }
+
+    fn charge_head_open(&mut self) -> ProviderScanResult<()> {
+        charge_limit(&mut self.head_opens, self.limits.head_opens)
+    }
+}
+
+fn charge_limit(used: &mut usize, limit: usize) -> ProviderScanResult<()> {
+    if *used >= limit {
+        return Err(ProviderScanError::LimitExceeded);
+    }
+    *used += 1;
+    Ok(())
+}
+
+fn complete_io<T>(result: std::io::Result<T>) -> ProviderScanResult<T> {
+    result.map_err(|_| ProviderScanError::Incomplete)
+}
 
 struct ScanCache {
     captured_at: Instant,
+    session_key: Vec<(uuid::Uuid, Option<u32>)>,
     mappings: Vec<(uuid::Uuid, AgentKind, String)>,
 }
 
@@ -216,10 +288,16 @@ fn collect_mappings_cached(
     sessions: &[SessionPid],
     scope: MappingScope,
 ) -> Vec<(uuid::Uuid, AgentKind, String)> {
+    if sessions.len() > LIVE_SCAN_SESSION_LIMIT {
+        return Vec::new();
+    }
+    let session_key = scan_cache_session_key(sessions);
     {
         let guard = cache.lock();
         if let Some(cache) = guard.as_ref() {
-            if cache.captured_at.elapsed() < Duration::from_millis(SCAN_CACHE_TTL_MS) {
+            if cache.session_key == session_key
+                && cache.captured_at.elapsed() < Duration::from_millis(SCAN_CACHE_TTL_MS)
+            {
                 return cache.mappings.clone();
             }
         }
@@ -227,9 +305,19 @@ fn collect_mappings_cached(
     let mappings = scan_live_mappings(sessions, scope);
     *cache.lock() = Some(ScanCache {
         captured_at: Instant::now(),
+        session_key,
         mappings: mappings.clone(),
     });
     mappings
+}
+
+fn scan_cache_session_key(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, Option<u32>)> {
+    let mut key = sessions
+        .iter()
+        .map(|session| (session.session_id, session.root_pid))
+        .collect::<Vec<_>>();
+    key.sort_unstable();
+    key
 }
 
 /// Resolve the provider conversation id created by an agent run in `cwd`.
@@ -314,6 +402,9 @@ fn scan_live_mappings(
     sessions: &[SessionPid],
     scope: MappingScope,
 ) -> Vec<(uuid::Uuid, AgentKind, String)> {
+    if sessions.len() > LIVE_SCAN_SESSION_LIMIT {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let refresh = ProcessRefreshKind::new()
         .with_cwd(UpdateKind::Always)
@@ -396,10 +487,17 @@ fn scan_live_mappings(
             continue;
         };
 
-        let matches =
-            collect_agent_processes_in_tree(&children, Pid::from_u32(root_pid), scope, |pid| {
-                sys.process(pid).and_then(agent_process_node)
-            });
+        let remaining_processes = LIVE_AGENT_PROCESS_LIMIT.saturating_sub(candidates.len());
+        let matches = match collect_agent_processes_in_tree_bounded(
+            &children,
+            Pid::from_u32(root_pid),
+            scope,
+            remaining_processes,
+            |pid| sys.process(pid).and_then(agent_process_node),
+        ) {
+            Ok(matches) => matches,
+            Err(_) => return Vec::new(),
+        };
 
         for process_match in matches {
             if let Some(proc) = sys.process(process_match.pid) {
@@ -453,6 +551,9 @@ fn scan_live_mappings(
             .then_with(|| b.start_time.cmp(&a.start_time))
     });
 
+    let mut claude_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    let mut codex_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    let mut antigravity_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     for c in candidates {
         let mut reserved = assigned.clone();
         if c.role == AgentProcessRole::Emit {
@@ -460,103 +561,101 @@ fn scan_live_mappings(
                 reserved.extend(paths.iter().cloned());
             }
         }
-        let candidate = match c.kind {
-            AgentKind::Claude => {
-                let sole_claude_in_cwd = claude_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
-                let allow_rotation = sole_claude_in_cwd
-                    && !owner_rotation_quarantined.contains(&owner_rotation_scope(
-                        c.session_id,
-                        c.kind,
-                        &c.cwd,
-                    ));
-                c.explicit_transcript_id
-                    .as_deref()
-                    .and_then(|id| {
-                        find_claude_jsonl_for_uuid(&c.cwd, claude_root.as_deref(), id, &assigned)
-                    })
-                    .or_else(|| {
-                        find_recent_claude_jsonl(
+        let candidate = (|| -> ProviderScanResult<Option<(PathBuf, String)>> {
+            match c.kind {
+                AgentKind::Claude => {
+                    let sole_claude_in_cwd =
+                        claude_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
+                    let allow_rotation = sole_claude_in_cwd
+                        && !owner_rotation_quarantined.contains(&owner_rotation_scope(
+                            c.session_id,
+                            c.kind,
+                            &c.cwd,
+                        ));
+                    if let Some(id) = c.explicit_transcript_id.as_deref() {
+                        if let Some(candidate) = find_claude_jsonl_for_uuid_budgeted(
                             &c.cwd,
                             claude_root.as_deref(),
-                            recency_cutoff,
-                            c.start_time,
-                            now,
-                            allow_rotation,
-                            &reserved,
-                        )
-                    })
-            }
-            AgentKind::Codex => {
-                let sole_codex_in_cwd = codex_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
-                let allow_rotation = sole_codex_in_cwd
-                    && !owner_rotation_quarantined.contains(&owner_rotation_scope(
-                        c.session_id,
-                        c.kind,
-                        &c.cwd,
-                    ));
-                // `codex resume <uuid>` may attach to an existing JSONL before
-                // Codex appends a new line, so the normal mtime >= process-start
-                // guard would hide the active transcript.
-                c.explicit_transcript_id
-                    .as_deref()
-                    .and_then(|id| find_codex_jsonl_for_uuid(codex_root.as_deref(), id, &assigned))
-                    .or_else(|| {
-                        match codex_rollout_scope_for_mapping(
-                            scope,
-                            c.role,
-                            c.codex_resume_requested,
-                        ) {
-                            CodexRolloutScope::SessionOwner => find_recent_codex_owner_jsonl(
-                                &c.cwd,
-                                codex_root.as_deref(),
-                                recency_cutoff,
-                                c.start_time,
-                                now,
-                                allow_rotation,
-                                &reserved,
-                            ),
-                            CodexRolloutScope::ResumedOwner => find_recent_resumed_codex_jsonl(
-                                &c.cwd,
-                                codex_root.as_deref(),
-                                recency_cutoff,
-                                c.start_time,
-                                now,
-                                allow_rotation,
-                                &reserved,
-                            ),
-                            CodexRolloutScope::AnyTerminal => find_recent_codex_jsonl(
-                                &c.cwd,
-                                codex_root.as_deref(),
-                                recency_cutoff,
-                                c.start_time,
-                                now,
-                                allow_rotation,
-                                &reserved,
-                            ),
+                            id,
+                            &assigned,
+                            &mut claude_budget,
+                        )? {
+                            return Ok(Some(candidate));
                         }
-                    })
-            }
-            AgentKind::Antigravity => {
-                let owner_cursor_id =
-                    antigravity_owner_cursor_id(antigravity_storage_root.as_deref(), &c.cwd);
-                let sole_antigravity_in_cwd =
-                    antigravity_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
-                let allow_rotation = sole_antigravity_in_cwd
-                    && !owner_rotation_quarantined.contains(&owner_rotation_scope(
-                        c.session_id,
-                        c.kind,
+                    }
+                    find_recent_claude_jsonl_budgeted(
                         &c.cwd,
-                    ));
-                find_recent_antigravity_jsonl(
-                    &antigravity_roots,
-                    recency_cutoff,
-                    c.start_time,
-                    now,
-                    allow_rotation,
-                    owner_cursor_id.as_deref(),
-                    &reserved,
-                )
+                        claude_root.as_deref(),
+                        recency_cutoff,
+                        c.start_time,
+                        now,
+                        allow_rotation,
+                        &reserved,
+                        &mut claude_budget,
+                    )
+                }
+                AgentKind::Codex => {
+                    let sole_codex_in_cwd = codex_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
+                    let allow_rotation = sole_codex_in_cwd
+                        && !owner_rotation_quarantined.contains(&owner_rotation_scope(
+                            c.session_id,
+                            c.kind,
+                            &c.cwd,
+                        ));
+                    // `codex resume <uuid>` may attach to an existing JSONL before
+                    // Codex appends a new line, so the normal mtime >= process-start
+                    // guard would hide the active transcript.
+                    if let Some(id) = c.explicit_transcript_id.as_deref() {
+                        if let Some(candidate) = find_codex_jsonl_for_uuid_budgeted(
+                            codex_root.as_deref(),
+                            id,
+                            &assigned,
+                            &mut codex_budget,
+                        )? {
+                            return Ok(Some(candidate));
+                        }
+                    }
+                    let rollout_scope =
+                        codex_rollout_scope_for_mapping(scope, c.role, c.codex_resume_requested);
+                    find_recent_codex_jsonl_budgeted(
+                        &c.cwd,
+                        codex_root.as_deref(),
+                        recency_cutoff,
+                        c.start_time,
+                        now,
+                        allow_rotation,
+                        &reserved,
+                        rollout_scope,
+                        &mut codex_budget,
+                    )
+                }
+                AgentKind::Antigravity => {
+                    let owner_cursor_id =
+                        antigravity_owner_cursor_id(antigravity_storage_root.as_deref(), &c.cwd);
+                    let sole_antigravity_in_cwd =
+                        antigravity_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
+                    let allow_rotation = sole_antigravity_in_cwd
+                        && !owner_rotation_quarantined.contains(&owner_rotation_scope(
+                            c.session_id,
+                            c.kind,
+                            &c.cwd,
+                        ));
+                    find_recent_antigravity_jsonl_budgeted(
+                        &antigravity_roots,
+                        recency_cutoff,
+                        c.start_time,
+                        now,
+                        allow_rotation,
+                        owner_cursor_id.as_deref(),
+                        &reserved,
+                        &mut antigravity_budget,
+                    )
+                }
             }
+        })();
+        let candidate = match candidate {
+            Ok(candidate) => candidate,
+            Err(_) => return Vec::new(),
         };
         if let Some((path, uuid)) = candidate {
             tracing::info!(
@@ -602,12 +701,30 @@ fn scan_live_mappings(
     out
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LiveAgentProcessLimitExceeded;
+
+#[cfg(test)]
 fn collect_agent_processes_in_tree<F>(
     children: &std::collections::HashMap<Pid, Vec<Pid>>,
     root: Pid,
     scope: MappingScope,
-    mut node_for_pid: F,
+    node_for_pid: F,
 ) -> Vec<AgentProcessMatch>
+where
+    F: FnMut(Pid) -> Option<AgentProcessNode>,
+{
+    collect_agent_processes_in_tree_bounded(children, root, scope, usize::MAX, node_for_pid)
+        .expect("unbounded test traversal cannot exceed its match limit")
+}
+
+fn collect_agent_processes_in_tree_bounded<F>(
+    children: &std::collections::HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+    scope: MappingScope,
+    match_limit: usize,
+    mut node_for_pid: F,
+) -> Result<Vec<AgentProcessMatch>, LiveAgentProcessLimitExceeded>
 where
     F: FnMut(Pid) -> Option<AgentProcessNode>,
 {
@@ -622,6 +739,9 @@ where
             .is_some_and(|(parent, child)| same_logical_agent_invocation(parent, child));
         if let Some(node) = &node {
             if !belongs_to_parent {
+                if out.len() >= match_limit {
+                    return Err(LiveAgentProcessLimitExceeded);
+                }
                 let role = if scope == MappingScope::SessionOwners && below_agent_boundary {
                     AgentProcessRole::Quarantine
                 } else {
@@ -644,7 +764,7 @@ where
             );
         }
     }
-    out
+    Ok(out)
 }
 
 /// Snapshot the by-path owner quarantine, evicting entries that can no
@@ -1194,6 +1314,45 @@ fn codex_sessions_root() -> Option<PathBuf> {
         .map(|p| p.join("sessions"))
 }
 
+fn safe_is_directory(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|meta| meta.file_type().is_dir())
+        .unwrap_or(false)
+}
+
+fn safe_read_dir(path: &Path) -> ProviderScanResult<Option<std::fs::ReadDir>> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(ProviderScanError::Incomplete),
+    };
+    if !meta.file_type().is_dir() {
+        return Ok(None);
+    }
+    complete_io(std::fs::read_dir(path)).map(Some)
+}
+
+fn safe_directory_entry_path(entry: &std::fs::DirEntry) -> ProviderScanResult<Option<PathBuf>> {
+    Ok(complete_io(entry.file_type())?
+        .is_dir()
+        .then(|| entry.path()))
+}
+
+fn safe_regular_file_metadata(path: &Path) -> Option<std::fs::Metadata> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    meta.file_type().is_file().then_some(meta)
+}
+
+fn safe_regular_file_entry_metadata(
+    entry: &std::fs::DirEntry,
+) -> ProviderScanResult<Option<std::fs::Metadata>> {
+    if !complete_io(entry.file_type())?.is_file() {
+        return Ok(None);
+    }
+    let meta = complete_io(std::fs::symlink_metadata(entry.path()))?;
+    Ok(meta.file_type().is_file().then_some(meta))
+}
+
 /// Locate a Codex rollout JSONL by its transcript UUID.
 ///
 /// Codex stores rollouts under `<sessions>/<yyyy>/<mm>/<dd>/`, while the
@@ -1206,71 +1365,136 @@ pub fn locate_codex_transcript(uuid: &str) -> Option<PathBuf> {
 }
 
 fn locate_codex_transcript_in(sessions_root: &Path, uuid: &str) -> Option<PathBuf> {
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    locate_codex_transcript_in_budgeted(sessions_root, uuid, &mut budget)
+        .ok()
+        .flatten()
+}
+
+fn locate_codex_transcript_in_budgeted(
+    sessions_root: &Path,
+    uuid: &str,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<PathBuf>> {
     if !is_uuid_v4_shape(uuid) {
-        return None;
+        return Ok(None);
     }
 
     for day_dir in codex_day_dirs_for_uuid(sessions_root, uuid) {
-        if let Some(path) = find_rollout_for_uuid(&day_dir, uuid) {
-            return Some(path);
+        if let Some(path) = find_rollout_for_uuid_budgeted(&day_dir, uuid, budget)? {
+            return Ok(Some(path));
         }
     }
 
-    for year in iter_subdirs_desc(sessions_root)?.into_iter().take(2) {
-        for month in iter_subdirs_desc(&year)?.into_iter().take(2) {
-            for day in iter_subdirs_desc(&month)?.into_iter().take(7) {
-                if let Some(path) = find_rollout_for_uuid(&day, uuid) {
-                    return Some(path);
+    let Some(years) = iter_subdirs_desc_budgeted(sessions_root, budget)? else {
+        return Ok(None);
+    };
+    for year in years.into_iter().take(2) {
+        let Some(months) = iter_subdirs_desc_budgeted(&year, budget)? else {
+            continue;
+        };
+        for month in months.into_iter().take(2) {
+            let Some(days) = iter_subdirs_desc_budgeted(&month, budget)? else {
+                continue;
+            };
+            for day in days.into_iter().take(7) {
+                if let Some(path) = find_rollout_for_uuid_budgeted(&day, uuid, budget)? {
+                    return Ok(Some(path));
                 }
             }
         }
     }
-    None
+    Ok(None)
 }
 
+#[cfg(test)]
 fn find_codex_jsonl_for_uuid(
     sessions_root: Option<&Path>,
     uuid: &str,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
-    let path = locate_codex_transcript_in(sessions_root?, uuid)?;
-    if assigned.contains(&path) {
-        return None;
-    }
-    Some((path, uuid.to_string()))
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    find_codex_jsonl_for_uuid_budgeted(sessions_root, uuid, assigned, &mut budget)
+        .ok()
+        .flatten()
 }
 
-fn find_claude_jsonl_for_uuid(
+fn find_codex_jsonl_for_uuid_budgeted(
+    sessions_root: Option<&Path>,
+    uuid: &str,
+    assigned: &HashSet<PathBuf>,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
+    let Some(root) = sessions_root else {
+        return Ok(None);
+    };
+    let Some(path) = locate_codex_transcript_in_budgeted(root, uuid, budget)? else {
+        return Ok(None);
+    };
+    if assigned.contains(&path) {
+        return Ok(None);
+    }
+    Ok(Some((path, uuid.to_string())))
+}
+
+fn find_claude_jsonl_for_uuid_budgeted(
     cwd: &Path,
     projects_root: Option<&Path>,
     uuid: &str,
     assigned: &HashSet<PathBuf>,
-) -> Option<(PathBuf, String)> {
-    let root = projects_root?;
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
+    let Some(root) = projects_root else {
+        return Ok(None);
+    };
+    if !safe_is_directory(root) {
+        return Ok(None);
+    }
     if !is_uuid_v4_shape(uuid) {
-        return None;
+        return Ok(None);
     }
     let filename = format!("{uuid}.jsonl");
-    let slug_path = root.join(slug_for_cwd(cwd)).join(&filename);
-    if claude_uuid_path_matches_cwd(&slug_path, cwd, assigned) {
-        return Some((slug_path, uuid.to_string()));
-    }
-    for project in std::fs::read_dir(root).ok()?.flatten() {
-        let path = project.path().join(&filename);
-        if claude_uuid_path_matches_cwd(&path, cwd, assigned) {
-            return Some((path, uuid.to_string()));
+    let slug_dir = root.join(slug_for_cwd(cwd));
+    if safe_is_directory(&slug_dir) {
+        let slug_path = slug_dir.join(&filename);
+        if claude_uuid_path_matches_cwd_budgeted(&slug_path, cwd, assigned, budget)? {
+            return Ok(Some((slug_path, uuid.to_string())));
         }
     }
-    None
+
+    let Some(projects) = safe_read_dir(root)? else {
+        return Ok(None);
+    };
+    for raw_project in projects {
+        budget.charge_directory_entry()?;
+        let project = complete_io(raw_project)?;
+        let Some(project_dir) = safe_directory_entry_path(&project)? else {
+            continue;
+        };
+        let path = project_dir.join(&filename);
+        if claude_uuid_path_matches_cwd_budgeted(&path, cwd, assigned, budget)? {
+            return Ok(Some((path, uuid.to_string())));
+        }
+    }
+    Ok(None)
 }
 
-fn claude_uuid_path_matches_cwd(path: &Path, cwd: &Path, assigned: &HashSet<PathBuf>) -> bool {
-    if assigned.contains(path) || !path.is_file() {
-        return false;
+fn claude_uuid_path_matches_cwd_budgeted(
+    path: &Path,
+    cwd: &Path,
+    assigned: &HashSet<PathBuf>,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<bool> {
+    if assigned.contains(path) {
+        return Ok(false);
     }
-    read_agent_transcript_cwd(path)
+    budget.charge_candidate()?;
+    if safe_regular_file_metadata(path).is_none() {
+        return Ok(false);
+    }
+    Ok(read_agent_transcript_cwd_budgeted(path, budget)?
         .map(|transcript_cwd| transcript_cwd == cwd)
-        .unwrap_or(true)
+        .unwrap_or(true))
 }
 
 fn codex_day_dirs_for_uuid(sessions_root: &Path, uuid: &str) -> Vec<PathBuf> {
@@ -1317,18 +1541,31 @@ fn uuid_v7_unix_millis(uuid: &str) -> Option<u64> {
     u64::from_str_radix(&compact[..12], 16).ok()
 }
 
-fn find_rollout_for_uuid(day_dir: &Path, uuid: &str) -> Option<PathBuf> {
+fn find_rollout_for_uuid_budgeted(
+    day_dir: &Path,
+    uuid: &str,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<PathBuf>> {
     let suffix = format!("{uuid}.jsonl");
-    for entry in std::fs::read_dir(day_dir).ok()?.flatten() {
+    let Some(entries) = safe_read_dir(day_dir)? else {
+        return Ok(None);
+    };
+    for raw_entry in entries {
+        budget.charge_directory_entry()?;
+        let entry = complete_io(raw_entry)?;
         let path = entry.path();
         let Some(filename) = path.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
-        if filename.starts_with("rollout-") && filename.ends_with(&suffix) {
-            return Some(path);
+        if !filename.starts_with("rollout-") || !filename.ends_with(&suffix) {
+            continue;
+        }
+        budget.charge_candidate()?;
+        if safe_regular_file_entry_metadata(&entry)?.is_some() {
+            return Ok(Some(path));
         }
     }
-    None
+    Ok(None)
 }
 
 fn google_agent_storage_root() -> Option<PathBuf> {
@@ -1345,7 +1582,7 @@ fn antigravity_brain_roots() -> Vec<PathBuf> {
     ["antigravity", "antigravity-ide", "antigravity-cli"]
         .into_iter()
         .map(|profile| root.join(profile).join("brain"))
-        .filter(|path| path.is_dir())
+        .filter(|path| safe_is_directory(path))
         .collect()
 }
 
@@ -1372,30 +1609,87 @@ fn find_recent_claude_jsonl(
     allow_rotation: bool,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
-    let root = projects_root?;
+    find_recent_claude_jsonl_with_limits(
+        cwd,
+        projects_root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        PROVIDER_SCAN_LIMITS,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_recent_claude_jsonl_with_limits(
+    cwd: &Path,
+    projects_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+    limits: ProviderScanLimits,
+) -> Option<(PathBuf, String)> {
+    let mut budget = ProviderScanBudget::new(limits);
+    find_recent_claude_jsonl_budgeted(
+        cwd,
+        projects_root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        &mut budget,
+    )
+    .ok()
+    .flatten()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_recent_claude_jsonl_budgeted(
+    cwd: &Path,
+    projects_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
+    let Some(root) = projects_root else {
+        return Ok(None);
+    };
+    if !safe_is_directory(root) {
+        return Ok(None);
+    }
     let slug_dir = root.join(slug_for_cwd(cwd));
-    pick_newest_unassigned_jsonl(
+    if let Some(candidate) = pick_newest_unassigned_jsonl_budgeted(
         &slug_dir,
         recency_cutoff,
         process_start,
         now,
         allow_rotation,
         assigned,
+        budget,
+    )? {
+        return Ok(Some(candidate));
+    }
+    find_recent_claude_jsonl_by_cwd_budgeted(
+        cwd,
+        root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        budget,
     )
-    .or_else(|| {
-        find_recent_claude_jsonl_by_cwd(
-            cwd,
-            root,
-            recency_cutoff,
-            process_start,
-            now,
-            allow_rotation,
-            assigned,
-        )
-    })
 }
 
-fn find_recent_claude_jsonl_by_cwd(
+#[allow(clippy::too_many_arguments)]
+fn find_recent_claude_jsonl_by_cwd_budgeted(
     cwd: &Path,
     projects_root: &Path,
     recency_cutoff: SystemTime,
@@ -1403,17 +1697,24 @@ fn find_recent_claude_jsonl_by_cwd(
     now: SystemTime,
     allow_rotation: bool,
     assigned: &HashSet<PathBuf>,
-) -> Option<(PathBuf, String)> {
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
     let mut candidates: Vec<TranscriptCandidate> = Vec::new();
-    for project in std::fs::read_dir(projects_root).ok()?.flatten() {
-        let dir = project.path();
-        if !dir.is_dir() {
-            continue;
-        }
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+    let Some(projects) = safe_read_dir(projects_root)? else {
+        return Ok(None);
+    };
+    for raw_project in projects {
+        budget.charge_directory_entry()?;
+        let project = complete_io(raw_project)?;
+        let Some(dir) = safe_directory_entry_path(&project)? else {
             continue;
         };
-        for entry in entries.flatten() {
+        let Some(entries) = safe_read_dir(&dir)? else {
+            continue;
+        };
+        for raw_entry in entries {
+            budget.charge_directory_entry()?;
+            let entry = complete_io(raw_entry)?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
@@ -1421,12 +1722,15 @@ fn find_recent_claude_jsonl_by_cwd(
             if assigned.contains(&path) {
                 continue;
             }
-            let Ok(meta) = entry.metadata() else { continue };
+            budget.charge_candidate()?;
+            let Some(meta) = safe_regular_file_entry_metadata(&entry)? else {
+                continue;
+            };
             let Ok(mtime) = meta.modified() else { continue };
             if mtime < recency_cutoff || mtime < process_start {
                 continue;
             }
-            let Some(transcript_cwd) = read_agent_transcript_cwd(&path) else {
+            let Some(transcript_cwd) = read_agent_transcript_cwd_budgeted(&path, budget)? else {
                 continue;
             };
             if transcript_cwd != cwd {
@@ -1444,9 +1748,15 @@ fn find_recent_claude_jsonl_by_cwd(
             });
         }
     }
-    pick_anchor_or_rotate(candidates, process_start, now, allow_rotation)
+    Ok(pick_anchor_or_rotate(
+        candidates,
+        process_start,
+        now,
+        allow_rotation,
+    ))
 }
 
+#[cfg(test)]
 fn find_recent_codex_jsonl(
     cwd: &Path,
     sessions_root: Option<&Path>,
@@ -1456,7 +1766,7 @@ fn find_recent_codex_jsonl(
     allow_rotation: bool,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
-    find_recent_codex_jsonl_with_scope(
+    find_recent_codex_jsonl_with_limits(
         cwd,
         sessions_root,
         recency_cutoff,
@@ -1464,10 +1774,11 @@ fn find_recent_codex_jsonl(
         now,
         allow_rotation,
         assigned,
-        CodexRolloutScope::AnyTerminal,
+        PROVIDER_SCAN_LIMITS,
     )
 }
 
+#[cfg(test)]
 fn find_recent_codex_owner_jsonl(
     cwd: &Path,
     sessions_root: Option<&Path>,
@@ -1489,6 +1800,7 @@ fn find_recent_codex_owner_jsonl(
     )
 }
 
+#[cfg(test)]
 fn find_recent_resumed_codex_jsonl(
     cwd: &Path,
     sessions_root: Option<&Path>,
@@ -1510,29 +1822,35 @@ fn find_recent_resumed_codex_jsonl(
     )
 }
 
-fn codex_day_dirs_for_scope(root: &Path, scope: CodexRolloutScope) -> Vec<PathBuf> {
-    if scope != CodexRolloutScope::ResumedOwner {
-        return newest_subdir(root)
-            .and_then(|year| newest_subdir(&year))
-            .and_then(|month| newest_subdir(&month))
-            .into_iter()
-            .collect();
-    }
-
-    // A picker, --last, or named resume can reopen a rollout stored under any
-    // historical date. Its file mtime becomes current without changing the
-    // containing directory, so the resume-only path must inspect every date
-    // directory and let the normal mtime/process-start filters discard cold
-    // files. New-session scans stay on the newest day above.
-    let mut days = Vec::new();
-    for year in iter_subdirs_desc(root).unwrap_or_default() {
-        for month in iter_subdirs_desc(&year).unwrap_or_default() {
-            days.extend(iter_subdirs_desc(&month).unwrap_or_default());
-        }
-    }
-    days
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn find_recent_codex_jsonl_with_limits(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+    limits: ProviderScanLimits,
+) -> Option<(PathBuf, String)> {
+    let mut budget = ProviderScanBudget::new(limits);
+    find_recent_codex_jsonl_budgeted(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        CodexRolloutScope::AnyTerminal,
+        &mut budget,
+    )
+    .ok()
+    .flatten()
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn find_recent_codex_jsonl_with_scope(
     cwd: &Path,
@@ -1544,21 +1862,89 @@ fn find_recent_codex_jsonl_with_scope(
     assigned: &HashSet<PathBuf>,
     scope: CodexRolloutScope,
 ) -> Option<(PathBuf, String)> {
-    // Codex rollouts live under <root>/<year>/<month>/<day>/. The
-    // filename does NOT encode the cwd (unlike claude), so we read each
-    // candidate's first JSONL line and match its `payload.cwd` against
-    // the live process's cwd. New-session scans walk just the newest date
-    // directory; non-UUID resume scans include historical date directories
-    // because reopening a rollout updates the file, not its parent directory.
-    // The cwd check runs while collecting (not after ranking) so the rotation
-    // successor is also guaranteed to belong to this cwd.
-    let root = sessions_root?;
-    let mut candidates: Vec<TranscriptCandidate> = Vec::new();
-    for day_dir in codex_day_dirs_for_scope(root, scope) {
-        let Ok(entries) = std::fs::read_dir(&day_dir) else {
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    find_recent_codex_jsonl_budgeted(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        scope,
+        &mut budget,
+    )
+    .ok()
+    .flatten()
+}
+
+fn codex_day_dirs_for_scope_budgeted(
+    root: &Path,
+    scope: CodexRolloutScope,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Vec<PathBuf>> {
+    if scope != CodexRolloutScope::ResumedOwner {
+        let Some(year) = newest_subdir_budgeted(root, budget)? else {
+            return Ok(Vec::new());
+        };
+        let Some(month) = newest_subdir_budgeted(&year, budget)? else {
+            return Ok(Vec::new());
+        };
+        let Some(day) = newest_subdir_budgeted(&month, budget)? else {
+            return Ok(Vec::new());
+        };
+        return Ok(vec![day]);
+    }
+
+    // A picker, --last, or named resume can reopen a rollout stored under any
+    // historical date. Its file mtime becomes current without changing the
+    // containing directory, so the resume-only path must inspect every date
+    // directory and let the normal mtime/process-start filters discard cold
+    // files. New-session scans stay on the newest day above.
+    let mut days = Vec::new();
+    let Some(years) = iter_subdirs_desc_budgeted(root, budget)? else {
+        return Ok(days);
+    };
+    for year in years {
+        let Some(months) = iter_subdirs_desc_budgeted(&year, budget)? else {
             continue;
         };
-        for entry in entries.flatten() {
+        for month in months {
+            if let Some(month_days) = iter_subdirs_desc_budgeted(&month, budget)? {
+                days.extend(month_days);
+            }
+        }
+    }
+    Ok(days)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_recent_codex_jsonl_budgeted(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+    scope: CodexRolloutScope,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
+    // Codex rollouts live under <root>/<year>/<month>/<day>/. The filename
+    // does not encode the cwd, so inspect each bounded candidate head.
+    // Resume scans include historical dates because reopening a rollout
+    // updates the file rather than its parent directory.
+    let Some(root) = sessions_root else {
+        return Ok(None);
+    };
+    let mut candidates: Vec<TranscriptCandidate> = Vec::new();
+    for day_dir in codex_day_dirs_for_scope_budgeted(root, scope, budget)? {
+        let Some(entries) = safe_read_dir(&day_dir)? else {
+            continue;
+        };
+        for raw_entry in entries {
+            budget.charge_directory_entry()?;
+            let entry = complete_io(raw_entry)?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
@@ -1566,20 +1952,20 @@ fn find_recent_codex_jsonl_with_scope(
             if assigned.contains(&path) {
                 continue;
             }
-            let Ok(meta) = entry.metadata() else { continue };
-            let Ok(mtime) = meta.modified() else { continue };
-            if mtime < recency_cutoff {
+            budget.charge_candidate()?;
+            let Some(meta) = safe_regular_file_entry_metadata(&entry)? else {
                 continue;
-            }
-            // Transcript must have been written after this agent process
-            // started — otherwise it belongs to an earlier run.
-            if mtime < process_start {
+            };
+            let Ok(mtime) = meta.modified() else {
+                continue;
+            };
+            if mtime < recency_cutoff || mtime < process_start {
                 continue;
             }
             let Some(uuid) = extract_uuid_from_path(&path) else {
                 continue;
             };
-            let Some(head) = read_codex_rollout_head(&path) else {
+            let Some(head) = read_codex_rollout_head_budgeted(&path, budget)? else {
                 continue;
             };
             if head.cwd != cwd || !head.is_writer_for_scope(scope) {
@@ -1595,9 +1981,14 @@ fn find_recent_codex_jsonl_with_scope(
         }
     }
     if scope == CodexRolloutScope::ResumedOwner {
-        retain_resumed_codex_roots(&mut candidates, root, process_start);
+        retain_resumed_codex_roots(&mut candidates, root, process_start, budget)?;
     }
-    pick_anchor_or_rotate(candidates, process_start, now, allow_rotation)
+    Ok(pick_anchor_or_rotate(
+        candidates,
+        process_start,
+        now,
+        allow_rotation,
+    ))
 }
 
 fn find_completed_codex_jsonl(
@@ -1637,23 +2028,53 @@ fn find_completed_codex_jsonl_with_scope(
     process_start: SystemTime,
     scope: CodexRolloutScope,
 ) -> Option<(PathBuf, String)> {
-    let root = sessions_root?;
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    find_completed_codex_jsonl_budgeted(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        scope,
+        &mut budget,
+    )
+    .ok()
+    .flatten()
+}
+
+fn find_completed_codex_jsonl_budgeted(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    scope: CodexRolloutScope,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
+    let Some(root) = sessions_root else {
+        return Ok(None);
+    };
     let mut candidates: Vec<TranscriptCandidate> = Vec::new();
-    for day_dir in codex_day_dirs_for_scope(root, scope) {
-        let Ok(entries) = std::fs::read_dir(&day_dir) else {
+    for day_dir in codex_day_dirs_for_scope_budgeted(root, scope, budget)? {
+        let Some(entries) = safe_read_dir(&day_dir)? else {
             continue;
         };
-        for entry in entries.flatten() {
+        for raw_entry in entries {
+            budget.charge_directory_entry()?;
+            let entry = complete_io(raw_entry)?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            let Ok(meta) = entry.metadata() else { continue };
-            let Ok(mtime) = meta.modified() else { continue };
+            budget.charge_candidate()?;
+            let Some(meta) = safe_regular_file_entry_metadata(&entry)? else {
+                continue;
+            };
+            let Ok(mtime) = meta.modified() else {
+                continue;
+            };
             if mtime < recency_cutoff || mtime < process_start {
                 continue;
             }
-            let Some(head) = read_codex_rollout_head(&path) else {
+            let Some(head) = read_codex_rollout_head_budgeted(&path, budget)? else {
                 continue;
             };
             if head.cwd != cwd || !head.is_writer_for_scope(scope) {
@@ -1672,17 +2093,20 @@ fn find_completed_codex_jsonl_with_scope(
         }
     }
     if scope == CodexRolloutScope::ResumedOwner {
-        retain_resumed_codex_roots(&mut candidates, root, process_start);
+        retain_resumed_codex_roots(&mut candidates, root, process_start, budget)?;
     }
     candidates.sort_by_key(|candidate| time_distance(candidate.birth, process_start));
     if candidates.len() == 1 {
-        let candidate = candidates.pop()?;
-        Some((candidate.path, candidate.uuid))
+        let Some(candidate) = candidates.pop() else {
+            return Ok(None);
+        };
+        Ok(Some((candidate.path, candidate.uuid)))
     } else {
-        None
+        Ok(None)
     }
 }
 
+#[cfg(test)]
 fn find_recent_antigravity_jsonl(
     brain_roots: &[PathBuf],
     recency_cutoff: SystemTime,
@@ -1692,16 +2116,42 @@ fn find_recent_antigravity_jsonl(
     owner_cursor_id: Option<&str>,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    find_recent_antigravity_jsonl_budgeted(
+        brain_roots,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        owner_cursor_id,
+        assigned,
+        &mut budget,
+    )
+    .ok()
+    .flatten()
+}
+
+fn find_recent_antigravity_jsonl_budgeted(
+    brain_roots: &[PathBuf],
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    owner_cursor_id: Option<&str>,
+    assigned: &HashSet<PathBuf>,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
     let mut candidates: Vec<TranscriptCandidate> = Vec::new();
     for root in brain_roots {
-        let Ok(entries) = std::fs::read_dir(root) else {
+        let Some(entries) = safe_read_dir(root)? else {
             continue;
         };
-        for entry in entries.flatten() {
-            let session_dir = entry.path();
-            if !session_dir.is_dir() {
+        for raw_entry in entries {
+            budget.charge_directory_entry()?;
+            let entry = complete_io(raw_entry)?;
+            let Some(session_dir) = safe_directory_entry_path(&entry)? else {
                 continue;
-            }
+            };
             let Some(uuid) = session_dir.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
@@ -1712,13 +2162,14 @@ fn find_recent_antigravity_jsonl(
                 .join(".system_generated")
                 .join("logs")
                 .join("transcript.jsonl");
-            if assigned.contains(&path) || !path.is_file() {
+            budget.charge_candidate()?;
+            if assigned.contains(&path) || !safe_antigravity_transcript_path(&session_dir, &path) {
                 continue;
             }
             let Some(id) = antigravity_uuid_from_transcript_path(&path) else {
                 continue;
             };
-            let Ok(meta) = std::fs::metadata(&path) else {
+            let Some(meta) = safe_regular_file_metadata(&path) else {
                 continue;
             };
             let Ok(mtime) = meta.modified() else { continue };
@@ -1734,13 +2185,13 @@ fn find_recent_antigravity_jsonl(
             });
         }
     }
-    pick_anchor_or_rotate_with_target(
+    Ok(pick_anchor_or_rotate_with_target(
         candidates,
         process_start,
         now,
         allow_rotation && owner_cursor_id.is_some(),
         owner_cursor_id,
-    )
+    ))
 }
 
 fn find_completed_antigravity_jsonl(
@@ -1749,34 +2200,55 @@ fn find_completed_antigravity_jsonl(
     recency_cutoff: SystemTime,
     process_start: SystemTime,
 ) -> Option<(PathBuf, String)> {
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    find_completed_antigravity_jsonl_budgeted(
+        cwd,
+        brain_roots,
+        recency_cutoff,
+        process_start,
+        &mut budget,
+    )
+    .ok()
+    .flatten()
+}
+
+fn find_completed_antigravity_jsonl_budgeted(
+    cwd: &Path,
+    brain_roots: &[PathBuf],
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
     let mut candidates: Vec<(PathBuf, SystemTime, String)> = Vec::new();
     for root in brain_roots {
-        let Ok(entries) = std::fs::read_dir(root) else {
+        let Some(entries) = safe_read_dir(root)? else {
             continue;
         };
-        for entry in entries.flatten() {
-            let session_dir = entry.path();
-            if !session_dir.is_dir() {
+        for raw_entry in entries {
+            budget.charge_directory_entry()?;
+            let entry = complete_io(raw_entry)?;
+            let Some(session_dir) = safe_directory_entry_path(&entry)? else {
                 continue;
-            }
+            };
             let path = session_dir
                 .join(".system_generated")
                 .join("logs")
                 .join("transcript.jsonl");
-            if !path.is_file() {
+            budget.charge_candidate()?;
+            if !safe_antigravity_transcript_path(&session_dir, &path) {
                 continue;
             }
             let Some(id) = antigravity_uuid_from_transcript_path(&path) else {
                 continue;
             };
-            let Ok(meta) = std::fs::metadata(&path) else {
+            let Some(meta) = safe_regular_file_metadata(&path) else {
                 continue;
             };
             let Ok(mtime) = meta.modified() else { continue };
             if mtime < recency_cutoff || mtime < process_start {
                 continue;
             }
-            let Some(transcript_cwd) = read_agent_transcript_cwd(&path) else {
+            let Some(transcript_cwd) = read_agent_transcript_cwd_budgeted(&path, budget)? else {
                 continue;
             };
             if transcript_cwd != cwd {
@@ -1788,11 +2260,21 @@ fn find_completed_antigravity_jsonl(
     }
     candidates.sort_by_key(|candidate| time_distance(candidate.1, process_start));
     if candidates.len() == 1 {
-        let (path, _, id) = candidates.pop()?;
-        Some((path, id))
+        let Some((path, _, id)) = candidates.pop() else {
+            return Ok(None);
+        };
+        Ok(Some((path, id)))
     } else {
-        None
+        Ok(None)
     }
+}
+
+fn safe_antigravity_transcript_path(session_dir: &Path, transcript: &Path) -> bool {
+    let generated = session_dir.join(".system_generated");
+    let logs = generated.join("logs");
+    safe_is_directory(&generated)
+        && safe_is_directory(&logs)
+        && safe_regular_file_metadata(transcript).is_some()
 }
 
 /// Read codex rollout's first non-empty JSONL line and pull `payload.cwd`.
@@ -1836,26 +2318,33 @@ impl CodexRolloutHead {
 /// this relationship narrowly; arbitrary backwards transcript moves still
 /// pass the normal dormant-echo guard.
 pub fn codex_rollout_parent_thread_id(path: &Path) -> Option<String> {
-    use std::io::{BufRead, BufReader};
-    let file = std::fs::File::open(path).ok()?;
-    let reader = BufReader::new(file);
-    for line in reader.lines().map_while(Result::ok).take(20) {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    codex_rollout_parent_thread_id_budgeted(path, &mut budget)
+        .ok()
+        .flatten()
+}
+
+fn codex_rollout_parent_thread_id_budgeted(
+    path: &Path,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<String>> {
+    read_bounded_head(path, budget, |line| {
+        let value = serde_json::from_slice::<serde_json::Value>(line).ok()?;
         for scope in [Some(&value), value.get("payload")] {
-            let Some(scope) = scope else { continue };
+            let Some(scope) = scope else {
+                continue;
+            };
             let (is_subagent, parent_thread_id) = codex_subagent_metadata(scope);
             if is_subagent && parent_thread_id.is_some() {
                 return parent_thread_id;
             }
         }
-    }
-    None
+        None
+    })
 }
 
 /// A deliberately resumed sub-agent rollout becomes the root conversation for
-/// this terminal run, but it keeps its original `source.subagent` metadata.
+/// this terminal run, but it keeps its original source.subagent metadata.
 /// Historical ancestors remain candidates so normal birth anchoring selects
 /// the youngest pre-existing rollout. Only descendants born by this process
 /// are removed. Process start times are second-granularity on supported hosts;
@@ -1865,79 +2354,95 @@ fn retain_resumed_codex_roots(
     candidates: &mut Vec<TranscriptCandidate>,
     sessions_root: &Path,
     process_start: SystemTime,
-) {
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<()> {
     let candidate_ids = candidates
         .iter()
         .map(|candidate| candidate.uuid.clone())
         .collect::<HashSet<_>>();
-    candidates.retain(|candidate| {
+    let mut keep = Vec::with_capacity(candidates.len());
+    for candidate in candidates.iter() {
         let born_this_run = candidate.birth.duration_since(process_start).is_ok();
-        !born_this_run
-            || !codex_rollout_has_candidate_ancestor(&candidate.path, &candidate_ids, sessions_root)
-    });
+        let has_candidate_ancestor = if born_this_run {
+            codex_rollout_has_candidate_ancestor_budgeted(
+                &candidate.path,
+                &candidate_ids,
+                sessions_root,
+                budget,
+            )?
+        } else {
+            false
+        };
+        keep.push(!born_this_run || !has_candidate_ancestor);
+    }
+    let mut keep = keep.into_iter();
+    candidates.retain(|_| keep.next().unwrap_or(false));
+    Ok(())
 }
 
-fn codex_rollout_has_candidate_ancestor(
+fn codex_rollout_has_candidate_ancestor_budgeted(
     rollout: &Path,
     candidate_ids: &HashSet<String>,
     sessions_root: &Path,
-) -> bool {
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<bool> {
     const MAX_ANCESTOR_DEPTH: usize = 16;
 
     let mut current = rollout.to_path_buf();
     let mut seen = HashSet::new();
     for _ in 0..MAX_ANCESTOR_DEPTH {
-        let Some(parent_uuid) = codex_rollout_parent_thread_id(&current) else {
-            return false;
+        let Some(parent_uuid) = codex_rollout_parent_thread_id_budgeted(&current, budget)? else {
+            return Ok(false);
         };
         if !seen.insert(parent_uuid.clone()) {
-            return true;
+            return Ok(true);
         }
         if candidate_ids.contains(&parent_uuid) {
-            return true;
+            return Ok(true);
         }
-        let Some((parent_path, _)) =
-            find_codex_jsonl_for_uuid(Some(sessions_root), &parent_uuid, &HashSet::new())
+        let Some((parent_path, _)) = find_codex_jsonl_for_uuid_budgeted(
+            Some(sessions_root),
+            &parent_uuid,
+            &HashSet::new(),
+            budget,
+        )?
         else {
-            return false;
+            return Ok(false);
         };
         current = parent_path;
     }
-    true
+    Ok(true)
 }
 
-/// Read owner metadata from a codex rollout's leading `session_meta` line.
-/// Fields live at the top level in old formats and under `payload` in current
+/// Read owner metadata from a Codex rollout's leading session_meta line.
+/// Fields live at the top level in old formats and under payload in current
 /// ones. Current sub-agent sources encode their parent beneath
-/// `source.subagent`; the payload-level parent id is retained as a fallback
+/// source.subagent; the payload-level parent id is retained as a fallback
 /// for compatible writers.
-fn read_codex_rollout_head(path: &Path) -> Option<CodexRolloutHead> {
-    use std::io::{BufRead, BufReader};
-    let f = std::fs::File::open(path).ok()?;
-    let reader = BufReader::new(f);
-    for line in reader.lines().map_while(Result::ok).take(20) {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        for scope in [Some(&v), v.get("payload")] {
-            let Some(scope) = scope else { continue };
-            if let Some(cwd) = scope.get("cwd").and_then(|c| c.as_str()) {
+fn read_codex_rollout_head_budgeted(
+    path: &Path,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<CodexRolloutHead>> {
+    read_bounded_head(path, budget, |line| {
+        let value = serde_json::from_slice::<serde_json::Value>(line).ok()?;
+        for scope in [Some(&value), value.get("payload")] {
+            let Some(scope) = scope else {
+                continue;
+            };
+            if let Some(cwd) = scope.get("cwd").and_then(|cwd| cwd.as_str()) {
                 let (is_subagent, _) = codex_subagent_metadata(scope);
                 return Some(CodexRolloutHead {
                     cwd: PathBuf::from(cwd),
                     originator: scope
                         .get("originator")
-                        .and_then(|o| o.as_str())
+                        .and_then(|originator| originator.as_str())
                         .map(str::to_string),
                     is_subagent,
                 });
             }
         }
-    }
-    None
+        None
+    })
 }
 
 fn codex_subagent_metadata(scope: &serde_json::Value) -> (bool, Option<String>) {
@@ -1967,31 +2472,99 @@ fn find_parent_thread_id(value: &serde_json::Value) -> Option<&str> {
     }
 }
 
-fn read_agent_transcript_cwd(path: &Path) -> Option<PathBuf> {
-    use std::io::{BufRead, BufReader};
-    let f = std::fs::File::open(path).ok()?;
-    let reader = BufReader::new(f);
-    for line in reader.lines().map_while(Result::ok).take(50) {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
+fn read_agent_transcript_cwd_budgeted(
+    path: &Path,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<PathBuf>> {
+    read_bounded_head(path, budget, |line| {
+        let value = serde_json::from_slice::<serde_json::Value>(line).ok()?;
         for key in ["cwd", "project"] {
-            if let Some(path) = v.get(key).and_then(|c| c.as_str()) {
+            if let Some(path) = value.get(key).and_then(|cwd| cwd.as_str()) {
                 return Some(PathBuf::from(path));
             }
-            if let Some(path) = v
+            if let Some(path) = value
                 .get("payload")
-                .and_then(|p| p.get(key))
-                .and_then(|c| c.as_str())
+                .and_then(|payload| payload.get(key))
+                .and_then(|cwd| cwd.as_str())
             {
                 return Some(PathBuf::from(path));
             }
         }
+        None
+    })
+}
+
+fn read_bounded_head<T>(
+    path: &Path,
+    budget: &mut ProviderScanBudget,
+    mut parse_line: impl FnMut(&[u8]) -> Option<T>,
+) -> ProviderScanResult<Option<T>> {
+    use std::io::Read;
+
+    if safe_regular_file_metadata(path).is_none() {
+        return Ok(None);
     }
-    None
+    budget.charge_head_open()?;
+    let mut file = complete_io(std::fs::File::open(path))?;
+    let mut buffer = [0_u8; 8 * 1024];
+    let mut line = Vec::new();
+    let mut bytes_read = 0;
+    let mut lines_read = 0;
+
+    if budget.limits.head_bytes == 0 || budget.limits.head_lines == 0 {
+        return probe_head_boundary(&mut file);
+    }
+
+    while bytes_read < budget.limits.head_bytes {
+        let remaining = budget.limits.head_bytes - bytes_read;
+        let read_len = remaining.min(buffer.len());
+        let read = complete_io(file.read(&mut buffer[..read_len]))?;
+        if read == 0 {
+            if !line.is_empty() {
+                if let Some(value) = parse_line(&line) {
+                    return Ok(Some(value));
+                }
+            }
+            return Ok(None);
+        }
+        bytes_read += read;
+
+        for (index, byte) in buffer[..read].iter().enumerate() {
+            if *byte == b'\n' {
+                lines_read += 1;
+                if let Some(value) = parse_line(&line) {
+                    return Ok(Some(value));
+                }
+                line.clear();
+                if lines_read >= budget.limits.head_lines {
+                    if index + 1 < read {
+                        return Err(ProviderScanError::LimitExceeded);
+                    }
+                    return probe_head_boundary(&mut file);
+                }
+                continue;
+            }
+            if line.len() >= budget.limits.line_bytes {
+                return Err(ProviderScanError::LimitExceeded);
+            }
+            line.push(*byte);
+        }
+    }
+
+    if let Some(value) = parse_line(&line) {
+        return Ok(Some(value));
+    }
+    probe_head_boundary(&mut file)
+}
+
+fn probe_head_boundary<T>(file: &mut std::fs::File) -> ProviderScanResult<Option<T>> {
+    use std::io::Read;
+
+    let mut probe = [0_u8; 1];
+    match complete_io(file.read(&mut probe))? {
+        0 => Ok(None),
+        _ => Err(ProviderScanError::LimitExceeded),
+    }
 }
 
 /// Pick the lexicographically greatest subdirectory of `dir`. Codex
@@ -2000,13 +2573,26 @@ fn read_agent_transcript_cwd(path: &Path) -> Option<PathBuf> {
 /// mtime drift (some filesystems do not bump a directory's mtime when
 /// a child gains a new grandchild, which would mislead a mtime-based
 /// pick).
+#[cfg(test)]
 fn newest_subdir(dir: &Path) -> Option<PathBuf> {
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    newest_subdir_budgeted(dir, &mut budget).ok().flatten()
+}
+
+fn newest_subdir_budgeted(
+    dir: &Path,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<PathBuf>> {
     let mut best: Option<PathBuf> = None;
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
+    let Some(entries) = safe_read_dir(dir)? else {
+        return Ok(None);
+    };
+    for raw_entry in entries {
+        budget.charge_directory_entry()?;
+        let entry = complete_io(raw_entry)?;
+        let Some(path) = safe_directory_entry_path(&entry)? else {
             continue;
-        }
+        };
         match &best {
             None => best = Some(path),
             Some(current) if path.file_name() > current.file_name() => {
@@ -2015,20 +2601,31 @@ fn newest_subdir(dir: &Path) -> Option<PathBuf> {
             _ => {}
         }
     }
-    best
+    Ok(best)
 }
 
-fn iter_subdirs_desc(dir: &Path) -> Option<Vec<PathBuf>> {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
+fn iter_subdirs_desc_budgeted(
+    dir: &Path,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<Vec<PathBuf>>> {
+    let Some(raw_entries) = safe_read_dir(dir)? else {
+        return Ok(None);
+    };
+    let mut entries = Vec::new();
+    for raw_entry in raw_entries {
+        budget.charge_directory_entry()?;
+        let entry = complete_io(raw_entry)?;
+        let Some(path) = safe_directory_entry_path(&entry)? else {
+            continue;
+        };
+        budget.charge_candidate()?;
+        entries.push(path);
+    }
     entries.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
-    Some(entries)
+    Ok(Some(entries))
 }
 
+#[cfg(test)]
 fn pick_newest_unassigned_jsonl(
     dir: &Path,
     recency_cutoff: SystemTime,
@@ -2037,6 +2634,52 @@ fn pick_newest_unassigned_jsonl(
     allow_rotation: bool,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
+    pick_newest_unassigned_jsonl_with_limits(
+        dir,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        PROVIDER_SCAN_LIMITS,
+    )
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn pick_newest_unassigned_jsonl_with_limits(
+    dir: &Path,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+    limits: ProviderScanLimits,
+) -> Option<(PathBuf, String)> {
+    let mut budget = ProviderScanBudget::new(limits);
+    pick_newest_unassigned_jsonl_budgeted(
+        dir,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+        &mut budget,
+    )
+    .ok()
+    .flatten()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pick_newest_unassigned_jsonl_budgeted(
+    dir: &Path,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
     // We track two timestamps per candidate. `created` (file birth
     // time, falling back to mtime when btime is unavailable) is what
     // we rank by: when two `claude` processes run concurrently in the
@@ -2044,7 +2687,12 @@ fn pick_newest_unassigned_jsonl(
     // process's own start time is its transcript. `mtime` is still
     // used as a recency filter so stale years-old files don't surface.
     let mut candidates: Vec<(PathBuf, SystemTime, SystemTime)> = Vec::new();
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+    let Some(entries) = safe_read_dir(dir)? else {
+        return Ok(None);
+    };
+    for raw_entry in entries {
+        budget.charge_directory_entry()?;
+        let entry = complete_io(raw_entry)?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
@@ -2052,7 +2700,10 @@ fn pick_newest_unassigned_jsonl(
         if assigned.contains(&path) {
             continue;
         }
-        let Ok(meta) = entry.metadata() else { continue };
+        budget.charge_candidate()?;
+        let Some(meta) = safe_regular_file_entry_metadata(&entry)? else {
+            continue;
+        };
         let Ok(mtime) = meta.modified() else { continue };
         if mtime < recency_cutoff {
             continue;
@@ -2078,7 +2729,12 @@ fn pick_newest_unassigned_jsonl(
             })
         })
         .collect();
-    pick_anchor_or_rotate(candidates, process_start, now, allow_rotation)
+    Ok(pick_anchor_or_rotate(
+        candidates,
+        process_start,
+        now,
+        allow_rotation,
+    ))
 }
 
 /// A transcript file eligible for pairing with a live agent process.
@@ -2173,10 +2829,7 @@ fn time_distance(a: SystemTime, b: SystemTime) -> u64 {
 fn extract_uuid_from_path(path: &Path) -> Option<String> {
     let filename = path.file_name()?.to_str()?;
     let stem = filename.strip_suffix(".jsonl")?;
-    if stem.len() < 36 {
-        return None;
-    }
-    let candidate = &stem[stem.len() - 36..];
+    let candidate = stem.get(stem.len().checked_sub(36)?..)?;
     is_uuid_v4_shape(candidate).then(|| candidate.to_string())
 }
 
@@ -2256,6 +2909,13 @@ mod tests {
         }
     }
 
+    fn scan_limits_with_entries(directory_entries: usize) -> ProviderScanLimits {
+        ProviderScanLimits {
+            directory_entries,
+            ..PROVIDER_SCAN_LIMITS
+        }
+    }
+
     fn process_roles(matches: Vec<AgentProcessMatch>) -> Vec<(u32, AgentKind, AgentProcessRole)> {
         matches
             .into_iter()
@@ -2305,6 +2965,286 @@ mod tests {
             extract_uuid_from_path(path).as_deref(),
             Some("019e2001-3250-76b0-8410-2e073b38a2c1")
         );
+    }
+
+    #[test]
+    fn rejects_uuid_suffix_at_non_ascii_boundary_without_panicking() {
+        let path = Path::new("가aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeee.jsonl");
+
+        assert_eq!(extract_uuid_from_path(path), None);
+    }
+
+    #[test]
+    fn provider_entry_budget_accepts_exact_limit_and_rejects_partial_candidate() {
+        use std::fs::{self, File};
+
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-provider-budget-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        File::create(&transcript).unwrap();
+        File::create(dir.join("decoy.txt")).unwrap();
+        let now = fs::metadata(&transcript).unwrap().modified().unwrap();
+
+        let exact = pick_newest_unassigned_jsonl_with_limits(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            now,
+            false,
+            &HashSet::new(),
+            scan_limits_with_entries(2),
+        );
+        assert_eq!(exact.map(|(_, id)| id).as_deref(), Some(A_UUID));
+
+        let over = pick_newest_unassigned_jsonl_with_limits(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            now,
+            false,
+            &HashSet::new(),
+            scan_limits_with_entries(1),
+        );
+        assert!(
+            over.is_none(),
+            "an over-budget traversal must discard an already collected candidate"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn provider_entry_budget_is_shared_across_matcher_lookups() {
+        use std::fs::{self, File};
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-provider-shared-budget-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let first_dir = root.join("first");
+        let second_dir = root.join("second");
+        fs::create_dir_all(&first_dir).unwrap();
+        fs::create_dir_all(&second_dir).unwrap();
+        let first = first_dir.join(format!("{A_UUID}.jsonl"));
+        let second = second_dir.join(format!("{B_UUID}.jsonl"));
+        File::create(&first).unwrap();
+        File::create(&second).unwrap();
+        let now = fs::metadata(&second).unwrap().modified().unwrap();
+        let mut budget = ProviderScanBudget::new(scan_limits_with_entries(1));
+
+        let first_result = pick_newest_unassigned_jsonl_budgeted(
+            &first_dir,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            now,
+            false,
+            &HashSet::new(),
+            &mut budget,
+        );
+        assert!(matches!(first_result, Ok(Some(_))));
+
+        let second_result = pick_newest_unassigned_jsonl_budgeted(
+            &second_dir,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            now,
+            false,
+            &HashSet::new(),
+            &mut budget,
+        );
+        assert!(second_result.is_err());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn transcript_head_rejects_oversized_line_and_snapshot() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-provider-head-budget-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join(format!("{A_UUID}.jsonl"));
+
+        let mut file = File::create(&transcript).unwrap();
+        writeln!(file, "123456789").unwrap();
+        writeln!(file, "{{\"cwd\":\"/repo\"}}").unwrap();
+        let line_limits = ProviderScanLimits {
+            line_bytes: 8,
+            ..PROVIDER_SCAN_LIMITS
+        };
+        let mut line_budget = ProviderScanBudget::new(line_limits);
+        assert!(read_agent_transcript_cwd_budgeted(&transcript, &mut line_budget).is_err());
+
+        let mut file = File::create(&transcript).unwrap();
+        write!(file, "         {{\"cwd\":\"/repo\"}}\n").unwrap();
+        let snapshot_limits = ProviderScanLimits {
+            head_bytes: 8,
+            line_bytes: 64,
+            ..PROVIDER_SCAN_LIMITS
+        };
+        let mut snapshot_budget = ProviderScanBudget::new(snapshot_limits);
+        assert!(read_agent_transcript_cwd_budgeted(&transcript, &mut snapshot_budget).is_err());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn transcript_head_accepts_exact_byte_and_line_boundaries() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-provider-head-exact-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join(format!("{A_UUID}.jsonl"));
+
+        let mut file = File::create(&transcript).unwrap();
+        write!(file, "12345678").unwrap();
+        drop(file);
+        let exact_byte_limits = ProviderScanLimits {
+            head_bytes: 8,
+            line_bytes: 8,
+            ..PROVIDER_SCAN_LIMITS
+        };
+        let mut exact_byte_budget = ProviderScanBudget::new(exact_byte_limits);
+        assert_eq!(
+            read_agent_transcript_cwd_budgeted(&transcript, &mut exact_byte_budget),
+            Ok(None)
+        );
+
+        let mut file = File::create(&transcript).unwrap();
+        write!(file, "{{}}\n{{}}\n").unwrap();
+        drop(file);
+        let exact_line_limits = ProviderScanLimits {
+            head_lines: 2,
+            ..PROVIDER_SCAN_LIMITS
+        };
+        let mut exact_line_budget = ProviderScanBudget::new(exact_line_limits);
+        assert_eq!(
+            read_agent_transcript_cwd_budgeted(&transcript, &mut exact_line_budget),
+            Ok(None)
+        );
+
+        let mut file = File::create(&transcript).unwrap();
+        write!(file, "{{}}\n{{}}\n{{}}\n").unwrap();
+        drop(file);
+        let mut over_line_budget = ProviderScanBudget::new(exact_line_limits);
+        assert_eq!(
+            read_agent_transcript_cwd_budgeted(&transcript, &mut over_line_budget),
+            Err(ProviderScanError::LimitExceeded)
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn io_errors_mark_provider_scan_incomplete() {
+        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "unreadable");
+
+        assert_eq!(
+            complete_io::<()>(Err(error)),
+            Err(ProviderScanError::Incomplete)
+        );
+    }
+
+    #[test]
+    fn over_limit_sessions_cannot_receive_cached_mappings() {
+        let cached_session = uuid::Uuid::new_v4();
+        let cache = Box::leak(Box::new(Mutex::new(Some(ScanCache {
+            captured_at: Instant::now(),
+            session_key: Vec::new(),
+            mappings: vec![(cached_session, AgentKind::Codex, "cached".to_string())],
+        }))));
+        let sessions = (0..=LIVE_SCAN_SESSION_LIMIT)
+            .map(|_| SessionPid {
+                session_id: uuid::Uuid::new_v4(),
+                root_pid: None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(collect_mappings_cached(cache, &sessions, MappingScope::SessionOwners).is_empty());
+    }
+
+    #[test]
+    fn changed_under_limit_sessions_cannot_receive_cached_mappings() {
+        let stale_session = SessionPid {
+            session_id: uuid::Uuid::new_v4(),
+            root_pid: Some(41),
+        };
+        let cached_mapping = (
+            stale_session.session_id,
+            AgentKind::Codex,
+            "cached".to_string(),
+        );
+        let cache = Box::leak(Box::new(Mutex::new(Some(ScanCache {
+            captured_at: Instant::now(),
+            session_key: scan_cache_session_key(std::slice::from_ref(&stale_session)),
+            mappings: vec![cached_mapping],
+        }))));
+        let replacement = SessionPid {
+            session_id: stale_session.session_id,
+            root_pid: None,
+        };
+
+        assert!(
+            collect_mappings_cached(cache, &[replacement], MappingScope::SessionOwners,).is_empty()
+        );
+    }
+
+    #[test]
+    fn scan_cache_session_key_is_order_independent() {
+        let first = SessionPid {
+            session_id: uuid::Uuid::new_v4(),
+            root_pid: Some(11),
+        };
+        let second = SessionPid {
+            session_id: uuid::Uuid::new_v4(),
+            root_pid: Some(22),
+        };
+
+        assert_eq!(
+            scan_cache_session_key(&[first.clone(), second.clone()]),
+            scan_cache_session_key(&[second, first]),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transcript_picker_rejects_symlinked_file() {
+        use std::fs::{self, File};
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-provider-symlink-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let scan_dir = root.join("scan");
+        fs::create_dir_all(&scan_dir).unwrap();
+        let target = root.join("target.jsonl");
+        File::create(&target).unwrap();
+        let link = scan_dir.join(format!("{A_UUID}.jsonl"));
+        symlink(&target, &link).unwrap();
+
+        let picked = pick_newest_unassigned_jsonl(
+            &scan_dir,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::now(),
+            false,
+            &HashSet::new(),
+        );
+        assert!(picked.is_none());
+
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2979,6 +3919,33 @@ mod tests {
 
         assert_eq!(antigravity.get(&cwd), Some(&2));
         assert_eq!(antigravity.get(&other_cwd), Some(&1));
+    }
+
+    #[test]
+    fn process_tree_match_limit_fails_before_collecting_partial_results() {
+        let root = Pid::from_u32(1);
+        let first = Pid::from_u32(2);
+        let second = Pid::from_u32(3);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![first, second]);
+
+        let exact = collect_agent_processes_in_tree_bounded(
+            &children,
+            root,
+            MappingScope::AllDescendants,
+            2,
+            |pid| (pid != root).then(|| runtime(AgentKind::Codex)),
+        );
+        assert_eq!(exact.unwrap().len(), 2);
+
+        let over = collect_agent_processes_in_tree_bounded(
+            &children,
+            root,
+            MappingScope::AllDescendants,
+            1,
+            |pid| (pid != root).then(|| runtime(AgentKind::Codex)),
+        );
+        assert_eq!(over, Err(LiveAgentProcessLimitExceeded));
     }
 
     #[test]
@@ -4262,7 +5229,8 @@ mod tests {
             },
         ];
 
-        retain_resumed_codex_roots(&mut candidates, &sessions, process_start);
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        retain_resumed_codex_roots(&mut candidates, &sessions, process_start, &mut budget).unwrap();
 
         assert_eq!(
             candidates

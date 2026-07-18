@@ -47,9 +47,6 @@
     ]
   },
   "plugins": {
-    "opener": {
-      "requireLiteralLeadingDot": false
-    },
     "updater": {
       "active": true,
       "endpoints": [

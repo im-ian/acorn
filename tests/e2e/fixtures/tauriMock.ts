@@ -69,6 +69,28 @@ export const tauriMockSource = `
     if (cmd === 'plugin:fs|mkdir') return Promise.resolve(undefined);
     if (cmd === 'plugin:fs|read_dir') return Promise.resolve([]);
     if (cmd === 'plugin:fs|read_text_file') return Promise.resolve('');
+    if (cmd === 'plugin:fs|stat') {
+      return Promise.resolve({
+        isFile: true,
+        isDirectory: false,
+        isSymlink: false,
+        size: 0,
+        mtime: null,
+        atime: null,
+        birthtime: null,
+        readonly: false,
+        fileAttributes: null,
+        dev: null,
+        ino: null,
+        mode: null,
+        nlink: null,
+        uid: null,
+        gid: null,
+        rdev: null,
+        blksize: null,
+        blocks: null,
+      });
+    }
     return undefined;
   }
 
@@ -291,11 +313,6 @@ export const tauriMockSource = `
     if (cmd === 'daemon_restart') return Promise.resolve(undefined);
     if (cmd === 'daemon_shutdown') return Promise.resolve(undefined);
     if (cmd === 'daemon_list_sessions') return Promise.resolve([]);
-    if (cmd === 'daemon_spawn_session') {
-      return Promise.reject(new Error('daemon disabled in E2E'));
-    }
-    if (cmd === 'daemon_send_input') return Promise.resolve(undefined);
-    if (cmd === 'daemon_resize') return Promise.resolve(undefined);
     if (cmd === 'daemon_kill_session') return Promise.resolve(undefined);
     if (cmd === 'daemon_forget_session') return Promise.resolve(undefined);
     if (cmd === 'daemon_forget_inactive_sessions') return Promise.resolve(0);

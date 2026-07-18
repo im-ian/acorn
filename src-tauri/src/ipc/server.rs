@@ -152,14 +152,14 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Option<IpcServer
     if let Err(err) =
         std::fs::set_permissions(&staging_path, std::fs::Permissions::from_mode(0o600))
     {
-        // Tighten on best-effort. If chmod fails we keep going — it just
-        // means the socket is more permissive than ideal, not that the
-        // server is unsafe (the unix peer is still local).
         tracing::warn!(
             error = %err,
             path = %staging_path.display(),
-            "ipc: chmod 0600 failed",
+            "ipc: chmod 0600 failed; server disabled",
         );
+        drop(listener);
+        let _ = std::fs::remove_file(&staging_path);
+        return None;
     }
     if let Err(err) = std::fs::rename(&staging_path, &path) {
         tracing::warn!(

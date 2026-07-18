@@ -35,6 +35,29 @@ const TITLE_CONTEXT_ENTRY_CHARS: usize = 700;
 const RECENT_SUMMARY_MESSAGES: usize = 6;
 const SUMMARY_MESSAGE_PREVIEW_CHARS: usize = 600;
 const TRANSCRIPT_SUMMARY_CACHE_MAX_ENTRIES: usize = 128;
+const MAX_DISCOVERY_ENTRIES_PER_PROVIDER: usize = 10_000;
+const MAX_TRANSCRIPT_SCAN_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_TRANSCRIPT_SCAN_LINES: usize = 250_000;
+const MAX_TRANSCRIPT_LINE_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Copy)]
+struct TranscriptScanLimits {
+    max_bytes: u64,
+    max_lines: usize,
+    max_line_bytes: usize,
+}
+
+const TRANSCRIPT_SCAN_LIMITS: TranscriptScanLimits = TranscriptScanLimits {
+    max_bytes: MAX_TRANSCRIPT_SCAN_BYTES,
+    max_lines: MAX_TRANSCRIPT_SCAN_LINES,
+    max_line_bytes: MAX_TRANSCRIPT_LINE_BYTES,
+};
+
+struct TranscriptSnapshot {
+    file: fs::File,
+    len: u64,
+    modified: Option<SystemTime>,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -366,16 +389,13 @@ fn scan_claude(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
 }
 
 fn scan_antigravity(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
-    let mut files = Vec::new();
-    for root in antigravity_brain_roots() {
-        files.extend(collect_files(
-            &root,
-            ANTIGRAVITY_SCAN_MAX_DIR_DEPTH,
-            is_antigravity_transcript_path,
-        ));
-    }
-    files.sort_by(|a, b| file_updated_at(b).cmp(&file_updated_at(a)));
-    files.truncate(MAX_DISCOVERED_FILES_PER_PROVIDER);
+    let roots = antigravity_brain_root_candidates();
+    let files = collect_files_across_roots_with_entry_limit(
+        &roots,
+        ANTIGRAVITY_SCAN_MAX_DIR_DEPTH,
+        is_antigravity_transcript_path,
+        MAX_DISCOVERY_ENTRIES_PER_PROVIDER,
+    );
     parse_recent_files(files, limit, |path| parse_antigravity_file(path, scope))
 }
 
@@ -428,18 +448,19 @@ fn find_antigravity_history_item_by_path_id(
     scope: HistoryScope<'_>,
     transcript_id: &str,
 ) -> Option<AgentHistoryItem> {
-    if Uuid::parse_str(transcript_id).is_err() {
-        return None;
-    }
-    for root in antigravity_brain_roots() {
-        let path = root
-            .join(transcript_id)
-            .join(".system_generated/logs/transcript.jsonl");
-        if !path.is_file() || !is_antigravity_transcript_path(&path) {
-            continue;
-        }
-        if let Some(item) =
-            parse_antigravity_file(&path, scope).filter(|item| item.id == transcript_id)
+    let storage_root = google_agent_storage_root()?;
+    find_antigravity_history_item_by_path_id_at(scope, transcript_id, &storage_root)
+}
+
+fn find_antigravity_history_item_by_path_id_at(
+    scope: HistoryScope<'_>,
+    transcript_id: &str,
+    storage_root: &Path,
+) -> Option<AgentHistoryItem> {
+    let id = crate::agent_resume::normalize_provider_id(transcript_id).ok()?;
+    for snapshot in crate::agent_resume::open_antigravity_transcript_snapshots_at(storage_root, &id)
+    {
+        if let Some(item) = parse_antigravity_snapshot(snapshot, scope).filter(|item| item.id == id)
         {
             return Some(item);
         }
@@ -477,21 +498,16 @@ fn find_antigravity_history_item_by_parsed_id(
     scope: HistoryScope<'_>,
     transcript_id: &str,
 ) -> Option<AgentHistoryItem> {
-    for root in antigravity_brain_roots() {
-        let files = collect_files(
-            &root,
-            ANTIGRAVITY_SCAN_MAX_DIR_DEPTH,
-            is_antigravity_transcript_path,
-        );
-        if let Some(item) =
-            find_history_item_in_files(parse_budget_files(files), transcript_id, |path| {
-                parse_antigravity_file(path, scope)
-            })
-        {
-            return Some(item);
-        }
-    }
-    None
+    let roots = antigravity_brain_root_candidates();
+    let files = collect_files_across_roots_with_entry_limit(
+        &roots,
+        ANTIGRAVITY_SCAN_MAX_DIR_DEPTH,
+        is_antigravity_transcript_path,
+        MAX_DISCOVERY_ENTRIES_PER_PROVIDER,
+    );
+    find_history_item_in_files(parse_budget_files(files), transcript_id, |path| {
+        parse_antigravity_file(path, scope)
+    })
 }
 
 fn parse_budget_files(files: Vec<PathBuf>) -> impl Iterator<Item = PathBuf> {
@@ -514,20 +530,85 @@ fn collect_files(
     max_dir_depth: usize,
     accept: impl Fn(&Path) -> bool,
 ) -> Vec<PathBuf> {
-    if !root.is_dir() {
-        return Vec::new();
-    }
+    collect_files_with_entry_limit(
+        root,
+        max_dir_depth,
+        accept,
+        MAX_DISCOVERY_ENTRIES_PER_PROVIDER,
+    )
+}
+
+fn collect_files_with_entry_limit(
+    root: &Path,
+    max_dir_depth: usize,
+    accept: impl Fn(&Path) -> bool,
+    max_entries: usize,
+) -> Vec<PathBuf> {
+    collect_files_across_roots_with_entry_limit(
+        &[root.to_path_buf()],
+        max_dir_depth,
+        accept,
+        max_entries,
+    )
+}
+
+fn collect_files_across_roots_with_entry_limit(
+    roots: &[PathBuf],
+    max_dir_depth: usize,
+    accept: impl Fn(&Path) -> bool,
+    max_entries: usize,
+) -> Vec<PathBuf> {
     let mut out = Vec::new();
+    let mut remaining_entries = max_entries;
+    for root in roots {
+        if !collect_files_from_root(
+            root,
+            max_dir_depth,
+            &accept,
+            &mut remaining_entries,
+            &mut out,
+        ) {
+            return Vec::new();
+        }
+    }
+
+    out.sort_by(|a, b| file_updated_at(b).cmp(&file_updated_at(a)));
+    out.truncate(MAX_DISCOVERED_FILES_PER_PROVIDER);
+    out
+}
+
+fn collect_files_from_root(
+    root: &Path,
+    max_dir_depth: usize,
+    accept: &impl Fn(&Path) -> bool,
+    remaining_entries: &mut usize,
+    out: &mut Vec<PathBuf>,
+) -> bool {
+    match fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => return true,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return true,
+        Err(_) => return false,
+    }
     let mut stack = vec![(root.to_path_buf(), 0_usize)];
 
     while let Some((dir, depth)) = stack.pop() {
         let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
+            return false;
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            if *remaining_entries == 0 {
+                // An incomplete traversal can select the wrong "newest" files,
+                // so discard it instead of returning a plausible partial list.
+                return false;
+            }
+            *remaining_entries -= 1;
+            let Ok(entry) = entry else {
+                return false;
+            };
             let path = entry.path();
             let Ok(file_type) = entry.file_type() else {
-                continue;
+                return false;
             };
             if file_type.is_dir() {
                 if depth < max_dir_depth {
@@ -538,10 +619,7 @@ fn collect_files(
             }
         }
     }
-
-    out.sort_by(|a, b| file_updated_at(b).cmp(&file_updated_at(a)));
-    out.truncate(MAX_DISCOVERED_FILES_PER_PROVIDER);
-    out
+    true
 }
 
 fn parse_recent_files<T>(
@@ -648,6 +726,29 @@ fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistor
 
 fn parse_antigravity_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
     let state = parse_agent_state(AgentKind::Antigravity, path)?;
+    build_antigravity_item(path, state, file_updated_at(path), scope)
+}
+
+fn parse_antigravity_snapshot(
+    snapshot: crate::agent_resume::AntigravityTranscriptSnapshot,
+    scope: HistoryScope<'_>,
+) -> Option<AgentHistoryItem> {
+    let crate::agent_resume::AntigravityTranscriptSnapshot {
+        path,
+        file,
+        len,
+        modified,
+    } = snapshot;
+    let state = parse_agent_state_from_opened(AgentKind::Antigravity, &path, file, len)?;
+    build_antigravity_item(&path, state, updated_at_from_modified(modified), scope)
+}
+
+fn build_antigravity_item(
+    path: &Path,
+    state: ParsedAgentFile,
+    updated_at: u64,
+    scope: HistoryScope<'_>,
+) -> Option<AgentHistoryItem> {
     if state.internal_title_generation {
         return None;
     }
@@ -686,7 +787,7 @@ fn parse_antigravity_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentH
         cwd,
         worktree,
         transcript_path: path.display().to_string(),
-        updated_at: file_updated_at(path),
+        updated_at,
     })
 }
 
@@ -707,23 +808,19 @@ pub fn transcript_title_context(
     path: &Path,
     max_chars: usize,
 ) -> Option<String> {
-    let file = fs::File::open(path).ok()?;
+    let snapshot = open_transcript_snapshot(path, TRANSCRIPT_SCAN_LIMITS)?;
     let mut builder = TitleContextBuilder::new(max_chars);
     let kind = provider.kind();
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let line = line.trim();
-        if !line.starts_with('{') {
-            continue;
-        }
+    scan_transcript_json_lines(snapshot, TRANSCRIPT_SCAN_LIMITS, |line| {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
+            return;
         };
         let parsed = parse_transcript_value(kind, &value);
         let Some(entry) = title_context_entry(&parsed) else {
-            continue;
+            return;
         };
         builder.push(entry);
-    }
+    })?;
     builder.finish()
 }
 
@@ -740,9 +837,9 @@ fn summarize_agent_transcript(
     id: String,
     path: &Path,
 ) -> Option<AgentTranscriptSummary> {
-    let metadata = fs::metadata(path).ok()?;
-    let len = metadata.len();
-    let modified = metadata.modified().ok();
+    let snapshot = open_transcript_snapshot(path, TRANSCRIPT_SCAN_LIMITS)?;
+    let len = snapshot.len;
+    let modified = snapshot.modified;
     let cache_key = TranscriptSummaryCacheKey {
         provider: provider.clone(),
         id: id.clone(),
@@ -752,7 +849,6 @@ fn summarize_agent_transcript(
         return Some(summary);
     }
 
-    let file = fs::File::open(path).ok()?;
     let mut message_count = 0_u64;
     let mut user_messages = 0_u64;
     let mut assistant_messages = 0_u64;
@@ -761,13 +857,9 @@ fn summarize_agent_transcript(
     let mut recent_messages = VecDeque::new();
     let kind = provider.kind();
 
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let line = line.trim();
-        if !line.starts_with('{') {
-            continue;
-        }
+    scan_transcript_json_lines(snapshot, TRANSCRIPT_SCAN_LIMITS, |line| {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
+            return;
         };
         let parsed = parse_transcript_value(kind, &value);
         if let Some(entry) = title_context_entry(&parsed) {
@@ -798,12 +890,12 @@ fn summarize_agent_transcript(
         }
         if let Some(usage) = transcript_usage_from_value(&provider, &value) {
             if is_cumulative_usage_event(&provider, &value) {
-                cumulative_usage = max_token_usage(cumulative_usage, usage);
+                cumulative_usage = max_token_usage(std::mem::take(&mut cumulative_usage), usage);
             } else {
                 add_token_usage(&mut summed_usage, usage);
             }
         }
-    }
+    })?;
 
     let token_usage = if cumulative_usage.total_tokens > summed_usage.total_tokens {
         cumulative_usage
@@ -828,6 +920,56 @@ fn summarize_agent_transcript(
     };
     store_transcript_summary_cache(cache_key, len, modified, summary.clone());
     Some(summary)
+}
+
+fn open_transcript_snapshot(
+    path: &Path,
+    limits: TranscriptScanLimits,
+) -> Option<TranscriptSnapshot> {
+    let path_metadata = fs::symlink_metadata(path).ok()?;
+    if !path_metadata.file_type().is_file() {
+        return None;
+    }
+    let file = fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > limits.max_bytes {
+        return None;
+    }
+    Some(TranscriptSnapshot {
+        file,
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+fn scan_transcript_json_lines(
+    snapshot: TranscriptSnapshot,
+    limits: TranscriptScanLimits,
+    mut visit: impl FnMut(&str),
+) -> Option<()> {
+    let mut reader = BufReader::new(snapshot.file.take(snapshot.len));
+    let mut line = Vec::new();
+    let mut line_count = 0_usize;
+    loop {
+        line.clear();
+        let read_limit = limits.max_line_bytes.checked_add(1)?;
+        let read = reader
+            .by_ref()
+            .take(read_limit as u64)
+            .read_until(b'\n', &mut line)
+            .ok()?;
+        if read == 0 {
+            return Some(());
+        }
+        if line.len() > limits.max_line_bytes || line_count >= limits.max_lines {
+            return None;
+        }
+        line_count += 1;
+        let text = std::str::from_utf8(&line).ok()?.trim();
+        if text.starts_with('{') {
+            visit(text);
+        }
+    }
 }
 
 fn cached_transcript_summary(
@@ -1040,6 +1182,17 @@ fn max_token_usage(
 }
 
 fn parse_agent_state(kind: AgentKind, path: &Path) -> Option<ParsedAgentFile> {
+    let file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    parse_agent_state_from_opened(kind, path, file, len)
+}
+
+fn parse_agent_state_from_opened(
+    kind: AgentKind,
+    path: &Path,
+    file: fs::File,
+    len: u64,
+) -> Option<ParsedAgentFile> {
     let mut state = ParsedAgentFile {
         id: if kind == AgentKind::Antigravity {
             antigravity_id_from_path(path)
@@ -1048,7 +1201,7 @@ fn parse_agent_state(kind: AgentKind, path: &Path) -> Option<ParsedAgentFile> {
         },
         ..ParsedAgentFile::default()
     };
-    for line in sample_lines(path).ok()? {
+    for line in sample_lines_from_opened(file, len).ok()? {
         let value = if kind == AgentKind::Claude {
             serde_json::from_str::<Value>(&line).ok()
         } else {
@@ -1091,7 +1244,7 @@ fn parse_agent_state(kind: AgentKind, path: &Path) -> Option<ParsedAgentFile> {
         }
     }
     if kind == AgentKind::Claude && state.conversation_message_count == 0 {
-        state.subagent_transcript_count = count_claude_subagent_transcripts(path);
+        state.subagent_transcript_count = count_claude_subagent_transcripts(path)?;
     }
 
     Some(state)
@@ -1140,20 +1293,42 @@ fn has_recoverable_json_text(value: &Value) -> bool {
     }
 }
 
-fn count_claude_subagent_transcripts(path: &Path) -> u64 {
+fn count_claude_subagent_transcripts(path: &Path) -> Option<u64> {
+    count_claude_subagent_transcripts_with_limit(path, MAX_DISCOVERY_ENTRIES_PER_PROVIDER)
+}
+
+fn count_claude_subagent_transcripts_with_limit(path: &Path, max_entries: usize) -> Option<u64> {
     let Some(dir) = claude_subagent_transcripts_dir(path) else {
-        return 0;
+        return Some(0);
     };
-    let Ok(entries) = fs::read_dir(dir) else {
-        return 0;
+    let metadata = match fs::symlink_metadata(&dir) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Some(0),
+        Err(_) => return None,
     };
-    entries
-        .flatten()
-        .filter(|entry| {
-            entry.file_type().map(|ty| ty.is_file()).unwrap_or(false)
-                && entry.path().extension().and_then(|s| s.to_str()) == Some("jsonl")
-        })
-        .count() as u64
+    if !metadata.file_type().is_dir() {
+        return None;
+    }
+    let entries = fs::read_dir(dir).ok()?;
+    let mut scanned_entries = 0_usize;
+    let mut transcripts = 0_u64;
+    for entry in entries {
+        if scanned_entries >= max_entries {
+            return None;
+        }
+        scanned_entries += 1;
+        let entry = entry.ok()?;
+        if entry.file_type().ok()?.is_file()
+            && entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("jsonl")
+        {
+            transcripts = transcripts.checked_add(1)?;
+        }
+    }
+    Some(transcripts)
 }
 
 fn claude_subagent_transcripts_dir(path: &Path) -> Option<PathBuf> {
@@ -1277,8 +1452,12 @@ fn looks_like_acorn_title_generation_prompt(text: &str) -> bool {
 }
 
 fn sample_lines(path: &Path) -> std::io::Result<Vec<String>> {
-    let mut file = fs::File::open(path)?;
+    let file = fs::File::open(path)?;
     let len = file.metadata()?.len();
+    sample_lines_from_opened(file, len)
+}
+
+fn sample_lines_from_opened(mut file: fs::File, len: u64) -> std::io::Result<Vec<String>> {
     let mut bytes = Vec::new();
     let head_max = READ_HEAD_MAX_BYTES.min(len);
     let mut read = 0_u64;
@@ -1299,7 +1478,7 @@ fn sample_lines(path: &Path) -> std::io::Result<Vec<String>> {
         let tail_start = len.saturating_sub(READ_TAIL_BYTES);
         file.seek(SeekFrom::Start(tail_start))?;
         let mut tail = Vec::new();
-        file.read_to_end(&mut tail)?;
+        file.take(READ_TAIL_BYTES).read_to_end(&mut tail)?;
         bytes.push(b'\n');
         bytes.extend(tail);
     }
@@ -1397,10 +1576,7 @@ fn path_has_uuid_stem(path: &Path) -> bool {
 }
 
 fn uuid_suffix(stem: &str) -> Option<String> {
-    if stem.len() < 36 {
-        return None;
-    }
-    let suffix = &stem[stem.len() - 36..];
+    let suffix = stem.get(stem.len().checked_sub(36)?..)?;
     Uuid::parse_str(suffix).ok().map(|_| suffix.to_string())
 }
 
@@ -1575,13 +1751,19 @@ fn google_agent_storage_root() -> Option<PathBuf> {
 }
 
 fn antigravity_brain_roots() -> Vec<PathBuf> {
+    antigravity_brain_root_candidates()
+        .into_iter()
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+fn antigravity_brain_root_candidates() -> Vec<PathBuf> {
     let Some(root) = google_agent_storage_root() else {
         return Vec::new();
     };
     ["antigravity", "antigravity-ide", "antigravity-cli"]
         .into_iter()
         .map(|profile| root.join(profile).join("brain"))
-        .filter(|path| path.is_dir())
         .collect()
 }
 
@@ -1625,6 +1807,19 @@ struct AgentStateCwd {
     updated_at: u64,
 }
 
+const MAX_AGENT_STATE_ENTRIES: usize = 10_000;
+
+#[derive(Clone, Copy)]
+struct AgentStateLookupLimits {
+    max_entries: usize,
+    max_cwd_bytes: usize,
+}
+
+const AGENT_STATE_LOOKUP_LIMITS: AgentStateLookupLimits = AgentStateLookupLimits {
+    max_entries: MAX_AGENT_STATE_ENTRIES,
+    max_cwd_bytes: crate::agent_resume::AGENT_CWD_MAX_BYTES,
+};
+
 fn antigravity_cwds_from_agent_state(id: &str) -> Vec<String> {
     let Some(data_dir) = acorn_daemon::paths::data_dir().ok() else {
         return Vec::new();
@@ -1636,36 +1831,87 @@ fn antigravity_cwds_from_agent_state(id: &str) -> Vec<String> {
 }
 
 fn antigravity_cwds_from_agent_state_at(data_dir: &Path, id: &str) -> Vec<AgentStateCwd> {
-    let root = data_dir.join("agent-state");
-    let Ok(entries) = fs::read_dir(root) else {
+    antigravity_cwds_from_agent_state_with_limits(data_dir, id, AGENT_STATE_LOOKUP_LIMITS)
+}
+
+fn antigravity_cwds_from_agent_state_with_limits(
+    data_dir: &Path,
+    id: &str,
+    limits: AgentStateLookupLimits,
+) -> Vec<AgentStateCwd> {
+    let Ok(id) = crate::agent_resume::normalize_provider_id(id) else {
         return Vec::new();
     };
-    let mut out = entries
-        .flatten()
-        .filter_map(|entry| {
-            let dir = entry.path();
-            if !dir.is_dir() {
-                return None;
-            }
-            if read_trimmed_state_file(&dir.join("antigravity.id")).as_deref() != Some(id) {
-                return None;
-            }
-            let cwd = read_trimmed_state_file(&dir.join("antigravity.cwd"))?;
-            let updated_at = file_updated_at(&dir.join("antigravity.id"))
-                .max(file_updated_at(&dir.join("antigravity.cwd")));
-            Some(AgentStateCwd { cwd, updated_at })
-        })
-        .collect::<Vec<_>>();
+    let root = data_dir.join("agent-state");
+    let Ok(root_metadata) = fs::symlink_metadata(&root) else {
+        return Vec::new();
+    };
+    if !root_metadata.file_type().is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut scanned_entries = 0_usize;
+    for entry in entries {
+        if scanned_entries >= limits.max_entries {
+            // Returning a subset would make a partial scan look authoritative.
+            return Vec::new();
+        }
+        scanned_entries += 1;
+        let Ok(entry) = entry else {
+            return Vec::new();
+        };
+        let Ok(entry_type) = entry.file_type() else {
+            return Vec::new();
+        };
+        if !entry_type.is_dir() {
+            continue;
+        }
+        let dir = entry.path();
+        let Ok(dir_metadata) = fs::symlink_metadata(&dir) else {
+            return Vec::new();
+        };
+        if !dir_metadata.file_type().is_dir() {
+            continue;
+        }
+
+        // These pathname checks reject stable links and special files. A parent
+        // can still be swapped between checks and opens; RES-006 tracks the
+        // dirfd/handle-relative redesign for that remaining TOCTOU window.
+        let marker = match crate::agent_resume::read_provider_marker(&dir.join("antigravity.id")) {
+            Ok(Some(marker)) => marker,
+            Ok(None) => continue,
+            Err(_) => return Vec::new(),
+        };
+        if marker.text != id {
+            continue;
+        }
+        let cwd_snapshot = match crate::agent_resume::read_state_text_with_limit(
+            &dir.join("antigravity.cwd"),
+            limits.max_cwd_bytes,
+        ) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => continue,
+            Err(_) => return Vec::new(),
+        };
+        let cwd = cwd_snapshot.text.trim().to_string();
+        if cwd.is_empty() {
+            continue;
+        }
+        let updated_at = [marker.modified, cwd_snapshot.modified]
+            .into_iter()
+            .flatten()
+            .filter_map(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+            .max()
+            .unwrap_or(0);
+        out.push(AgentStateCwd { cwd, updated_at });
+    }
     out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     out.dedup_by(|a, b| a.cwd == b.cwd);
     out
-}
-
-fn read_trimmed_state_file(path: &Path) -> Option<String> {
-    fs::read_to_string(path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -1712,6 +1958,37 @@ mod tests {
         }
     }
 
+    fn write_antigravity_history_transcript(storage_root: &Path, id: &str, cwd: &Path) -> PathBuf {
+        let transcript = storage_root
+            .join("antigravity/brain")
+            .join(id)
+            .join(".system_generated/logs/transcript.jsonl");
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "workspacePaths": [cwd.display().to_string()],
+                "content": "<USER_REQUEST>Secure direct history lookup</USER_REQUEST>",
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "content": "Opened snapshot parsed.",
+            })
+        )
+        .unwrap();
+        transcript
+    }
+
     #[test]
     fn codex_transcript_match_accepts_payload_id_when_filename_differs() {
         let dir = tempfile::tempdir().unwrap();
@@ -1738,6 +2015,13 @@ mod tests {
             codex_id_from_filename(path).as_deref(),
             Some("019e4818-7c15-7e60-9b3b-898a1c7803d6")
         );
+    }
+
+    #[test]
+    fn codex_id_from_filename_rejects_non_ascii_boundary_without_panicking() {
+        let path = Path::new("가aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeee.jsonl");
+
+        assert_eq!(codex_id_from_filename(path), None);
     }
 
     #[test]
@@ -1811,6 +2095,96 @@ mod tests {
             antigravity_id_from_path(path).as_deref(),
             Some("17f38e8c-3a7e-408b-8c79-aef7432c0fd2")
         );
+    }
+
+    #[test]
+    fn antigravity_direct_history_lookup_parses_secure_opened_snapshot() {
+        let storage = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let repo_path = repo.path().canonicalize().unwrap();
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let transcript = write_antigravity_history_transcript(storage.path(), id, &repo_path);
+
+        let mut snapshots =
+            crate::agent_resume::open_antigravity_transcript_snapshots_at(storage.path(), id);
+        assert_eq!(snapshots.len(), 1, "secure exact locator must open fixture");
+        assert!(
+            parse_antigravity_snapshot(snapshots.pop().unwrap(), HistoryScope::Project(&repo_path))
+                .is_some(),
+            "opened fixture must parse inside project scope"
+        );
+
+        let item = find_antigravity_history_item_by_path_id_at(
+            HistoryScope::Project(&repo_path),
+            "17F38E8C-3A7E-408B-8C79-AEF7432C0FD2",
+            storage.path(),
+        )
+        .unwrap();
+
+        assert_eq!(item.id, id);
+        assert_eq!(
+            item.transcript_path,
+            transcript.canonicalize().unwrap().display().to_string()
+        );
+        assert_eq!(item.title, "Secure direct history lookup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antigravity_direct_history_lookup_rejects_symlinked_root_component_and_leaf() {
+        use std::os::unix::fs::symlink;
+
+        let repo = tempfile::tempdir().unwrap();
+        let repo_path = repo.path().canonicalize().unwrap();
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = write_antigravity_history_transcript(outside.path(), id, &repo_path);
+
+        let linked_root = tempfile::tempdir().unwrap();
+        let profile = linked_root.path().join("antigravity");
+        fs::create_dir(&profile).unwrap();
+        symlink(
+            outside.path().join("antigravity/brain"),
+            profile.join("brain"),
+        )
+        .unwrap();
+        assert!(find_antigravity_history_item_by_path_id_at(
+            HistoryScope::Project(&repo_path),
+            id,
+            linked_root.path(),
+        )
+        .is_none());
+
+        let linked_session = tempfile::tempdir().unwrap();
+        let brain = linked_session.path().join("antigravity/brain");
+        fs::create_dir_all(&brain).unwrap();
+        symlink(
+            outside.path().join("antigravity/brain").join(id),
+            brain.join(id),
+        )
+        .unwrap();
+        assert!(find_antigravity_history_item_by_path_id_at(
+            HistoryScope::Project(&repo_path),
+            id,
+            linked_session.path(),
+        )
+        .is_none());
+
+        let linked_leaf = tempfile::tempdir().unwrap();
+        let leaf = linked_leaf
+            .path()
+            .join("antigravity/brain")
+            .join(id)
+            .join(".system_generated/logs/transcript.jsonl");
+        fs::create_dir_all(leaf.parent().unwrap()).unwrap();
+        symlink(&sentinel, &leaf).unwrap();
+        assert!(find_antigravity_history_item_by_path_id_at(
+            HistoryScope::Project(&repo_path),
+            id,
+            linked_leaf.path(),
+        )
+        .is_none());
+        assert!(sentinel.is_file());
     }
 
     #[test]
@@ -2146,6 +2520,156 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_agent_state_lookup_discards_partial_results_over_raw_entry_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("agent-state");
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        for (session, cwd) in [("session-1", "/tmp/one"), ("session-2", "/tmp/two")] {
+            let state_dir = root.join(session);
+            fs::create_dir_all(&state_dir).unwrap();
+            fs::write(state_dir.join("antigravity.id"), format!("{id}\n")).unwrap();
+            fs::write(state_dir.join("antigravity.cwd"), format!("{cwd}\n")).unwrap();
+        }
+        let limits = AgentStateLookupLimits {
+            max_entries: 2,
+            max_cwd_bytes: crate::agent_resume::AGENT_CWD_MAX_BYTES,
+        };
+        assert_eq!(
+            antigravity_cwds_from_agent_state_with_limits(dir.path(), id, limits).len(),
+            2,
+            "the exact raw-entry budget must remain usable"
+        );
+
+        fs::write(root.join("unrelated"), "raw entry").unwrap();
+        assert!(antigravity_cwds_from_agent_state_with_limits(dir.path(), id, limits).is_empty());
+    }
+
+    #[test]
+    fn antigravity_agent_state_lookup_discards_partial_results_on_state_read_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("agent-state");
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let valid = root.join("valid");
+        let broken = root.join("broken");
+        fs::create_dir_all(&valid).unwrap();
+        fs::create_dir_all(&broken).unwrap();
+        fs::write(valid.join("antigravity.id"), format!("{id}\n")).unwrap();
+        fs::write(valid.join("antigravity.cwd"), "/tmp/valid\n").unwrap();
+        fs::write(
+            broken.join("antigravity.id"),
+            "x".repeat(crate::agent_resume::PROVIDER_MARKER_MAX_BYTES + 1),
+        )
+        .unwrap();
+        fs::write(broken.join("antigravity.cwd"), "/tmp/broken\n").unwrap();
+        let limits = AgentStateLookupLimits {
+            max_entries: 2,
+            max_cwd_bytes: crate::agent_resume::AGENT_CWD_MAX_BYTES,
+        };
+
+        assert!(
+            antigravity_cwds_from_agent_state_with_limits(dir.path(), id, limits).is_empty(),
+            "a marker read error must discard an already collected cwd"
+        );
+
+        fs::write(broken.join("antigravity.id"), format!("{id}\n")).unwrap();
+        fs::write(
+            broken.join("antigravity.cwd"),
+            "x".repeat(crate::agent_resume::AGENT_CWD_MAX_BYTES + 1),
+        )
+        .unwrap();
+        assert!(
+            antigravity_cwds_from_agent_state_with_limits(dir.path(), id, limits).is_empty(),
+            "a cwd read error must discard an already collected cwd"
+        );
+
+        fs::remove_file(broken.join("antigravity.cwd")).unwrap();
+        let entries = antigravity_cwds_from_agent_state_with_limits(dir.path(), id, limits);
+        assert_eq!(entries.len(), 1, "a missing cwd leaf remains skippable");
+        assert_eq!(entries[0].cwd, "/tmp/valid");
+    }
+
+    #[test]
+    fn antigravity_agent_state_lookup_enforces_injected_cwd_limit_and_valid_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("agent-state/session-1");
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let cwd = "/x\n";
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::write(state_dir.join("antigravity.id"), format!("{id}\n")).unwrap();
+        fs::write(state_dir.join("antigravity.cwd"), cwd).unwrap();
+
+        let exact = AgentStateLookupLimits {
+            max_entries: 1,
+            max_cwd_bytes: cwd.len(),
+        };
+        assert_eq!(
+            antigravity_cwds_from_agent_state_with_limits(dir.path(), id, exact)[0].cwd,
+            "/x"
+        );
+        let over = AgentStateLookupLimits {
+            max_cwd_bytes: cwd.len() - 1,
+            ..exact
+        };
+        assert!(antigravity_cwds_from_agent_state_with_limits(dir.path(), id, over).is_empty());
+
+        for invalid in [
+            "not-a-uuid",
+            "../17f38e8c-3a7e-408b-8c79-aef7432c0fd2",
+            "/tmp/17f38e8c-3a7e-408b-8c79-aef7432c0fd2",
+        ] {
+            assert!(
+                antigravity_cwds_from_agent_state_with_limits(dir.path(), invalid, exact)
+                    .is_empty()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antigravity_agent_state_lookup_rejects_symlinked_dirs_and_leaves() {
+        use std::os::unix::fs::symlink;
+
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let outside = tempfile::tempdir().unwrap();
+        let outside_state = outside.path().join("session");
+        fs::create_dir(&outside_state).unwrap();
+        fs::write(outside_state.join("antigravity.id"), format!("{id}\n")).unwrap();
+        fs::write(outside_state.join("antigravity.cwd"), "/tmp/outside\n").unwrap();
+
+        let linked_root = tempfile::tempdir().unwrap();
+        symlink(outside.path(), linked_root.path().join("agent-state")).unwrap();
+        assert!(antigravity_cwds_from_agent_state_at(linked_root.path(), id).is_empty());
+
+        let linked_session = tempfile::tempdir().unwrap();
+        let root = linked_session.path().join("agent-state");
+        fs::create_dir(&root).unwrap();
+        symlink(&outside_state, root.join("session")).unwrap();
+        assert!(antigravity_cwds_from_agent_state_at(linked_session.path(), id).is_empty());
+
+        let linked_leaf = tempfile::tempdir().unwrap();
+        let state_dir = linked_leaf.path().join("agent-state/session");
+        fs::create_dir_all(&state_dir).unwrap();
+        let id_sentinel = linked_leaf.path().join("id-sentinel");
+        let cwd_sentinel = linked_leaf.path().join("cwd-sentinel");
+        fs::write(&id_sentinel, format!("{id}\n")).unwrap();
+        fs::write(&cwd_sentinel, "/tmp/sentinel\n").unwrap();
+        symlink(&id_sentinel, state_dir.join("antigravity.id")).unwrap();
+        fs::write(state_dir.join("antigravity.cwd"), "/tmp/local\n").unwrap();
+        assert!(antigravity_cwds_from_agent_state_at(linked_leaf.path(), id).is_empty());
+
+        fs::remove_file(state_dir.join("antigravity.id")).unwrap();
+        fs::write(state_dir.join("antigravity.id"), format!("{id}\n")).unwrap();
+        fs::remove_file(state_dir.join("antigravity.cwd")).unwrap();
+        symlink(&cwd_sentinel, state_dir.join("antigravity.cwd")).unwrap();
+        assert!(antigravity_cwds_from_agent_state_at(linked_leaf.path(), id).is_empty());
+        assert_eq!(fs::read_to_string(&id_sentinel).unwrap(), format!("{id}\n"));
+        assert_eq!(
+            fs::read_to_string(&cwd_sentinel).unwrap(),
+            "/tmp/sentinel\n"
+        );
+    }
+
+    #[test]
     fn parse_file_budget_scales_with_requested_limit() {
         assert_eq!(parse_file_budget(0), 0);
         assert_eq!(parse_file_budget(1), MIN_PARSED_FILES_PER_PROVIDER);
@@ -2200,6 +2724,82 @@ mod tests {
         });
 
         assert_eq!(files, vec![parent]);
+    }
+
+    #[test]
+    fn collect_files_discards_traversal_that_exceeds_entry_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.jsonl"), "{}\n").unwrap();
+        fs::write(dir.path().join("b.jsonl"), "{}\n").unwrap();
+        let accepts_jsonl = |path: &Path| {
+            path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
+        };
+
+        assert_eq!(
+            collect_files_with_entry_limit(dir.path(), 0, accepts_jsonl, 2).len(),
+            2,
+            "the exact raw-entry budget must remain usable"
+        );
+        assert!(
+            collect_files_with_entry_limit(dir.path(), 0, accepts_jsonl, 1).is_empty(),
+            "an incomplete traversal must not return a plausible partial history"
+        );
+    }
+
+    #[test]
+    fn collect_files_shares_exact_entry_budget_across_provider_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        fs::write(first.join("a.jsonl"), "{}\n").unwrap();
+        fs::write(second.join("b.jsonl"), "{}\n").unwrap();
+        let roots = vec![first, second.clone()];
+        let accepts_jsonl = |path: &Path| {
+            path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
+        };
+
+        assert_eq!(
+            collect_files_across_roots_with_entry_limit(&roots, 0, accepts_jsonl, 2).len(),
+            2,
+            "the exact shared budget must remain usable"
+        );
+        fs::write(second.join("c.jsonl"), "{}\n").unwrap();
+        assert!(
+            collect_files_across_roots_with_entry_limit(&roots, 0, accepts_jsonl, 2).is_empty(),
+            "overflow in a later root must discard earlier-root results"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_files_discards_partial_traversal_after_nested_read_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let accepted = dir.path().join("accepted.jsonl");
+        let unreadable = dir.path().join("unreadable");
+        fs::write(&accepted, "{}\n").unwrap();
+        fs::create_dir(&unreadable).unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_dir(&unreadable).is_ok() {
+            fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        let files = collect_files_with_entry_limit(
+            dir.path(),
+            1,
+            |path| path.extension().and_then(|extension| extension.to_str()) == Some("jsonl"),
+            10,
+        );
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(
+            files.is_empty(),
+            "a traversal error must discard already collected history"
+        );
     }
 
     #[test]
@@ -2330,6 +2930,31 @@ mod tests {
         assert_eq!(item.queued_message_count, 1);
         assert_eq!(item.subagent_transcript_count, 1);
         assert_eq!(item.cwd.as_deref(), Some(repo.to_str().unwrap()));
+    }
+
+    #[test]
+    fn claude_subagent_count_discards_directory_over_entry_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        fs::write(&transcript, "{}\n").unwrap();
+        let subagents = dir
+            .path()
+            .join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/subagents");
+        fs::create_dir_all(&subagents).unwrap();
+        fs::write(subagents.join("a.jsonl"), "{}\n").unwrap();
+        fs::write(subagents.join("b.jsonl"), "{}\n").unwrap();
+
+        assert_eq!(
+            count_claude_subagent_transcripts_with_limit(&transcript, 2),
+            Some(2)
+        );
+        assert_eq!(
+            count_claude_subagent_transcripts_with_limit(&transcript, 1),
+            None,
+            "a partial child count must not be surfaced as complete"
+        );
     }
 
     #[test]
@@ -2622,6 +3247,49 @@ mod tests {
         assert!(context.contains("Turn 0"));
         assert!(context.contains("[...]"));
         assert!(context.contains("Turn 19"));
+    }
+
+    #[test]
+    fn transcript_jsonl_scan_enforces_file_line_and_line_count_budgets() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("transcript.jsonl");
+        let line = b"{\"ok\":true}\n";
+        fs::write(&transcript, line).unwrap();
+
+        let exact = TranscriptScanLimits {
+            max_bytes: line.len() as u64,
+            max_lines: 1,
+            max_line_bytes: line.len(),
+        };
+        let mut visited = 0;
+        let snapshot = open_transcript_snapshot(&transcript, exact).unwrap();
+        assert_eq!(
+            scan_transcript_json_lines(snapshot, exact, |_| visited += 1),
+            Some(())
+        );
+        assert_eq!(visited, 1);
+
+        let file_too_large = TranscriptScanLimits {
+            max_bytes: line.len() as u64 - 1,
+            ..exact
+        };
+        assert!(open_transcript_snapshot(&transcript, file_too_large).is_none());
+
+        let line_too_large = TranscriptScanLimits {
+            max_line_bytes: line.len() - 1,
+            ..exact
+        };
+        let snapshot = open_transcript_snapshot(&transcript, line_too_large).unwrap();
+        assert!(scan_transcript_json_lines(snapshot, line_too_large, |_| {}).is_none());
+
+        fs::write(&transcript, [line.as_slice(), line.as_slice()].concat()).unwrap();
+        let too_many_lines = TranscriptScanLimits {
+            max_bytes: (line.len() * 2) as u64,
+            max_lines: 1,
+            max_line_bytes: line.len(),
+        };
+        let snapshot = open_transcript_snapshot(&transcript, too_many_lines).unwrap();
+        assert!(scan_transcript_json_lines(snapshot, too_many_lines, |_| {}).is_none());
     }
 
     #[test]

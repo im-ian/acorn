@@ -7,6 +7,7 @@ const tauriFsMock = vi.hoisted(() => ({
   readDir: vi.fn(),
   readTextFile: vi.fn(),
   remove: vi.fn(),
+  stat: vi.fn(),
   writeTextFile: vi.fn(),
 }));
 
@@ -21,6 +22,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: vi.fn() }));
 
 import {
   THEME_CSS_VARS,
+  fetchThemeCatalog,
   installCatalogTheme,
   loadUserThemes,
   parseThemeCatalog,
@@ -53,6 +55,7 @@ beforeEach(() => {
   tauriFsMock.readDir.mockResolvedValue([]);
   tauriFsMock.readTextFile.mockResolvedValue("");
   tauriFsMock.remove.mockResolvedValue(undefined);
+  tauriFsMock.stat.mockResolvedValue({ isFile: true, size: VALID_CSS.length });
   tauriFsMock.writeTextFile.mockResolvedValue(undefined);
 });
 
@@ -89,6 +92,22 @@ describe("parseThemeCatalog", () => {
       }),
     ).toThrow(/invalid file path/);
   });
+
+  it("bounds the remote catalog before JSON parsing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("x", {
+          status: 200,
+          headers: { "Content-Length": "300000" },
+        }),
+      ),
+    );
+
+    await expect(fetchThemeCatalog()).rejects.toThrow(
+      /Theme catalog is too large/,
+    );
+  });
 });
 
 describe("theme filesystem capability", () => {
@@ -96,6 +115,7 @@ describe("theme filesystem capability", () => {
     expect(defaultCapability.permissions).toContain(
       "fs:allow-write-text-file",
     );
+    expect(defaultCapability.permissions).toContain("fs:allow-stat");
   });
 });
 
@@ -157,6 +177,51 @@ describe("catalog theme persistence", () => {
     expect(tauriFsMock.writeTextFile).not.toHaveBeenCalled();
   });
 
+  it("rejects network-capable CSS including escaped spellings", async () => {
+    const unsafeCss = [
+      `${VALID_CSS}\n:root { background: url(https://example.invalid/pixel); }`,
+      `${VALID_CSS}\n@import "https://example.invalid/theme.css";`,
+      String.raw`${VALID_CSS}
+:root { cursor: u\72 l(https://example.invalid/cursor); }`,
+      String.raw`${VALID_CSS}
+@\69 mport "https://example.invalid/theme.css";`,
+      `${VALID_CSS}\n:root { background: u/**/rl(https://example.invalid/pixel); }`,
+      `${VALID_CSS}\n@im/**/port "https://example.invalid/theme.css";`,
+      `${VALID_CSS}\n:root { background: image-set("https://example.invalid/pixel" 1x); }`,
+      `${VALID_CSS}\n@font-face { src: src("https://example.invalid/font"); }`,
+      `${VALID_CSS}\n:root { --open: "/*"; background: url("https://example.invalid/pixel"); --close: "*/"; }`,
+      `${VALID_CSS}\n:root { background: u\\72\r\nl("https://example.invalid/pixel"); }`,
+      `${VALID_CSS}\n@\\69\r\nmport "https://example.invalid/theme.css";`,
+    ];
+
+    for (const css of unsafeCss) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response(css, { status: 200 })),
+      );
+
+      await expect(installCatalogTheme(THEME)).rejects.toThrow(
+        /cannot load external CSS resources/,
+      );
+    }
+
+    expect(tauriFsMock.writeTextFile).not.toHaveBeenCalled();
+  });
+
+  it("bounds downloaded CSS while reading the response body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("x".repeat(1_000_001), { status: 200 }),
+      ),
+    );
+
+    await expect(installCatalogTheme(THEME)).rejects.toThrow(
+      /Theme note is too large/,
+    );
+    expect(tauriFsMock.writeTextFile).not.toHaveBeenCalled();
+  });
+
   it("loads catalog metadata separately from custom CSS files", async () => {
     tauriFsMock.readDir.mockResolvedValue([
       { isFile: true, name: "note.css" },
@@ -200,6 +265,106 @@ describe("catalog theme persistence", () => {
         source: "user",
       }),
     ]);
+  });
+
+  it("revalidates persisted catalog CSS without restricting user themes", async () => {
+    tauriFsMock.readDir.mockResolvedValue([
+      { isFile: true, name: "note.css" },
+      { isFile: true, name: "personal.css" },
+    ]);
+    tauriFsMock.readTextFile.mockImplementation((path: string) => {
+      if (path.endsWith("catalog.json")) {
+        return Promise.resolve(
+          JSON.stringify({
+            schemaVersion: 1,
+            installed: {
+              note: {
+                label: "Note",
+                mode: "light",
+                version: 2,
+                file: "note.css",
+              },
+            },
+          }),
+        );
+      }
+      const base = path.endsWith("note.css")
+        ? VALID_CSS
+        : VALID_CSS.split("note").join("personal");
+      return Promise.resolve(
+        `${base}\n:root { background: url(https://example.invalid/pixel); }`,
+      );
+    });
+
+    const themes = await loadUserThemes();
+
+    expect(themes).toEqual([
+      expect.objectContaining({
+        id: "personal",
+        source: "user",
+      }),
+    ]);
+  });
+
+  it("skips oversized persisted catalog CSS before reading it", async () => {
+    tauriFsMock.readDir.mockResolvedValue([
+      { isFile: true, name: "note.css" },
+    ]);
+    tauriFsMock.readTextFile.mockImplementation((path: string) => {
+      if (path.endsWith("catalog.json")) {
+        return Promise.resolve(
+          JSON.stringify({
+            schemaVersion: 1,
+            installed: {
+              note: {
+                label: "Note",
+                mode: "light",
+                version: 2,
+                file: "note.css",
+              },
+            },
+          }),
+        );
+      }
+      return Promise.reject(new Error("oversized CSS must not be read"));
+    });
+    tauriFsMock.stat.mockImplementation((path: string) =>
+      Promise.resolve({
+        isFile: true,
+        size: path.endsWith("note.css") ? 1_000_001 : VALID_CSS.length,
+      }),
+    );
+
+    await expect(loadUserThemes()).resolves.toEqual([]);
+    expect(tauriFsMock.readTextFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed before reading oversized installed metadata", async () => {
+    tauriFsMock.readDir.mockResolvedValue([
+      { isFile: true, name: "personal.css" },
+    ]);
+    tauriFsMock.stat.mockResolvedValue({ isFile: true, size: 300_000 });
+    tauriFsMock.readTextFile.mockRejectedValue(
+      new Error("oversized metadata must not be read"),
+    );
+
+    await expect(loadUserThemes()).resolves.toEqual([]);
+    expect(tauriFsMock.readTextFile).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when installed metadata provenance is corrupt", async () => {
+    tauriFsMock.readDir.mockResolvedValue([
+      { isFile: true, name: "note.css" },
+    ]);
+    tauriFsMock.readTextFile.mockImplementation((path: string) => {
+      if (path.endsWith("catalog.json")) {
+        return Promise.resolve('{"schemaVersion":1,"installed":"invalid"}');
+      }
+      return Promise.reject(new Error("unclassified CSS must not be read"));
+    });
+
+    await expect(loadUserThemes()).resolves.toEqual([]);
+    expect(tauriFsMock.readTextFile).toHaveBeenCalledTimes(1);
   });
 
   it("removes only files recorded as catalog-managed", async () => {

@@ -3,6 +3,10 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../lib/cn";
+import {
+  markdownImageUrlTransform,
+  RemoteImage,
+} from "../ui/RemoteImage";
 import { ChatCodeBlock } from "./ChatCodeBlock";
 
 interface ChatMessageBodyProps {
@@ -77,6 +81,19 @@ export function ChatMessageBody({
         <blockquote className="my-2 border-l-2 border-border pl-3 text-fg-muted">
           {children}
         </blockquote>
+      );
+    },
+    img({ src, alt, title, width, height }) {
+      return (
+        <RemoteImage
+          src={src}
+          alt={alt ?? ""}
+          title={title}
+          width={width}
+          height={height}
+          loading="lazy"
+          className="my-2 max-w-full rounded border border-border"
+        />
       );
     },
     code({ className, children, ...rest }) {
@@ -154,7 +171,11 @@ export function ChatMessageBody({
       )}
       data-chat-message-body
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        urlTransform={markdownImageUrlTransform}
+        components={components}
+      >
         {renderableStreamingContent(content, isStreaming)}
       </ReactMarkdown>
     </div>

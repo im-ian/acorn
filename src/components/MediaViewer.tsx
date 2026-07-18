@@ -258,6 +258,7 @@ function renderMedia(
       key={src}
       src={src}
       title={title}
+      referrerPolicy="no-referrer"
       className="h-full w-full border-0 bg-white"
     />
   );

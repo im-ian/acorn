@@ -14,7 +14,10 @@
 //!   already verified that no other daemon owns the path.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use interprocess::local_socket::{
     traits::Stream as _StreamConnect, GenericFilePath, ListenerOptions, Name, ToFsName,
@@ -58,10 +61,45 @@ pub fn bind_both() -> io::Result<DaemonListeners> {
 
 /// Bind a single local socket at `path`. Removes any pre-existing file so
 /// a stale socket from a previous crash does not block startup.
-fn bind_one(path: &PathBuf) -> io::Result<interprocess::local_socket::Listener> {
+#[cfg(unix)]
+fn bind_one(path: &Path) -> io::Result<interprocess::local_socket::Listener> {
     if path.exists() {
         let _ = std::fs::remove_file(path);
     }
+    // Keep the default `.sock` staging names shorter than their canonical
+    // names so ordinary data-directory paths retain their prior length bound.
+    let staging_path = path.with_extension("tmp");
+    if staging_path.exists() {
+        let _ = std::fs::remove_file(&staging_path);
+    }
+    let name: Name<'_> = staging_path
+        .as_os_str()
+        .to_fs_name::<GenericFilePath>()
+        .map_err(io::Error::other)?;
+    // The socket is renamed below, so interprocess must not retain its
+    // default drop guard for the staging pathname. Otherwise dropping the
+    // listener could unlink an unrelated file later created at that name.
+    let listener = ListenerOptions::new()
+        .name(name)
+        .reclaim_name(false)
+        .create_sync()?;
+    if let Err(err) =
+        std::fs::set_permissions(&staging_path, std::fs::Permissions::from_mode(0o600))
+    {
+        drop(listener);
+        let _ = std::fs::remove_file(&staging_path);
+        return Err(err);
+    }
+    if let Err(err) = std::fs::rename(&staging_path, path) {
+        drop(listener);
+        let _ = std::fs::remove_file(&staging_path);
+        return Err(err);
+    }
+    Ok(listener)
+}
+
+#[cfg(not(unix))]
+fn bind_one(path: &Path) -> io::Result<interprocess::local_socket::Listener> {
     let name: Name<'_> = path
         .as_os_str()
         .to_fs_name::<GenericFilePath>()
@@ -123,11 +161,56 @@ mod tests {
         let listeners = bind_both().unwrap();
         assert!(listeners.control_path.exists());
         assert!(listeners.stream_path.exists());
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                std::fs::metadata(&listeners.control_path)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::metadata(&listeners.stream_path)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+
+        // The canonical path must be connectable. On Unix this also proves
+        // that renaming the bound socket did not break daemon clients.
+        // Connect to the paths returned by this bind rather than resolving
+        // the process-wide test override again; other path tests mutate that
+        // environment variable in parallel.
+        let control_client =
+            connect_one(&listeners.control_path).expect("control socket should accept connects");
+        let stream_client =
+            connect_one(&listeners.stream_path).expect("stream socket should accept connects");
+        drop((control_client, stream_client));
+
+        #[cfg(unix)]
+        let staging_marker = {
+            // interprocess normally unlinks the path it originally bound when
+            // the listener drops. Since we rename that path, prove its reclaim
+            // guard is disabled and cannot delete a later-created sibling.
+            let marker = listeners.control_path.with_extension("tmp");
+            std::fs::write(&marker, b"keep").unwrap();
+            marker
+        };
 
         // Drop listeners before cleanup so the OS releases the fd.
         let cp = listeners.control_path.clone();
         let sp = listeners.stream_path.clone();
         drop(listeners);
+        #[cfg(unix)]
+        {
+            assert_eq!(std::fs::read(&staging_marker).unwrap(), b"keep");
+            std::fs::remove_file(&staging_marker).unwrap();
+        }
         cleanup_paths(&cp, &sp);
         assert!(!cp.exists());
         assert!(!sp.exists());

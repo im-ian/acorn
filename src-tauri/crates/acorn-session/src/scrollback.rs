@@ -57,15 +57,23 @@ fn is_safe_session_id(id: &str) -> bool {
 
 pub fn save(data_dir: &Path, session_id: &str, data: &str) -> ScrollbackResult<()> {
     let final_path = session_file(data_dir, session_id)?;
-    let payload = if data.len() > MAX_PAYLOAD_BYTES {
-        // Drop the oldest bytes; xterm-rendered ANSI may break mid-sequence
-        // here, but the frontend re-clears the screen on full restore so a
-        // few corrupted glyphs at the very top are tolerable.
-        &data[data.len() - MAX_PAYLOAD_BYTES..]
-    } else {
-        data
-    };
+    let payload = trailing_utf8_slice(data, MAX_PAYLOAD_BYTES);
     write_atomic(&final_path, payload.as_bytes())
+}
+
+fn trailing_utf8_slice(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+
+    // Drop the oldest bytes, then advance at most three more bytes so slicing
+    // never lands in the middle of a UTF-8 scalar value. ANSI may still start
+    // mid-sequence, but a non-ASCII terminal buffer must not panic the app.
+    let mut start = value.len() - max_bytes;
+    while !value.is_char_boundary(start) {
+        start += 1;
+    }
+    &value[start..]
 }
 
 pub fn load(data_dir: &Path, session_id: &str) -> ScrollbackResult<Option<String>> {
@@ -200,6 +208,12 @@ mod tests {
         assert!(got.contains("hello"));
         // Cleanup
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn payload_truncation_advances_to_a_utf8_boundary() {
+        assert_eq!(trailing_utf8_slice("é1234", 5), "1234");
+        assert_eq!(trailing_utf8_slice("한글", 3), "글");
     }
 
     #[test]
