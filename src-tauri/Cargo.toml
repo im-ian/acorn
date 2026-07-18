@@ -27,16 +27,16 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
 portable-pty = "0.9"
 parking_lot = "0.12"
 dashmap = "6"
-directories = "5"
-sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+directories = "6"
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 interprocess = "2"
-notify = "6"
+notify = "8"
 ignore = "0.4"
 globset = "0.4"
 trash = "5"
