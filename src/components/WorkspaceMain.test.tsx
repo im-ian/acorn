@@ -240,18 +240,18 @@ describe("WorkspaceMain", () => {
     );
     firePointer(dragHandle!, "pointerdown", { clientX: 100, clientY: 100 });
     firePointer(window, "pointerup", { clientX: 100, clientY: 100 });
-    expect(alpha!.dataset.canvasNodeX).toBe("60");
-    expect(alpha!.dataset.canvasNodeY).toBe("60");
+    expect(alpha!.dataset.canvasNodeX).toBe("40");
+    expect(alpha!.dataset.canvasNodeY).toBe("40");
 
     firePointer(dragHandle!, "pointerdown", { clientX: 100, clientY: 100 });
     firePointer(window, "pointermove", { clientX: 152, clientY: 132 });
     firePointer(window, "pointerup", { clientX: 152, clientY: 132 });
 
-    expect(alpha!.dataset.canvasNodeX).toBe("120");
-    expect(alpha!.dataset.canvasNodeY).toBe("100");
+    expect(alpha!.dataset.canvasNodeX).toBe("100");
+    expect(alpha!.dataset.canvasNodeY).toBe("80");
     expect(
       useAppStore.getState().workspaces[REPO].canvas?.nodes.alpha,
-    ).toMatchObject({ x: 120, y: 100 });
+    ).toMatchObject({ x: 100, y: 80 });
 
     const resizeHandle = alpha!.querySelector<HTMLElement>(
       "[data-testid='workspace-canvas-node-resize-handle']",
@@ -265,8 +265,8 @@ describe("WorkspaceMain", () => {
 
     expect(alpha!.dataset.canvasNodeWidth).toBe("680");
     expect(alpha!.dataset.canvasNodeHeight).toBe("460");
-    expect(alpha!.dataset.canvasNodeX).toBe("120");
-    expect(alpha!.dataset.canvasNodeY).toBe("100");
+    expect(alpha!.dataset.canvasNodeX).toBe("100");
+    expect(alpha!.dataset.canvasNodeY).toBe("80");
     expect(
       useAppStore.getState().workspaces[REPO].canvas?.nodes.alpha,
     ).toMatchObject({ width: 680, height: 460 });

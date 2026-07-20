@@ -81,8 +81,8 @@ describe("workspaceCanvas", () => {
     const result = resetWorkspaceCanvasState(["a", "b", "c"]);
 
     expect(result.nodes.a).toMatchObject({
-      x: 60,
-      y: 60,
+      x: 40,
+      y: 40,
       width: 600,
       height: 400,
     });
@@ -116,7 +116,7 @@ describe("workspaceCanvas", () => {
     });
     expect(result.nodes.new).toEqual({
       x: 700,
-      y: 60,
+      y: 40,
       width: 600,
       height: 400,
       zIndex: 2,
