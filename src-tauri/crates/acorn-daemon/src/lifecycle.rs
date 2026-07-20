@@ -112,12 +112,13 @@ fn is_our_daemon(pid: u32) -> bool {
         return false;
     }
     let target_pid = Pid::from_u32(pid);
-    let mut sys =
-        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
+    let mut sys = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+    );
     sys.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[target_pid]),
         true,
-        ProcessRefreshKind::new(),
+        ProcessRefreshKind::nothing(),
     );
     sys.process(target_pid)
         .map(process_basename_is_daemon)

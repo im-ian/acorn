@@ -136,7 +136,7 @@ pub fn github_owner_repo(repo_path: &Path) -> AppResult<Option<String>> {
         Ok(r) => r,
         Err(_) => return Ok(None),
     };
-    let Some(url) = remote.url() else {
+    let Ok(url) = remote.url() else {
         return Ok(None);
     };
     Ok(parse_github_owner_repo(url))
@@ -346,8 +346,8 @@ pub fn list_commits(repo_path: &Path, offset: usize, limit: usize) -> AppResult<
             author: author.name().unwrap_or("?").to_string(),
             author_email: author.email().unwrap_or("").to_string(),
             timestamp: commit.time().seconds(),
-            summary: commit.summary().unwrap_or("").to_string(),
-            body: commit.body().unwrap_or("").to_string(),
+            summary: commit.summary().ok().flatten().unwrap_or("").to_string(),
+            body: commit.body().ok().flatten().unwrap_or("").to_string(),
             pushed: pushed_set.contains(&oid),
         });
     }
@@ -434,7 +434,7 @@ fn pushed_page_oids(
         }
 
         let (branch, _) = entry?;
-        if branch.get().symbolic_target().is_some() {
+        if branch.get().symbolic_target()?.is_some() {
             continue;
         }
         let oid = branch.get().target().ok_or_else(|| {
