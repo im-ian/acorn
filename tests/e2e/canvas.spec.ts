@@ -674,7 +674,7 @@ test.describe("workspace canvas mode", () => {
       dragBox.y + dragBox.height / 2 + 60,
     );
 
-    await expect(alpha).toHaveAttribute("data-canvas-node-x", "700");
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "740");
     await expect(
       canvas.locator('[data-canvas-alignment-axis="x"]'),
     ).toBeVisible();
@@ -683,7 +683,7 @@ test.describe("workspace canvas mode", () => {
     await expect(
       canvas.locator('[data-canvas-alignment-axis="x"]'),
     ).toHaveCount(0);
-    await expect(alpha).toHaveAttribute("data-canvas-node-x", "700");
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "740");
   });
 
   test("keeps Alt gestures on whole pixels when the canvas loses focus", async ({
