@@ -391,6 +391,69 @@ describe("WorkSummaryView", () => {
     expect(mocks.fsGitStatus).toHaveBeenCalledOnce();
   });
 
+  it("starts a fresh git summary request when the branch changes in the same cwd", async () => {
+    const first = deferred<Awaited<ReturnType<typeof mocks.fsGitStatus>>>();
+    const second = deferred<Awaited<ReturnType<typeof mocks.fsGitStatus>>>();
+    mocks.fsGitStatus
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const tab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: `${REPO}/.worktrees/s1`,
+      sessionId: "s1",
+      title: "Feature runner Summary",
+    });
+
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={tab}
+          session={session({ branch: "feature/one", mode: "chat" })}
+          isActive
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(mocks.fsGitStatus).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={tab}
+          session={session({ branch: "feature/two", mode: "chat" })}
+          isActive
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(mocks.fsGitStatus).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      second.resolve({
+        statuses: {
+          [`${REPO}/.worktrees/s1/feature-two.ts`]: {
+            kind: "added",
+            additions: 0,
+            deletions: 0,
+          },
+        },
+        huge: false,
+        limit: 500,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("feature-two.ts");
+
+    await act(async () => {
+      first.resolve({ statuses: {}, huge: false, limit: 500 });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("feature-two.ts");
+  });
+
   it("does not let an old git summary completion clear a newer cwd request", async () => {
     vi.useFakeTimers();
     const first = deferred<Awaited<ReturnType<typeof mocks.fsGitStatus>>>();

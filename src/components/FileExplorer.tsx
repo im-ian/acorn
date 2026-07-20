@@ -38,7 +38,10 @@ import {
 import { cn } from "../lib/cn";
 import { retainRecentGitStatPaths } from "../lib/fileExplorerGitStats";
 import { matchesHotkeyEvent } from "../lib/hotkeys";
-import { planGitRefresh } from "../lib/git-refresh-scheduler";
+import {
+  planGitRefresh,
+  type GitRefreshTrigger,
+} from "../lib/git-refresh-scheduler";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { rightPanelCache } from "../lib/right-panel-cache";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -77,6 +80,7 @@ function fileExplorerText(
 
 interface FileExplorerProps {
   rootPath: string;
+  gitRevision?: string | null;
 }
 
 interface DirState {
@@ -114,6 +118,10 @@ function pathInsideRoot(path: string, rootPath: string): boolean {
   const target = trimTrailingSlash(path);
   if (root === "/") return target.startsWith("/");
   return target === root || target.startsWith(root + "/");
+}
+
+function isGitignorePath(path: string): boolean {
+  return /(^|[\\/])\.gitignore$/.test(path);
 }
 
 function nearestCachedRefreshDir(
@@ -307,7 +315,10 @@ function setLocalBool(key: string, value: boolean) {
   }
 }
 
-export function FileExplorer({ rootPath }: FileExplorerProps) {
+export function FileExplorer({
+  rootPath,
+  gitRevision = null,
+}: FileExplorerProps) {
   const t = useTranslation();
   const findShortcut = useSettings((s) => s.settings.shortcuts.findInView);
   const renameShortcut = useSettings((s) => s.settings.shortcuts.renameItem);
@@ -364,7 +375,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   const visiblePathsRef = useRef<Set<string>>(new Set());
   const changedPathsRef = useRef<Set<string>>(new Set());
   const statusInFlightRef = useRef<Promise<void> | null>(null);
-  const statusRefreshPendingRef = useRef(false);
+  const statusRefreshPendingRef = useRef<GitRefreshTrigger | null>(null);
   const lastStatusSuccessRef = useRef<number | null>(null);
   const refreshDeferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingDotgitRef = useRef(false);
@@ -408,7 +419,9 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
 
   const refreshGitStatus = useCallback(async () => {
     if (statusInFlightRef.current) {
-      statusRefreshPendingRef.current = true;
+      if (statusRefreshPendingRef.current !== "user") {
+        statusRefreshPendingRef.current = "fs-event";
+      }
       return statusInFlightRef.current;
     }
 
@@ -445,11 +458,13 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
 
     const promise = run().finally(() => {
       statusInFlightRef.current = null;
-      if (statusRefreshPendingRef.current) {
-        statusRefreshPendingRef.current = false;
+      const pendingTrigger = statusRefreshPendingRef.current;
+      if (pendingTrigger) {
+        statusRefreshPendingRef.current = null;
+        if (pendingTrigger === "user") lastStatusSuccessRef.current = null;
         // Route through the scheduler so huge / focus / quiet-window guards
         // still apply to the re-fire instead of bypassing them.
-        scheduleRefreshRef.current?.("fs-event");
+        scheduleRefreshRef.current?.(pendingTrigger);
       }
     });
     statusInFlightRef.current = promise;
@@ -497,7 +512,12 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
           // The in-flight refreshGitStatus will re-enter the scheduler via
           // scheduleRefreshRef once it settles; flag the pending so the
           // .finally arm fires the retry.
-          statusRefreshPendingRef.current = true;
+          if (
+            trigger === "user" ||
+            statusRefreshPendingRef.current === null
+          ) {
+            statusRefreshPendingRef.current = trigger;
+          }
           break;
         case "defer-until-focus":
         case "skip-huge":
@@ -745,6 +765,33 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     cacheRef.current = cache;
   }, [cache]);
 
+  const gitContextRef = useRef({ rootPath, gitRevision });
+  useEffect(() => {
+    const previous = gitContextRef.current;
+    gitContextRef.current = { rootPath, gitRevision };
+    if (
+      previous.rootPath !== rootPath ||
+      previous.gitRevision === gitRevision
+    ) {
+      return;
+    }
+
+    for (const path of new Set([rootPath, ...Object.keys(cacheRef.current)])) {
+      void fetchDir(path);
+    }
+    gitHugeRef.current = false;
+    lastStatusSuccessRef.current = null;
+    pendingDotgitRef.current = true;
+    scheduleGitStatusRefresh("user");
+    scheduleGitDiffStats();
+  }, [
+    fetchDir,
+    gitRevision,
+    rootPath,
+    scheduleGitDiffStats,
+    scheduleGitStatusRefresh,
+  ]);
+
   // Listen for backend fs-changed batches and refresh only loaded
   // directories. Overflow batches carry a subtree/root refresh hint so
   // large generated-file bursts do not fan out into per-file work.
@@ -766,6 +813,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       const current = cacheRef.current;
       const toFetch = new Set<string>();
       const changedPaths = payload.paths.filter((p) => pathInsideRoot(p, rootPath));
+      const gitignoreChanged = changedPaths.some(isGitignorePath);
 
       retainRecentGitStatPaths(
         changedPathsRef.current,
@@ -773,7 +821,10 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
         payload.cap,
       );
 
-      if (payload.overflow && payload.refresh) {
+      if (gitignoreChanged) {
+        toFetch.add(rootPath);
+        for (const path of Object.keys(current)) toFetch.add(path);
+      } else if (payload.overflow && payload.refresh) {
         const refreshPath =
           payload.refresh.kind === "root" ? rootPath : payload.refresh.path;
         toFetch.add(nearestCachedRefreshDir(refreshPath, current, rootPath));
