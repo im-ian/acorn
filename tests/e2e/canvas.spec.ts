@@ -539,6 +539,7 @@ test.describe("workspace canvas mode", () => {
 
     await expect(alpha).toHaveAttribute("data-canvas-node-width", "620");
     await expect(alpha).toHaveAttribute("data-canvas-node-height", "400");
+    await expect(alpha).toHaveCSS("z-index", "3");
     await expect(canvas.getByTestId("workspace-canvas-size-hint"))
       .toHaveAttribute("data-canvas-match-width", "true");
     await expect(canvas.getByTestId("workspace-canvas-size-hint"))
@@ -573,8 +574,11 @@ test.describe("workspace canvas mode", () => {
       dragBox.y + dragBox.height / 2,
     );
     await page.mouse.down();
+    const beta = canvas.locator('[data-canvas-session-id="beta"]');
+    const alphaX = Number(await alpha.getAttribute("data-canvas-node-x"));
+    const betaX = Number(await beta.getAttribute("data-canvas-node-x"));
     await page.mouse.move(
-      dragBox.x + dragBox.width / 2 + 655,
+      dragBox.x + dragBox.width / 2 + (betaX - alphaX - 5),
       dragBox.y + dragBox.height / 2 + 60,
     );
 
@@ -588,6 +592,158 @@ test.describe("workspace canvas mode", () => {
       canvas.locator('[data-canvas-alignment-axis="x"]'),
     ).toHaveCount(0);
     await expect(alpha).toHaveAttribute("data-canvas-node-x", "708");
+  });
+
+  test("keeps Alt gestures on whole pixels when the canvas loses focus", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [session("alpha"), session("beta")]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const alpha = page.locator('[data-canvas-session-id="alpha"]');
+    const dragHandle = alpha.getByTestId("workspace-canvas-node-drag-handle");
+    const dragBox = await dragHandle.boundingBox();
+    if (!dragBox) throw new Error("Canvas drag handle is not visible");
+    const start = {
+      x: dragBox.x + dragBox.width / 2,
+      y: dragBox.y + dragBox.height / 2,
+    };
+
+    await page.keyboard.down("Alt");
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 13, start.y + 13);
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "61");
+    await expect(alpha).toHaveAttribute("data-canvas-node-y", "61");
+
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "61");
+    await expect(alpha).toHaveAttribute("data-canvas-node-y", "61");
+    await page.mouse.up();
+    await page.keyboard.up("Alt");
+  });
+
+  test("commits the last canvas position without jumping on pointer cancellation", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [session("alpha"), session("beta")]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const canvas = page.getByTestId("workspace-canvas");
+    const alpha = canvas.locator('[data-canvas-session-id="alpha"]');
+    const dragHandle = alpha.getByTestId("workspace-canvas-node-drag-handle");
+    const dragBox = await dragHandle.boundingBox();
+    if (!dragBox) throw new Error("Canvas drag handle is not visible");
+    const start = {
+      x: dragBox.x + dragBox.width / 2,
+      y: dragBox.y + dragBox.height / 2,
+    };
+
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 100, start.y + 6);
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "148");
+    await expect(alpha).toHaveAttribute("data-canvas-node-y", "48");
+    await expect(
+      canvas.locator('[data-canvas-alignment-axis="y"]'),
+    ).toBeVisible();
+
+    await page.evaluate(() =>
+      window.dispatchEvent(
+        new PointerEvent("pointercancel", { clientX: 0, clientY: 0 }),
+      ),
+    );
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "140");
+    await expect(alpha).toHaveAttribute("data-canvas-node-y", "48");
+    await expect(canvas.getByTestId("workspace-canvas-alignment-guide"))
+      .toHaveCount(0);
+    await page.mouse.up();
+  });
+
+  test("clears alignment guides when the dragged session disappears", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const removedIds = (
+        window as unknown as { __canvasRemovedIds?: string[] }
+      ).__canvasRemovedIds;
+      return ["alpha", "beta"]
+        .filter((id) => !removedIds?.includes(id))
+        .map((id) => ({
+          id,
+          name: id,
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+          title_source: "default",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: null,
+          in_worktree: false,
+        }));
+    });
+    await tauri.handle("remove_session", (args) => {
+      const w = window as unknown as { __canvasRemovedIds?: string[] };
+      w.__canvasRemovedIds = [
+        ...(w.__canvasRemovedIds ?? []),
+        (args as { id: string }).id,
+      ];
+      return null;
+    });
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const canvas = page.getByTestId("workspace-canvas");
+    const alpha = canvas.locator('[data-canvas-session-id="alpha"]');
+    const dragHandle = alpha.getByTestId("workspace-canvas-node-drag-handle");
+    const dragBox = await dragHandle.boundingBox();
+    if (!dragBox) throw new Error("Canvas drag handle is not visible");
+    await page.mouse.move(
+      dragBox.x + dragBox.width / 2,
+      dragBox.y + dragBox.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      dragBox.x + dragBox.width / 2 + 100,
+      dragBox.y + dragBox.height / 2 + 6,
+    );
+    await expect(canvas.getByTestId("workspace-canvas-alignment-guide"))
+      .toBeVisible();
+
+    await alpha
+      .getByRole("button", { name: "Close alpha" })
+      .evaluate((button: HTMLButtonElement) => button.click());
+    const dialog = page.getByRole("dialog");
+    await expect(
+      dialog.getByRole("heading", { name: "Remove session" }),
+    ).toBeVisible();
+    await dialog
+      .getByRole("button", { name: "Remove", exact: true })
+      .evaluate((button: HTMLButtonElement) => button.click());
+
+    await expect(alpha).toHaveCount(0);
+    await expect(canvas.getByTestId("workspace-canvas-alignment-guide"))
+      .toHaveCount(0);
+    await page.mouse.up();
   });
 
   test("uses the minimap to navigate only the active project sessions", async ({

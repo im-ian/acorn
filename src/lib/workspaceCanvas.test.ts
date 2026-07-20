@@ -200,6 +200,38 @@ describe("workspaceCanvas", () => {
     expect(resized.node).toMatchObject({ width: 614, height: 408 });
   });
 
+  it("skips alignments that whole-pixel geometry cannot represent exactly", () => {
+    const moved = alignWorkspaceCanvasNode(
+      { x: 347, y: 259, width: 100, height: 80, zIndex: 3 },
+      [{ x: 300, y: 200, width: 201, height: 201, zIndex: 1 }],
+      "move",
+      8,
+    );
+
+    expect(moved.node).toMatchObject({ x: 347, y: 259 });
+    expect(moved.matches).toEqual({
+      x: false,
+      y: false,
+      width: false,
+      height: false,
+    });
+    expect(moved.guides).toEqual([]);
+
+    const resized = alignWorkspaceCanvasNode(
+      { x: 80, y: 100, width: 614, height: 407, zIndex: 3 },
+      [{ x: 900, y: 300, width: 620.5, height: 400.5, zIndex: 1 }],
+      "resize",
+      8,
+    );
+    expect(resized.node).toMatchObject({ width: 614, height: 407 });
+    expect(resized.matches).toEqual({
+      x: false,
+      y: false,
+      width: false,
+      height: false,
+    });
+  });
+
   it("pans only enough to reveal a selected node", () => {
     expect(
       revealWorkspaceCanvasNode(
