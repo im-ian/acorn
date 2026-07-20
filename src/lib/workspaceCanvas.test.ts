@@ -83,8 +83,8 @@ describe("workspaceCanvas", () => {
     const result = resetWorkspaceCanvasState(["a", "b", "c"]);
 
     expect(result.nodes.a).toMatchObject({
-      x: 40,
-      y: 40,
+      x: 0,
+      y: 0,
       width: 620,
       height: 400,
     });
@@ -117,11 +117,56 @@ describe("workspaceCanvas", () => {
       zIndex: 1,
     });
     expect(result.nodes.new).toEqual({
-      x: 720,
-      y: 40,
+      x: 680,
+      y: 0,
       width: 620,
       height: 400,
       zIndex: 2,
+    });
+  });
+
+  it("places a new session beside the active canvas session", () => {
+    const result = reconcileWorkspaceCanvasState(
+      {
+        viewport: { offset: { x: -120, y: 40 }, zoom: 1 },
+        nodes: {
+          active: { x: 100, y: 200, width: 700, height: 460, zIndex: 4 },
+          other: { x: 0, y: 0, width: 620, height: 400, zIndex: 2 },
+        },
+      },
+      ["active", "other", "new"],
+      "active",
+    );
+
+    expect(result.nodes.active).toMatchObject({ x: 100, y: 200, zIndex: 4 });
+    expect(result.nodes.new).toEqual({
+      x: 860,
+      y: 200,
+      width: 620,
+      height: 400,
+      zIndex: 5,
+    });
+  });
+
+  it("uses another nearby side when the active session's right side is occupied", () => {
+    const result = reconcileWorkspaceCanvasState(
+      {
+        viewport: { offset: { x: 48, y: 48 }, zoom: 1 },
+        nodes: {
+          active: { x: 0, y: 0, width: 620, height: 400, zIndex: 1 },
+          right: { x: 680, y: 0, width: 620, height: 400, zIndex: 2 },
+        },
+      },
+      ["active", "right", "new"],
+      "active",
+    );
+
+    expect(result.nodes.new).toEqual({
+      x: 0,
+      y: 460,
+      width: 620,
+      height: 400,
+      zIndex: 3,
     });
   });
 
