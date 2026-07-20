@@ -14,6 +14,8 @@ const SESSIONS_FILE: &str = "sessions.json";
 const SESSIONS_TMP_FILE: &str = "sessions.json.tmp";
 const PROJECTS_FILE: &str = "projects.json";
 const PROJECTS_TMP_FILE: &str = "projects.json.tmp";
+const LAST_PROJECT_PARENT_FOLDER_FILE: &str = "last-project-parent-folder.json";
+const LAST_PROJECT_PARENT_FOLDER_TMP_FILE: &str = "last-project-parent-folder.json.tmp";
 const CHAT_SESSIONS_DIR: &str = "chat-sessions";
 pub const CHAT_SESSION_SCHEMA_VERSION: u32 = 1;
 static SESSION_SAVE_LOCK: Mutex<()> = Mutex::new(());
@@ -469,6 +471,68 @@ pub fn save_projects(projects: &[Project]) -> AppResult<()> {
         path = %final_path.display(),
         "saved projects to disk"
     );
+    Ok(())
+}
+
+fn last_project_parent_folder_path(base_dir: &Path) -> PathBuf {
+    base_dir.join(LAST_PROJECT_PARENT_FOLDER_FILE)
+}
+
+fn last_project_parent_folder_tmp_path(base_dir: &Path) -> PathBuf {
+    base_dir.join(LAST_PROJECT_PARENT_FOLDER_TMP_FILE)
+}
+
+pub(crate) fn load_last_project_parent_folder_from_dir(
+    base_dir: &Path,
+) -> AppResult<Option<PathBuf>> {
+    let path = last_project_parent_folder_path(base_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(path)?;
+    let value = serde_json::from_slice::<String>(&bytes).map_err(|err| {
+        AppError::Other(format!(
+            "failed to parse remembered project parent folder: {err}"
+        ))
+    })?;
+    if value.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(PathBuf::from(value)))
+}
+
+pub(crate) fn save_last_project_parent_folder_to_dir(
+    base_dir: &Path,
+    parent: &Path,
+) -> AppResult<()> {
+    fs::create_dir_all(base_dir)?;
+    let final_path = last_project_parent_folder_path(base_dir);
+    let tmp_path = last_project_parent_folder_tmp_path(base_dir);
+    let payload = serde_json::to_vec(&parent.to_string_lossy().into_owned()).map_err(|err| {
+        AppError::Other(format!(
+            "failed to serialize remembered project parent folder: {err}"
+        ))
+    })?;
+    fs::write(&tmp_path, payload)?;
+    fs::rename(tmp_path, final_path)?;
+    Ok(())
+}
+
+pub fn save_last_project_parent_folder(parent: &Path) -> AppResult<()> {
+    save_last_project_parent_folder_to_dir(&data_dir()?, parent)
+}
+
+pub(crate) fn clear_last_project_parent_folder_from_dir(base_dir: &Path) -> AppResult<()> {
+    for path in [
+        last_project_parent_folder_path(base_dir),
+        last_project_parent_folder_tmp_path(base_dir),
+    ] {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(AppError::Io(err)),
+        }
+    }
     Ok(())
 }
 

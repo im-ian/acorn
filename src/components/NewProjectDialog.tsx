@@ -1,5 +1,5 @@
 import { FolderPlus } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { api } from "../lib/api";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -43,14 +43,32 @@ export function NewProjectDialog({
   const [error, setError] = useState<string | null>(null);
   const [ignoreSafeName, setIgnoreSafeName] = useState(false);
   const [pending, setPending] = useState(false);
+  const locationPickedRef = useRef(false);
 
   useEffect(() => {
     if (!isOpen) return;
+    let cancelled = false;
+    locationPickedRef.current = false;
     setName("");
     setParentPath("");
     setError(null);
     setIgnoreSafeName(false);
     setPending(false);
+    void api
+      .getLastProjectParentFolder()
+      .then((path) => {
+        if (!cancelled && !locationPickedRef.current) {
+          setParentPath(path ?? "");
+        }
+      })
+      .catch(() => {
+        if (!cancelled && !locationPickedRef.current) {
+          setParentPath("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
 
   useDialogShortcuts(isOpen, {
@@ -84,6 +102,7 @@ export function NewProjectDialog({
       dt(t, "dialogs.newProject.selectParentFolder"),
     );
     if (!picked) return;
+    locationPickedRef.current = true;
     setParentPath(picked);
     setError(null);
   }

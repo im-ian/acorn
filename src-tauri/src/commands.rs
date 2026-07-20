@@ -3336,7 +3336,73 @@ pub async fn select_project_parent_folder<R: Runtime>(
         return Ok(None);
     };
     let path = remember_folder_grant(state.inner(), &path)?;
+    if let Err(err) = persistence::save_last_project_parent_folder(&path) {
+        tracing::warn!(
+            error = %err,
+            path = %path.display(),
+            "failed to remember project parent folder"
+        );
+    }
     Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub fn get_last_project_parent_folder(state: State<'_, AppState>) -> AppResult<Option<String>> {
+    let data_dir = persistence::data_dir()?;
+    get_last_project_parent_folder_from_dir(state.inner(), &data_dir)
+}
+
+fn get_last_project_parent_folder_from_dir(
+    state: &AppState,
+    data_dir: &Path,
+) -> AppResult<Option<String>> {
+    let remembered = match persistence::load_last_project_parent_folder_from_dir(data_dir) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to load remembered project parent folder");
+            if let Err(clear_err) = persistence::clear_last_project_parent_folder_from_dir(data_dir)
+            {
+                tracing::warn!(
+                    error = %clear_err,
+                    "failed to clear invalid remembered project parent folder"
+                );
+            }
+            return Ok(None);
+        }
+    };
+    let Some(path) = remembered else {
+        return Ok(None);
+    };
+
+    if !path.is_dir() {
+        if let Err(err) = persistence::clear_last_project_parent_folder_from_dir(data_dir) {
+            tracing::warn!(
+                error = %err,
+                path = %path.display(),
+                "failed to clear missing remembered project parent folder"
+            );
+        }
+        return Ok(None);
+    }
+
+    match remember_folder_grant(state, &path) {
+        Ok(path) => Ok(Some(path.to_string_lossy().into_owned())),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                path = %path.display(),
+                "remembered project parent folder is no longer accessible"
+            );
+            if let Err(clear_err) = persistence::clear_last_project_parent_folder_from_dir(data_dir)
+            {
+                tracing::warn!(
+                    error = %clear_err,
+                    "failed to clear inaccessible remembered project parent folder"
+                );
+            }
+            Ok(None)
+        }
+    }
 }
 
 #[tauri::command]
@@ -10004,8 +10070,8 @@ mod tests {
             .unwrap();
         let state = crate::state::AppState::default();
 
-        let restored = super::get_last_project_parent_folder_from_dir(&state, app_data.path())
-            .unwrap();
+        let restored =
+            super::get_last_project_parent_folder_from_dir(&state, app_data.path()).unwrap();
 
         let canonical = parent.canonicalize().unwrap();
         assert_eq!(restored, Some(canonical.to_string_lossy().into_owned()));
@@ -10020,8 +10086,8 @@ mod tests {
             .unwrap();
         let state = crate::state::AppState::default();
 
-        let restored = super::get_last_project_parent_folder_from_dir(&state, app_data.path())
-            .unwrap();
+        let restored =
+            super::get_last_project_parent_folder_from_dir(&state, app_data.path()).unwrap();
 
         assert_eq!(restored, None);
         assert_eq!(
