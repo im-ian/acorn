@@ -1,26 +1,5 @@
 import { useEffect } from "react";
-// tinykeys@3 ships type declarations at `dist/tinykeys.d.ts` but its
-// `package.json#exports` field omits a `types` condition, so TS's
-// bundler resolver cannot pick them up. We work around this by
-// importing the runtime module untyped and re-declaring the minimal
-// surface we use locally.
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-expect-error -- see note above
-import { tinykeys as tinykeysRaw } from "tinykeys";
-
-type KeyBindingMap = Record<string, (event: KeyboardEvent) => void>;
-interface TinykeysOptions {
-  capture?: boolean;
-  timeout?: number;
-}
-
-type Tinykeys = (
-  target: Window | HTMLElement,
-  keyBindingMap: KeyBindingMap,
-  options?: TinykeysOptions,
-) => () => void;
-
-const tinykeys = tinykeysRaw as Tinykeys;
+import { tinykeys } from "tinykeys";
 
 /**
  * Named keybinding defaults used across the app. `$mod` resolves to
@@ -607,11 +586,19 @@ export function useHotkeys(bindings: HotkeyBindings): void {
       unsubscribes.push(
         tinykeys(window, stopPropagationAfterHandling(captureBindings), {
           capture: true,
+          // tinykeys v4 ignores form/contenteditable targets by default.
+          // Acorn's app-level shortcuts intentionally remain active while a
+          // terminal title or other input has focus, matching v3 behavior.
+          ignore: () => false,
         }),
       );
     }
     if (Object.keys(bubbleBindings).length > 0) {
-      unsubscribes.push(tinykeys(window, skipWhileRecording(bubbleBindings)));
+      unsubscribes.push(
+        tinykeys(window, skipWhileRecording(bubbleBindings), {
+          ignore: () => false,
+        }),
+      );
     }
 
     return () => {
