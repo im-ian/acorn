@@ -359,6 +359,18 @@ describe("workspaceCanvas", () => {
     ).toBe(hiddenNext.offset.x);
   });
 
+  it("preserves a reachable header while an otherwise visible node overflows below", () => {
+    const node = { x: 40, y: 200, width: 620, height: 400, zIndex: 1 };
+    const preserved = preserveWorkspaceCanvasNodeRevealOnZoom(
+      { zoom: 1, offset: { x: 0, y: 0 } },
+      { zoom: 2, offset: { x: 0, y: -370 } },
+      node,
+      { width: 1_000, height: 600 },
+    );
+
+    expect(node.y * preserved.zoom + preserved.offset.y).toBe(48);
+  });
+
   it("maps nodes and the viewport into a minimap and recenters from it", () => {
     const viewport = { offset: { x: 0, y: 0 }, zoom: 1 };
     const layout = layoutWorkspaceCanvasMinimap(

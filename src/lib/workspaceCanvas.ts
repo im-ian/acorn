@@ -429,8 +429,20 @@ export function preserveWorkspaceCanvasNodeRevealOnZoom(
   const nextReveal = revealWorkspaceCanvasNode(nextViewport, node, container);
   const xWasReachable =
     currentReveal.offset.x === currentViewport.offset.x;
-  const yWasReachable =
-    currentReveal.offset.y === currentViewport.offset.y;
+  const headerYIsReachable = (viewport: WorkspaceCanvasViewport) => {
+    if (container.height <= 0) return false;
+    const top =
+      node.y * clampWorkspaceCanvasZoom(viewport.zoom) + viewport.offset.y;
+    const maxSafeTop = Math.max(
+      container.height - WORKSPACE_CANVAS_REVEAL_PADDING,
+      WORKSPACE_CANVAS_REVEAL_PADDING,
+    );
+    return (
+      top >= WORKSPACE_CANVAS_REVEAL_PADDING && top <= maxSafeTop
+    );
+  };
+  const yWasReachable = headerYIsReachable(currentViewport);
+  const yWillBeReachable = headerYIsReachable(nextViewport);
 
   return {
     ...nextViewport,
@@ -440,7 +452,7 @@ export function preserveWorkspaceCanvasNodeRevealOnZoom(
           ? nextReveal.offset.x
           : nextViewport.offset.x,
       y:
-        yWasReachable && nextReveal.offset.y !== nextViewport.offset.y
+        yWasReachable && !yWillBeReachable
           ? nextReveal.offset.y
           : nextViewport.offset.y,
     },
