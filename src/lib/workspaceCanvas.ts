@@ -78,7 +78,7 @@ const WORKSPACE_CANVAS_MAX_NODE_WIDTH = 2_400;
 const WORKSPACE_CANVAS_MAX_NODE_HEIGHT = 1_600;
 const WORKSPACE_CANVAS_COORDINATE_LIMIT = 100_000;
 const WORKSPACE_CANVAS_NODE_GAP = WORKSPACE_CANVAS_GRID_SIZE * 3;
-const WORKSPACE_CANVAS_NODE_ORIGIN = WORKSPACE_CANVAS_GRID_SIZE * 2;
+const WORKSPACE_CANVAS_NODE_ORIGIN = 0;
 const WORKSPACE_CANVAS_DEFAULT_COLUMNS = 2;
 
 export function defaultWorkspaceCanvasViewport(): WorkspaceCanvasViewport {
@@ -225,12 +225,11 @@ function nodesOverlap(
   first: WorkspaceCanvasNode,
   second: WorkspaceCanvasNode,
 ): boolean {
-  const gap = WORKSPACE_CANVAS_NODE_GAP / 2;
   return !(
-    first.x + first.width + gap <= second.x ||
-    second.x + second.width + gap <= first.x ||
-    first.y + first.height + gap <= second.y ||
-    second.y + second.height + gap <= first.y
+    first.x + first.width <= second.x ||
+    second.x + second.width <= first.x ||
+    first.y + first.height <= second.y ||
+    second.y + second.height <= first.y
   );
 }
 
@@ -247,9 +246,69 @@ function nextOpenNode(
   return defaultNodeAt(existing.length, zIndex);
 }
 
+function snapWorkspaceCanvasUp(value: number): number {
+  return normalizeZero(
+    Math.ceil(value / WORKSPACE_CANVAS_GRID_SIZE) * WORKSPACE_CANVAS_GRID_SIZE,
+  );
+}
+
+function snapWorkspaceCanvasDown(value: number): number {
+  return normalizeZero(
+    Math.floor(value / WORKSPACE_CANVAS_GRID_SIZE) * WORKSPACE_CANVAS_GRID_SIZE,
+  );
+}
+
+function nextOpenNodeNear(
+  existing: readonly WorkspaceCanvasNode[],
+  anchor: WorkspaceCanvasNode,
+  zIndex: number,
+): WorkspaceCanvasNode {
+  const alignedX = snapWorkspaceCanvasValue(anchor.x);
+  const alignedY = snapWorkspaceCanvasValue(anchor.y);
+  const rightX = snapWorkspaceCanvasUp(
+    anchor.x + anchor.width + WORKSPACE_CANVAS_NODE_GAP,
+  );
+  const belowY = snapWorkspaceCanvasUp(
+    anchor.y + anchor.height + WORKSPACE_CANVAS_NODE_GAP,
+  );
+  const leftX = snapWorkspaceCanvasDown(
+    anchor.x - WORKSPACE_CANVAS_NODE_GAP - WORKSPACE_CANVAS_DEFAULT_NODE_WIDTH,
+  );
+  const aboveY = snapWorkspaceCanvasDown(
+    anchor.y -
+      WORKSPACE_CANVAS_NODE_GAP -
+      WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT,
+  );
+  const positions: readonly WorkspaceCanvasPoint[] = [
+    { x: rightX, y: alignedY },
+    { x: alignedX, y: belowY },
+    { x: leftX, y: alignedY },
+    { x: alignedX, y: aboveY },
+    { x: rightX, y: belowY },
+    { x: leftX, y: belowY },
+    { x: rightX, y: aboveY },
+    { x: leftX, y: aboveY },
+  ];
+
+  for (const position of positions) {
+    const candidate = clampWorkspaceCanvasNode({
+      ...position,
+      width: WORKSPACE_CANVAS_DEFAULT_NODE_WIDTH,
+      height: WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT,
+      zIndex,
+    });
+    if (!existing.some((node) => nodesOverlap(candidate, node))) {
+      return candidate;
+    }
+  }
+
+  return nextOpenNode(existing, zIndex);
+}
+
 export function reconcileWorkspaceCanvasState(
   value: unknown,
   sessionIds: readonly string[],
+  placementAnchorSessionId: string | null = null,
 ): WorkspaceCanvasState {
   const normalized = normalizeWorkspaceCanvasState(value) ?? {
     viewport: defaultWorkspaceCanvasViewport(),
@@ -269,7 +328,13 @@ export function reconcileWorkspaceCanvasState(
   for (const id of ids) {
     if (nodes[id]) continue;
     maxZ += 1;
-    nodes[id] = nextOpenNode(Object.values(nodes), maxZ);
+    const existing = Object.values(nodes);
+    const anchor = placementAnchorSessionId
+      ? nodes[placementAnchorSessionId]
+      : undefined;
+    nodes[id] = anchor
+      ? nextOpenNodeNear(existing, anchor, maxZ)
+      : nextOpenNode(existing, maxZ);
   }
 
   return { viewport: normalized.viewport, nodes };

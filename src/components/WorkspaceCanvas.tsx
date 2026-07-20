@@ -255,6 +255,10 @@ export function WorkspaceCanvas({
     return reconcileWorkspaceCanvasState(persisted, reconciliationIds);
   });
   const canvasRef = useRef(canvas);
+  // Session creation can activate the new id before its canvas node exists.
+  const placementAnchorSessionIdRef = useRef<string | null>(
+    activeSessionId && canvas.nodes[activeSessionId] ? activeSessionId : null,
+  );
   const resetUndoRef = useRef<WorkspaceCanvasState | null>(null);
   const [canUndoReset, setCanUndoReset] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -380,13 +384,36 @@ export function WorkspaceCanvas({
 
   useEffect(() => {
     const current = canvasRef.current;
-    const next = reconcileWorkspaceCanvasState(current, reconciliationIds);
+    const placementAnchorSessionId =
+      activeSessionId && current.nodes[activeSessionId]
+        ? activeSessionId
+        : placementAnchorSessionIdRef.current;
+    const next = reconcileWorkspaceCanvasState(
+      current,
+      reconciliationIds,
+      placementAnchorSessionId,
+    );
     setInteractionHints(null);
     if (workspaceCanvasStatesEqual(current, next)) return;
     clearResetUndo();
     applyCanvas(next);
     persistCanvas(next);
-  }, [applyCanvas, clearResetUndo, persistCanvas, reconciliationIds]);
+  }, [
+    activeSessionId,
+    applyCanvas,
+    clearResetUndo,
+    persistCanvas,
+    reconciliationIds,
+  ]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      placementAnchorSessionIdRef.current = null;
+      return;
+    }
+    if (!canvasRef.current.nodes[activeSessionId]) return;
+    placementAnchorSessionIdRef.current = activeSessionId;
+  }, [activeSessionId, reconciliationIds]);
 
   useEffect(() => {
     const root = rootRef.current;
