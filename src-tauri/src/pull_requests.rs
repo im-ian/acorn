@@ -2566,7 +2566,11 @@ fn build_commit_message_prompt(
     // afterwards if details are missing.
     const MAX_DIFF_BYTES: usize = 12_000;
     let trimmed_diff = if diff.len() > MAX_DIFF_BYTES {
-        format!("{}\n…(diff truncated)…", &diff[..MAX_DIFF_BYTES])
+        let mut end = MAX_DIFF_BYTES;
+        while !diff.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}\n…(diff truncated)…", &diff[..end])
     } else {
         diff.to_string()
     };
@@ -3111,6 +3115,16 @@ mod tests {
         );
 
         assert!(prompt.contains("Write a merge commit message."));
+    }
+
+    #[test]
+    fn commit_message_prompt_truncates_diff_on_a_utf8_boundary() {
+        let diff = format!("{}é", "a".repeat(11_999));
+
+        let prompt = build_commit_message_prompt(MergeMethod::Squash, "", &fake_view(), &diff);
+
+        assert!(prompt.contains("\n…(diff truncated)…"));
+        assert!(!prompt.contains('é'));
     }
 
     #[test]

@@ -906,6 +906,11 @@
       "waitingForInput": "입력 대기",
       "errored": "오류"
     },
+    "agentStatusSource": {
+      "hook": "네이티브 훅",
+      "transcript_fallback": "트랜스크립트 폴백(기능 저하)",
+      "process_fallback": "프로세스 폴백(기능 저하)"
+    },
     "sessionStatusReason": {
       "turn_complete": "에이전트 응답 완료",
       "shell_prompt": "셸 프롬프트 감지"
@@ -1097,6 +1102,9 @@
     "imagePreview": "이미지 미리보기",
     "openInBrowser": "브라우저에서 열기",
     "close": "닫기"
+  },
+  "remoteImage": {
+    "load": "원격 이미지 불러오기"
   },
   "mediaViewer": {
     "zoomControls": "이미지 확대/축소 컨트롤",

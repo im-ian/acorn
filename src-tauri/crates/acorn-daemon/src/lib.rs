@@ -28,6 +28,7 @@ pub mod ring_buffer;
 pub mod server;
 pub mod session;
 pub mod socket;
+pub mod wire;
 
 #[cfg(test)]
 mod test_env;

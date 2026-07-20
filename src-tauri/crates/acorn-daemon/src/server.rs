@@ -18,7 +18,7 @@
 //!   their next read after the flag is set, or sooner if the client
 //!   closes the connection.
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufReader, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -34,6 +34,7 @@ use super::protocol::{
 use super::pty::PtyManager;
 use super::session::SessionRegistry;
 use super::socket::DaemonListeners;
+use super::wire::read_request_frame_line;
 
 /// Wraps all the per-process state a connection handler needs.
 pub struct Daemon {
@@ -174,7 +175,7 @@ impl Daemon {
 
         // Handshake: client `Hello` must arrive first.
         let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
+        if read_request_frame_line(&mut reader, &mut line)? == 0 {
             return Ok(()); // immediate close
         }
         let hello: Hello = match serde_json::from_str(line.trim()) {
@@ -204,8 +205,7 @@ impl Daemon {
         )?;
 
         loop {
-            line.clear();
-            let n = reader.read_line(&mut line)?;
+            let n = read_request_frame_line(&mut reader, &mut line)?;
             if n == 0 {
                 return Ok(()); // peer closed
             }
@@ -388,7 +388,7 @@ impl Daemon {
 
         // Hello → StreamAttach → live frames loop.
         let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
+        if read_request_frame_line(&mut reader, &mut line)? == 0 {
             return Ok(());
         }
         let hello: Hello = match serde_json::from_str(line.trim()) {
@@ -422,8 +422,7 @@ impl Daemon {
             &serde_json::to_string(&Hello::current(ClientRole::Stream)).unwrap(),
         )?;
 
-        line.clear();
-        if reader.read_line(&mut line)? == 0 {
+        if read_request_frame_line(&mut reader, &mut line)? == 0 {
             return Ok(());
         }
         let attach: StreamAttach = match serde_json::from_str(line.trim()) {
@@ -468,8 +467,7 @@ impl Daemon {
                 let mut r = BufReader::new(input_reader);
                 let mut buf = String::new();
                 loop {
-                    buf.clear();
-                    match r.read_line(&mut buf) {
+                    match read_request_frame_line(&mut r, &mut buf) {
                         Ok(0) => return,
                         Ok(_) => {}
                         Err(_) => return,

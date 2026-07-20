@@ -906,6 +906,11 @@
       "waitingForInput": "waiting for input",
       "errored": "error"
     },
+    "agentStatusSource": {
+      "hook": "Native hook",
+      "transcript_fallback": "Transcript fallback (degraded)",
+      "process_fallback": "Process fallback (degraded)"
+    },
     "sessionStatusReason": {
       "turn_complete": "agent turn complete",
       "shell_prompt": "shell prompt detected"
@@ -1097,6 +1102,9 @@
     "imagePreview": "Image preview",
     "openInBrowser": "Open in browser",
     "close": "Close"
+  },
+  "remoteImage": {
+    "load": "Load remote image"
   },
   "mediaViewer": {
     "zoomControls": "Image zoom controls",

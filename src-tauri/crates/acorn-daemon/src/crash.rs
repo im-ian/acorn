@@ -102,7 +102,7 @@ fn log_tail() -> std::io::Result<Vec<u8>> {
     let mut f = std::fs::File::open(&path)?;
     f.seek(SeekFrom::Start(start))?;
     let mut buf = Vec::with_capacity(LOG_TAIL_BYTES);
-    f.read_to_end(&mut buf)?;
+    f.take(LOG_TAIL_BYTES as u64).read_to_end(&mut buf)?;
     Ok(buf)
 }
 

@@ -113,6 +113,42 @@ test.describe("status bar", () => {
     await expect(tooltip.locator("svg")).toHaveCount(3);
   });
 
+  for (const { source, label } of [
+    { source: "hook", label: "Native hook" },
+    {
+      source: "transcript_fallback",
+      label: "Transcript fallback (degraded)",
+    },
+    { source: "process_fallback", label: "Process fallback (degraded)" },
+  ]) {
+    test(`identifies ${source} lifecycle diagnostics from status polling`, async ({
+      page,
+      tauri,
+    }) => {
+      await tauri.respond("list_projects", [PROJECT]);
+      await tauri.respond("list_sessions", [
+        { ...BASE_SESSION, agent_provider: "codex" },
+      ]);
+      await tauri.respond("detect_session_statuses", [
+        {
+          id: BASE_SESSION.id,
+          status: "working",
+          status_reason: null,
+          agent_status_source: source,
+          branch: null,
+        },
+      ]);
+
+      await page.goto("/");
+
+      const detail = `working · ${label}`;
+      await expect(page.locator(`footer span[title="${detail}"]`)).toHaveAttribute(
+        "title",
+        detail,
+      );
+    });
+  }
+
   test("shows only Codex token usage for an active Codex tab", async ({
     page,
     tauri,
