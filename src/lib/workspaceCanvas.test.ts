@@ -182,6 +182,24 @@ describe("workspaceCanvas", () => {
     });
   });
 
+  it("keeps pointer-driven movement and resizing on whole pixels", () => {
+    const moved = alignWorkspaceCanvasNode(
+      { x: 95.49, y: 204.51, width: 500, height: 300, zIndex: 3 },
+      [],
+      "move",
+      8,
+    );
+    expect(moved.node).toMatchObject({ x: 95, y: 205 });
+
+    const resized = alignWorkspaceCanvasNode(
+      { x: 80, y: 100, width: 614.49, height: 407.51, zIndex: 3 },
+      [],
+      "resize",
+      8,
+    );
+    expect(resized.node).toMatchObject({ width: 614, height: 408 });
+  });
+
   it("pans only enough to reveal a selected node", () => {
     expect(
       revealWorkspaceCanvasNode(
