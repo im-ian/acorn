@@ -17,8 +17,8 @@ export function GitHubLabelChip({
   const color = `#${hex}`;
   const labelStyle: CSSProperties = {
     backgroundColor: `${color}1f`,
-    borderColor: `${color}40`,
-    color,
+    borderColor: `color-mix(in srgb, ${color} 65%, var(--color-fg))`,
+    color: "var(--color-fg)",
     ...style,
   };
 

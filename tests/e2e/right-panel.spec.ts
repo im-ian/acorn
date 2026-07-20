@@ -98,6 +98,47 @@ test.describe("right panel: tab switching", () => {
     await expect(page.getByText(/Select a commit to see diff/i)).toBeVisible();
   });
 
+  test("keeps black GitHub labels readable in the dark theme", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 91,
+          title: "Keep dark labels readable",
+          state: "OPEN",
+          author: "im-ian",
+          head_branch: "fix/label-contrast",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/91",
+          updated_at: "2026-07-20T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [{ name: "github_actions", color: "000000" }],
+        },
+      ],
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "PRs" }).click();
+
+    const label = page.getByText("github_actions", { exact: true }).locator("..");
+    await expect(label).toBeVisible();
+    const colors = await label.evaluate((element) => ({
+      label: getComputedStyle(element).color,
+      foreground: getComputedStyle(document.body).color,
+      border: getComputedStyle(element).borderColor,
+    }));
+
+    expect(colors.label).toBe(colors.foreground);
+    expect(colors.border).not.toBe("rgb(0, 0, 0)");
+  });
+
   test("double-clicking a commit opens the diff modal before the diff finishes loading", async ({
     page,
     tauri,
