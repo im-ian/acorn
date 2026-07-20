@@ -605,7 +605,17 @@ test.describe("workspace canvas mode", () => {
     await page.getByTestId("workspace-view-status").click();
     await page.getByRole("option", { name: "Canvas" }).click();
 
-    const alpha = page.locator('[data-canvas-session-id="alpha"]');
+    const canvas = page.getByTestId("workspace-canvas");
+    const world = page.getByTestId("workspace-canvas-world");
+    await canvas.getByRole("button", { name: "Zoom in" }).click();
+    const zoom = Number(await world.getAttribute("data-canvas-zoom"));
+    const appScale = await canvas.evaluate(
+      (element) => element.getBoundingClientRect().width / element.offsetWidth,
+    );
+
+    const alpha = canvas.locator('[data-canvas-session-id="alpha"]');
+    const initialX = Number(await alpha.getAttribute("data-canvas-node-x"));
+    const initialY = Number(await alpha.getAttribute("data-canvas-node-y"));
     const dragHandle = alpha.getByTestId("workspace-canvas-node-drag-handle");
     const dragBox = await dragHandle.boundingBox();
     if (!dragBox) throw new Error("Canvas drag handle is not visible");
@@ -618,12 +628,56 @@ test.describe("workspace canvas mode", () => {
     await page.mouse.move(start.x, start.y);
     await page.mouse.down();
     await page.mouse.move(start.x + 13, start.y + 13);
-    await expect(alpha).toHaveAttribute("data-canvas-node-x", "61");
-    await expect(alpha).toHaveAttribute("data-canvas-node-y", "61");
+    const expectedX = Math.round(initialX + 13 / (appScale * zoom));
+    const expectedY = Math.round(initialY + 13 / (appScale * zoom));
+    await expect(alpha).toHaveAttribute(
+      "data-canvas-node-x",
+      String(expectedX),
+    );
+    await expect(alpha).toHaveAttribute(
+      "data-canvas-node-y",
+      String(expectedY),
+    );
 
     await page.evaluate(() => window.dispatchEvent(new Event("blur")));
-    await expect(alpha).toHaveAttribute("data-canvas-node-x", "61");
-    await expect(alpha).toHaveAttribute("data-canvas-node-y", "61");
+    await expect(alpha).toHaveAttribute(
+      "data-canvas-node-x",
+      String(expectedX),
+    );
+    await expect(alpha).toHaveAttribute(
+      "data-canvas-node-y",
+      String(expectedY),
+    );
+    await page.mouse.up();
+    await page.keyboard.up("Alt");
+
+    const initialWidth = Number(
+      await alpha.getAttribute("data-canvas-node-width"),
+    );
+    const initialHeight = Number(
+      await alpha.getAttribute("data-canvas-node-height"),
+    );
+    const resizeHandle = alpha.getByTestId(
+      "workspace-canvas-node-resize-handle",
+    );
+    const resizeBox = await resizeHandle.boundingBox();
+    if (!resizeBox) throw new Error("Canvas resize handle is not visible");
+    const resizeStart = {
+      x: resizeBox.x + resizeBox.width / 2,
+      y: resizeBox.y + resizeBox.height / 2,
+    };
+    await page.keyboard.down("Alt");
+    await page.mouse.move(resizeStart.x, resizeStart.y);
+    await page.mouse.down();
+    await page.mouse.move(resizeStart.x + 13, resizeStart.y + 13);
+    await expect(alpha).toHaveAttribute(
+      "data-canvas-node-width",
+      String(Math.round(initialWidth + 13 / (appScale * zoom))),
+    );
+    await expect(alpha).toHaveAttribute(
+      "data-canvas-node-height",
+      String(Math.round(initialHeight + 13 / (appScale * zoom))),
+    );
     await page.mouse.up();
     await page.keyboard.up("Alt");
   });
