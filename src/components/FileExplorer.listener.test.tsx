@@ -346,6 +346,7 @@ describe("FileExplorer filesystem listener", () => {
 
   it("refreshes loaded directories and git status when the branch revision changes", async () => {
     const rootPath = "/tmp/acorn-branch";
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
 
     await act(async () => {
       root?.render(
@@ -367,5 +368,6 @@ describe("FileExplorer filesystem listener", () => {
 
     expect(apiMocks.fsListDir).toHaveBeenCalledWith(rootPath, false, true);
     expect(apiMocks.fsGitStatus).toHaveBeenCalledWith(rootPath);
+    hasFocus.mockRestore();
   });
 });

@@ -1057,9 +1057,13 @@ test.describe("file explorer", () => {
     await tauri.handle("pty_repo_root", () => repo);
     await tauri.handle("fs_list_dir", (args) => {
       const { path } = args as { path: string };
-      const switched = (
-        window as unknown as { __fileExplorerBranchSwitched?: boolean }
-      ).__fileExplorerBranchSwitched;
+      const state = window as unknown as {
+        __fileExplorerBranchSwitched?: boolean;
+        __fileExplorerListCalls?: Array<{ path: string; switched: boolean }>;
+      };
+      const switched = Boolean(state.__fileExplorerBranchSwitched);
+      state.__fileExplorerListCalls = state.__fileExplorerListCalls ?? [];
+      state.__fileExplorerListCalls.push({ path, switched });
       if (path === "/tmp/branch-refresh") {
         return {
           repo_root: "/tmp/branch-refresh",
@@ -1120,9 +1124,8 @@ test.describe("file explorer", () => {
     await page.getByRole("button", { name: "Code" }).click();
     await page.getByRole("button", { name: "Files", exact: true }).click();
     await page.getByRole("button", { name: "generated", exact: true }).click();
-    await expect(
-      page.getByRole("button", { name: "result.json", exact: true }),
-    ).toHaveCount(0);
+    const resultRow = page.getByRole("button", { name: /^result\.json/ });
+    await expect(resultRow).toHaveCount(0);
 
     await page.evaluate(() => {
       (
@@ -1133,9 +1136,22 @@ test.describe("file explorer", () => {
     await expect(
       page.getByRole("button", { name: /^branch agent feature\/visible · Working$/ }),
     ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "result.json", exact: true }),
-    ).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __fileExplorerListCalls?: Array<{
+                  path: string;
+                  switched: boolean;
+                }>;
+              }
+            ).__fileExplorerListCalls ?? [],
+        ),
+      )
+      .toContainEqual({ path: "/tmp/branch-refresh/generated", switched: true });
+    await expect(resultRow).toBeVisible();
     await expect(page.getByLabel("Git status added")).toBeVisible();
   });
 });
