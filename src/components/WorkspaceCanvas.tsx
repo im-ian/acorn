@@ -357,6 +357,7 @@ export function WorkspaceCanvas({
   useEffect(() => {
     const current = canvasRef.current;
     const next = reconcileWorkspaceCanvasState(current, reconciliationIds);
+    setInteractionHints(null);
     if (workspaceCanvasStatesEqual(current, next)) return;
     clearResetUndo();
     applyCanvas(next);
@@ -567,7 +568,10 @@ export function WorkspaceCanvas({
         mode,
         snapThreshold ?? 0,
       );
-      updateNode(sessionId, () => result.node);
+      updateNode(sessionId, (current) => ({
+        ...result.node,
+        zIndex: current.zIndex,
+      }));
 
       if (
         result.guides.length > 0 ||
@@ -1154,11 +1158,13 @@ const WorkspaceCanvasSessionNode = memo(
       document.body.style.userSelect = "none";
       let finished = false;
       let moved = false;
+      let snapEnabled = true;
       let matches = emptyWorkspaceCanvasAlignmentMatches();
 
       const handleMove = (event: PointerEvent) => {
         if (event.clientX !== start.x || event.clientY !== start.y)
           moved = true;
+        snapEnabled = !event.altKey;
         matches = onMove(event);
       };
 
@@ -1176,16 +1182,17 @@ const WorkspaceCanvasSessionNode = memo(
         }
       };
       const finish = (event: Event) => {
-        if (moved && event instanceof PointerEvent) {
+        if (
+          moved &&
+          event.type === "pointerup" &&
+          event instanceof PointerEvent
+        ) {
+          snapEnabled = !event.altKey;
           matches = onMove(event);
         }
         cleanup();
         if (moved) {
-          onCommit(
-            purpose,
-            !("altKey" in event) || !event.altKey,
-            matches,
-          );
+          onCommit(purpose, snapEnabled, matches);
         }
       };
 

@@ -643,6 +643,8 @@ function findWorkspaceCanvasMoveAlignment(
       const peerPosition = workspaceCanvasAnchorPosition(peer, axis, anchor);
       const delta = peerPosition - currentPosition;
       if (!Number.isFinite(delta) || Math.abs(delta) > threshold) continue;
+      const start = axis === "x" ? node.x : node.y;
+      if (!Number.isInteger(start + delta)) continue;
       if (!best || Math.abs(delta) < Math.abs(best.delta)) {
         best = { delta, position: peerPosition, peer };
       }
@@ -662,7 +664,7 @@ function findWorkspaceCanvasDimensionMatch(
 
   for (const peer of peers) {
     const peerValue = peer[dimension];
-    if (!Number.isFinite(peerValue)) continue;
+    if (!Number.isFinite(peerValue) || !Number.isInteger(peerValue)) continue;
     const delta = peerValue - value;
     if (Math.abs(delta) > threshold) continue;
     if (!best || Math.abs(delta) < Math.abs(best.delta)) {
