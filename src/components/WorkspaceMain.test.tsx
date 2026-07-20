@@ -264,12 +264,12 @@ describe("WorkspaceMain", () => {
     firePointer(window, "pointerup", { clientX: 180, clientY: 160 });
 
     expect(alpha!.dataset.canvasNodeWidth).toBe("700");
-    expect(alpha!.dataset.canvasNodeHeight).toBe("480");
+    expect(alpha!.dataset.canvasNodeHeight).toBe("460");
     expect(alpha!.dataset.canvasNodeX).toBe("100");
     expect(alpha!.dataset.canvasNodeY).toBe("80");
     expect(
       useAppStore.getState().workspaces[REPO].canvas?.nodes.alpha,
-    ).toMatchObject({ width: 700, height: 480 });
+    ).toMatchObject({ width: 700, height: 460 });
   });
 
   it("renders chat sessions as interactive canvas nodes", () => {

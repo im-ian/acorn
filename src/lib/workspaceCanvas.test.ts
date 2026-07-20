@@ -84,10 +84,10 @@ describe("workspaceCanvas", () => {
       x: 40,
       y: 40,
       width: 620,
-      height: 420,
+      height: 400,
     });
     expect(WORKSPACE_CANVAS_DEFAULT_NODE_WIDTH).toBe(620);
-    expect(WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT).toBe(420);
+    expect(WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT).toBe(400);
     for (const node of Object.values(result.nodes)) {
       expect(node.x % WORKSPACE_CANVAS_GRID_SIZE).toBe(0);
       expect(node.y % WORKSPACE_CANVAS_GRID_SIZE).toBe(0);
@@ -118,7 +118,7 @@ describe("workspaceCanvas", () => {
       x: 720,
       y: 40,
       width: 620,
-      height: 420,
+      height: 400,
       zIndex: 2,
     });
   });

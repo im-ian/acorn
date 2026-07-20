@@ -630,7 +630,7 @@ test.describe("workspace canvas mode", () => {
     );
 
     await expect(alpha).toHaveAttribute("data-canvas-node-width", "620");
-    await expect(alpha).toHaveAttribute("data-canvas-node-height", "420");
+    await expect(alpha).toHaveAttribute("data-canvas-node-height", "400");
     await expect(alpha).toHaveCSS("z-index", "3");
     await expect(canvas.getByTestId("workspace-canvas-size-hint"))
       .toHaveAttribute("data-canvas-match-width", "true");
@@ -654,7 +654,7 @@ test.describe("workspace canvas mode", () => {
       wholePixelResizeBox.y + wholePixelResizeBox.height / 2 + 20,
     );
     await expect(alpha).toHaveAttribute("data-canvas-node-width", "640");
-    await expect(alpha).toHaveAttribute("data-canvas-node-height", "440");
+    await expect(alpha).toHaveAttribute("data-canvas-node-height", "420");
     await expect(canvas.getByTestId("workspace-canvas-size-hint")).toHaveCount(0);
     await page.mouse.up();
 
