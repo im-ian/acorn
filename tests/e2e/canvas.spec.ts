@@ -551,21 +551,19 @@ test.describe("workspace canvas mode", () => {
     if (!wholePixelResizeBox) {
       throw new Error("Canvas resize handle is not visible");
     }
-    await page.keyboard.down("Alt");
     await page.mouse.move(
       wholePixelResizeBox.x + wholePixelResizeBox.width / 2,
       wholePixelResizeBox.y + wholePixelResizeBox.height / 2,
     );
     await page.mouse.down();
     await page.mouse.move(
-      wholePixelResizeBox.x + wholePixelResizeBox.width / 2 + 6,
-      wholePixelResizeBox.y + wholePixelResizeBox.height / 2 + 6,
+      wholePixelResizeBox.x + wholePixelResizeBox.width / 2 + 20,
+      wholePixelResizeBox.y + wholePixelResizeBox.height / 2 + 20,
     );
-    await expect(alpha).toHaveAttribute("data-canvas-node-width", "626");
-    await expect(alpha).toHaveAttribute("data-canvas-node-height", "406");
+    await expect(alpha).toHaveAttribute("data-canvas-node-width", "640");
+    await expect(alpha).toHaveAttribute("data-canvas-node-height", "420");
     await expect(canvas.getByTestId("workspace-canvas-size-hint")).toHaveCount(0);
     await page.mouse.up();
-    await page.keyboard.up("Alt");
 
     const dragHandle = alpha.getByTestId("workspace-canvas-node-drag-handle");
     const dragBox = await dragHandle.boundingBox();

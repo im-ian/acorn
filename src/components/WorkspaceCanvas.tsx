@@ -45,6 +45,7 @@ import { useTranslation } from "../lib/useTranslation";
 import {
   WORKSPACE_CANVAS_MAX_ZOOM,
   WORKSPACE_CANVAS_MIN_ZOOM,
+  alignWorkspaceCanvasNode,
   clampWorkspaceCanvasNode,
   fitWorkspaceCanvasViewport,
   reconcileWorkspaceCanvasState,
@@ -53,6 +54,9 @@ import {
   snapWorkspaceCanvasValue,
   workspaceCanvasStatesEqual,
   zoomWorkspaceCanvasAtPoint,
+  type WorkspaceCanvasAlignmentGuide,
+  type WorkspaceCanvasAlignmentMatches,
+  type WorkspaceCanvasAlignmentMode,
   type WorkspaceCanvasNode,
   type WorkspaceCanvasSize,
   type WorkspaceCanvasState,
@@ -89,6 +93,18 @@ const CANVAS_SESSION_CREATE_ACTIONS = PROJECT_SESSION_CREATE_ACTIONS;
 const VIEWPORT_SAVE_DEBOUNCE_MS = 220;
 const WHEEL_ZOOM_SENSITIVITY = 0.0015;
 const TOOLBAR_ZOOM_STEP = 0.15;
+const ALIGNMENT_SNAP_DISTANCE_PX = 8;
+
+interface WorkspaceCanvasInteractionHints {
+  sessionId: string;
+  mode: WorkspaceCanvasAlignmentMode;
+  guides: readonly WorkspaceCanvasAlignmentGuide[];
+  matches: WorkspaceCanvasAlignmentMatches;
+}
+
+function emptyWorkspaceCanvasAlignmentMatches(): WorkspaceCanvasAlignmentMatches {
+  return { x: false, y: false, width: false, height: false };
+}
 
 function canvasText(
   t: Translator,
@@ -118,6 +134,26 @@ function canvasElementScale(element: HTMLElement): number {
   if (element.offsetWidth <= 0 || rect.width <= 0) return 1;
   const scale = rect.width / element.offsetWidth;
   return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
+function canvasAlignmentGuideStyle(
+  guide: WorkspaceCanvasAlignmentGuide,
+  viewport: WorkspaceCanvasViewport,
+): CSSProperties {
+  if (guide.axis === "x") {
+    return {
+      left: viewport.offset.x + guide.position * viewport.zoom,
+      top: viewport.offset.y + guide.start * viewport.zoom,
+      width: 1,
+      height: Math.max((guide.end - guide.start) * viewport.zoom, 1),
+    };
+  }
+  return {
+    left: viewport.offset.x + guide.start * viewport.zoom,
+    top: viewport.offset.y + guide.position * viewport.zoom,
+    width: Math.max((guide.end - guide.start) * viewport.zoom, 1),
+    height: 1,
+  };
 }
 
 function canvasSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
@@ -227,6 +263,8 @@ export function WorkspaceCanvas({
     x: number;
     y: number;
   } | null>(null);
+  const [interactionHints, setInteractionHints] =
+    useState<WorkspaceCanvasInteractionHints | null>(null);
   const [containerSize, setContainerSize] = useState<WorkspaceCanvasSize>({
     width: 0,
     height: 0,
@@ -506,6 +544,50 @@ export function WorkspaceCanvas({
     [updateCanvas],
   );
 
+  const clearInteractionHints = useCallback(() => {
+    setInteractionHints(null);
+  }, []);
+
+  const updateNodeDuringGesture = useCallback(
+    (
+      sessionId: string,
+      mode: WorkspaceCanvasAlignmentMode,
+      candidate: WorkspaceCanvasNode,
+      snapThreshold: number | null,
+    ): WorkspaceCanvasAlignmentMatches => {
+      const peers =
+        snapThreshold === null
+          ? []
+          : Object.entries(canvasRef.current.nodes).flatMap(([id, node]) =>
+              id === sessionId ? [] : [node],
+            );
+      const result = alignWorkspaceCanvasNode(
+        candidate,
+        peers,
+        mode,
+        snapThreshold ?? 0,
+      );
+      updateNode(sessionId, () => result.node);
+
+      if (
+        result.guides.length > 0 ||
+        result.matches.width ||
+        result.matches.height
+      ) {
+        setInteractionHints({
+          sessionId,
+          mode,
+          guides: result.guides,
+          matches: result.matches,
+        });
+      } else {
+        setInteractionHints(null);
+      }
+      return result.matches;
+    },
+    [updateNode],
+  );
+
   const activateNode = useCallback(
     (sessionId: string) => {
       useAppStore.getState().selectTab(sessionId);
@@ -521,7 +603,12 @@ export function WorkspaceCanvas({
   );
 
   const commitNode = useCallback(
-    (sessionId: string, purpose: "move" | "resize", snap: boolean) => {
+    (
+      sessionId: string,
+      purpose: WorkspaceCanvasAlignmentMode,
+      snap: boolean,
+      matches: WorkspaceCanvasAlignmentMatches,
+    ) => {
       const next = updateNode(
         sessionId,
         (node) =>
@@ -529,20 +616,25 @@ export function WorkspaceCanvas({
             ? purpose === "move"
               ? {
                   ...node,
-                  x: snapWorkspaceCanvasValue(node.x),
-                  y: snapWorkspaceCanvasValue(node.y),
+                  x: matches.x ? node.x : snapWorkspaceCanvasValue(node.x),
+                  y: matches.y ? node.y : snapWorkspaceCanvasValue(node.y),
                 }
               : {
                   ...node,
-                  width: snapWorkspaceCanvasValue(node.width),
-                  height: snapWorkspaceCanvasValue(node.height),
+                  width: matches.width
+                    ? node.width
+                    : snapWorkspaceCanvasValue(node.width),
+                  height: matches.height
+                    ? node.height
+                    : snapWorkspaceCanvasValue(node.height),
                 }
             : node,
         "later",
       );
       persistCanvas(next);
+      clearInteractionHints();
     },
-    [persistCanvas, updateNode],
+    [clearInteractionHints, persistCanvas, updateNode],
   );
 
   const openInPanes = useCallback((sessionId: string) => {
@@ -707,6 +799,22 @@ export function WorkspaceCanvas({
     backgroundSize: `${gridStep}px ${gridStep}px`,
   };
   const zoomPercent = Math.round(canvas.viewport.zoom * 100);
+  const sizeHintNode =
+    interactionHints?.mode === "resize"
+      ? canvas.nodes[interactionHints.sessionId]
+      : undefined;
+  const sizeHintStyle: CSSProperties | undefined = sizeHintNode
+    ? {
+        left:
+          canvas.viewport.offset.x +
+          (sizeHintNode.x + sizeHintNode.width) * canvas.viewport.zoom +
+          8,
+        top:
+          canvas.viewport.offset.y +
+          (sizeHintNode.y + sizeHintNode.height) * canvas.viewport.zoom +
+          8,
+      }
+    : undefined;
 
   return (
     <section
@@ -740,8 +848,17 @@ export function WorkspaceCanvas({
               active={activeSessionId === session.id}
               onActivate={() => activateNode(session.id)}
               onUpdate={(updater) => updateNode(session.id, updater)}
-              onCommit={(purpose, snap) =>
-                commitNode(session.id, purpose, snap)
+              onGestureStart={clearInteractionHints}
+              onGestureUpdate={(mode, candidate, snapThreshold) =>
+                updateNodeDuringGesture(
+                  session.id,
+                  mode,
+                  candidate,
+                  snapThreshold,
+                )
+              }
+              onCommit={(purpose, snap, matches) =>
+                commitNode(session.id, purpose, snap, matches)
               }
               onExpand={() => openExpanded(session.id)}
               onClose={() => requestRemoveSession(session.id)}
@@ -750,6 +867,33 @@ export function WorkspaceCanvas({
           );
         })}
       </div>
+
+      {interactionHints?.guides.map((guide) => (
+        <div
+          key={`${guide.axis}:${guide.position}:${guide.start}:${guide.end}`}
+          aria-hidden="true"
+          className="pointer-events-none absolute z-20 bg-accent shadow-[0_0_6px_var(--color-accent)]"
+          data-canvas-alignment-axis={guide.axis}
+          data-testid="workspace-canvas-alignment-guide"
+          style={canvasAlignmentGuideStyle(guide, canvas.viewport)}
+        />
+      ))}
+      {sizeHintNode && interactionHints ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute z-20 -translate-y-1/2 rounded-md border border-accent/55 bg-bg/95 px-2 py-1 font-mono text-[10px] tabular-nums text-accent shadow-lg backdrop-blur"
+          data-canvas-match-height={String(interactionHints.matches.height)}
+          data-canvas-match-width={String(interactionHints.matches.width)}
+          data-testid="workspace-canvas-size-hint"
+          style={sizeHintStyle}
+        >
+          {interactionHints.matches.width && interactionHints.matches.height
+            ? `${sizeHintNode.width} × ${sizeHintNode.height}px`
+            : interactionHints.matches.width
+              ? `W ${sizeHintNode.width}px`
+              : `H ${sizeHintNode.height}px`}
+        </div>
+      ) : null}
 
       {canvasSessions.length === 0 ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -942,7 +1086,17 @@ interface WorkspaceCanvasSessionNodeProps {
   onUpdate: (
     updater: (node: WorkspaceCanvasNode) => WorkspaceCanvasNode,
   ) => void;
-  onCommit: (purpose: "move" | "resize", snap: boolean) => void;
+  onGestureStart: () => void;
+  onGestureUpdate: (
+    mode: WorkspaceCanvasAlignmentMode,
+    candidate: WorkspaceCanvasNode,
+    snapThreshold: number | null,
+  ) => WorkspaceCanvasAlignmentMatches;
+  onCommit: (
+    purpose: WorkspaceCanvasAlignmentMode,
+    snap: boolean,
+    matches: WorkspaceCanvasAlignmentMatches,
+  ) => void;
   onExpand: () => void;
   onClose: () => void;
   t: Translator;
@@ -956,6 +1110,8 @@ const WorkspaceCanvasSessionNode = memo(
     active,
     onActivate,
     onUpdate,
+    onGestureStart,
+    onGestureUpdate,
     onCommit,
     onExpand,
     onClose,
@@ -986,22 +1142,24 @@ const WorkspaceCanvasSessionNode = memo(
 
     const startPointerGesture = (
       cursor: string,
-      purpose: "move" | "resize",
+      purpose: WorkspaceCanvasAlignmentMode,
       start: { x: number; y: number },
-      onMove: (event: PointerEvent) => void,
+      onMove: (event: PointerEvent) => WorkspaceCanvasAlignmentMatches,
     ) => {
       cancelGestureRef.current?.();
+      onGestureStart();
       const previousCursor = document.body.style.cursor;
       const previousUserSelect = document.body.style.userSelect;
       document.body.style.cursor = cursor;
       document.body.style.userSelect = "none";
       let finished = false;
       let moved = false;
+      let matches = emptyWorkspaceCanvasAlignmentMatches();
 
       const handleMove = (event: PointerEvent) => {
         if (event.clientX !== start.x || event.clientY !== start.y)
           moved = true;
-        onMove(event);
+        matches = onMove(event);
       };
 
       const cleanup = () => {
@@ -1018,9 +1176,16 @@ const WorkspaceCanvasSessionNode = memo(
         }
       };
       const finish = (event: Event) => {
+        if (moved && event instanceof PointerEvent) {
+          matches = onMove(event);
+        }
         cleanup();
         if (moved) {
-          onCommit(purpose, !("altKey" in event) || !event.altKey);
+          onCommit(
+            purpose,
+            !("altKey" in event) || !event.altKey,
+            matches,
+          );
         }
       };
 
@@ -1043,11 +1208,17 @@ const WorkspaceCanvasSessionNode = memo(
       );
       const appScale = root ? canvasElementScale(root) : 1;
       const onMove = (moveEvent: PointerEvent) => {
-        onUpdate((current) => ({
-          ...current,
-          x: startNode.x + (moveEvent.clientX - start.x) / (appScale * zoom),
-          y: startNode.y + (moveEvent.clientY - start.y) / (appScale * zoom),
-        }));
+        return onGestureUpdate(
+          "move",
+          {
+            ...startNode,
+            x: startNode.x + (moveEvent.clientX - start.x) / (appScale * zoom),
+            y: startNode.y + (moveEvent.clientY - start.y) / (appScale * zoom),
+          },
+          moveEvent.altKey
+            ? null
+            : ALIGNMENT_SNAP_DISTANCE_PX / (appScale * zoom),
+        );
       };
       startPointerGesture("grabbing", "move", start, onMove);
     };
@@ -1064,14 +1235,21 @@ const WorkspaceCanvasSessionNode = memo(
       );
       const appScale = root ? canvasElementScale(root) : 1;
       const onMove = (moveEvent: PointerEvent) => {
-        onUpdate((current) => ({
-          ...current,
-          width:
-            startNode.width + (moveEvent.clientX - start.x) / (appScale * zoom),
-          height:
-            startNode.height +
-            (moveEvent.clientY - start.y) / (appScale * zoom),
-        }));
+        return onGestureUpdate(
+          "resize",
+          {
+            ...startNode,
+            width:
+              startNode.width +
+              (moveEvent.clientX - start.x) / (appScale * zoom),
+            height:
+              startNode.height +
+              (moveEvent.clientY - start.y) / (appScale * zoom),
+          },
+          moveEvent.altKey
+            ? null
+            : ALIGNMENT_SNAP_DISTANCE_PX / (appScale * zoom),
+        );
       };
       startPointerGesture("nwse-resize", "resize", start, onMove);
     };
@@ -1107,7 +1285,7 @@ const WorkspaceCanvasSessionNode = memo(
               height: current.height + direction.y * step,
             },
       );
-      onCommit(purpose, false);
+      onCommit(purpose, false, emptyWorkspaceCanvasAlignmentMatches());
     };
 
     return (

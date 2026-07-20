@@ -33,6 +33,28 @@ export interface WorkspaceCanvasRect {
   height: number;
 }
 
+export interface WorkspaceCanvasAlignmentGuide {
+  axis: "x" | "y";
+  position: number;
+  start: number;
+  end: number;
+}
+
+export interface WorkspaceCanvasAlignmentMatches {
+  x: boolean;
+  y: boolean;
+  width: boolean;
+  height: boolean;
+}
+
+export interface WorkspaceCanvasAlignmentResult {
+  node: WorkspaceCanvasNode;
+  matches: WorkspaceCanvasAlignmentMatches;
+  guides: WorkspaceCanvasAlignmentGuide[];
+}
+
+export type WorkspaceCanvasAlignmentMode = "move" | "resize";
+
 export interface WorkspaceCanvasMinimapLayout {
   bounds: WorkspaceCanvasRect;
   origin: WorkspaceCanvasPoint;
@@ -567,6 +589,194 @@ export function centerWorkspaceCanvasViewportFromMinimapPoint(
       y: canvasSize.height / 2 - worldPoint.y * zoom,
     },
   };
+}
+
+type WorkspaceCanvasMoveAxis = "x" | "y";
+type WorkspaceCanvasMoveAnchor = "start" | "center" | "end";
+
+interface WorkspaceCanvasMoveAlignment {
+  delta: number;
+  position: number;
+  peer: WorkspaceCanvasNode;
+}
+
+function workspaceCanvasNodeHasFiniteGeometry(
+  node: WorkspaceCanvasNode,
+): boolean {
+  return (
+    Number.isFinite(node.x) &&
+    Number.isFinite(node.y) &&
+    Number.isFinite(node.width) &&
+    Number.isFinite(node.height)
+  );
+}
+
+function workspaceCanvasAnchorPosition(
+  node: WorkspaceCanvasNode,
+  axis: WorkspaceCanvasMoveAxis,
+  anchor: WorkspaceCanvasMoveAnchor,
+): number {
+  const start = axis === "x" ? node.x : node.y;
+  const size = axis === "x" ? node.width : node.height;
+  if (anchor === "start") return start;
+  if (anchor === "center") return start + size / 2;
+  return start + size;
+}
+
+function findWorkspaceCanvasMoveAlignment(
+  node: WorkspaceCanvasNode,
+  peers: readonly WorkspaceCanvasNode[],
+  axis: WorkspaceCanvasMoveAxis,
+  threshold: number,
+): WorkspaceCanvasMoveAlignment | undefined {
+  const anchors: readonly WorkspaceCanvasMoveAnchor[] = [
+    "start",
+    "center",
+    "end",
+  ];
+  let best: WorkspaceCanvasMoveAlignment | undefined;
+
+  for (const peer of peers) {
+    if (!workspaceCanvasNodeHasFiniteGeometry(peer)) continue;
+    for (const anchor of anchors) {
+      const currentPosition = workspaceCanvasAnchorPosition(node, axis, anchor);
+      const peerPosition = workspaceCanvasAnchorPosition(peer, axis, anchor);
+      const delta = peerPosition - currentPosition;
+      if (!Number.isFinite(delta) || Math.abs(delta) > threshold) continue;
+      if (!best || Math.abs(delta) < Math.abs(best.delta)) {
+        best = { delta, position: peerPosition, peer };
+      }
+    }
+  }
+
+  return best;
+}
+
+function findWorkspaceCanvasDimensionMatch(
+  value: number,
+  peers: readonly WorkspaceCanvasNode[],
+  dimension: "width" | "height",
+  threshold: number,
+): number | undefined {
+  let best: { value: number; delta: number } | undefined;
+
+  for (const peer of peers) {
+    const peerValue = peer[dimension];
+    if (!Number.isFinite(peerValue)) continue;
+    const delta = peerValue - value;
+    if (Math.abs(delta) > threshold) continue;
+    if (!best || Math.abs(delta) < Math.abs(best.delta)) {
+      best = { value: peerValue, delta };
+    }
+  }
+
+  return best?.value;
+}
+
+export function alignWorkspaceCanvasNode(
+  node: WorkspaceCanvasNode,
+  otherNodes: readonly WorkspaceCanvasNode[],
+  mode: WorkspaceCanvasAlignmentMode,
+  threshold: number,
+): WorkspaceCanvasAlignmentResult {
+  const alignedNode = { ...node };
+  if (mode === "resize") {
+    alignedNode.width = normalizeZero(Math.round(node.width));
+    alignedNode.height = normalizeZero(Math.round(node.height));
+  } else {
+    alignedNode.x = normalizeZero(Math.round(node.x));
+    alignedNode.y = normalizeZero(Math.round(node.y));
+  }
+  const matches: WorkspaceCanvasAlignmentMatches = {
+    x: false,
+    y: false,
+    width: false,
+    height: false,
+  };
+  const guides: WorkspaceCanvasAlignmentGuide[] = [];
+
+  if (
+    !Number.isFinite(threshold) ||
+    threshold < 0 ||
+    !workspaceCanvasNodeHasFiniteGeometry(node)
+  ) {
+    return { node: alignedNode, matches, guides };
+  }
+
+  if (mode === "resize") {
+    const width = findWorkspaceCanvasDimensionMatch(
+      alignedNode.width,
+      otherNodes,
+      "width",
+      threshold,
+    );
+    const height = findWorkspaceCanvasDimensionMatch(
+      alignedNode.height,
+      otherNodes,
+      "height",
+      threshold,
+    );
+    if (width !== undefined) {
+      alignedNode.width = normalizeZero(Math.round(width));
+      matches.width = true;
+    }
+    if (height !== undefined) {
+      alignedNode.height = normalizeZero(Math.round(height));
+      matches.height = true;
+    }
+    return { node: alignedNode, matches, guides };
+  }
+
+  const xAlignment = findWorkspaceCanvasMoveAlignment(
+    alignedNode,
+    otherNodes,
+    "x",
+    threshold,
+  );
+  const yAlignment = findWorkspaceCanvasMoveAlignment(
+    alignedNode,
+    otherNodes,
+    "y",
+    threshold,
+  );
+
+  if (xAlignment) {
+    alignedNode.x = normalizeZero(
+      Math.round(alignedNode.x + xAlignment.delta),
+    );
+    matches.x = true;
+  }
+  if (yAlignment) {
+    alignedNode.y = normalizeZero(
+      Math.round(alignedNode.y + yAlignment.delta),
+    );
+    matches.y = true;
+  }
+
+  if (xAlignment) {
+    guides.push({
+      axis: "x",
+      position: normalizeZero(xAlignment.position),
+      start: Math.min(alignedNode.y, xAlignment.peer.y),
+      end: Math.max(
+        alignedNode.y + alignedNode.height,
+        xAlignment.peer.y + xAlignment.peer.height,
+      ),
+    });
+  }
+  if (yAlignment) {
+    guides.push({
+      axis: "y",
+      position: normalizeZero(yAlignment.position),
+      start: Math.min(alignedNode.x, yAlignment.peer.x),
+      end: Math.max(
+        alignedNode.x + alignedNode.width,
+        yAlignment.peer.x + yAlignment.peer.width,
+      ),
+    });
+  }
+
+  return { node: alignedNode, matches, guides };
 }
 
 export function snapWorkspaceCanvasValue(value: number): number {
