@@ -10,7 +10,8 @@ import {
 import { highlightDiff, langFromPath } from "../lib/highlight";
 import { useSettings } from "../lib/settings";
 import { resolveThemeMode, useThemes } from "../lib/themes";
-import type { DiffFile, DiffPayload } from "../lib/types";
+import type { DiffFile, DiffImageContext, DiffPayload } from "../lib/types";
+import { useDiffImages, type ResolvedDiffImage } from "../lib/useDiffImages";
 import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
 import {
@@ -23,18 +24,29 @@ import {
 interface DiffViewProps {
   payload: DiffPayload;
   onExpand?: () => void;
+  imageContext?: DiffImageContext;
 }
 
-export function DiffView({ payload, onExpand }: DiffViewProps) {
+export function DiffView({ payload, onExpand, imageContext }: DiffViewProps) {
   const t = useTranslation();
+  const imageLoader = useDiffImages(imageContext);
   const collapseByDefault = payload.files.length > 1;
   const [collapsed, setCollapsed] = useState<Set<number>>(
-    () => new Set(collapseByDefault ? payload.files.map((_, i) => i) : []),
+    () =>
+      new Set(
+        collapseByDefault
+          ? payload.files.map((_, i) => i)
+          : payload.files.flatMap((file, i) => (file.is_image ? [i] : [])),
+      ),
   );
 
   useEffect(() => {
     setCollapsed(
-      new Set(payload.files.length > 1 ? payload.files.map((_, i) => i) : []),
+      new Set(
+        payload.files.length > 1
+          ? payload.files.map((_, i) => i)
+          : payload.files.flatMap((file, i) => (file.is_image ? [i] : [])),
+      ),
     );
   }, [payload]);
 
@@ -104,8 +116,10 @@ export function DiffView({ payload, onExpand }: DiffViewProps) {
         <DiffFileAccordion
           key={`${file.new_path ?? file.old_path ?? "unknown"}-${idx}`}
           file={file}
+          image={imageLoader.resolve(file)}
           collapsed={collapsed.has(idx)}
           onToggle={() => toggle(idx)}
+          onLoadImage={imageLoader.load}
         />
       ))}
     </div>
@@ -114,16 +128,28 @@ export function DiffView({ payload, onExpand }: DiffViewProps) {
 
 interface DiffFileAccordionProps {
   file: DiffFile;
+  image: ResolvedDiffImage;
   collapsed: boolean;
   onToggle: () => void;
+  onLoadImage: (file: DiffFile) => void;
 }
 
-function DiffFileAccordion({ file, collapsed, onToggle }: DiffFileAccordionProps) {
+function DiffFileAccordion({
+  file,
+  image,
+  collapsed,
+  onToggle,
+  onLoadImage,
+}: DiffFileAccordionProps) {
   const t = useTranslation();
   const path = file.new_path ?? file.old_path ?? "(unknown)";
   const lines = useMemo(() => parseDiff(file.patch), [file.patch]);
   const stats = useMemo(() => countStats(lines), [lines]);
   const highlighted = useHighlightedDiff(lines, path);
+
+  useEffect(() => {
+    if (file.is_image && !collapsed) onLoadImage(file);
+  }, [file, collapsed, onLoadImage]);
 
   return (
     <div className="overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg">
@@ -158,7 +184,15 @@ function DiffFileAccordion({ file, collapsed, onToggle }: DiffFileAccordionProps
       </button>
       {!collapsed ? (
         file.is_image ? (
-          <ImageDiff file={file} />
+          image.loading ? (
+            <ImageDiffStatus>{t("diffView.loadingImage")}</ImageDiffStatus>
+          ) : image.error ? (
+            <ImageDiffStatus tone="danger">
+              {t("diffView.imageLoadFailed")}: {image.error}
+            </ImageDiffStatus>
+          ) : (
+            <ImageDiff file={image.file} />
+          )
         ) : (
           <DiffLineList
             lines={lines}
@@ -167,6 +201,25 @@ function DiffFileAccordion({ file, collapsed, onToggle }: DiffFileAccordionProps
           />
         )
       ) : null}
+    </div>
+  );
+}
+
+function ImageDiffStatus({
+  children,
+  tone = "muted",
+}: {
+  children: React.ReactNode;
+  tone?: "muted" | "danger";
+}) {
+  return (
+    <div
+      className={cn(
+        "flex min-h-24 items-center justify-center p-3 text-xs",
+        tone === "danger" ? "text-danger" : "text-fg-muted",
+      )}
+    >
+      {children}
     </div>
   );
 }

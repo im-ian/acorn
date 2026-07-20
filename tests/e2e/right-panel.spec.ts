@@ -557,6 +557,163 @@ test.describe("right panel: tab switching", () => {
     ).toBeVisible();
   });
 
+  test("PR files render before a selected image preview finishes loading", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 88,
+          title: "Lazy image diff",
+          state: "OPEN",
+          author: "im-ian",
+          head_branch: "feature/lazy-image",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/88",
+          updated_at: "2026-05-19T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.respond("get_pull_request_detail", {
+      kind: "ok",
+      account: "test-account",
+      detail: {
+        number: 88,
+        title: "Lazy image diff",
+        body: "Keep the file list responsive.",
+        state: "OPEN",
+        is_draft: false,
+        author: "im-ian",
+        head_branch: "feature/lazy-image",
+        base_branch: "main",
+        url: "https://github.com/im-ian/acorn/pull/88",
+        created_at: "2026-05-18T00:00:00Z",
+        updated_at: "2026-05-19T00:00:00Z",
+        merged_at: null,
+        additions: 1,
+        deletions: 0,
+        changed_files: 2,
+        mergeable: "MERGEABLE",
+        labels: [],
+        comments: [],
+        reviews: [],
+        checks: [],
+        commits: [],
+      },
+    });
+    await tauri.respond("get_pull_request_diff", {
+      kind: "ok",
+      account: "test-account",
+      diff: {
+        files: [
+          {
+            old_path: "src/a.ts",
+            new_path: "src/a.ts",
+            patch: "@@ -1 +1 @@\n-old\n+new\n",
+            is_image: false,
+          },
+          {
+            old_path: null,
+            new_path: "zz-assets/image.png",
+            patch: "",
+            is_image: true,
+          },
+        ],
+      },
+    });
+    await tauri.handle("load_diff_images", (args) => {
+      const w = window as unknown as {
+        __diffImageCalls?: unknown[];
+        __releaseDiffImage?: boolean;
+      };
+      w.__diffImageCalls = w.__diffImageCalls ?? [];
+      w.__diffImageCalls.push(args);
+      return new Promise((resolve) => {
+        const tick = () => {
+          if (w.__releaseDiffImage) {
+            resolve({
+              new_image:
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            });
+            return;
+          }
+          setTimeout(tick, 20);
+        };
+        tick();
+      });
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    const prRow = page
+      .getByText("Lazy image diff")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await dblclickRowRightSide(page, prRow);
+
+    const dialog = page.locator('[role="dialog"]').filter({
+      has: page.getByRole("heading", { name: "Lazy image diff" }),
+    });
+    await dialog.getByRole("button", { name: /^Files/ }).click();
+    await expect(dialog.getByRole("button", { name: /a\.ts/ })).toBeVisible();
+    await expect(
+      dialog.getByRole("button", { name: /image\.png/ }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __diffImageCalls?: unknown[] })
+            .__diffImageCalls?.length ?? 0,
+      ),
+    ).toBe(0);
+
+    await dialog.getByRole("button", { name: /image\.png/ }).click();
+    await expect(dialog.getByText("Loading image preview...")).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __diffImageCalls?: unknown[] })
+              .__diffImageCalls?.length ?? 0,
+        ),
+      )
+      .toBe(1);
+    const call = await page.evaluate(
+      () =>
+        (window as unknown as { __diffImageCalls?: unknown[] })
+          .__diffImageCalls?.[0],
+    );
+    expect(call).toEqual({
+      repoPath: "/tmp/demo",
+      source: { kind: "pull_request", number: 88 },
+      oldPath: null,
+      newPath: "zz-assets/image.png",
+    });
+
+    await page.evaluate(() => {
+      (window as unknown as { __releaseDiffImage?: boolean })
+        .__releaseDiffImage = true;
+    });
+    await expect(dialog.getByRole("img", { name: "Added" })).toBeVisible();
+
+    await dialog.getByRole("button", { name: /a\.ts/ }).click();
+    await dialog.getByRole("button", { name: /image\.png/ }).click();
+    await expect(dialog.getByRole("img", { name: "Added" })).toBeVisible();
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __diffImageCalls?: unknown[] })
+            .__diffImageCalls?.length ?? 0,
+      ),
+    ).toBe(1);
+  });
+
   test("right-clicking a pull request opens the session for its head branch", async ({
     page,
     tauri,
