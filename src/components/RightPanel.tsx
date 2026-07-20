@@ -93,6 +93,7 @@ import type {
   AgentHistoryItem,
   AgentHistoryProvider,
   CommitInfo,
+  DiffImageContext,
   DiffPayload,
   IssueInfo,
   IssueListing,
@@ -160,6 +161,7 @@ import {
 
 interface ExpandedDiff {
   payload: DiffPayload | null;
+  imageContext?: DiffImageContext;
   title: string;
   /** Rich React subtitle — avatar + author + sha line for commit expansion. */
   subtitle?: ReactNode;
@@ -624,6 +626,7 @@ export function RightPanel() {
         headerActions={expanded?.headerActions}
         body={expanded?.body}
         cwd={codePanelRepoPath ?? undefined}
+        imageContext={expanded?.imageContext}
         loadingLabel={rt(t, "rightPanel.loading.diffLower")}
         onClose={() => setExpanded(null)}
       />
@@ -2062,6 +2065,10 @@ function CommitsTab({
     const cachedPayload = rightPanelCache.getCommitDiff(repoPath, c.sha);
     onExpand({
       payload: cachedPayload,
+      imageContext: {
+        repoPath,
+        source: { kind: "commit", sha: c.sha },
+      },
       title: c.summary,
       subtitle: buildSubtitle(c),
       headerActions: buildHeaderActions(c, null),
@@ -2265,6 +2272,10 @@ function CommitsTab({
           {selected && diff ? (
             <DiffView
               payload={diff}
+              imageContext={{
+                repoPath,
+                source: { kind: "commit", sha: selected },
+              }}
               onExpand={() => {
                 const c = commits.find((x) => x.sha === selected);
                 if (c) {
@@ -2272,6 +2283,10 @@ function CommitsTab({
                 } else {
                   onExpand({
                     payload: diff,
+                    imageContext: {
+                      repoPath,
+                      source: { kind: "commit", sha: selected },
+                    },
                     title: selected.slice(0, 12),
                     subtitle: selected.slice(0, 7),
                   });
@@ -2584,9 +2599,19 @@ function StagedTab({
           {selectedDiff ? (
             <DiffView
               payload={selectedDiff}
+              imageContext={{
+                repoPath,
+                source: { kind: "staged" },
+                cacheKey: diffRefreshKey,
+              }}
               onExpand={() =>
                 onExpand({
                   payload: selectedDiff,
+                  imageContext: {
+                    repoPath,
+                    source: { kind: "staged" },
+                    cacheKey: diffRefreshKey,
+                  },
                   title:
                     selectedFile?.path ??
                     rt(t, "rightPanel.staged.workingTreeChanges"),

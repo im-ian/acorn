@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::agent_history::{self, AgentHistoryItem};
 use crate::agent_resume;
 use crate::error::{AppError, AppResult};
-use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
+use crate::git_ops::{self, CommitInfo, DiffImages, DiffPayload, StagedFile};
 use crate::persistence;
 use crate::project_settings::{self, ProjectSettings, ProjectSettingsRecord};
 use crate::pull_requests::{
@@ -32,7 +32,7 @@ use acorn_session::{
 };
 use acorn_transcript::{assistant_message_text, collapse_preview};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri_plugin_dialog::DialogExt;
 
 const CHAT_SESSION_STATE_CHANGED_EVENT: &str = "acorn:chat-session-state-changed";
@@ -6813,6 +6813,63 @@ pub async fn staged_diff(repo_path: String) -> AppResult<DiffPayload> {
 pub async fn staged_file_diff(repo_path: String, path: String) -> AppResult<DiffPayload> {
     run_blocking("staged_file_diff", move || {
         git_ops::diff_staged_file(&PathBuf::from(repo_path), &path)
+    })
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DiffImageSource {
+    Commit { sha: String },
+    Staged,
+    PullRequest { number: u64 },
+    PullRequestCommit { sha: String },
+}
+
+#[tauri::command]
+pub async fn load_diff_images(
+    repo_path: String,
+    source: DiffImageSource,
+    old_path: Option<String>,
+    new_path: Option<String>,
+) -> AppResult<DiffImages> {
+    run_blocking("load_diff_images", move || {
+        if old_path.is_none() && new_path.is_none() {
+            return Err(AppError::InvalidPath("diff image path is missing".into()));
+        }
+        for path in [old_path.as_deref(), new_path.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            git_ops::validate_relative_git_path(path)?;
+        }
+        match source {
+            DiffImageSource::Commit { sha } => git_ops::diff_images_for_commit(
+                &PathBuf::from(repo_path),
+                &sha,
+                old_path.as_deref(),
+                new_path.as_deref(),
+            ),
+            DiffImageSource::Staged => git_ops::diff_images_staged(
+                &PathBuf::from(repo_path),
+                old_path.as_deref(),
+                new_path.as_deref(),
+            ),
+            DiffImageSource::PullRequest { number } => pull_requests::get_pull_request_diff_images(
+                &PathBuf::from(repo_path),
+                number,
+                old_path.as_deref(),
+                new_path.as_deref(),
+            ),
+            DiffImageSource::PullRequestCommit { sha } => {
+                pull_requests::get_pull_request_commit_diff_images(
+                    &PathBuf::from(repo_path),
+                    &sha,
+                    old_path.as_deref(),
+                    new_path.as_deref(),
+                )
+            }
+        }
     })
     .await
 }
