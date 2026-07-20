@@ -709,6 +709,7 @@ pub fn run() {
             commands::list_projects,
             commands::add_project,
             commands::select_project_parent_folder,
+            commands::get_last_project_parent_folder,
             commands::create_new_project,
             commands::remove_project,
             commands::get_project_settings,

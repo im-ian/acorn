@@ -3756,6 +3756,59 @@ test.describe("sidebar: project lifecycle", () => {
     });
   });
 
+  test("New project remembers the most recently selected parent folder", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("get_last_project_parent_folder", () => {
+      const w = window as unknown as { __lastProjectParent?: string };
+      return w.__lastProjectParent ?? null;
+    });
+    await tauri.handle("select_project_parent_folder", () => {
+      const w = window as unknown as { __lastProjectParent?: string };
+      w.__lastProjectParent = "/tmp/remembered-parent";
+      return w.__lastProjectParent;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "New project" }).click();
+    await expect(page.getByLabel("Project location")).toHaveValue("");
+
+    await page.getByRole("button", { name: "Choose" }).click();
+    await expect(page.getByLabel("Project location")).toHaveValue(
+      "/tmp/remembered-parent",
+    );
+
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await page.getByRole("button", { name: "New project" }).click();
+
+    await expect(page.getByLabel("Project location")).toHaveValue(
+      "/tmp/remembered-parent",
+    );
+  });
+
+  test("New project falls back to an empty location when the remembered folder is missing", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("get_last_project_parent_folder", () => {
+      const w = window as unknown as { __lastParentReads?: number };
+      w.__lastParentReads = (w.__lastParentReads ?? 0) + 1;
+      return w.__lastParentReads === 1 ? "/tmp/removed-parent" : null;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "New project" }).click();
+    await expect(page.getByLabel("Project location")).toHaveValue(
+      "/tmp/removed-parent",
+    );
+
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await page.getByRole("button", { name: "New project" }).click();
+
+    await expect(page.getByLabel("Project location")).toHaveValue("");
+  });
+
   test("New project can override long-name safe warnings", async ({
     page,
     tauri,
