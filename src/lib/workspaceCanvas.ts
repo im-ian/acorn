@@ -65,6 +65,7 @@ export interface WorkspaceCanvasMinimapLayout {
 
 export const WORKSPACE_CANVAS_MIN_ZOOM = 0.35;
 export const WORKSPACE_CANVAS_MAX_ZOOM = 2;
+export const WORKSPACE_CANVAS_REVEAL_PADDING = 48;
 export const WORKSPACE_CANVAS_MIN_NODE_WIDTH = 360;
 export const WORKSPACE_CANVAS_MIN_NODE_HEIGHT = 240;
 export const WORKSPACE_CANVAS_GRID_SIZE = 20;
@@ -77,7 +78,7 @@ const WORKSPACE_CANVAS_MAX_NODE_WIDTH = 2_400;
 const WORKSPACE_CANVAS_MAX_NODE_HEIGHT = 1_600;
 const WORKSPACE_CANVAS_COORDINATE_LIMIT = 100_000;
 const WORKSPACE_CANVAS_NODE_GAP = WORKSPACE_CANVAS_GRID_SIZE * 2;
-const WORKSPACE_CANVAS_NODE_ORIGIN = WORKSPACE_CANVAS_GRID_SIZE * 2;
+const WORKSPACE_CANVAS_NODE_ORIGIN = WORKSPACE_CANVAS_GRID_SIZE * 3;
 const WORKSPACE_CANVAS_DEFAULT_COLUMNS = 2;
 
 export function defaultWorkspaceCanvasViewport(): WorkspaceCanvasViewport {
@@ -377,7 +378,7 @@ export function revealWorkspaceCanvasNode(
   viewport: WorkspaceCanvasViewport,
   node: WorkspaceCanvasNode,
   container: WorkspaceCanvasSize,
-  padding = 48,
+  padding = WORKSPACE_CANVAS_REVEAL_PADDING,
 ): WorkspaceCanvasViewport {
   if (container.width <= 0 || container.height <= 0) return viewport;
   const zoom = clampWorkspaceCanvasZoom(viewport.zoom);

@@ -46,6 +46,7 @@ import {
   WORKSPACE_CANVAS_GRID_SIZE,
   WORKSPACE_CANVAS_MAX_ZOOM,
   WORKSPACE_CANVAS_MIN_ZOOM,
+  WORKSPACE_CANVAS_REVEAL_PADDING,
   alignWorkspaceCanvasNode,
   clampWorkspaceCanvasNode,
   fitWorkspaceCanvasViewport,
@@ -128,6 +129,20 @@ function sameViewport(
     first.offset.x === second.offset.x &&
     first.offset.y === second.offset.y
   );
+}
+
+function canvasNodeHeaderIsInSafeArea(
+  viewport: WorkspaceCanvasViewport,
+  node: WorkspaceCanvasNode,
+  container: WorkspaceCanvasSize,
+): boolean {
+  if (container.height <= 0) return false;
+  const top = node.y * viewport.zoom + viewport.offset.y;
+  const maxSafeTop = Math.max(
+    container.height - WORKSPACE_CANVAS_REVEAL_PADDING,
+    WORKSPACE_CANVAS_REVEAL_PADDING,
+  );
+  return top >= WORKSPACE_CANVAS_REVEAL_PADDING && top <= maxSafeTop;
 }
 
 function canvasElementScale(element: HTMLElement): number {
@@ -421,11 +436,34 @@ export function WorkspaceCanvas({
 
   const zoomAround = useCallback(
     (nextZoom: number, point: { x: number; y: number }) => {
-      setViewport(
-        zoomWorkspaceCanvasAtPoint(canvasRef.current.viewport, nextZoom, point),
+      const current = canvasRef.current;
+      let viewport = zoomWorkspaceCanvasAtPoint(
+        current.viewport,
+        nextZoom,
+        point,
       );
+      const activeNode = activeSessionId
+        ? current.nodes[activeSessionId]
+        : undefined;
+      const container = containerSizeRef.current;
+      if (
+        activeNode &&
+        canvasNodeHeaderIsInSafeArea(current.viewport, activeNode, container) &&
+        !canvasNodeHeaderIsInSafeArea(viewport, activeNode, container)
+      ) {
+        const revealed = revealWorkspaceCanvasNode(
+          viewport,
+          activeNode,
+          container,
+        );
+        viewport = {
+          ...viewport,
+          offset: { ...viewport.offset, y: revealed.offset.y },
+        };
+      }
+      setViewport(viewport);
     },
-    [setViewport],
+    [activeSessionId, setViewport],
   );
 
   useEffect(() => {
