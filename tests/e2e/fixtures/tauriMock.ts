@@ -111,6 +111,9 @@ export const tauriMockSource = `
     if (cmd === 'select_project_parent_folder') {
       return Promise.resolve('/tmp');
     }
+    if (cmd === 'get_last_project_parent_folder') {
+      return Promise.resolve(null);
+    }
     if (cmd === 'create_session_from_dialog') {
       return Promise.resolve(null);
     }

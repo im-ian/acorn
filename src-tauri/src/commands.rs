@@ -3336,7 +3336,73 @@ pub async fn select_project_parent_folder<R: Runtime>(
         return Ok(None);
     };
     let path = remember_folder_grant(state.inner(), &path)?;
+    if let Err(err) = persistence::save_last_project_parent_folder(&path) {
+        tracing::warn!(
+            error = %err,
+            path = %path.display(),
+            "failed to remember project parent folder"
+        );
+    }
     Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub fn get_last_project_parent_folder(state: State<'_, AppState>) -> AppResult<Option<String>> {
+    let data_dir = persistence::data_dir()?;
+    get_last_project_parent_folder_from_dir(state.inner(), &data_dir)
+}
+
+fn get_last_project_parent_folder_from_dir(
+    state: &AppState,
+    data_dir: &Path,
+) -> AppResult<Option<String>> {
+    let remembered = match persistence::load_last_project_parent_folder_from_dir(data_dir) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to load remembered project parent folder");
+            if let Err(clear_err) = persistence::clear_last_project_parent_folder_from_dir(data_dir)
+            {
+                tracing::warn!(
+                    error = %clear_err,
+                    "failed to clear invalid remembered project parent folder"
+                );
+            }
+            return Ok(None);
+        }
+    };
+    let Some(path) = remembered else {
+        return Ok(None);
+    };
+
+    if !path.is_dir() {
+        if let Err(err) = persistence::clear_last_project_parent_folder_from_dir(data_dir) {
+            tracing::warn!(
+                error = %err,
+                path = %path.display(),
+                "failed to clear missing remembered project parent folder"
+            );
+        }
+        return Ok(None);
+    }
+
+    match remember_folder_grant(state, &path) {
+        Ok(path) => Ok(Some(path.to_string_lossy().into_owned())),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                path = %path.display(),
+                "remembered project parent folder is no longer accessible"
+            );
+            if let Err(clear_err) = persistence::clear_last_project_parent_folder_from_dir(data_dir)
+            {
+                tracing::warn!(
+                    error = %clear_err,
+                    "failed to clear inaccessible remembered project parent folder"
+                );
+            }
+            Ok(None)
+        }
+    }
 }
 
 #[tauri::command]
@@ -10049,5 +10115,42 @@ mod tests {
             Some(20)
         );
         assert_eq!(infer_acornd_root_from_session_pids(&by_pid, &[999]), None);
+    }
+
+    #[test]
+    fn remembered_project_parent_folder_is_regranted_when_it_exists() {
+        let app_data = tempfile::tempdir().unwrap();
+        let parent_root = tempfile::tempdir().unwrap();
+        let parent = parent_root.path().join("projects");
+        std::fs::create_dir(&parent).unwrap();
+        crate::persistence::save_last_project_parent_folder_to_dir(app_data.path(), &parent)
+            .unwrap();
+        let state = crate::state::AppState::default();
+
+        let restored =
+            super::get_last_project_parent_folder_from_dir(&state, app_data.path()).unwrap();
+
+        let canonical = parent.canonicalize().unwrap();
+        assert_eq!(restored, Some(canonical.to_string_lossy().into_owned()));
+        assert_eq!(state.folder_grants.lock().as_slice(), &[canonical]);
+    }
+
+    #[test]
+    fn missing_remembered_project_parent_folder_is_cleared() {
+        let app_data = tempfile::tempdir().unwrap();
+        let missing = app_data.path().join("removed-projects");
+        crate::persistence::save_last_project_parent_folder_to_dir(app_data.path(), &missing)
+            .unwrap();
+        let state = crate::state::AppState::default();
+
+        let restored =
+            super::get_last_project_parent_folder_from_dir(&state, app_data.path()).unwrap();
+
+        assert_eq!(restored, None);
+        assert_eq!(
+            crate::persistence::load_last_project_parent_folder_from_dir(app_data.path()).unwrap(),
+            None
+        );
+        assert!(state.folder_grants.lock().is_empty());
     }
 }

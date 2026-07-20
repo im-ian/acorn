@@ -281,6 +281,9 @@ export const api = {
   selectProjectParentFolder(title?: string): Promise<string | null> {
     return invoke<string | null>("select_project_parent_folder", { title });
   },
+  getLastProjectParentFolder(): Promise<string | null> {
+    return invoke<string | null>("get_last_project_parent_folder");
+  },
   createNewProject(
     parentPath: string,
     name: string,
