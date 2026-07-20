@@ -292,7 +292,9 @@ export async function startNotificationClickHandler(): Promise<() => void> {
     void win.show();
     void win.unminimize();
     void win.setFocus();
-    useAppStore.getState().openSessionSurface(sessionId);
+    useAppStore
+      .getState()
+      .openSessionSurface(sessionId, { centerInCanvas: true });
     markSessionNotificationsRead(sessionId);
   });
   return () => {

@@ -415,6 +415,22 @@ export function revealWorkspaceCanvasNode(
   return { zoom, offset: { x, y } };
 }
 
+export function centerWorkspaceCanvasNode(
+  viewport: WorkspaceCanvasViewport,
+  node: WorkspaceCanvasNode,
+  container: WorkspaceCanvasSize,
+): WorkspaceCanvasViewport {
+  if (container.width <= 0 || container.height <= 0) return viewport;
+  const zoom = clampWorkspaceCanvasZoom(viewport.zoom);
+  return {
+    zoom,
+    offset: {
+      x: container.width / 2 - (node.x + node.width / 2) * zoom,
+      y: container.height / 2 - (node.y + node.height / 2) * zoom,
+    },
+  };
+}
+
 export function preserveWorkspaceCanvasNodeRevealOnZoom(
   currentViewport: WorkspaceCanvasViewport,
   nextViewport: WorkspaceCanvasViewport,
