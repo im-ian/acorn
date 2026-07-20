@@ -2865,12 +2865,12 @@ pub fn get_memory_usage(state: State<'_, AppState>) -> MemoryUsage {
     let mut guard = MEMORY_PROBE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let refresh = ProcessRefreshKind::new()
+    let refresh = ProcessRefreshKind::nothing()
         .with_memory()
         .with_exe(UpdateKind::Always)
         .with_cmd(UpdateKind::Always);
     let sys = guard.get_or_insert_with(|| {
-        System::new_with_specifics(RefreshKind::new().with_processes(refresh))
+        System::new_with_specifics(RefreshKind::nothing().with_processes(refresh))
     });
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
 
@@ -5153,12 +5153,13 @@ fn pty_cwd_inner(state: AppState, session_id: String) -> AppResult<Option<String
         return Ok(None);
     };
 
-    let mut sys =
-        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
+    let mut sys = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+    );
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
-        ProcessRefreshKind::new()
+        ProcessRefreshKind::nothing()
             .with_cwd(UpdateKind::Always)
             .with_exe(UpdateKind::Always)
             .with_cmd(UpdateKind::Always),
@@ -5197,12 +5198,12 @@ pub async fn pty_repo_root(
     };
     tauri::async_runtime::spawn_blocking(move || {
         let mut sys = System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::new()),
+            RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
         );
         sys.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
-            ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+            ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
         );
         let Some(cwd) = deepest_descendant_cwd(&sys, Pid::from_u32(root_pid)) else {
             return Ok(None);
@@ -5302,12 +5303,13 @@ fn pty_in_worktree_all_inner(state: AppState) -> HashMap<String, bool> {
         return HashMap::new();
     }
 
-    let mut sys =
-        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
+    let mut sys = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+    );
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
-        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+        ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
     );
 
     let mut out = HashMap::with_capacity(pids.len());
@@ -5625,11 +5627,11 @@ fn detect_session_statuses_blocking(
     // root). Without this, the StatusBar/Sidebar branch stays pinned to the
     // project root's branch regardless of `git checkout` performed inside
     // the PTY.
-    let refresh = ProcessRefreshKind::new()
+    let refresh = ProcessRefreshKind::nothing()
         .with_cwd(UpdateKind::Always)
         .with_exe(UpdateKind::Always)
         .with_cmd(UpdateKind::Always);
-    let mut sys = System::new_with_specifics(RefreshKind::new().with_processes(refresh));
+    let mut sys = System::new_with_specifics(RefreshKind::nothing().with_processes(refresh));
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
     let children = build_children_map(&sys);
     let daemon_session_pids = std::sync::OnceLock::<HashMap<Uuid, u32>>::new();
@@ -7262,15 +7264,15 @@ fn agent_is_running_in_session(state: &AppState, session_id: &Uuid, basename: &s
     else {
         return false;
     };
-    // Refresh with exe + cmd populated — `ProcessRefreshKind::new()`
-    // alone gives an empty config on sysinfo 0.32, so `proc.exe()` and
+    // Refresh with exe + cmd populated — `ProcessRefreshKind::nothing()`
+    // alone gives an empty config, so `proc.exe()` and
     // `proc.cmd()` come back as `None` and the basename match always
     // fails. That silently flipped the suppression off and let the
     // modal pop for sessions whose claude was still mid-conversation.
-    let refresh = ProcessRefreshKind::new()
+    let refresh = ProcessRefreshKind::nothing()
         .with_exe(UpdateKind::Always)
         .with_cmd(UpdateKind::Always);
-    let mut sys = System::new_with_specifics(RefreshKind::new().with_processes(refresh));
+    let mut sys = System::new_with_specifics(RefreshKind::nothing().with_processes(refresh));
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
     let mut frontier: Vec<Pid> = vec![Pid::from_u32(root)];
     let mut visited: std::collections::HashSet<Pid> = std::collections::HashSet::new();

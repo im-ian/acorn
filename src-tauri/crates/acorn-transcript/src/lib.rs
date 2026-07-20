@@ -406,11 +406,11 @@ fn scan_live_mappings(
         return Vec::new();
     }
     let mut out = Vec::new();
-    let refresh = ProcessRefreshKind::new()
+    let refresh = ProcessRefreshKind::nothing()
         .with_cwd(UpdateKind::Always)
         .with_exe(UpdateKind::Always)
         .with_cmd(UpdateKind::Always);
-    let mut sys = System::new_with_specifics(RefreshKind::new().with_processes(refresh));
+    let mut sys = System::new_with_specifics(RefreshKind::nothing().with_processes(refresh));
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
 
     let mut children: std::collections::HashMap<Pid, Vec<Pid>> = std::collections::HashMap::new();
