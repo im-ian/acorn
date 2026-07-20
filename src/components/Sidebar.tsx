@@ -3920,7 +3920,7 @@ function SidebarActivityRow({
 
   const openSession = () => {
     markRead(notification.id);
-    openSessionSurface(notification.sessionId);
+    openSessionSurface(notification.sessionId, { centerInCanvas: true });
   };
 
   return (

@@ -4,6 +4,7 @@ import {
   WORKSPACE_CANVAS_MIN_NODE_HEIGHT,
   WORKSPACE_CANVAS_MIN_NODE_WIDTH,
   WORKSPACE_CANVAS_MIN_ZOOM,
+  centerWorkspaceCanvasNode,
   findWorkspaceCanvasMinimapNodeAtPoint,
   fitWorkspaceCanvasViewport,
   centerWorkspaceCanvasViewportFromMinimapPoint,
@@ -113,6 +114,16 @@ describe("workspaceCanvas", () => {
         { width: 1_000, height: 700 },
       ),
     ).toEqual({ offset: { x: -348, y: 0 }, zoom: 1 });
+  });
+
+  it("centers a selected node without changing the zoom", () => {
+    expect(
+      centerWorkspaceCanvasNode(
+        { offset: { x: -40, y: 20 }, zoom: 0.8 },
+        { x: 900, y: 100, width: 400, height: 300, zIndex: 1 },
+        { width: 1_000, height: 700 },
+      ),
+    ).toEqual({ offset: { x: -380, y: 150 }, zoom: 0.8 });
   });
 
   it("maps nodes and the viewport into a minimap and recenters from it", () => {
