@@ -958,6 +958,24 @@ mod tests {
     }
 
     #[test]
+    fn remembered_project_parent_folder_round_trips_and_clears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("projects");
+
+        save_last_project_parent_folder_to_dir(tmp.path(), &parent).unwrap();
+        assert_eq!(
+            load_last_project_parent_folder_from_dir(tmp.path()).unwrap(),
+            Some(parent)
+        );
+
+        clear_last_project_parent_folder_from_dir(tmp.path()).unwrap();
+        assert_eq!(
+            load_last_project_parent_folder_from_dir(tmp.path()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn missing_chat_state_returns_empty_state() {
         let tmp = tempfile::tempdir().unwrap();
         let session_id = uuid::Uuid::new_v4().to_string();

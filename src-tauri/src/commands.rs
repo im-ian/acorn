@@ -9993,4 +9993,41 @@ mod tests {
         );
         assert_eq!(infer_acornd_root_from_session_pids(&by_pid, &[999]), None);
     }
+
+    #[test]
+    fn remembered_project_parent_folder_is_regranted_when_it_exists() {
+        let app_data = tempfile::tempdir().unwrap();
+        let parent_root = tempfile::tempdir().unwrap();
+        let parent = parent_root.path().join("projects");
+        std::fs::create_dir(&parent).unwrap();
+        crate::persistence::save_last_project_parent_folder_to_dir(app_data.path(), &parent)
+            .unwrap();
+        let state = crate::state::AppState::default();
+
+        let restored = super::get_last_project_parent_folder_from_dir(&state, app_data.path())
+            .unwrap();
+
+        let canonical = parent.canonicalize().unwrap();
+        assert_eq!(restored, Some(canonical.to_string_lossy().into_owned()));
+        assert_eq!(state.folder_grants.lock().as_slice(), &[canonical]);
+    }
+
+    #[test]
+    fn missing_remembered_project_parent_folder_is_cleared() {
+        let app_data = tempfile::tempdir().unwrap();
+        let missing = app_data.path().join("removed-projects");
+        crate::persistence::save_last_project_parent_folder_to_dir(app_data.path(), &missing)
+            .unwrap();
+        let state = crate::state::AppState::default();
+
+        let restored = super::get_last_project_parent_folder_from_dir(&state, app_data.path())
+            .unwrap();
+
+        assert_eq!(restored, None);
+        assert_eq!(
+            crate::persistence::load_last_project_parent_folder_from_dir(app_data.path()).unwrap(),
+            None
+        );
+        assert!(state.folder_grants.lock().is_empty());
+    }
 }
