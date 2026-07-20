@@ -4,6 +4,7 @@ import {
   WORKSPACE_CANVAS_MIN_NODE_HEIGHT,
   WORKSPACE_CANVAS_MIN_NODE_WIDTH,
   WORKSPACE_CANVAS_MIN_ZOOM,
+  alignWorkspaceCanvasNode,
   findWorkspaceCanvasMinimapNodeAtPoint,
   fitWorkspaceCanvasViewport,
   centerWorkspaceCanvasViewportFromMinimapPoint,
@@ -103,6 +104,82 @@ describe("workspaceCanvas", () => {
     );
     expect(snapWorkspaceCanvasValue(31)).toBe(40);
     expect(snapWorkspaceCanvasValue(-9)).toBe(0);
+  });
+
+  it("magnetically aligns matching node edges while moving", () => {
+    const result = alignWorkspaceCanvasNode(
+      { x: 95, y: 204, width: 500, height: 300, zIndex: 3 },
+      [{ x: 100, y: 200, width: 620, height: 400, zIndex: 1 }],
+      "move",
+      8,
+    );
+
+    expect(result.node).toEqual({
+      x: 100,
+      y: 200,
+      width: 500,
+      height: 300,
+      zIndex: 3,
+    });
+    expect(result.matches).toEqual({
+      x: true,
+      y: true,
+      width: false,
+      height: false,
+    });
+    expect(result.guides).toEqual([
+      { axis: "x", position: 100, start: 200, end: 600 },
+      { axis: "y", position: 200, start: 100, end: 720 },
+    ]);
+  });
+
+  it("aligns node centers when their outer edges differ", () => {
+    const result = alignWorkspaceCanvasNode(
+      { x: 347, y: 259, width: 100, height: 80, zIndex: 3 },
+      [{ x: 300, y: 200, width: 200, height: 200, zIndex: 1 }],
+      "move",
+      8,
+    );
+
+    expect(result.node.x).toBe(350);
+    expect(result.node.y).toBe(260);
+    expect(result.guides).toEqual([
+      { axis: "x", position: 400, start: 200, end: 400 },
+      { axis: "y", position: 300, start: 300, end: 500 },
+    ]);
+  });
+
+  it("matches peer dimensions while resizing and releases outside the threshold", () => {
+    const target = { x: 900, y: 300, width: 620, height: 400, zIndex: 1 };
+    const matched = alignWorkspaceCanvasNode(
+      { x: 80, y: 100, width: 614, height: 407, zIndex: 3 },
+      [target],
+      "resize",
+      8,
+    );
+
+    expect(matched.node).toMatchObject({ width: 620, height: 400 });
+    expect(matched.matches).toEqual({
+      x: false,
+      y: false,
+      width: true,
+      height: true,
+    });
+    expect(matched.guides).toEqual([]);
+
+    const released = alignWorkspaceCanvasNode(
+      { x: 80, y: 100, width: 629, height: 409, zIndex: 3 },
+      [target],
+      "resize",
+      8,
+    );
+    expect(released.node).toMatchObject({ width: 629, height: 409 });
+    expect(released.matches).toEqual({
+      x: false,
+      y: false,
+      width: false,
+      height: false,
+    });
   });
 
   it("pans only enough to reveal a selected node", () => {

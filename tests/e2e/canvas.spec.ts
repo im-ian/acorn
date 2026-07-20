@@ -508,6 +508,70 @@ test.describe("workspace canvas mode", () => {
     );
   });
 
+  test("shows magnetic alignment guides and matches peer dimensions", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [session("alpha"), session("beta")]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const canvas = page.getByTestId("workspace-canvas");
+    const alpha = canvas.locator('[data-canvas-session-id="alpha"]');
+    const resizeHandle = alpha.getByTestId(
+      "workspace-canvas-node-resize-handle",
+    );
+    const resizeBox = await resizeHandle.boundingBox();
+    if (!resizeBox) throw new Error("Canvas resize handle is not visible");
+
+    await page.mouse.move(
+      resizeBox.x + resizeBox.width / 2,
+      resizeBox.y + resizeBox.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      resizeBox.x + resizeBox.width / 2 + 6,
+      resizeBox.y + resizeBox.height / 2 + 6,
+    );
+
+    await expect(alpha).toHaveAttribute("data-canvas-node-width", "620");
+    await expect(alpha).toHaveAttribute("data-canvas-node-height", "400");
+    await expect(canvas.getByTestId("workspace-canvas-size-hint"))
+      .toHaveAttribute("data-canvas-match-width", "true");
+    await expect(canvas.getByTestId("workspace-canvas-size-hint"))
+      .toHaveAttribute("data-canvas-match-height", "true");
+
+    await page.mouse.up();
+    await expect(canvas.getByTestId("workspace-canvas-size-hint")).toHaveCount(0);
+
+    const dragHandle = alpha.getByTestId("workspace-canvas-node-drag-handle");
+    const dragBox = await dragHandle.boundingBox();
+    if (!dragBox) throw new Error("Canvas drag handle is not visible");
+    await page.mouse.move(
+      dragBox.x + dragBox.width / 2,
+      dragBox.y + dragBox.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      dragBox.x + dragBox.width / 2 + 655,
+      dragBox.y + dragBox.height / 2 + 60,
+    );
+
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "708");
+    await expect(
+      canvas.locator('[data-canvas-alignment-axis="x"]'),
+    ).toBeVisible();
+
+    await page.mouse.up();
+    await expect(
+      canvas.locator('[data-canvas-alignment-axis="x"]'),
+    ).toHaveCount(0);
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "708");
+  });
+
   test("uses the minimap to navigate only the active project sessions", async ({
     page,
     tauri,
