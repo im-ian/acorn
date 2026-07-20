@@ -273,4 +273,99 @@ describe("FileExplorer filesystem listener", () => {
 
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("refetches every loaded directory when gitignore rules change", async () => {
+    const rootPath = "/tmp/acorn-gitignore";
+    const generatedPath = `${rootPath}/generated`;
+    let fsListener:
+      | ((event: {
+          payload: {
+            paths: string[];
+            root: string;
+            cap: number;
+            dotgit_changed: boolean;
+          };
+        }) => void)
+      | null = null;
+    eventMocks.listen.mockImplementation((_event, handler) => {
+      fsListener = handler;
+      return Promise.resolve(() => {});
+    });
+    apiMocks.fsListDir.mockImplementation(async (path: string) => ({
+      entries:
+        path === rootPath
+          ? [
+              {
+                name: "generated",
+                path: generatedPath,
+                is_dir: true,
+                is_symlink: false,
+                size: 0,
+                modified_ms: 1,
+                gitignored: false,
+              },
+            ]
+          : [],
+      repo_root: rootPath,
+    }));
+
+    await act(async () => {
+      root?.render(<FileExplorer rootPath={rootPath} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const generatedButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("generated"),
+    );
+    expect(generatedButton).toBeInstanceOf(HTMLButtonElement);
+
+    await act(async () => {
+      generatedButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(apiMocks.fsListDir).toHaveBeenCalledWith(generatedPath, false, true);
+    apiMocks.fsListDir.mockClear();
+
+    await act(async () => {
+      fsListener?.({
+        payload: {
+          paths: [`${rootPath}/.gitignore`],
+          root: rootPath,
+          cap: 256,
+          dotgit_changed: false,
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.fsListDir).toHaveBeenCalledWith(rootPath, false, true);
+    expect(apiMocks.fsListDir).toHaveBeenCalledWith(generatedPath, false, true);
+  });
+
+  it("refreshes loaded directories and git status when the branch revision changes", async () => {
+    const rootPath = "/tmp/acorn-branch";
+
+    await act(async () => {
+      root?.render(
+        <FileExplorer rootPath={rootPath} gitRevision="feature/one" />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    apiMocks.fsListDir.mockClear();
+    apiMocks.fsGitStatus.mockClear();
+
+    await act(async () => {
+      root?.render(
+        <FileExplorer rootPath={rootPath} gitRevision="feature/two" />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.fsListDir).toHaveBeenCalledWith(rootPath, false, true);
+    expect(apiMocks.fsGitStatus).toHaveBeenCalledWith(rootPath);
+  });
 });

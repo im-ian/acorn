@@ -1012,4 +1012,130 @@ test.describe("file explorer", () => {
 
     await expect(page.getByRole("button", { name: "Preview" })).toBeVisible();
   });
+
+  test("shows newly unignored files after the active agent changes branches", async ({
+    page,
+    tauri,
+  }) => {
+    const repo = "/tmp/branch-refresh";
+
+    await tauri.respond("list_projects", [
+      {
+        repo_path: repo,
+        name: "branch-refresh",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "branch-session",
+        name: "branch agent",
+        repo_path: repo,
+        worktree_path: repo,
+        branch: "feature/ignored",
+        isolated: false,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("detect_session_statuses", (args) => {
+      const ids = Array.isArray((args as { ids?: unknown }).ids)
+        ? ((args as { ids: string[] }).ids)
+        : [];
+      const switched = (
+        window as unknown as { __fileExplorerBranchSwitched?: boolean }
+      ).__fileExplorerBranchSwitched;
+      return ids.map((id) => ({
+        id,
+        status: "working",
+        branch: switched ? "feature/visible" : "feature/ignored",
+      }));
+    });
+    await tauri.handle("pty_repo_root", () => repo);
+    await tauri.handle("fs_list_dir", (args) => {
+      const { path } = args as { path: string };
+      const switched = (
+        window as unknown as { __fileExplorerBranchSwitched?: boolean }
+      ).__fileExplorerBranchSwitched;
+      if (path === "/tmp/branch-refresh") {
+        return {
+          repo_root: "/tmp/branch-refresh",
+          entries: [
+            {
+              name: "generated",
+              path: "/tmp/branch-refresh/generated",
+              is_dir: true,
+              is_symlink: false,
+              size: 0,
+              modified_ms: 0,
+              gitignored: false,
+            },
+          ],
+        };
+      }
+      if (path === "/tmp/branch-refresh/generated" && switched) {
+        return {
+          repo_root: "/tmp/branch-refresh",
+          entries: [
+            {
+              name: "result.json",
+              path: "/tmp/branch-refresh/generated/result.json",
+              is_dir: false,
+              is_symlink: false,
+              size: 12,
+              modified_ms: 0,
+              gitignored: false,
+            },
+          ],
+        };
+      }
+      return { repo_root: "/tmp/branch-refresh", entries: [] };
+    });
+    await tauri.handle("fs_git_status", () => {
+      const switched = (
+        window as unknown as { __fileExplorerBranchSwitched?: boolean }
+      ).__fileExplorerBranchSwitched;
+      return {
+        statuses: switched
+          ? {
+              "/tmp/branch-refresh/generated/result.json": {
+                kind: "added",
+                additions: 0,
+                deletions: 0,
+              },
+            }
+          : {},
+        huge: false,
+        limit: 10_000,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^branch agent feature\/ignored · Working$/ })
+      .click();
+    await page.getByRole("button", { name: "Code" }).click();
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+    await page.getByRole("button", { name: "generated", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "result.json", exact: true }),
+    ).toHaveCount(0);
+
+    await page.evaluate(() => {
+      (
+        window as unknown as { __fileExplorerBranchSwitched?: boolean }
+      ).__fileExplorerBranchSwitched = true;
+    });
+
+    await expect(
+      page.getByRole("button", { name: /^branch agent feature\/visible · Working$/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "result.json", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Git status added")).toBeVisible();
+  });
 });
