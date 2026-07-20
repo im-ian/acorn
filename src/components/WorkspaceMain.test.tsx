@@ -240,8 +240,8 @@ describe("WorkspaceMain", () => {
     );
     firePointer(dragHandle!, "pointerdown", { clientX: 100, clientY: 100 });
     firePointer(window, "pointerup", { clientX: 100, clientY: 100 });
-    expect(alpha!.dataset.canvasNodeX).toBe("48");
-    expect(alpha!.dataset.canvasNodeY).toBe("48");
+    expect(alpha!.dataset.canvasNodeX).toBe("40");
+    expect(alpha!.dataset.canvasNodeY).toBe("40");
 
     firePointer(dragHandle!, "pointerdown", { clientX: 100, clientY: 100 });
     firePointer(window, "pointermove", { clientX: 152, clientY: 132 });
