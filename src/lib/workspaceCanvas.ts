@@ -415,6 +415,38 @@ export function revealWorkspaceCanvasNode(
   return { zoom, offset: { x, y } };
 }
 
+export function preserveWorkspaceCanvasNodeRevealOnZoom(
+  currentViewport: WorkspaceCanvasViewport,
+  nextViewport: WorkspaceCanvasViewport,
+  node: WorkspaceCanvasNode,
+  container: WorkspaceCanvasSize,
+): WorkspaceCanvasViewport {
+  const currentReveal = revealWorkspaceCanvasNode(
+    currentViewport,
+    node,
+    container,
+  );
+  const nextReveal = revealWorkspaceCanvasNode(nextViewport, node, container);
+  const xWasReachable =
+    currentReveal.offset.x === currentViewport.offset.x;
+  const yWasReachable =
+    currentReveal.offset.y === currentViewport.offset.y;
+
+  return {
+    ...nextViewport,
+    offset: {
+      x:
+        xWasReachable && nextReveal.offset.x !== nextViewport.offset.x
+          ? nextReveal.offset.x
+          : nextViewport.offset.x,
+      y:
+        yWasReachable && nextReveal.offset.y !== nextViewport.offset.y
+          ? nextReveal.offset.y
+          : nextViewport.offset.y,
+    },
+  };
+}
+
 function rectFromNode(node: WorkspaceCanvasNode): WorkspaceCanvasRect {
   return {
     x: node.x,

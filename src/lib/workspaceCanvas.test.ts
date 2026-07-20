@@ -13,6 +13,7 @@ import {
   centerWorkspaceCanvasViewportFromMinimapPoint,
   layoutWorkspaceCanvasMinimap,
   normalizeWorkspaceCanvasState,
+  preserveWorkspaceCanvasNodeRevealOnZoom,
   reconcileWorkspaceCanvasState,
   revealWorkspaceCanvasNode,
   resetWorkspaceCanvasState,
@@ -311,6 +312,51 @@ describe("workspaceCanvas", () => {
     );
 
     expect(node.y * viewport.zoom + viewport.offset.y).toBe(48);
+  });
+
+  it("keeps previously revealed axes reachable while zooming", () => {
+    const container = { width: 1_000, height: 700 };
+    const node = { x: 1_000, y: 0, width: 620, height: 400, zIndex: 1 };
+    const current = {
+      zoom: 0.35,
+      offset: { x: 385, y: 200 },
+    };
+    const next = zoomWorkspaceCanvasAtPoint(current, 0.8, {
+      x: 500,
+      y: 350,
+    });
+
+    const preserved = preserveWorkspaceCanvasNodeRevealOnZoom(
+      current,
+      next,
+      node,
+      container,
+    );
+
+    expect(preserved.offset.x).toBeCloseTo(-344);
+    expect(node.x * preserved.zoom + preserved.offset.x).toBeCloseTo(456);
+    expect(
+      (node.x + node.width) * preserved.zoom + preserved.offset.x,
+    ).toBe(952);
+    expect(node.y * preserved.zoom + preserved.offset.y).toBe(48);
+
+    const intentionallyHidden = {
+      ...current,
+      offset: { ...current.offset, x: -2_000 },
+    };
+    const hiddenNext = zoomWorkspaceCanvasAtPoint(
+      intentionallyHidden,
+      0.8,
+      { x: 500, y: 350 },
+    );
+    expect(
+      preserveWorkspaceCanvasNodeRevealOnZoom(
+        intentionallyHidden,
+        hiddenNext,
+        node,
+        container,
+      ).offset.x,
+    ).toBe(hiddenNext.offset.x);
   });
 
   it("maps nodes and the viewport into a minimap and recenters from it", () => {

@@ -46,10 +46,10 @@ import {
   WORKSPACE_CANVAS_GRID_SIZE,
   WORKSPACE_CANVAS_MAX_ZOOM,
   WORKSPACE_CANVAS_MIN_ZOOM,
-  WORKSPACE_CANVAS_REVEAL_PADDING,
   alignWorkspaceCanvasNode,
   clampWorkspaceCanvasNode,
   fitWorkspaceCanvasViewport,
+  preserveWorkspaceCanvasNodeRevealOnZoom,
   reconcileWorkspaceCanvasState,
   resetWorkspaceCanvasState,
   revealWorkspaceCanvasNode,
@@ -129,20 +129,6 @@ function sameViewport(
     first.offset.x === second.offset.x &&
     first.offset.y === second.offset.y
   );
-}
-
-function canvasNodeHeaderIsInSafeArea(
-  viewport: WorkspaceCanvasViewport,
-  node: WorkspaceCanvasNode,
-  container: WorkspaceCanvasSize,
-): boolean {
-  if (container.height <= 0) return false;
-  const top = node.y * viewport.zoom + viewport.offset.y;
-  const maxSafeTop = Math.max(
-    container.height - WORKSPACE_CANVAS_REVEAL_PADDING,
-    WORKSPACE_CANVAS_REVEAL_PADDING,
-  );
-  return top >= WORKSPACE_CANVAS_REVEAL_PADDING && top <= maxSafeTop;
 }
 
 function canvasElementScale(element: HTMLElement): number {
@@ -445,21 +431,13 @@ export function WorkspaceCanvas({
       const activeNode = activeSessionId
         ? current.nodes[activeSessionId]
         : undefined;
-      const container = containerSizeRef.current;
-      if (
-        activeNode &&
-        canvasNodeHeaderIsInSafeArea(current.viewport, activeNode, container) &&
-        !canvasNodeHeaderIsInSafeArea(viewport, activeNode, container)
-      ) {
-        const revealed = revealWorkspaceCanvasNode(
+      if (activeNode) {
+        viewport = preserveWorkspaceCanvasNodeRevealOnZoom(
+          current.viewport,
           viewport,
           activeNode,
-          container,
+          containerSizeRef.current,
         );
-        viewport = {
-          ...viewport,
-          offset: { ...viewport.offset, y: revealed.offset.y },
-        };
       }
       setViewport(viewport);
     },
@@ -1322,13 +1300,13 @@ const WorkspaceCanvasSessionNode = memo(
         purpose === "move"
           ? {
               ...current,
-              x: current.x + direction.x * step,
-              y: current.y + direction.y * step,
+              x: Math.round(current.x + direction.x * step),
+              y: Math.round(current.y + direction.y * step),
             }
           : {
               ...current,
-              width: current.width + direction.x * step,
-              height: current.height + direction.y * step,
+              width: Math.round(current.width + direction.x * step),
+              height: Math.round(current.height + direction.y * step),
             },
       );
       onCommit(purpose, false, emptyWorkspaceCanvasAlignmentMatches());
