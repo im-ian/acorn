@@ -152,14 +152,14 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Option<IpcServer
     if let Err(err) =
         std::fs::set_permissions(&staging_path, std::fs::Permissions::from_mode(0o600))
     {
-        // Tighten on best-effort. If chmod fails we keep going — it just
-        // means the socket is more permissive than ideal, not that the
-        // server is unsafe (the unix peer is still local).
         tracing::warn!(
             error = %err,
             path = %staging_path.display(),
-            "ipc: chmod 0600 failed",
+            "ipc: chmod 0600 failed; server disabled",
         );
+        drop(listener);
+        let _ = std::fs::remove_file(&staging_path);
+        return None;
     }
     if let Err(err) = std::fs::rename(&staging_path, &path) {
         tracing::warn!(
@@ -397,7 +397,7 @@ fn handle_promote_self<R: Runtime>(
         Err(err) => return err,
     };
     if !already_control {
-        if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
+        if let Err(err) = persistence::save_sessions(&state.sessions) {
             tracing::warn!(error = %err, "ipc: persist after promote-self failed");
         }
         if let Err(err) = app.emit(
@@ -769,7 +769,7 @@ fn handle_new_session<R: Runtime>(
         .unwrap_or("project")
         .to_string();
     state.projects.ensure(repo, basename);
-    if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
+    if let Err(err) = persistence::save_sessions(&state.sessions) {
         tracing::warn!(error = %err, "ipc: persist sessions after new-session failed");
     }
     // Nudge the frontend so the new session appears in the sidebar
@@ -846,7 +846,7 @@ fn handle_kill_session<R: Runtime>(
             };
         }
     }
-    if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
+    if let Err(err) = persistence::save_sessions(&state.sessions) {
         tracing::warn!(error = %err, "ipc: persist after kill-session failed");
     }
     for session in &sessions_to_remove {

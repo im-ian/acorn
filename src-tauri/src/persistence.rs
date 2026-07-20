@@ -1,9 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::{AppError, AppResult};
-use acorn_session::{Project, Session};
+use acorn_session::{Project, Session, SessionStore};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,6 +16,13 @@ const PROJECTS_FILE: &str = "projects.json";
 const PROJECTS_TMP_FILE: &str = "projects.json.tmp";
 const CHAT_SESSIONS_DIR: &str = "chat-sessions";
 pub const CHAT_SESSION_SCHEMA_VERSION: u32 = 1;
+static SESSION_SAVE_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_session_save() -> MutexGuard<'static, ()> {
+    SESSION_SAVE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn utc_now() -> DateTime<Utc> {
     Utc::now()
@@ -379,16 +387,29 @@ pub fn load_sessions_with_status() -> AppResult<(Vec<Session>, bool)> {
     }
 }
 
-/// Persist sessions atomically: write to a temp file, then rename into place.
-pub fn save_sessions(sessions: &[Session]) -> AppResult<()> {
+/// Persist the latest session-store snapshot atomically. The process-wide gate
+/// is acquired before taking the snapshot and held through rename, so delayed
+/// save requests re-read current state instead of overwriting a newer lifecycle
+/// claim with a stale caller-owned vector. It also protects the shared temp
+/// path from concurrent in-process writers.
+pub fn save_sessions(sessions: &SessionStore) -> AppResult<()> {
     let final_path = sessions_path()?;
     let tmp_path = sessions_tmp_path()?;
+    save_session_store_to_paths(sessions, &final_path, &tmp_path)
+}
 
-    let payload = serde_json::to_vec_pretty(sessions)
+fn save_session_store_to_paths(
+    sessions: &SessionStore,
+    final_path: &Path,
+    tmp_path: &Path,
+) -> AppResult<()> {
+    let _save_guard = lock_session_save();
+    let sessions = sessions.list();
+    let payload = serde_json::to_vec_pretty(&sessions)
         .map_err(|err| AppError::Other(format!("failed to serialize sessions: {err}")))?;
 
-    fs::write(&tmp_path, &payload)?;
-    fs::rename(&tmp_path, &final_path)?;
+    fs::write(tmp_path, &payload)?;
+    fs::rename(tmp_path, final_path)?;
     tracing::info!(
         count = sessions.len(),
         path = %final_path.display(),
@@ -725,9 +746,131 @@ fn update_chat_message_in_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{mpsc, Arc, Barrier, Mutex};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn persistence_test_session(name: &str) -> Session {
+        Session::new(
+            name.to_string(),
+            "/tmp/acorn-persistence-test".into(),
+            "/tmp/acorn-persistence-test".into(),
+            "main".to_string(),
+            false,
+            acorn_session::SessionKind::Regular,
+        )
+    }
+
+    #[test]
+    fn concurrent_session_store_saves_leave_a_complete_parseable_snapshot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let final_path = Arc::new(dir.path().join(SESSIONS_FILE));
+        let tmp_path = Arc::new(dir.path().join(SESSIONS_TMP_FILE));
+        let store = acorn_session::SessionStore::new();
+        let barrier = Arc::new(Barrier::new(8));
+        let mut workers = Vec::new();
+
+        for index in 0..8 {
+            let final_path = final_path.clone();
+            let tmp_path = tmp_path.clone();
+            let store = store.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                store.insert(persistence_test_session(&format!("session-{index}")));
+                save_session_store_to_paths(&store, &final_path, &tmp_path)
+            }));
+        }
+
+        for worker in workers {
+            worker
+                .join()
+                .expect("save worker did not panic")
+                .expect("concurrent save succeeds");
+        }
+
+        let saved: Vec<Session> = serde_json::from_slice(
+            &fs::read(final_path.as_ref()).expect("saved sessions file exists"),
+        )
+        .expect("saved sessions parse");
+        assert_eq!(saved.len(), 8);
+        assert!(!tmp_path.exists());
+    }
+
+    #[test]
+    fn delayed_session_save_resnapshots_a_newer_native_claim() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let final_path = dir.path().join(SESSIONS_FILE);
+        let tmp_path = dir.path().join(SESSIONS_TMP_FILE);
+        let store = acorn_session::SessionStore::new();
+        let session = store.insert(persistence_test_session("native-claim"));
+        let save_gate = lock_session_save();
+        let (started_tx, started_rx) = mpsc::channel();
+        let save_store = store.clone();
+        let save_final_path = final_path.clone();
+        let save_tmp_path = tmp_path.clone();
+        let delayed_save = std::thread::spawn(move || {
+            started_tx.send(()).expect("signal delayed save");
+            save_session_store_to_paths(&save_store, &save_final_path, &save_tmp_path)
+        });
+        started_rx.recv().expect("delayed save started");
+
+        store
+            .apply_native_status(
+                &session.id,
+                acorn_session::SessionAgentProvider::Codex,
+                acorn_session::SessionStatus::Working,
+            )
+            .expect("native claim applies");
+        drop(save_gate);
+        delayed_save
+            .join()
+            .expect("delayed save did not panic")
+            .expect("delayed save succeeds");
+
+        let saved: Vec<Session> =
+            serde_json::from_slice(&fs::read(final_path).expect("saved sessions file exists"))
+                .expect("saved sessions parse");
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].status, acorn_session::SessionStatus::Working);
+        assert!(saved[0].hook_active);
+        assert_eq!(
+            saved[0].hook_provider,
+            Some(acorn_session::SessionAgentProvider::Codex)
+        );
+    }
+
+    #[test]
+    fn cleared_hook_ownership_survives_save_and_reload() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let final_path = dir.path().join(SESSIONS_FILE);
+        let tmp_path = dir.path().join(SESSIONS_TMP_FILE);
+        let store = acorn_session::SessionStore::new();
+        let session = store.insert(persistence_test_session("cleared-owner"));
+        store
+            .apply_native_status(
+                &session.id,
+                acorn_session::SessionAgentProvider::Claude,
+                acorn_session::SessionStatus::WaitingForInput,
+            )
+            .expect("native claim applies");
+        let (_, _, hook_revision, lifecycle_revision) = store
+            .lifecycle_snapshot(&session.id)
+            .expect("session exists");
+        assert!(store
+            .clear_hook_ownership_if_revision(&session.id, hook_revision, lifecycle_revision,)
+            .expect("ownership clear applies"));
+
+        save_session_store_to_paths(&store, &final_path, &tmp_path)
+            .expect("cleared ownership saves");
+        let saved: Vec<Session> =
+            serde_json::from_slice(&fs::read(final_path).expect("saved sessions file exists"))
+                .expect("saved sessions parse");
+
+        assert_eq!(saved.len(), 1);
+        assert!(!saved[0].hook_active);
+        assert_eq!(saved[0].hook_provider, None);
+    }
 
     #[test]
     fn data_dir_is_resolvable() {

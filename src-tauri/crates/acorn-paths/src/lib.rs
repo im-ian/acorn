@@ -4,7 +4,10 @@
 //! state is isolated below that directory with a profile segment.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use directories::ProjectDirs;
 
@@ -56,17 +59,28 @@ pub fn base_data_dir() -> io::Result<PathBuf> {
     Ok(pd.data_dir().to_path_buf())
 }
 
+fn ensure_private_dir(path: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
 pub fn data_dir() -> io::Result<PathBuf> {
     if let Ok(over) = std::env::var(ENV_DATA_DIR_OVERRIDE) {
         if !over.is_empty() {
             let p = PathBuf::from(over);
-            std::fs::create_dir_all(&p)?;
+            ensure_private_dir(&p)?;
             return Ok(p);
         }
     }
 
-    let dir = base_data_dir()?.join("profiles").join(effective_profile()?);
-    std::fs::create_dir_all(&dir)?;
+    let base = base_data_dir()?;
+    ensure_private_dir(&base)?;
+    let profiles = base.join("profiles");
+    ensure_private_dir(&profiles)?;
+    let dir = profiles.join(effective_profile()?);
+    ensure_private_dir(&dir)?;
     Ok(dir)
 }
 
@@ -106,10 +120,36 @@ mod tests {
 
         assert_eq!(data_dir().unwrap(), tmp);
 
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+
         unsafe {
             std::env::remove_var(ENV_DATA_DIR_OVERRIDE);
             std::env::remove_var(ENV_PROFILE);
         }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn data_dir_tightens_existing_permissions() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp =
+            PathBuf::from("/tmp").join(format!("acorn-paths-permissions-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        unsafe { std::env::set_var(ENV_DATA_DIR_OVERRIDE, &tmp) };
+
+        assert_eq!(data_dir().unwrap(), tmp);
+        assert_eq!(
+            std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+
+        unsafe { std::env::remove_var(ENV_DATA_DIR_OVERRIDE) };
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

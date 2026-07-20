@@ -849,6 +849,10 @@ test.describe("file explorer", () => {
       "src",
       /%2Ftmp%2Fdemo%2Fspec\.pdf/,
     );
+    await expect(page.locator('iframe[title="spec.pdf"]')).toHaveAttribute(
+      "referrerpolicy",
+      "no-referrer",
+    );
   });
 
   test("finds matches inside a code viewer tab", async ({ page, tauri }) => {

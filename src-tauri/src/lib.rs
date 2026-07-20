@@ -242,7 +242,6 @@ pub fn run() {
     builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -416,7 +415,7 @@ pub fn run() {
                 projects_dirty = true;
             }
             if sessions_dirty {
-                if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
+                if let Err(err) = persistence::save_sessions(&state.sessions) {
                     tracing::warn!("failed to persist sessions after project path cleanup: {err}");
                 }
             }
@@ -523,7 +522,7 @@ pub fn run() {
                         }
                     }
                 }
-                if let Err(err) = persistence::save_sessions(&hook_sessions.list()) {
+                if let Err(err) = persistence::save_sessions(&hook_sessions) {
                     tracing::warn!(error = %err, "agent hook persist status failed");
                 }
                 if let Err(err) = hook_app
@@ -797,9 +796,6 @@ pub fn run() {
             daemon_commands::daemon_restart,
             daemon_commands::daemon_shutdown,
             daemon_commands::daemon_list_sessions,
-            daemon_commands::daemon_spawn_session,
-            daemon_commands::daemon_send_input,
-            daemon_commands::daemon_resize,
             daemon_commands::daemon_kill_session,
             daemon_commands::daemon_forget_session,
             daemon_commands::daemon_forget_inactive_sessions,

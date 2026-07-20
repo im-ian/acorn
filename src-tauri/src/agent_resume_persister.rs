@@ -143,9 +143,11 @@ fn tick(state: &AppState) -> io::Result<()> {
         };
         if let Some(cwd_file) = cwd_filename(kind) {
             if let Some(cwd) = session_cwds.get(&session_id) {
-                if let Err(err) =
-                    write_if_changed(&state_dir.join(cwd_file), &format!("{}\n", cwd.display()))
-                {
+                if let Err(err) = write_if_changed(
+                    &state_dir.join(cwd_file),
+                    &format!("{}\n", cwd.display()),
+                    agent_resume::AGENT_CWD_MAX_BYTES,
+                ) {
                     tracing::warn!(
                         %session_id, ?kind, error = %err,
                         "agent_resume_persister: cwd write failed"
@@ -222,12 +224,14 @@ fn bind_marker_in_state_dir_with_policy(
     uuid: &str,
     policy: MarkerBindPolicy,
 ) -> io::Result<()> {
+    let uuid = agent_resume::normalize_provider_id(uuid)?;
+    agent_resume::validate_state_directory(state_dir)?;
     let _guard = marker_bind_lock()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     let id_file = state_dir.join(id_filename(kind));
-    let previous = read_trimmed(&id_file);
-    if previous.as_deref() == Some(uuid) {
+    let previous = agent_resume::read_provider_marker(&id_file)?.map(|marker| marker.text);
+    if previous.as_deref() == Some(uuid.as_str()) {
         return Ok(());
     }
     // A backwards move (to an earlier-born transcript) is legitimate
@@ -236,12 +240,12 @@ fn bind_marker_in_state_dir_with_policy(
     // scan can echo the abandoned original once the new transcript
     // goes idle; writing that echo would oscillate the marker. Skip
     // only the dormant-echo case so the marker never flaps.
-    if marker_update_is_blocked(policy, previous.as_deref(), uuid, |prev, next| {
+    if marker_update_is_blocked(policy, previous.as_deref(), &uuid, |prev, next| {
         marker_rollback_is_dormant_echo(kind, prev, next)
     }) {
         return Ok(());
     }
-    write_if_changed(&id_file, &format!("{uuid}\n"))
+    agent_resume::replace_provider_marker(&id_file, &uuid).map(drop)
 }
 
 fn marker_update_is_blocked<F>(
@@ -360,20 +364,35 @@ fn rollback_is_dormant_echo(prev: &Path, next: &Path, now: SystemTime) -> bool {
         .unwrap_or(false)
 }
 
-fn write_if_changed(path: &PathBuf, content: &str) -> io::Result<()> {
-    if fs::read_to_string(path).ok().as_deref() == Some(content) {
+fn write_if_changed(path: &Path, content: &str, max_bytes: usize) -> io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "agent state leaf has no parent directory",
+        )
+    })?;
+    agent_resume::validate_state_directory(parent)?;
+    if agent_resume::read_state_text_with_limit(path, max_bytes)?
+        .as_ref()
+        .map(|snapshot| snapshot.text.as_str())
+        == Some(content)
+    {
         return Ok(());
     }
-    fs::write(path, content)
-}
-
-fn read_trimmed(path: &PathBuf) -> Option<String> {
-    fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+    agent_resume::replace_state_text_atomically(path, content, max_bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn read_marker(path: &Path) -> Option<String> {
+        agent_resume::read_provider_marker(path)
+            .ok()
+            .flatten()
+            .map(|marker| marker.text)
+    }
 
     fn session_with_id(id: Uuid) -> Session {
         let mut session = Session::new(
@@ -444,12 +463,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read_trimmed(&marker).as_deref(),
+            read_marker(&marker).as_deref(),
             Some("019e2001-aaaa-76b0-8410-2e073b38a2c1"),
             "first bind must create the marker"
         );
 
-        let mtime_before = fs::metadata(&marker).unwrap().modified().unwrap();
+        let metadata_before = fs::metadata(&marker).unwrap();
         bind_marker_in_state_dir(
             &dir,
             AgentKind::Codex,
@@ -458,9 +477,17 @@ mod tests {
         .unwrap();
         assert_eq!(
             fs::metadata(&marker).unwrap().modified().unwrap(),
-            mtime_before,
+            metadata_before.modified().unwrap(),
             "same-uuid rebind must not rewrite the marker"
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+            let metadata_after = fs::metadata(&marker).unwrap();
+            assert_eq!(metadata_after.ino(), metadata_before.ino());
+            assert_eq!(metadata_after.permissions().mode() & 0o777, 0o600);
+        }
 
         bind_marker_in_state_dir(
             &dir,
@@ -469,9 +496,121 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read_trimmed(&marker).as_deref(),
+            read_marker(&marker).as_deref(),
             Some("019e2001-bbbb-76b0-8410-2e073b38a2c2"),
             "a new uuid must replace the marker"
+        );
+        assert!(fs::read_dir(&dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".acorn-agent-state-")
+        }));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn bind_marker_validates_ids_before_creating_a_leaf() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-bindbad-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&dir).unwrap();
+
+        for invalid in [
+            "not-a-uuid",
+            "../019e2001-aaaa-76b0-8410-2e073b38a2c1",
+            "/tmp/019e2001-aaaa-76b0-8410-2e073b38a2c1",
+            &"x".repeat(agent_resume::PROVIDER_MARKER_MAX_BYTES + 1),
+        ] {
+            assert!(bind_marker_in_state_dir(&dir, AgentKind::Codex, invalid).is_err());
+            assert!(!dir.join("codex.id").exists());
+        }
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn atomic_state_writer_honors_an_injected_limit_and_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-statewrite-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("antigravity.cwd");
+
+        write_if_changed(&path, "abcd", 4).unwrap();
+        let before = fs::metadata(&path).unwrap();
+        write_if_changed(&path, "abcd", 4).unwrap();
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+            assert_eq!(before.ino(), after.ino());
+            assert_eq!(after.permissions().mode() & 0o777, 0o600);
+        }
+        assert!(write_if_changed(&path, "abcde", 4).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "abcd");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn marker_writer_rejects_symlink_and_replaces_hardlink_without_clobbering_sentinel() {
+        use std::os::unix::fs::symlink;
+
+        let dir =
+            std::env::temp_dir().join(format!("acorn-bindlink-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("codex.id");
+        let sentinel = dir.join("sentinel");
+        let sentinel_body = "019e2001-bbbb-76b0-8410-2e073b38a2c2\n";
+        fs::write(&sentinel, sentinel_body).unwrap();
+
+        symlink(&sentinel, &marker).unwrap();
+        assert!(bind_marker_in_state_dir(
+            &dir,
+            AgentKind::Codex,
+            "019e2001-aaaa-76b0-8410-2e073b38a2c1",
+        )
+        .is_err());
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), sentinel_body);
+
+        fs::remove_file(&marker).unwrap();
+        fs::hard_link(&sentinel, &marker).unwrap();
+        bind_marker_in_state_dir(
+            &dir,
+            AgentKind::Codex,
+            "019e2001-aaaa-76b0-8410-2e073b38a2c1",
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), sentinel_body);
+        assert_eq!(
+            read_marker(&marker).as_deref(),
+            Some("019e2001-aaaa-76b0-8410-2e073b38a2c1")
+        );
+
+        let outside_state = dir.join("outside-state");
+        let linked_state = dir.join("linked-state");
+        fs::create_dir(&outside_state).unwrap();
+        fs::write(
+            outside_state.join("codex.id"),
+            "019e2001-aaaa-76b0-8410-2e073b38a2c1\n",
+        )
+        .unwrap();
+        symlink(&outside_state, &linked_state).unwrap();
+        assert!(bind_marker_in_state_dir(
+            &linked_state,
+            AgentKind::Codex,
+            "019e2001-aaaa-76b0-8410-2e073b38a2c1",
+        )
+        .is_err());
+        assert_eq!(
+            fs::read_to_string(outside_state.join("codex.id")).unwrap(),
+            "019e2001-aaaa-76b0-8410-2e073b38a2c1\n"
         );
 
         fs::remove_dir_all(&dir).unwrap();
@@ -504,7 +643,7 @@ mod tests {
 
         bind_provider_marker_in_state_dir(&dir, AgentKind::Claude, resumed).unwrap();
 
-        assert_eq!(read_trimmed(&marker).as_deref(), Some(resumed));
+        assert_eq!(read_marker(&marker).as_deref(), Some(resumed));
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -535,7 +674,7 @@ mod tests {
             handle.join().unwrap();
         }
 
-        let survivor = read_trimmed(&dir.join("codex.id"));
+        let survivor = read_marker(&dir.join("codex.id"));
         assert!(
             survivor.as_deref() == Some(a) || survivor.as_deref() == Some(b),
             "marker must hold one intact uuid, got {survivor:?}"

@@ -101,7 +101,6 @@ acorn-transcript = { path = "crates/acorn-transcript" }
 tauri = { workspace = true }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
@@ -138,9 +137,8 @@ notify = { workspace = true }
 ignore = { workspace = true }
 globset = { workspace = true }
 trash = { workspace = true }
-
-[dev-dependencies]
-# Used by `fs_explorer` unit tests for scratch directories.
+# Secure same-directory atomic replacement for generated control-session
+# markers; tests also use it for scratch directories.
 tempfile = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

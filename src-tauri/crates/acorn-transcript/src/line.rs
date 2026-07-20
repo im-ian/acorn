@@ -116,8 +116,9 @@ pub fn read_tail(path: &Path, max_bytes: u64) -> io::Result<TailRead> {
     let len = file.metadata()?.len();
     let start = len.saturating_sub(max_bytes);
     file.seek(SeekFrom::Start(start))?;
-    let mut buf = Vec::with_capacity(max_bytes.min(len) as usize);
-    file.read_to_end(&mut buf)?;
+    let read_limit = max_bytes.min(len);
+    let mut buf = Vec::with_capacity(read_limit as usize);
+    file.take(read_limit).read_to_end(&mut buf)?;
     Ok(TailRead {
         text: String::from_utf8_lossy(&buf).into_owned(),
         read_full: len <= max_bytes,
@@ -747,6 +748,7 @@ fn nonempty_trimmed(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn assistant(stop_reason: &str) -> String {
         format!(
@@ -760,6 +762,18 @@ mod tests {
 
     fn classify(kind: AgentKind, tail: &str, read_full: bool) -> Option<TurnState> {
         latest_turn_state(kind, tail, read_full)
+    }
+
+    #[test]
+    fn tail_read_never_returns_more_than_the_byte_budget() {
+        let path = std::env::temp_dir().join(format!("acorn-tail-{}.log", uuid::Uuid::new_v4()));
+        fs::write(&path, b"abcdefgh").unwrap();
+
+        let tail = read_tail(&path, 3).unwrap();
+        let _ = fs::remove_file(path);
+
+        assert_eq!(tail.text, "fgh");
+        assert!(!tail.read_full);
     }
 
     #[test]

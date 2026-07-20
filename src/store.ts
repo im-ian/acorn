@@ -138,6 +138,7 @@ function mergeRefreshedSessionRuntimeState(
     if (current.status === refreshed.status) {
       preserve("status_reason");
       preserve("status_started_at");
+      preserve("agent_status_source");
     }
     if (refreshed.last_message === null && current.last_message !== null) {
       merged.last_message = current.last_message;
@@ -1906,6 +1907,15 @@ export const useAppStore = create<AppStateModel>()(
                 )
                   ? (update.status_reason ?? null)
                   : (sess.status_reason ?? null);
+                const nextAgentStatusSource =
+                  Object.prototype.hasOwnProperty.call(
+                    update,
+                    "agent_status_source",
+                  )
+                    ? (update.agent_status_source ?? null)
+                    : nextStatus === sess.status
+                      ? (sess.agent_status_source ?? null)
+                      : null;
                 const nextStatusStartedAt = Object.prototype.hasOwnProperty.call(
                   update,
                   "status_started_at",
@@ -1993,6 +2003,8 @@ export const useAppStore = create<AppStateModel>()(
                 if (
                   nextStatus !== sess.status ||
                   nextStatusReason !== (sess.status_reason ?? null) ||
+                  nextAgentStatusSource !==
+                    (sess.agent_status_source ?? null) ||
                   nextStatusStartedAt !== (sess.status_started_at ?? null) ||
                   nextBranch !== sess.branch ||
                   nextLastMessage !== sess.last_message ||
@@ -2019,6 +2031,7 @@ export const useAppStore = create<AppStateModel>()(
                     ...sess,
                     status: nextStatus,
                     status_reason: nextStatusReason,
+                    agent_status_source: nextAgentStatusSource,
                     status_started_at: nextStatusStartedAt,
                     branch: nextBranch,
                     last_message: nextLastMessage,
