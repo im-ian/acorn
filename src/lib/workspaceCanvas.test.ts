@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT,
+  WORKSPACE_CANVAS_DEFAULT_NODE_WIDTH,
+  WORKSPACE_CANVAS_GRID_SIZE,
   WORKSPACE_CANVAS_MAX_ZOOM,
   WORKSPACE_CANVAS_MIN_NODE_HEIGHT,
   WORKSPACE_CANVAS_MIN_NODE_WIDTH,
@@ -72,6 +75,25 @@ describe("workspaceCanvas", () => {
     expect(result.nodes.a.x).toBe(result.nodes.c.x);
     expect(result.nodes.a.y).toBeLessThan(result.nodes.c.y);
     expect(result.nodes.b.x).toBeGreaterThan(result.nodes.a.x);
+  });
+
+  it("places new sessions on exact grid cells with a grid-sized default", () => {
+    const result = resetWorkspaceCanvasState(["a", "b", "c"]);
+
+    expect(result.nodes.a).toMatchObject({
+      x: 40,
+      y: 40,
+      width: 600,
+      height: 400,
+    });
+    expect(WORKSPACE_CANVAS_DEFAULT_NODE_WIDTH).toBe(600);
+    expect(WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT).toBe(400);
+    for (const node of Object.values(result.nodes)) {
+      expect(node.x % WORKSPACE_CANVAS_GRID_SIZE).toBe(0);
+      expect(node.y % WORKSPACE_CANVAS_GRID_SIZE).toBe(0);
+      expect(node.width % WORKSPACE_CANVAS_GRID_SIZE).toBe(0);
+      expect(node.height % WORKSPACE_CANVAS_GRID_SIZE).toBe(0);
+    }
   });
 
   it("keeps the world point under the cursor fixed while zooming", () => {
@@ -240,6 +262,17 @@ describe("workspaceCanvas", () => {
         { width: 1_000, height: 700 },
       ),
     ).toEqual({ offset: { x: -348, y: 0 }, zoom: 1 });
+  });
+
+  it("keeps an oversized node header inside the reveal padding", () => {
+    const node = { x: 100, y: 100, width: 620, height: 400, zIndex: 1 };
+    const viewport = revealWorkspaceCanvasNode(
+      { offset: { x: 0, y: 0 }, zoom: 1.3 },
+      node,
+      { width: 700, height: 400 },
+    );
+
+    expect(node.y * viewport.zoom + viewport.offset.y).toBe(48);
   });
 
   it("maps nodes and the viewport into a minimap and recenters from it", () => {
