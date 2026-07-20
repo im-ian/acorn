@@ -343,6 +343,16 @@ export interface ProjectWorkspace {
 }
 
 export type WorkspaceViewMode = "panes" | "kanban" | "canvas";
+
+export interface OpenSessionSurfaceOptions {
+  centerInCanvas?: boolean;
+}
+
+export interface FocusSessionEventDetail {
+  sessionId: string;
+  canvasTarget?: "reveal" | "center";
+}
+
 type WorkspaceViewScope = "project" | "local";
 
 export interface MoveTabArgs {
@@ -449,7 +459,10 @@ interface AppStateModel {
   pollSessionStatuses: (ids?: string[]) => Promise<void>;
   selectTab: (id: string | null) => void;
   selectSession: (id: string | null) => void;
-  openSessionSurface: (id: string) => boolean;
+  openSessionSurface: (
+    id: string,
+    options?: OpenSessionSurfaceOptions,
+  ) => boolean;
   focusLocalSessions: () => void;
   setActiveProject: (repoPath: string) => void;
   setActiveProjectFolder: (folderId: string) => void;
@@ -2194,7 +2207,7 @@ export const useAppStore = create<AppStateModel>()(
     }
   },
 
-  openSessionSurface(id) {
+  openSessionSurface(id, options) {
     if (!get().sessions.some((session) => session.id === id)) return false;
 
     get().selectSession(id);
@@ -2205,6 +2218,15 @@ export const useAppStore = create<AppStateModel>()(
       state.openTerminalPopup(id);
     } else {
       state.closeTerminalPopup();
+    }
+    if (options?.centerInCanvas && typeof window !== "undefined") {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(
+          new CustomEvent<FocusSessionEventDetail>("acorn:focus-session", {
+            detail: { sessionId: id, canvasTarget: "center" },
+          }),
+        );
+      });
     }
     return true;
   },

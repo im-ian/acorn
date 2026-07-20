@@ -136,7 +136,9 @@ describe("notifications", () => {
 
     handleAction({ extra: { sessionId: "session-1" } });
 
-    expect(openSessionSurface).toHaveBeenCalledWith("session-1");
+    expect(openSessionSurface).toHaveBeenCalledWith("session-1", {
+      centerInCanvas: true,
+    });
     expect(mocks.show).toHaveBeenCalled();
     expect(mocks.unminimize).toHaveBeenCalled();
     expect(mocks.setFocus).toHaveBeenCalled();

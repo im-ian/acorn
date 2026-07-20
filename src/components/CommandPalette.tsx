@@ -222,7 +222,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   function handleOpenActivity(notificationId: string, sessionId: string) {
     const state = useAppStore.getState();
     state.markSessionNotificationRead(notificationId);
-    state.openSessionSurface(sessionId);
+    state.openSessionSurface(sessionId, { centerInCanvas: true });
     close();
   }
 

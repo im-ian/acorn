@@ -998,7 +998,7 @@ function NotificationRow({
 
   const openSession = () => {
     markRead(notification.id);
-    openSessionSurface(notification.sessionId);
+    openSessionSurface(notification.sessionId, { centerInCanvas: true });
     onClose();
   };
 

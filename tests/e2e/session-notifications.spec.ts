@@ -193,6 +193,105 @@ test.describe("session notification center", () => {
     await expect(activity.getByText("Ready", { exact: true })).toHaveCount(0);
   });
 
+  test("centers the destination session when opened from a notification in canvas mode", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "foreground",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "session-2",
+        name: "agent run",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.respond("detect_session_statuses", [
+      {
+        id: "session-2",
+        status: "waiting_for_input",
+        branch: null,
+        agent_provider: null,
+      },
+    ]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const canvas = page.getByTestId("workspace-canvas");
+    const world = page.getByTestId("workspace-canvas-world");
+    const target = canvas.locator('[data-canvas-session-id="session-2"]');
+    const initialOffset = Number(
+      await world.getAttribute("data-canvas-offset-x"),
+    );
+    await canvas.dispatchEvent("wheel", { deltaX: 1_800, deltaY: 900 });
+    await expect
+      .poll(async () =>
+        Number(await world.getAttribute("data-canvas-offset-x")),
+      )
+      .toBeLessThan(initialOffset - 1_000);
+
+    await expect(page.getByRole("button", { name: "Session notifications" }))
+      .toContainText("1");
+    await page.getByRole("button", { name: "Session notifications" }).click();
+    await page.getByRole("menuitem", { name: /Waiting for input/ }).click();
+
+    await expect
+      .poll(async () => {
+        const [canvasBox, targetBox] = await Promise.all([
+          canvas.boundingBox(),
+          target.boundingBox(),
+        ]);
+        if (!canvasBox || !targetBox) return Number.POSITIVE_INFINITY;
+        const horizontalDelta = Math.abs(
+          canvasBox.x + canvasBox.width / 2 -
+            (targetBox.x + targetBox.width / 2),
+        );
+        const verticalDelta = Math.abs(
+          canvasBox.y + canvasBox.height / 2 -
+            (targetBox.y + targetBox.height / 2),
+        );
+        return Math.max(horizontalDelta, verticalDelta);
+      })
+      .toBeLessThan(3);
+  });
+
   test("opens the kanban terminal popover from sidebar activity rows", async ({
     page,
     tauri,

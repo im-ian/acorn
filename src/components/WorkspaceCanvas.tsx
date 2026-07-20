@@ -47,6 +47,7 @@ import {
   WORKSPACE_CANVAS_MAX_ZOOM,
   WORKSPACE_CANVAS_MIN_ZOOM,
   alignWorkspaceCanvasNode,
+  centerWorkspaceCanvasNode,
   clampWorkspaceCanvasNode,
   fitWorkspaceCanvasViewport,
   preserveWorkspaceCanvasNodeRevealOnZoom,
@@ -64,7 +65,7 @@ import {
   type WorkspaceCanvasState,
   type WorkspaceCanvasViewport,
 } from "../lib/workspaceCanvas";
-import { useAppStore } from "../store";
+import { useAppStore, type FocusSessionEventDetail } from "../store";
 import { Button, IconButton, StatusDot, type StatusTone } from "./ui";
 import { ChatPane } from "./ChatPane";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -356,6 +357,27 @@ export function WorkspaceCanvas({
     [updateCanvas],
   );
 
+  const centerSession = useCallback(
+    (sessionId: string) => {
+      const current = canvasRef.current;
+      const node = current.nodes[sessionId];
+      if (!node) return;
+      const root = rootRef.current;
+      const container = root
+        ? { width: root.clientWidth, height: root.clientHeight }
+        : containerSizeRef.current;
+      containerSizeRef.current = container;
+      const viewport = centerWorkspaceCanvasNode(
+        current.viewport,
+        node,
+        container,
+      );
+      if (sameViewport(current.viewport, viewport)) return;
+      updateCanvas((state) => ({ ...state, viewport }), "soon");
+    },
+    [updateCanvas],
+  );
+
   useEffect(() => {
     const current = canvasRef.current;
     const next = reconcileWorkspaceCanvasState(current, reconciliationIds);
@@ -396,13 +418,18 @@ export function WorkspaceCanvas({
 
   useEffect(() => {
     const onFocusSession = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
-      if (detail?.sessionId) revealSession(detail.sessionId);
+      const detail = (event as CustomEvent<FocusSessionEventDetail>).detail;
+      if (!detail?.sessionId) return;
+      if (detail.canvasTarget === "center") {
+        centerSession(detail.sessionId);
+        return;
+      }
+      revealSession(detail.sessionId);
     };
     window.addEventListener("acorn:focus-session", onFocusSession);
     return () =>
       window.removeEventListener("acorn:focus-session", onFocusSession);
-  }, [revealSession]);
+  }, [centerSession, revealSession]);
 
   useEffect(() => {
     return () => {
