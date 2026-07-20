@@ -153,6 +153,8 @@ test.describe("workspace canvas mode", () => {
       '[data-canvas-session-id="canvas-created"]',
     );
     await expect(node).toBeVisible();
+    await expect(node).toHaveAttribute("data-canvas-node-x", "0");
+    await expect(node).toHaveAttribute("data-canvas-node-y", "0");
     const calls = await page.evaluate(
       () =>
         (
@@ -191,6 +193,8 @@ test.describe("workspace canvas mode", () => {
 
     const chatNode = canvas.locator('[data-canvas-session-id="canvas-chat"]');
     await expect(chatNode).toBeVisible();
+    await expect(chatNode).toHaveAttribute("data-canvas-node-x", "680");
+    await expect(chatNode).toHaveAttribute("data-canvas-node-y", "0");
     await expect(
       chatNode.getByRole("textbox", { name: "Chat message" }),
     ).toBeVisible();
@@ -762,7 +766,7 @@ test.describe("workspace canvas mode", () => {
       dragBox.y + dragBox.height / 2 + 60,
     );
 
-    await expect(alpha).toHaveAttribute("data-canvas-node-x", "720");
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "680");
     await expect(
       canvas.locator('[data-canvas-alignment-axis="x"]'),
     ).toBeVisible();
@@ -771,7 +775,7 @@ test.describe("workspace canvas mode", () => {
     await expect(
       canvas.locator('[data-canvas-alignment-axis="x"]'),
     ).toHaveCount(0);
-    await expect(alpha).toHaveAttribute("data-canvas-node-x", "720");
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "680");
   });
 
   test("keeps Alt gestures on whole pixels when the canvas loses focus", async ({
@@ -937,8 +941,8 @@ test.describe("workspace canvas mode", () => {
     await page.mouse.move(start.x, start.y);
     await page.mouse.down();
     await page.mouse.move(start.x + 100, start.y + 6);
-    await expect(alpha).toHaveAttribute("data-canvas-node-x", "140");
-    await expect(alpha).toHaveAttribute("data-canvas-node-y", "40");
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "100");
+    await expect(alpha).toHaveAttribute("data-canvas-node-y", "0");
     await expect(
       canvas.locator('[data-canvas-alignment-axis="y"]'),
     ).toBeVisible();
@@ -948,8 +952,8 @@ test.describe("workspace canvas mode", () => {
         new PointerEvent("pointercancel", { clientX: 0, clientY: 0 }),
       ),
     );
-    await expect(alpha).toHaveAttribute("data-canvas-node-x", "140");
-    await expect(alpha).toHaveAttribute("data-canvas-node-y", "40");
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "100");
+    await expect(alpha).toHaveAttribute("data-canvas-node-y", "0");
     await expect(canvas.getByTestId("workspace-canvas-alignment-guide"))
       .toHaveCount(0);
     await page.mouse.up();
@@ -1282,7 +1286,7 @@ test.describe("workspace canvas mode", () => {
       y: await alpha.getAttribute("data-canvas-node-y"),
       zoom: await world.getAttribute("data-canvas-zoom"),
     };
-    expect(beforeReset.x).not.toBe("40");
+    expect(beforeReset.x).not.toBe("0");
     expect(beforeReset.zoom).not.toBe("1");
 
     const terminalSlot = alpha.locator(
@@ -1294,8 +1298,8 @@ test.describe("workspace canvas mode", () => {
     );
     await page.getByRole("button", { name: "Reset session layout" }).click();
 
-    await expect(alpha).toHaveAttribute("data-canvas-node-x", "40");
-    await expect(alpha).toHaveAttribute("data-canvas-node-y", "40");
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "0");
+    await expect(alpha).toHaveAttribute("data-canvas-node-y", "0");
     await expect(world).toHaveAttribute("data-canvas-zoom", "1");
 
     await expect(
