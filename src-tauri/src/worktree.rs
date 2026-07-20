@@ -271,7 +271,7 @@ pub fn list_worktree_paths(repo_path: &Path) -> AppResult<Vec<std::path::PathBuf
     let repo = ensure_repo(repo_path)?;
     let names = repo.worktrees()?;
     let mut paths = Vec::new();
-    for name in names.iter().flatten() {
+    for name in names.iter().filter_map(|name| name.ok().flatten()) {
         if let Ok(wt) = repo.find_worktree(name) {
             paths.push(wt.path().to_path_buf());
         }
@@ -327,7 +327,7 @@ pub fn stage_remove_worktree_at_path(
 
     let repo = ensure_repo(repo_path)?;
     let names = repo.worktrees()?;
-    for name in names.iter().flatten() {
+    for name in names.iter().filter_map(|name| name.ok().flatten()) {
         let wt = repo.find_worktree(name)?;
         if same_path(wt.path(), worktree_path) {
             if !worktree_path.exists() {
@@ -438,7 +438,7 @@ pub fn discard_removed_worktree(
 
 fn prune_registered_worktree_at_path(repo: &Repository, worktree_path: &Path) -> AppResult<bool> {
     let names = repo.worktrees()?;
-    for name in names.iter().flatten() {
+    for name in names.iter().filter_map(|name| name.ok().flatten()) {
         let wt = repo.find_worktree(name)?;
         if same_path(wt.path(), worktree_path) {
             prune_missing_registered_worktree(&wt, worktree_path)?;
@@ -595,7 +595,7 @@ pub fn current_branch(repo_path: &Path) -> AppResult<String> {
     Ok(head
         .shorthand()
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "HEAD".to_string()))
+        .unwrap_or_else(|_| "HEAD".to_string()))
 }
 
 #[cfg(test)]
@@ -829,7 +829,7 @@ mod tests {
         let worktree_repo = Repository::open(&worktree_path).expect("open worktree repo");
         let head = worktree_repo.head().expect("worktree head");
 
-        assert_eq!(head.shorthand(), Some("worker"));
+        assert_eq!(head.shorthand().expect("branch shorthand"), "worker");
         assert_eq!(head.target(), Some(main_oid));
         assert_eq!(
             std::fs::read_to_string(worktree_path.join("tracked.txt")).unwrap(),

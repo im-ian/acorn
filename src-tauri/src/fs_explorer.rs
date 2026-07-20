@@ -846,7 +846,7 @@ pub fn fs_git_status_with_limit(
     // renames/conflicts which we skip below, and we don't want them to
     // inflate the count past the truncation threshold.
     let limit_usize = limit as usize;
-    let valid_total = statuses.iter().filter(|e| e.path().is_some()).count();
+    let valid_total = statuses.iter().filter(|e| e.path().is_ok()).count();
     let huge = valid_total > limit_usize;
     let mut out: HashMap<String, GitStatusEntry> =
         HashMap::with_capacity(valid_total.min(limit_usize));
@@ -854,7 +854,7 @@ pub fn fs_git_status_with_limit(
         if out.len() >= limit_usize {
             break;
         }
-        let Some(rel) = entry.path() else { continue };
+        let Ok(rel) = entry.path() else { continue };
         let abs = workdir.join(rel);
         let abs_str = abs.to_string_lossy().into_owned();
         let kind = classify_status(entry.status());
@@ -1494,7 +1494,7 @@ pub fn fs_git_branch(state: State<'_, AppState>, repo_root: String) -> AppResult
         Err(_) => return Ok(String::new()),
     };
     if head.is_branch() {
-        if let Some(name) = head.shorthand() {
+        if let Ok(name) = head.shorthand() {
             return Ok(name.to_string());
         }
     }

@@ -1636,7 +1636,7 @@ fn registered_worktree_for_cwd(cwd: &str, repo: &Path) -> Option<AgentHistoryWor
     let cwd = normalize_path(Path::new(cwd));
     let repo = git2::Repository::discover(repo).ok()?;
     let names = repo.worktrees().ok()?;
-    for name in names.iter().flatten() {
+    for name in names.iter().filter_map(|name| name.ok().flatten()) {
         let Ok(wt) = repo.find_worktree(name) else {
             continue;
         };
