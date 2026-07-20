@@ -154,6 +154,7 @@ export function WorkSummaryView({
     session?.agent_transcript_id ?? "",
     session?.agent_transcript_path ?? "",
   ].join("\u0000");
+  const summaryIdentity = [tab.cwdPath, session?.branch ?? ""].join("\u0000");
 
   const fetchSummary = useCallback(async (): Promise<WorkSummarySnapshot> => {
     const status = await api.fsGitStatus(tab.cwdPath, GIT_STATUS_FILE_LIMIT);
@@ -168,16 +169,16 @@ export function WorkSummaryView({
 
   const fetchSummaryCoalesced = useCallback(() => {
     const existing = summaryInFlightRef.current;
-    if (existing?.identity === tab.cwdPath) return existing.promise;
+    if (existing?.identity === summaryIdentity) return existing.promise;
 
     const promise = fetchSummary().finally(() => {
       if (summaryInFlightRef.current?.promise === promise) {
         summaryInFlightRef.current = null;
       }
     });
-    summaryInFlightRef.current = { identity: tab.cwdPath, promise };
+    summaryInFlightRef.current = { identity: summaryIdentity, promise };
     return promise;
-  }, [fetchSummary, tab.cwdPath]);
+  }, [fetchSummary, summaryIdentity]);
 
   const fetchConversation = useCallback(async (): Promise<WorkSummaryConversationSnapshot> => {
     if (!session) {

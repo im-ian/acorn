@@ -552,6 +552,7 @@ export function RightPanel() {
             <FileExplorer
               key={codePanelRepoPath}
               rootPath={codePanelRepoPath}
+              gitRevision={active?.branch ?? null}
             />
           ) : (
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
