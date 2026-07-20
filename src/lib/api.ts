@@ -9,6 +9,8 @@ import type {
   ChatMessage,
   ChatMessagePatch,
   ChatSessionState,
+  DiffImages,
+  DiffImageSource,
   DiffPayload,
   GenerateSessionTitleResult,
   GeneratedCommitMessage,
@@ -353,6 +355,19 @@ export const api = {
   },
   stagedFileDiff(repoPath: string, path: string): Promise<DiffPayload> {
     return invoke<DiffPayload>("staged_file_diff", { repoPath, path });
+  },
+  loadDiffImages(
+    repoPath: string,
+    source: DiffImageSource,
+    oldPath: string | null,
+    newPath: string | null,
+  ): Promise<DiffImages> {
+    return invoke<DiffImages>("load_diff_images", {
+      repoPath,
+      source,
+      oldPath,
+      newPath,
+    });
   },
   listPullRequests(
     repoPath: string,

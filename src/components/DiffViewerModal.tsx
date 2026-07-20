@@ -2,7 +2,7 @@ import { type ReactNode } from "react";
 import { Panel, PanelGroup } from "react-resizable-panels";
 import { DiffSplitView } from "./DiffSplitView";
 import { ResizeHandle } from "./ResizeHandle";
-import type { DiffPayload } from "../lib/types";
+import type { DiffImageContext, DiffPayload } from "../lib/types";
 import { useDialogShortcuts } from "../lib/dialog";
 import { Markdown, Modal, ModalHeader, Notice, SkeletonBlock } from "./ui";
 
@@ -27,6 +27,7 @@ interface DiffViewerModalProps {
    * active session's `worktree_path`. When omitted, the action is hidden.
    */
   cwd?: string;
+  imageContext?: DiffImageContext;
   loadingLabel?: string;
   onClose: () => void;
 }
@@ -41,6 +42,7 @@ export function DiffViewerModal({
   headerActions,
   body,
   cwd,
+  imageContext,
   loadingLabel,
   onClose,
 }: DiffViewerModalProps) {
@@ -68,12 +70,22 @@ export function DiffViewerModal({
         </Panel>
         <ResizeHandle direction="vertical" gap />
         <Panel id="diff" order={2} defaultSize={75} minSize={20}>
-          <DiffSplitView payload={payload} cwd={cwd} />
+          <DiffSplitView
+            payload={payload}
+            cwd={cwd}
+            imageContext={imageContext}
+          />
         </Panel>
       </PanelGroup>
     );
   } else if (payload) {
-    content = <DiffSplitView payload={payload} cwd={cwd} />;
+    content = (
+      <DiffSplitView
+        payload={payload}
+        cwd={cwd}
+        imageContext={imageContext}
+      />
+    );
   } else if (error) {
     content = (
       <Notice tone="danger" density="compact">

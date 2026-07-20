@@ -384,6 +384,24 @@ export interface DiffPayload {
   files: DiffFile[];
 }
 
+export interface DiffImages {
+  old_image?: string | null;
+  new_image?: string | null;
+}
+
+export type DiffImageSource =
+  | { kind: "commit"; sha: string }
+  | { kind: "staged" }
+  | { kind: "pull_request"; number: number }
+  | { kind: "pull_request_commit"; sha: string };
+
+export interface DiffImageContext {
+  repoPath: string;
+  source: DiffImageSource;
+  /** Changes when mutable diff contents are refreshed under the same source. */
+  cacheKey?: string | number;
+}
+
 export interface MemoryProcess {
   pid: number;
   parent_pid: number | null;

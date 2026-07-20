@@ -860,7 +860,17 @@ function PullRequestFilesPane({
       </div>
     );
   }
-  return <DiffSplitView payload={diff} cwd={cwd} />;
+  return (
+    <DiffSplitView
+      payload={diff}
+      cwd={cwd}
+      imageContext={{
+        repoPath,
+        source: { kind: "pull_request", number },
+        cacheKey: reloadKey,
+      }}
+    />
+  );
 }
 
 /**
@@ -1701,7 +1711,14 @@ function CommitDetailView({
           {dt(t, "dialogs.pullRequestDetail.noFileChanges")}
         </div>
       ) : (
-        <DiffSplitView payload={diff} cwd={cwd} />
+        <DiffSplitView
+          payload={diff}
+          cwd={cwd}
+          imageContext={{
+            repoPath,
+            source: { kind: "pull_request_commit", sha: commit.oid },
+          }}
+        />
       )}
     </div>
   );

@@ -4,7 +4,8 @@ import { ExternalLink } from "lucide-react";
 import { cn } from "../lib/cn";
 import { countStats, parseDiff } from "../lib/diff";
 import { openFileInEditor } from "../lib/editor";
-import type { DiffFile, DiffPayload } from "../lib/types";
+import type { DiffFile, DiffImageContext, DiffPayload } from "../lib/types";
+import { useDiffImages, type ResolvedDiffImage } from "../lib/useDiffImages";
 import { Tooltip } from "./Tooltip";
 import { joinPath } from "../lib/paths";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -15,6 +16,7 @@ import { ListBox, ListRowButton } from "./ui";
 
 interface DiffSplitViewProps {
   payload: DiffPayload;
+  imageContext?: DiffImageContext;
   /**
    * Working directory for resolving repo-relative diff paths. When provided,
    * a context-menu "Open in editor" action becomes available on each file.
@@ -37,6 +39,8 @@ interface FileEntry {
   del: number;
 }
 
+const EMPTY_ACTIVATED_IMAGES = new Set<number>();
+
 /**
  * GitHub-style diff layout: file list on the left, full diff for the
  * currently-selected file on the right. Used inside `DiffViewerModal`.
@@ -44,8 +48,9 @@ interface FileEntry {
  * Renamed files show `old → new`. The file list stays alphabetised by display
  * path so navigation is stable across diff payloads.
  */
-export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
+export function DiffSplitView({ payload, cwd, imageContext }: DiffSplitViewProps) {
   const t = useTranslation();
+  const imageLoader = useDiffImages(imageContext);
   const entries = useMemo<FileEntry[]>(() => {
     return payload.files
       .map((file, index) => {
@@ -65,12 +70,21 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
   const [selectedIndex, setSelectedIndex] = useState<number>(() =>
     entries[0]?.index ?? 0,
   );
+  const [imageActivation, setImageActivation] = useState<{
+    payload: DiffPayload;
+    indices: Set<number>;
+  }>(() => ({ payload, indices: new Set() }));
+  const activatedImages =
+    imageActivation.payload === payload
+      ? imageActivation.indices
+      : EMPTY_ACTIVATED_IMAGES;
   const [menu, setMenu] = useState<MenuState | null>(null);
 
   // If the payload changes (e.g. a different commit selected) reset selection
   // to the first file so we don't keep pointing at a stale index.
   useEffect(() => {
     setSelectedIndex(entries[0]?.index ?? 0);
+    setImageActivation({ payload, indices: new Set() });
     setMenu(null);
   }, [payload]);
 
@@ -103,6 +117,20 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
     }
   }
 
+  function selectEntry(entry: FileEntry) {
+    setSelectedIndex(entry.index);
+    if (entry.file.is_image) {
+      setImageActivation((current) => {
+        const currentIndices =
+          current.payload === payload ? current.indices : EMPTY_ACTIVATED_IMAGES;
+        if (currentIndices.has(entry.index)) return current;
+        const next = new Set(currentIndices);
+        next.add(entry.index);
+        return { payload, indices: next };
+      });
+    }
+  }
+
   return (
     <>
     <PanelGroup
@@ -131,11 +159,11 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
               return (
                 <li key={entry.index}>
                   <ListRowButton
-                    onClick={() => setSelectedIndex(entry.index)}
+                    onClick={() => selectEntry(entry)}
                     onContextMenu={(e) => {
                       if (!cwd) return;
                       e.preventDefault();
-                      setSelectedIndex(entry.index);
+                      selectEntry(entry);
                       setMenu({ x: e.clientX, y: e.clientY, entry });
                     }}
                     density="compact"
@@ -195,7 +223,12 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
               </span>
             </span>
           </header>
-          <DiffSplitContent entry={selected} />
+          <DiffSplitContent
+            entry={selected}
+            image={imageLoader.resolve(selected.file)}
+            onLoadImage={imageLoader.load}
+            shouldLoadImage={activatedImages.has(selected.index)}
+          />
         </section>
       </Panel>
     </PanelGroup>
@@ -224,11 +257,49 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
 }
 
 
-function DiffSplitContent({ entry }: { entry: FileEntry }) {
+function DiffSplitContent({
+  entry,
+  image,
+  onLoadImage,
+  shouldLoadImage,
+}: {
+  entry: FileEntry;
+  image: ResolvedDiffImage;
+  onLoadImage: (file: DiffFile) => void;
+  shouldLoadImage: boolean;
+}) {
+  const t = useTranslation();
   const path = entry.file.new_path ?? entry.file.old_path ?? entry.path;
   const highlighted = useHighlightedDiff(entry.lines, path);
+  useEffect(() => {
+    if (entry.file.is_image && shouldLoadImage) onLoadImage(entry.file);
+  }, [entry.file, onLoadImage, shouldLoadImage]);
   if (entry.file.is_image) {
-    return <ImageDiffPane file={entry.file} />;
+    if (
+      !shouldLoadImage &&
+      !("old_image" in entry.file || "new_image" in entry.file)
+    ) {
+      return (
+        <div className="flex h-full items-center justify-center p-6 text-xs text-fg-muted">
+          {t("diffView.selectImageToLoad")}
+        </div>
+      );
+    }
+    if (image.loading) {
+      return (
+        <div className="flex h-full items-center justify-center p-6 text-xs text-fg-muted">
+          {t("diffView.loadingImage")}
+        </div>
+      );
+    }
+    if (image.error) {
+      return (
+        <div className="flex h-full items-center justify-center p-6 text-xs text-danger">
+          {t("diffView.imageLoadFailed")}: {image.error}
+        </div>
+      );
+    }
+    return <ImageDiffPane file={image.file} />;
   }
   return (
     <DiffLineList
