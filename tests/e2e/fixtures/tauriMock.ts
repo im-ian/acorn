@@ -232,6 +232,7 @@ export const tauriMockSource = `
     if (cmd === 'staged_diff') return Promise.resolve({ files: [] });
     if (cmd === 'staged_file_diff') return Promise.resolve({ files: [] });
     if (cmd === 'commit_diff') return Promise.resolve({ files: [] });
+    if (cmd === 'load_diff_images') return Promise.resolve({});
     if (cmd === 'scrollback_load') return Promise.resolve(null);
     if (cmd === 'get_memory_usage') {
       return Promise.resolve({

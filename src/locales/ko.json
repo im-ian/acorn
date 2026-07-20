@@ -1137,6 +1137,9 @@
     "openFullDiff": "전체 diff 열기",
     "openInEditor": "편집기에서 열기",
     "image": "이미지",
+    "selectImageToLoad": "이미지 파일을 선택하면 미리보기를 불러옵니다.",
+    "loadingImage": "이미지 미리보기 불러오는 중...",
+    "imageLoadFailed": "이미지 미리보기를 불러오지 못했습니다",
     "binaryImageNoPreview": "바이너리 이미지 변경(미리보기 없음)",
     "none": "(없음)",
     "imageLabels": {

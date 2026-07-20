@@ -1137,6 +1137,9 @@
     "openFullDiff": "Open full diff",
     "openInEditor": "Open in editor",
     "image": "image",
+    "selectImageToLoad": "Select the image file to load its preview.",
+    "loadingImage": "Loading image preview...",
+    "imageLoadFailed": "Failed to load image preview",
     "binaryImageNoPreview": "Binary image change (no preview available)",
     "none": "(none)",
     "imageLabels": {

@@ -35,6 +35,14 @@ pub struct DiffPayload {
     pub files: Vec<DiffFile>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DiffImages {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_image: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DiffFile {
     pub old_path: Option<String>,
@@ -372,6 +380,26 @@ fn describe_status(s: git2::Status) -> String {
 }
 
 pub fn diff_for_commit(repo_path: &Path, sha: &str) -> AppResult<DiffPayload> {
+    diff_for_commit_with_image_target(repo_path, sha, None)
+}
+
+pub fn diff_images_for_commit(
+    repo_path: &Path,
+    sha: &str,
+    old_path: Option<&str>,
+    new_path: Option<&str>,
+) -> AppResult<DiffImages> {
+    validate_optional_git_paths(old_path, new_path)?;
+    let target = DiffImageTarget { old_path, new_path };
+    let payload = diff_for_commit_with_image_target(repo_path, sha, Some(&target))?;
+    Ok(images_from_payload(payload, &target))
+}
+
+fn diff_for_commit_with_image_target(
+    repo_path: &Path,
+    sha: &str,
+    image_target: Option<&DiffImageTarget<'_>>,
+) -> AppResult<DiffPayload> {
     let repo = ensure_repo(repo_path)?;
     let oid = git2::Oid::from_str(sha)?;
     let commit = repo.find_commit(oid)?;
@@ -380,19 +408,35 @@ pub fn diff_for_commit(repo_path: &Path, sha: &str) -> AppResult<DiffPayload> {
     let commit_tree = commit.tree()?;
     let mut opts = DiffOptions::new();
     let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), Some(&mut opts))?;
-    collect_diff(&repo, &diff)
+    collect_diff(&repo, &diff, image_target)
 }
 
 pub fn diff_staged(repo_path: &Path) -> AppResult<DiffPayload> {
-    diff_staged_with_pathspec(repo_path, None)
+    diff_staged_with_pathspec(repo_path, None, None)
 }
 
 pub fn diff_staged_file(repo_path: &Path, path: &str) -> AppResult<DiffPayload> {
     validate_relative_git_path(path)?;
-    diff_staged_with_pathspec(repo_path, Some(path))
+    diff_staged_with_pathspec(repo_path, Some(path), None)
 }
 
-fn diff_staged_with_pathspec(repo_path: &Path, pathspec: Option<&str>) -> AppResult<DiffPayload> {
+pub fn diff_images_staged(
+    repo_path: &Path,
+    old_path: Option<&str>,
+    new_path: Option<&str>,
+) -> AppResult<DiffImages> {
+    validate_optional_git_paths(old_path, new_path)?;
+    let target = DiffImageTarget { old_path, new_path };
+    let pathspec = new_path.or(old_path);
+    let payload = diff_staged_with_pathspec(repo_path, pathspec, Some(&target))?;
+    Ok(images_from_payload(payload, &target))
+}
+
+fn diff_staged_with_pathspec(
+    repo_path: &Path,
+    pathspec: Option<&str>,
+    image_target: Option<&DiffImageTarget<'_>>,
+) -> AppResult<DiffPayload> {
     let repo = ensure_repo(repo_path)?;
     let head_tree = repo.head().ok().and_then(|r| r.peel_to_tree().ok());
     let mut opts = DiffOptions::new();
@@ -403,10 +447,23 @@ fn diff_staged_with_pathspec(repo_path: &Path, pathspec: Option<&str>) -> AppRes
         opts.pathspec(path);
     }
     let diff = repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))?;
-    collect_diff(&repo, &diff)
+    collect_diff(&repo, &diff, image_target)
 }
 
-fn validate_relative_git_path(path: &str) -> AppResult<()> {
+fn validate_optional_git_paths(old_path: Option<&str>, new_path: Option<&str>) -> AppResult<()> {
+    if old_path.is_none() && new_path.is_none() {
+        return Err(AppError::InvalidPath("diff image path is missing".into()));
+    }
+    if let Some(path) = old_path {
+        validate_relative_git_path(path)?;
+    }
+    if let Some(path) = new_path {
+        validate_relative_git_path(path)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_relative_git_path(path: &str) -> AppResult<()> {
     if path.trim().is_empty() {
         return Err(AppError::InvalidPath("empty git path".into()));
     }
@@ -431,7 +488,37 @@ fn validate_relative_git_path(path: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn collect_diff(repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload> {
+struct DiffImageTarget<'a> {
+    old_path: Option<&'a str>,
+    new_path: Option<&'a str>,
+}
+
+fn target_matches(
+    target: &DiffImageTarget<'_>,
+    old_path: Option<&str>,
+    new_path: Option<&str>,
+) -> bool {
+    target.old_path.is_some_and(|path| Some(path) == old_path)
+        || target.new_path.is_some_and(|path| Some(path) == new_path)
+}
+
+fn images_from_payload(payload: DiffPayload, target: &DiffImageTarget<'_>) -> DiffImages {
+    payload
+        .files
+        .into_iter()
+        .find(|file| target_matches(target, file.old_path.as_deref(), file.new_path.as_deref()))
+        .map(|file| DiffImages {
+            old_image: file.old_image,
+            new_image: file.new_image,
+        })
+        .unwrap_or_default()
+}
+
+fn collect_diff(
+    repo: &Repository,
+    diff: &git2::Diff,
+    image_target: Option<&DiffImageTarget<'_>>,
+) -> AppResult<DiffPayload> {
     use std::cell::RefCell;
     let acc: RefCell<Vec<DiffFile>> = RefCell::new(Vec::new());
     let current: RefCell<Option<DiffFile>> = RefCell::new(None);
@@ -445,7 +532,11 @@ fn collect_diff(repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload> 
             let new_path = delta.new_file().path().map(|p| p.display().to_string());
             let path_for_type = new_path.as_deref().or(old_path.as_deref()).unwrap_or("");
             let is_image = is_image_path(path_for_type);
-            let (old_image, new_image) = if is_image {
+            let should_load_images = is_image
+                && image_target.is_some_and(|target| {
+                    target_matches(target, old_path.as_deref(), new_path.as_deref())
+                });
+            let (old_image, new_image) = if should_load_images {
                 (
                     image_data_uri(repo, delta.old_file().id(), old_path.as_deref()),
                     image_data_uri_workdir(repo, delta.new_file().id(), new_path.as_deref()),
@@ -643,6 +734,49 @@ mod tests {
             patch.lines().any(|l| l.starts_with("@@")),
             "patch should contain at least one hunk header, got: {patch:?}",
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn image_diff_metadata_does_not_embed_bytes_until_requested() {
+        let root = unique_temp_dir("lazy-image-diff");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let first_oid = commit_file(&repo, "preview.png", "old-image", "init", &[]);
+        let first = repo.find_commit(first_oid).expect("first commit");
+        let second_oid = commit_file(
+            &repo,
+            "preview.png",
+            "new-image",
+            "replace image",
+            &[&first],
+        );
+        drop(first);
+        drop(repo);
+
+        let sha = second_oid.to_string();
+        let payload = diff_for_commit(&root, &sha).expect("image diff metadata");
+        assert_eq!(payload.files.len(), 1);
+        let file = &payload.files[0];
+        assert!(file.is_image);
+        assert!(file.old_image.is_none());
+        assert!(file.new_image.is_none());
+
+        let images = diff_images_for_commit(
+            &root,
+            &sha,
+            file.old_path.as_deref(),
+            file.new_path.as_deref(),
+        )
+        .expect("lazy image bytes");
+        assert!(images
+            .old_image
+            .as_deref()
+            .is_some_and(|data| data.starts_with("data:image/png;base64,")));
+        assert!(images
+            .new_image
+            .as_deref()
+            .is_some_and(|data| data.starts_with("data:image/png;base64,")));
 
         std::fs::remove_dir_all(&root).ok();
     }

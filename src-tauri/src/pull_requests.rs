@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli_resolver;
 use crate::error::{AppError, AppResult};
-use crate::git_ops::{github_owner_repo, DiffPayload};
+use crate::git_ops::{github_owner_repo, DiffImages, DiffPayload};
 
 /// PR state filter accepted from the frontend. Mirrors the values gh
 /// understands so we can pass it straight through.
@@ -1297,18 +1297,7 @@ pub fn get_pull_request_diff(repo_path: &Path, number: u64) -> AppResult<PullReq
 
     match try_with_account(repo_path, &slug, |token| {
         let diff_text = run_pr_diff(&slug, number, token)?;
-        let mut diff = crate::unified_diff::parse_unified_diff(&diff_text);
-        if diff.files.iter().any(|file| file.is_image) {
-            let refs = run_pr_refs(&slug, number, token)?;
-            enrich_image_previews_against_refs(
-                &slug,
-                &refs.head_ref_name,
-                &refs.base_ref_name,
-                token,
-                &mut diff,
-            );
-        }
-        Ok(diff)
+        Ok(crate::unified_diff::parse_unified_diff(&diff_text))
     })? {
         AccountOutcome::Ok {
             account,
@@ -1317,6 +1306,36 @@ pub fn get_pull_request_diff(repo_path: &Path, number: u64) -> AppResult<PullReq
         AccountOutcome::NoAccess { accounts } => {
             Ok(PullRequestDiffListing::NoAccess { slug, accounts })
         }
+    }
+}
+
+pub fn get_pull_request_diff_images(
+    repo_path: &Path,
+    number: u64,
+    old_path: Option<&str>,
+    new_path: Option<&str>,
+) -> AppResult<DiffImages> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "origin remote is not a GitHub repository".into(),
+        ));
+    };
+
+    match try_with_account(repo_path, &slug, |token| {
+        let refs = run_pr_refs(&slug, number, token)?;
+        Ok(image_previews_against_refs(
+            &slug,
+            &refs.head_ref_name,
+            &refs.base_ref_name,
+            token,
+            old_path,
+            new_path,
+        ))
+    })? {
+        AccountOutcome::Ok { value, .. } => Ok(value),
+        AccountOutcome::NoAccess { .. } => Err(AppError::Other(format!(
+            "no logged-in gh account can access {slug}"
+        ))),
     }
 }
 
@@ -1342,32 +1361,28 @@ pub fn add_pull_request_comment(repo_path: &Path, number: u64, body: &str) -> Ap
     }
 }
 
-/// Image enrichment variant used for the overall PR diff. Resolves the
-/// "new" side at the PR's head ref and the "old" side at the base ref.
-fn enrich_image_previews_against_refs(
+/// Resolve one PR file's image sides without delaying the initial file list.
+fn image_previews_against_refs(
     slug: &str,
     head_ref: &str,
     base_ref: &str,
     token: &str,
-    payload: &mut crate::git_ops::DiffPayload,
-) {
-    for file in &mut payload.files {
-        if !file.is_image {
-            continue;
-        }
-        if let Some(path) = file.new_path.clone() {
-            if let Ok(bytes) = fetch_raw_blob(slug, head_ref, &path, token) {
-                file.new_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
-            }
-        }
-        if let Some(path) = file.old_path.clone() {
-            if let Ok(bytes) = fetch_raw_blob(slug, base_ref, &path, token) {
-                file.old_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
-            }
-        }
-        if file.new_image.is_some() || file.old_image.is_some() {
-            file.patch.clear();
-        }
+    old_path: Option<&str>,
+    new_path: Option<&str>,
+) -> DiffImages {
+    let new_image = new_path.and_then(|path| {
+        fetch_raw_blob(slug, head_ref, path, token)
+            .ok()
+            .map(|bytes| crate::git_ops::encode_data_uri(&bytes, path))
+    });
+    let old_image = old_path.and_then(|path| {
+        fetch_raw_blob(slug, base_ref, path, token)
+            .ok()
+            .map(|bytes| crate::git_ops::encode_data_uri(&bytes, path))
+    });
+    DiffImages {
+        old_image,
+        new_image,
     }
 }
 
@@ -1658,13 +1673,30 @@ pub fn get_pull_request_commit_diff(repo_path: &Path, sha: &str) -> AppResult<Di
     };
     match try_with_account(repo_path, &slug, |token| {
         let diff_text = run_commit_diff(&slug, sha, token)?;
-        let mut payload = crate::unified_diff::parse_unified_diff(&diff_text);
-        // GitHub's `application/vnd.github.diff` reduces binary changes to a
-        // single "Binary files ... differ" sentinel line. Re-fetch the actual
-        // image bytes via the contents API so the renderer can show before /
-        // after previews instead of leaking that sentinel into the patch body.
-        enrich_image_previews(&slug, sha, token, &mut payload);
-        Ok(payload)
+        Ok(crate::unified_diff::parse_unified_diff(&diff_text))
+    })? {
+        AccountOutcome::Ok { value, .. } => Ok(value),
+        AccountOutcome::NoAccess { .. } => Err(AppError::Other(format!(
+            "no logged-in gh account can access {slug}"
+        ))),
+    }
+}
+
+pub fn get_pull_request_commit_diff_images(
+    repo_path: &Path,
+    sha: &str,
+    old_path: Option<&str>,
+    new_path: Option<&str>,
+) -> AppResult<DiffImages> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "origin remote is not a GitHub repository".into(),
+        ));
+    };
+    match try_with_account(repo_path, &slug, |token| {
+        Ok(image_previews_for_commit(
+            &slug, sha, token, old_path, new_path,
+        ))
     })? {
         AccountOutcome::Ok { value, .. } => Ok(value),
         AccountOutcome::NoAccess { .. } => Err(AppError::Other(format!(
@@ -1862,37 +1894,29 @@ fn commit_login_cache() -> &'static Mutex<CommitLoginCache> {
     CELL.get_or_init(|| Mutex::new(CommitLoginCache::with_capacity(COMMIT_LOGIN_CACHE_CAPACITY)))
 }
 
-/// For every image file in `payload`, fetch the actual blob bytes from
-/// GitHub at `sha` (new side) and `sha^` (old side) and encode them as
-/// `data:` URIs. Misses (deleted file → no `new_path`, parent fetch
-/// failures, files too large for the contents API, etc.) are tolerated:
-/// the renderer falls back to a "no preview available" placeholder.
-fn enrich_image_previews(
+/// Resolve one commit file's image sides. Missing sides and fetch failures
+/// remain absent so the renderer can show its preview placeholder.
+fn image_previews_for_commit(
     slug: &str,
     sha: &str,
     token: &str,
-    payload: &mut crate::git_ops::DiffPayload,
-) {
+    old_path: Option<&str>,
+    new_path: Option<&str>,
+) -> DiffImages {
     let parent = format!("{sha}^");
-    for file in &mut payload.files {
-        if !file.is_image {
-            continue;
-        }
-        if let Some(path) = file.new_path.clone() {
-            if let Ok(bytes) = fetch_raw_blob(slug, sha, &path, token) {
-                file.new_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
-            }
-        }
-        if let Some(path) = file.old_path.clone() {
-            if let Ok(bytes) = fetch_raw_blob(slug, &parent, &path, token) {
-                file.old_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
-            }
-        }
-        // Once a preview is attached the renderer no longer needs the
-        // "Binary files ... differ" placeholder lurking in the patch body.
-        if file.new_image.is_some() || file.old_image.is_some() {
-            file.patch.clear();
-        }
+    let new_image = new_path.and_then(|path| {
+        fetch_raw_blob(slug, sha, path, token)
+            .ok()
+            .map(|bytes| crate::git_ops::encode_data_uri(&bytes, path))
+    });
+    let old_image = old_path.and_then(|path| {
+        fetch_raw_blob(slug, &parent, path, token)
+            .ok()
+            .map(|bytes| crate::git_ops::encode_data_uri(&bytes, path))
+    });
+    DiffImages {
+        old_image,
+        new_image,
     }
 }
 

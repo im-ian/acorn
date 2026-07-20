@@ -725,6 +725,7 @@ pub fn run() {
             commands::open_in_editor,
             commands::staged_diff,
             commands::staged_file_diff,
+            commands::load_diff_images,
             commands::list_pull_requests,
             commands::list_issues,
             commands::get_issue_detail,
