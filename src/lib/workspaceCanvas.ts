@@ -67,15 +67,17 @@ export const WORKSPACE_CANVAS_MIN_ZOOM = 0.35;
 export const WORKSPACE_CANVAS_MAX_ZOOM = 2;
 export const WORKSPACE_CANVAS_MIN_NODE_WIDTH = 360;
 export const WORKSPACE_CANVAS_MIN_NODE_HEIGHT = 240;
-export const WORKSPACE_CANVAS_DEFAULT_NODE_WIDTH = 620;
-export const WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT = 400;
 export const WORKSPACE_CANVAS_GRID_SIZE = 20;
+export const WORKSPACE_CANVAS_DEFAULT_NODE_WIDTH =
+  WORKSPACE_CANVAS_GRID_SIZE * 30;
+export const WORKSPACE_CANVAS_DEFAULT_NODE_HEIGHT =
+  WORKSPACE_CANVAS_GRID_SIZE * 20;
 
 const WORKSPACE_CANVAS_MAX_NODE_WIDTH = 2_400;
 const WORKSPACE_CANVAS_MAX_NODE_HEIGHT = 1_600;
 const WORKSPACE_CANVAS_COORDINATE_LIMIT = 100_000;
-const WORKSPACE_CANVAS_NODE_GAP = 40;
-const WORKSPACE_CANVAS_NODE_ORIGIN = 48;
+const WORKSPACE_CANVAS_NODE_GAP = WORKSPACE_CANVAS_GRID_SIZE * 2;
+const WORKSPACE_CANVAS_NODE_ORIGIN = WORKSPACE_CANVAS_GRID_SIZE * 2;
 const WORKSPACE_CANVAS_DEFAULT_COLUMNS = 2;
 
 export function defaultWorkspaceCanvasViewport(): WorkspaceCanvasViewport {
@@ -397,7 +399,12 @@ export function revealWorkspaceCanvasNode(
   }
 
   if (node.height * zoom > availableHeight) {
-    y += container.height / 2 - (top + bottom) / 2;
+    const maxSafeTop = Math.max(container.height - padding, padding);
+    if (top < padding) {
+      y += padding - top;
+    } else if (top > maxSafeTop) {
+      y -= top - maxSafeTop;
+    }
   } else if (top < padding) {
     y += padding - top;
   } else if (bottom > container.height - padding) {

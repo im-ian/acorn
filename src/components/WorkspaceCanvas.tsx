@@ -43,6 +43,7 @@ import type { Session, SessionStatus } from "../lib/types";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
+  WORKSPACE_CANVAS_GRID_SIZE,
   WORKSPACE_CANVAS_MAX_ZOOM,
   WORKSPACE_CANVAS_MIN_ZOOM,
   alignWorkspaceCanvasNode,
@@ -795,7 +796,7 @@ export function WorkspaceCanvas({
     transform: `translate3d(${canvas.viewport.offset.x}px, ${canvas.viewport.offset.y}px, 0) scale(${canvas.viewport.zoom})`,
     transformOrigin: "0 0",
   };
-  const gridStep = 20 * canvas.viewport.zoom;
+  const gridStep = WORKSPACE_CANVAS_GRID_SIZE * canvas.viewport.zoom;
   const gridStyle: CSSProperties = {
     backgroundImage:
       "radial-gradient(circle, color-mix(in oklab, var(--color-fg-muted) 32%, transparent) 1px, transparent 1px)",

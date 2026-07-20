@@ -264,10 +264,21 @@ describe("workspaceCanvas", () => {
     ).toEqual({ offset: { x: -348, y: 0 }, zoom: 1 });
   });
 
-  it("keeps an oversized node header inside the reveal padding", () => {
+  it("keeps an accessible oversized node header stationary", () => {
     const node = { x: 100, y: 100, width: 620, height: 400, zIndex: 1 };
     const viewport = revealWorkspaceCanvasNode(
       { offset: { x: 0, y: 0 }, zoom: 1.3 },
+      node,
+      { width: 700, height: 400 },
+    );
+
+    expect(node.y * viewport.zoom + viewport.offset.y).toBe(130);
+  });
+
+  it("clamps an oversized node header back inside the reveal padding", () => {
+    const node = { x: 100, y: 100, width: 620, height: 400, zIndex: 1 };
+    const viewport = revealWorkspaceCanvasNode(
+      { offset: { x: 0, y: -300 }, zoom: 1 },
       node,
       { width: 700, height: 400 },
     );
