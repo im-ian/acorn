@@ -156,6 +156,7 @@ import type {
   SessionStatus,
   SessionStatusReason,
 } from "../lib/types";
+import { AutonomousGoalDialog } from "./AutonomousGoalDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
@@ -326,6 +327,9 @@ export function Sidebar() {
     );
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [autonomousGoalOpen, setAutonomousGoalOpen] = useState(false);
+  const [autonomousGoalScope, setAutonomousGoalScope] =
+    useState<SessionCreateScope | null>(null);
   const [settingsProject, setSettingsProject] =
     useState<ProjectFolderProjectGroup | null>(null);
   const [pendingRemoveProjectFolderId, setPendingRemoveProjectFolderId] =
@@ -674,6 +678,13 @@ export function Sidebar() {
         "chat",
       );
     };
+    const newAutonomousGoal = () => {
+      const scope = activeScope();
+      setAutonomousGoalScope(
+        scope?.placement.projectScoped !== false ? scope : null,
+      );
+      setAutonomousGoalOpen(true);
+    };
     const newProject = () => {
       setNewProjectOpen(true);
     };
@@ -684,6 +695,10 @@ export function Sidebar() {
     window.addEventListener("acorn:new-isolated-session", newIsolated);
     window.addEventListener("acorn:new-control-session", newControl);
     window.addEventListener("acorn:new-chat-session", newChat);
+    window.addEventListener(
+      "acorn:new-autonomous-goal-session",
+      newAutonomousGoal,
+    );
     window.addEventListener("acorn:new-project", newProject);
     window.addEventListener("acorn:add-project", addProj);
     return () => {
@@ -691,6 +706,10 @@ export function Sidebar() {
       window.removeEventListener("acorn:new-isolated-session", newIsolated);
       window.removeEventListener("acorn:new-control-session", newControl);
       window.removeEventListener("acorn:new-chat-session", newChat);
+      window.removeEventListener(
+        "acorn:new-autonomous-goal-session",
+        newAutonomousGoal,
+      );
       window.removeEventListener("acorn:new-project", newProject);
       window.removeEventListener("acorn:add-project", addProj);
     };
@@ -791,6 +810,18 @@ export function Sidebar() {
   onNewSessionRef.current = onNewSession;
   onNewLocalSessionRef.current = onNewLocalSession;
   onAddProjectRef.current = onAddExistingProject;
+
+  function openAutonomousGoalForFolder(folder: ProjectFolder) {
+    setAutonomousGoalScope({
+      placement: {
+        repoPath: folder.repoPath,
+        projectScoped: true,
+        projectFolderId: folder.id,
+      },
+      launch: { kind: "workspaceCwd", cwdPath: folder.cwdPath },
+    });
+    setAutonomousGoalOpen(true);
+  }
 
   const projectIds = useMemo(
     () => projectGroups.map((p) => projectDragId(p.repoPath)),
@@ -1169,6 +1200,26 @@ export function Sidebar() {
         </h2>
         <div className="flex items-center gap-1">
           <Tooltip
+            label={sidebarText(t, "sidebar.actions.newAutonomousGoalSession")}
+            side="left"
+          >
+            <button
+              type="button"
+              onClick={() =>
+                window.dispatchEvent(
+                  new CustomEvent("acorn:new-autonomous-goal-session"),
+                )
+              }
+              className="rounded-md p-1.5 text-fg-muted transition hover:bg-bg-elevated hover:text-accent"
+              aria-label={sidebarText(
+                t,
+                "sidebar.aria.newAutonomousGoalSession",
+              )}
+            >
+              <Sparkles size={14} />
+            </button>
+          </Tooltip>
+          <Tooltip
             label={sidebarText(t, "sidebar.projects.newProject")}
             side="left"
           >
@@ -1289,6 +1340,7 @@ export function Sidebar() {
                             mode,
                           )
                         }
+                        onAddAutonomousGoal={openAutonomousGoalForFolder}
                         onAddFolder={() => onAddProjectFolder(project.repoPath)}
                         onAddWorktreeFolder={() =>
                           void onAddProjectFolderWorktree(project.repoPath)
@@ -1346,6 +1398,11 @@ export function Sidebar() {
         </DndContext>
         <SessionActivityInbox />
       </div>
+      <AutonomousGoalDialog
+        open={autonomousGoalOpen}
+        scope={autonomousGoalScope}
+        onClose={() => setAutonomousGoalOpen(false)}
+      />
       <NewProjectDialog
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
@@ -1846,6 +1903,7 @@ interface ProjectGroupViewProps {
     kind: SessionKind,
     mode?: SessionMode,
   ) => void;
+  onAddAutonomousGoal: (folder: ProjectFolder) => void;
   onAddFolder: () => void;
   onAddWorktreeFolder: () => void;
   onRenameFolder: (folderId: string, name: string) => void;
@@ -1873,6 +1931,7 @@ function ProjectGroupView({
   onSelectSession,
   onRemoveSession,
   onAddSession,
+  onAddAutonomousGoal,
   onAddFolder,
   onAddWorktreeFolder,
   onRenameFolder,
@@ -1922,28 +1981,49 @@ function ProjectGroupView({
   const projectSessionCreationFolder = defaultFolderGroup?.folder ?? null;
 
   const createMenuItems = useMemo<ContextMenuItem[]>(
-    () =>
-      PROJECT_SESSION_CREATE_MENU.map((item) => {
-        if (item.type === "separator") return { type: "separator" };
-        const action = item.action;
-        return {
-          label: sidebarText(t, action.labelKey),
-          icon: projectSessionCreateIcon(action.id),
-          shortcut: action.hotkeyId
-            ? formatHotkey(shortcuts[action.hotkeyId])
-            : undefined,
+    () => {
+      const items: ContextMenuItem[] = [
+        {
+          label: sidebarText(t, "sidebar.actions.newAutonomousGoalSession"),
+          icon: <Sparkles size={12} />,
           onClick: () =>
             projectSessionCreationFolder
-              ? onAddSession(
-                  projectSessionCreationFolder,
-                  action.isolated,
-                  action.kind,
-                  action.mode,
-                )
+              ? onAddAutonomousGoal(projectSessionCreationFolder)
               : undefined,
-        };
-      }),
-    [onAddSession, projectSessionCreationFolder, shortcuts, t],
+        },
+        { type: "separator" },
+      ];
+      items.push(
+        ...PROJECT_SESSION_CREATE_MENU.map<ContextMenuItem>((item) => {
+          if (item.type === "separator") return { type: "separator" };
+          const action = item.action;
+          return {
+            label: sidebarText(t, action.labelKey),
+            icon: projectSessionCreateIcon(action.id),
+            shortcut: action.hotkeyId
+              ? formatHotkey(shortcuts[action.hotkeyId])
+              : undefined,
+            onClick: () =>
+              projectSessionCreationFolder
+                ? onAddSession(
+                    projectSessionCreationFolder,
+                    action.isolated,
+                    action.kind,
+                    action.mode,
+                  )
+                : undefined,
+          };
+        }),
+      );
+      return items;
+    },
+    [
+      onAddAutonomousGoal,
+      onAddSession,
+      projectSessionCreationFolder,
+      shortcuts,
+      t,
+    ],
   );
   const overflowCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => {
@@ -1982,11 +2062,20 @@ function ProjectGroupView({
           onClick: onAddWorktreeFolder,
         },
         contextMenuGroupTitle(t, "session"),
+        {
+          label: sidebarText(t, "sidebar.actions.newAutonomousGoalSession"),
+          icon: <Sparkles size={12} />,
+          onClick: () =>
+            projectSessionCreationFolder
+              ? onAddAutonomousGoal(projectSessionCreationFolder)
+              : undefined,
+        },
         ...sessionItems,
       ];
     },
     [
       onAddFolder,
+      onAddAutonomousGoal,
       onAddSession,
       onAddWorktreeFolder,
       projectSessionCreationFolder,
@@ -2307,6 +2396,9 @@ function ProjectGroupView({
                         mode,
                       )
                     }
+                    onAddAutonomousGoal={() =>
+                      onAddAutonomousGoal(item.folderGroup.folder)
+                    }
                     onMoveSessionToFolder={onMoveSessionToFolder}
                   />
                 ),
@@ -2347,6 +2439,7 @@ interface ProjectFolderViewProps {
     kind: SessionKind,
     mode: SessionMode,
   ) => void;
+  onAddAutonomousGoal: () => void;
   onMoveSessionToFolder: (sessionId: string, folderId: string | null) => void;
 }
 
@@ -2364,6 +2457,7 @@ function ProjectFolderView({
   onRenameFolder,
   onRemoveFolder,
   onAddSession,
+  onAddAutonomousGoal,
   onMoveSessionToFolder,
 }: ProjectFolderViewProps) {
   const t = useTranslation();
@@ -2419,6 +2513,12 @@ function ProjectFolderView({
   const folderCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => [
       contextMenuGroupTitle(t, "session"),
+      {
+        label: sidebarText(t, "sidebar.actions.newAutonomousGoalSession"),
+        icon: <Sparkles size={12} />,
+        onClick: onAddAutonomousGoal,
+      },
+      { type: "separator" },
       ...folderCreateMenu.map((item) => {
         if (item.type === "separator") return { type: "separator" as const };
         const action = item.action;
@@ -2433,11 +2533,16 @@ function ProjectFolderView({
         };
       }),
     ],
-    [folderCreateMenu, onAddSession, shortcuts, t],
+    [folderCreateMenu, onAddAutonomousGoal, onAddSession, shortcuts, t],
   );
   const folderOverflowCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => [
       contextMenuGroupTitle(t, "session"),
+      {
+        label: sidebarText(t, "sidebar.actions.newAutonomousGoalSession"),
+        icon: <Sparkles size={12} />,
+        onClick: onAddAutonomousGoal,
+      },
       ...folderOverflowCreateMenu.map((item) => {
         if (item.type === "separator") return { type: "separator" as const };
         const action = item.action;
@@ -2452,7 +2557,13 @@ function ProjectFolderView({
         };
       }),
     ],
-    [folderOverflowCreateMenu, onAddSession, shortcuts, t],
+    [
+      folderOverflowCreateMenu,
+      onAddAutonomousGoal,
+      onAddSession,
+      shortcuts,
+      t,
+    ],
   );
 
   function submitRename(next: string) {

@@ -1844,6 +1844,25 @@ fn chat_session_status_for_message_status(status: persistence::ChatMessageStatus
     }
 }
 
+fn chat_state_requests_user_input(chat_state: &persistence::ChatSessionState) -> bool {
+    chat_state.messages.last().is_some_and(|message| {
+        message.role == persistence::ChatRole::Assistant
+            && !matches!(
+                message.status,
+                Some(
+                    persistence::ChatMessageStatus::Pending
+                        | persistence::ChatMessageStatus::Streaming
+                        | persistence::ChatMessageStatus::Error
+                        | persistence::ChatMessageStatus::Cancelled
+                )
+            )
+            && message
+                .content
+                .lines()
+                .any(|line| line.trim_start().starts_with("WAITING:"))
+    })
+}
+
 fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> SessionStatus {
     if chat_state_has_running_message(chat_state) {
         return SessionStatus::Working;
@@ -1856,6 +1875,8 @@ fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> 
         || last_turn.is_some_and(|turn| turn.status == persistence::ChatTurnStatus::Error)
     {
         SessionStatus::Errored
+    } else if chat_state_requests_user_input(chat_state) {
+        SessionStatus::WaitingForInput
     } else {
         SessionStatus::Ready
     }
@@ -3178,18 +3199,23 @@ fn send_chat_message_from_state_inner<R: Runtime>(
     };
     let was_cancelled = cancellation.is_cancelled();
     state.chat_runs.finish(&session.id, &started.turn_id);
-    let final_session_status = chat_session_status_for_message_status(if was_cancelled {
+    let final_message_status = if was_cancelled {
         persistence::ChatMessageStatus::Cancelled
     } else if provider_result.is_ok() {
         persistence::ChatMessageStatus::Complete
     } else {
         persistence::ChatMessageStatus::Error
-    });
+    };
     let chat_state = finish_chat_turn(
         started,
         chat_turn_finish_from_result(provider_result, was_cancelled),
     );
     let chat_state = persistence::save_chat_session_state(chat_state)?;
+    let final_session_status = if final_message_status == persistence::ChatMessageStatus::Error {
+        SessionStatus::Errored
+    } else {
+        chat_session_status_for_state(&chat_state)
+    };
     state
         .sessions
         .update_status(&session.id, final_session_status)?;
@@ -7883,6 +7909,26 @@ mod tests {
         )]);
         assert_eq!(
             super::chat_session_status_for_state(&completed),
+            acorn_session::SessionStatus::Ready
+        );
+
+        let waiting = chat_state_for_runtime(vec![chat_message(
+            "a2",
+            crate::persistence::ChatRole::Assistant,
+            "Plan prepared.\n\nWAITING: Confirm the plan to continue.",
+        )]);
+        assert_eq!(
+            super::chat_session_status_for_state(&waiting),
+            acorn_session::SessionStatus::WaitingForInput
+        );
+
+        let mentioned_waiting = chat_state_for_runtime(vec![chat_message(
+            "a3",
+            crate::persistence::ChatRole::Assistant,
+            "The literal WAITING: marker is documented here.",
+        )]);
+        assert_eq!(
+            super::chat_session_status_for_state(&mentioned_waiting),
             acorn_session::SessionStatus::Ready
         );
 

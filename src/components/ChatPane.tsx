@@ -136,6 +136,15 @@ function sessionStatusFromChatState(state: ChatSessionState): SessionStatus {
   if (lastMessage?.status === "error" || lastTurn?.status === "error") {
     return "errored";
   }
+  if (
+    lastMessage?.role === "assistant" &&
+    lastMessage.status !== "cancelled" &&
+    lastMessage.content
+      .split(/\r?\n/u)
+      .some((line) => line.trimStart().startsWith("WAITING:"))
+  ) {
+    return "waiting_for_input";
+  }
   return "ready";
 }
 

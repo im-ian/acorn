@@ -360,6 +360,55 @@ describe("ChatPane", () => {
     expect(container.textContent).toContain("hi from codex");
   });
 
+  it("marks a chat session as waiting when the assistant emits the waiting marker", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
+    mocks.sendChatMessage.mockResolvedValueOnce(
+      chatState("s1", [
+        {
+          id: "u1",
+          role: "user",
+          content: "prepare a plan",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "Here is the plan.\n\nWAITING: Confirm it to continue.",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "complete",
+          metadata: null,
+        },
+      ]),
+    );
+    useAppStore.setState({ sessions: [session()] });
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Chat message"]',
+    );
+    const form = container.querySelector("form");
+    expect(textarea).toBeTruthy();
+    expect(form).toBeTruthy();
+
+    await act(async () => {
+      changeTextareaValue(textarea!, "prepare a plan");
+      form!.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await settle();
+
+    expect(useAppStore.getState().sessions[0]?.status).toBe(
+      "waiting_for_input",
+    );
+  });
+
   it("can prepare a new worktree before the first chat message", async () => {
     mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
     mocks.sendChatMessage.mockResolvedValueOnce(

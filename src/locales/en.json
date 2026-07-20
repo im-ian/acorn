@@ -16,6 +16,10 @@
       "worktreeAdoptFailed": "Failed to adopt worktree:",
       "worktreeMissing": "Worktree folder no longer exists on disk."
     },
+    "autonomousGoal": {
+      "started": "Autonomous goal started in {name}.",
+      "startFailed": "Autonomous goal failed to start:"
+    },
     "project": {
       "addFailed": "Failed to add project:",
       "createFailed": "Failed to create project:",
@@ -1200,6 +1204,7 @@
       "newIsolatedSession": "New isolated session",
       "newIsolatedSessionWorktree": "New worktree session",
       "newChatSession": "New chat session",
+      "newAutonomousGoalSession": "New autonomous goal session",
       "newControlSession": "New control session",
       "newProjectFolder": "New workspace",
       "newProjectFolderWithWorktree": "New worktree workspace",
@@ -1255,6 +1260,7 @@
       "newSessionMenuInProjectFolder": "Create session in this workspace",
       "newSessionInProject": "New session in this project",
       "newSessionInProjectFolder": "New session in this workspace",
+      "newAutonomousGoalSession": "New autonomous goal session",
       "newIsolatedSessionInProject": "New worktree session in this project",
       "newChatSessionInProject": "New chat session in this project",
       "newControlSessionInProject": "New control session in this project",
@@ -1712,6 +1718,70 @@
       "dontShowAgain": "Don't show this again",
       "gotIt": "Got it"
     },
+    "autonomousGoal": {
+      "title": "New autonomous goal session",
+      "subtitle": "Describe the outcome once, then let the selected agent work in an isolated worktree.",
+      "selectRepository": "Select a Git repository for the autonomous goal",
+      "goal": {
+        "label": "Goal",
+        "hint": "Required. Write the outcome you want, not an issue to select.",
+        "placeholder": "For example: Add keyboard navigation to the command palette and verify it with tests."
+      },
+      "completionCriteria": {
+        "label": "Completion criteria",
+        "placeholder": "What must be true when the work is done?"
+      },
+      "constraints": {
+        "label": "Constraints",
+        "placeholder": "APIs to preserve, files to avoid, compatibility requirements..."
+      },
+      "tests": {
+        "label": "Tests",
+        "placeholder": "Commands or behaviors that should be verified"
+      },
+      "optionalFieldHint": "Optional — the agent infers omitted details.",
+      "provider": {
+        "label": "Agent",
+        "hint": "The provider stays fixed for this session; there is no automatic fallback."
+      },
+      "preset": {
+        "label": "Policy preset",
+        "hint": "Built-ins are read-only. Add or duplicate a slot to customize it.",
+        "add": "New preset",
+        "duplicate": "Duplicate",
+        "delete": "Delete",
+        "name": "Preset name",
+        "builtInReadonly": "This built-in preset cannot be changed. Duplicate it to make an editable copy.",
+        "snapshotHint": "The session receives a snapshot. Renaming, editing, or deleting this preset later will not change a running session."
+      },
+      "presets": {
+        "review": "Review-centered",
+        "balanced": "Balanced",
+        "fullAutonomy": "Full autonomy",
+        "builtIn": "Built-in · read-only",
+        "custom": "Custom preset",
+        "customDefault": "Custom preset",
+        "copySuffix": "copy"
+      },
+      "stages": {
+        "interpretation": "Interpretation",
+        "plan": "Plan",
+        "implementation": "Implementation",
+        "validation": "Validation",
+        "autoFix": "Automatic fixes",
+        "selfReview": "Self-review",
+        "draftPr": "Draft PR"
+      },
+      "policies": {
+        "auto": "Automatic",
+        "approval": "Ask first",
+        "disabled": "Disabled"
+      },
+      "prototypeNotice": "This first version starts immediately in a new isolated worktree. It can edit and test locally, but it will not push, open a PR, merge, deploy, or release. Stop the response and send a revised goal to make it replan and wait for confirmation.",
+      "footerHint": "Starting creates the session and submits this goal immediately.",
+      "start": "Start goal",
+      "starting": "Creating worktree..."
+    },
     "removeSession": {
       "title": "Remove session",
       "confirmPrefix": "Remove session",
@@ -2101,6 +2171,7 @@
       "newIsolatedSession": "New isolated session",
       "newControlSession": "New control session",
       "newChatSession": "New chat session",
+      "newAutonomousGoalSession": "New autonomous goal session",
       "newProject": "New project",
       "addExistingProject": "Add existing project",
       "refreshSessions": "Refresh sessions",

@@ -129,6 +129,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     close();
   }
 
+  function handleNewAutonomousGoalSession() {
+    window.dispatchEvent(
+      new CustomEvent("acorn:new-autonomous-goal-session"),
+    );
+    close();
+  }
+
   async function handleNewChatSession() {
     const show = useToasts.getState().show;
     try {
@@ -367,6 +374,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           >
             <MessageSquareText size={14} className="text-accent" />
             <span>{cpt(t, "commandPalette.commands.newChatSession")}</span>
+          </Command.Item>
+          <Command.Item
+            value="new-autonomous-goal-session"
+            onSelect={handleNewAutonomousGoalSession}
+            keywords={["autonomous", "goal", "agent", "codex", "claude"]}
+          >
+            <Sparkles size={14} className="text-accent" />
+            <span>
+              {cpt(t, "commandPalette.commands.newAutonomousGoalSession")}
+            </span>
           </Command.Item>
           <Command.Item
             value="new-project"
