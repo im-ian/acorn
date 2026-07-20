@@ -289,6 +289,50 @@ test.describe("workspace canvas mode", () => {
       .toBeGreaterThan(initialX);
   });
 
+  test("keeps the active session drag handle accessible while zooming", async ({
+    page,
+    tauri,
+  }) => {
+    await page.setViewportSize({ width: 900, height: 600 });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [session("alpha")]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const canvas = page.getByTestId("workspace-canvas");
+    await canvas.getByRole("button", { name: "Zoom in" }).click();
+    await canvas.getByRole("button", { name: "Zoom in" }).click();
+
+    const alpha = canvas.locator('[data-canvas-session-id="alpha"]');
+    const dragHandle = alpha.getByTestId(
+      "workspace-canvas-node-drag-handle",
+    );
+    const toolbarBox = await canvas.getByRole("toolbar").boundingBox();
+    const dragBox = await dragHandle.boundingBox();
+    if (!toolbarBox || !dragBox) {
+      throw new Error("Canvas toolbar and drag handle must be visible");
+    }
+    expect(dragBox.y).toBeGreaterThanOrEqual(toolbarBox.y + toolbarBox.height);
+
+    const initialX = Number(await alpha.getAttribute("data-canvas-node-x"));
+    await page.mouse.move(
+      dragBox.x + dragBox.width / 2,
+      dragBox.y + dragBox.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      dragBox.x + dragBox.width / 2 + 26,
+      dragBox.y + dragBox.height / 2,
+    );
+    await page.mouse.up();
+
+    await expect
+      .poll(async () => Number(await alpha.getAttribute("data-canvas-node-x")))
+      .toBeGreaterThan(initialX);
+  });
+
   test("closes sessions from the canvas context menu and title button", async ({
     page,
     tauri,

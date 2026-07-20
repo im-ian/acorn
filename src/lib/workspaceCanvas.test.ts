@@ -81,8 +81,8 @@ describe("workspaceCanvas", () => {
     const result = resetWorkspaceCanvasState(["a", "b", "c"]);
 
     expect(result.nodes.a).toMatchObject({
-      x: 40,
-      y: 40,
+      x: 60,
+      y: 60,
       width: 600,
       height: 400,
     });
@@ -94,6 +94,33 @@ describe("workspaceCanvas", () => {
       expect(node.width % WORKSPACE_CANVAS_GRID_SIZE).toBe(0);
       expect(node.height % WORKSPACE_CANVAS_GRID_SIZE).toBe(0);
     }
+  });
+
+  it("places a new grid-sized session beside the preserved legacy default", () => {
+    const result = reconcileWorkspaceCanvasState(
+      {
+        viewport: { offset: { x: 48, y: 48 }, zoom: 1 },
+        nodes: {
+          legacy: { x: 48, y: 48, width: 620, height: 400, zIndex: 1 },
+        },
+      },
+      ["legacy", "new"],
+    );
+
+    expect(result.nodes.legacy).toEqual({
+      x: 48,
+      y: 48,
+      width: 620,
+      height: 400,
+      zIndex: 1,
+    });
+    expect(result.nodes.new).toEqual({
+      x: 700,
+      y: 60,
+      width: 600,
+      height: 400,
+      zIndex: 2,
+    });
   });
 
   it("keeps the world point under the cursor fixed while zooming", () => {
