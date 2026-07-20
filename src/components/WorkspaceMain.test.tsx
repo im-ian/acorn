@@ -263,13 +263,13 @@ describe("WorkspaceMain", () => {
     firePointer(window, "pointermove", { clientX: 180, clientY: 160 });
     firePointer(window, "pointerup", { clientX: 180, clientY: 160 });
 
-    expect(alpha!.dataset.canvasNodeWidth).toBe("720");
-    expect(alpha!.dataset.canvasNodeHeight).toBe("500");
+    expect(alpha!.dataset.canvasNodeWidth).toBe("700");
+    expect(alpha!.dataset.canvasNodeHeight).toBe("480");
     expect(alpha!.dataset.canvasNodeX).toBe("100");
     expect(alpha!.dataset.canvasNodeY).toBe("80");
     expect(
       useAppStore.getState().workspaces[REPO].canvas?.nodes.alpha,
-    ).toMatchObject({ width: 720, height: 500 });
+    ).toMatchObject({ width: 700, height: 480 });
   });
 
   it("renders chat sessions as interactive canvas nodes", () => {

@@ -629,8 +629,8 @@ test.describe("workspace canvas mode", () => {
       resizeBox.y + resizeBox.height / 2 + 6,
     );
 
-    await expect(alpha).toHaveAttribute("data-canvas-node-width", "640");
-    await expect(alpha).toHaveAttribute("data-canvas-node-height", "440");
+    await expect(alpha).toHaveAttribute("data-canvas-node-width", "620");
+    await expect(alpha).toHaveAttribute("data-canvas-node-height", "420");
     await expect(alpha).toHaveCSS("z-index", "3");
     await expect(canvas.getByTestId("workspace-canvas-size-hint"))
       .toHaveAttribute("data-canvas-match-width", "true");
@@ -653,8 +653,8 @@ test.describe("workspace canvas mode", () => {
       wholePixelResizeBox.x + wholePixelResizeBox.width / 2 + 20,
       wholePixelResizeBox.y + wholePixelResizeBox.height / 2 + 20,
     );
-    await expect(alpha).toHaveAttribute("data-canvas-node-width", "660");
-    await expect(alpha).toHaveAttribute("data-canvas-node-height", "460");
+    await expect(alpha).toHaveAttribute("data-canvas-node-width", "640");
+    await expect(alpha).toHaveAttribute("data-canvas-node-height", "440");
     await expect(canvas.getByTestId("workspace-canvas-size-hint")).toHaveCount(0);
     await page.mouse.up();
 
@@ -674,7 +674,7 @@ test.describe("workspace canvas mode", () => {
       dragBox.y + dragBox.height / 2 + 60,
     );
 
-    await expect(alpha).toHaveAttribute("data-canvas-node-x", "740");
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "720");
     await expect(
       canvas.locator('[data-canvas-alignment-axis="x"]'),
     ).toBeVisible();
@@ -683,7 +683,7 @@ test.describe("workspace canvas mode", () => {
     await expect(
       canvas.locator('[data-canvas-alignment-axis="x"]'),
     ).toHaveCount(0);
-    await expect(alpha).toHaveAttribute("data-canvas-node-x", "740");
+    await expect(alpha).toHaveAttribute("data-canvas-node-x", "720");
   });
 
   test("keeps Alt gestures on whole pixels when the canvas loses focus", async ({
