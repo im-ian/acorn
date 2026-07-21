@@ -47,6 +47,7 @@ import type {
   SessionAgentProvider,
   SessionStatus,
 } from "../lib/types";
+import { ChatActivityTimeline } from "./chat/ChatActivityTimeline";
 import { ChatMessageBody } from "./chat/ChatMessageBody";
 import { Tooltip } from "./Tooltip";
 import { Button, Modal, ModalFooter, ModalHeader, Select } from "./ui";
@@ -1162,6 +1163,15 @@ export function ChatPane({
               const isPending = message.status === "pending";
               const isStreaming = message.status === "streaming";
               const isRunningMessage = isPending || isStreaming;
+              const turn = message.turn_id
+                ? state?.turns.find((turn) => turn.id === message.turn_id)
+                : undefined;
+              const activities =
+                message.role === "assistant" ? (turn?.activities ?? []) : [];
+              const hasActivities = activities.length > 0;
+              const activityIsRunning =
+                isRunningMessage ||
+                activities.some((activity) => activity.status === "running");
               const isCancelled = message.status === "cancelled";
               const canForkBeforeMessage =
                 !isRunningMessage &&
@@ -1266,18 +1276,7 @@ export function ChatPane({
                           : ""
                       }`}
                     >
-                      {isPending || (isStreaming && !message.content) ? (
-                        <div className="flex items-center text-fg-muted">
-                          <span
-                            className="animate-pulse"
-                            data-chat-running-label
-                          >
-                            Running {providerLabel(
-                              messageProvider ?? stateProvider ?? provider,
-                            )}
-                          </span>
-                        </div>
-                      ) : isEditing ? (
+                      {isEditing ? (
                         <div className="flex min-w-0 flex-col gap-2">
                           <textarea
                             aria-label="Edit user message content"
@@ -1324,11 +1323,39 @@ export function ChatPane({
                           </div>
                         </div>
                       ) : (
-                        <StreamingChatMessageBody
-                          content={message.content}
-                          repoPath={repoPath}
-                          isStreaming={isStreaming}
-                        />
+                        <>
+                          {hasActivities ? (
+                            <ChatActivityTimeline
+                              activities={activities}
+                              isRunning={activityIsRunning}
+                            />
+                          ) : null}
+                          {isPending ||
+                          (isStreaming && !message.content) ? (
+                            hasActivities ? null : (
+                              <div className="flex items-center text-fg-muted">
+                                <span
+                                  className="animate-pulse"
+                                  data-chat-running-label
+                                >
+                                  Running {providerLabel(
+                                    messageProvider ??
+                                      stateProvider ??
+                                      provider,
+                                  )}
+                                </span>
+                              </div>
+                            )
+                          ) : message.content ? (
+                            <div className={hasActivities ? "mt-2" : undefined}>
+                              <StreamingChatMessageBody
+                                content={message.content}
+                                repoPath={repoPath}
+                                isStreaming={isStreaming}
+                              />
+                            </div>
+                          ) : null}
+                        </>
                       )}
                     </div>
                     {showMessageMeta ? (
