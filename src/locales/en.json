@@ -1845,6 +1845,7 @@
       "projectNameLabel": "Project name",
       "projectNameHint": "Use a single folder name.",
       "ignoreSafeName": "Ignore safe-name check",
+      "initCommit": "Create an initial commit (needed for worktrees and GitHub)",
       "locationLabel": "Location",
       "locationPlaceholder": "Choose a parent folder",
       "locationAriaLabel": "Project location",
