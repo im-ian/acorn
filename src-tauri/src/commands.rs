@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, Runtime, State};
@@ -649,14 +649,29 @@ pub(crate) trait ChatProviderAdapter {
     fn send_message_streaming(
         &self,
         input: ChatProviderInput,
-        on_chunk: &mut dyn FnMut(&str),
+        on_event: &mut dyn FnMut(ChatProviderStreamEvent),
     ) -> AppResult<ProviderResponse> {
-        let _ = on_chunk;
+        let _ = on_event;
         self.send_message(input)
     }
 }
 
-fn ignore_chat_streaming_chunk(_: &str) {}
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ChatProviderStreamEvent {
+    AssistantTextDelta(String),
+    Activity(ChatActivityPatch),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChatActivityPatch {
+    id: String,
+    kind: persistence::ChatActivityKind,
+    title: Option<String>,
+    detail: Option<String>,
+    status: persistence::ChatActivityStatus,
+}
+
+fn ignore_chat_streaming_event(_: ChatProviderStreamEvent) {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChatCliOutputMode {
@@ -671,6 +686,16 @@ struct ChatCliOutputParser {
     emitted_text: String,
     final_text: Option<String>,
     usage: Option<serde_json::Value>,
+    claude_message_id: Option<String>,
+    claude_blocks: HashMap<u64, ClaudePartialBlock>,
+}
+
+struct ClaudePartialBlock {
+    id: String,
+    kind: persistence::ChatActivityKind,
+    title: String,
+    detail: String,
+    input_json: String,
 }
 
 impl ChatCliOutputParser {
@@ -681,18 +706,20 @@ impl ChatCliOutputParser {
             emitted_text: String::new(),
             final_text: None,
             usage: None,
+            claude_message_id: None,
+            claude_blocks: HashMap::new(),
         }
     }
 
-    fn push_chunk(&mut self, chunk: &str, on_chunk: &mut dyn FnMut(&str)) {
+    fn push_chunk(&mut self, chunk: &str, on_event: &mut dyn FnMut(ChatProviderStreamEvent)) {
         match self.mode {
-            ChatCliOutputMode::Text => self.emit_delta(chunk, on_chunk),
+            ChatCliOutputMode::Text => self.emit_delta(chunk, on_event),
             ChatCliOutputMode::ClaudeStreamJson | ChatCliOutputMode::CodexJson => {
                 self.pending_line.push_str(chunk);
                 while let Some(newline) = self.pending_line.find('\n') {
                     let line = self.pending_line[..newline].to_string();
                     self.pending_line.drain(..=newline);
-                    self.process_json_line(&line, on_chunk);
+                    self.process_json_line(&line, on_event);
                 }
             }
         }
@@ -702,11 +729,8 @@ impl ChatCliOutputParser {
         if self.mode == ChatCliOutputMode::Text {
             return raw.trim().to_string();
         }
-        if !self.pending_line.trim().is_empty() {
-            let line = std::mem::take(&mut self.pending_line);
-            let mut ignore_chunk = ignore_chat_streaming_chunk;
-            self.process_json_line(&line, &mut ignore_chunk);
-        }
+        let mut ignore_event = ignore_chat_streaming_event;
+        self.flush_pending(&mut ignore_event);
         self.final_text
             .as_deref()
             .unwrap_or(self.emitted_text.as_str())
@@ -714,7 +738,16 @@ impl ChatCliOutputParser {
             .to_string()
     }
 
-    fn process_json_line(&mut self, line: &str, on_chunk: &mut dyn FnMut(&str)) {
+    fn flush_pending(&mut self, on_event: &mut dyn FnMut(ChatProviderStreamEvent)) {
+        if self.pending_line.trim().is_empty() {
+            self.pending_line.clear();
+            return;
+        }
+        let line = std::mem::take(&mut self.pending_line);
+        self.process_json_line(&line, on_event);
+    }
+
+    fn process_json_line(&mut self, line: &str, on_event: &mut dyn FnMut(ChatProviderStreamEvent)) {
         let line = line.trim();
         if line.is_empty() {
             return;
@@ -725,48 +758,235 @@ impl ChatCliOutputParser {
         if let Some(usage) = extract_chat_stream_usage(self.mode, &value) {
             self.usage = Some(usage);
         }
+        let mut activities = if self.mode == ChatCliOutputMode::ClaudeStreamJson {
+            self.extract_claude_partial_activities(&value)
+        } else {
+            Vec::new()
+        };
+        activities.extend(extract_chat_stream_activities(self.mode, &value));
+        for activity in activities {
+            on_event(ChatProviderStreamEvent::Activity(activity));
+        }
         let Some(event) = extract_chat_stream_text(self.mode, &value) else {
             return;
         };
         if event.is_final {
             self.final_text = Some(event.text.clone());
         }
-        self.emit_text_candidate(&event, on_chunk);
+        self.emit_text_candidate(&event, on_event);
     }
 
-    fn emit_text_candidate(&mut self, event: &ChatStreamTextEvent, on_chunk: &mut dyn FnMut(&str)) {
+    fn emit_text_candidate(
+        &mut self,
+        event: &ChatStreamTextEvent,
+        on_event: &mut dyn FnMut(ChatProviderStreamEvent),
+    ) {
         let text = event.text.as_str();
         if text.is_empty() {
             return;
         }
         if let Some(delta) = text.strip_prefix(&self.emitted_text) {
-            self.emit_delta(delta, on_chunk);
+            self.emit_delta(delta, on_event);
         } else if event.is_final {
             // Persist normalized final text from finish() without briefly
             // appending a divergent duplicate to the live stream.
         } else if event.boundary != ChatStreamTextBoundary::Delta {
             let separator = message_boundary_separator(&self.emitted_text, text);
             if !separator.is_empty() {
-                self.emit_delta(separator, on_chunk);
+                self.emit_delta(separator, on_event);
             }
-            self.emit_delta(text, on_chunk);
+            self.emit_delta(text, on_event);
         } else {
-            self.emit_delta(text, on_chunk);
+            self.emit_delta(text, on_event);
         }
     }
 
-    fn emit_delta(&mut self, delta: &str, on_chunk: &mut dyn FnMut(&str)) {
+    fn emit_delta(&mut self, delta: &str, on_event: &mut dyn FnMut(ChatProviderStreamEvent)) {
         if delta.is_empty() {
             return;
         }
         self.emitted_text.push_str(delta);
-        on_chunk(delta);
+        on_event(ChatProviderStreamEvent::AssistantTextDelta(
+            delta.to_string(),
+        ));
     }
 
     fn provider_metadata(&self) -> Option<serde_json::Value> {
         self.usage
             .as_ref()
             .map(|usage| serde_json::json!({ "usage": usage }))
+    }
+
+    fn extract_claude_partial_activities(
+        &mut self,
+        value: &serde_json::Value,
+    ) -> Vec<ChatActivityPatch> {
+        if value.get("type").and_then(serde_json::Value::as_str) != Some("stream_event") {
+            return Vec::new();
+        }
+        let Some(event) = value.get("event") else {
+            return Vec::new();
+        };
+        let event_type = event.get("type").and_then(serde_json::Value::as_str);
+        match event_type {
+            Some("message_start") => {
+                self.claude_message_id = event
+                    .get("message")
+                    .and_then(|message| message.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
+                self.claude_blocks.clear();
+                Vec::new()
+            }
+            Some("content_block_start") => {
+                let Some(index) = event.get("index").and_then(serde_json::Value::as_u64) else {
+                    return Vec::new();
+                };
+                let Some(block) = event.get("content_block") else {
+                    return Vec::new();
+                };
+                let Some(block_type) = block.get("type").and_then(serde_json::Value::as_str) else {
+                    return Vec::new();
+                };
+                let message_id = self.claude_message_id.as_deref().unwrap_or("assistant");
+                let partial = match block_type {
+                    "thinking" | "redacted_thinking" => ClaudePartialBlock {
+                        id: format!("claude:{message_id}:reasoning:{index}"),
+                        kind: persistence::ChatActivityKind::Reasoning,
+                        title: "Reasoning".to_string(),
+                        detail: block
+                            .get("thinking")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        input_json: String::new(),
+                    },
+                    "tool_use" | "server_tool_use" => {
+                        let name = block
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("Tool");
+                        ClaudePartialBlock {
+                            id: block
+                                .get("id")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_string)
+                                .unwrap_or_else(|| format!("claude:{message_id}:tool:{index}")),
+                            kind: tool_activity_kind(name),
+                            title: humanize_activity_name(name),
+                            detail: tool_input_detail(block.get("input")).unwrap_or_default(),
+                            input_json: String::new(),
+                        }
+                    }
+                    _ => return Vec::new(),
+                };
+                let patch =
+                    claude_partial_block_patch(&partial, persistence::ChatActivityStatus::Running);
+                self.claude_blocks.insert(index, partial);
+                vec![patch]
+            }
+            Some("content_block_delta") => {
+                let Some(index) = event.get("index").and_then(serde_json::Value::as_u64) else {
+                    return Vec::new();
+                };
+                let Some(delta) = event.get("delta") else {
+                    return Vec::new();
+                };
+                let delta_type = delta.get("type").and_then(serde_json::Value::as_str);
+                if delta_type == Some("thinking_delta") && !self.claude_blocks.contains_key(&index)
+                {
+                    let message_id = self.claude_message_id.as_deref().unwrap_or("assistant");
+                    self.claude_blocks.insert(
+                        index,
+                        ClaudePartialBlock {
+                            id: format!("claude:{message_id}:reasoning:{index}"),
+                            kind: persistence::ChatActivityKind::Reasoning,
+                            title: "Reasoning".to_string(),
+                            detail: String::new(),
+                            input_json: String::new(),
+                        },
+                    );
+                }
+                let Some(partial) = self.claude_blocks.get_mut(&index) else {
+                    return Vec::new();
+                };
+                match delta_type {
+                    Some("thinking_delta") => {
+                        if let Some(fragment) =
+                            delta.get("thinking").and_then(serde_json::Value::as_str)
+                        {
+                            append_limited_activity_text(&mut partial.detail, fragment);
+                        }
+                    }
+                    Some("input_json_delta") => {
+                        if let Some(fragment) = delta
+                            .get("partial_json")
+                            .and_then(serde_json::Value::as_str)
+                        {
+                            append_limited_tool_input_json(&mut partial.input_json, fragment);
+                        }
+                    }
+                    _ => return Vec::new(),
+                }
+                vec![claude_partial_block_patch(
+                    partial,
+                    persistence::ChatActivityStatus::Running,
+                )]
+            }
+            Some("content_block_stop") => {
+                let Some(index) = event.get("index").and_then(serde_json::Value::as_u64) else {
+                    return Vec::new();
+                };
+                let Some(mut partial) = self.claude_blocks.remove(&index) else {
+                    return Vec::new();
+                };
+                if partial.kind != persistence::ChatActivityKind::Reasoning
+                    && !partial.input_json.is_empty()
+                {
+                    partial.detail = serde_json::from_str::<serde_json::Value>(&partial.input_json)
+                        .ok()
+                        .as_ref()
+                        .and_then(|input| tool_input_detail(Some(input)))
+                        .unwrap_or_default();
+                }
+                let status = if partial.kind == persistence::ChatActivityKind::Reasoning {
+                    persistence::ChatActivityStatus::Complete
+                } else {
+                    persistence::ChatActivityStatus::Running
+                };
+                vec![claude_partial_block_patch(&partial, status)]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
+fn claude_partial_block_patch(
+    partial: &ClaudePartialBlock,
+    status: persistence::ChatActivityStatus,
+) -> ChatActivityPatch {
+    ChatActivityPatch {
+        id: partial.id.clone(),
+        kind: partial.kind,
+        title: Some(partial.title.clone()),
+        detail: activity_detail(Some(&partial.detail)),
+        status,
+    }
+}
+
+fn append_limited_activity_text(target: &mut String, fragment: &str) {
+    let remaining = MAX_CHAT_ACTIVITY_DETAIL_CHARS.saturating_sub(target.chars().count());
+    if remaining > 0 {
+        target.extend(fragment.chars().take(remaining));
+    }
+}
+
+const MAX_CHAT_TOOL_INPUT_JSON_CHARS: usize = 16_000;
+
+fn append_limited_tool_input_json(target: &mut String, fragment: &str) {
+    let remaining = MAX_CHAT_TOOL_INPUT_JSON_CHARS.saturating_sub(target.chars().count());
+    if remaining > 0 {
+        target.extend(fragment.chars().take(remaining));
     }
 }
 
@@ -826,6 +1046,12 @@ fn extract_claude_stream_usage(value: &serde_json::Value) -> Option<serde_json::
                 .get("message")
                 .and_then(|message| message.get("usage"))
         })
+        .or_else(|| {
+            value
+                .get("event")
+                .and_then(|event| event.get("message"))
+                .and_then(|message| message.get("usage"))
+        })
         .cloned()
 }
 
@@ -844,6 +1070,615 @@ fn extract_codex_event_usage(value: &serde_json::Value) -> Option<serde_json::Va
             .cloned();
     }
     value.get("usage").cloned()
+}
+
+const MAX_CHAT_ACTIVITY_DETAIL_CHARS: usize = 4_000;
+const MAX_CHAT_ACTIVITY_ID_CHARS: usize = 512;
+const MAX_CHAT_ACTIVITY_TITLE_CHARS: usize = 200;
+const MAX_CHAT_TURN_ACTIVITIES: usize = 512;
+
+fn extract_chat_stream_activities(
+    mode: ChatCliOutputMode,
+    value: &serde_json::Value,
+) -> Vec<ChatActivityPatch> {
+    match mode {
+        ChatCliOutputMode::Text => Vec::new(),
+        ChatCliOutputMode::ClaudeStreamJson => extract_claude_stream_activities(value),
+        ChatCliOutputMode::CodexJson => extract_codex_stream_activities(value),
+    }
+}
+
+fn extract_claude_stream_activities(value: &serde_json::Value) -> Vec<ChatActivityPatch> {
+    let event_type = value.get("type").and_then(serde_json::Value::as_str);
+    match event_type {
+        Some("assistant") => {
+            let Some(message) = value.get("message") else {
+                return Vec::new();
+            };
+            let message_id = message
+                .get("id")
+                .or_else(|| value.get("uuid"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("assistant");
+            let block_status = if message
+                .get("stop_reason")
+                .is_some_and(|reason| !reason.is_null())
+            {
+                persistence::ChatActivityStatus::Complete
+            } else {
+                persistence::ChatActivityStatus::Running
+            };
+            message
+                .get("content")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .take(MAX_CHAT_TURN_ACTIVITIES)
+                .enumerate()
+                .filter_map(|(index, block)| {
+                    let block_type = block.get("type").and_then(serde_json::Value::as_str)?;
+                    match block_type {
+                        "thinking" | "redacted_thinking" => Some(ChatActivityPatch {
+                            id: format!("claude:{message_id}:reasoning:{index}"),
+                            kind: persistence::ChatActivityKind::Reasoning,
+                            title: Some("Reasoning".to_string()),
+                            detail: activity_detail(
+                                block
+                                    .get("thinking")
+                                    .or_else(|| block.get("text"))
+                                    .and_then(json_display_text)
+                                    .as_deref(),
+                            ),
+                            status: block_status,
+                        }),
+                        "tool_use" | "server_tool_use" => {
+                            let name = block
+                                .get("name")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("Tool");
+                            let id = block
+                                .get("id")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_string)
+                                .unwrap_or_else(|| format!("claude:{message_id}:tool:{index}"));
+                            Some(ChatActivityPatch {
+                                id,
+                                kind: tool_activity_kind(name),
+                                title: Some(humanize_activity_name(name)),
+                                detail: tool_input_detail(block.get("input")),
+                                status: persistence::ChatActivityStatus::Running,
+                            })
+                        }
+                        _ => None,
+                    }
+                })
+                .collect()
+        }
+        Some("user") => value
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(MAX_CHAT_TURN_ACTIVITIES)
+            .filter_map(|block| {
+                if block.get("type").and_then(serde_json::Value::as_str) != Some("tool_result") {
+                    return None;
+                }
+                let id = block
+                    .get("tool_use_id")
+                    .and_then(serde_json::Value::as_str)?
+                    .to_string();
+                let is_error = block
+                    .get("is_error")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                Some(ChatActivityPatch {
+                    id,
+                    kind: persistence::ChatActivityKind::Tool,
+                    title: None,
+                    detail: None,
+                    status: if is_error {
+                        persistence::ChatActivityStatus::Error
+                    } else {
+                        persistence::ChatActivityStatus::Complete
+                    },
+                })
+            })
+            .collect(),
+        Some("tool_progress") => {
+            let Some(id) = value.get("tool_use_id").and_then(serde_json::Value::as_str) else {
+                return Vec::new();
+            };
+            vec![ChatActivityPatch {
+                id: id.to_string(),
+                kind: persistence::ChatActivityKind::Tool,
+                title: value
+                    .get("tool_name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(humanize_activity_name),
+                detail: None,
+                status: persistence::ChatActivityStatus::Running,
+            }]
+        }
+        Some("tool_use_summary") => {
+            let summary = value
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|summary| activity_detail(Some(summary)));
+            value
+                .get("preceding_tool_use_ids")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .take(MAX_CHAT_TURN_ACTIVITIES)
+                .filter_map(serde_json::Value::as_str)
+                .map(|id| ChatActivityPatch {
+                    id: id.to_string(),
+                    kind: persistence::ChatActivityKind::Tool,
+                    title: None,
+                    detail: summary.clone(),
+                    status: persistence::ChatActivityStatus::Complete,
+                })
+                .collect()
+        }
+        Some("result") => value
+            .get("permission_denials")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(MAX_CHAT_TURN_ACTIVITIES)
+            .filter_map(|denial| {
+                let id = denial
+                    .get("tool_use_id")
+                    .or_else(|| denial.get("id"))
+                    .and_then(serde_json::Value::as_str)?;
+                Some(ChatActivityPatch {
+                    id: id.to_string(),
+                    kind: persistence::ChatActivityKind::Tool,
+                    title: denial
+                        .get("tool_name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(humanize_activity_name),
+                    detail: denial
+                        .get("message")
+                        .and_then(json_display_text)
+                        .and_then(|detail| activity_detail(Some(&detail))),
+                    status: persistence::ChatActivityStatus::Error,
+                })
+            })
+            .collect(),
+        Some("system") => extract_claude_system_activity(value).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn extract_claude_system_activity(value: &serde_json::Value) -> Option<ChatActivityPatch> {
+    let subtype = value.get("subtype").and_then(serde_json::Value::as_str)?;
+    let id = value
+        .get("task_id")
+        .or_else(|| value.get("tool_use_id"))
+        .or_else(|| value.get("uuid"))
+        .and_then(serde_json::Value::as_str)?;
+    match subtype {
+        "task_started" | "task_progress" | "task_notification" => {
+            let status = match value.get("status").and_then(serde_json::Value::as_str) {
+                Some("failed") => persistence::ChatActivityStatus::Error,
+                Some("stopped") => persistence::ChatActivityStatus::Cancelled,
+                Some("completed") => persistence::ChatActivityStatus::Complete,
+                _ => persistence::ChatActivityStatus::Running,
+            };
+            Some(ChatActivityPatch {
+                id: format!("claude:task:{id}"),
+                kind: persistence::ChatActivityKind::Tool,
+                title: Some("Background task".to_string()),
+                detail: value
+                    .get("summary")
+                    .or_else(|| value.get("description"))
+                    .and_then(json_display_text)
+                    .and_then(|detail| activity_detail(Some(&detail))),
+                status,
+            })
+        }
+        "permission_denied" => Some(ChatActivityPatch {
+            id: id.to_string(),
+            kind: persistence::ChatActivityKind::Tool,
+            title: value
+                .get("tool_name")
+                .and_then(serde_json::Value::as_str)
+                .map(humanize_activity_name),
+            detail: value
+                .get("message")
+                .and_then(json_display_text)
+                .and_then(|detail| activity_detail(Some(&detail))),
+            status: persistence::ChatActivityStatus::Error,
+        }),
+        _ => None,
+    }
+}
+
+fn extract_codex_stream_activities(value: &serde_json::Value) -> Vec<ChatActivityPatch> {
+    let outer_type = value.get("type").and_then(serde_json::Value::as_str);
+    if matches!(
+        outer_type,
+        Some("item.started" | "item.updated" | "item.completed")
+    ) {
+        return value
+            .get("item")
+            .and_then(|item| codex_item_activity(outer_type.unwrap_or_default(), item))
+            .into_iter()
+            .collect();
+    }
+
+    let event = value
+        .get("msg")
+        .filter(|event| event.is_object())
+        .or_else(|| value.get("payload").filter(|event| event.is_object()))
+        .unwrap_or(value);
+    codex_legacy_activity(event).into_iter().collect()
+}
+
+fn codex_item_activity(outer_type: &str, item: &serde_json::Value) -> Option<ChatActivityPatch> {
+    let item_type = item.get("type").and_then(serde_json::Value::as_str)?;
+    if item_type == "agent_message" {
+        return None;
+    }
+    let id = item
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("codex:{item_type}"));
+    let status = codex_activity_status(outer_type, item);
+    let patch = match item_type {
+        "reasoning" => ChatActivityPatch {
+            id,
+            kind: persistence::ChatActivityKind::Reasoning,
+            title: Some("Reasoning".to_string()),
+            detail: item
+                .get("text")
+                .or_else(|| item.get("summary"))
+                .and_then(json_display_text)
+                .and_then(|detail| activity_detail(Some(&detail))),
+            status,
+        },
+        "command_execution" => ChatActivityPatch {
+            id,
+            kind: persistence::ChatActivityKind::Command,
+            title: Some("Command".to_string()),
+            detail: item
+                .get("command")
+                .and_then(json_display_text)
+                .and_then(|detail| activity_detail(Some(&detail))),
+            status,
+        },
+        "file_change" => ChatActivityPatch {
+            id,
+            kind: persistence::ChatActivityKind::FileChange,
+            title: Some("File changes".to_string()),
+            detail: codex_file_change_detail(item),
+            status,
+        },
+        "mcp_tool_call" => {
+            let server = item
+                .get("server")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("MCP");
+            let tool = item
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("tool");
+            ChatActivityPatch {
+                id,
+                kind: persistence::ChatActivityKind::Tool,
+                title: Some(format!("{server} · {tool}")),
+                detail: None,
+                status,
+            }
+        }
+        "collab_tool_call" => ChatActivityPatch {
+            id,
+            kind: persistence::ChatActivityKind::Tool,
+            title: Some("Sub-agent".to_string()),
+            detail: item
+                .get("tool")
+                .and_then(json_display_text)
+                .map(|detail| humanize_activity_name(&detail))
+                .and_then(|detail| activity_detail(Some(&detail))),
+            status,
+        },
+        "web_search" => ChatActivityPatch {
+            id,
+            kind: persistence::ChatActivityKind::WebSearch,
+            title: Some("Web search".to_string()),
+            detail: item
+                .get("query")
+                .and_then(json_display_text)
+                .and_then(|detail| activity_detail(Some(&detail))),
+            status,
+        },
+        "todo_list" => ChatActivityPatch {
+            id,
+            kind: persistence::ChatActivityKind::Plan,
+            title: Some("Plan".to_string()),
+            detail: codex_todo_detail(item),
+            status,
+        },
+        "error" => ChatActivityPatch {
+            id,
+            kind: persistence::ChatActivityKind::Tool,
+            title: Some("Provider error".to_string()),
+            detail: item
+                .get("message")
+                .and_then(json_display_text)
+                .and_then(|detail| activity_detail(Some(&detail))),
+            status: persistence::ChatActivityStatus::Error,
+        },
+        _ => return None,
+    };
+    Some(patch)
+}
+
+fn codex_activity_status(
+    outer_type: &str,
+    item: &serde_json::Value,
+) -> persistence::ChatActivityStatus {
+    match item.get("status").and_then(serde_json::Value::as_str) {
+        Some("failed" | "error" | "declined") => persistence::ChatActivityStatus::Error,
+        Some("cancelled") => persistence::ChatActivityStatus::Cancelled,
+        Some("completed") => persistence::ChatActivityStatus::Complete,
+        Some("in_progress") => persistence::ChatActivityStatus::Running,
+        _ if outer_type == "item.completed" => persistence::ChatActivityStatus::Complete,
+        _ => persistence::ChatActivityStatus::Running,
+    }
+}
+
+fn codex_legacy_activity(event: &serde_json::Value) -> Option<ChatActivityPatch> {
+    let event_type = event.get("type").and_then(serde_json::Value::as_str)?;
+    let id = event
+        .get("call_id")
+        .or_else(|| event.get("id"))
+        .or_else(|| event.get("turn_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("codex:{event_type}"));
+    let is_error = event
+        .get("success")
+        .and_then(serde_json::Value::as_bool)
+        .is_some_and(|success| !success)
+        || matches!(
+            event.get("status").and_then(serde_json::Value::as_str),
+            Some("failed" | "error" | "declined")
+        );
+    let ending = event_type.ends_with("_end") || event_type.ends_with("_complete");
+    let status = if is_error {
+        persistence::ChatActivityStatus::Error
+    } else if ending {
+        persistence::ChatActivityStatus::Complete
+    } else {
+        persistence::ChatActivityStatus::Running
+    };
+
+    match event_type {
+        "reasoning" => Some(ChatActivityPatch {
+            id: format!("{id}:reasoning"),
+            kind: persistence::ChatActivityKind::Reasoning,
+            title: Some("Reasoning".to_string()),
+            detail: event
+                .get("text")
+                .or_else(|| event.get("summary"))
+                .and_then(json_display_text)
+                .and_then(|detail| activity_detail(Some(&detail))),
+            status: persistence::ChatActivityStatus::Complete,
+        }),
+        "exec_command_begin" | "exec_command_end" => Some(ChatActivityPatch {
+            id,
+            kind: persistence::ChatActivityKind::Command,
+            title: Some("Command".to_string()),
+            detail: event
+                .get("command")
+                .or_else(|| event.get("cmd"))
+                .and_then(json_display_text)
+                .and_then(|detail| activity_detail(Some(&detail))),
+            status,
+        }),
+        "patch_apply_begin" | "patch_apply_end" | "apply_patch_begin" | "apply_patch_end" => {
+            Some(ChatActivityPatch {
+                id,
+                kind: persistence::ChatActivityKind::FileChange,
+                title: Some("File changes".to_string()),
+                detail: codex_file_change_detail(event),
+                status,
+            })
+        }
+        "mcp_tool_call_begin" | "mcp_tool_call_end" => {
+            let invocation = event.get("invocation").unwrap_or(event);
+            let server = invocation
+                .get("server")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("MCP");
+            let tool = invocation
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("tool");
+            Some(ChatActivityPatch {
+                id,
+                kind: persistence::ChatActivityKind::Tool,
+                title: Some(format!("{server} · {tool}")),
+                detail: None,
+                status,
+            })
+        }
+        "function_call" | "custom_tool_call" => {
+            let name = event
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Tool");
+            Some(ChatActivityPatch {
+                id,
+                kind: tool_activity_kind(name),
+                title: Some(humanize_activity_name(name)),
+                detail: tool_input_detail(event.get("arguments").or_else(|| event.get("input"))),
+                status,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn codex_file_change_detail(value: &serde_json::Value) -> Option<String> {
+    let mut paths = Vec::new();
+    if let Some(changes) = value.get("changes").and_then(serde_json::Value::as_array) {
+        for change in changes.iter().take(20) {
+            if let Some(path) = change.get("path").and_then(serde_json::Value::as_str) {
+                paths.push(path.to_string());
+            }
+        }
+    } else if let Some(changes) = value.get("changes").and_then(serde_json::Value::as_object) {
+        paths.extend(changes.keys().take(20).cloned());
+    }
+    activity_detail((!paths.is_empty()).then(|| paths.join("\n")).as_deref())
+}
+
+fn codex_todo_detail(value: &serde_json::Value) -> Option<String> {
+    let items = value.get("items")?.as_array()?;
+    let lines = items
+        .iter()
+        .take(30)
+        .filter_map(|item| {
+            let text = item.get("text").and_then(serde_json::Value::as_str)?;
+            let marker = if item
+                .get("completed")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                "[x]"
+            } else {
+                "[ ]"
+            };
+            Some(format!("{marker} {text}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    activity_detail(Some(&lines))
+}
+
+fn tool_activity_kind(name: &str) -> persistence::ChatActivityKind {
+    let normalized = name.to_ascii_lowercase();
+    if normalized.contains("bash")
+        || normalized.contains("shell")
+        || normalized.contains("command")
+        || normalized == "exec"
+    {
+        persistence::ChatActivityKind::Command
+    } else if normalized.contains("search") || normalized.contains("grep") {
+        persistence::ChatActivityKind::WebSearch
+    } else if normalized.contains("write")
+        || normalized.contains("edit")
+        || normalized.contains("patch")
+    {
+        persistence::ChatActivityKind::FileChange
+    } else {
+        persistence::ChatActivityKind::Tool
+    }
+}
+
+fn tool_input_detail(input: Option<&serde_json::Value>) -> Option<String> {
+    let input = input?;
+    if let Some(text) = input.as_str() {
+        return activity_detail(json_display_text(input).as_deref().or(Some(text)));
+    }
+    let object = input.as_object()?;
+    const SAFE_DETAIL_KEYS: &[&str] = &[
+        "command",
+        "cmd",
+        "file_path",
+        "path",
+        "AbsolutePath",
+        "DirectoryPath",
+        "pattern",
+        "query",
+        "url",
+        "description",
+        "toolAction",
+        "toolSummary",
+    ];
+    SAFE_DETAIL_KEYS.iter().find_map(|key| {
+        object
+            .get(*key)
+            .and_then(json_display_text)
+            .and_then(|detail| activity_detail(Some(&detail)))
+    })
+}
+
+fn json_display_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.starts_with('"') && trimmed.ends_with('"') {
+                serde_json::from_str::<String>(trimmed)
+                    .ok()
+                    .or_else(|| Some(trimmed.to_string()))
+            } else if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        serde_json::Value::Array(values) => {
+            let text = values
+                .iter()
+                .filter_map(|value| {
+                    value
+                        .get("text")
+                        .and_then(json_display_text)
+                        .or_else(|| json_display_text(value))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.is_empty()).then_some(text)
+        }
+        _ => None,
+    }
+}
+
+fn activity_detail(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let mut detail = value
+        .chars()
+        .take(MAX_CHAT_ACTIVITY_DETAIL_CHARS)
+        .collect::<String>();
+    if value.chars().count() > MAX_CHAT_ACTIVITY_DETAIL_CHARS {
+        detail.push('…');
+    }
+    Some(detail)
+}
+
+fn humanize_activity_name(value: &str) -> String {
+    let mut out = String::new();
+    let mut previous_lowercase = false;
+    for ch in value.trim().chars() {
+        if ch == '_' || ch == '-' {
+            if !out.ends_with(' ') {
+                out.push(' ');
+            }
+            previous_lowercase = false;
+            continue;
+        }
+        if ch.is_ascii_uppercase() && previous_lowercase {
+            out.push(' ');
+        }
+        out.push(ch);
+        previous_lowercase = ch.is_ascii_lowercase();
+    }
+    let compact = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        "Tool".to_string()
+    } else {
+        compact
+    }
 }
 
 fn extract_claude_stream_text(value: &serde_json::Value) -> Option<ChatStreamTextEvent> {
@@ -870,11 +1705,44 @@ fn extract_claude_stream_text(value: &serde_json::Value) -> Option<ChatStreamTex
                 is_final: false,
             })
         }
+        Some("stream_event") => {
+            let event = value.get("event")?;
+            if event.get("type").and_then(serde_json::Value::as_str) != Some("content_block_delta")
+                || event
+                    .get("delta")
+                    .and_then(|delta| delta.get("type"))
+                    .and_then(serde_json::Value::as_str)
+                    != Some("text_delta")
+            {
+                return None;
+            }
+            json_delta_text(event).map(|text| ChatStreamTextEvent {
+                text,
+                boundary: ChatStreamTextBoundary::Delta,
+                is_final: false,
+            })
+        }
         _ => None,
     }
 }
 
 fn extract_codex_stream_text(value: &serde_json::Value) -> Option<ChatStreamTextEvent> {
+    if matches!(
+        value.get("type").and_then(serde_json::Value::as_str),
+        Some("item.started" | "item.updated" | "item.completed")
+    ) {
+        let item = value.get("item")?;
+        if item.get("type").and_then(serde_json::Value::as_str) == Some("agent_message") {
+            return item
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .map(|text| ChatStreamTextEvent {
+                    text: text.to_string(),
+                    boundary: ChatStreamTextBoundary::Message,
+                    is_final: false,
+                });
+        }
+    }
     if let Some(event) = extract_codex_event_text(value) {
         return Some(event);
     }
@@ -1081,6 +1949,278 @@ fn backfill_latest_empty_codex_assistant_message(
     backfill_latest_empty_codex_assistant_message_from_path(state, &path)
 }
 
+const ANTIGRAVITY_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const ANTIGRAVITY_TRANSCRIPT_DISCOVERY_INTERVAL: Duration = Duration::from_millis(500);
+const MAX_ANTIGRAVITY_TRANSCRIPT_READ_BYTES: u64 = 1024 * 1024;
+const MAX_ANTIGRAVITY_TRANSCRIPT_LINE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_ANTIGRAVITY_FINISH_POLLS: usize = 8;
+
+struct AntigravityTranscriptFollower {
+    cwd: PathBuf,
+    process_start: SystemTime,
+    path: Option<PathBuf>,
+    offset: u64,
+    pending_bytes: Vec<u8>,
+    discard_until_newline: bool,
+    last_poll: Option<Instant>,
+    last_discovery: Option<Instant>,
+    line_sequence: u64,
+    pending_tools: VecDeque<(String, persistence::ChatActivityKind)>,
+}
+
+impl AntigravityTranscriptFollower {
+    fn new(cwd: PathBuf, resume_token: Option<&str>, process_start: SystemTime) -> Self {
+        let path = resume_token.and_then(acorn_transcript::locate_antigravity_transcript);
+        let offset = path
+            .as_ref()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        Self {
+            cwd,
+            process_start,
+            path,
+            offset,
+            pending_bytes: Vec::new(),
+            discard_until_newline: false,
+            last_poll: None,
+            last_discovery: None,
+            line_sequence: 0,
+            pending_tools: VecDeque::new(),
+        }
+    }
+
+    fn poll(&mut self, on_event: &mut dyn FnMut(ChatProviderStreamEvent)) {
+        let now = Instant::now();
+        if self
+            .last_poll
+            .is_some_and(|last| now.duration_since(last) < ANTIGRAVITY_TRANSCRIPT_POLL_INTERVAL)
+        {
+            return;
+        }
+        self.last_poll = Some(now);
+        self.poll_now(on_event);
+    }
+
+    fn poll_now(&mut self, on_event: &mut dyn FnMut(ChatProviderStreamEvent)) {
+        if self.path.is_none() {
+            let now = Instant::now();
+            if self.last_discovery.is_some_and(|last| {
+                now.duration_since(last) < ANTIGRAVITY_TRANSCRIPT_DISCOVERY_INTERVAL
+            }) {
+                return;
+            }
+            self.last_discovery = Some(now);
+            self.path = acorn_transcript::find_agent_run_transcript(
+                &self.cwd,
+                AgentKind::Antigravity,
+                self.process_start,
+            )
+            .map(|(path, _)| path);
+        }
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let Ok(mut file) = std::fs::File::open(&path) else {
+            return;
+        };
+        let Ok(metadata) = file.metadata() else {
+            return;
+        };
+        if !metadata.file_type().is_file() {
+            return;
+        }
+        if metadata.len() < self.offset {
+            self.offset = 0;
+            self.pending_bytes.clear();
+            self.discard_until_newline = false;
+            self.line_sequence = 0;
+            self.pending_tools.clear();
+        }
+        let available = metadata.len().saturating_sub(self.offset);
+        if available == 0 || file.seek(SeekFrom::Start(self.offset)).is_err() {
+            return;
+        }
+        let mut bytes = Vec::new();
+        if file
+            .take(available.min(MAX_ANTIGRAVITY_TRANSCRIPT_READ_BYTES))
+            .read_to_end(&mut bytes)
+            .is_err()
+        {
+            return;
+        }
+        self.offset = self.offset.saturating_add(bytes.len() as u64);
+        self.consume_bytes(&bytes, on_event);
+    }
+
+    fn finish(&mut self, on_event: &mut dyn FnMut(ChatProviderStreamEvent)) {
+        self.last_discovery = None;
+        for _ in 0..MAX_ANTIGRAVITY_FINISH_POLLS {
+            let previous_path = self.path.clone();
+            let previous_offset = self.offset;
+            self.poll_now(on_event);
+            if self.path == previous_path && self.offset == previous_offset {
+                break;
+            }
+        }
+        if !self.discard_until_newline && !self.pending_bytes.is_empty() {
+            let line = std::mem::take(&mut self.pending_bytes);
+            self.process_line(&line, on_event);
+        }
+    }
+
+    fn consume_bytes(
+        &mut self,
+        mut bytes: &[u8],
+        on_event: &mut dyn FnMut(ChatProviderStreamEvent),
+    ) {
+        if self.discard_until_newline {
+            let Some(newline) = bytes.iter().position(|byte| *byte == b'\n') else {
+                return;
+            };
+            bytes = &bytes[newline + 1..];
+            self.discard_until_newline = false;
+        }
+        self.pending_bytes.extend_from_slice(bytes);
+        while let Some(newline) = self.pending_bytes.iter().position(|byte| *byte == b'\n') {
+            let mut line = self.pending_bytes.drain(..=newline).collect::<Vec<_>>();
+            line.pop();
+            if line.len() <= MAX_ANTIGRAVITY_TRANSCRIPT_LINE_BYTES {
+                self.process_line(&line, on_event);
+            }
+        }
+        if self.pending_bytes.len() > MAX_ANTIGRAVITY_TRANSCRIPT_LINE_BYTES {
+            self.pending_bytes.clear();
+            self.discard_until_newline = true;
+        }
+    }
+
+    fn process_line(&mut self, line: &[u8], on_event: &mut dyn FnMut(ChatProviderStreamEvent)) {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) else {
+            return;
+        };
+        let line_type = value
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if matches!(line_type, "" | "USER_INPUT" | "CONVERSATION_HISTORY") {
+            return;
+        }
+        self.line_sequence = self.line_sequence.saturating_add(1);
+        let step = value
+            .get("step_index")
+            .and_then(serde_json::Value::as_u64)
+            .map(|step| step.to_string())
+            .unwrap_or_else(|| self.line_sequence.to_string());
+        let line_type_upper = line_type.to_ascii_uppercase();
+        let provider_status = value
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_ascii_uppercase);
+        let status = match provider_status.as_deref() {
+            Some("ERROR" | "FAILED") => persistence::ChatActivityStatus::Error,
+            Some("CANCELLED" | "CANCELED" | "STOPPED") => {
+                persistence::ChatActivityStatus::Cancelled
+            }
+            _ if line_type_upper.contains("ERROR") => persistence::ChatActivityStatus::Error,
+            _ => persistence::ChatActivityStatus::Complete,
+        };
+
+        if line_type == "PLANNER_RESPONSE" {
+            let thinking = value
+                .get("thinking")
+                .and_then(json_display_text)
+                .and_then(|detail| activity_detail(Some(&detail)));
+            let has_thinking = thinking.is_some();
+            if thinking.is_some() {
+                on_event(ChatProviderStreamEvent::Activity(ChatActivityPatch {
+                    id: format!("antigravity:{step}:reasoning"),
+                    kind: persistence::ChatActivityKind::Reasoning,
+                    title: Some("Reasoning".to_string()),
+                    detail: thinking,
+                    status: persistence::ChatActivityStatus::Complete,
+                }));
+            }
+            let tool_calls = value
+                .get("tool_calls")
+                .and_then(serde_json::Value::as_array);
+            if let Some(tool_calls) = tool_calls.filter(|calls| !calls.is_empty()) {
+                if !has_thinking {
+                    if let Some(detail) = value
+                        .get("content")
+                        .and_then(json_display_text)
+                        .and_then(|detail| activity_detail(Some(&detail)))
+                    {
+                        on_event(ChatProviderStreamEvent::Activity(ChatActivityPatch {
+                            id: format!("antigravity:{step}:reasoning"),
+                            kind: persistence::ChatActivityKind::Reasoning,
+                            title: Some("Reasoning".to_string()),
+                            detail: Some(detail),
+                            status: persistence::ChatActivityStatus::Complete,
+                        }));
+                    }
+                }
+                for (index, tool_call) in tool_calls
+                    .iter()
+                    .take(MAX_CHAT_TURN_ACTIVITIES.saturating_sub(self.pending_tools.len()))
+                    .enumerate()
+                {
+                    let name = tool_call
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Tool");
+                    let id = format!("antigravity:{step}:tool:{index}");
+                    let kind = tool_activity_kind(name);
+                    let args = tool_call.get("args");
+                    let title = args
+                        .and_then(|args| args.get("toolAction"))
+                        .or_else(|| args.and_then(|args| args.get("toolSummary")))
+                        .and_then(json_display_text)
+                        .unwrap_or_else(|| humanize_activity_name(name));
+                    on_event(ChatProviderStreamEvent::Activity(ChatActivityPatch {
+                        id: id.clone(),
+                        kind,
+                        title: Some(title),
+                        detail: tool_input_detail(args),
+                        status: persistence::ChatActivityStatus::Running,
+                    }));
+                    self.pending_tools.push_back((id, kind));
+                }
+            } else if status == persistence::ChatActivityStatus::Error {
+                on_event(ChatProviderStreamEvent::Activity(ChatActivityPatch {
+                    id: format!("antigravity:{step}:error"),
+                    kind: persistence::ChatActivityKind::Tool,
+                    title: Some("Provider error".to_string()),
+                    detail: value
+                        .get("content")
+                        .and_then(json_display_text)
+                        .and_then(|detail| activity_detail(Some(&detail))),
+                    status,
+                }));
+            }
+            return;
+        }
+
+        if let Some((id, kind)) = self.pending_tools.pop_front() {
+            on_event(ChatProviderStreamEvent::Activity(ChatActivityPatch {
+                id,
+                kind,
+                title: None,
+                detail: None,
+                status,
+            }));
+        } else {
+            on_event(ChatProviderStreamEvent::Activity(ChatActivityPatch {
+                id: format!("antigravity:{step}:{line_type}"),
+                kind: tool_activity_kind(line_type),
+                title: Some(humanize_activity_name(line_type)),
+                detail: None,
+                status,
+            }));
+        }
+    }
+}
+
 struct CliChatProviderAdapter {
     ai: crate::ai::AiExecutionRequest,
     cwd: PathBuf,
@@ -1102,26 +2242,48 @@ impl ChatProviderAdapter for CliChatProviderAdapter {
     }
 
     fn send_message(&self, input: ChatProviderInput) -> AppResult<ProviderResponse> {
-        let mut ignore_chunk: fn(&str) = ignore_chat_streaming_chunk;
-        self.send_message_streaming(input, &mut ignore_chunk)
+        let mut ignore_event: fn(ChatProviderStreamEvent) = ignore_chat_streaming_event;
+        self.send_message_streaming(input, &mut ignore_event)
     }
 
     fn send_message_streaming(
         &self,
         input: ChatProviderInput,
-        on_chunk: &mut dyn FnMut(&str),
+        on_event: &mut dyn FnMut(ChatProviderStreamEvent),
     ) -> AppResult<ProviderResponse> {
         let invocation = resolve_chat_cli_invocation(&self.ai, &input)?;
         let started_at = SystemTime::now();
         let mut output_parser = ChatCliOutputParser::new(invocation.output_mode);
+        let mut antigravity_follower = (self.ai.provider == crate::ai::AiProvider::Antigravity)
+            .then(|| {
+                AntigravityTranscriptFollower::new(
+                    self.cwd.clone(),
+                    invocation.resume_token.as_deref(),
+                    started_at,
+                )
+            });
         let raw = crate::ai::run_resolved_streaming_in_dir_cancellable(
             &invocation.cli,
             &invocation.prompt,
             "Settings → Agents",
             Some(&self.cwd),
             self.cancellation.clone(),
-            |chunk| output_parser.push_chunk(chunk, on_chunk),
-        )?;
+            |event| match event {
+                crate::ai::AiProcessStreamEvent::Stdout(chunk) => {
+                    output_parser.push_chunk(chunk, on_event);
+                }
+                crate::ai::AiProcessStreamEvent::Tick => {
+                    if let Some(follower) = antigravity_follower.as_mut() {
+                        follower.poll(on_event);
+                    }
+                }
+            },
+        );
+        if let Some(follower) = antigravity_follower.as_mut() {
+            follower.finish(on_event);
+        }
+        output_parser.flush_pending(on_event);
+        let raw = raw?;
         let content = output_parser.finish(&raw);
         let discovered_thread_id = invocation.transcript_discovery.and_then(|kind| {
             acorn_transcript::find_completed_agent_run(&self.cwd, kind, started_at)
@@ -1602,6 +2764,7 @@ fn start_chat_turn(
         started_at: now,
         completed_at: None,
         error: None,
+        activities: Vec::new(),
     });
     chat_state
         .context_snapshots
@@ -1700,6 +2863,7 @@ fn finish_chat_turn(
         .iter_mut()
         .find(|turn| turn.id == started.turn_id)
     {
+        finish_running_chat_activities(&mut turn.activities, turn_status, completed_at);
         turn.status = turn_status;
         turn.completed_at = Some(completed_at);
         turn.error = error;
@@ -1758,6 +2922,107 @@ fn append_streaming_chat_chunk(
     true
 }
 
+fn upsert_chat_activity(
+    chat_state: &mut persistence::ChatSessionState,
+    turn_id: &str,
+    mut patch: ChatActivityPatch,
+) -> bool {
+    patch.id = patch
+        .id
+        .trim()
+        .chars()
+        .take(MAX_CHAT_ACTIVITY_ID_CHARS)
+        .collect();
+    if patch.id.is_empty() {
+        return false;
+    }
+    patch.title = patch.title.and_then(|title| {
+        let title = title
+            .trim()
+            .chars()
+            .take(MAX_CHAT_ACTIVITY_TITLE_CHARS)
+            .collect::<String>();
+        (!title.is_empty()).then_some(title)
+    });
+    patch.detail = patch
+        .detail
+        .as_deref()
+        .and_then(|detail| activity_detail(Some(detail)));
+
+    let Some(turn) = chat_state.turns.iter_mut().find(|turn| turn.id == turn_id) else {
+        return false;
+    };
+    let now = chrono::Utc::now();
+    if let Some(activity) = turn
+        .activities
+        .iter_mut()
+        .find(|activity| activity.id == patch.id)
+    {
+        if let Some(title) = patch.title {
+            activity.title = title;
+        }
+        if let Some(detail) = patch.detail {
+            activity.detail = Some(detail);
+        }
+        activity.status = patch.status;
+        activity.completed_at = match patch.status {
+            persistence::ChatActivityStatus::Running => None,
+            _ => Some(now),
+        };
+    } else {
+        if turn.activities.len() >= MAX_CHAT_TURN_ACTIVITIES {
+            return false;
+        }
+        let title = patch
+            .title
+            .unwrap_or_else(|| default_chat_activity_title(patch.kind).to_string());
+        turn.activities.push(persistence::ChatActivity {
+            id: patch.id,
+            kind: patch.kind,
+            title,
+            detail: patch.detail,
+            status: patch.status,
+            started_at: now,
+            completed_at: match patch.status {
+                persistence::ChatActivityStatus::Running => None,
+                _ => Some(now),
+            },
+        });
+    }
+    chat_state.session.updated_at = now;
+    chat_state.updated_at = now;
+    true
+}
+
+fn default_chat_activity_title(kind: persistence::ChatActivityKind) -> &'static str {
+    match kind {
+        persistence::ChatActivityKind::Reasoning => "Reasoning",
+        persistence::ChatActivityKind::Tool => "Tool",
+        persistence::ChatActivityKind::Command => "Command",
+        persistence::ChatActivityKind::FileChange => "File changes",
+        persistence::ChatActivityKind::WebSearch => "Web search",
+        persistence::ChatActivityKind::Plan => "Plan",
+    }
+}
+
+fn finish_running_chat_activities(
+    activities: &mut [persistence::ChatActivity],
+    turn_status: persistence::ChatTurnStatus,
+    completed_at: chrono::DateTime<chrono::Utc>,
+) {
+    let status = match turn_status {
+        persistence::ChatTurnStatus::Error => persistence::ChatActivityStatus::Error,
+        persistence::ChatTurnStatus::Cancelled => persistence::ChatActivityStatus::Cancelled,
+        _ => persistence::ChatActivityStatus::Complete,
+    };
+    for activity in activities {
+        if activity.status == persistence::ChatActivityStatus::Running {
+            activity.status = status;
+            activity.completed_at = Some(completed_at);
+        }
+    }
+}
+
 fn chat_turn_finish_from_result(
     provider_result: AppResult<ProviderResponse>,
     was_cancelled: bool,
@@ -1783,6 +3048,11 @@ fn cancel_chat_turn_in_state(
             turn.status,
             persistence::ChatTurnStatus::Pending | persistence::ChatTurnStatus::Running
         ) {
+            finish_running_chat_activities(
+                &mut turn.activities,
+                persistence::ChatTurnStatus::Cancelled,
+                completed_at,
+            );
             turn.status = persistence::ChatTurnStatus::Cancelled;
             turn.completed_at = Some(completed_at);
             turn.error = None;
@@ -3309,12 +4579,21 @@ fn send_chat_message_from_state_inner<R: Runtime>(
     let provider_input = started.input.clone();
     let assistant_message_id = started.assistant_message_id.clone();
     let provider_result = if adapter.capabilities().streaming {
-        let mut on_chunk = |chunk: &str| {
-            if append_streaming_chat_chunk(&mut started.state, &assistant_message_id, chunk) {
+        let turn_id = started.turn_id.clone();
+        let mut on_event = |event| {
+            let changed = match event {
+                ChatProviderStreamEvent::AssistantTextDelta(chunk) => {
+                    append_streaming_chat_chunk(&mut started.state, &assistant_message_id, &chunk)
+                }
+                ChatProviderStreamEvent::Activity(activity) => {
+                    upsert_chat_activity(&mut started.state, &turn_id, activity)
+                }
+            };
+            if changed {
                 emit_chat_session_state_changed(app, &started.state);
             }
         };
-        adapter.send_message_streaming(provider_input, &mut on_chunk)
+        adapter.send_message_streaming(provider_input, &mut on_event)
     } else {
         adapter.send_message(provider_input)
     };
@@ -8114,6 +9393,7 @@ mod tests {
             started_at: now,
             completed_at: None,
             error: None,
+            activities: Vec::new(),
         });
 
         assert!(super::chat_state_has_running_message(&state));
@@ -8149,13 +9429,73 @@ mod tests {
     }
 
     #[test]
+    fn streaming_activity_updates_one_stable_turn_entry() {
+        let now = chrono::Utc::now();
+        let mut state = chat_state_for_runtime(Vec::new());
+        state.turns.push(crate::persistence::ChatTurn {
+            id: "turn-1".to_string(),
+            session_id: state.session_id.clone(),
+            provider: "codex".to_string(),
+            model: None,
+            status: crate::persistence::ChatTurnStatus::Running,
+            user_message_id: "u1".to_string(),
+            assistant_message_id: Some("a1".to_string()),
+            started_at: now,
+            completed_at: None,
+            error: None,
+            activities: Vec::new(),
+        });
+
+        assert!(super::upsert_chat_activity(
+            &mut state,
+            "turn-1",
+            super::ChatActivityPatch {
+                id: "tool-1".to_string(),
+                kind: crate::persistence::ChatActivityKind::Command,
+                title: Some("Run tests".to_string()),
+                detail: Some("cargo test".to_string()),
+                status: crate::persistence::ChatActivityStatus::Running,
+            },
+        ));
+        assert!(super::upsert_chat_activity(
+            &mut state,
+            "turn-1",
+            super::ChatActivityPatch {
+                id: "tool-1".to_string(),
+                kind: crate::persistence::ChatActivityKind::Tool,
+                title: None,
+                detail: None,
+                status: crate::persistence::ChatActivityStatus::Complete,
+            },
+        ));
+
+        let activities = &state.turns[0].activities;
+        assert_eq!(activities.len(), 1);
+        assert_eq!(
+            activities[0].kind,
+            crate::persistence::ChatActivityKind::Command
+        );
+        assert_eq!(activities[0].title, "Run tests");
+        assert_eq!(activities[0].detail.as_deref(), Some("cargo test"));
+        assert_eq!(
+            activities[0].status,
+            crate::persistence::ChatActivityStatus::Complete
+        );
+        assert!(activities[0].completed_at.is_some());
+    }
+
+    #[test]
     fn chat_stream_parser_extracts_claude_partial_jsonl_without_duplicates() {
         let mut parser =
             super::ChatCliOutputParser::new(super::ChatCliOutputMode::ClaudeStreamJson);
         let mut chunks = Vec::new();
 
         {
-            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            let mut on_chunk = |event| {
+                if let super::ChatProviderStreamEvent::AssistantTextDelta(chunk) = event {
+                    chunks.push(chunk);
+                }
+            };
             parser.push_chunk(
                 r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hel"}]}}"#,
                 &mut on_chunk,
@@ -8175,13 +9515,126 @@ mod tests {
     }
 
     #[test]
+    fn chat_stream_parser_normalizes_claude_reasoning_and_tool_lifecycle() {
+        let mut parser =
+            super::ChatCliOutputParser::new(super::ChatCliOutputMode::ClaudeStreamJson);
+        let mut events = Vec::new();
+
+        {
+            let mut on_event = |event| events.push(event);
+            parser.push_chunk(
+                concat!(
+                    r#"{"type":"assistant","message":{"id":"msg-1","stop_reason":null,"content":[{"type":"thinking","thinking":"Inspect the repository first."},{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"rg --files"}}]}}"#,
+                    "\n",
+                    r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"done"}]}}"#,
+                    "\n"
+                ),
+                &mut on_event,
+            );
+        }
+
+        assert_eq!(
+            events,
+            vec![
+                super::ChatProviderStreamEvent::Activity(super::ChatActivityPatch {
+                    id: "claude:msg-1:reasoning:0".to_string(),
+                    kind: crate::persistence::ChatActivityKind::Reasoning,
+                    title: Some("Reasoning".to_string()),
+                    detail: Some("Inspect the repository first.".to_string()),
+                    status: crate::persistence::ChatActivityStatus::Running,
+                }),
+                super::ChatProviderStreamEvent::Activity(super::ChatActivityPatch {
+                    id: "tool-1".to_string(),
+                    kind: crate::persistence::ChatActivityKind::Command,
+                    title: Some("Bash".to_string()),
+                    detail: Some("rg --files".to_string()),
+                    status: crate::persistence::ChatActivityStatus::Running,
+                }),
+                super::ChatProviderStreamEvent::Activity(super::ChatActivityPatch {
+                    id: "tool-1".to_string(),
+                    kind: crate::persistence::ChatActivityKind::Tool,
+                    title: None,
+                    detail: None,
+                    status: crate::persistence::ChatActivityStatus::Complete,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn chat_stream_parser_normalizes_claude_partial_stream_events() {
+        let mut parser =
+            super::ChatCliOutputParser::new(super::ChatCliOutputMode::ClaudeStreamJson);
+        let mut events = Vec::new();
+
+        {
+            let mut on_event = |event| events.push(event);
+            parser.push_chunk(
+                concat!(
+                    r#"{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg-live","usage":{"input_tokens":8}}}}"#,
+                    "\n",
+                    r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}}"#,
+                    "\n",
+                    r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Inspect live."}}}"#,
+                    "\n",
+                    r#"{"type":"stream_event","event":{"type":"content_block_stop","index":0}}"#,
+                    "\n",
+                    r#"{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-live","name":"Bash","input":{}}}}"#,
+                    "\n",
+                    r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\""}}}"#,
+                    "\n",
+                    r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"pwd\"}"}}}"#,
+                    "\n",
+                    r#"{"type":"stream_event","event":{"type":"content_block_stop","index":1}}"#,
+                    "\n",
+                    r#"{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"Done"}}}"#,
+                    "\n"
+                ),
+                &mut on_event,
+            );
+        }
+
+        let activities = events
+            .iter()
+            .filter_map(|event| match event {
+                super::ChatProviderStreamEvent::Activity(activity) => Some(activity),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(activities[2].id, "claude:msg-live:reasoning:0");
+        assert_eq!(activities[2].detail.as_deref(), Some("Inspect live."));
+        assert_eq!(
+            activities[2].status,
+            crate::persistence::ChatActivityStatus::Complete
+        );
+        let tool = activities.last().unwrap();
+        assert_eq!(tool.id, "tool-live");
+        assert_eq!(tool.detail.as_deref(), Some("pwd"));
+        assert_eq!(tool.status, crate::persistence::ChatActivityStatus::Running);
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                super::ChatProviderStreamEvent::AssistantTextDelta(text) if text == "Done"
+            )
+        }));
+        assert_eq!(
+            parser.provider_metadata(),
+            Some(serde_json::json!({ "usage": { "input_tokens": 8 } }))
+        );
+    }
+
+    #[test]
     fn chat_stream_parser_records_claude_usage_metadata() {
         let mut parser =
             super::ChatCliOutputParser::new(super::ChatCliOutputMode::ClaudeStreamJson);
         let mut chunks = Vec::new();
 
         {
-            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            let mut on_chunk = |event| {
+                if let super::ChatProviderStreamEvent::AssistantTextDelta(chunk) = event {
+                    chunks.push(chunk);
+                }
+            };
             parser.push_chunk(
                 r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":11,"output_tokens":3}}}"#,
                 &mut on_chunk,
@@ -8207,7 +9660,11 @@ mod tests {
         let mut chunks = Vec::new();
 
         {
-            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            let mut on_chunk = |event| {
+                if let super::ChatProviderStreamEvent::AssistantTextDelta(chunk) = event {
+                    chunks.push(chunk);
+                }
+            };
             parser.push_chunk(
                 r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"핵심 파일 확인."}]}}"#,
                 &mut on_chunk,
@@ -8236,7 +9693,11 @@ mod tests {
         let mut chunks = Vec::new();
 
         {
-            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            let mut on_chunk = |event| {
+                if let super::ChatProviderStreamEvent::AssistantTextDelta(chunk) = event {
+                    chunks.push(chunk);
+                }
+            };
             parser.push_chunk(
                 r#"{"msg":{"type":"agent_message_content_delta","delta":"hel"}}"#,
                 &mut on_chunk,
@@ -8259,12 +9720,121 @@ mod tests {
     }
 
     #[test]
+    fn chat_stream_parser_normalizes_codex_item_events() {
+        let mut parser = super::ChatCliOutputParser::new(super::ChatCliOutputMode::CodexJson);
+        let mut events = Vec::new();
+
+        {
+            let mut on_event = |event| events.push(event);
+            parser.push_chunk(
+                concat!(
+                    r#"{"type":"item.completed","item":{"id":"reason-1","type":"reasoning","text":"Find the relevant call path."}}"#,
+                    "\n",
+                    r#"{"type":"item.started","item":{"id":"command-1","type":"command_execution","command":"cargo test","status":"in_progress"}}"#,
+                    "\n",
+                    r#"{"type":"item.completed","item":{"id":"command-1","type":"command_execution","command":"cargo test","status":"completed"}}"#,
+                    "\n"
+                ),
+                &mut on_event,
+            );
+        }
+
+        assert_eq!(events.len(), 3);
+        let super::ChatProviderStreamEvent::Activity(reasoning) = &events[0] else {
+            panic!("expected reasoning activity");
+        };
+        assert_eq!(
+            reasoning.kind,
+            crate::persistence::ChatActivityKind::Reasoning
+        );
+        assert_eq!(
+            reasoning.detail.as_deref(),
+            Some("Find the relevant call path.")
+        );
+        assert_eq!(
+            reasoning.status,
+            crate::persistence::ChatActivityStatus::Complete
+        );
+
+        let super::ChatProviderStreamEvent::Activity(started) = &events[1] else {
+            panic!("expected command activity");
+        };
+        let super::ChatProviderStreamEvent::Activity(completed) = &events[2] else {
+            panic!("expected command completion");
+        };
+        assert_eq!(started.id, "command-1");
+        assert_eq!(completed.id, "command-1");
+        assert_eq!(
+            started.status,
+            crate::persistence::ChatActivityStatus::Running
+        );
+        assert_eq!(
+            completed.status,
+            crate::persistence::ChatActivityStatus::Complete
+        );
+    }
+
+    #[test]
+    fn antigravity_transcript_follower_normalizes_planner_and_tool_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut follower = super::AntigravityTranscriptFollower::new(
+            tmp.path().to_path_buf(),
+            None,
+            std::time::SystemTime::now(),
+        );
+        let mut events = Vec::new();
+        let mut on_event = |event| events.push(event);
+
+        follower.process_line(
+            br#"{"type":"PLANNER_RESPONSE","step_index":7,"thinking":"Inspect before editing.","tool_calls":[{"name":"run_command","args":{"toolAction":"Run tests","command":"pnpm test"}}]}"#,
+            &mut on_event,
+        );
+        follower.process_line(
+            br#"{"type":"RUN_COMMAND","step_index":7,"status":"SUCCESS"}"#,
+            &mut on_event,
+        );
+
+        assert_eq!(events.len(), 3);
+        let super::ChatProviderStreamEvent::Activity(reasoning) = &events[0] else {
+            panic!("expected reasoning activity");
+        };
+        assert_eq!(
+            reasoning.kind,
+            crate::persistence::ChatActivityKind::Reasoning
+        );
+        assert_eq!(reasoning.detail.as_deref(), Some("Inspect before editing."));
+
+        let super::ChatProviderStreamEvent::Activity(started) = &events[1] else {
+            panic!("expected tool activity");
+        };
+        let super::ChatProviderStreamEvent::Activity(completed) = &events[2] else {
+            panic!("expected tool completion");
+        };
+        assert_eq!(started.id, "antigravity:7:tool:0");
+        assert_eq!(started.title.as_deref(), Some("Run tests"));
+        assert_eq!(started.detail.as_deref(), Some("pnpm test"));
+        assert_eq!(
+            started.status,
+            crate::persistence::ChatActivityStatus::Running
+        );
+        assert_eq!(completed.id, started.id);
+        assert_eq!(
+            completed.status,
+            crate::persistence::ChatActivityStatus::Complete
+        );
+    }
+
+    #[test]
     fn chat_stream_parser_extracts_codex_task_complete_payload_message() {
         let mut parser = super::ChatCliOutputParser::new(super::ChatCliOutputMode::CodexJson);
         let mut chunks = Vec::new();
 
         {
-            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            let mut on_chunk = |event| {
+                if let super::ChatProviderStreamEvent::AssistantTextDelta(chunk) = event {
+                    chunks.push(chunk);
+                }
+            };
             parser.push_chunk(
                 r#"{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"안녕하세요. 무엇을 도와드릴까요?"}}"#,
                 &mut on_chunk,
@@ -8456,7 +10026,11 @@ mod tests {
         let mut chunks = Vec::new();
 
         {
-            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            let mut on_chunk = |event| {
+                if let super::ChatProviderStreamEvent::AssistantTextDelta(chunk) = event {
+                    chunks.push(chunk);
+                }
+            };
             parser.push_chunk(
                 r#"{"msg":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"cached_input_tokens":7,"output_tokens":5,"reasoning_output_tokens":2,"total_tokens":32}}}}"#,
                 &mut on_chunk,
@@ -8484,7 +10058,11 @@ mod tests {
         let mut chunks = Vec::new();
 
         {
-            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            let mut on_chunk = |event| {
+                if let super::ChatProviderStreamEvent::AssistantTextDelta(chunk) = event {
+                    chunks.push(chunk);
+                }
+            };
             parser.push_chunk(
                 r#"{"msg":{"type":"agent_message","message":"디렉토리 + 타입 정의 핵심 파일 확인."}}"#,
                 &mut on_chunk,
@@ -8513,7 +10091,11 @@ mod tests {
         let mut chunks = Vec::new();
 
         {
-            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            let mut on_chunk = |event| {
+                if let super::ChatProviderStreamEvent::AssistantTextDelta(chunk) = event {
+                    chunks.push(chunk);
+                }
+            };
             parser.push_chunk(
                 r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}}"#,
                 &mut on_chunk,
@@ -9116,6 +10698,15 @@ mod tests {
             started_at: now,
             completed_at: None,
             error: None,
+            activities: vec![crate::persistence::ChatActivity {
+                id: "tool-1".to_string(),
+                kind: crate::persistence::ChatActivityKind::Command,
+                title: "Long command".to_string(),
+                detail: None,
+                status: crate::persistence::ChatActivityStatus::Running,
+                started_at: now,
+                completed_at: None,
+            }],
         });
         state.messages.push(crate::persistence::ChatMessage {
             id: "a1".to_string(),
@@ -9137,6 +10728,11 @@ mod tests {
         );
         assert!(state.turns[0].completed_at.is_some());
         assert_eq!(state.turns[0].error, None);
+        assert_eq!(
+            state.turns[0].activities[0].status,
+            crate::persistence::ChatActivityStatus::Cancelled
+        );
+        assert!(state.turns[0].activities[0].completed_at.is_some());
         assert_eq!(state.messages[1].content, "Cancelled");
         assert_eq!(
             state.messages[1].status,

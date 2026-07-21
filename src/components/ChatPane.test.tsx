@@ -2360,4 +2360,144 @@ describe("ChatPane", () => {
     expect(container.textContent).toContain("hi from antigravity");
   });
 
+  it("shows normalized agent activity instead of the generic running label", async () => {
+    const loaded = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          turn_id: "turn-1",
+          role: "user",
+          content: "inspect the repository",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          turn_id: "turn-1",
+          role: "assistant",
+          content: "",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "pending",
+          metadata: { provider: "antigravity" },
+        },
+      ],
+      "antigravity",
+    );
+    loaded.turns = [
+      {
+        id: "turn-1",
+        session_id: "s1",
+        provider: "antigravity",
+        status: "running",
+        user_message_id: "u1",
+        assistant_message_id: "a1",
+        started_at: "2026-01-01T00:00:00Z",
+        activities: [
+          {
+            id: "agy-tool-1",
+            kind: "command",
+            title: "Inspect repository",
+            detail: "rg --files",
+            status: "running",
+            started_at: "2026-01-01T00:00:01Z",
+          },
+        ],
+      },
+    ];
+    mocks.loadChatSessionState.mockResolvedValueOnce(loaded);
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    expect(container.querySelector("[data-chat-activity-timeline]")).toBeTruthy();
+    expect(container.querySelector("[data-chat-activity-list]")).toBeTruthy();
+    expect(container.textContent).toContain("Inspect repository");
+    expect(container.textContent).toContain("rg --files");
+    expect(container.querySelector("[data-chat-running-label]")).toBeNull();
+  });
+
+  it("collapses completed agent activity and lets the user inspect it", async () => {
+    const loaded = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          turn_id: "turn-1",
+          role: "user",
+          content: "fix it",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          turn_id: "turn-1",
+          role: "assistant",
+          content: "Done.",
+          created_at: "2026-01-01T00:00:03Z",
+          status: "complete",
+          metadata: { provider: "codex" },
+        },
+      ],
+      "codex",
+    );
+    loaded.turns = [
+      {
+        id: "turn-1",
+        session_id: "s1",
+        provider: "codex",
+        status: "complete",
+        user_message_id: "u1",
+        assistant_message_id: "a1",
+        started_at: "2026-01-01T00:00:00Z",
+        completed_at: "2026-01-01T00:00:03Z",
+        activities: [
+          {
+            id: "reasoning-1",
+            kind: "reasoning",
+            title: "Reasoning",
+            detail: "The failing path is in the parser.",
+            status: "complete",
+            started_at: "2026-01-01T00:00:01Z",
+            completed_at: "2026-01-01T00:00:02Z",
+          },
+          {
+            id: "file-1",
+            kind: "file_change",
+            title: "File changes",
+            detail: "src/parser.ts",
+            status: "complete",
+            started_at: "2026-01-01T00:00:02Z",
+            completed_at: "2026-01-01T00:00:03Z",
+          },
+        ],
+      },
+    ];
+    mocks.loadChatSessionState.mockResolvedValueOnce(loaded);
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      "[data-chat-activity-toggle]",
+    );
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector("[data-chat-activity-list]")).toBeNull();
+    expect(container.textContent).toContain("2 activities");
+    expect(container.textContent).toContain("Done.");
+
+    await act(async () => {
+      toggle!.click();
+    });
+
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("The failing path is in the parser.");
+    expect(container.textContent).toContain("src/parser.ts");
+  });
 });

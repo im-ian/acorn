@@ -221,6 +221,31 @@ export interface ChatTurn {
   started_at: string;
   completed_at?: string | null;
   error?: string | null;
+  activities?: ChatActivity[];
+}
+
+export type ChatActivityKind =
+  | "reasoning"
+  | "tool"
+  | "command"
+  | "file_change"
+  | "web_search"
+  | "plan";
+
+export type ChatActivityStatus =
+  | "running"
+  | "complete"
+  | "error"
+  | "cancelled";
+
+export interface ChatActivity {
+  id: string;
+  kind: ChatActivityKind;
+  title: string;
+  detail?: string | null;
+  status: ChatActivityStatus;
+  started_at: string;
+  completed_at?: string | null;
 }
 
 export interface ProviderThread {
