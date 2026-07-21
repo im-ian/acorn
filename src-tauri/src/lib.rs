@@ -2,6 +2,7 @@ mod agent_history;
 mod agent_hooks;
 mod agent_resume;
 mod agent_resume_persister;
+mod agent_session_names;
 mod agent_wrappers;
 mod ai;
 mod chat_runs;
