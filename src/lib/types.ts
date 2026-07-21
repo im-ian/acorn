@@ -44,6 +44,39 @@ export type SessionTitleSource = "default" | "generated" | "manual";
 
 export type SessionAgentProvider = "claude" | "codex" | "antigravity";
 
+export type SessionGoalProvider = Extract<
+  SessionAgentProvider,
+  "claude" | "codex"
+>;
+
+export type SessionGoalStagePolicy = "auto" | "approval" | "disabled";
+
+export interface SessionGoalPolicies {
+  interpretation: SessionGoalStagePolicy;
+  plan: SessionGoalStagePolicy;
+  implementation: SessionGoalStagePolicy;
+  validation: SessionGoalStagePolicy;
+  auto_fix: SessionGoalStagePolicy;
+  self_review: SessionGoalStagePolicy;
+  draft_pr: SessionGoalStagePolicy;
+}
+
+export interface SessionGoalPreset {
+  id: string;
+  name: string;
+  policies: SessionGoalPolicies;
+}
+
+export interface SessionGoal {
+  objective: string;
+  completion_criteria?: string | null;
+  constraints?: string | null;
+  tests?: string | null;
+  provider: SessionGoalProvider;
+  preset: SessionGoalPreset;
+  revision: number;
+}
+
 export type SessionAgentDetection = Record<SessionAgentProvider, string | null>;
 
 export type SessionTitleGenerationStatus =
@@ -145,6 +178,7 @@ export interface Session {
   generated_title_transcript_id?: string | null;
   kind: SessionKind;
   mode?: SessionMode;
+  goal?: SessionGoal | null;
   owner: SessionOwner;
   position: number | null;
   /** Derived backend-side from `worktree_path`'s `.git` being a file (linked

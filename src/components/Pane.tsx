@@ -1473,6 +1473,16 @@ function TabItem({
                 className="pointer-events-none shrink-0 text-accent"
               />
             </Tooltip>
+          ) : session?.goal ? (
+            <Tooltip label={paneT(t, "pane.aria.goalSession")} side="bottom">
+              <Sparkles
+                size={12}
+                className={cn(
+                  "pointer-events-none shrink-0",
+                  session && STATUS_ICON[session.status],
+                )}
+              />
+            </Tooltip>
           ) : session?.mode === "chat" ? (
             <Tooltip label={paneT(t, "pane.aria.chatSession")} side="bottom">
               <MessageSquareText

@@ -13,7 +13,10 @@ import {
   AUTONOMOUS_GOAL_STAGE_IDS,
   FULL_AUTONOMY_GOAL_PRESET_ID,
   REVIEW_AUTONOMOUS_GOAL_PRESET_ID,
-  buildAutonomousGoalPrompt,
+  autonomousPresetFromSessionGoal,
+  buildAutonomousGoalRevisionPrompt,
+  buildPromptForSessionGoal,
+  createSessionGoal,
   createCustomAutonomousGoalPreset,
   deleteCustomAutonomousGoalPreset,
   deriveAutonomousGoalSessionName,
@@ -40,6 +43,7 @@ import { resolveAiExecutionRequest, useSettings } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
+import type { Session } from "../lib/types";
 import {
   Button,
   Field,
@@ -55,6 +59,7 @@ import {
 interface AutonomousGoalDialogProps {
   open: boolean;
   scope: SessionCreateScope | null;
+  session?: Session | null;
   onClose: () => void;
 }
 
@@ -142,6 +147,10 @@ function formatToast(template: string, value: string): string {
   return template.replace("{name}", value);
 }
 
+function sessionSnapshotPresetId(session: Session): string {
+  return `session-snapshot:${session.id}:${session.goal?.revision ?? 0}`;
+}
+
 function markLocalGoalSessionWorking(sessionId: string) {
   useAppStore.setState((state) => {
     let changed = false;
@@ -159,6 +168,7 @@ function markLocalGoalSessionWorking(sessionId: string) {
 export function AutonomousGoalDialog({
   open,
   scope,
+  session = null,
   onClose,
 }: AutonomousGoalDialogProps) {
   const t = useTranslation();
@@ -184,32 +194,59 @@ export function AutonomousGoalDialog({
   const [presetNameDraft, setPresetNameDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const editingSession = session?.goal ? session : null;
+  const editingGoal = editingSession?.goal ?? null;
+  const snapshotPreset = useMemo(() => {
+    if (!editingSession || !editingGoal) return null;
+    return autonomousPresetFromSessionGoal(
+      editingGoal,
+      sessionSnapshotPresetId(editingSession),
+      `${editingGoal.preset.name} · ${agt(t, "dialogs.autonomousGoal.presets.sessionSnapshot")}`,
+    );
+  }, [editingGoal, editingSession, t]);
 
   useEffect(() => {
     if (!open) return;
     const loaded = loadAutonomousGoalPreferences();
-    const initialPresetId = resolveInitialAutonomousGoalPresetId(loaded);
-    const initialPreset = findAutonomousGoalPreset(loaded, initialPresetId);
+    const initialPresetId = editingSession
+      ? sessionSnapshotPresetId(editingSession)
+      : resolveInitialAutonomousGoalPresetId(loaded);
+    const initialPreset = editingSession
+      ? autonomousPresetFromSessionGoal(
+          editingSession.goal!,
+          initialPresetId,
+          editingSession.goal!.preset.name,
+        )
+      : findAutonomousGoalPreset(loaded, initialPresetId);
     preferencesRef.current = loaded;
     setPreferences(loaded);
     setSelectedPresetId(initialPresetId);
     setPresetNameDraft(initialPreset?.builtIn ? "" : (initialPreset?.name ?? ""));
-    setProvider(defaultProvider(useSettings.getState().settings.agents.selected));
-    setGoal("");
-    setCompletionCriteria("");
-    setConstraints("");
-    setTests("");
+    setProvider(
+      editingSession?.goal?.provider ??
+        defaultProvider(useSettings.getState().settings.agents.selected),
+    );
+    setGoal(editingSession?.goal?.objective ?? "");
+    setCompletionCriteria(editingSession?.goal?.completion_criteria ?? "");
+    setConstraints(editingSession?.goal?.constraints ?? "");
+    setTests(editingSession?.goal?.tests ?? "");
     setSubmitting(false);
     setError(null);
-  }, [open]);
+  }, [editingSession?.id, editingSession?.goal?.revision, open]);
 
   const presets = useMemo(
-    () => listAutonomousGoalPresets(preferences),
-    [preferences],
+    () => [
+      ...(snapshotPreset ? [snapshotPreset] : []),
+      ...listAutonomousGoalPresets(preferences),
+    ],
+    [preferences, snapshotPreset],
   );
   const selectedPreset = useMemo(
-    () => findAutonomousGoalPreset(preferences, selectedPresetId),
-    [preferences, selectedPresetId],
+    () =>
+      snapshotPreset?.id === selectedPresetId
+        ? snapshotPreset
+        : findAutonomousGoalPreset(preferences, selectedPresetId),
+    [preferences, selectedPresetId, snapshotPreset],
   );
 
   useEffect(() => {
@@ -303,14 +340,53 @@ export function AutonomousGoalDialog({
     if (!submitting) onClose();
   }
 
+  function runGoalPrompt(
+    sessionId: string,
+    promptProvider: AutonomousGoalProvider,
+    prompt: string,
+  ) {
+    markLocalGoalSessionWorking(sessionId);
+    void api
+      .sendChatMessage(
+        sessionId,
+        { ...resolveAiExecutionRequest(settings), provider: promptProvider },
+        prompt,
+      )
+      .then(
+        () => {
+          void useAppStore
+            .getState()
+            .refreshSessions()
+            .catch((refreshError: unknown) => {
+              console.error(
+                "failed to refresh completed goal session",
+                refreshError,
+              );
+            });
+        },
+        async (sendError: unknown) => {
+          console.error("goal session run failed", sendError);
+          try {
+            await api.setSessionStatus(sessionId, "errored");
+            await useAppStore.getState().refreshSessions();
+          } catch (statusError) {
+            console.error("failed to mark goal session as errored", statusError);
+          }
+          showToast(
+            `${t("toasts.autonomousGoal.startFailed")} ${String(sendError)}`,
+          );
+        },
+      );
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedGoal = goal.trim();
     let currentPreferences = preferencesRef.current;
-    let currentPreset = findAutonomousGoalPreset(
-      currentPreferences,
-      selectedPresetId,
-    );
+    let currentPreset =
+      snapshotPreset?.id === selectedPresetId
+        ? snapshotPreset
+        : findAutonomousGoalPreset(currentPreferences, selectedPresetId);
     if (!trimmedGoal || !currentPreset || submitting) return;
 
     if (!currentPreset.builtIn) {
@@ -336,108 +412,92 @@ export function AutonomousGoalDialog({
     setError(null);
 
     const sessionName = deriveAutonomousGoalSessionName(trimmedGoal);
+    const usesSessionSnapshot = currentPreset.id === snapshotPreset?.id;
     const presetSnapshot: AutonomousGoalPreset = {
       ...currentPreset,
-      name: presetDisplayName(t, currentPreset),
+      id: usesSessionSnapshot
+        ? (editingGoal?.preset.id ?? currentPreset.id)
+        : currentPreset.id,
+      name: usesSessionSnapshot
+        ? (editingGoal?.preset.name ?? currentPreset.name)
+        : presetDisplayName(t, currentPreset),
       policies: { ...currentPreset.policies },
     };
+    const goalSpec = createSessionGoal(
+      { goal: trimmedGoal, completionCriteria, constraints, tests },
+      provider,
+      presetSnapshot,
+      editingGoal?.revision ?? 1,
+    );
 
     try {
-      const created = scope
-        ? await applySessionCreateRequest(
-            createSession,
-            buildSessionCreateRequestFromScope(
-              { sessions, projects },
-              scope,
-              {
-                name: sessionName,
-                isolated: true,
-                kind: "regular",
-                agentProvider: provider,
-                mode: "chat",
-              },
-            ),
-          )
-        : await api.createSessionFromDialog(
-            sessionName,
-            true,
-            "regular",
-            provider,
-            true,
-            agt(t, "dialogs.autonomousGoal.selectRepository"),
-            "chat",
-          );
+      const nextPreferences = {
+        ...currentPreferences,
+        lastPresetId: usesSessionSnapshot
+          ? currentPreferences.lastPresetId
+          : currentPreset.id,
+      } satisfies AutonomousGoalPreferences;
+      persistPreferences(nextPreferences);
 
-      if (!created) {
-        if (scope) {
-          const storeError = useAppStore.getState().consumeError();
-          if (storeError) setError(storeError);
+      if (editingSession && editingGoal) {
+        await api.cancelChatMessage(editingSession.id);
+        const updated = await api.updateSessionGoal(
+          editingSession.id,
+          editingGoal.revision,
+          goalSpec,
+        );
+        if (!updated.goal) {
+          throw new Error("updated goal session did not return its goal");
         }
-        setSubmitting(false);
+        await useAppStore.getState().refreshSessions();
+        onClose();
+        showToast(
+          formatToast(t("toasts.autonomousGoal.updated"), updated.name),
+        );
+        runGoalPrompt(
+          updated.id,
+          updated.goal.provider,
+          buildAutonomousGoalRevisionPrompt(editingGoal, updated.goal),
+        );
         return;
       }
 
       if (!scope) {
-        await useAppStore.getState().refreshAll();
-        useAppStore.getState().selectSession(created.id);
+        throw new Error(
+          agt(t, "dialogs.autonomousGoal.projectScopeRequired"),
+        );
+      }
+      const created = await applySessionCreateRequest(
+        createSession,
+        buildSessionCreateRequestFromScope(
+          { sessions, projects },
+          scope,
+          {
+            name: sessionName,
+            isolated: true,
+            kind: "regular",
+            agentProvider: provider,
+            mode: "chat",
+            goal: goalSpec,
+          },
+        ),
+      );
+      if (!created) {
+        const storeError = useAppStore.getState().consumeError();
+        if (storeError) setError(storeError);
+        setSubmitting(false);
+        return;
       }
 
-      const nextPreferences = {
-        ...currentPreferences,
-        lastPresetId: currentPreset.id,
-      } satisfies AutonomousGoalPreferences;
-      saveAutonomousGoalPreferences(nextPreferences);
-
-      const prompt = buildAutonomousGoalPrompt({
-        goal: trimmedGoal,
-        completionCriteria,
-        constraints,
-        tests,
-        provider,
-        preset: presetSnapshot,
-      });
       onClose();
-      showToast(
-        formatToast(t("toasts.autonomousGoal.started"), sessionName),
+      showToast(formatToast(t("toasts.autonomousGoal.started"), sessionName));
+      runGoalPrompt(
+        created.id,
+        provider,
+        buildPromptForSessionGoal(created.goal ?? goalSpec),
       );
-      markLocalGoalSessionWorking(created.id);
-
-      void api
-        .sendChatMessage(
-          created.id,
-          { ...resolveAiExecutionRequest(settings), provider },
-          prompt,
-        )
-        .then(
-          () => {
-            void useAppStore
-              .getState()
-              .refreshSessions()
-              .catch((refreshError: unknown) => {
-                console.error(
-                  "failed to refresh completed goal session",
-                  refreshError,
-                );
-              });
-          },
-          async (sendError: unknown) => {
-            console.error("autonomous goal session failed", sendError);
-            try {
-              await api.setSessionStatus(created.id, "errored");
-              await useAppStore.getState().refreshSessions();
-            } catch (statusError) {
-              console.error(
-                "failed to mark goal session as errored",
-                statusError,
-              );
-            }
-            showToast(
-              `${t("toasts.autonomousGoal.startFailed")} ${String(sendError)}`,
-            );
-          },
-        );
     } catch (submitError) {
-      console.error("create autonomous goal session failed", submitError);
+      console.error("save goal session failed", submitError);
       setError(String(submitError));
       setSubmitting(false);
     }
@@ -446,9 +506,12 @@ export function AutonomousGoalDialog({
   const presetOptions = presets.map((preset) => ({
     value: preset.id,
     label: presetDisplayName(t, preset),
-    description: preset.builtIn
-      ? agt(t, "dialogs.autonomousGoal.presets.builtIn")
-      : agt(t, "dialogs.autonomousGoal.presets.custom"),
+    description:
+      preset.id === snapshotPreset?.id
+        ? agt(t, "dialogs.autonomousGoal.presets.sessionSnapshotHint")
+        : preset.builtIn
+          ? agt(t, "dialogs.autonomousGoal.presets.builtIn")
+          : agt(t, "dialogs.autonomousGoal.presets.custom"),
   }));
   const policyOptions = (["auto", "approval", "disabled"] as const).map(
     (policy) => ({
@@ -469,8 +532,18 @@ export function AutonomousGoalDialog({
       <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
         <ModalHeader
           titleId={titleId}
-          title={agt(t, "dialogs.autonomousGoal.title")}
-          subtitle={agt(t, "dialogs.autonomousGoal.subtitle")}
+          title={agt(
+            t,
+            editingSession
+              ? "dialogs.autonomousGoal.editTitle"
+              : "dialogs.autonomousGoal.title",
+          )}
+          subtitle={agt(
+            t,
+            editingSession
+              ? "dialogs.autonomousGoal.editSubtitle"
+              : "dialogs.autonomousGoal.subtitle",
+          )}
           icon={<Sparkles size={18} className="text-accent" />}
           variant="dialog"
           onClose={close}
@@ -582,7 +655,12 @@ export function AutonomousGoalDialog({
               </Field>
 
               <Notice tone="info" density="compact">
-                {agt(t, "dialogs.autonomousGoal.prototypeNotice")}
+                {agt(
+                  t,
+                  editingSession
+                    ? "dialogs.autonomousGoal.revisionNotice"
+                    : "dialogs.autonomousGoal.prototypeNotice",
+                )}
               </Notice>
             </section>
 
@@ -693,7 +771,12 @@ export function AutonomousGoalDialog({
 
         <ModalFooter className="border-t border-border" align="between">
           <span className="text-[11px] text-fg-muted">
-            {agt(t, "dialogs.autonomousGoal.footerHint")}
+            {agt(
+              t,
+              editingSession
+                ? "dialogs.autonomousGoal.editFooterHint"
+                : "dialogs.autonomousGoal.footerHint",
+            )}
           </span>
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={close} disabled={submitting}>
@@ -706,8 +789,18 @@ export function AutonomousGoalDialog({
             >
               <Sparkles size={13} />
               {submitting
-                ? agt(t, "dialogs.autonomousGoal.starting")
-                : agt(t, "dialogs.autonomousGoal.start")}
+                ? agt(
+                    t,
+                    editingSession
+                      ? "dialogs.autonomousGoal.replanning"
+                      : "dialogs.autonomousGoal.starting",
+                  )
+                : agt(
+                    t,
+                    editingSession
+                      ? "dialogs.autonomousGoal.saveAndReplan"
+                      : "dialogs.autonomousGoal.start",
+                  )}
             </Button>
           </div>
         </ModalFooter>

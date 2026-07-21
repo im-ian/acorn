@@ -71,6 +71,7 @@ import {
   createEmptySessionAgentDetection,
 } from "../lib/agentContextMenu";
 import { api, type WorktreeRemoval } from "../lib/api";
+import { EDIT_AUTONOMOUS_GOAL_SESSION_EVENT } from "../lib/autonomousGoal";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
@@ -330,6 +331,8 @@ export function Sidebar() {
   const [autonomousGoalOpen, setAutonomousGoalOpen] = useState(false);
   const [autonomousGoalScope, setAutonomousGoalScope] =
     useState<SessionCreateScope | null>(null);
+  const [autonomousGoalSession, setAutonomousGoalSession] =
+    useState<Session | null>(null);
   const [settingsProject, setSettingsProject] =
     useState<ProjectFolderProjectGroup | null>(null);
   const [pendingRemoveProjectFolderId, setPendingRemoveProjectFolderId] =
@@ -678,12 +681,34 @@ export function Sidebar() {
         "chat",
       );
     };
-    const newAutonomousGoal = () => {
-      const scope = activeScope();
-      setAutonomousGoalScope(
-        scope?.placement.projectScoped !== false ? scope : null,
-      );
-      setAutonomousGoalOpen(true);
+    const editAutonomousGoal = (event: Event) => {
+      const sessionId = (event as CustomEvent<{ sessionId?: string }>).detail
+        ?.sessionId;
+      if (!sessionId) return;
+      const target = useAppStore
+        .getState()
+        .sessions.find((candidate) => candidate.id === sessionId);
+      if (!target?.goal || target.project_scoped === false) return;
+      void (async () => {
+        try {
+          if (target.status === "working") {
+            await api.cancelChatMessage(target.id);
+            await useAppStore.getState().refreshSessions();
+          }
+          const current = useAppStore
+            .getState()
+            .sessions.find((candidate) => candidate.id === sessionId);
+          if (!current?.goal) return;
+          setAutonomousGoalScope(null);
+          setAutonomousGoalSession(current);
+          setAutonomousGoalOpen(true);
+        } catch (error) {
+          console.error("pause goal session before editing failed", error);
+          useToasts
+            .getState()
+            .show(`${t("toasts.autonomousGoal.pauseFailed")} ${String(error)}`);
+        }
+      })();
     };
     const newProject = () => {
       setNewProjectOpen(true);
@@ -696,8 +721,8 @@ export function Sidebar() {
     window.addEventListener("acorn:new-control-session", newControl);
     window.addEventListener("acorn:new-chat-session", newChat);
     window.addEventListener(
-      "acorn:new-autonomous-goal-session",
-      newAutonomousGoal,
+      EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
+      editAutonomousGoal,
     );
     window.addEventListener("acorn:new-project", newProject);
     window.addEventListener("acorn:add-project", addProj);
@@ -707,8 +732,8 @@ export function Sidebar() {
       window.removeEventListener("acorn:new-control-session", newControl);
       window.removeEventListener("acorn:new-chat-session", newChat);
       window.removeEventListener(
-        "acorn:new-autonomous-goal-session",
-        newAutonomousGoal,
+        EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
+        editAutonomousGoal,
       );
       window.removeEventListener("acorn:new-project", newProject);
       window.removeEventListener("acorn:add-project", addProj);
@@ -812,6 +837,7 @@ export function Sidebar() {
   onAddProjectRef.current = onAddExistingProject;
 
   function openAutonomousGoalForFolder(folder: ProjectFolder) {
+    setAutonomousGoalSession(null);
     setAutonomousGoalScope({
       placement: {
         repoPath: folder.repoPath,
@@ -1200,26 +1226,6 @@ export function Sidebar() {
         </h2>
         <div className="flex items-center gap-1">
           <Tooltip
-            label={sidebarText(t, "sidebar.actions.newAutonomousGoalSession")}
-            side="left"
-          >
-            <button
-              type="button"
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("acorn:new-autonomous-goal-session"),
-                )
-              }
-              className="rounded-md p-1.5 text-fg-muted transition hover:bg-bg-elevated hover:text-accent"
-              aria-label={sidebarText(
-                t,
-                "sidebar.aria.newAutonomousGoalSession",
-              )}
-            >
-              <Sparkles size={14} />
-            </button>
-          </Tooltip>
-          <Tooltip
             label={sidebarText(t, "sidebar.projects.newProject")}
             side="left"
           >
@@ -1401,7 +1407,12 @@ export function Sidebar() {
       <AutonomousGoalDialog
         open={autonomousGoalOpen}
         scope={autonomousGoalScope}
-        onClose={() => setAutonomousGoalOpen(false)}
+        session={autonomousGoalSession}
+        onClose={() => {
+          setAutonomousGoalOpen(false);
+          setAutonomousGoalScope(null);
+          setAutonomousGoalSession(null);
+        }}
       />
       <NewProjectDialog
         open={newProjectOpen}
@@ -1557,6 +1568,7 @@ function SessionRowPreview({
         isGeneratingTitle={false}
         generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
         chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
+        goalLabel={sidebarText(t, "sidebar.aria.goalSession")}
       />
       <SessionRowLabel
         editing={false}
@@ -3277,6 +3289,7 @@ function SessionRow({
         isGeneratingTitle={isGeneratingTitle}
         generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
         chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
+        goalLabel={sidebarText(t, "sidebar.aria.goalSession")}
       />
       <SessionRowLabel
         editing={editing}
@@ -3475,17 +3488,26 @@ function SessionStatusMarker({
   isGeneratingTitle,
   generatingLabel,
   chatLabel,
+  goalLabel,
 }: {
   session: Session;
   agentProvider: SessionAgentProvider | null;
   isGeneratingTitle: boolean;
   generatingLabel: string;
   chatLabel: string;
+  goalLabel: string;
 }) {
   return (
     <span className="flex h-5 w-3 shrink-0 items-center justify-center">
       {isGeneratingTitle ? (
         <SessionTitleGeneratingIndicator label={generatingLabel} side="right" />
+      ) : session.goal ? (
+        <Tooltip label={goalLabel} side="right">
+          <Sparkles
+            size={12}
+            className={cn("shrink-0", STATUS_ICON[session.status])}
+          />
+        </Tooltip>
       ) : session.mode === "chat" ? (
         <Tooltip label={chatLabel} side="right">
           <MessageSquareText
@@ -4622,6 +4644,7 @@ function LocalSessionRow({
         isGeneratingTitle={isGeneratingTitle}
         generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
         chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
+        goalLabel={sidebarText(t, "sidebar.aria.goalSession")}
       />
       <SessionRowLabel
         editing={editing}

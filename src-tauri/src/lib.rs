@@ -694,6 +694,7 @@ pub fn run() {
             commands::create_session_from_dialog,
             commands::remove_session,
             commands::set_session_status,
+            commands::update_session_goal,
             commands::rename_session,
             commands::session_title_readiness,
             commands::generate_session_title,

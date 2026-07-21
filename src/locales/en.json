@@ -17,8 +17,10 @@
       "worktreeMissing": "Worktree folder no longer exists on disk."
     },
     "autonomousGoal": {
-      "started": "Autonomous goal started in {name}.",
-      "startFailed": "Autonomous goal failed to start:"
+      "started": "Goal session started in {name}.",
+      "updated": "Goal updated in {name}. Replanning has started.",
+      "startFailed": "Goal session failed:",
+      "pauseFailed": "Goal session could not be paused:"
     },
     "project": {
       "addFailed": "Failed to add project:",
@@ -1204,7 +1206,7 @@
       "newIsolatedSession": "New isolated session",
       "newIsolatedSessionWorktree": "New worktree session",
       "newChatSession": "New chat session",
-      "newAutonomousGoalSession": "New autonomous goal session",
+      "newAutonomousGoalSession": "New goal session",
       "newControlSession": "New control session",
       "newProjectFolder": "New workspace",
       "newProjectFolderWithWorktree": "New worktree workspace",
@@ -1260,10 +1262,11 @@
       "newSessionMenuInProjectFolder": "Create session in this workspace",
       "newSessionInProject": "New session in this project",
       "newSessionInProjectFolder": "New session in this workspace",
-      "newAutonomousGoalSession": "New autonomous goal session",
+      "newAutonomousGoalSession": "New goal session",
       "newIsolatedSessionInProject": "New worktree session in this project",
       "newChatSessionInProject": "New chat session in this project",
       "newControlSessionInProject": "New control session in this project",
+      "goalSession": "goal session",
       "dragToReorderSession": "Drag to reorder session",
       "localTerminalSessions": "Local terminal sessions",
       "worktree": "worktree",
@@ -1318,6 +1321,14 @@
       "isolatedWorktree": "Isolated worktree"
     }
   },
+  "chat": {
+    "goalSession": {
+      "label": "Project goal",
+      "revision": "Revision",
+      "edit": "Edit goal",
+      "pauseAndEdit": "Pause & edit"
+    }
+  },
   "pane": {
     "empty": {
       "dropTabOrDoubleClick": "Drop a tab here or double-click to start a session",
@@ -1327,6 +1338,7 @@
       "worktree": "worktree",
       "controlSession": "control session",
       "chatSession": "chat session",
+      "goalSession": "goal session",
       "workSummary": "work summary",
       "generatingSessionTitle": "Generating session title",
       "notificationsSilenced": "Notifications silenced",
@@ -1719,8 +1731,11 @@
       "gotIt": "Got it"
     },
     "autonomousGoal": {
-      "title": "New autonomous goal session",
-      "subtitle": "Describe the outcome once, then let the selected agent work in an isolated worktree.",
+      "title": "New goal session",
+      "subtitle": "Add a durable goal session to this project and let the selected agent work in an isolated worktree.",
+      "editTitle": "Edit project goal",
+      "editSubtitle": "Pause this project session, revise its durable goal, then review the new plan before work resumes.",
+      "projectScopeRequired": "Goal sessions must be created inside a project.",
       "selectRepository": "Select a Git repository for the autonomous goal",
       "goal": {
         "label": "Goal",
@@ -1761,7 +1776,9 @@
         "builtIn": "Built-in · read-only",
         "custom": "Custom preset",
         "customDefault": "Custom preset",
-        "copySuffix": "copy"
+        "copySuffix": "copy",
+        "sessionSnapshot": "session snapshot",
+        "sessionSnapshotHint": "Snapshot saved with this goal session"
       },
       "stages": {
         "interpretation": "Interpretation",
@@ -1778,9 +1795,13 @@
         "disabled": "Disabled"
       },
       "prototypeNotice": "This first version starts immediately in a new isolated worktree. It can edit and test locally, but it will not push, open a PR, merge, deploy, or release. Stop the response and send a revised goal to make it replan and wait for confirmation.",
+      "revisionNotice": "Opening this editor pauses active work. Saving persists a new goal revision, asks the agent to replan, and waits for your confirmation before implementation resumes.",
       "footerHint": "Starting creates the session and submits this goal immediately.",
+      "editFooterHint": "The current preset snapshot remains unchanged unless you select another preset.",
       "start": "Start goal",
-      "starting": "Creating worktree..."
+      "starting": "Creating worktree...",
+      "saveAndReplan": "Save & replan",
+      "replanning": "Saving revision..."
     },
     "removeSession": {
       "title": "Remove session",
@@ -2171,7 +2192,7 @@
       "newIsolatedSession": "New isolated session",
       "newControlSession": "New control session",
       "newChatSession": "New chat session",
-      "newAutonomousGoalSession": "New autonomous goal session",
+      "newAutonomousGoalSession": "New goal session",
       "newProject": "New project",
       "addExistingProject": "Add existing project",
       "refreshSessions": "Refresh sessions",

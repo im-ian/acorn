@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTONOMOUS_GOAL_PRESET_STORAGE_KEY } from "../lib/autonomousGoal";
+import type { SessionCreateScope } from "../lib/sessionCreation";
 import { useSettings } from "../lib/settings";
 import { AutonomousGoalDialog } from "./AutonomousGoalDialog";
 
@@ -25,9 +26,16 @@ describe("AutonomousGoalDialog", () => {
   });
 
   function renderDialog() {
+    const scope: SessionCreateScope = {
+      placement: {
+        repoPath: "/tmp/acorn-project",
+        projectScoped: true,
+      },
+      launch: { kind: "projectRoot" },
+    };
     act(() => {
       root.render(
-        <AutonomousGoalDialog open scope={null} onClose={vi.fn()} />,
+        <AutonomousGoalDialog open scope={scope} onClose={vi.fn()} />,
       );
     });
   }
@@ -46,7 +54,7 @@ describe("AutonomousGoalDialog", () => {
     renderDialog();
 
     expect(document.body.textContent).toContain(
-      "New autonomous goal session",
+      "New goal session",
     );
     expect(document.body.textContent).toContain("Full autonomy");
     expect(document.body.textContent).toContain(

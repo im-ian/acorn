@@ -27,8 +27,8 @@ use acorn_session::scrollback;
 use acorn_session::status as session_status;
 use acorn_session::status::StatusReason as SessionStatusReason;
 use acorn_session::{
-    AgentStatusSource, Project, Session, SessionAgentProvider, SessionKind, SessionMode,
-    SessionOwner, SessionStatus,
+    AgentStatusSource, Project, Session, SessionAgentProvider, SessionGoal, SessionKind,
+    SessionMode, SessionOwner, SessionStatus,
 };
 use acorn_transcript::{assistant_message_text, collapse_preview};
 
@@ -2922,6 +2922,7 @@ pub async fn create_session(
     agent_provider: Option<SessionAgentProvider>,
     project_scoped: Option<bool>,
     mode: Option<SessionMode>,
+    goal: Option<SessionGoal>,
 ) -> AppResult<Session> {
     create_session_inner(
         state.inner(),
@@ -2933,6 +2934,7 @@ pub async fn create_session(
         agent_provider,
         project_scoped.unwrap_or(true),
         mode.unwrap_or_default(),
+        goal,
         false,
     )
 }
@@ -2962,6 +2964,7 @@ pub async fn create_session_from_dialog<R: Runtime>(
         agent_provider,
         project_scoped.unwrap_or(true),
         mode.unwrap_or_default(),
+        None,
         true,
     )?))
 }
@@ -2976,8 +2979,28 @@ fn create_session_inner(
     agent_provider: Option<SessionAgentProvider>,
     project_scoped: bool,
     mode: SessionMode,
+    goal: Option<SessionGoal>,
     allow_project_registration: bool,
 ) -> AppResult<Session> {
+    let goal = goal
+        .map(normalize_session_goal)
+        .transpose()?
+        .map(|mut goal| {
+            goal.revision = 1;
+            goal
+        });
+    if let Some(goal) = goal.as_ref() {
+        if !project_scoped || kind != SessionKind::Regular || mode != SessionMode::Chat {
+            return Err(AppError::Other(
+                "goal sessions must be regular project chat sessions".to_string(),
+            ));
+        }
+        if agent_provider != Some(goal.provider) {
+            return Err(AppError::Other(
+                "goal session provider must match the selected agent".to_string(),
+            ));
+        }
+    }
     let selected_path = canonical_existing_path(&selected_path)?;
     let cwd_path = cwd_path
         .map(|path| canonical_existing_path(&path))
@@ -3025,12 +3048,51 @@ fn create_session_inner(
     ));
     session.agent_provider = agent_provider;
     session.mode = mode;
+    session.goal = goal;
     let inserted = state.sessions.insert(session);
     if project_scoped {
         state.projects.ensure(repo.clone(), project_basename(&repo));
     }
     persist(state);
     Ok(enrich_session(inserted))
+}
+
+fn normalize_session_goal(mut goal: SessionGoal) -> AppResult<SessionGoal> {
+    goal.objective = goal.objective.trim().to_string();
+    if goal.objective.is_empty() {
+        return Err(AppError::Other(
+            "goal objective must not be empty".to_string(),
+        ));
+    }
+    if !matches!(
+        goal.provider,
+        SessionAgentProvider::Claude | SessionAgentProvider::Codex
+    ) {
+        return Err(AppError::Other(
+            "goal sessions support only Claude or Codex".to_string(),
+        ));
+    }
+    goal.completion_criteria = normalize_optional_goal_text(goal.completion_criteria);
+    goal.constraints = normalize_optional_goal_text(goal.constraints);
+    goal.tests = normalize_optional_goal_text(goal.tests);
+    goal.preset.id = goal.preset.id.trim().to_string();
+    goal.preset.name = goal.preset.name.trim().to_string();
+    if goal.preset.id.is_empty() || goal.preset.name.is_empty() {
+        return Err(AppError::Other(
+            "goal preset id and name must not be empty".to_string(),
+        ));
+    }
+    if goal.revision == 0 {
+        goal.revision = 1;
+    }
+    Ok(goal)
+}
+
+fn normalize_optional_goal_text(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
 }
 
 fn auto_title_enabled_for_new_session(
@@ -3780,6 +3842,34 @@ pub fn set_session_status(
     let updated = state.sessions.update_status(&id, status)?;
     persist(&state);
     Ok(updated)
+}
+
+#[tauri::command]
+pub fn update_session_goal(
+    state: State<'_, AppState>,
+    id: String,
+    expected_revision: u32,
+    goal: SessionGoal,
+) -> AppResult<Session> {
+    let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
+    let current = state.sessions.get(&id)?;
+    if !current.project_scoped || current.mode != SessionMode::Chat || current.goal.is_none() {
+        return Err(AppError::Other(
+            "session is not a project goal session".to_string(),
+        ));
+    }
+    let next_revision = expected_revision
+        .checked_add(1)
+        .ok_or_else(|| AppError::Other("goal revision overflow".to_string()))?;
+    let mut goal = normalize_session_goal(goal)?;
+    goal.revision = next_revision;
+    let Some(updated) = state.sessions.update_goal(&id, expected_revision, goal)? else {
+        return Err(AppError::Other(
+            "goal changed since this editor was opened".to_string(),
+        ));
+    };
+    persist(&state);
+    Ok(enrich_session(updated))
 }
 
 #[tauri::command]
@@ -7428,12 +7518,16 @@ mod tests {
         auto_title_enabled_for_new_session, collect_memory_usage_from_roots,
         create_unique_worktree, daemon_spawn_name_for_session, detach_requested_by_stale_renderer,
         font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
-        memory_root_pids, poll_defers_to_hook, remove_linked_worktree_at_path,
-        should_remove_local_project_mirror, validate_editor_command, validate_new_project_name,
-        ChatProviderAdapter, ProcessMemorySnapshot,
+        memory_root_pids, normalize_session_goal, poll_defers_to_hook,
+        remove_linked_worktree_at_path, should_remove_local_project_mirror,
+        validate_editor_command, validate_new_project_name, ChatProviderAdapter,
+        ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
-    use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionMode};
+    use acorn_session::{
+        Session, SessionAgentProvider, SessionGoal, SessionGoalPolicies, SessionGoalPreset,
+        SessionGoalStagePolicy, SessionKind, SessionMode,
+    };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
@@ -7463,6 +7557,53 @@ mod tests {
         );
         session.in_worktree = true;
         session
+    }
+
+    fn goal_spec(provider: SessionAgentProvider) -> SessionGoal {
+        SessionGoal {
+            objective: "  Persist this goal  ".to_string(),
+            completion_criteria: Some("  Sessions reload  ".to_string()),
+            constraints: Some("   ".to_string()),
+            tests: None,
+            provider,
+            preset: SessionGoalPreset {
+                id: " builtin:balanced ".to_string(),
+                name: " Balanced ".to_string(),
+                policies: SessionGoalPolicies {
+                    interpretation: SessionGoalStagePolicy::Auto,
+                    plan: SessionGoalStagePolicy::Approval,
+                    implementation: SessionGoalStagePolicy::Auto,
+                    validation: SessionGoalStagePolicy::Auto,
+                    auto_fix: SessionGoalStagePolicy::Auto,
+                    self_review: SessionGoalStagePolicy::Auto,
+                    draft_pr: SessionGoalStagePolicy::Approval,
+                },
+            },
+            revision: 1,
+        }
+    }
+
+    #[test]
+    fn goal_spec_normalization_preserves_a_durable_snapshot() {
+        let normalized = normalize_session_goal(goal_spec(SessionAgentProvider::Codex))
+            .expect("valid goal normalizes");
+
+        assert_eq!(normalized.objective, "Persist this goal");
+        assert_eq!(
+            normalized.completion_criteria.as_deref(),
+            Some("Sessions reload")
+        );
+        assert_eq!(normalized.constraints, None);
+        assert_eq!(normalized.preset.id, "builtin:balanced");
+        assert_eq!(normalized.preset.name, "Balanced");
+    }
+
+    #[test]
+    fn goal_spec_rejects_unsupported_agents() {
+        let error = normalize_session_goal(goal_spec(SessionAgentProvider::Antigravity))
+            .expect_err("unsupported goal provider is rejected");
+
+        assert!(error.to_string().contains("only Claude or Codex"));
     }
 
     fn chat_state_for_runtime(

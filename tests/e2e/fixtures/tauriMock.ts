@@ -117,6 +117,15 @@ export const tauriMockSource = `
     if (cmd === 'create_session_from_dialog') {
       return Promise.resolve(null);
     }
+    if (cmd === 'update_session_goal') {
+      return Promise.resolve({
+        id: args?.id || '',
+        goal: {
+          ...(args?.goal || {}),
+          revision: Number(args?.expectedRevision || 0) + 1,
+        },
+      });
+    }
     if (cmd === 'get_project_settings') {
       return Promise.resolve({
         key: 'path:' + (args?.repoPath || '/tmp/project'),

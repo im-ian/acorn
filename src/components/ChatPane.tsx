@@ -8,6 +8,7 @@ import {
   Pencil,
   RotateCcw,
   Send,
+  Sparkles,
   Square,
   Trash2,
   X,
@@ -39,8 +40,10 @@ import {
   isSessionAgentProvider,
 } from "../lib/agentProvider";
 import { pathRelativeToCwd } from "../lib/fileMention";
+import { EDIT_AUTONOMOUS_GOAL_SESSION_EVENT } from "../lib/autonomousGoal";
 import { useDialogShortcuts } from "../lib/dialog";
 import { useAppStore } from "../store";
+import { useTranslation } from "../lib/useTranslation";
 import type {
   ChatMessage,
   Session,
@@ -1147,6 +1150,7 @@ export function ChatPane({
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-bg text-fg">
+      {session?.goal ? <GoalSessionHeader session={session} /> : null}
       <div
         ref={scrollRef}
         data-chat-scroll-region
@@ -1681,6 +1685,45 @@ export function ChatPane({
           void handleForkBeforeMessage(forkTargetIndex, mode);
         }}
       />
+    </div>
+  );
+}
+
+function GoalSessionHeader({ session }: { session: Session }) {
+  const t = useTranslation();
+  const goal = session.goal;
+  if (!goal) return null;
+
+  function editGoal() {
+    window.dispatchEvent(
+      new CustomEvent(EDIT_AUTONOMOUS_GOAL_SESSION_EVENT, {
+        detail: { sessionId: session.id },
+      }),
+    );
+  }
+
+  return (
+    <div
+      className="flex shrink-0 items-center gap-3 border-b border-border bg-bg-sidebar/55 px-4 py-2"
+      data-goal-session-header
+    >
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-accent/25 bg-accent/10 text-accent">
+        <Sparkles size={14} aria-hidden />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[10px] font-medium uppercase tracking-wide text-fg-muted">
+          {t("chat.goalSession.label")} · {t("chat.goalSession.revision")} {goal.revision}
+        </span>
+        <span className="block truncate text-xs font-medium text-fg" title={goal.objective}>
+          {goal.objective}
+        </span>
+      </span>
+      <Button size="xs" variant="outline" onClick={editGoal}>
+        <Pencil size={12} />
+        {session.status === "working"
+          ? t("chat.goalSession.pauseAndEdit")
+          : t("chat.goalSession.edit")}
+      </Button>
     </div>
   );
 }

@@ -1,7 +1,13 @@
-import type { SessionAgentProvider } from "./types";
+import type {
+  SessionAgentProvider,
+  SessionGoal,
+  SessionGoalPolicies,
+} from "./types";
 
 export const AUTONOMOUS_GOAL_PRESET_STORAGE_KEY =
   "acorn:autonomous-goal-presets:v1";
+export const EDIT_AUTONOMOUS_GOAL_SESSION_EVENT =
+  "acorn:edit-autonomous-goal-session";
 
 export const AUTONOMOUS_GOAL_STAGE_IDS = [
   "interpretation",
@@ -57,6 +63,105 @@ export interface AutonomousGoalInput {
 export interface AutonomousGoalPromptOptions extends AutonomousGoalInput {
   provider: AutonomousGoalProvider;
   preset: AutonomousGoalPreset;
+}
+
+function optionalGoalValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function sessionGoalPolicies(
+  policies: AutonomousGoalPolicies,
+): SessionGoalPolicies {
+  return {
+    interpretation: policies.interpretation,
+    plan: policies.plan,
+    implementation: policies.implementation,
+    validation: policies.validation,
+    auto_fix: policies.autoFix,
+    self_review: policies.selfReview,
+    draft_pr: policies.draftPr,
+  };
+}
+
+function autonomousGoalPolicies(
+  policies: SessionGoalPolicies,
+): AutonomousGoalPolicies {
+  return {
+    interpretation: policies.interpretation,
+    plan: policies.plan,
+    implementation: policies.implementation,
+    validation: policies.validation,
+    autoFix: policies.auto_fix,
+    selfReview: policies.self_review,
+    draftPr: policies.draft_pr,
+  };
+}
+
+export function createSessionGoal(
+  input: AutonomousGoalInput,
+  provider: AutonomousGoalProvider,
+  preset: AutonomousGoalPreset,
+  revision = 1,
+): SessionGoal {
+  const objective = input.goal.trim();
+  if (!objective) throw new Error("A goal is required.");
+  return {
+    objective,
+    completion_criteria: optionalGoalValue(input.completionCriteria),
+    constraints: optionalGoalValue(input.constraints),
+    tests: optionalGoalValue(input.tests),
+    provider,
+    preset: {
+      id: preset.id,
+      name: preset.name,
+      policies: sessionGoalPolicies(preset.policies),
+    },
+    revision,
+  };
+}
+
+export function autonomousPresetFromSessionGoal(
+  goal: SessionGoal,
+  id = goal.preset.id,
+  name = goal.preset.name,
+): AutonomousGoalPreset {
+  return {
+    id,
+    name,
+    builtIn: true,
+    policies: autonomousGoalPolicies(goal.preset.policies),
+  };
+}
+
+export function buildPromptForSessionGoal(goal: SessionGoal): string {
+  return buildAutonomousGoalPrompt({
+    goal: goal.objective,
+    completionCriteria: goal.completion_criteria ?? undefined,
+    constraints: goal.constraints ?? undefined,
+    tests: goal.tests ?? undefined,
+    provider: goal.provider,
+    preset: autonomousPresetFromSessionGoal(goal),
+  });
+}
+
+export function buildAutonomousGoalRevisionPrompt(
+  previous: SessionGoal,
+  next: SessionGoal,
+): string {
+  return [
+    `# Acorn goal revision ${next.revision}`,
+    "",
+    `This project goal session was paused so its durable goal could be revised. Revision ${next.revision} supersedes revision ${previous.revision}; treat the revised specification below as authoritative.`,
+    "",
+    "## Previous objective",
+    previous.objective,
+    "",
+    buildPromptForSessionGoal(next),
+    "",
+    "## Revision protocol",
+    "Compare the revised goal with the previous objective and the work already present in this project worktree. Explain what remains valid, what scope changed, and the revised plan. Do not resume implementation in this response, even when the selected Plan policy is AUTO. End with `WAITING:` and ask for confirmation of the revised plan. Resume only after the user confirms in this chat.",
+  ].join("\n");
 }
 
 export const REVIEW_AUTONOMOUS_GOAL_PRESET_ID = "builtin:review";

@@ -6,7 +6,10 @@ import {
   BUILTIN_AUTONOMOUS_GOAL_PRESETS,
   FULL_AUTONOMY_GOAL_PRESET_ID,
   REVIEW_AUTONOMOUS_GOAL_PRESET,
+  autonomousPresetFromSessionGoal,
   buildAutonomousGoalPrompt,
+  buildAutonomousGoalRevisionPrompt,
+  createSessionGoal,
   createCustomAutonomousGoalPreset,
   deleteCustomAutonomousGoalPreset,
   deriveAutonomousGoalSessionName,
@@ -123,6 +126,57 @@ describe("autonomous goal presets", () => {
 });
 
 describe("autonomous goal prompt", () => {
+  it("persists the goal and policy snapshot in the session data contract", () => {
+    const goal = createSessionGoal(
+      {
+        goal: "  Ship project-owned goal sessions  ",
+        completionCriteria: " Sessions survive restart ",
+        constraints: "   ",
+      },
+      "codex",
+      BALANCED_AUTONOMOUS_GOAL_PRESET,
+    );
+
+    expect(goal).toMatchObject({
+      objective: "Ship project-owned goal sessions",
+      completion_criteria: "Sessions survive restart",
+      constraints: undefined,
+      provider: "codex",
+      revision: 1,
+      preset: {
+        id: BALANCED_AUTONOMOUS_GOAL_PRESET_ID,
+        policies: {
+          auto_fix: "auto",
+          self_review: "auto",
+          draft_pr: "approval",
+        },
+      },
+    });
+    expect(autonomousPresetFromSessionGoal(goal).policies).toEqual(
+      BALANCED_AUTONOMOUS_GOAL_PRESET.policies,
+    );
+  });
+
+  it("forces a revised goal through replan and confirmation before resuming", () => {
+    const previous = createSessionGoal(
+      { goal: "Add keyboard navigation" },
+      "claude",
+      BALANCED_AUTONOMOUS_GOAL_PRESET,
+    );
+    const next = createSessionGoal(
+      { goal: "Add keyboard and screen-reader navigation" },
+      "claude",
+      REVIEW_AUTONOMOUS_GOAL_PRESET,
+      2,
+    );
+
+    const prompt = buildAutonomousGoalRevisionPrompt(previous, next);
+    expect(prompt).toContain("Revision 2 supersedes revision 1");
+    expect(prompt).toContain("Add keyboard and screen-reader navigation");
+    expect(prompt).toContain("Do not resume implementation");
+    expect(prompt).toContain("WAITING:");
+  });
+
   it("captures structured fields, policy, and the prototype safety boundary", () => {
     const prompt = buildAutonomousGoalPrompt({
       goal: "Fix the flaky parser test",

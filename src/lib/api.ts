@@ -30,6 +30,7 @@ import type {
   Session,
   SessionAgentDetection,
   SessionAgentProvider,
+  SessionGoal,
   SessionKind,
   SessionMode,
   SessionProcessSummary,
@@ -120,6 +121,7 @@ export const api = {
     projectScoped?: boolean,
     mode: SessionMode = "terminal",
     cwdPath?: string,
+    goal?: SessionGoal,
   ): Promise<Session> {
     const args: {
       name: string;
@@ -130,6 +132,7 @@ export const api = {
       projectScoped?: boolean;
       mode: SessionMode;
       cwdPath?: string;
+      goal?: SessionGoal;
     } = {
       name,
       repoPath,
@@ -140,6 +143,7 @@ export const api = {
     };
     if (projectScoped !== undefined) args.projectScoped = projectScoped;
     if (cwdPath !== undefined) args.cwdPath = cwdPath;
+    if (goal !== undefined) args.goal = goal;
     return invoke<Session>("create_session", args);
   },
   createSessionFromDialog(
@@ -169,6 +173,17 @@ export const api = {
   },
   setSessionStatus(id: string, status: SessionStatus): Promise<Session> {
     return invoke<Session>("set_session_status", { id, status });
+  },
+  updateSessionGoal(
+    id: string,
+    expectedRevision: number,
+    goal: SessionGoal,
+  ): Promise<Session> {
+    return invoke<Session>("update_session_goal", {
+      id,
+      expectedRevision,
+      goal,
+    });
   },
   renameSession(id: string, name: string): Promise<Session> {
     return invoke<Session>("rename_session", { id, name });
