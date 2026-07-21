@@ -134,6 +134,38 @@ export function resolveActiveSessionScope(
   };
 }
 
+export function resolveActiveProjectSessionScope(
+  context: SessionCreationContext,
+): SessionCreateScope | null {
+  const activeScope = resolveActiveSessionScope(context);
+  const repoPath = context.activeWorkspaceRepoPath;
+  const isRegisteredProject = (candidate: string) =>
+    context.projects.some((project) => project.repo_path === candidate);
+
+  if (!repoPath) {
+    return activeScope?.placement.projectScoped &&
+      isRegisteredProject(activeScope.placement.repoPath)
+      ? activeScope
+      : null;
+  }
+  if (!isRegisteredProject(repoPath)) return null;
+  if (
+    activeScope?.placement.projectScoped &&
+    activeScope.placement.repoPath === repoPath
+  ) {
+    return activeScope;
+  }
+
+  return {
+    placement: {
+      repoPath,
+      projectScoped: true,
+      projectFolderId: context.activeProjectFolderId ?? undefined,
+    },
+    launch: workspaceLaunch(context.activeWorkspaceCwdPath ?? repoPath),
+  };
+}
+
 export function resolveProjectScopedForRepoPath(
   context: Pick<SessionCreationContext, "sessions" | "projects">,
   repoPath: string,

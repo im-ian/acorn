@@ -360,6 +360,40 @@ describe("ChatPane", () => {
     expect(container.textContent).toContain("hi from codex");
   });
 
+  it("locks a goal session to the agent saved by its preset", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
+    const goalSession = session({
+      agent_provider: "codex",
+      goal: {
+        objective: "Ship the requested change",
+        provider: "codex",
+        preset: {
+          id: "full-autonomy",
+          name: "Full autonomy",
+          policies: {
+            interpretation: "auto",
+            plan: "auto",
+            implementation: "auto",
+            validation: "auto",
+            auto_fix: "auto",
+            self_review: "auto",
+            draft_pr: "auto",
+          },
+        },
+        revision: 1,
+      },
+    });
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" session={goalSession} />);
+    });
+    await settle();
+
+    const provider = getCombobox("Chat provider");
+    expect(provider.disabled).toBe(true);
+    expect(provider.textContent).toContain("Codex");
+  });
+
   it("marks a chat session as waiting when the assistant emits the waiting marker", async () => {
     mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
     mocks.sendChatMessage.mockResolvedValueOnce(

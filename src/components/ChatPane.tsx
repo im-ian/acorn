@@ -658,8 +658,10 @@ export function ChatPane({
   const isScrolledBackRef = useRef(false);
   const [isScrolledBack, setIsScrolledBack] = useState(false);
   const settings = useSettings((s) => s.settings);
+  const goalProviderRef = useRef(session?.goal?.provider);
+  goalProviderRef.current = session?.goal?.provider;
   const [provider, setProvider] = useState<ChatProvider>(() =>
-    defaultProvider(useSettings.getState().settings),
+    session?.goal?.provider ?? defaultProvider(useSettings.getState().settings),
   );
   const messages = state?.messages ?? [];
   const stateProvider = state?.provider ?? null;
@@ -705,7 +707,8 @@ export function ChatPane({
     latestChatStateRef.current = loaded;
     setState(loaded);
     setProvider(
-      providerFromString(loaded.provider) ??
+      goalProviderRef.current ??
+        providerFromString(loaded.provider) ??
         defaultProvider(useSettings.getState().settings),
     );
     setSending(chatStateIsRunning(loaded));
@@ -1630,7 +1633,7 @@ export function ChatPane({
               <Select
                 aria-label="Chat provider"
                 className="w-32 shrink-0"
-                disabled={sending}
+                disabled={sending || Boolean(session?.goal)}
                 value={provider}
                 onChange={(event) =>
                   setProvider(event.target.value as ChatProvider)

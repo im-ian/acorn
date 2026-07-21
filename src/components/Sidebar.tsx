@@ -71,7 +71,11 @@ import {
   createEmptySessionAgentDetection,
 } from "../lib/agentContextMenu";
 import { api, type WorktreeRemoval } from "../lib/api";
-import { EDIT_AUTONOMOUS_GOAL_SESSION_EVENT } from "../lib/autonomousGoal";
+import {
+  EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
+  NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
+  type NewAutonomousGoalSessionEventDetail,
+} from "../lib/autonomousGoal";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
@@ -128,6 +132,7 @@ import {
   applySessionCreateRequest,
   buildSessionCreateRequest,
   buildSessionCreateRequestFromScope,
+  resolveActiveProjectSessionScope,
   resolveActiveSessionScope,
   scopeForSession,
   scopeWithProjectRootLaunch,
@@ -681,6 +686,35 @@ export function Sidebar() {
         "chat",
       );
     };
+    const newAutonomousGoal = (event: Event) => {
+      const requestedScope = (
+        event as CustomEvent<NewAutonomousGoalSessionEventDetail>
+      ).detail?.scope;
+      const state = useAppStore.getState();
+      const scope =
+        requestedScope ??
+        resolveActiveProjectSessionScope({
+          sessions: state.sessions,
+          projects: state.projects,
+          activeSessionId: state.activeSessionId,
+          activeWorkspaceRepoPath: state.activeProject,
+          activeWorkspaceCwdPath:
+            findProjectFolderById(
+              state.projectFolders,
+              state.activeProjectFolderId,
+            )?.cwdPath ?? null,
+          activeProjectFolderId: state.activeProjectFolderId,
+        });
+      if (!scope?.placement.projectScoped) {
+        useToasts
+          .getState()
+          .show(t("dialogs.autonomousGoal.projectScopeRequired"));
+        return;
+      }
+      setAutonomousGoalSession(null);
+      setAutonomousGoalScope(scope);
+      setAutonomousGoalOpen(true);
+    };
     const editAutonomousGoal = (event: Event) => {
       const sessionId = (event as CustomEvent<{ sessionId?: string }>).detail
         ?.sessionId;
@@ -719,6 +753,10 @@ export function Sidebar() {
     window.addEventListener("acorn:new-control-session", newControl);
     window.addEventListener("acorn:new-chat-session", newChat);
     window.addEventListener(
+      NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
+      newAutonomousGoal,
+    );
+    window.addEventListener(
       EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
       editAutonomousGoal,
     );
@@ -729,6 +767,10 @@ export function Sidebar() {
       window.removeEventListener("acorn:new-isolated-session", newIsolated);
       window.removeEventListener("acorn:new-control-session", newControl);
       window.removeEventListener("acorn:new-chat-session", newChat);
+      window.removeEventListener(
+        NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
+        newAutonomousGoal,
+      );
       window.removeEventListener(
         EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
         editAutonomousGoal,
@@ -1860,6 +1902,8 @@ function pickSessionToActivate(
 
 function projectSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
   switch (id) {
+    case "goal":
+      return <Sparkles size={12} />;
     case "terminal":
       return <Plus size={12} />;
     case "isolated":
@@ -1990,19 +2034,26 @@ function ProjectGroupView({
     ) ?? project.folders[0] ?? null;
   const projectSessionCreationFolder = defaultFolderGroup?.folder ?? null;
 
+  const runCreateAction = useCallback(
+    (action: ProjectSessionCreateAction) => {
+      if (!projectSessionCreationFolder) return;
+      if (action.flow === "goal") {
+        onAddAutonomousGoal(projectSessionCreationFolder);
+        return;
+      }
+      onAddSession(
+        projectSessionCreationFolder,
+        action.isolated,
+        action.kind,
+        action.mode,
+      );
+    },
+    [onAddAutonomousGoal, onAddSession, projectSessionCreationFolder],
+  );
+
   const createMenuItems = useMemo<ContextMenuItem[]>(
     () => {
-      const items: ContextMenuItem[] = [
-        {
-          label: sidebarText(t, "sidebar.actions.newAutonomousGoalSession"),
-          icon: <Sparkles size={12} />,
-          onClick: () =>
-            projectSessionCreationFolder
-              ? onAddAutonomousGoal(projectSessionCreationFolder)
-              : undefined,
-        },
-        { type: "separator" },
-      ];
+      const items: ContextMenuItem[] = [];
       items.push(
         ...PROJECT_SESSION_CREATE_MENU.map<ContextMenuItem>((item) => {
           if (item.type === "separator") return { type: "separator" };
@@ -2013,27 +2064,13 @@ function ProjectGroupView({
             shortcut: action.hotkeyId
               ? formatHotkey(shortcuts[action.hotkeyId])
               : undefined,
-            onClick: () =>
-              projectSessionCreationFolder
-                ? onAddSession(
-                    projectSessionCreationFolder,
-                    action.isolated,
-                    action.kind,
-                    action.mode,
-                  )
-                : undefined,
+            onClick: () => runCreateAction(action),
           };
         }),
       );
       return items;
     },
-    [
-      onAddAutonomousGoal,
-      onAddSession,
-      projectSessionCreationFolder,
-      shortcuts,
-      t,
-    ],
+    [runCreateAction, shortcuts, t],
   );
   const overflowCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => {
@@ -2045,15 +2082,7 @@ function ProjectGroupView({
             shortcut: action.hotkeyId
               ? formatHotkey(shortcuts[action.hotkeyId])
               : undefined,
-            onClick: () =>
-              projectSessionCreationFolder
-                ? onAddSession(
-                    projectSessionCreationFolder,
-                    action.isolated,
-                    action.kind,
-                    action.mode,
-                  )
-                : undefined,
+            onClick: () => runCreateAction(action),
           };
         });
       return [
@@ -2072,26 +2101,10 @@ function ProjectGroupView({
           onClick: onAddWorktreeFolder,
         },
         contextMenuGroupTitle(t, "session"),
-        {
-          label: sidebarText(t, "sidebar.actions.newAutonomousGoalSession"),
-          icon: <Sparkles size={12} />,
-          onClick: () =>
-            projectSessionCreationFolder
-              ? onAddAutonomousGoal(projectSessionCreationFolder)
-              : undefined,
-        },
         ...sessionItems,
       ];
     },
-    [
-      onAddFolder,
-      onAddAutonomousGoal,
-      onAddSession,
-      onAddWorktreeFolder,
-      projectSessionCreationFolder,
-      shortcuts,
-      t,
-    ],
+    [onAddFolder, onAddWorktreeFolder, runCreateAction, shortcuts, t],
   );
 
   async function copyText(text: string) {
@@ -2212,14 +2225,7 @@ function ProjectGroupView({
                   e.stopPropagation();
                   setMenu(null);
                   setCreateMenu(null);
-                  if (projectSessionCreationFolder) {
-                    onAddSession(
-                      projectSessionCreationFolder,
-                      action.isolated,
-                      action.kind,
-                      action.mode,
-                    );
-                  }
+                  runCreateAction(action);
                 }}
                 className="flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
                 aria-label={sidebarText(t, action.ariaKey)}
@@ -2520,15 +2526,21 @@ function ProjectFolderView({
     () => projectSessionCreateMenuForWorkspace(folder, false),
     [folder],
   );
+
+  const runCreateAction = useCallback(
+    (action: ProjectSessionCreateAction) => {
+      if (action.flow === "goal") {
+        onAddAutonomousGoal();
+        return;
+      }
+      onAddSession(action.isolated, action.kind, action.mode);
+    },
+    [onAddAutonomousGoal, onAddSession],
+  );
+
   const folderCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => [
       contextMenuGroupTitle(t, "session"),
-      {
-        label: sidebarText(t, "sidebar.actions.newAutonomousGoalSession"),
-        icon: <Sparkles size={12} />,
-        onClick: onAddAutonomousGoal,
-      },
-      { type: "separator" },
       ...folderCreateMenu.map((item) => {
         if (item.type === "separator") return { type: "separator" as const };
         const action = item.action;
@@ -2538,21 +2550,15 @@ function ProjectFolderView({
           shortcut: action.hotkeyId
             ? formatHotkey(shortcuts[action.hotkeyId])
             : undefined,
-          onClick: () =>
-            onAddSession(action.isolated, action.kind, action.mode),
+          onClick: () => runCreateAction(action),
         };
       }),
     ],
-    [folderCreateMenu, onAddAutonomousGoal, onAddSession, shortcuts, t],
+    [folderCreateMenu, runCreateAction, shortcuts, t],
   );
   const folderOverflowCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => [
       contextMenuGroupTitle(t, "session"),
-      {
-        label: sidebarText(t, "sidebar.actions.newAutonomousGoalSession"),
-        icon: <Sparkles size={12} />,
-        onClick: onAddAutonomousGoal,
-      },
       ...folderOverflowCreateMenu.map((item) => {
         if (item.type === "separator") return { type: "separator" as const };
         const action = item.action;
@@ -2562,18 +2568,11 @@ function ProjectFolderView({
           shortcut: action.hotkeyId
             ? formatHotkey(shortcuts[action.hotkeyId])
             : undefined,
-          onClick: () =>
-            onAddSession(action.isolated, action.kind, action.mode),
+          onClick: () => runCreateAction(action),
         };
       }),
     ],
-    [
-      folderOverflowCreateMenu,
-      onAddAutonomousGoal,
-      onAddSession,
-      shortcuts,
-      t,
-    ],
+    [folderOverflowCreateMenu, runCreateAction, shortcuts, t],
   );
 
   function submitRename(next: string) {

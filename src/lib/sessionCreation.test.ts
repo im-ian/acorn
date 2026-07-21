@@ -3,6 +3,7 @@ import {
   applySessionCreateRequest,
   buildSessionCreateRequest,
   buildSessionCreateRequestFromScope,
+  resolveActiveProjectSessionScope,
   resolveActiveSessionScope,
   resolveProjectScopedForRepoPath,
   scopeForSession,
@@ -83,6 +84,75 @@ describe("session creation policy", () => {
       }),
     ).toMatchObject({
       placement: { repoPath: "/Users/me", projectScoped: false },
+    });
+  });
+
+  it("falls back to the active project when the active session is local", () => {
+    const sessions = [
+      session("local", "/Users/me", { project_scoped: false }),
+    ];
+
+    expect(
+      resolveActiveProjectSessionScope({
+        sessions,
+        projects: [project("/repo/app")],
+        activeSessionId: "local",
+        activeWorkspaceRepoPath: "/repo/app",
+        activeWorkspaceCwdPath: "/repo/app/packages/web",
+        activeProjectFolderId: "workspace:web",
+      }),
+    ).toEqual({
+      placement: {
+        repoPath: "/repo/app",
+        projectScoped: true,
+        projectFolderId: "workspace:web",
+      },
+      launch: {
+        kind: "workspaceCwd",
+        cwdPath: "/repo/app/packages/web",
+      },
+    });
+  });
+
+  it("does not invent project scope without an active registered project", () => {
+    expect(
+      resolveActiveProjectSessionScope({
+        sessions: [
+          session("local", "/Users/me", { project_scoped: false }),
+        ],
+        projects: [],
+        activeSessionId: "local",
+        activeWorkspaceRepoPath: "/Users/me",
+      }),
+    ).toBeNull();
+    expect(
+      resolveActiveProjectSessionScope({
+        sessions: [],
+        projects: [],
+        activeWorkspaceRepoPath: "/unregistered/repo",
+      }),
+    ).toBeNull();
+  });
+
+  it("uses the registered active workspace instead of a stale project session", () => {
+    expect(
+      resolveActiveProjectSessionScope({
+        sessions: [
+          session("old", "/repo/old", { project_scoped: true }),
+        ],
+        projects: [project("/repo/old"), project("/repo/current")],
+        activeSessionId: "old",
+        activeWorkspaceRepoPath: "/repo/current",
+      }),
+    ).toEqual({
+      placement: {
+        repoPath: "/repo/current",
+        projectScoped: true,
+      },
+      launch: {
+        kind: "workspaceCwd",
+        cwdPath: "/repo/current",
+      },
     });
   });
 

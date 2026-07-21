@@ -5,11 +5,31 @@ import type {
   SessionGoalModelSelection,
   SessionGoalPolicies,
 } from "./types";
+import type { SessionCreateScope } from "./sessionCreation";
 
 export const AUTONOMOUS_GOAL_PRESET_STORAGE_KEY =
   "acorn:autonomous-goal-presets:v1";
+export const AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY =
+  "acorn:autonomous-goal-model-presets:v1";
+export const NEW_AUTONOMOUS_GOAL_SESSION_EVENT =
+  "acorn:new-autonomous-goal-session";
 export const EDIT_AUTONOMOUS_GOAL_SESSION_EVENT =
   "acorn:edit-autonomous-goal-session";
+
+export interface NewAutonomousGoalSessionEventDetail {
+  scope?: SessionCreateScope;
+}
+
+export function requestNewAutonomousGoalSession(
+  scope?: SessionCreateScope,
+): void {
+  window.dispatchEvent(
+    new CustomEvent<NewAutonomousGoalSessionEventDetail>(
+      NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
+      { detail: { scope } },
+    ),
+  );
+}
 
 export const AUTONOMOUS_GOAL_STAGE_IDS = [
   "interpretation",
@@ -65,6 +85,25 @@ export interface AutonomousGoalPreferences {
    * no longer resolves is a stale binding and intentionally falls back to the
    * balanced preset.
    */
+  lastPresetId: string | null;
+}
+
+export interface AutonomousGoalModelPreset {
+  id: string;
+  name: string;
+  builtIn: boolean;
+  provider: AutonomousGoalProvider;
+  modelConfig: SessionGoalModelConfig;
+}
+
+export interface CustomAutonomousGoalModelPreset
+  extends AutonomousGoalModelPreset {
+  builtIn: false;
+}
+
+export interface AutonomousGoalModelPreferences {
+  schemaVersion: 1;
+  customPresets: CustomAutonomousGoalModelPreset[];
   lastPresetId: string | null;
 }
 
@@ -199,6 +238,10 @@ export function autonomousPresetFromSessionGoal(
 export const REVIEW_AUTONOMOUS_GOAL_PRESET_ID = "builtin:review";
 export const BALANCED_AUTONOMOUS_GOAL_PRESET_ID = "builtin:balanced";
 export const FULL_AUTONOMY_GOAL_PRESET_ID = "builtin:full-autonomy";
+export const CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID =
+  "builtin:model:codex-default";
+export const CLAUDE_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID =
+  "builtin:model:claude-default";
 
 const STAGE_POLICY_VALUES = new Set<AutonomousGoalStagePolicy>([
   "auto",
@@ -210,6 +253,11 @@ const BUILTIN_PRESET_IDS = new Set([
   REVIEW_AUTONOMOUS_GOAL_PRESET_ID,
   BALANCED_AUTONOMOUS_GOAL_PRESET_ID,
   FULL_AUTONOMY_GOAL_PRESET_ID,
+]);
+
+const BUILTIN_MODEL_PRESET_IDS = new Set([
+  CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID,
+  CLAUDE_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID,
 ]);
 
 function immutablePolicies(
@@ -279,7 +327,71 @@ export const BUILTIN_AUTONOMOUS_GOAL_PRESETS = Object.freeze([
   FULL_AUTONOMY_GOAL_PRESET,
 ]);
 
+function immutableModelSelection(
+  selection: SessionGoalModelSelection,
+): SessionGoalModelSelection {
+  return Object.freeze({ ...selection });
+}
+
+function immutableModelConfig(
+  config: SessionGoalModelConfig,
+): SessionGoalModelConfig {
+  const cloned = cloneGoalModelConfig(config);
+  return Object.freeze({
+    single_model: cloned.single_model,
+    default: immutableModelSelection(cloned.default),
+    stages: Object.freeze({
+      interpretation: immutableModelSelection(cloned.stages.interpretation),
+      plan: immutableModelSelection(cloned.stages.plan),
+      implementation: immutableModelSelection(cloned.stages.implementation),
+      validation: immutableModelSelection(cloned.stages.validation),
+      auto_fix: immutableModelSelection(cloned.stages.auto_fix),
+      self_review: immutableModelSelection(cloned.stages.self_review),
+      draft_pr: immutableModelSelection(cloned.stages.draft_pr),
+    }),
+  });
+}
+
+function immutableBuiltinModelPreset(
+  id: string,
+  name: string,
+  provider: AutonomousGoalProvider,
+): AutonomousGoalModelPreset {
+  return Object.freeze({
+    id,
+    name,
+    builtIn: true,
+    provider,
+    modelConfig: immutableModelConfig(createDefaultGoalModelConfig()),
+  });
+}
+
+export const CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET =
+  immutableBuiltinModelPreset(
+    CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID,
+    "Codex · Default",
+    "codex",
+  );
+
+export const CLAUDE_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET =
+  immutableBuiltinModelPreset(
+    CLAUDE_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID,
+    "Claude · Default",
+    "claude",
+  );
+
+export const BUILTIN_AUTONOMOUS_GOAL_MODEL_PRESETS = Object.freeze([
+  CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET,
+  CLAUDE_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET,
+]);
+
 const EMPTY_PREFERENCES: AutonomousGoalPreferences = {
+  schemaVersion: 1,
+  customPresets: [],
+  lastPresetId: null,
+};
+
+const EMPTY_MODEL_PREFERENCES: AutonomousGoalModelPreferences = {
   schemaVersion: 1,
   customPresets: [],
   lastPresetId: null,
@@ -320,6 +432,96 @@ function sanitizeCustomPreset(
   const policies = sanitizePolicies(value.policies);
   if (!id || !name || BUILTIN_PRESET_IDS.has(id) || !policies) return null;
   return { id, name, builtIn: false, policies };
+}
+
+function sanitizeModelSelection(
+  value: unknown,
+): SessionGoalModelSelection | null {
+  if (!isRecord(value)) return null;
+  if (
+    value.model !== undefined &&
+    value.model !== null &&
+    typeof value.model !== "string"
+  ) {
+    return null;
+  }
+  if (
+    value.effort !== undefined &&
+    value.effort !== null &&
+    typeof value.effort !== "string"
+  ) {
+    return null;
+  }
+  return normalizedModelSelection({
+    model: typeof value.model === "string" ? value.model : undefined,
+    effort:
+      typeof value.effort === "string"
+        ? optionalGoalValue(value.effort)
+        : undefined,
+  });
+}
+
+function sanitizeModelConfig(value: unknown): SessionGoalModelConfig | null {
+  if (
+    !isRecord(value) ||
+    typeof value.single_model !== "boolean" ||
+    !isRecord(value.stages)
+  ) {
+    return null;
+  }
+  const defaultSelection = sanitizeModelSelection(value.default);
+  const interpretation = sanitizeModelSelection(value.stages.interpretation);
+  const plan = sanitizeModelSelection(value.stages.plan);
+  const implementation = sanitizeModelSelection(value.stages.implementation);
+  const validation = sanitizeModelSelection(value.stages.validation);
+  const autoFix = sanitizeModelSelection(value.stages.auto_fix);
+  const selfReview = sanitizeModelSelection(value.stages.self_review);
+  const draftPr = sanitizeModelSelection(value.stages.draft_pr);
+  if (
+    !defaultSelection ||
+    !interpretation ||
+    !plan ||
+    !implementation ||
+    !validation ||
+    !autoFix ||
+    !selfReview ||
+    !draftPr
+  ) {
+    return null;
+  }
+  return {
+    single_model: value.single_model,
+    default: defaultSelection,
+    stages: {
+      interpretation,
+      plan,
+      implementation,
+      validation,
+      auto_fix: autoFix,
+      self_review: selfReview,
+      draft_pr: draftPr,
+    },
+  };
+}
+
+function sanitizeCustomModelPreset(
+  value: unknown,
+): CustomAutonomousGoalModelPreset | null {
+  if (!isRecord(value)) return null;
+  const id = typeof value.id === "string" ? value.id.trim() : "";
+  const name = typeof value.name === "string" ? value.name.trim() : "";
+  const provider = value.provider;
+  const modelConfig = sanitizeModelConfig(value.modelConfig);
+  if (
+    !id ||
+    !name ||
+    BUILTIN_MODEL_PRESET_IDS.has(id) ||
+    (provider !== "codex" && provider !== "claude") ||
+    !modelConfig
+  ) {
+    return null;
+  }
+  return { id, name, builtIn: false, provider, modelConfig };
 }
 
 function storageOrNull(): Storage | null {
@@ -380,6 +582,57 @@ export function saveAutonomousGoalPreferences(
   } catch {
     // Presets are a convenience setting; a blocked or full storage area must
     // not prevent the user from starting a goal session.
+  }
+}
+
+export function loadAutonomousGoalModelPreferences(
+): AutonomousGoalModelPreferences {
+  const storage = storageOrNull();
+  if (!storage) return { ...EMPTY_MODEL_PREFERENCES, customPresets: [] };
+  try {
+    const raw = storage.getItem(AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY);
+    if (!raw) return { ...EMPTY_MODEL_PREFERENCES, customPresets: [] };
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      return { ...EMPTY_MODEL_PREFERENCES, customPresets: [] };
+    }
+    const seenIds = new Set<string>();
+    const customPresets = Array.isArray(parsed.customPresets)
+      ? parsed.customPresets.flatMap((candidate) => {
+          const preset = sanitizeCustomModelPreset(candidate);
+          if (!preset || seenIds.has(preset.id)) return [];
+          seenIds.add(preset.id);
+          return [preset];
+        })
+      : [];
+    return {
+      schemaVersion: 1,
+      customPresets,
+      lastPresetId:
+        typeof parsed.lastPresetId === "string" ? parsed.lastPresetId : null,
+    };
+  } catch {
+    return { ...EMPTY_MODEL_PREFERENCES, customPresets: [] };
+  }
+}
+
+export function saveAutonomousGoalModelPreferences(
+  preferences: AutonomousGoalModelPreferences,
+): void {
+  const storage = storageOrNull();
+  if (!storage) return;
+  try {
+    storage.setItem(
+      AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY,
+      JSON.stringify({
+        schemaVersion: 1,
+        customPresets: preferences.customPresets,
+        lastPresetId: preferences.lastPresetId,
+      } satisfies AutonomousGoalModelPreferences),
+    );
+  } catch {
+    // Model presets are optional convenience state and must never block Goal
+    // session creation when local storage is unavailable.
   }
 }
 
@@ -452,6 +705,96 @@ export function deleteCustomAutonomousGoalPreset(
   };
 }
 
+export function defaultAutonomousGoalModelPresetId(
+  provider: AutonomousGoalProvider,
+): string {
+  return provider === "claude"
+    ? CLAUDE_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID
+    : CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID;
+}
+
+export function builtinAutonomousGoalModelPresetForProvider(
+  provider: AutonomousGoalProvider,
+): AutonomousGoalModelPreset {
+  return provider === "claude"
+    ? CLAUDE_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET
+    : CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET;
+}
+
+export function listAutonomousGoalModelPresets(
+  preferences: AutonomousGoalModelPreferences,
+): AutonomousGoalModelPreset[] {
+  return [
+    ...BUILTIN_AUTONOMOUS_GOAL_MODEL_PRESETS,
+    ...preferences.customPresets,
+  ];
+}
+
+export function findAutonomousGoalModelPreset(
+  preferences: AutonomousGoalModelPreferences,
+  presetId: string,
+): AutonomousGoalModelPreset | null {
+  return (
+    listAutonomousGoalModelPresets(preferences).find(
+      (preset) => preset.id === presetId,
+    ) ?? null
+  );
+}
+
+export function resolveInitialAutonomousGoalModelPresetId(
+  preferences: AutonomousGoalModelPreferences,
+  defaultProvider: AutonomousGoalProvider,
+): string {
+  if (
+    preferences.lastPresetId &&
+    findAutonomousGoalModelPreset(preferences, preferences.lastPresetId)
+  ) {
+    return preferences.lastPresetId;
+  }
+  return defaultAutonomousGoalModelPresetId(defaultProvider);
+}
+
+export function createCustomAutonomousGoalModelPreset(
+  source: AutonomousGoalModelPreset,
+  id: string,
+  name: string,
+): CustomAutonomousGoalModelPreset {
+  const trimmedId = id.trim();
+  const trimmedName = name.trim();
+  if (!trimmedId || BUILTIN_MODEL_PRESET_IDS.has(trimmedId)) {
+    throw new Error("A custom model preset requires a unique custom id.");
+  }
+  if (!trimmedName) {
+    throw new Error("A custom model preset requires a name.");
+  }
+  return {
+    id: trimmedId,
+    name: trimmedName,
+    builtIn: false,
+    provider: source.provider,
+    modelConfig: cloneGoalModelConfig(source.modelConfig),
+  };
+}
+
+export function deleteCustomAutonomousGoalModelPreset(
+  preferences: AutonomousGoalModelPreferences,
+  presetId: string,
+): AutonomousGoalModelPreferences {
+  const removed = preferences.customPresets.find(
+    (preset) => preset.id === presetId,
+  );
+  if (!removed) return preferences;
+  return {
+    ...preferences,
+    customPresets: preferences.customPresets.filter(
+      (preset) => preset.id !== presetId,
+    ),
+    lastPresetId:
+      preferences.lastPresetId === presetId
+        ? defaultAutonomousGoalModelPresetId(removed.provider)
+        : preferences.lastPresetId,
+  };
+}
 
 export function deriveAutonomousGoalSessionName(goal: string): string {
   const firstMeaningfulLine =

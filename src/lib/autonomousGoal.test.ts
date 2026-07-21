@@ -1,19 +1,30 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY,
   AUTONOMOUS_GOAL_PRESET_STORAGE_KEY,
   BALANCED_AUTONOMOUS_GOAL_PRESET,
   BALANCED_AUTONOMOUS_GOAL_PRESET_ID,
+  BUILTIN_AUTONOMOUS_GOAL_MODEL_PRESETS,
   BUILTIN_AUTONOMOUS_GOAL_PRESETS,
+  CLAUDE_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID,
+  CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET,
+  CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID,
   FULL_AUTONOMY_GOAL_PRESET_ID,
   REVIEW_AUTONOMOUS_GOAL_PRESET,
   autonomousPresetFromSessionGoal,
+  createCustomAutonomousGoalModelPreset,
   createSessionGoal,
   createCustomAutonomousGoalPreset,
+  deleteCustomAutonomousGoalModelPreset,
   deleteCustomAutonomousGoalPreset,
   deriveAutonomousGoalSessionName,
+  loadAutonomousGoalModelPreferences,
   loadAutonomousGoalPreferences,
+  resolveInitialAutonomousGoalModelPresetId,
   resolveInitialAutonomousGoalPresetId,
+  saveAutonomousGoalModelPreferences,
   saveAutonomousGoalPreferences,
+  type AutonomousGoalModelPreferences,
   type AutonomousGoalPreferences,
 } from "./autonomousGoal";
 
@@ -118,6 +129,113 @@ describe("autonomous goal presets", () => {
       JSON.parse(
         window.localStorage.getItem(AUTONOMOUS_GOAL_PRESET_STORAGE_KEY) ??
           "null",
+      ),
+    ).toEqual(loaded);
+  });
+});
+
+describe("autonomous goal model presets", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("ships immutable agent-default presets for Codex and Claude", () => {
+    expect(BUILTIN_AUTONOMOUS_GOAL_MODEL_PRESETS).toHaveLength(2);
+    expect(Object.isFrozen(BUILTIN_AUTONOMOUS_GOAL_MODEL_PRESETS)).toBe(true);
+    expect(Object.isFrozen(CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET)).toBe(
+      true,
+    );
+    expect(
+      Object.isFrozen(CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET.modelConfig),
+    ).toBe(true);
+    expect(CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET).toMatchObject({
+      provider: "codex",
+      modelConfig: { single_model: true, default: {} },
+    });
+  });
+
+  it("defaults to the selected agent and falls back from stale bindings", () => {
+    const fresh = loadAutonomousGoalModelPreferences();
+    expect(resolveInitialAutonomousGoalModelPresetId(fresh, "claude")).toBe(
+      CLAUDE_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID,
+    );
+    expect(
+      resolveInitialAutonomousGoalModelPresetId(
+        { ...fresh, lastPresetId: "deleted:model-preset" },
+        "codex",
+      ),
+    ).toBe(CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID);
+  });
+
+  it("duplicates model routing as an independent custom snapshot", () => {
+    const source = {
+      ...CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET,
+      modelConfig: {
+        ...CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET.modelConfig,
+        default: { model: "gpt-test", effort: "high" },
+      },
+    };
+    const duplicate = createCustomAutonomousGoalModelPreset(
+      source,
+      "custom:model",
+      "My Codex route",
+    );
+    duplicate.modelConfig.default.model = "gpt-other";
+
+    expect(duplicate.builtIn).toBe(false);
+    expect(duplicate.provider).toBe("codex");
+    expect(source.modelConfig.default.model).toBe("gpt-test");
+  });
+
+  it("deletes only the custom model preset and restores its agent default", () => {
+    const custom = createCustomAutonomousGoalModelPreset(
+      CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET,
+      "custom:model",
+      "My route",
+    );
+    const preferences: AutonomousGoalModelPreferences = {
+      schemaVersion: 1,
+      customPresets: [custom],
+      lastPresetId: custom.id,
+    };
+
+    const next = deleteCustomAutonomousGoalModelPreset(
+      preferences,
+      custom.id,
+    );
+    expect(next.customPresets).toEqual([]);
+    expect(next.lastPresetId).toBe(
+      CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID,
+    );
+  });
+
+  it("sanitizes malformed persisted model presets without losing valid ones", () => {
+    const valid = createCustomAutonomousGoalModelPreset(
+      CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET,
+      "custom:valid-model",
+      "Valid model route",
+    );
+    window.localStorage.setItem(
+      AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY,
+      JSON.stringify({
+        customPresets: [
+          valid,
+          { ...valid, id: "custom:broken", provider: "unknown" },
+          {
+            ...valid,
+            id: CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID,
+          },
+        ],
+        lastPresetId: valid.id,
+      }),
+    );
+
+    const loaded = loadAutonomousGoalModelPreferences();
+    expect(loaded.customPresets).toEqual([valid]);
+    saveAutonomousGoalModelPreferences(loaded);
+    expect(
+      JSON.parse(
+        window.localStorage.getItem(
+          AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY,
+        ) ?? "null",
       ),
     ).toEqual(loaded);
   });

@@ -1386,6 +1386,7 @@
       "closeOthers": "Close Others",
       "closeAll": "Close All",
       "newSessionInThisPane": "New Session in This Pane",
+      "newGoalSessionInThisPane": "New Goal Session in This Pane",
       "closePane": "Close Pane"
     }
   },
@@ -1783,7 +1784,21 @@
         "claudeCapabilities": "Loaded the aliases and effort levels exposed by Claude CLI. Use Custom model for a full model ID.",
         "capabilityFallback": "The CLI model catalog could not be loaded. Default and custom model values remain available.",
         "allStages": "All stages",
-        "snapshotHint": "Model and effort choices are saved with this Goal session. Default lets the selected agent CLI choose its current default."
+        "snapshotHint": "The selected agent and model preset is saved as a snapshot with this Goal session. Default lets the selected agent CLI choose its current default."
+      },
+      "modelPreset": {
+        "label": "Agent & model preset",
+        "hint": "Built-ins are read-only. Add or duplicate a slot to customize the agent, model, and effort routing.",
+        "currentSession": "Current session settings",
+        "builtInReadonly": "This built-in preset cannot be changed. Duplicate it to make an editable copy.",
+        "currentSessionReadonly": "Current session settings are not a reusable preset. Choose or create a preset to replace them."
+      },
+      "modelPresets": {
+        "codexDefault": "Codex · Agent default",
+        "claudeDefault": "Claude · Agent default",
+        "builtIn": "Built-in · read-only",
+        "custom": "Custom preset",
+        "customDefault": "Model preset"
       },
       "preset": {
         "label": "Policy preset",
@@ -1792,7 +1807,9 @@
         "duplicate": "Duplicate",
         "delete": "Delete",
         "name": "Preset name",
+        "currentSession": "Current session policy",
         "builtInReadonly": "This built-in preset cannot be changed. Duplicate it to make an editable copy.",
+        "currentSessionReadonly": "The current session policy is already snapshotted and is not a reusable preset. Choose or create a preset to replace it.",
         "snapshotHint": "The session receives a snapshot. Renaming, editing, or deleting this preset later will not change a running session."
       },
       "presets": {
@@ -1802,9 +1819,7 @@
         "builtIn": "Built-in · read-only",
         "custom": "Custom preset",
         "customDefault": "Custom preset",
-        "copySuffix": "copy",
-        "sessionSnapshot": "session snapshot",
-        "sessionSnapshotHint": "Snapshot saved with this goal session"
+        "copySuffix": "copy"
       },
       "stages": {
         "interpretation": "Interpretation",

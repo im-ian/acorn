@@ -1386,6 +1386,7 @@
       "closeOthers": "다른 탭 닫기",
       "closeAll": "모두 닫기",
       "newSessionInThisPane": "이 패널에서 새 세션",
+      "newGoalSessionInThisPane": "이 패널에서 새 Goal 세션",
       "closePane": "패널 닫기"
     }
   },
@@ -1783,7 +1784,21 @@
         "claudeCapabilities": "Claude CLI가 노출하는 모델 별칭과 effort를 불러왔습니다. 전체 모델 ID는 직접 입력을 사용하세요.",
         "capabilityFallback": "CLI 모델 목록을 불러오지 못했습니다. 기본값 또는 커스텀 모델을 사용할 수 있습니다.",
         "allStages": "모든 단계",
-        "snapshotHint": "모델과 effort 설정은 Goal 세션에 스냅샷으로 저장됩니다. 기본값은 선택한 에이전트 CLI의 현재 기본 설정을 사용합니다."
+        "snapshotHint": "선택한 에이전트·모델 프리셋은 Goal 세션에 스냅샷으로 저장됩니다. 기본값은 선택한 에이전트 CLI의 현재 기본 설정을 사용합니다."
+      },
+      "modelPreset": {
+        "label": "에이전트 · 모델 프리셋",
+        "hint": "기본 프리셋은 읽기 전용입니다. 슬롯을 추가하거나 복제해 에이전트, 모델, effort 경로를 수정하세요.",
+        "currentSession": "현재 세션 설정",
+        "builtInReadonly": "기본 프리셋은 변경할 수 없습니다. 복제하면 편집 가능한 사본이 만들어집니다.",
+        "currentSessionReadonly": "현재 세션 설정은 재사용 프리셋이 아닙니다. 다른 프리셋을 선택하거나 새로 만들어 교체하세요."
+      },
+      "modelPresets": {
+        "codexDefault": "Codex · 에이전트 기본값",
+        "claudeDefault": "Claude · 에이전트 기본값",
+        "builtIn": "기본 · 읽기 전용",
+        "custom": "사용자 프리셋",
+        "customDefault": "모델 프리셋"
       },
       "preset": {
         "label": "정책 프리셋",
@@ -1792,7 +1807,9 @@
         "duplicate": "복제",
         "delete": "삭제",
         "name": "프리셋 이름",
+        "currentSession": "현재 세션 정책",
         "builtInReadonly": "기본 프리셋은 변경할 수 없습니다. 복제하면 편집 가능한 사본이 만들어집니다.",
+        "currentSessionReadonly": "현재 세션 정책은 이미 스냅샷으로 저장되어 재사용 프리셋이 아닙니다. 다른 프리셋을 선택하거나 새로 만들어 교체하세요.",
         "snapshotHint": "세션에는 현재 설정의 스냅샷이 전달됩니다. 나중에 이 프리셋을 변경하거나 삭제해도 실행 중인 세션에는 영향이 없습니다."
       },
       "presets": {
@@ -1802,9 +1819,7 @@
         "builtIn": "기본 · 읽기 전용",
         "custom": "사용자 프리셋",
         "customDefault": "사용자 프리셋",
-        "copySuffix": "사본",
-        "sessionSnapshot": "세션 스냅샷",
-        "sessionSnapshotHint": "이 Goal 세션에 저장된 정책 스냅샷"
+        "copySuffix": "사본"
       },
       "stages": {
         "interpretation": "목표 해석",

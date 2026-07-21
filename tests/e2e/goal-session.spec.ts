@@ -95,9 +95,16 @@ test("creates and revises a durable goal session inside a project", async ({
       "For example: Add keyboard navigation to the command palette and verify it with tests.",
     )
     .fill("Add project-owned goal sessions");
-  await createDialog.getByRole("combobox").first().click();
-  await page.getByRole("option", { name: /^Codex/ }).click();
-  await createDialog.getByRole("button", { name: "Model", exact: true }).click();
+  await createDialog
+    .getByRole("button", { name: "Agent & Model", exact: true })
+    .click();
+  await createDialog
+    .getByRole("combobox", { name: "Agent & model preset" })
+    .click();
+  await page
+    .getByRole("option", { name: /^Codex · Agent default/ })
+    .click();
+  await createDialog.getByRole("button", { name: "Duplicate" }).click();
   await createDialog
     .getByRole("combobox", { name: "All stages Model" })
     .click();

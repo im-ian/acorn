@@ -12,20 +12,32 @@ import {
   BALANCED_AUTONOMOUS_GOAL_PRESET_ID,
   AUTONOMOUS_GOAL_STAGE_IDS,
   AUTONOMOUS_GOAL_STAGE_MODEL_KEYS,
+  CLAUDE_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID,
+  CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID,
   FULL_AUTONOMY_GOAL_PRESET_ID,
   REVIEW_AUTONOMOUS_GOAL_PRESET_ID,
   autonomousPresetFromSessionGoal,
+  builtinAutonomousGoalModelPresetForProvider,
   cloneGoalModelConfig,
+  createCustomAutonomousGoalModelPreset,
   createDefaultGoalModelConfig,
   createSessionGoal,
   createCustomAutonomousGoalPreset,
+  deleteCustomAutonomousGoalModelPreset,
   deleteCustomAutonomousGoalPreset,
   deriveAutonomousGoalSessionName,
+  findAutonomousGoalModelPreset,
   findAutonomousGoalPreset,
+  listAutonomousGoalModelPresets,
   listAutonomousGoalPresets,
+  loadAutonomousGoalModelPreferences,
   loadAutonomousGoalPreferences,
+  resolveInitialAutonomousGoalModelPresetId,
   resolveInitialAutonomousGoalPresetId,
+  saveAutonomousGoalModelPreferences,
   saveAutonomousGoalPreferences,
+  type AutonomousGoalModelPreferences,
+  type AutonomousGoalModelPreset,
   type AutonomousGoalPreferences,
   type AutonomousGoalPreset,
   type AutonomousGoalProvider,
@@ -145,6 +157,26 @@ function presetDisplayName(t: Translator, preset: AutonomousGoalPreset) {
   return preset.builtIn ? builtinPresetName(t, preset) : preset.name;
 }
 
+function builtinModelPresetName(
+  t: Translator,
+  preset: AutonomousGoalModelPreset,
+): string {
+  if (preset.id === CODEX_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID) {
+    return agt(t, "dialogs.autonomousGoal.modelPresets.codexDefault");
+  }
+  if (preset.id === CLAUDE_DEFAULT_AUTONOMOUS_GOAL_MODEL_PRESET_ID) {
+    return agt(t, "dialogs.autonomousGoal.modelPresets.claudeDefault");
+  }
+  return preset.name;
+}
+
+function modelPresetDisplayName(
+  t: Translator,
+  preset: AutonomousGoalModelPreset,
+): string {
+  return preset.builtIn ? builtinModelPresetName(t, preset) : preset.name;
+}
+
 function nextCustomPresetName(
   t: Translator,
   preferences: AutonomousGoalPreferences,
@@ -162,12 +194,28 @@ function nextCustomPresetName(
   return candidate;
 }
 
-function formatToast(template: string, value: string): string {
-  return template.replace("{name}", value);
+function nextCustomModelPresetName(
+  t: Translator,
+  preferences: AutonomousGoalModelPreferences,
+): string {
+  const prefix = agt(
+    t,
+    "dialogs.autonomousGoal.modelPresets.customDefault",
+  );
+  const taken = new Set(
+    preferences.customPresets.map((preset) => preset.name.toLocaleLowerCase()),
+  );
+  let index = preferences.customPresets.length + 1;
+  let candidate = `${prefix} ${index}`;
+  while (taken.has(candidate.toLocaleLowerCase())) {
+    index += 1;
+    candidate = `${prefix} ${index}`;
+  }
+  return candidate;
 }
 
-function sessionSnapshotPresetId(session: Session): string {
-  return `session-snapshot:${session.id}:${session.goal?.revision ?? 0}`;
+function formatToast(template: string, value: string): string {
+  return template.replace("{name}", value);
 }
 
 function markLocalGoalSessionWorking(sessionId: string) {
@@ -211,6 +259,21 @@ export function AutonomousGoalDialog({
   );
   const [presetNameDraft, setPresetNameDraft] = useState("");
   const [settingsTab, setSettingsTab] = useState<GoalSettingsTab>("policy");
+  const [modelPreferences, setModelPreferences] =
+    useState<AutonomousGoalModelPreferences>(
+      loadAutonomousGoalModelPreferences,
+    );
+  const modelPreferencesRef = useRef(modelPreferences);
+  const [selectedModelPresetId, setSelectedModelPresetId] = useState(() => {
+    const selectedProvider = defaultProvider(
+      useSettings.getState().settings.agents.selected,
+    );
+    return resolveInitialAutonomousGoalModelPresetId(
+      loadAutonomousGoalModelPreferences(),
+      selectedProvider,
+    );
+  });
+  const [modelPresetNameDraft, setModelPresetNameDraft] = useState("");
   const [modelConfig, setModelConfig] = useState<SessionGoalModelConfig>(
     createDefaultGoalModelConfig,
   );
@@ -230,38 +293,61 @@ export function AutonomousGoalDialog({
   const [error, setError] = useState<string | null>(null);
   const editingSession = session?.goal ? session : null;
   const editingGoal = editingSession?.goal ?? null;
-  const snapshotPreset = useMemo(() => {
-    if (!editingSession || !editingGoal) return null;
+  const currentSessionPolicy = useMemo(() => {
+    if (!editingGoal) return null;
     return autonomousPresetFromSessionGoal(
       editingGoal,
-      sessionSnapshotPresetId(editingSession),
-      `${editingGoal.preset.name} · ${agt(t, "dialogs.autonomousGoal.presets.sessionSnapshot")}`,
+      editingGoal.preset.id,
+      editingGoal.preset.name,
     );
-  }, [editingGoal, editingSession, t]);
+  }, [editingGoal]);
 
   useEffect(() => {
     if (!open) return;
     const loaded = loadAutonomousGoalPreferences();
+    const loadedModelPreferences = loadAutonomousGoalModelPreferences();
+    const settingsProvider = defaultProvider(
+      useSettings.getState().settings.agents.selected,
+    );
     const initialPresetId = editingSession
-      ? sessionSnapshotPresetId(editingSession)
+      ? ""
       : resolveInitialAutonomousGoalPresetId(loaded);
-    const initialPreset = editingSession
-      ? autonomousPresetFromSessionGoal(
-          editingSession.goal!,
-          initialPresetId,
-          editingSession.goal!.preset.name,
+    const initialPreset = initialPresetId
+      ? findAutonomousGoalPreset(loaded, initialPresetId)
+      : currentSessionPolicy;
+    const initialModelPresetId = editingSession
+      ? ""
+      : resolveInitialAutonomousGoalModelPresetId(
+          loadedModelPreferences,
+          settingsProvider,
+        );
+    const initialModelPreset = initialModelPresetId
+      ? findAutonomousGoalModelPreset(
+          loadedModelPreferences,
+          initialModelPresetId,
         )
-      : findAutonomousGoalPreset(loaded, initialPresetId);
+      : null;
     preferencesRef.current = loaded;
     setPreferences(loaded);
     setSelectedPresetId(initialPresetId);
-    setPresetNameDraft(initialPreset?.builtIn ? "" : (initialPreset?.name ?? ""));
+    setPresetNameDraft(
+      initialPreset?.builtIn ? "" : (initialPreset?.name ?? ""),
+    );
+    modelPreferencesRef.current = loadedModelPreferences;
+    setModelPreferences(loadedModelPreferences);
+    setSelectedModelPresetId(initialModelPresetId);
+    setModelPresetNameDraft(
+      initialModelPreset?.builtIn ? "" : (initialModelPreset?.name ?? ""),
+    );
     setProvider(
-      editingSession?.goal?.provider ??
-        defaultProvider(useSettings.getState().settings.agents.selected),
+      editingGoal?.provider ?? initialModelPreset?.provider ?? settingsProvider,
     );
     setSettingsTab("policy");
-    setModelConfig(cloneGoalModelConfig(editingSession?.goal?.model_config));
+    setModelConfig(
+      cloneGoalModelConfig(
+        editingGoal?.model_config ?? initialModelPreset?.modelConfig,
+      ),
+    );
     setCustomModelSlots(new Set());
     setGoal(editingSession?.goal?.objective ?? "");
     setCompletionCriteria(editingSession?.goal?.completion_criteria ?? "");
@@ -269,7 +355,7 @@ export function AutonomousGoalDialog({
     setTests(editingSession?.goal?.tests ?? "");
     setSubmitting(false);
     setError(null);
-  }, [editingSession?.id, editingSession?.goal?.revision, open]);
+  }, [editingSession?.id, editingGoal?.revision, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -313,18 +399,30 @@ export function AutonomousGoalDialog({
   }, [open]);
 
   const presets = useMemo(
-    () => [
-      ...(snapshotPreset ? [snapshotPreset] : []),
-      ...listAutonomousGoalPresets(preferences),
-    ],
-    [preferences, snapshotPreset],
+    () => listAutonomousGoalPresets(preferences),
+    [preferences],
   );
-  const selectedPreset = useMemo(
+  const selectedStoredPreset = useMemo(
     () =>
-      snapshotPreset?.id === selectedPresetId
-        ? snapshotPreset
-        : findAutonomousGoalPreset(preferences, selectedPresetId),
-    [preferences, selectedPresetId, snapshotPreset],
+      selectedPresetId
+        ? findAutonomousGoalPreset(preferences, selectedPresetId)
+        : null,
+    [preferences, selectedPresetId],
+  );
+  const selectedPreset = selectedStoredPreset ?? currentSessionPolicy;
+  const modelPresets = useMemo(
+    () => listAutonomousGoalModelPresets(modelPreferences),
+    [modelPreferences],
+  );
+  const selectedModelPreset = useMemo(
+    () =>
+      selectedModelPresetId
+        ? findAutonomousGoalModelPreset(
+            modelPreferences,
+            selectedModelPresetId,
+          )
+        : null,
+    [modelPreferences, selectedModelPresetId],
   );
 
   useEffect(() => {
@@ -333,10 +431,28 @@ export function AutonomousGoalDialog({
     );
   }, [selectedPreset?.id, selectedPreset?.name, selectedPreset?.builtIn]);
 
+  useEffect(() => {
+    setModelPresetNameDraft(
+      selectedModelPreset && !selectedModelPreset.builtIn
+        ? selectedModelPreset.name
+        : "",
+    );
+  }, [
+    selectedModelPreset?.id,
+    selectedModelPreset?.name,
+    selectedModelPreset?.builtIn,
+  ]);
+
   function persistPreferences(next: AutonomousGoalPreferences) {
     preferencesRef.current = next;
     setPreferences(next);
     saveAutonomousGoalPreferences(next);
+  }
+
+  function persistModelPreferences(next: AutonomousGoalModelPreferences) {
+    modelPreferencesRef.current = next;
+    setModelPreferences(next);
+    saveAutonomousGoalModelPreferences(next);
   }
 
   function selectPreset(presetId: string) {
@@ -359,10 +475,10 @@ export function AutonomousGoalDialog({
   }
 
   function duplicatePreset() {
-    if (!selectedPreset) return;
-    const sourceName = presetDisplayName(t, selectedPreset);
+    if (!selectedStoredPreset) return;
+    const sourceName = presetDisplayName(t, selectedStoredPreset);
     const preset = createCustomAutonomousGoalPreset(
-      selectedPreset,
+      selectedStoredPreset,
       createPresetId(),
       `${sourceName} ${agt(t, "dialogs.autonomousGoal.presets.copySuffix")}`,
     );
@@ -375,13 +491,13 @@ export function AutonomousGoalDialog({
   }
 
   function commitPresetName() {
-    if (!selectedPreset || selectedPreset.builtIn) return;
-    const name = presetNameDraft.trim() || selectedPreset.name;
+    if (!selectedStoredPreset || selectedStoredPreset.builtIn) return;
+    const name = presetNameDraft.trim() || selectedStoredPreset.name;
     setPresetNameDraft(name);
     persistPreferences({
       ...preferences,
       customPresets: preferences.customPresets.map((preset) =>
-        preset.id === selectedPreset.id ? { ...preset, name } : preset,
+        preset.id === selectedStoredPreset.id ? { ...preset, name } : preset,
       ),
     });
   }
@@ -390,11 +506,11 @@ export function AutonomousGoalDialog({
     stage: AutonomousGoalStage,
     policy: AutonomousGoalStagePolicy,
   ) {
-    if (!selectedPreset || selectedPreset.builtIn) return;
+    if (!selectedStoredPreset || selectedStoredPreset.builtIn) return;
     persistPreferences({
       ...preferences,
       customPresets: preferences.customPresets.map((preset) =>
-        preset.id === selectedPreset.id
+        preset.id === selectedStoredPreset.id
           ? {
               ...preset,
               policies: { ...preset.policies, [stage]: policy },
@@ -405,54 +521,169 @@ export function AutonomousGoalDialog({
   }
 
   function deletePreset() {
-    if (!selectedPreset || selectedPreset.builtIn) return;
+    if (!selectedStoredPreset || selectedStoredPreset.builtIn) return;
     const next = deleteCustomAutonomousGoalPreset(
       preferences,
-      selectedPreset.id,
+      selectedStoredPreset.id,
     );
     persistPreferences(next);
     selectPreset(resolveInitialAutonomousGoalPresetId(next));
   }
 
+  function applyModelPreset(preset: AutonomousGoalModelPreset) {
+    setSelectedModelPresetId(preset.id);
+    setProvider(preset.provider);
+    setModelConfig(cloneGoalModelConfig(preset.modelConfig));
+    setCustomModelSlots(new Set());
+    setError(null);
+  }
+
+  function selectModelPreset(presetId: string) {
+    const preset = findAutonomousGoalModelPreset(
+      modelPreferences,
+      presetId,
+    );
+    if (preset) applyModelPreset(preset);
+  }
+
+  function addModelPreset() {
+    const preset = createCustomAutonomousGoalModelPreset(
+      builtinAutonomousGoalModelPresetForProvider(provider),
+      createPresetId(),
+      nextCustomModelPresetName(t, modelPreferences),
+    );
+    const next = {
+      ...modelPreferences,
+      customPresets: [...modelPreferences.customPresets, preset],
+      lastPresetId: preset.id,
+    } satisfies AutonomousGoalModelPreferences;
+    persistModelPreferences(next);
+    applyModelPreset(preset);
+  }
+
+  function duplicateModelPreset() {
+    if (!selectedModelPreset) return;
+    const sourceName = modelPresetDisplayName(t, selectedModelPreset);
+    const preset = createCustomAutonomousGoalModelPreset(
+      selectedModelPreset,
+      createPresetId(),
+      `${sourceName} ${agt(t, "dialogs.autonomousGoal.presets.copySuffix")}`,
+    );
+    const next = {
+      ...modelPreferences,
+      customPresets: [...modelPreferences.customPresets, preset],
+      lastPresetId: preset.id,
+    } satisfies AutonomousGoalModelPreferences;
+    persistModelPreferences(next);
+    applyModelPreset(preset);
+  }
+
+  function commitModelPresetName() {
+    if (!selectedModelPreset || selectedModelPreset.builtIn) return;
+    const name = modelPresetNameDraft.trim() || selectedModelPreset.name;
+    setModelPresetNameDraft(name);
+    persistModelPreferences({
+      ...modelPreferences,
+      customPresets: modelPreferences.customPresets.map((preset) =>
+        preset.id === selectedModelPreset.id ? { ...preset, name } : preset,
+      ),
+    });
+  }
+
+  function deleteModelPreset() {
+    if (!selectedModelPreset || selectedModelPreset.builtIn) return;
+    const providerFallback = selectedModelPreset.provider;
+    const next = deleteCustomAutonomousGoalModelPreset(
+      modelPreferences,
+      selectedModelPreset.id,
+    );
+    persistModelPreferences(next);
+    const fallbackId = resolveInitialAutonomousGoalModelPresetId(
+      next,
+      providerFallback,
+    );
+    const fallback = findAutonomousGoalModelPreset(next, fallbackId);
+    if (fallback) applyModelPreset(fallback);
+  }
+
+  function persistSelectedModelPreset(
+    nextProvider: AutonomousGoalProvider,
+    nextConfig: SessionGoalModelConfig,
+  ) {
+    if (!selectedModelPreset || selectedModelPreset.builtIn) return;
+    persistModelPreferences({
+      ...modelPreferences,
+      customPresets: modelPreferences.customPresets.map((preset) =>
+        preset.id === selectedModelPreset.id
+          ? {
+              ...preset,
+              provider: nextProvider,
+              modelConfig: cloneGoalModelConfig(nextConfig),
+            }
+          : preset,
+      ),
+    });
+  }
+
   function changeProvider(nextProvider: AutonomousGoalProvider) {
+    if (
+      nextProvider === provider ||
+      !selectedModelPreset ||
+      selectedModelPreset.builtIn
+    ) {
+      return;
+    }
+    const nextConfig = {
+      ...createDefaultGoalModelConfig(),
+      single_model: modelConfig.single_model,
+    };
     setProvider(nextProvider);
+    setModelConfig(nextConfig);
+    persistSelectedModelPreset(nextProvider, nextConfig);
     setCustomModelSlots(new Set());
   }
 
   function updateDefaultModelSelection(
     patch: Partial<SessionGoalModelSelection>,
   ) {
-    setModelConfig((current) => ({
-      ...current,
-      default: { ...current.default, ...patch },
-    }));
+    if (!selectedModelPreset || selectedModelPreset.builtIn) return;
+    const next = {
+      ...modelConfig,
+      default: { ...modelConfig.default, ...patch },
+    };
+    setModelConfig(next);
+    persistSelectedModelPreset(provider, next);
   }
 
   function updateStageModelSelection(
     stage: AutonomousGoalStage,
     patch: Partial<SessionGoalModelSelection>,
   ) {
+    if (!selectedModelPreset || selectedModelPreset.builtIn) return;
     const stageKey = AUTONOMOUS_GOAL_STAGE_MODEL_KEYS[stage];
-    setModelConfig((current) => ({
-      ...current,
+    const next = {
+      ...modelConfig,
       stages: {
-        ...current.stages,
-        [stageKey]: { ...current.stages[stageKey], ...patch },
+        ...modelConfig.stages,
+        [stageKey]: { ...modelConfig.stages[stageKey], ...patch },
       },
-    }));
+    };
+    setModelConfig(next);
+    persistSelectedModelPreset(provider, next);
   }
 
   function toggleSingleModel(singleModel: boolean) {
-    setModelConfig((current) => {
-      if (singleModel) return { ...current, single_model: true };
-      const stageSelections = Object.values(current.stages);
+    if (!selectedModelPreset || selectedModelPreset.builtIn) return;
+    const next = (() => {
+      if (singleModel) return { ...modelConfig, single_model: true };
+      const stageSelections = Object.values(modelConfig.stages);
       const hasDetailedValues = stageSelections.some(
         (selection) => selection.model || selection.effort,
       );
-      if (hasDetailedValues) return { ...current, single_model: false };
-      const inherited = () => ({ ...current.default });
+      if (hasDetailedValues) return { ...modelConfig, single_model: false };
+      const inherited = () => ({ ...modelConfig.default });
       return {
-        ...current,
+        ...modelConfig,
         single_model: false,
         stages: {
           interpretation: inherited(),
@@ -464,7 +695,9 @@ export function AutonomousGoalDialog({
           draft_pr: inherited(),
         },
       };
-    });
+    })();
+    setModelConfig(next);
+    persistSelectedModelPreset(provider, next);
   }
 
   function close() {
@@ -506,10 +739,10 @@ export function AutonomousGoalDialog({
     event.preventDefault();
     const trimmedGoal = goal.trim();
     let currentPreferences = preferencesRef.current;
-    let currentPreset =
-      snapshotPreset?.id === selectedPresetId
-        ? snapshotPreset
-        : findAutonomousGoalPreset(currentPreferences, selectedPresetId);
+    let currentModelPreferences = modelPreferencesRef.current;
+    let currentPreset = selectedPresetId
+      ? findAutonomousGoalPreset(currentPreferences, selectedPresetId)
+      : currentSessionPolicy;
     if (!trimmedGoal || !currentPreset || submitting) return;
 
     if (!currentPreset.builtIn) {
@@ -531,11 +764,36 @@ export function AutonomousGoalDialog({
         if (!currentPreset) return;
       }
     }
+    let currentModelPreset = selectedModelPresetId
+      ? findAutonomousGoalModelPreset(
+          currentModelPreferences,
+          selectedModelPresetId,
+        )
+      : null;
+    if (currentModelPreset && !currentModelPreset.builtIn) {
+      const committedName =
+        modelPresetNameDraft.trim() || currentModelPreset.name;
+      if (committedName !== currentModelPreset.name) {
+        currentModelPreferences = {
+          ...currentModelPreferences,
+          customPresets: currentModelPreferences.customPresets.map((preset) =>
+            preset.id === currentModelPreset?.id
+              ? { ...preset, name: committedName }
+              : preset,
+          ),
+        };
+        persistModelPreferences(currentModelPreferences);
+        currentModelPreset = findAutonomousGoalModelPreset(
+          currentModelPreferences,
+          selectedModelPresetId,
+        );
+      }
+    }
     setSubmitting(true);
     setError(null);
 
     const sessionName = deriveAutonomousGoalSessionName(trimmedGoal);
-    const usesSessionSnapshot = currentPreset.id === snapshotPreset?.id;
+    const usesSessionSnapshot = !selectedPresetId && Boolean(editingGoal);
     const presetSnapshot: AutonomousGoalPreset = {
       ...currentPreset,
       id: usesSessionSnapshot
@@ -562,6 +820,13 @@ export function AutonomousGoalDialog({
           : currentPreset.id,
       } satisfies AutonomousGoalPreferences;
       persistPreferences(nextPreferences);
+      const nextModelPreferences = {
+        ...currentModelPreferences,
+        lastPresetId: currentModelPreset
+          ? currentModelPreset.id
+          : currentModelPreferences.lastPresetId,
+      } satisfies AutonomousGoalModelPreferences;
+      persistModelPreferences(nextModelPreferences);
 
       if (editingSession && editingGoal) {
         await api.cancelChatMessage(editingSession.id);
@@ -622,12 +887,19 @@ export function AutonomousGoalDialog({
   const presetOptions = presets.map((preset) => ({
     value: preset.id,
     label: presetDisplayName(t, preset),
-    description:
-      preset.id === snapshotPreset?.id
-        ? agt(t, "dialogs.autonomousGoal.presets.sessionSnapshotHint")
-        : preset.builtIn
-          ? agt(t, "dialogs.autonomousGoal.presets.builtIn")
-          : agt(t, "dialogs.autonomousGoal.presets.custom"),
+    description: preset.builtIn
+      ? agt(t, "dialogs.autonomousGoal.presets.builtIn")
+      : agt(t, "dialogs.autonomousGoal.presets.custom"),
+  }));
+  const modelPresetOptions = modelPresets.map((preset) => ({
+    value: preset.id,
+    label: modelPresetDisplayName(t, preset),
+    description: preset.builtIn
+      ? agt(t, "dialogs.autonomousGoal.modelPresets.builtIn")
+      : `${preset.provider === "codex" ? "Codex" : "Claude"} · ${agt(
+          t,
+          "dialogs.autonomousGoal.modelPresets.custom",
+        )}`,
   }));
   const policyOptions = (["auto", "approval", "disabled"] as const).map(
     (policy) => ({
@@ -758,6 +1030,7 @@ export function AutonomousGoalDialog({
     onChange: (patch: Partial<SessionGoalModelSelection>) => void,
     ariaPrefix: string,
     slot: GoalModelSlot,
+    disabled: boolean,
   ) {
     const model = selection.model?.trim() ?? "";
     const modelIsDiscovered = selectedAgentCapabilities?.models.some(
@@ -772,6 +1045,7 @@ export function AutonomousGoalDialog({
           <div className="flex min-w-0 gap-1">
             <TextInput
               autoFocus={!model}
+              disabled={disabled}
               aria-label={`${ariaPrefix} ${agt(t, "dialogs.autonomousGoal.model.modelLabel")}`}
               value={selection.model ?? ""}
               placeholder={agt(
@@ -781,6 +1055,7 @@ export function AutonomousGoalDialog({
               onChange={(event) => onChange({ model: event.target.value })}
             />
             <IconButton
+              disabled={disabled}
               aria-label={agt(
                 t,
                 "dialogs.autonomousGoal.model.chooseDiscoveredModel",
@@ -802,6 +1077,7 @@ export function AutonomousGoalDialog({
         ) : (
           <Select
             searchable
+            disabled={disabled}
             aria-label={`${ariaPrefix} ${agt(t, "dialogs.autonomousGoal.model.modelLabel")}`}
             value={model === "default" ? "" : model}
             options={modelOptions()}
@@ -839,6 +1115,7 @@ export function AutonomousGoalDialog({
           />
         )}
         <Select
+          disabled={disabled}
           aria-label={`${ariaPrefix} ${agt(t, "dialogs.autonomousGoal.model.effortLabel")}`}
           value={selection.effort ?? "default"}
           options={effortOptionsFor(selection)}
@@ -1006,7 +1283,15 @@ export function AutonomousGoalDialog({
                     hint={agt(t, "dialogs.autonomousGoal.preset.hint")}
                   >
                     <Select
+                      aria-label={agt(
+                        t,
+                        "dialogs.autonomousGoal.preset.label",
+                      )}
                       value={selectedPresetId}
+                      placeholder={agt(
+                        t,
+                        "dialogs.autonomousGoal.preset.currentSession",
+                      )}
                       onValueChange={selectPreset}
                       options={presetOptions}
                     />
@@ -1021,12 +1306,12 @@ export function AutonomousGoalDialog({
                       size="xs"
                       variant="outline"
                       onClick={duplicatePreset}
-                      disabled={!selectedPreset}
+                      disabled={!selectedStoredPreset}
                     >
                       <Copy size={12} />
                       {agt(t, "dialogs.autonomousGoal.preset.duplicate")}
                     </Button>
-                    {!selectedPreset?.builtIn ? (
+                    {selectedStoredPreset && !selectedStoredPreset.builtIn ? (
                       <Button
                         size="xs"
                         variant="dangerGhost"
@@ -1038,7 +1323,7 @@ export function AutonomousGoalDialog({
                     ) : null}
                   </div>
 
-                  {selectedPreset && !selectedPreset.builtIn ? (
+                  {selectedStoredPreset && !selectedStoredPreset.builtIn ? (
                     <Field
                       label={agt(t, "dialogs.autonomousGoal.preset.name")}
                     >
@@ -1059,7 +1344,12 @@ export function AutonomousGoalDialog({
                     </Field>
                   ) : (
                     <Notice tone="neutral" density="compact">
-                      {agt(t, "dialogs.autonomousGoal.preset.builtInReadonly")}
+                      {agt(
+                        t,
+                        selectedStoredPreset
+                          ? "dialogs.autonomousGoal.preset.builtInReadonly"
+                          : "dialogs.autonomousGoal.preset.currentSessionReadonly",
+                      )}
                     </Notice>
                   )}
 
@@ -1076,7 +1366,10 @@ export function AutonomousGoalDialog({
                             <Select
                               aria-label={agt(t, STAGE_TRANSLATION_KEYS[stage])}
                               value={selectedPreset.policies[stage]}
-                              disabled={selectedPreset.builtIn}
+                              disabled={
+                                !selectedStoredPreset ||
+                                selectedStoredPreset.builtIn
+                              }
                               onValueChange={(value) =>
                                 updateStagePolicy(
                                   stage,
@@ -1097,6 +1390,91 @@ export function AutonomousGoalDialog({
               ) : (
                 <>
                   <Field
+                    label={agt(
+                      t,
+                      "dialogs.autonomousGoal.modelPreset.label",
+                    )}
+                    hint={agt(
+                      t,
+                      "dialogs.autonomousGoal.modelPreset.hint",
+                    )}
+                  >
+                    <Select
+                      aria-label={agt(
+                        t,
+                        "dialogs.autonomousGoal.modelPreset.label",
+                      )}
+                      value={selectedModelPresetId}
+                      placeholder={agt(
+                        t,
+                        "dialogs.autonomousGoal.modelPreset.currentSession",
+                      )}
+                      onValueChange={selectModelPreset}
+                      options={modelPresetOptions}
+                    />
+                  </Field>
+
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={addModelPreset}
+                    >
+                      <Plus size={12} />
+                      {agt(t, "dialogs.autonomousGoal.preset.add")}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={duplicateModelPreset}
+                      disabled={!selectedModelPreset}
+                    >
+                      <Copy size={12} />
+                      {agt(t, "dialogs.autonomousGoal.preset.duplicate")}
+                    </Button>
+                    {selectedModelPreset && !selectedModelPreset.builtIn ? (
+                      <Button
+                        size="xs"
+                        variant="dangerGhost"
+                        onClick={deleteModelPreset}
+                      >
+                        <Trash2 size={12} />
+                        {agt(t, "dialogs.autonomousGoal.preset.delete")}
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  {selectedModelPreset && !selectedModelPreset.builtIn ? (
+                    <Field
+                      label={agt(t, "dialogs.autonomousGoal.preset.name")}
+                    >
+                      <TextInput
+                        value={modelPresetNameDraft}
+                        maxLength={80}
+                        onChange={(event) =>
+                          setModelPresetNameDraft(event.target.value)
+                        }
+                        onBlur={commitModelPresetName}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            commitModelPresetName();
+                          }
+                        }}
+                      />
+                    </Field>
+                  ) : (
+                    <Notice tone="neutral" density="compact">
+                      {agt(
+                        t,
+                        selectedModelPreset
+                          ? "dialogs.autonomousGoal.modelPreset.builtInReadonly"
+                          : "dialogs.autonomousGoal.modelPreset.currentSessionReadonly",
+                      )}
+                    </Notice>
+                  )}
+
+                  <Field
                     label={agt(t, "dialogs.autonomousGoal.provider.label")}
                     hint={agt(t, "dialogs.autonomousGoal.provider.hint")}
                   >
@@ -1106,6 +1484,9 @@ export function AutonomousGoalDialog({
                         "dialogs.autonomousGoal.provider.label",
                       )}
                       value={provider}
+                      disabled={
+                        !selectedModelPreset || selectedModelPreset.builtIn
+                      }
                       onValueChange={(value) =>
                         changeProvider(value as AutonomousGoalProvider)
                       }
@@ -1115,6 +1496,9 @@ export function AutonomousGoalDialog({
 
                   <CheckboxRow
                     checked={modelConfig.single_model}
+                    disabled={
+                      !selectedModelPreset || selectedModelPreset.builtIn
+                    }
                     onChange={toggleSingleModel}
                     label={agt(t, "dialogs.autonomousGoal.model.singleModel")}
                     description={agt(
@@ -1150,6 +1534,7 @@ export function AutonomousGoalDialog({
                         updateDefaultModelSelection,
                         agt(t, "dialogs.autonomousGoal.model.allStages"),
                         "default",
+                        !selectedModelPreset || selectedModelPreset.builtIn,
                       )}
                     </div>
                   ) : (
@@ -1179,6 +1564,8 @@ export function AutonomousGoalDialog({
                                 updateStageModelSelection(stage, patch),
                               label,
                               stageKey,
+                              !selectedModelPreset ||
+                                selectedModelPreset.builtIn,
                             )}
                           </div>
                         );

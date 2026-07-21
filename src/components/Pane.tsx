@@ -49,6 +49,7 @@ import {
   providerRequiresForkTranscriptPrep,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
+import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
@@ -442,13 +443,15 @@ export function Pane({ paneId }: PaneProps) {
     await spawnSession(anchor.repoPath, "regular", rootScopeForTab(anchor));
   }
 
-  async function handleNewTabFromEmpty() {
+  function creationScopeForPane(): SessionCreateScope | null {
     // Prefer the pane's project if any tabs exist (shouldn't here), else use
     // the globally active project. With no project at all, do nothing.
     const anchor = active ?? tabs[0] ?? null;
+    if (anchor) return rootScopeForTab(anchor);
+
     const state = useAppStore.getState();
-    const repoPath = anchor?.repoPath ?? state.activeProject ?? null;
-    if (!repoPath) return;
+    const repoPath = state.activeProject;
+    if (!repoPath) return null;
     const activeFolder = state.activeProjectFolderId
       ? Object.values(state.projectFolders)
           .flat()
@@ -468,22 +471,26 @@ export function Pane({ paneId }: PaneProps) {
     const projectFolderId = activeFolderIsProjectWorktree
       ? defaultProjectFolderId(repoPath)
       : activeFolder?.id;
+    return {
+      placement: {
+        repoPath,
+        projectScoped,
+        projectFolderId,
+      },
+      launch:
+        activeFolder && !activeFolderIsProjectWorktree
+          ? { kind: "workspaceCwd", cwdPath: activeFolder.cwdPath }
+          : { kind: "projectRoot" },
+    };
+  }
+
+  async function handleNewTabFromEmpty() {
+    const scope = creationScopeForPane();
+    if (!scope) return;
     await spawnSession(
-      repoPath,
+      scope.placement.repoPath,
       "regular",
-      anchor
-        ? rootScopeForTab(anchor)
-        : {
-            placement: {
-              repoPath,
-              projectScoped,
-              projectFolderId,
-            },
-            launch:
-              activeFolder && !activeFolderIsProjectWorktree
-                ? { kind: "workspaceCwd", cwdPath: activeFolder.cwdPath }
-                : { kind: "projectRoot" },
-          },
+      scope,
     );
   }
 
@@ -514,6 +521,8 @@ export function Pane({ paneId }: PaneProps) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [active, handleNewTabFromEmpty, hasProjects, isFocused]);
+
+  const autonomousGoalScope = creationScopeForPane();
 
   return (
     <div
@@ -653,6 +662,10 @@ export function Pane({ paneId }: PaneProps) {
           onSplit: splitFocusedPane,
           onClose: () => closePane(paneId),
           activeProjectFallback: useAppStore.getState().activeProject,
+          onNewGoal:
+            autonomousGoalScope?.placement.projectScoped === true
+              ? () => requestNewAutonomousGoalSession(autonomousGoalScope)
+              : undefined,
           shortcuts,
           activeSessionSilenced,
           setSessionSilenced,
@@ -1780,6 +1793,7 @@ function buildPaneMenuItems({
   onSplit,
   onClose,
   activeProjectFallback,
+  onNewGoal,
   shortcuts,
   activeSessionSilenced,
   setSessionSilenced,
@@ -1793,6 +1807,7 @@ function buildPaneMenuItems({
   onSplit: (direction: Direction) => void;
   onClose: () => void;
   activeProjectFallback: string | null;
+  onNewGoal?: () => void;
   shortcuts: Record<HotkeyId, string>;
   activeSessionSilenced: boolean;
   setSessionSilenced: (sessionId: string, silenced: boolean) => void;
@@ -1872,6 +1887,15 @@ function buildPaneMenuItems({
       onClick: onNewTab,
       disabled: !activeSession && activeProjectFallback === null,
     },
+    ...(onNewGoal
+      ? [
+          {
+            label: paneT(t, "pane.menu.newGoalSessionInThisPane"),
+            icon: <Sparkles size={12} />,
+            onClick: onNewGoal,
+          },
+        ]
+      : []),
     { type: "separator" },
     {
       label: paneT(t, "pane.menu.splitRight"),

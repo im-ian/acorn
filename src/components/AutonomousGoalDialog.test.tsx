@@ -1,9 +1,15 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTONOMOUS_GOAL_PRESET_STORAGE_KEY } from "../lib/autonomousGoal";
+import {
+  AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY,
+  AUTONOMOUS_GOAL_PRESET_STORAGE_KEY,
+  FULL_AUTONOMY_GOAL_PRESET,
+  createSessionGoal,
+} from "../lib/autonomousGoal";
 import type { SessionCreateScope } from "../lib/sessionCreation";
 import { useSettings } from "../lib/settings";
+import type { Session } from "../lib/types";
 import { AutonomousGoalDialog } from "./AutonomousGoalDialog";
 
 vi.mock("../lib/api", () => ({
@@ -79,7 +85,7 @@ describe("AutonomousGoalDialog", () => {
     vi.clearAllMocks();
   });
 
-  async function renderDialog() {
+  async function renderDialog(session: Session | null = null) {
     const scope: SessionCreateScope = {
       placement: {
         repoPath: "/tmp/acorn-project",
@@ -89,9 +95,44 @@ describe("AutonomousGoalDialog", () => {
     };
     await act(async () => {
       root.render(
-        <AutonomousGoalDialog open scope={scope} onClose={vi.fn()} />,
+        <AutonomousGoalDialog
+          open
+          scope={session ? null : scope}
+          session={session}
+          onClose={vi.fn()}
+        />,
       );
     });
+  }
+
+  function goalSession(): Session {
+    return {
+      id: "goal-1",
+      name: "Goal · Existing work",
+      repo_path: "/tmp/acorn-project",
+      worktree_path: "/tmp/acorn-project/.acorn/worktrees/goal-1",
+      branch: "goal-1",
+      isolated: true,
+      project_scoped: true,
+      status: "working",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      last_message: null,
+      title_source: "default",
+      generated_title_transcript_id: null,
+      kind: "regular",
+      mode: "chat",
+      owner: { kind: "user" },
+      position: null,
+      in_worktree: true,
+      agent_provider: "claude",
+      agent_transcript_id: null,
+      goal: createSessionGoal(
+        { goal: "Finish the existing work" },
+        "claude",
+        FULL_AUTONOMY_GOAL_PRESET,
+      ),
+    };
   }
 
   function button(label: string): HTMLButtonElement {
@@ -102,6 +143,22 @@ describe("AutonomousGoalDialog", () => {
       throw new Error(`button "${label}" not found`);
     }
     return match;
+  }
+
+  async function chooseSelectOption(label: string, optionText: string) {
+    const combobox = document.body.querySelector<HTMLButtonElement>(
+      `button[role="combobox"][aria-label="${label}"]`,
+    );
+    if (!combobox) throw new Error(`Combobox not found: ${label}`);
+    await act(async () => combobox.click());
+    const optionLabel = Array.from(
+      document.body.querySelectorAll("[data-select-option-label]"),
+    ).find((element) => element.textContent?.trim() === optionText);
+    const option = optionLabel?.closest('[role="option"]');
+    if (!(option instanceof HTMLElement)) {
+      throw new Error(`Select option not found: ${optionText}`);
+    }
+    await act(async () => option.click());
   }
 
   it("opens on the full-autonomy built-in with a required goal", async () => {
@@ -163,6 +220,13 @@ describe("AutonomousGoalDialog", () => {
       ),
     ).toBeInstanceOf(HTMLButtonElement);
 
+    expect(
+      document.body.querySelector<HTMLButtonElement>(
+        'button[aria-label="Agent"]',
+      )?.disabled,
+    ).toBe(true);
+    act(() => button("Duplicate").click());
+
     const singleModel = document.body.querySelector<HTMLInputElement>(
       'input[type="checkbox"]',
     );
@@ -182,5 +246,57 @@ describe("AutonomousGoalDialog", () => {
     expect(modelPickers()).toHaveLength(7);
     expect(document.body.textContent).toContain("Automatic fixes");
     expect(document.body.textContent).toContain("Draft PR");
+  });
+
+  it("persists editable Agent & Model presets and resets routes when the agent changes", async () => {
+    await renderDialog();
+    act(() => button("Agent & Model").click());
+    act(() => button("Duplicate").click());
+
+    await chooseSelectOption("All stages Model", "Sonnet");
+    await chooseSelectOption("Agent", "Codex");
+
+    const stored = JSON.parse(
+      window.localStorage.getItem(
+        AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY,
+      ) ?? "null",
+    );
+    expect(stored.customPresets).toHaveLength(1);
+    expect(stored.customPresets[0]).toMatchObject({
+      provider: "codex",
+      modelConfig: {
+        single_model: true,
+        default: {},
+      },
+    });
+    const modelPicker = document.body.querySelector<HTMLButtonElement>(
+      'button[role="combobox"][aria-label="All stages Model"]',
+    );
+    expect(modelPicker?.textContent).toContain("Default");
+
+    act(() => button("Delete").click());
+    const storedAfterDelete = JSON.parse(
+      window.localStorage.getItem(
+        AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY,
+      ) ?? "null",
+    );
+    expect(storedAfterDelete.customPresets).toEqual([]);
+  });
+
+  it("keeps current session snapshots out of reusable preset actions", async () => {
+    await renderDialog(goalSession());
+
+    expect(document.body.textContent).not.toContain("session snapshot");
+    expect(button("Duplicate").disabled).toBe(true);
+    expect(
+      document.body.querySelector<HTMLButtonElement>(
+        'button[aria-label="Policy preset"]',
+      )?.textContent,
+    ).toContain("Current session policy");
+
+    act(() => button("Agent & Model").click());
+
+    expect(button("Duplicate").disabled).toBe(true);
+    expect(document.body.textContent).toContain("Current session settings");
   });
 });
