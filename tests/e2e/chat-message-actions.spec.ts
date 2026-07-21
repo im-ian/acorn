@@ -29,6 +29,112 @@ const PROJECT = {
 };
 
 test.describe("chat message actions", () => {
+  test("shows normalized live reasoning and tool activity", async ({
+    page,
+    tauri,
+  }) => {
+    const now = "2026-01-01T00:00:00Z";
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      { ...CHAT_SESSION, status: "working" },
+    ]);
+    await tauri.respond("load_chat_session_state", {
+      schema_version: 1,
+      session_id: "chat-actions",
+      session: {
+        id: "chat-actions",
+        workspace_path: "/tmp/demo",
+        title: "Chat actions",
+        active_provider: "antigravity",
+        active_model: null,
+        created_at: now,
+        updated_at: now,
+      },
+      provider: "antigravity",
+      model: null,
+      messages: [
+        {
+          id: "u1",
+          session_id: "chat-actions",
+          turn_id: "t1",
+          role: "user",
+          content: "inspect the project",
+          created_at: now,
+          status: "complete",
+          metadata: { provider: "antigravity" },
+        },
+        {
+          id: "a1",
+          session_id: "chat-actions",
+          turn_id: "t1",
+          role: "assistant",
+          content: "",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "pending",
+          metadata: { provider: "antigravity" },
+        },
+      ],
+      turns: [
+        {
+          id: "t1",
+          session_id: "chat-actions",
+          provider: "antigravity",
+          status: "running",
+          user_message_id: "u1",
+          assistant_message_id: "a1",
+          started_at: now,
+          activities: [
+            {
+              id: "reasoning-1",
+              kind: "reasoning",
+              title: "Reasoning",
+              detail: "Locate the relevant files first.",
+              status: "complete",
+              started_at: "2026-01-01T00:00:01Z",
+              completed_at: "2026-01-01T00:00:02Z",
+            },
+            {
+              id: "tool-1",
+              kind: "command",
+              title: "Search source files",
+              detail: "rg --files src",
+              status: "running",
+              started_at: "2026-01-01T00:00:02Z",
+            },
+          ],
+        },
+      ],
+      provider_threads: [],
+      context_snapshots: [],
+      memory: {
+        session_id: "chat-actions",
+        summary: null,
+        important_decisions: [],
+        facts: [],
+        through_message_id: null,
+        updated_at: now,
+      },
+      created_at: now,
+      updated_at: now,
+    });
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("button", { name: "Collapse agent activity" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Locate the relevant files first."),
+    ).toBeVisible();
+    await expect(
+      page
+        .locator("[data-chat-activity-item]")
+        .filter({ hasText: "Search source files" }),
+    ).toBeVisible();
+    await expect(page.getByText("rg --files src")).toBeVisible();
+    await expect(page.locator("[data-chat-running-label]")).toHaveCount(0);
+  });
+
   test("can stop a running native chat response", async ({ page, tauri }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [CHAT_SESSION]);

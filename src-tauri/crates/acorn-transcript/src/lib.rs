@@ -1586,6 +1586,26 @@ fn antigravity_brain_roots() -> Vec<PathBuf> {
         .collect()
 }
 
+pub fn locate_antigravity_transcript(uuid: &str) -> Option<PathBuf> {
+    locate_antigravity_transcript_in(&antigravity_brain_roots(), uuid)
+}
+
+fn locate_antigravity_transcript_in(brain_roots: &[PathBuf], uuid: &str) -> Option<PathBuf> {
+    if !is_uuid_v4_shape(uuid) {
+        return None;
+    }
+    brain_roots.iter().find_map(|root| {
+        let session_dir = root.join(uuid);
+        let path = session_dir
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+        (safe_antigravity_transcript_path(&session_dir, &path)
+            && antigravity_uuid_from_transcript_path(&path).as_deref() == Some(uuid))
+        .then_some(path)
+    })
+}
+
 fn antigravity_owner_cursor_id(storage_root: Option<&Path>, cwd: &Path) -> Option<String> {
     let cwd = cwd.to_str()?;
     let path = storage_root?
@@ -4186,6 +4206,30 @@ mod tests {
             antigravity_uuid_from_transcript_path(path).as_deref(),
             Some("17f38e8c-3a7e-408b-8c79-aef7432c0fd2")
         );
+    }
+
+    #[test]
+    fn locates_antigravity_transcript_by_brain_id() {
+        use std::fs::{self, File};
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-antigravity-locate-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let brain_root = root.join("brain");
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let logs = brain_root.join(id).join(".system_generated").join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        let transcript = logs.join("transcript.jsonl");
+        File::create(&transcript).unwrap();
+
+        assert_eq!(
+            locate_antigravity_transcript_in(&[brain_root], id),
+            Some(transcript)
+        );
+        assert!(locate_antigravity_transcript_in(&[], "not-a-uuid").is_none());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

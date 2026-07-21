@@ -51,6 +51,11 @@ pub struct ResolvedAiCommand {
     pub prompt_transport: PromptTransport,
 }
 
+pub enum AiProcessStreamEvent<'a> {
+    Stdout(&'a str),
+    Tick,
+}
+
 impl AiExecutionRequest {
     pub fn resolve(&self) -> AppResult<ResolvedAiCommand> {
         match self.provider {
@@ -164,10 +169,10 @@ pub fn run_resolved_streaming_in_dir_cancellable<F>(
     settings_label: &str,
     cwd: Option<&Path>,
     cancellation: Option<ChatCancellation>,
-    on_stdout_chunk: F,
+    on_event: F,
 ) -> AppResult<String>
 where
-    F: FnMut(&str),
+    F: FnMut(AiProcessStreamEvent<'_>),
 {
     run_streaming_in_dir_cancellable_with_transport(
         resolved.command,
@@ -177,7 +182,7 @@ where
         cwd,
         cancellation,
         resolved.prompt_transport,
-        on_stdout_chunk,
+        on_event,
     )
 }
 
@@ -257,10 +262,10 @@ fn run_streaming_in_dir_cancellable_with_transport<F>(
     cwd: Option<&Path>,
     cancellation: Option<ChatCancellation>,
     prompt_transport: PromptTransport,
-    mut on_stdout_chunk: F,
+    mut on_event: F,
 ) -> AppResult<String>
 where
-    F: FnMut(&str),
+    F: FnMut(AiProcessStreamEvent<'_>),
 {
     let resolved = cli_resolver::resolve(command).map_err(|_| {
         AppError::Other(format!(
@@ -306,8 +311,7 @@ where
         }
     }
 
-    let output =
-        wait_with_timeout_streaming(command, child, None, cancellation, &mut on_stdout_chunk)?;
+    let output = wait_with_timeout_streaming(command, child, None, cancellation, &mut on_event)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -673,10 +677,10 @@ fn process_stdout_chunk<F>(
     chunk: io::Result<Vec<u8>>,
     stdout: &mut Vec<u8>,
     decoder: &mut Utf8ChunkDecoder,
-    on_stdout_chunk: &mut F,
+    on_event: &mut F,
 ) -> AppResult<()>
 where
-    F: FnMut(&str),
+    F: FnMut(AiProcessStreamEvent<'_>),
 {
     let chunk =
         chunk.map_err(|e| AppError::Other(format!("failed reading {command} stdout: {e}")))?;
@@ -686,7 +690,7 @@ where
     stdout.extend_from_slice(&chunk);
     let text = decoder.push(&chunk);
     if !text.is_empty() {
-        on_stdout_chunk(&text);
+        on_event(AiProcessStreamEvent::Stdout(&text));
     }
     Ok(())
 }
@@ -696,14 +700,14 @@ fn drain_stdout_chunks<F>(
     stdout_rx: &Receiver<io::Result<Vec<u8>>>,
     stdout: &mut Vec<u8>,
     decoder: &mut Utf8ChunkDecoder,
-    on_stdout_chunk: &mut F,
+    on_event: &mut F,
 ) -> AppResult<()>
 where
-    F: FnMut(&str),
+    F: FnMut(AiProcessStreamEvent<'_>),
 {
     loop {
         match stdout_rx.try_recv() {
-            Ok(chunk) => process_stdout_chunk(command, chunk, stdout, decoder, on_stdout_chunk)?,
+            Ok(chunk) => process_stdout_chunk(command, chunk, stdout, decoder, on_event)?,
             Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(()),
         }
     }
@@ -714,10 +718,10 @@ fn wait_with_timeout_streaming<F>(
     mut child: std::process::Child,
     timeout: Option<Duration>,
     cancellation: Option<ChatCancellation>,
-    on_stdout_chunk: &mut F,
+    on_event: &mut F,
 ) -> AppResult<Output>
 where
-    F: FnMut(&str),
+    F: FnMut(AiProcessStreamEvent<'_>),
 {
     let child_id = child.id();
     let stdout_pipe = child
@@ -760,13 +764,8 @@ where
     let status = if let Some(cancellation) = cancellation {
         cancellation.set_child(child);
         let status = loop {
-            drain_stdout_chunks(
-                command,
-                &stdout_rx,
-                &mut stdout,
-                &mut decoder,
-                on_stdout_chunk,
-            )?;
+            drain_stdout_chunks(command, &stdout_rx, &mut stdout, &mut decoder, on_event)?;
+            on_event(AiProcessStreamEvent::Tick);
             if cancellation.is_cancelled() {
                 terminate_child_process_group(child_id);
                 cancellation.kill_and_wait();
@@ -796,13 +795,8 @@ where
         status
     } else {
         loop {
-            drain_stdout_chunks(
-                command,
-                &stdout_rx,
-                &mut stdout,
-                &mut decoder,
-                on_stdout_chunk,
-            )?;
+            drain_stdout_chunks(command, &stdout_rx, &mut stdout, &mut decoder, on_event)?;
+            on_event(AiProcessStreamEvent::Tick);
             match child
                 .try_wait()
                 .map_err(|e| AppError::Other(format!("failed waiting for {command}: {e}")))?
@@ -831,16 +825,11 @@ where
     stdout_reader
         .join()
         .map_err(|_| AppError::Other(format!("{command} stdout reader failed")))?;
-    drain_stdout_chunks(
-        command,
-        &stdout_rx,
-        &mut stdout,
-        &mut decoder,
-        on_stdout_chunk,
-    )?;
+    drain_stdout_chunks(command, &stdout_rx, &mut stdout, &mut decoder, on_event)?;
+    on_event(AiProcessStreamEvent::Tick);
     let trailing = decoder.finish();
     if !trailing.is_empty() {
-        on_stdout_chunk(&trailing);
+        on_event(AiProcessStreamEvent::Stdout(&trailing));
     }
     let stderr = stderr_reader
         .join()
@@ -1018,13 +1007,42 @@ mod tests {
             None,
             None,
             PromptTransport::Stdin,
-            |chunk| chunks.push(chunk.to_string()),
+            |event| {
+                if let AiProcessStreamEvent::Stdout(chunk) = event {
+                    chunks.push(chunk.to_string());
+                }
+            },
         )
         .unwrap();
 
         assert_eq!(output, "onetwo");
         assert_eq!(chunks.concat(), "onetwo");
         assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn streaming_reports_ticks_while_stdout_is_idle() {
+        let args = vec!["-c".to_string(), "sleep 0.08; printf done".to_string()];
+        let mut ticks = 0usize;
+
+        let output = run_streaming_in_dir_cancellable_with_transport(
+            "/bin/sh",
+            &args,
+            "",
+            "test settings",
+            None,
+            None,
+            PromptTransport::Stdin,
+            |event| {
+                if matches!(event, AiProcessStreamEvent::Tick) {
+                    ticks += 1;
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output, "done");
+        assert!(ticks > 0);
     }
 
     #[cfg(unix)]
@@ -1042,7 +1060,11 @@ mod tests {
             None,
             None,
             PromptTransport::Stdin,
-            |chunk| chunks.push(chunk.to_string()),
+            |event| {
+                if let AiProcessStreamEvent::Stdout(chunk) = event {
+                    chunks.push(chunk.to_string());
+                }
+            },
         )
         .unwrap();
 

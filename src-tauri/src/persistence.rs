@@ -172,6 +172,41 @@ pub struct ChatTurn {
     pub completed_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activities: Vec<ChatActivity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChatActivity {
+    pub id: String,
+    pub kind: ChatActivityKind,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub status: ChatActivityStatus,
+    pub started_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatActivityKind {
+    Reasoning,
+    Tool,
+    Command,
+    FileChange,
+    WebSearch,
+    Plan,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatActivityStatus {
+    Running,
+    Complete,
+    Error,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -635,6 +670,21 @@ fn validate_chat_session_state(mut state: ChatSessionState) -> AppResult<(Uuid, 
         turn.model = normalize_optional_string(turn.model.take());
         turn.assistant_message_id = normalize_optional_string(turn.assistant_message_id.take());
         turn.error = normalize_optional_string(turn.error.take());
+        for activity in &mut turn.activities {
+            activity.id = activity.id.trim().to_string();
+            if activity.id.is_empty() {
+                return Err(AppError::Other(
+                    "chat activity id must not be empty".to_string(),
+                ));
+            }
+            activity.title = activity.title.trim().to_string();
+            if activity.title.is_empty() {
+                return Err(AppError::Other(
+                    "chat activity title must not be empty".to_string(),
+                ));
+            }
+            activity.detail = normalize_optional_string(activity.detail.take());
+        }
     }
     for thread in &mut state.provider_threads {
         if thread.session_id.trim().is_empty() {
