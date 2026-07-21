@@ -2415,6 +2415,9 @@ describe("ChatPane", () => {
 
     expect(container.querySelector("[data-chat-activity-timeline]")).toBeTruthy();
     expect(container.querySelector("[data-chat-activity-list]")).toBeTruthy();
+    expect(
+      container.querySelector("[data-chat-activity-summary]")?.textContent,
+    ).toBe("Working · Inspect repository");
     expect(container.textContent).toContain("Inspect repository");
     expect(container.textContent).toContain("rg --files");
     expect(container.querySelector("[data-chat-running-label]")).toBeNull();
@@ -2489,7 +2492,7 @@ describe("ChatPane", () => {
     );
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector("[data-chat-activity-list]")).toBeNull();
-    expect(container.textContent).toContain("2 activities");
+    expect(container.textContent).toContain("Worked through 2 steps");
     expect(container.textContent).toContain("Done.");
 
     await act(async () => {
