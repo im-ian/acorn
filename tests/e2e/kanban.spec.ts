@@ -231,6 +231,7 @@ test.describe("workspace kanban mode", () => {
         repoPath: "/tmp/demo",
         worktreePath: "/tmp/demo/.worktrees/completed",
         gitCommonDir: "/tmp/demo/.git",
+        sessionIds: ["completed"],
       };
     });
 
@@ -265,7 +266,7 @@ test.describe("workspace kanban mode", () => {
       .click();
 
     await expect(
-      page.getByText(/Removing completed worktree in \d+s/),
+      page.getByText(/Session and worktree removed\. Restore within \d+s/),
     ).toBeVisible();
     await expect(
       board.locator(

@@ -19,7 +19,7 @@ use crate::pull_requests::{
     PrStateFilter, PullRequestDetailListing, PullRequestDiffListing, PullRequestListing,
     WorkflowRunDetailListing, WorkflowRunsListing,
 };
-use crate::state::AppState;
+use crate::state::{AppState, PendingSessionRemoval};
 use crate::todos::{self, TodoItem};
 use crate::worktree;
 use acorn_agent::AgentKind;
@@ -53,6 +53,31 @@ const DEFAULT_CLAUDE_FORK_LIMITS: ClaudeForkLimits = ClaudeForkLimits {
     max_project_entries: MAX_CLAUDE_FORK_PROJECT_ENTRIES,
     max_transcript_bytes: MAX_CLAUDE_FORK_TRANSCRIPT_BYTES,
 };
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRemoval {
+    pub token: String,
+    pub repo_path: String,
+    pub worktree_path: String,
+    pub git_common_dir: String,
+    pub session_ids: Vec<String>,
+}
+
+impl SessionRemoval {
+    fn new(worktree: &worktree::RemovedWorktree, sessions: &[Session]) -> Self {
+        Self {
+            token: worktree.token.clone(),
+            repo_path: worktree.repo_path.clone(),
+            worktree_path: worktree.worktree_path.clone(),
+            git_common_dir: worktree.git_common_dir.clone(),
+            session_ids: sessions
+                .iter()
+                .map(|session| session.id.to_string())
+                .collect(),
+        }
+    }
+}
 
 async fn run_blocking<T, F>(label: &'static str, f: F) -> AppResult<T>
 where
@@ -117,6 +142,123 @@ async fn discard_removed_worktree_blocking(
         )
     })
     .await
+}
+
+fn pending_session_removal_matches(
+    pending: &PendingSessionRemoval,
+    repo_path: &str,
+    worktree_path: &str,
+    git_common_dir: &str,
+) -> bool {
+    pending.worktree.repo_path == repo_path
+        && pending.worktree.worktree_path == worktree_path
+        && pending.worktree.git_common_dir == git_common_dir
+}
+
+fn take_pending_session_removal(
+    state: &AppState,
+    token: &str,
+    repo_path: &str,
+    worktree_path: &str,
+    git_common_dir: &str,
+) -> AppResult<PendingSessionRemoval> {
+    let mut pending_removals = state.pending_session_removals.lock();
+    let pending = pending_removals
+        .remove(token)
+        .ok_or_else(|| AppError::Other("removed session backup is not available".to_string()))?;
+    if pending_session_removal_matches(&pending, repo_path, worktree_path, git_common_dir) {
+        return Ok(pending);
+    }
+    pending_removals.insert(token.to_string(), pending);
+    Err(AppError::Other(
+        "removed session backup does not match the requested worktree".to_string(),
+    ))
+}
+
+fn restore_pending_session_removal(
+    state: &AppState,
+    token: &str,
+    repo_path: &str,
+    worktree_path: &str,
+    git_common_dir: &str,
+) -> AppResult<()> {
+    let pending =
+        take_pending_session_removal(state, token, repo_path, worktree_path, git_common_dir)?;
+
+    if pending
+        .sessions
+        .iter()
+        .any(|session| state.sessions.get(&session.id).is_ok())
+    {
+        state
+            .pending_session_removals
+            .lock()
+            .insert(token.to_string(), pending);
+        return Err(AppError::Other(
+            "one or more removed sessions already exist".to_string(),
+        ));
+    }
+
+    if let Err(error) = worktree::restore_removed_worktree(
+        Path::new(repo_path),
+        Path::new(worktree_path),
+        token,
+        Path::new(git_common_dir),
+    ) {
+        state
+            .pending_session_removals
+            .lock()
+            .insert(token.to_string(), pending);
+        return Err(error);
+    }
+
+    for mut session in pending.sessions {
+        session.status = SessionStatus::Ready;
+        session.updated_at = chrono::Utc::now();
+        session.daemon_session_id = None;
+        session.hook_active = false;
+        session.hook_provider = None;
+        session.in_worktree = false;
+        session.agent_provider = None;
+        session.agent_transcript_id = None;
+        if session.project_scoped {
+            state.projects.ensure(
+                session.repo_path.clone(),
+                project_basename(&session.repo_path),
+            );
+        }
+        state.sessions.insert(session);
+    }
+    Ok(())
+}
+
+fn discard_pending_session_removal(
+    state: &AppState,
+    token: &str,
+    repo_path: &str,
+    worktree_path: &str,
+    git_common_dir: &str,
+) -> AppResult<()> {
+    let pending =
+        take_pending_session_removal(state, token, repo_path, worktree_path, git_common_dir)?;
+    if let Err(error) = worktree::discard_removed_worktree(
+        Path::new(repo_path),
+        Path::new(worktree_path),
+        token,
+        Path::new(git_common_dir),
+    ) {
+        state
+            .pending_session_removals
+            .lock()
+            .insert(token.to_string(), pending);
+        return Err(error);
+    }
+    if let Ok(dir) = persistence::data_dir() {
+        for session in pending.sessions {
+            scrollback::delete(&dir, &session.id.to_string()).ok();
+        }
+    }
+    Ok(())
 }
 
 fn canonical_existing_path(path: &Path) -> AppResult<PathBuf> {
@@ -3685,7 +3827,7 @@ pub async fn remove_session(
     state: State<'_, AppState>,
     id: String,
     remove_worktree: Option<bool>,
-) -> AppResult<Option<worktree::RemovedWorktree>> {
+) -> AppResult<Option<SessionRemoval>> {
     let app_state = state.inner().clone();
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = app_state.sessions.get(&id)?;
@@ -3703,11 +3845,6 @@ pub async fn remove_session(
     }
     for session in &sessions_to_remove {
         terminate_session_pty(&app_state, &session.id);
-    }
-    if let Ok(dir) = persistence::data_dir() {
-        for session in &sessions_to_remove {
-            scrollback::delete(&dir, &session.id.to_string()).ok();
-        }
     }
     let removed_worktree = if remove_worktree.unwrap_or(false) {
         match stage_remove_linked_worktree_blocking(
@@ -3741,7 +3878,23 @@ pub async fn remove_session(
         app_state.projects.remove(&session.repo_path);
     }
     persist(&app_state);
-    Ok(removed_worktree)
+    let Some(removed_worktree) = removed_worktree else {
+        if let Ok(dir) = persistence::data_dir() {
+            for session in &sessions_to_remove {
+                scrollback::delete(&dir, &session.id.to_string()).ok();
+            }
+        }
+        return Ok(None);
+    };
+    let removal = SessionRemoval::new(&removed_worktree, &sessions_to_remove);
+    app_state.pending_session_removals.lock().insert(
+        removed_worktree.token.clone(),
+        PendingSessionRemoval {
+            worktree: removed_worktree,
+            sessions: sessions_to_remove,
+        },
+    );
+    Ok(Some(removal))
 }
 
 #[tauri::command]
@@ -4442,6 +4595,50 @@ pub async fn discard_removed_worktree(
     git_common_dir: String,
 ) -> AppResult<()> {
     discard_removed_worktree_blocking(token, repo_path, worktree_path, git_common_dir).await
+}
+
+#[tauri::command]
+pub async fn restore_removed_session(
+    state: State<'_, AppState>,
+    token: String,
+    repo_path: String,
+    worktree_path: String,
+    git_common_dir: String,
+) -> AppResult<()> {
+    let app_state = state.inner().clone();
+    run_blocking("restore removed session", move || {
+        restore_pending_session_removal(
+            &app_state,
+            &token,
+            &repo_path,
+            &worktree_path,
+            &git_common_dir,
+        )?;
+        persist(&app_state);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn discard_removed_session(
+    state: State<'_, AppState>,
+    token: String,
+    repo_path: String,
+    worktree_path: String,
+    git_common_dir: String,
+) -> AppResult<()> {
+    let app_state = state.inner().clone();
+    run_blocking("discard removed session", move || {
+        discard_pending_session_removal(
+            &app_state,
+            &token,
+            &repo_path,
+            &worktree_path,
+            &git_common_dir,
+        )
+    })
+    .await
 }
 
 fn parse_id(id: &str) -> AppResult<Uuid> {
@@ -7403,10 +7600,12 @@ mod tests {
         create_unique_worktree, daemon_spawn_name_for_session, detach_requested_by_stale_renderer,
         font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
         memory_root_pids, poll_defers_to_hook, remove_linked_worktree_at_path,
-        should_remove_local_project_mirror, validate_editor_command, validate_new_project_name,
-        ChatProviderAdapter, ProcessMemorySnapshot,
+        restore_pending_session_removal, should_remove_local_project_mirror,
+        validate_editor_command, validate_new_project_name, ChatProviderAdapter,
+        ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
+    use crate::state::{AppState, PendingSessionRemoval};
     use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionMode};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -9632,6 +9831,96 @@ mod tests {
             .expect("initial commit");
         drop(tree);
         repo
+    }
+
+    #[test]
+    fn restoring_pending_session_removal_restores_worktree_and_session_identity() {
+        let repo_dir = unique_repo_dir("restore-session-and-worktree");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let worktree_path = crate::worktree::create_worktree(&repo_dir, "restored")
+            .expect("create linked worktree");
+        let removed = crate::worktree::stage_remove_worktree_at_path(&repo_dir, &worktree_path)
+            .expect("stage worktree removal")
+            .expect("removal token");
+        assert!(!worktree_path.exists());
+
+        let state = AppState::new();
+        let mut session = worktree_session(
+            "restored",
+            repo_dir.to_str().expect("repo path"),
+            worktree_path.to_str().expect("worktree path"),
+        );
+        let session_id = session.id;
+        session.status = acorn_session::SessionStatus::Working;
+        session.daemon_session_id = Some(session.id);
+        state.pending_session_removals.lock().insert(
+            removed.token.clone(),
+            PendingSessionRemoval {
+                worktree: removed.clone(),
+                sessions: vec![session],
+            },
+        );
+
+        restore_pending_session_removal(
+            &state,
+            &removed.token,
+            &removed.repo_path,
+            &removed.worktree_path,
+            &removed.git_common_dir,
+        )
+        .expect("restore session removal");
+
+        let restored = state.sessions.get(&session_id).expect("restored session");
+        assert!(worktree_path.exists());
+        assert_eq!(restored.id, session_id);
+        assert_eq!(restored.status, acorn_session::SessionStatus::Ready);
+        assert_eq!(restored.daemon_session_id, None);
+        assert!(state.pending_session_removals.lock().is_empty());
+
+        crate::worktree::remove_worktree_at_path(&repo_dir, &worktree_path)
+            .expect("remove restored worktree");
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn failed_worktree_restore_does_not_restore_session() {
+        let repo_dir = unique_repo_dir("failed-worktree-restore");
+        let worktree_path = repo_dir.join(".acorn/worktrees/missing");
+        let token = Uuid::new_v4().to_string();
+        let removed = crate::worktree::RemovedWorktree {
+            token: token.clone(),
+            repo_path: repo_dir.to_string_lossy().into_owned(),
+            worktree_path: worktree_path.to_string_lossy().into_owned(),
+            git_common_dir: repo_dir.join(".git").to_string_lossy().into_owned(),
+        };
+        let state = AppState::new();
+        let session = worktree_session(
+            "missing",
+            repo_dir.to_str().expect("repo path"),
+            worktree_path.to_str().expect("worktree path"),
+        );
+        let session_id = session.id;
+        state.pending_session_removals.lock().insert(
+            token.clone(),
+            PendingSessionRemoval {
+                worktree: removed.clone(),
+                sessions: vec![session],
+            },
+        );
+
+        restore_pending_session_removal(
+            &state,
+            &removed.token,
+            &removed.repo_path,
+            &removed.worktree_path,
+            &removed.git_common_dir,
+        )
+        .expect_err("missing worktree backup must fail");
+
+        assert!(state.sessions.get(&session_id).is_err());
+        assert!(state.pending_session_removals.lock().contains_key(&token));
+        std::fs::remove_dir_all(&repo_dir).ok();
     }
 
     // Regression: a generated worktree branch name can collide with an

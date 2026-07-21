@@ -96,6 +96,10 @@ export interface WorktreeRemoval {
   gitCommonDir: string;
 }
 
+export interface SessionRemoval extends WorktreeRemoval {
+  sessionIds: string[];
+}
+
 export interface ChatSessionStateChangedPayload {
   session_id: string;
   state: ChatSessionState;
@@ -164,8 +168,8 @@ export const api = {
   removeSession(
     id: string,
     removeWorktree = false,
-  ): Promise<WorktreeRemoval | null> {
-    return invoke<WorktreeRemoval | null>("remove_session", { id, removeWorktree });
+  ): Promise<SessionRemoval | null> {
+    return invoke<SessionRemoval | null>("remove_session", { id, removeWorktree });
   },
   setSessionStatus(id: string, status: SessionStatus): Promise<Session> {
     return invoke<Session>("set_session_status", { id, status });
@@ -824,6 +828,22 @@ export const api = {
   },
   discardRemovedWorktree(removal: WorktreeRemoval): Promise<void> {
     return invoke<void>("discard_removed_worktree", { ...removal });
+  },
+  restoreRemovedSession(removal: SessionRemoval): Promise<void> {
+    return invoke<void>("restore_removed_session", {
+      token: removal.token,
+      repoPath: removal.repoPath,
+      worktreePath: removal.worktreePath,
+      gitCommonDir: removal.gitCommonDir,
+    });
+  },
+  discardRemovedSession(removal: SessionRemoval): Promise<void> {
+    return invoke<void>("discard_removed_session", {
+      token: removal.token,
+      repoPath: removal.repoPath,
+      worktreePath: removal.worktreePath,
+      gitCommonDir: removal.gitCommonDir,
+    });
   },
   /**
    * Probe the `acornd` daemon. Backs the StatusBar daemon indicator and

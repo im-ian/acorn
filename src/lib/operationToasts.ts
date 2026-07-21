@@ -2,7 +2,7 @@ import { createTranslator, type TranslationKey } from "./i18n";
 import { useSettings } from "./settings";
 import { TOAST_TTL_MS, useToasts } from "./toasts";
 import { useAppStore } from "../store";
-import { api, type WorktreeRemoval } from "./api";
+import { api, type SessionRemoval, type WorktreeRemoval } from "./api";
 
 export function currentText(
   key: TranslationKey,
@@ -60,6 +60,16 @@ function worktreeRemovalToastValues(
   return {
     count: removals.length,
     name: removals.length === 1 ? worktreeName(removals[0]) : removals.length,
+    seconds: remainingSeconds,
+  };
+}
+
+function sessionRemovalToastValues(
+  removals: SessionRemoval[],
+  remainingSeconds: number,
+): Record<string, string | number> {
+  return {
+    count: removals.length,
     seconds: remainingSeconds,
   };
 }
@@ -125,6 +135,78 @@ export function showStoreWorktreeRemovalToast(
     return;
   }
   showWorktreeRemovalToast(
+    removals,
+    successKey,
+    undoKey,
+    restoredKey,
+    restoreFailedKey,
+  );
+}
+
+export function showSessionRemovalToast(
+  removals: SessionRemoval | SessionRemoval[] | null | undefined,
+  successKey: TranslationKey,
+  undoKey: TranslationKey,
+  restoredKey: TranslationKey,
+  restoreFailedKey: TranslationKey,
+): void {
+  const list = (Array.isArray(removals) ? removals : removals ? [removals] : [])
+    .filter(Boolean);
+  if (list.length === 0) {
+    showTranslatedToast(successKey);
+    return;
+  }
+
+  const initialSeconds = Math.ceil(TOAST_TTL_MS / 1000);
+  useToasts.getState().show(
+    currentText(
+      undoKey,
+      sessionRemovalToastValues(list, initialSeconds),
+    ),
+    {
+      formatMessage: (remainingSeconds) =>
+        currentText(
+          undoKey,
+          sessionRemovalToastValues(list, remainingSeconds),
+        ),
+      action: async () => {
+        try {
+          await Promise.all(
+            list.map((removal) => api.restoreRemovedSession(removal)),
+          );
+          await useAppStore.getState().refreshAll();
+          const restoredSessionId = list[0]?.sessionIds[0];
+          if (restoredSessionId) {
+            useAppStore.getState().selectSession(restoredSessionId);
+          }
+          showTranslatedToast(restoredKey);
+        } catch (error) {
+          showTranslatedErrorToast(restoreFailedKey, error);
+        }
+      },
+      onDismiss: async () => {
+        await Promise.allSettled(
+          list.map((removal) => api.discardRemovedSession(removal)),
+        );
+      },
+    },
+  );
+}
+
+export function showStoreSessionRemovalToast(
+  removals: SessionRemoval | SessionRemoval[] | null | undefined,
+  successKey: TranslationKey,
+  undoKey: TranslationKey,
+  failureKey: TranslationKey,
+  restoredKey: TranslationKey,
+  restoreFailedKey: TranslationKey,
+): void {
+  const error = useAppStore.getState().consumeError();
+  if (error) {
+    showTranslatedErrorToast(failureKey, error);
+    return;
+  }
+  showSessionRemovalToast(
     removals,
     successKey,
     undoKey,
