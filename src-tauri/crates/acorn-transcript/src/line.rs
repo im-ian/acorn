@@ -164,23 +164,34 @@ fn parse_codex_value(value: &Value) -> ParsedTranscriptLine {
     let event = codex_event_value(value);
     let event_role = codex_role_from_event(value, event);
     let texts = codex_event_texts(value, event);
-    let response_text = codex_response_text(value, event);
-    let state_text = match event_role {
-        TranscriptRole::User => joined_text(&texts),
-        TranscriptRole::Assistant => first_text(&texts),
-        TranscriptRole::Other => None,
-    };
-    let text = match event_role {
-        TranscriptRole::User => joined_text(&texts),
-        TranscriptRole::Assistant => first_text(&texts).or_else(|| response_text.clone()),
-        TranscriptRole::Other => None,
-    };
-    let display_role = if event_role == TranscriptRole::User && text.is_none() {
+    let hides_image_envelope =
+        event_role == TranscriptRole::User && codex_user_content_has_image_attachment(&texts);
+    let content_role = if hides_image_envelope {
         TranscriptRole::Other
     } else {
         event_role
     };
-    let (preview_role, preview_text) = codex_preview_role_and_text(value, event, event_role);
+    let response_text = codex_response_text(value, event);
+    let state_text = match content_role {
+        TranscriptRole::User => joined_text(&texts),
+        TranscriptRole::Assistant => first_text(&texts),
+        TranscriptRole::Other => None,
+    };
+    let text = match content_role {
+        TranscriptRole::User => joined_text(&texts),
+        TranscriptRole::Assistant => first_text(&texts).or_else(|| response_text.clone()),
+        TranscriptRole::Other => None,
+    };
+    let display_role = if content_role == TranscriptRole::User && text.is_none() {
+        TranscriptRole::Other
+    } else {
+        content_role
+    };
+    let (preview_role, preview_text) = if hides_image_envelope {
+        (TranscriptRole::Other, None)
+    } else {
+        codex_preview_role_and_text(value, event, event_role)
+    };
 
     ParsedTranscriptLine {
         timestamp: string_at(Some(value), "timestamp")
@@ -678,9 +689,18 @@ fn looks_like_hidden_message_block(text: &str) -> bool {
         "<user_shell_command>",
         "<user_action>",
         "<image name=",
+        "</image>",
     ]
     .iter()
     .any(|tag| lower.starts_with(tag))
+}
+
+fn codex_user_content_has_image_attachment(texts: &[String]) -> bool {
+    texts.iter().any(|text| {
+        text.trim_start()
+            .to_ascii_lowercase()
+            .starts_with("<image name=")
+    })
 }
 
 fn looks_like_skill_context_block(text: &str) -> bool {
@@ -911,6 +931,7 @@ mod tests {
             "<recommended_plugins>\nInternal recommendations.\n</recommended_plugins>",
             "<user_shell_command>\npnpm test\n</user_shell_command>",
             "<user_action>\nInternal action metadata.\n</user_action>",
+            "</image>",
             "<image name=[Image #1] path=\"/tmp/clipboard.png\">\n</image>\nShip the release",
         ];
 
@@ -943,8 +964,45 @@ mod tests {
     }
 
     #[test]
+    fn codex_split_image_envelope_is_not_user_content() {
+        let value = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "<image name=[Image #1] path=\"/tmp/clipboard.png\">",
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,abc",
+                    },
+                    {
+                        "type": "input_text",
+                        "text": "</image>",
+                    },
+                    {
+                        "type": "input_text",
+                        "text": "[Image #1] Remove the </image> marker from History",
+                    },
+                ],
+            },
+        });
+        let parsed = parse_transcript_value(AgentKind::Codex, &value);
+
+        assert_eq!(parsed.role, TranscriptRole::Other);
+        assert_eq!(parsed.text, None);
+        assert_eq!(parsed.state_role, TranscriptRole::Other);
+        assert_eq!(parsed.state_text, None);
+        assert_eq!(parsed.preview_role, TranscriptRole::Other);
+        assert_eq!(parsed.preview_text, None);
+    }
+
+    #[test]
     fn codex_keeps_inline_hidden_tag_mentions_as_user_content() {
-        let message = "Why does <codex_internal_context> appear in History?";
+        let message = "Why do <codex_internal_context> and </image> appear in History?";
         let value = serde_json::json!({
             "type": "response_item",
             "payload": {

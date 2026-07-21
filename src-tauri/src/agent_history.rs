@@ -2728,17 +2728,31 @@ mod tests {
                 "payload": {
                     "type": "message",
                     "role": "user",
-                    "content": [{
-                        "type": "input_text",
-                        "text": "<image name=[Image #1] path=\"/tmp/clipboard.png\">\n</image>\nShip the release",
-                    }],
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<image name=[Image #1] path=\"/tmp/clipboard.png\">",
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,abc",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "</image>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "[Image #1] Ship the release despite the </image> marker",
+                        },
+                    ],
                 },
             }),
             serde_json::json!({
                 "type": "event_msg",
                 "payload": {
                     "type": "user_message",
-                    "message": "Ship the release",
+                    "message": "[Image #1] Ship the release despite the </image> marker",
                 },
             }),
             serde_json::json!({
@@ -2756,7 +2770,10 @@ mod tests {
 
         let scope_repo = normalize_path(&repo);
         let item = parse_codex_file(&transcript, HistoryScope::Project(&scope_repo)).unwrap();
-        assert_eq!(item.title, "Ship the release");
+        assert_eq!(
+            item.title,
+            "[Image #1] Ship the release despite the </image> marker"
+        );
         assert_eq!(item.preview.as_deref(), Some("The release is published."));
 
         let summary =
@@ -2773,7 +2790,10 @@ mod tests {
                 .map(|message| (message.role.as_str(), message.text.as_str()))
                 .collect::<Vec<_>>(),
             vec![
-                ("user", "Ship the release"),
+                (
+                    "user",
+                    "[Image #1] Ship the release despite the </image> marker"
+                ),
                 ("assistant", "The release is published."),
             ]
         );
