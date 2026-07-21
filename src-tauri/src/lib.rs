@@ -1,3 +1,4 @@
+mod agent_capabilities;
 mod agent_history;
 mod agent_hooks;
 mod agent_resume;
@@ -703,6 +704,8 @@ pub fn run() {
             commands::save_chat_session_state,
             commands::append_chat_message,
             commands::update_chat_message,
+            commands::get_goal_agent_capabilities,
+            commands::run_goal_session,
             commands::send_chat_message,
             commands::retry_chat_message,
             commands::delete_chat_message,

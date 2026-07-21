@@ -1,6 +1,8 @@
 import type {
   SessionAgentProvider,
   SessionGoal,
+  SessionGoalModelConfig,
+  SessionGoalModelSelection,
   SessionGoalPolicies,
 } from "./types";
 
@@ -31,6 +33,19 @@ export type AutonomousGoalPolicies = Record<
   AutonomousGoalStagePolicy
 >;
 
+export const AUTONOMOUS_GOAL_STAGE_MODEL_KEYS: Record<
+  AutonomousGoalStage,
+  keyof SessionGoalModelConfig["stages"]
+> = {
+  interpretation: "interpretation",
+  plan: "plan",
+  implementation: "implementation",
+  validation: "validation",
+  autoFix: "auto_fix",
+  selfReview: "self_review",
+  draftPr: "draft_pr",
+};
+
 export interface AutonomousGoalPreset {
   id: string;
   name: string;
@@ -60,14 +75,53 @@ export interface AutonomousGoalInput {
   tests?: string;
 }
 
-export interface AutonomousGoalPromptOptions extends AutonomousGoalInput {
-  provider: AutonomousGoalProvider;
-  preset: AutonomousGoalPreset;
-}
-
 function optionalGoalValue(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed || undefined;
+}
+
+function normalizedModelSelection(
+  selection: SessionGoalModelSelection | undefined,
+): SessionGoalModelSelection {
+  return {
+    model: optionalGoalValue(selection?.model ?? undefined),
+    effort: selection?.effort ?? undefined,
+  };
+}
+
+export function createDefaultGoalModelConfig(): SessionGoalModelConfig {
+  return {
+    single_model: true,
+    default: {},
+    stages: {
+      interpretation: {},
+      plan: {},
+      implementation: {},
+      validation: {},
+      auto_fix: {},
+      self_review: {},
+      draft_pr: {},
+    },
+  };
+}
+
+export function cloneGoalModelConfig(
+  config: SessionGoalModelConfig | null | undefined,
+): SessionGoalModelConfig {
+  const source = config ?? createDefaultGoalModelConfig();
+  return {
+    single_model: source.single_model,
+    default: normalizedModelSelection(source.default),
+    stages: {
+      interpretation: normalizedModelSelection(source.stages.interpretation),
+      plan: normalizedModelSelection(source.stages.plan),
+      implementation: normalizedModelSelection(source.stages.implementation),
+      validation: normalizedModelSelection(source.stages.validation),
+      auto_fix: normalizedModelSelection(source.stages.auto_fix),
+      self_review: normalizedModelSelection(source.stages.self_review),
+      draft_pr: normalizedModelSelection(source.stages.draft_pr),
+    },
+  };
 }
 
 function sessionGoalPolicies(
@@ -103,6 +157,7 @@ export function createSessionGoal(
   provider: AutonomousGoalProvider,
   preset: AutonomousGoalPreset,
   revision = 1,
+  modelConfig: SessionGoalModelConfig = createDefaultGoalModelConfig(),
 ): SessionGoal {
   const objective = input.goal.trim();
   if (!objective) throw new Error("A goal is required.");
@@ -116,6 +171,13 @@ export function createSessionGoal(
       id: preset.id,
       name: preset.name,
       policies: sessionGoalPolicies(preset.policies),
+    },
+    model_config: cloneGoalModelConfig(modelConfig),
+    progress: {
+      current_stage: "interpretation",
+      state: "pending",
+      revision_review: false,
+      approval_pending: false,
     },
     revision,
   };
@@ -132,36 +194,6 @@ export function autonomousPresetFromSessionGoal(
     builtIn: true,
     policies: autonomousGoalPolicies(goal.preset.policies),
   };
-}
-
-export function buildPromptForSessionGoal(goal: SessionGoal): string {
-  return buildAutonomousGoalPrompt({
-    goal: goal.objective,
-    completionCriteria: goal.completion_criteria ?? undefined,
-    constraints: goal.constraints ?? undefined,
-    tests: goal.tests ?? undefined,
-    provider: goal.provider,
-    preset: autonomousPresetFromSessionGoal(goal),
-  });
-}
-
-export function buildAutonomousGoalRevisionPrompt(
-  previous: SessionGoal,
-  next: SessionGoal,
-): string {
-  return [
-    `# Acorn goal revision ${next.revision}`,
-    "",
-    `This project goal session was paused so its durable goal could be revised. Revision ${next.revision} supersedes revision ${previous.revision}; treat the revised specification below as authoritative.`,
-    "",
-    "## Previous objective",
-    previous.objective,
-    "",
-    buildPromptForSessionGoal(next),
-    "",
-    "## Revision protocol",
-    "Compare the revised goal with the previous objective and the work already present in this project worktree. Explain what remains valid, what scope changed, and the revised plan. Do not resume implementation in this response, even when the selected Plan policy is AUTO. End with `WAITING:` and ask for confirmation of the revised plan. Resume only after the user confirms in this chat.",
-  ].join("\n");
 }
 
 export const REVIEW_AUTONOMOUS_GOAL_PRESET_ID = "builtin:review";
@@ -420,74 +452,6 @@ export function deleteCustomAutonomousGoalPreset(
   };
 }
 
-const STAGE_PROMPT_LABELS: Record<AutonomousGoalStage, string> = {
-  interpretation: "Interpretation",
-  plan: "Plan",
-  implementation: "Implementation",
-  validation: "Validation",
-  autoFix: "Automatic fixes",
-  selfReview: "Self-review",
-  draftPr: "Draft PR preparation",
-};
-
-const POLICY_PROMPT_LABELS: Record<AutonomousGoalStagePolicy, string> = {
-  auto: "AUTO — proceed without asking",
-  approval: "APPROVAL — prepare a reviewable proposal, then ask for confirmation",
-  disabled: "DISABLED — skip this stage and report that it was skipped",
-};
-
-function optionalPromptSection(label: string, value: string | undefined) {
-  const trimmed = value?.trim();
-  return `## ${label}\n${trimmed || "Not provided — infer a reasonable answer from the goal and repository, and state important assumptions."}`;
-}
-
-export function buildAutonomousGoalPrompt({
-  goal,
-  completionCriteria,
-  constraints,
-  tests,
-  provider,
-  preset,
-}: AutonomousGoalPromptOptions): string {
-  const trimmedGoal = goal.trim();
-  if (!trimmedGoal) throw new Error("A goal is required.");
-
-  const policySnapshot = AUTONOMOUS_GOAL_STAGE_IDS.map(
-    (stage) =>
-      `- ${STAGE_PROMPT_LABELS[stage]}: ${POLICY_PROMPT_LABELS[preset.policies[stage]]}`,
-  ).join("\n");
-
-  return [
-    "# Acorn autonomous goal session",
-    "",
-    "Carry out the goal below in this isolated worktree. Work autonomously whenever the policy snapshot permits it, and follow every repository instruction file that applies.",
-    "",
-    "## Goal",
-    trimmedGoal,
-    "",
-    optionalPromptSection("Completion criteria", completionCriteria),
-    "",
-    optionalPromptSection("Constraints", constraints),
-    "",
-    optionalPromptSection("Tests", tests),
-    "",
-    "## Execution policy snapshot",
-    `Preset: ${preset.name}`,
-    `Provider: ${provider} (fixed for this session; do not switch providers automatically)`,
-    policySnapshot,
-    "",
-    "For an APPROVAL stage, prepare enough of that stage to make the interpretation, plan, review, or intended action reviewable, but do not perform its side-effecting actions or enter the next stage. Then stop and respond with `WAITING:` followed by the exact decision you need. Continue only after the user replies in this chat. Do not ask for confirmation during an AUTO stage unless progress is impossible without credentials, permissions, an externally consequential choice, or missing information that cannot be inferred safely.",
-    "",
-    "## Operating rules",
-    "- Treat only references explicitly written in the goal or optional fields as task references. Do not search for or select a GitHub issue merely because one may exist.",
-    "- You may perform destructive local changes only when they are explicitly requested by the goal. Otherwise stop before them and use `WAITING:`.",
-    "- This prototype authorizes work inside the isolated worktree only. Do not push, create or update a pull request, merge, deploy, release, publish, or incur additional external cost. Draft PR preparation means preparing a proposed title/body and reporting readiness, not creating the PR.",
-    "- If the user pauses the run and revises the goal in a later chat message, stop the old plan, treat the latest revision as authoritative, explain the scope and plan changes, and respond with `WAITING:` for confirmation before resuming implementation.",
-    "- Validate in proportion to the change. During automatic fixes, do not use a fixed total attempt limit. Stop with `WAITING:` when the same or meaning-equivalent validation failure has made no meaningful progress for two consecutive fix attempts. Meaningful progress means eliminating the original failure, reducing the failure set/count/severity, or producing materially more actionable diagnostics; renaming code or changing only a failure fingerprint does not count.",
-    "- Keep the work within the stated goal. If omitted fields were inferred, call out material assumptions in the final response.",
-    "- Finish with a concise summary of changes, validation performed and results, remaining risks, and any skipped or blocked policy stages.",
-  ].join("\n");
-}
 
 export function deriveAutonomousGoalSessionName(goal: string): string {
   const firstMeaningfulLine =

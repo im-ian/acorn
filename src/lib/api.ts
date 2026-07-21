@@ -14,6 +14,7 @@ import type {
   DiffPayload,
   GenerateSessionTitleResult,
   GeneratedCommitMessage,
+  GoalAgentCapabilities,
   IssueDetailListing,
   IssueListing,
   IssueStateFilter,
@@ -75,6 +76,8 @@ export interface PreventSleepStatus {
 
 export interface AiExecutionRequest {
   provider: "claude" | "antigravity" | "codex" | "ollama" | "llm" | "custom";
+  model?: string | null;
+  effort?: string | null;
   ollamaModel?: string | null;
   llmModel?: string | null;
 }
@@ -248,6 +251,16 @@ export const api = {
       messageId,
       patch,
     });
+  },
+  getGoalAgentCapabilities(
+    provider: "claude" | "codex",
+  ): Promise<GoalAgentCapabilities> {
+    return invoke<GoalAgentCapabilities>("get_goal_agent_capabilities", {
+      provider,
+    });
+  },
+  runGoalSession(sessionId: string): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("run_goal_session", { sessionId });
   },
   sendChatMessage(
     sessionId: string,

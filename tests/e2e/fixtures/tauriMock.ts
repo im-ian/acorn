@@ -126,6 +126,58 @@ export const tauriMockSource = `
         },
       });
     }
+    if (cmd === 'get_goal_agent_capabilities') {
+      const provider = args?.provider === 'claude' ? 'claude' : 'codex';
+      if (provider === 'claude') {
+        return Promise.resolve({
+          provider,
+          installed: true,
+          version: '2.0.0-test (Claude Code)',
+          source: 'claude_cli_help',
+          models: [
+            {
+              id: 'default',
+              label: 'Default',
+              description: 'Claude Code model alias',
+              is_default: true,
+              default_effort: null,
+              supported_efforts: [{ id: 'low' }, { id: 'high' }],
+            },
+            {
+              id: 'sonnet',
+              label: 'Sonnet',
+              description: 'Claude Code model alias',
+              is_default: false,
+              default_effort: null,
+              supported_efforts: [{ id: 'low' }, { id: 'high' }],
+            },
+          ],
+          effort_options: [{ id: 'low' }, { id: 'high' }],
+          warning: null,
+        });
+      }
+      return Promise.resolve({
+        provider,
+        installed: true,
+        version: 'codex-cli 0.0.0-test',
+        source: 'codex_app_server',
+        models: [
+          {
+            id: 'gpt-test-default',
+            label: 'GPT Test Default',
+            description: 'Default test coding model',
+            is_default: true,
+            default_effort: 'low',
+            supported_efforts: [
+              { id: 'low', description: 'Fast' },
+              { id: 'ultra', description: 'Delegates' },
+            ],
+          },
+        ],
+        effort_options: [{ id: 'low' }, { id: 'ultra' }],
+        warning: null,
+      });
+    }
     if (cmd === 'get_project_settings') {
       return Promise.resolve({
         key: 'path:' + (args?.repoPath || '/tmp/project'),

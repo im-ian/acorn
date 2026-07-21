@@ -67,6 +67,82 @@ export interface SessionGoalPreset {
   policies: SessionGoalPolicies;
 }
 
+export interface SessionGoalModelSelection {
+  model?: string | null;
+  effort?: string | null;
+}
+
+export type GoalAgentCapabilitySource =
+  | "codex_app_server"
+  | "claude_cli_help"
+  | "fallback"
+  | "unavailable";
+
+export interface GoalAgentEffortOption {
+  id: string;
+  description?: string | null;
+}
+
+export interface GoalAgentModelCapability {
+  id: string;
+  label: string;
+  description?: string | null;
+  is_default: boolean;
+  default_effort?: string | null;
+  supported_efforts: GoalAgentEffortOption[];
+}
+
+export interface GoalAgentCapabilities {
+  provider: "claude" | "codex";
+  installed: boolean;
+  version?: string | null;
+  source: GoalAgentCapabilitySource;
+  models: GoalAgentModelCapability[];
+  effort_options: GoalAgentEffortOption[];
+  warning?: string | null;
+}
+
+export interface SessionGoalStageModels {
+  interpretation: SessionGoalModelSelection;
+  plan: SessionGoalModelSelection;
+  implementation: SessionGoalModelSelection;
+  validation: SessionGoalModelSelection;
+  auto_fix: SessionGoalModelSelection;
+  self_review: SessionGoalModelSelection;
+  draft_pr: SessionGoalModelSelection;
+}
+
+export interface SessionGoalModelConfig {
+  single_model: boolean;
+  default: SessionGoalModelSelection;
+  stages: SessionGoalStageModels;
+}
+
+export type SessionGoalStage =
+  | "interpretation"
+  | "plan"
+  | "implementation"
+  | "validation"
+  | "auto_fix"
+  | "self_review"
+  | "draft_pr";
+
+export type SessionGoalRunState =
+  | "legacy"
+  | "pending"
+  | "running"
+  | "waiting"
+  | "paused"
+  | "completed"
+  | "failed";
+
+export interface SessionGoalProgress {
+  current_stage?: SessionGoalStage | null;
+  state: SessionGoalRunState;
+  revision_review: boolean;
+  approval_pending: boolean;
+}
+
 export interface SessionGoal {
   objective: string;
   completion_criteria?: string | null;
@@ -74,6 +150,8 @@ export interface SessionGoal {
   tests?: string | null;
   provider: SessionGoalProvider;
   preset: SessionGoalPreset;
+  model_config?: SessionGoalModelConfig;
+  progress?: SessionGoalProgress;
   revision: number;
 }
 

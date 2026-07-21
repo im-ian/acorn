@@ -1757,7 +1757,33 @@
       "optionalFieldHint": "선택 사항 — 비워두면 에이전트가 판단합니다.",
       "provider": {
         "label": "에이전트",
-        "hint": "이 세션에서는 선택한 제공자를 유지하며 자동 전환하지 않습니다."
+        "hint": "이 세션에서는 선택한 제공자를 유지하며 자동 전환하지 않습니다.",
+        "capabilityLoading": "CLI 기능 확인 중...",
+        "available": "CLI 사용 가능",
+        "unavailable": "CLI 사용 불가"
+      },
+      "tabs": {
+        "label": "Goal 실행 설정",
+        "policy": "Policy",
+        "model": "Model"
+      },
+      "model": {
+        "singleModel": "모든 단계에 단일 모델 사용",
+        "singleModelHint": "기본으로 켜져 있습니다. 끄면 Goal의 7단계마다 모델과 effort를 따로 지정할 수 있습니다.",
+        "modelLabel": "모델",
+        "effortLabel": "Effort",
+        "agentDefault": "기본값",
+        "customModel": "직접 입력...",
+        "customModelPlaceholder": "모델 ID 또는 별칭",
+        "chooseDiscoveredModel": "조회된 모델에서 선택",
+        "searchModels": "모델 검색",
+        "loadingCapabilities": "설치된 에이전트 CLI에서 모델과 effort를 불러오는 중입니다...",
+        "agentUnavailable": "이 에이전트 CLI를 찾지 못했습니다. 커스텀 모델은 저장할 수 있지만 CLI를 사용할 수 있을 때까지 Goal을 실행할 수 없습니다.",
+        "codexCapabilities": "Codex app-server에서 모델 {count}개와 각 모델이 지원하는 effort를 불러왔습니다.",
+        "claudeCapabilities": "Claude CLI가 노출하는 모델 별칭과 effort를 불러왔습니다. 전체 모델 ID는 직접 입력을 사용하세요.",
+        "capabilityFallback": "CLI 모델 목록을 불러오지 못했습니다. 기본값 또는 커스텀 모델을 사용할 수 있습니다.",
+        "allStages": "모든 단계",
+        "snapshotHint": "모델과 effort 설정은 Goal 세션에 스냅샷으로 저장됩니다. 기본값은 선택한 에이전트 CLI의 현재 기본 설정을 사용합니다."
       },
       "preset": {
         "label": "정책 프리셋",
@@ -1794,7 +1820,7 @@
         "approval": "먼저 확인",
         "disabled": "사용 안 함"
       },
-      "prototypeNotice": "첫 버전은 새 격리 워크트리에서 즉시 시작합니다. 로컬 수정과 테스트는 수행하지만 push, PR 생성, merge, 배포, release는 하지 않습니다. 응답을 중지한 뒤 변경된 목표를 보내면 재계획하고 확인을 기다립니다.",
+      "prototypeNotice": "Goal은 새 격리 워크트리에서 즉시 시작하고, 각 단계에 선택한 정책과 모델을 적용합니다. Draft PR 단계가 활성화되면 push와 초안 PR 생성까지 수행할 수 있지만 merge, 배포, 게시, release는 하지 않습니다.",
       "revisionNotice": "이 편집기를 열면 진행 중인 작업을 일시정지합니다. 저장하면 새 Goal 리비전을 보존하고, 에이전트가 재계획한 뒤 사용자의 확인을 기다립니다.",
       "footerHint": "시작하면 세션을 만들고 이 목표를 즉시 전달합니다.",
       "editFooterHint": "다른 프리셋을 선택하지 않으면 현재 세션의 정책 스냅샷을 유지합니다.",

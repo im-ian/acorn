@@ -691,10 +691,8 @@ export function Sidebar() {
       if (!target?.goal || target.project_scoped === false) return;
       void (async () => {
         try {
-          if (target.status === "working") {
-            await api.cancelChatMessage(target.id);
-            await useAppStore.getState().refreshSessions();
-          }
+          await api.cancelChatMessage(target.id);
+          await useAppStore.getState().refreshSessions();
           const current = useAppStore
             .getState()
             .sessions.find((candidate) => candidate.id === sessionId);

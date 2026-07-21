@@ -1757,7 +1757,33 @@
       "optionalFieldHint": "Optional — the agent infers omitted details.",
       "provider": {
         "label": "Agent",
-        "hint": "The provider stays fixed for this session; there is no automatic fallback."
+        "hint": "The provider stays fixed for this session; there is no automatic fallback.",
+        "capabilityLoading": "Checking CLI capabilities...",
+        "available": "CLI available",
+        "unavailable": "CLI unavailable"
+      },
+      "tabs": {
+        "label": "Goal execution settings",
+        "policy": "Policy",
+        "model": "Model"
+      },
+      "model": {
+        "singleModel": "Use one model for every stage",
+        "singleModelHint": "Enabled by default. Turn it off to route each of the seven Goal stages independently.",
+        "modelLabel": "Model",
+        "effortLabel": "Effort",
+        "agentDefault": "Default",
+        "customModel": "Custom model...",
+        "customModelPlaceholder": "Model ID or alias",
+        "chooseDiscoveredModel": "Choose from discovered models",
+        "searchModels": "Search models",
+        "loadingCapabilities": "Loading models and effort levels from the installed agent CLIs...",
+        "agentUnavailable": "This agent CLI was not found. You can still save a custom model, but the Goal cannot run until the CLI is available.",
+        "codexCapabilities": "Loaded {count} models and their supported effort levels from Codex app-server.",
+        "claudeCapabilities": "Loaded the aliases and effort levels exposed by Claude CLI. Use Custom model for a full model ID.",
+        "capabilityFallback": "The CLI model catalog could not be loaded. Default and custom model values remain available.",
+        "allStages": "All stages",
+        "snapshotHint": "Model and effort choices are saved with this Goal session. Default lets the selected agent CLI choose its current default."
       },
       "preset": {
         "label": "Policy preset",
@@ -1794,7 +1820,7 @@
         "approval": "Ask first",
         "disabled": "Disabled"
       },
-      "prototypeNotice": "This first version starts immediately in a new isolated worktree. It can edit and test locally, but it will not push, open a PR, merge, deploy, or release. Stop the response and send a revised goal to make it replan and wait for confirmation.",
+      "prototypeNotice": "This Goal starts immediately in a new isolated worktree. Each stage follows its selected policy and model. Draft PR can push and open a draft when enabled; merge, deploy, publish, and release remain blocked.",
       "revisionNotice": "Opening this editor pauses active work. Saving persists a new goal revision, asks the agent to replan, and waits for your confirmation before implementation resumes.",
       "footerHint": "Starting creates the session and submits this goal immediately.",
       "editFooterHint": "The current preset snapshot remains unchanged unless you select another preset.",

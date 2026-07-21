@@ -1,4 +1,4 @@
-import { Copy, Plus, Sparkles, Trash2 } from "lucide-react";
+import { ChevronsUpDown, Copy, Plus, Sparkles, Trash2 } from "lucide-react";
 import {
   useEffect,
   useId,
@@ -11,11 +11,12 @@ import {
   BALANCED_AUTONOMOUS_GOAL_PRESET,
   BALANCED_AUTONOMOUS_GOAL_PRESET_ID,
   AUTONOMOUS_GOAL_STAGE_IDS,
+  AUTONOMOUS_GOAL_STAGE_MODEL_KEYS,
   FULL_AUTONOMY_GOAL_PRESET_ID,
   REVIEW_AUTONOMOUS_GOAL_PRESET_ID,
   autonomousPresetFromSessionGoal,
-  buildAutonomousGoalRevisionPrompt,
-  buildPromptForSessionGoal,
+  cloneGoalModelConfig,
+  createDefaultGoalModelConfig,
   createSessionGoal,
   createCustomAutonomousGoalPreset,
   deleteCustomAutonomousGoalPreset,
@@ -39,19 +40,30 @@ import {
   buildSessionCreateRequestFromScope,
   type SessionCreateScope,
 } from "../lib/sessionCreation";
-import { resolveAiExecutionRequest, useSettings } from "../lib/settings";
+import { useSettings } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
-import type { Session } from "../lib/types";
+import type {
+  GoalAgentCapabilities,
+  GoalAgentEffortOption,
+  GoalAgentModelCapability,
+  Session,
+  SessionGoalModelConfig,
+  SessionGoalModelSelection,
+} from "../lib/types";
 import {
   Button,
+  CheckboxRow,
   Field,
+  IconButton,
   Modal,
   ModalFooter,
   ModalHeader,
   Notice,
   Select,
+  type SelectItem,
+  SegmentedControl,
   TextInput,
   TEXT_INPUT_CLASS,
 } from "./ui";
@@ -93,6 +105,13 @@ const POLICY_TRANSLATION_KEYS: Record<
   approval: "dialogs.autonomousGoal.policies.approval",
   disabled: "dialogs.autonomousGoal.policies.disabled",
 };
+
+type GoalSettingsTab = "policy" | "model";
+
+type GoalModelSlot = "default" | keyof SessionGoalModelConfig["stages"];
+
+const GOAL_AGENT_PROVIDERS = ["codex", "claude"] as const;
+const CUSTOM_MODEL_OPTION = "__acorn_custom_model__";
 
 function defaultProvider(selected: string): AutonomousGoalProvider {
   return selected === "claude" ? "claude" : "codex";
@@ -174,7 +193,6 @@ export function AutonomousGoalDialog({
   const t = useTranslation();
   const titleId = useId();
   const showToast = useToasts((state) => state.show);
-  const settings = useSettings((state) => state.settings);
   const sessions = useAppStore((state) => state.sessions);
   const projects = useAppStore((state) => state.projects);
   const createSession = useAppStore((state) => state.createSession);
@@ -192,6 +210,22 @@ export function AutonomousGoalDialog({
     resolveInitialAutonomousGoalPresetId(loadAutonomousGoalPreferences()),
   );
   const [presetNameDraft, setPresetNameDraft] = useState("");
+  const [settingsTab, setSettingsTab] = useState<GoalSettingsTab>("policy");
+  const [modelConfig, setModelConfig] = useState<SessionGoalModelConfig>(
+    createDefaultGoalModelConfig,
+  );
+  const [agentCapabilities, setAgentCapabilities] = useState<
+    Partial<Record<AutonomousGoalProvider, GoalAgentCapabilities>>
+  >({});
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
+  const capabilityRequestsRef = useRef<
+    Partial<
+      Record<AutonomousGoalProvider, Promise<GoalAgentCapabilities>>
+    >
+  >({});
+  const [customModelSlots, setCustomModelSlots] = useState<Set<GoalModelSlot>>(
+    () => new Set(),
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const editingSession = session?.goal ? session : null;
@@ -226,6 +260,9 @@ export function AutonomousGoalDialog({
       editingSession?.goal?.provider ??
         defaultProvider(useSettings.getState().settings.agents.selected),
     );
+    setSettingsTab("policy");
+    setModelConfig(cloneGoalModelConfig(editingSession?.goal?.model_config));
+    setCustomModelSlots(new Set());
     setGoal(editingSession?.goal?.objective ?? "");
     setCompletionCriteria(editingSession?.goal?.completion_criteria ?? "");
     setConstraints(editingSession?.goal?.constraints ?? "");
@@ -233,6 +270,47 @@ export function AutonomousGoalDialog({
     setSubmitting(false);
     setError(null);
   }, [editingSession?.id, editingSession?.goal?.revision, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setCapabilitiesLoading(true);
+    const requests = GOAL_AGENT_PROVIDERS.map((agentProvider) => {
+      const existing = capabilityRequestsRef.current[agentProvider];
+      if (existing) return existing;
+      const request = api
+        .getGoalAgentCapabilities(agentProvider)
+        .catch(
+          (capabilityError: unknown): GoalAgentCapabilities => ({
+            provider: agentProvider,
+            installed: false,
+            source: "unavailable",
+            models: [],
+            effort_options: [],
+            warning: String(capabilityError),
+          }),
+        );
+      capabilityRequestsRef.current[agentProvider] = request;
+      void request.then(() => {
+        if (capabilityRequestsRef.current[agentProvider] === request) {
+          delete capabilityRequestsRef.current[agentProvider];
+        }
+      });
+      return request;
+    });
+    void Promise.all(requests).then((capabilities) => {
+      if (cancelled) return;
+      setAgentCapabilities(
+        Object.fromEntries(
+          capabilities.map((item) => [item.provider, item]),
+        ) as Record<AutonomousGoalProvider, GoalAgentCapabilities>,
+      );
+      setCapabilitiesLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   const presets = useMemo(
     () => [
@@ -336,22 +414,67 @@ export function AutonomousGoalDialog({
     selectPreset(resolveInitialAutonomousGoalPresetId(next));
   }
 
+  function changeProvider(nextProvider: AutonomousGoalProvider) {
+    setProvider(nextProvider);
+    setCustomModelSlots(new Set());
+  }
+
+  function updateDefaultModelSelection(
+    patch: Partial<SessionGoalModelSelection>,
+  ) {
+    setModelConfig((current) => ({
+      ...current,
+      default: { ...current.default, ...patch },
+    }));
+  }
+
+  function updateStageModelSelection(
+    stage: AutonomousGoalStage,
+    patch: Partial<SessionGoalModelSelection>,
+  ) {
+    const stageKey = AUTONOMOUS_GOAL_STAGE_MODEL_KEYS[stage];
+    setModelConfig((current) => ({
+      ...current,
+      stages: {
+        ...current.stages,
+        [stageKey]: { ...current.stages[stageKey], ...patch },
+      },
+    }));
+  }
+
+  function toggleSingleModel(singleModel: boolean) {
+    setModelConfig((current) => {
+      if (singleModel) return { ...current, single_model: true };
+      const stageSelections = Object.values(current.stages);
+      const hasDetailedValues = stageSelections.some(
+        (selection) => selection.model || selection.effort,
+      );
+      if (hasDetailedValues) return { ...current, single_model: false };
+      const inherited = () => ({ ...current.default });
+      return {
+        ...current,
+        single_model: false,
+        stages: {
+          interpretation: inherited(),
+          plan: inherited(),
+          implementation: inherited(),
+          validation: inherited(),
+          auto_fix: inherited(),
+          self_review: inherited(),
+          draft_pr: inherited(),
+        },
+      };
+    });
+  }
+
   function close() {
     if (!submitting) onClose();
   }
 
-  function runGoalPrompt(
-    sessionId: string,
-    promptProvider: AutonomousGoalProvider,
-    prompt: string,
-  ) {
+  function runGoalSession(sessionId: string) {
     markLocalGoalSessionWorking(sessionId);
     void api
-      .sendChatMessage(
-        sessionId,
-        { ...resolveAiExecutionRequest(settings), provider: promptProvider },
-        prompt,
-      )
+      .runGoalSession(sessionId)
       .then(
         () => {
           void useAppStore
@@ -428,6 +551,7 @@ export function AutonomousGoalDialog({
       provider,
       presetSnapshot,
       editingGoal?.revision ?? 1,
+      modelConfig,
     );
 
     try {
@@ -454,11 +578,7 @@ export function AutonomousGoalDialog({
         showToast(
           formatToast(t("toasts.autonomousGoal.updated"), updated.name),
         );
-        runGoalPrompt(
-          updated.id,
-          updated.goal.provider,
-          buildAutonomousGoalRevisionPrompt(editingGoal, updated.goal),
-        );
+        runGoalSession(updated.id);
         return;
       }
 
@@ -491,11 +611,7 @@ export function AutonomousGoalDialog({
 
       onClose();
       showToast(formatToast(t("toasts.autonomousGoal.started"), sessionName));
-      runGoalPrompt(
-        created.id,
-        provider,
-        buildPromptForSessionGoal(created.goal ?? goalSpec),
-      );
+      runGoalSession(created.id);
     } catch (submitError) {
       console.error("save goal session failed", submitError);
       setError(String(submitError));
@@ -519,6 +635,222 @@ export function AutonomousGoalDialog({
       label: agt(t, POLICY_TRANSLATION_KEYS[policy]),
     }),
   );
+  const providerOptions = GOAL_AGENT_PROVIDERS.map((agentProvider) => {
+    const capabilities = agentCapabilities[agentProvider];
+    const label = agentProvider === "codex" ? "Codex" : "Claude";
+    let description = agt(
+      t,
+      "dialogs.autonomousGoal.provider.capabilityLoading",
+    );
+    if (capabilities?.installed) {
+      description = capabilities.version
+        ? capabilities.version
+        : agt(t, "dialogs.autonomousGoal.provider.available");
+    } else if (capabilities) {
+      description = agt(t, "dialogs.autonomousGoal.provider.unavailable");
+    }
+    return { value: agentProvider, label, description };
+  });
+  const selectedAgentCapabilities = agentCapabilities[provider];
+
+  function modelCapabilityFor(
+    selection: SessionGoalModelSelection,
+  ): GoalAgentModelCapability | undefined {
+    const model = selection.model?.trim();
+    if (model && model !== "default") {
+      return selectedAgentCapabilities?.models.find(
+        (candidate) => candidate.id === model,
+      );
+    }
+    return selectedAgentCapabilities?.models.find(
+      (candidate) => candidate.is_default,
+    );
+  }
+
+  function effortOptionsFor(
+    selection: SessionGoalModelSelection,
+  ): SelectItem[] {
+    const modelCapability = modelCapabilityFor(selection);
+    const discovered = modelCapability
+      ? modelCapability.supported_efforts
+      : (selectedAgentCapabilities?.effort_options ?? []);
+    const efforts: GoalAgentEffortOption[] = [];
+    const seen = new Set<string>();
+    for (const effort of discovered) {
+      if (seen.has(effort.id)) continue;
+      seen.add(effort.id);
+      efforts.push(effort);
+    }
+    if (selection.effort && !seen.has(selection.effort)) {
+      efforts.push({ id: selection.effort });
+    }
+    const defaultLabel = modelCapability?.default_effort
+      ? `${agt(t, "dialogs.autonomousGoal.model.agentDefault")} · ${modelCapability.default_effort}`
+      : agt(t, "dialogs.autonomousGoal.model.agentDefault");
+    return [
+      { value: "default", label: defaultLabel },
+      ...efforts.map((effort) => ({
+        value: effort.id,
+        label: effort.id,
+        description: effort.description ?? undefined,
+      })),
+    ];
+  }
+
+  function modelOptions(): SelectItem[] {
+    const defaultModel = selectedAgentCapabilities?.models.find(
+      (candidate) => candidate.is_default,
+    );
+    const options: SelectItem[] = [
+      {
+        value: "",
+        label: agt(t, "dialogs.autonomousGoal.model.agentDefault"),
+        description: defaultModel?.label,
+      },
+      ...(selectedAgentCapabilities?.models ?? [])
+        .filter((model) => model.id !== "default")
+        .map((model) => ({
+          value: model.id,
+          label: model.label,
+          description: model.description ?? undefined,
+          searchText: `${model.label} ${model.id}`,
+        })),
+      { type: "separator" },
+      {
+        value: CUSTOM_MODEL_OPTION,
+        label: agt(t, "dialogs.autonomousGoal.model.customModel"),
+      },
+    ];
+    return options;
+  }
+
+  function setCustomModelSlot(slot: GoalModelSlot, enabled: boolean) {
+    setCustomModelSlots((current) => {
+      const next = new Set(current);
+      if (enabled) next.add(slot);
+      else next.delete(slot);
+      return next;
+    });
+  }
+
+  function capabilityStatusText(): string {
+    const capabilities = selectedAgentCapabilities;
+    if (!capabilities && capabilitiesLoading) {
+      return agt(t, "dialogs.autonomousGoal.model.loadingCapabilities");
+    }
+    if (!capabilities?.installed) {
+      return agt(t, "dialogs.autonomousGoal.model.agentUnavailable");
+    }
+    if (capabilities.source === "codex_app_server") {
+      return agt(t, "dialogs.autonomousGoal.model.codexCapabilities").replace(
+        "{count}",
+        String(capabilities.models.length),
+      );
+    }
+    if (capabilities.source === "claude_cli_help") {
+      return agt(t, "dialogs.autonomousGoal.model.claudeCapabilities");
+    }
+    return agt(t, "dialogs.autonomousGoal.model.capabilityFallback");
+  }
+
+  function renderModelSelection(
+    selection: SessionGoalModelSelection,
+    onChange: (patch: Partial<SessionGoalModelSelection>) => void,
+    ariaPrefix: string,
+    slot: GoalModelSlot,
+  ) {
+    const model = selection.model?.trim() ?? "";
+    const modelIsDiscovered = selectedAgentCapabilities?.models.some(
+      (candidate) => candidate.id === model,
+    );
+    const customModel =
+      customModelSlots.has(slot) ||
+      Boolean(model && model !== "default" && !modelIsDiscovered);
+    return (
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_116px] gap-2">
+        {customModel ? (
+          <div className="flex min-w-0 gap-1">
+            <TextInput
+              autoFocus={!model}
+              aria-label={`${ariaPrefix} ${agt(t, "dialogs.autonomousGoal.model.modelLabel")}`}
+              value={selection.model ?? ""}
+              placeholder={agt(
+                t,
+                "dialogs.autonomousGoal.model.customModelPlaceholder",
+              )}
+              onChange={(event) => onChange({ model: event.target.value })}
+            />
+            <IconButton
+              aria-label={agt(
+                t,
+                "dialogs.autonomousGoal.model.chooseDiscoveredModel",
+              )}
+              title={agt(
+                t,
+                "dialogs.autonomousGoal.model.chooseDiscoveredModel",
+              )}
+              size="lg"
+              variant="outline"
+              onClick={() => {
+                setCustomModelSlot(slot, false);
+                onChange({ model: undefined });
+              }}
+            >
+              <ChevronsUpDown size={13} />
+            </IconButton>
+          </div>
+        ) : (
+          <Select
+            searchable
+            aria-label={`${ariaPrefix} ${agt(t, "dialogs.autonomousGoal.model.modelLabel")}`}
+            value={model === "default" ? "" : model}
+            options={modelOptions()}
+            searchPlaceholder={agt(
+              t,
+              "dialogs.autonomousGoal.model.searchModels",
+            )}
+            onValueChange={(value) => {
+              if (value === CUSTOM_MODEL_OPTION) {
+                setCustomModelSlot(slot, true);
+                onChange({ model: undefined });
+                return;
+              }
+              setCustomModelSlot(slot, false);
+              const nextModel = value || undefined;
+              const nextCapability = nextModel
+                ? selectedAgentCapabilities?.models.find(
+                    (candidate) => candidate.id === nextModel,
+                  )
+                : selectedAgentCapabilities?.models.find(
+                    (candidate) => candidate.is_default,
+                  );
+              const effort = selection.effort;
+              const supported = nextCapability?.supported_efforts ?? [];
+              onChange({
+                model: nextModel,
+                effort:
+                  effort &&
+                  nextCapability &&
+                  !supported.some((candidate) => candidate.id === effort)
+                    ? undefined
+                    : effort,
+              });
+            }}
+          />
+        )}
+        <Select
+          aria-label={`${ariaPrefix} ${agt(t, "dialogs.autonomousGoal.model.effortLabel")}`}
+          value={selection.effort ?? "default"}
+          options={effortOptionsFor(selection)}
+          onValueChange={(value) =>
+            onChange({
+              effort: value === "default" ? undefined : value,
+            })
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <Modal
@@ -572,7 +904,7 @@ export function AutonomousGoalDialog({
                 />
               </Field>
 
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3">
                 <Field
                   label={agt(
                     t,
@@ -645,12 +977,9 @@ export function AutonomousGoalDialog({
                 <Select
                   value={provider}
                   onValueChange={(value) =>
-                    setProvider(value as AutonomousGoalProvider)
+                    changeProvider(value as AutonomousGoalProvider)
                   }
-                  options={[
-                    { value: "codex", label: "Codex" },
-                    { value: "claude", label: "Claude" },
-                  ]}
+                  options={providerOptions}
                 />
               </Field>
 
@@ -665,8 +994,26 @@ export function AutonomousGoalDialog({
             </section>
 
             <section className="flex min-w-0 flex-col gap-3 rounded-xl border border-border bg-bg-sidebar/35 p-3">
-              <div className="flex items-end gap-2">
-                <div className="min-w-0 flex-1">
+              <SegmentedControl
+                activeId={settingsTab}
+                onChange={setSettingsTab}
+                surface="dialog"
+                size="sm"
+                ariaLabel={agt(t, "dialogs.autonomousGoal.tabs.label")}
+                items={[
+                  {
+                    id: "policy",
+                    label: agt(t, "dialogs.autonomousGoal.tabs.policy"),
+                  },
+                  {
+                    id: "model",
+                    label: agt(t, "dialogs.autonomousGoal.tabs.model"),
+                  },
+                ]}
+              />
+
+              {settingsTab === "policy" ? (
+                <>
                   <Field
                     label={agt(t, "dialogs.autonomousGoal.preset.label")}
                     hint={agt(t, "dialogs.autonomousGoal.preset.hint")}
@@ -677,88 +1024,169 @@ export function AutonomousGoalDialog({
                       options={presetOptions}
                     />
                   </Field>
-                </div>
-              </div>
 
-              <div className="flex flex-wrap gap-1.5">
-                <Button size="xs" variant="outline" onClick={addPreset}>
-                  <Plus size={12} />
-                  {agt(t, "dialogs.autonomousGoal.preset.add")}
-                </Button>
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={duplicatePreset}
-                  disabled={!selectedPreset}
-                >
-                  <Copy size={12} />
-                  {agt(t, "dialogs.autonomousGoal.preset.duplicate")}
-                </Button>
-                {!selectedPreset?.builtIn ? (
-                  <Button
-                    size="xs"
-                    variant="dangerGhost"
-                    onClick={deletePreset}
-                  >
-                    <Trash2 size={12} />
-                    {agt(t, "dialogs.autonomousGoal.preset.delete")}
-                  </Button>
-                ) : null}
-              </div>
-
-              {selectedPreset && !selectedPreset.builtIn ? (
-                <Field
-                  label={agt(t, "dialogs.autonomousGoal.preset.name")}
-                >
-                  <TextInput
-                    value={presetNameDraft}
-                    maxLength={80}
-                    onChange={(event) => setPresetNameDraft(event.target.value)}
-                    onBlur={commitPresetName}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        commitPresetName();
-                      }
-                    }}
-                  />
-                </Field>
-              ) : (
-                <Notice tone="neutral" density="compact">
-                  {agt(t, "dialogs.autonomousGoal.preset.builtInReadonly")}
-                </Notice>
-              )}
-
-              <div className="flex flex-col gap-1.5">
-                {selectedPreset
-                  ? AUTONOMOUS_GOAL_STAGE_IDS.map((stage) => (
-                      <div
-                        key={stage}
-                        className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-2"
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button size="xs" variant="outline" onClick={addPreset}>
+                      <Plus size={12} />
+                      {agt(t, "dialogs.autonomousGoal.preset.add")}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={duplicatePreset}
+                      disabled={!selectedPreset}
+                    >
+                      <Copy size={12} />
+                      {agt(t, "dialogs.autonomousGoal.preset.duplicate")}
+                    </Button>
+                    {!selectedPreset?.builtIn ? (
+                      <Button
+                        size="xs"
+                        variant="dangerGhost"
+                        onClick={deletePreset}
                       >
-                        <span className="truncate text-xs text-fg">
-                          {agt(t, STAGE_TRANSLATION_KEYS[stage])}
-                        </span>
-                        <Select
-                          aria-label={agt(t, STAGE_TRANSLATION_KEYS[stage])}
-                          value={selectedPreset.policies[stage]}
-                          disabled={selectedPreset.builtIn}
-                          onValueChange={(value) =>
-                            updateStagePolicy(
-                              stage,
-                              value as AutonomousGoalStagePolicy,
-                            )
-                          }
-                          options={policyOptions}
-                        />
-                      </div>
-                    ))
-                  : null}
-              </div>
+                        <Trash2 size={12} />
+                        {agt(t, "dialogs.autonomousGoal.preset.delete")}
+                      </Button>
+                    ) : null}
+                  </div>
 
-              <p className="text-[11px] leading-relaxed text-fg-muted">
-                {agt(t, "dialogs.autonomousGoal.preset.snapshotHint")}
-              </p>
+                  {selectedPreset && !selectedPreset.builtIn ? (
+                    <Field
+                      label={agt(t, "dialogs.autonomousGoal.preset.name")}
+                    >
+                      <TextInput
+                        value={presetNameDraft}
+                        maxLength={80}
+                        onChange={(event) =>
+                          setPresetNameDraft(event.target.value)
+                        }
+                        onBlur={commitPresetName}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            commitPresetName();
+                          }
+                        }}
+                      />
+                    </Field>
+                  ) : (
+                    <Notice tone="neutral" density="compact">
+                      {agt(t, "dialogs.autonomousGoal.preset.builtInReadonly")}
+                    </Notice>
+                  )}
+
+                  <div className="flex flex-col gap-1.5">
+                    {selectedPreset
+                      ? AUTONOMOUS_GOAL_STAGE_IDS.map((stage) => (
+                          <div
+                            key={stage}
+                            className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-2"
+                          >
+                            <span className="truncate text-xs text-fg">
+                              {agt(t, STAGE_TRANSLATION_KEYS[stage])}
+                            </span>
+                            <Select
+                              aria-label={agt(t, STAGE_TRANSLATION_KEYS[stage])}
+                              value={selectedPreset.policies[stage]}
+                              disabled={selectedPreset.builtIn}
+                              onValueChange={(value) =>
+                                updateStagePolicy(
+                                  stage,
+                                  value as AutonomousGoalStagePolicy,
+                                )
+                              }
+                              options={policyOptions}
+                            />
+                          </div>
+                        ))
+                      : null}
+                  </div>
+
+                  <p className="text-[11px] leading-relaxed text-fg-muted">
+                    {agt(t, "dialogs.autonomousGoal.preset.snapshotHint")}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <CheckboxRow
+                    checked={modelConfig.single_model}
+                    onChange={toggleSingleModel}
+                    label={agt(t, "dialogs.autonomousGoal.model.singleModel")}
+                    description={agt(
+                      t,
+                      "dialogs.autonomousGoal.model.singleModelHint",
+                    )}
+                  />
+
+                  <Notice
+                    tone={
+                      selectedAgentCapabilities?.installed === false ||
+                      selectedAgentCapabilities?.source === "fallback"
+                        ? "neutral"
+                        : "info"
+                    }
+                    density="compact"
+                  >
+                    {capabilityStatusText()}
+                  </Notice>
+
+                  {modelConfig.single_model ? (
+                    <div className="flex flex-col gap-1.5">
+                      <div className="grid grid-cols-[minmax(0,1fr)_116px] gap-2 text-[10px] uppercase tracking-wide text-fg-muted">
+                        <span>
+                          {agt(t, "dialogs.autonomousGoal.model.modelLabel")}
+                        </span>
+                        <span>
+                          {agt(t, "dialogs.autonomousGoal.model.effortLabel")}
+                        </span>
+                      </div>
+                      {renderModelSelection(
+                        modelConfig.default,
+                        updateDefaultModelSelection,
+                        agt(t, "dialogs.autonomousGoal.model.allStages"),
+                        "default",
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      <div className="grid grid-cols-[minmax(0,1fr)_116px] gap-2 px-2 text-[10px] uppercase tracking-wide text-fg-muted">
+                        <span>
+                          {agt(t, "dialogs.autonomousGoal.model.modelLabel")}
+                        </span>
+                        <span>
+                          {agt(t, "dialogs.autonomousGoal.model.effortLabel")}
+                        </span>
+                      </div>
+                      {AUTONOMOUS_GOAL_STAGE_IDS.map((stage) => {
+                        const stageKey = AUTONOMOUS_GOAL_STAGE_MODEL_KEYS[stage];
+                        const label = agt(t, STAGE_TRANSLATION_KEYS[stage]);
+                        return (
+                          <div
+                            key={stage}
+                            className="flex flex-col gap-1 rounded-lg border border-border bg-bg/65 p-2"
+                          >
+                            <span className="text-[11px] font-medium text-fg">
+                              {label}
+                            </span>
+                            {renderModelSelection(
+                              modelConfig.stages[stageKey],
+                              (patch) =>
+                                updateStageModelSelection(stage, patch),
+                              label,
+                              stageKey,
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <p className="text-[11px] leading-relaxed text-fg-muted">
+                    {agt(t, "dialogs.autonomousGoal.model.snapshotHint")}
+                  </p>
+                </>
+              )}
             </section>
           </div>
 

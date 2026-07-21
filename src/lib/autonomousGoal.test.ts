@@ -7,8 +7,6 @@ import {
   FULL_AUTONOMY_GOAL_PRESET_ID,
   REVIEW_AUTONOMOUS_GOAL_PRESET,
   autonomousPresetFromSessionGoal,
-  buildAutonomousGoalPrompt,
-  buildAutonomousGoalRevisionPrompt,
   createSessionGoal,
   createCustomAutonomousGoalPreset,
   deleteCustomAutonomousGoalPreset,
@@ -125,7 +123,7 @@ describe("autonomous goal presets", () => {
   });
 });
 
-describe("autonomous goal prompt", () => {
+describe("autonomous goal sessions", () => {
   it("persists the goal and policy snapshot in the session data contract", () => {
     const goal = createSessionGoal(
       {
@@ -151,61 +149,19 @@ describe("autonomous goal prompt", () => {
           draft_pr: "approval",
         },
       },
+      model_config: {
+        single_model: true,
+        default: {},
+      },
+      progress: {
+        current_stage: "interpretation",
+        state: "pending",
+        approval_pending: false,
+      },
     });
     expect(autonomousPresetFromSessionGoal(goal).policies).toEqual(
       BALANCED_AUTONOMOUS_GOAL_PRESET.policies,
     );
-  });
-
-  it("forces a revised goal through replan and confirmation before resuming", () => {
-    const previous = createSessionGoal(
-      { goal: "Add keyboard navigation" },
-      "claude",
-      BALANCED_AUTONOMOUS_GOAL_PRESET,
-    );
-    const next = createSessionGoal(
-      { goal: "Add keyboard and screen-reader navigation" },
-      "claude",
-      REVIEW_AUTONOMOUS_GOAL_PRESET,
-      2,
-    );
-
-    const prompt = buildAutonomousGoalRevisionPrompt(previous, next);
-    expect(prompt).toContain("Revision 2 supersedes revision 1");
-    expect(prompt).toContain("Add keyboard and screen-reader navigation");
-    expect(prompt).toContain("Do not resume implementation");
-    expect(prompt).toContain("WAITING:");
-  });
-
-  it("captures structured fields, policy, and the prototype safety boundary", () => {
-    const prompt = buildAutonomousGoalPrompt({
-      goal: "Fix the flaky parser test",
-      completionCriteria: "The parser suite passes",
-      constraints: "Do not change the public API",
-      tests: "pnpm test parser",
-      provider: "codex",
-      preset: BALANCED_AUTONOMOUS_GOAL_PRESET,
-    });
-
-    expect(prompt).toContain("Fix the flaky parser test");
-    expect(prompt).toContain("The parser suite passes");
-    expect(prompt).toContain("Plan: APPROVAL");
-    expect(prompt).toContain("Provider: codex");
-    expect(prompt).toContain("Do not push");
-    expect(prompt).toContain("treat the latest revision as authoritative");
-    expect(prompt).toContain("two consecutive fix attempts");
-    expect(prompt).toContain("Do not search for or select a GitHub issue");
-  });
-
-  it("tells the provider to infer omitted optional fields", () => {
-    const prompt = buildAutonomousGoalPrompt({
-      goal: "Implement the feature",
-      provider: "claude",
-      preset: REVIEW_AUTONOMOUS_GOAL_PRESET,
-    });
-
-    expect(prompt.match(/Not provided — infer/g)).toHaveLength(3);
-    expect(prompt).toContain("Interpretation: APPROVAL");
   });
 
   it("derives a compact name from the first meaningful goal line", () => {

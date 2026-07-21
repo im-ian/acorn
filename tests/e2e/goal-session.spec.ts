@@ -96,7 +96,16 @@ test("creates and revises a durable goal session inside a project", async ({
     )
     .fill("Add project-owned goal sessions");
   await createDialog.getByRole("combobox").first().click();
-  await page.getByRole("option", { name: "Codex", exact: true }).click();
+  await page.getByRole("option", { name: /^Codex/ }).click();
+  await createDialog.getByRole("button", { name: "Model", exact: true }).click();
+  await createDialog
+    .getByRole("combobox", { name: "All stages Model" })
+    .click();
+  await page.getByRole("option", { name: /^GPT Test Default/ }).click();
+  await createDialog
+    .getByRole("combobox", { name: "All stages Effort" })
+    .click();
+  await page.getByRole("option", { name: /^ultra/ }).click();
   await createDialog.getByRole("button", { name: "Start goal" }).click();
 
   await expect(page.locator("[data-goal-session-header]")).toContainText(
@@ -126,6 +135,13 @@ test("creates and revises a durable goal session inside a project", async ({
     goal: {
       objective: "Add project-owned goal sessions",
       provider: "codex",
+      model_config: {
+        single_model: true,
+        default: {
+          model: "gpt-test-default",
+          effort: "ultra",
+        },
+      },
       revision: 1,
     },
   });
