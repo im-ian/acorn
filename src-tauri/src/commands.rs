@@ -3922,8 +3922,15 @@ pub fn rename_session(state: State<'_, AppState>, id: String, name: String) -> A
             "control-session owned tabs cannot be renamed".to_string(),
         ));
     }
+    let native_session = (current.kind == SessionKind::Regular
+        && current.mode == SessionMode::Terminal)
+        .then(|| crate::session_titles::resolve_native_session(id))
+        .flatten();
     let updated = state.sessions.rename(&id, trimmed)?;
     persist(&state);
+    if let Some(native_session) = native_session {
+        crate::agent_session_names::enqueue(native_session, updated.name.clone());
+    }
     Ok(enrich_session(updated))
 }
 
@@ -4056,6 +4063,7 @@ fn generate_session_title_inner(
             session: enrich_session(session),
         });
     };
+    let native_session = title_input.native_session.clone();
     let generated = crate::session_titles::generate_title_in_dir(
         &ai,
         prompt.as_deref(),
@@ -4079,6 +4087,9 @@ fn generate_session_title_inner(
         .sessions
         .set_generated_title(&id, generated, Some(transcript_id))?;
     persist(&state);
+    if let Some(native_session) = native_session {
+        crate::agent_session_names::enqueue(native_session, updated.name.clone());
+    }
     Ok(GenerateSessionTitleResult {
         status: GenerateSessionTitleStatus::Generated,
         session: enrich_session(updated),
@@ -6019,6 +6030,13 @@ fn detect_session_statuses_blocking(
             // titles and resume for the whole session. Bind the live
             // codex process straight to its rollout instead.
             let live = live.or_else(|| codex_live_transcript_fallback(&sys, parsed_id, live_agent));
+            let agent_binding_changed =
+                session
+                    .as_ref()
+                    .zip(live.as_ref())
+                    .is_some_and(|(session, transcript)| {
+                        session.agent_transcript_id.as_deref() != Some(transcript.id.as_str())
+                    });
             let agent_transcript_id = live.as_ref().map(|t| t.id.clone());
             let transcript = match live.as_ref() {
                 Some(t) => Some((t.path.clone(), t.kind)),
@@ -6209,15 +6227,27 @@ fn detect_session_statuses_blocking(
             // Keep live-agent metadata on the same lifecycle fence as the
             // status/source write. A native or fallback event that landed
             // during this poll must retain its newer provider claim.
-            if let Some(uuid) = parsed_id {
+            let agent_metadata_applied = if let Some(uuid) = parsed_id {
                 if metadata_write_allowed {
-                    let _ = state.sessions.refresh_agent_state_if_lifecycle_revision(
-                        &uuid,
-                        metadata_expected_lifecycle_revision,
-                        metadata_expected_source,
-                        agent_provider,
-                        agent_transcript_id.clone(),
-                    );
+                    state
+                        .sessions
+                        .refresh_agent_state_if_lifecycle_revision(
+                            &uuid,
+                            metadata_expected_lifecycle_revision,
+                            metadata_expected_source,
+                            agent_provider,
+                            agent_transcript_id.clone(),
+                        )
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if agent_metadata_applied && agent_binding_changed {
+                if let (Some(session), Some(transcript)) = (session.as_ref(), live.clone()) {
+                    crate::agent_session_names::enqueue_existing_title(session, transcript);
                 }
             }
             SessionStatusEntry {
