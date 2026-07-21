@@ -1586,6 +1586,26 @@ fn antigravity_brain_roots() -> Vec<PathBuf> {
         .collect()
 }
 
+pub fn locate_antigravity_transcript(uuid: &str) -> Option<PathBuf> {
+    locate_antigravity_transcript_in(&antigravity_brain_roots(), uuid)
+}
+
+fn locate_antigravity_transcript_in(brain_roots: &[PathBuf], uuid: &str) -> Option<PathBuf> {
+    if !is_uuid_v4_shape(uuid) {
+        return None;
+    }
+    brain_roots.iter().find_map(|root| {
+        let session_dir = root.join(uuid);
+        let path = session_dir
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+        (safe_antigravity_transcript_path(&session_dir, &path)
+            && antigravity_uuid_from_transcript_path(&path).as_deref() == Some(uuid))
+        .then_some(path)
+    })
+}
+
 fn antigravity_owner_cursor_id(storage_root: Option<&Path>, cwd: &Path) -> Option<String> {
     let cwd = cwd.to_str()?;
     let path = storage_root?
@@ -2314,6 +2334,43 @@ impl CodexRolloutHead {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CodexRolloutLineage {
+    Root,
+    Subagent { parent_thread_id: Option<String> },
+}
+
+/// Classify a Codex rollout from its leading session metadata.
+pub fn codex_rollout_lineage(path: &Path) -> Option<CodexRolloutLineage> {
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    codex_rollout_lineage_budgeted(path, &mut budget)
+        .ok()
+        .flatten()
+}
+
+fn codex_rollout_lineage_budgeted(
+    path: &Path,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<CodexRolloutLineage>> {
+    read_bounded_head(path, budget, |line| {
+        let value = serde_json::from_slice::<serde_json::Value>(line).ok()?;
+        let mut is_session_metadata =
+            value.get("type").and_then(|kind| kind.as_str()) == Some("session_meta");
+        for scope in [Some(&value), value.get("payload")] {
+            let Some(scope) = scope else {
+                continue;
+            };
+            let (is_subagent, parent_thread_id) = codex_subagent_metadata(scope);
+            if is_subagent {
+                return Some(CodexRolloutLineage::Subagent { parent_thread_id });
+            }
+            is_session_metadata |= scope.get("source").is_some()
+                && (scope.get("id").is_some() || scope.get("cwd").is_some());
+        }
+        is_session_metadata.then_some(CodexRolloutLineage::Root)
+    })
+}
+
 /// Return the owner declared by a Codex sub-agent rollout. Marker repair uses
 /// this relationship narrowly; arbitrary backwards transcript moves still
 /// pass the normal dormant-echo guard.
@@ -2328,18 +2385,9 @@ fn codex_rollout_parent_thread_id_budgeted(
     path: &Path,
     budget: &mut ProviderScanBudget,
 ) -> ProviderScanResult<Option<String>> {
-    read_bounded_head(path, budget, |line| {
-        let value = serde_json::from_slice::<serde_json::Value>(line).ok()?;
-        for scope in [Some(&value), value.get("payload")] {
-            let Some(scope) = scope else {
-                continue;
-            };
-            let (is_subagent, parent_thread_id) = codex_subagent_metadata(scope);
-            if is_subagent && parent_thread_id.is_some() {
-                return parent_thread_id;
-            }
-        }
-        None
+    Ok(match codex_rollout_lineage_budgeted(path, budget)? {
+        Some(CodexRolloutLineage::Subagent { parent_thread_id }) => parent_thread_id,
+        Some(CodexRolloutLineage::Root) | None => None,
     })
 }
 
@@ -4189,6 +4237,30 @@ mod tests {
     }
 
     #[test]
+    fn locates_antigravity_transcript_by_brain_id() {
+        use std::fs::{self, File};
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-antigravity-locate-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let brain_root = root.join("brain");
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let logs = brain_root.join(id).join(".system_generated").join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        let transcript = logs.join("transcript.jsonl");
+        File::create(&transcript).unwrap();
+
+        assert_eq!(
+            locate_antigravity_transcript_in(&[brain_root], id),
+            Some(transcript)
+        );
+        assert!(locate_antigravity_transcript_in(&[], "not-a-uuid").is_none());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn claude_lookup_falls_back_to_cwd_metadata_when_slug_dir_differs() {
         use std::fs::{self, File};
         use std::io::Write;
@@ -4836,6 +4908,41 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn codex_rollout_lineage_stops_after_root_session_metadata() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let path = std::env::temp_dir().join(format!(
+            "acorn-codex-lineage-{}.jsonl",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let mut file = File::create(&path).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": "019e2001-3250-76b0-8410-2e073b38a2e1",
+                    "cwd": "/tmp/repo",
+                    "source": "cli",
+                }
+            })
+        )
+        .unwrap();
+        file.write_all(&vec![b'x'; PROVIDER_SCAN_LIMITS.line_bytes + 1])
+            .unwrap();
+        drop(file);
+
+        assert_eq!(
+            codex_rollout_lineage(&path),
+            Some(CodexRolloutLineage::Root)
+        );
+
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

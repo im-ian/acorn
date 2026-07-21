@@ -3,6 +3,7 @@ mod agent_history;
 mod agent_hooks;
 mod agent_resume;
 mod agent_resume_persister;
+mod agent_session_names;
 mod agent_wrappers;
 mod ai;
 mod chat_runs;
@@ -767,6 +768,8 @@ pub fn run() {
             commands::remove_worktree,
             commands::restore_removed_worktree,
             commands::discard_removed_worktree,
+            commands::restore_removed_session,
+            commands::discard_removed_session,
             commands::scrollback_save,
             commands::scrollback_load,
             commands::scrollback_delete,

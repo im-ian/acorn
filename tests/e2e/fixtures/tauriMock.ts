@@ -358,6 +358,8 @@ export const tauriMockSource = `
     if (cmd === 'remove_worktree') return Promise.resolve(null);
     if (cmd === 'restore_removed_worktree') return Promise.resolve(undefined);
     if (cmd === 'discard_removed_worktree') return Promise.resolve(undefined);
+    if (cmd === 'restore_removed_session') return Promise.resolve(undefined);
+    if (cmd === 'discard_removed_session') return Promise.resolve(undefined);
     // Daemon-mode commands. E2E runs in-browser without a real acornd
     // bound to a socket, so every routed call short-circuits with a
     // realistic "disabled / not-running" response. Tests that need to

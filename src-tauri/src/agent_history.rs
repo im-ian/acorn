@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -7,8 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use acorn_agent::AgentKind;
 use acorn_transcript::{
-    collapse_preview, parse_transcript_line, parse_transcript_value, ParsedTranscriptLine,
-    TranscriptRole,
+    codex_rollout_lineage, collapse_preview, parse_transcript_line, parse_transcript_value,
+    CodexRolloutLineage, ParsedTranscriptLine, TranscriptRole,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,6 +23,7 @@ const MIN_PARSED_FILES_PER_PROVIDER: usize = 100;
 const MAX_PARSED_FILES_PER_PROVIDER: usize = 500;
 const PARSED_FILES_PER_RESULT: usize = 5;
 const CODEX_SCAN_MAX_DIR_DEPTH: usize = 3;
+const CODEX_MAX_ANCESTOR_DEPTH: usize = 16;
 const CLAUDE_SCAN_MAX_DIR_DEPTH: usize = 1;
 const ANTIGRAVITY_SCAN_MAX_DIR_DEPTH: usize = 3;
 const DEFAULT_LIMIT: usize = 100;
@@ -95,6 +96,7 @@ pub struct AgentHistoryItem {
     pub preview: Option<String>,
     pub queued_message_count: u64,
     pub subagent_transcript_count: u64,
+    pub subagent_transcript_count_truncated: bool,
     pub cwd: Option<String>,
     pub worktree: Option<AgentHistoryWorktree>,
     pub transcript_path: String,
@@ -375,7 +377,137 @@ fn scan_codex(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
     let files = collect_files(&root, CODEX_SCAN_MAX_DIR_DEPTH, |path| {
         is_codex_transcript_path(path, &root)
     });
-    parse_recent_files(files, limit, |path| parse_codex_file(path, scope))
+    grouped_codex_history(files, scope, limit)
+}
+
+#[derive(Default)]
+struct CodexHistoryGroup {
+    root_path: Option<PathBuf>,
+    subagent_count: u64,
+    updated_at: u64,
+}
+
+fn grouped_codex_history(
+    files: Vec<PathBuf>,
+    scope: HistoryScope<'_>,
+    limit: usize,
+) -> Vec<AgentHistoryItem> {
+    let files = files
+        .into_iter()
+        .filter_map(|path| codex_id_from_filename(&path).map(|id| (path, id)))
+        .collect::<Vec<_>>();
+    let file_index_by_id =
+        files
+            .iter()
+            .enumerate()
+            .fold(HashMap::new(), |mut indexes, (index, (_, id))| {
+                indexes.entry(id.clone()).or_insert(index);
+                indexes
+            });
+
+    // Each subagent has its own rollout. Seed lineage discovery from the
+    // newest files and follow known parents immediately, so an older root is
+    // retained without reopening every discovered transcript. The shared
+    // provider file budget keeps this metadata pass bounded just like the
+    // later full-transcript parsing pass.
+    let lineage_file_budget = parse_file_budget(limit);
+    let mut classified_ids = HashSet::new();
+    let mut selected_file_indexes = Vec::new();
+    let mut subagent_ids = HashSet::new();
+    let mut parent_by_child = HashMap::new();
+    for seed_index in 0..files.len() {
+        if selected_file_indexes.len() >= lineage_file_budget {
+            break;
+        }
+        let mut current_index = seed_index;
+        // Once a seed is admitted, finish its bounded parent walk even if it
+        // crosses the soft file budget. Otherwise a child in the final slot
+        // would be retained without its root and the whole group would vanish.
+        for _ in 0..=CODEX_MAX_ANCESTOR_DEPTH {
+            let (path, id) = &files[current_index];
+            if !classified_ids.insert(id.clone()) {
+                break;
+            }
+            selected_file_indexes.push(current_index);
+
+            let Some(CodexRolloutLineage::Subagent { parent_thread_id }) =
+                codex_rollout_lineage(path)
+            else {
+                break;
+            };
+            subagent_ids.insert(id.clone());
+            let Some(parent_thread_id) = parent_thread_id else {
+                break;
+            };
+            parent_by_child.insert(id.clone(), parent_thread_id.clone());
+            let Some(parent_index) = file_index_by_id.get(&parent_thread_id) else {
+                break;
+            };
+            current_index = *parent_index;
+        }
+    }
+    let lineage_scan_truncated = classified_ids.len() < file_index_by_id.len();
+
+    let mut groups = HashMap::<String, CodexHistoryGroup>::new();
+    for file_index in selected_file_indexes {
+        let (path, id) = &files[file_index];
+        if subagent_ids.contains(id) && !parent_by_child.contains_key(id) {
+            continue;
+        }
+        let Some(root_id) = codex_history_root_id(id, &parent_by_child) else {
+            continue;
+        };
+        let group = groups.entry(root_id.clone()).or_default();
+        group.updated_at = group.updated_at.max(file_updated_at(path));
+        if id == &root_id {
+            group.root_path = Some(path.clone());
+        } else {
+            group.subagent_count = group.subagent_count.saturating_add(1);
+        }
+    }
+
+    let mut groups = groups
+        .into_values()
+        .filter(|group| group.root_path.is_some())
+        .collect::<Vec<_>>();
+    groups.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+    let mut items = Vec::new();
+    for group in groups.into_iter().take(parse_file_budget(limit)) {
+        let Some(path) = group.root_path else {
+            continue;
+        };
+        let Some(mut item) = parse_codex_file(&path, scope) else {
+            continue;
+        };
+        item.subagent_transcript_count = group.subagent_count;
+        item.subagent_transcript_count_truncated =
+            lineage_scan_truncated && group.subagent_count > 0;
+        item.updated_at = group.updated_at;
+        items.push(item);
+        if items.len() >= limit {
+            break;
+        }
+    }
+    items
+}
+
+fn codex_history_root_id(
+    transcript_id: &str,
+    parent_by_child: &HashMap<String, String>,
+) -> Option<String> {
+    let mut current = transcript_id;
+    let mut seen = HashSet::new();
+    for _ in 0..CODEX_MAX_ANCESTOR_DEPTH {
+        if !seen.insert(current) {
+            return None;
+        }
+        let Some(parent) = parent_by_child.get(current) else {
+            return Some(current.to_string());
+        };
+        current = parent;
+    }
+    (!parent_by_child.contains_key(current)).then(|| current.to_string())
 }
 
 fn scan_claude(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
@@ -674,6 +806,7 @@ fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistory
             .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
         queued_message_count: state.queued_message_count,
         subagent_transcript_count: state.subagent_transcript_count,
+        subagent_transcript_count_truncated: false,
         cwd: Some(cwd),
         worktree,
         transcript_path: path.display().to_string(),
@@ -717,6 +850,7 @@ fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistor
             .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
         queued_message_count: state.queued_message_count,
         subagent_transcript_count: state.subagent_transcript_count,
+        subagent_transcript_count_truncated: false,
         cwd: Some(cwd),
         worktree,
         transcript_path: path.display().to_string(),
@@ -784,6 +918,7 @@ fn build_antigravity_item(
             .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
         queued_message_count: state.queued_message_count,
         subagent_transcript_count: state.subagent_transcript_count,
+        subagent_transcript_count_truncated: false,
         cwd,
         worktree,
         transcript_path: path.display().to_string(),
@@ -2242,6 +2377,256 @@ mod tests {
     }
 
     #[test]
+    fn codex_history_groups_nested_subagents_under_the_main_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let repo = normalize_path(&repo);
+        let root_id = "019e4818-7c15-7e60-9b3b-898a1c780001";
+        let child_id = "019e4818-7c15-7e60-9b3b-898a1c780002";
+        let nested_id = "019e4818-7c15-7e60-9b3b-898a1c780003";
+        let other_id = "019e4818-7c15-7e60-9b3b-898a1c780004";
+        let orphan_id = "019e4818-7c15-7e60-9b3b-898a1c780005";
+        let missing_parent_id = "019e4818-7c15-7e60-9b3b-898a1c789999";
+
+        let write_rollout = |id: &str, parent_id: Option<&str>, title: &str| {
+            let path = dir
+                .path()
+                .join(format!("rollout-2026-07-20T10-00-00-{id}.jsonl"));
+            let source = parent_id.map_or_else(
+                || serde_json::json!("cli"),
+                |parent_id| {
+                    serde_json::json!({
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": parent_id,
+                                "depth": 1,
+                            }
+                        }
+                    })
+                },
+            );
+            let mut file = fs::File::create(&path).unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "type": "session_meta",
+                    "payload": {
+                        "id": id,
+                        "cwd": repo.display().to_string(),
+                        "originator": "codex-tui",
+                        "source": source,
+                    }
+                })
+            )
+            .unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "payload": {
+                        "id": id,
+                        "cwd": repo.display().to_string(),
+                        "role": "user",
+                        "content": title,
+                    }
+                })
+            )
+            .unwrap();
+            path
+        };
+
+        let root = write_rollout(root_id, None, "Coordinate the review");
+        let child = write_rollout(child_id, Some(root_id), "Inspect the code");
+        let nested = write_rollout(nested_id, Some(child_id), "Check an edge case");
+        let other = write_rollout(other_id, None, "Unrelated session");
+        let orphan = write_rollout(orphan_id, Some(missing_parent_id), "Orphaned subagent");
+
+        assert_eq!(
+            acorn_transcript::codex_rollout_parent_thread_id(&child).as_deref(),
+            Some(root_id)
+        );
+        assert_eq!(
+            acorn_transcript::codex_rollout_parent_thread_id(&nested).as_deref(),
+            Some(child_id)
+        );
+
+        for (path, modified_at) in [
+            (&root, 10),
+            (&other, 20),
+            (&child, 25),
+            (&nested, 30),
+            (&orphan, 40),
+        ] {
+            fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(
+                    SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(modified_at),
+                ))
+                .unwrap();
+        }
+
+        let items = grouped_codex_history(
+            vec![orphan, nested, child, other, root],
+            HistoryScope::Project(&repo),
+            10,
+        );
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, root_id);
+        assert_eq!(items[0].title, "Coordinate the review");
+        assert_eq!(items[0].subagent_transcript_count, 2);
+        assert!(!items[0].subagent_transcript_count_truncated);
+        assert_eq!(items[0].updated_at, 30);
+        assert_eq!(items[1].id, other_id);
+        assert_eq!(items[1].subagent_transcript_count, 0);
+        assert!(items.iter().all(|item| item.id != orphan_id));
+    }
+
+    #[test]
+    fn codex_history_finishes_parent_walk_at_the_file_budget_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let repo = normalize_path(&repo);
+        let root_id = "019e4818-7c15-7e60-9b3b-898a1c781001";
+        let child_id = "019e4818-7c15-7e60-9b3b-898a1c781002";
+
+        let write_rollout = |id: &str, parent_id: Option<&str>, title: &str| {
+            let path = dir
+                .path()
+                .join(format!("rollout-2026-07-20T10-00-00-{id}.jsonl"));
+            let source = parent_id.map_or_else(
+                || serde_json::json!("cli"),
+                |parent_id| {
+                    serde_json::json!({
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": parent_id,
+                                "depth": 1,
+                            }
+                        }
+                    })
+                },
+            );
+            let mut file = fs::File::create(&path).unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "type": "session_meta",
+                    "payload": {
+                        "id": id,
+                        "cwd": repo.display().to_string(),
+                        "originator": "codex-tui",
+                        "source": source,
+                    }
+                })
+            )
+            .unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "payload": {
+                        "id": id,
+                        "cwd": repo.display().to_string(),
+                        "role": "user",
+                        "content": title,
+                    }
+                })
+            )
+            .unwrap();
+            path
+        };
+
+        let mut files = Vec::new();
+        for index in 0..99_u64 {
+            let id = format!("019e4818-7c15-7e60-9b3c-{index:012x}");
+            let filler = write_rollout(&id, None, "Unrelated session");
+            fs::File::options()
+                .write(true)
+                .open(&filler)
+                .unwrap()
+                .set_times(
+                    fs::FileTimes::new()
+                        .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1)),
+                )
+                .unwrap();
+            files.push(filler);
+        }
+        let child = write_rollout(child_id, Some(root_id), "Delegate the review");
+        files.push(child.clone());
+        let root = write_rollout(root_id, None, "Coordinate the review");
+        files.push(root.clone());
+        files.push(write_rollout(
+            "019e4818-7c15-7e60-9b3d-898a1c781003",
+            None,
+            "Outside the lineage window",
+        ));
+
+        fs::File::options()
+            .write(true)
+            .open(&child)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(100)),
+            )
+            .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&root)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(2)),
+            )
+            .unwrap();
+
+        assert_eq!(files.len(), parse_file_budget(1) + 2);
+        assert_eq!(
+            codex_rollout_lineage(&child),
+            Some(CodexRolloutLineage::Subagent {
+                parent_thread_id: Some(root_id.to_string()),
+            })
+        );
+        assert_eq!(
+            parse_codex_file(&root, HistoryScope::Project(&repo))
+                .unwrap()
+                .id,
+            root_id
+        );
+        let items = grouped_codex_history(files, HistoryScope::Project(&repo), 1);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, root_id);
+        assert_eq!(items[0].subagent_transcript_count, 1);
+        assert!(items[0].subagent_transcript_count_truncated);
+        assert_eq!(items[0].updated_at, 100);
+    }
+
+    #[test]
+    fn codex_history_root_resolution_rejects_parent_cycles() {
+        let parent_by_child = HashMap::from([
+            ("child-a".to_string(), "child-b".to_string()),
+            ("child-b".to_string(), "child-a".to_string()),
+            ("self".to_string(), "self".to_string()),
+            ("orphan".to_string(), "missing".to_string()),
+        ]);
+
+        assert_eq!(codex_history_root_id("child-a", &parent_by_child), None);
+        assert_eq!(codex_history_root_id("self", &parent_by_child), None);
+        assert_eq!(
+            codex_history_root_id("orphan", &parent_by_child).as_deref(),
+            Some("missing")
+        );
+    }
+
+    #[test]
     fn codex_history_infers_roles_from_event_types() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
@@ -2343,17 +2728,31 @@ mod tests {
                 "payload": {
                     "type": "message",
                     "role": "user",
-                    "content": [{
-                        "type": "input_text",
-                        "text": "<image name=[Image #1] path=\"/tmp/clipboard.png\">\n</image>\nShip the release",
-                    }],
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<image name=[Image #1] path=\"/tmp/clipboard.png\">",
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,abc",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "</image>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "[Image #1] Ship the release despite the </image> marker",
+                        },
+                    ],
                 },
             }),
             serde_json::json!({
                 "type": "event_msg",
                 "payload": {
                     "type": "user_message",
-                    "message": "Ship the release",
+                    "message": "[Image #1] Ship the release despite the </image> marker",
                 },
             }),
             serde_json::json!({
@@ -2371,7 +2770,10 @@ mod tests {
 
         let scope_repo = normalize_path(&repo);
         let item = parse_codex_file(&transcript, HistoryScope::Project(&scope_repo)).unwrap();
-        assert_eq!(item.title, "Ship the release");
+        assert_eq!(
+            item.title,
+            "[Image #1] Ship the release despite the </image> marker"
+        );
         assert_eq!(item.preview.as_deref(), Some("The release is published."));
 
         let summary =
@@ -2388,7 +2790,10 @@ mod tests {
                 .map(|message| (message.role.as_str(), message.text.as_str()))
                 .collect::<Vec<_>>(),
             vec![
-                ("user", "Ship the release"),
+                (
+                    "user",
+                    "[Image #1] Ship the release despite the </image> marker"
+                ),
                 ("assistant", "The release is published."),
             ]
         );
@@ -3370,6 +3775,7 @@ mod tests {
             preview: Some("Done".to_string()),
             queued_message_count: 0,
             subagent_transcript_count: 0,
+            subagent_transcript_count_truncated: false,
             cwd: Some("/tmp/demo".to_string()),
             worktree: None,
             transcript_path: transcript.display().to_string(),
@@ -3499,6 +3905,7 @@ mod tests {
             preview: Some("message 7".to_string()),
             queued_message_count: 0,
             subagent_transcript_count: 0,
+            subagent_transcript_count_truncated: false,
             cwd: Some("/tmp/demo".to_string()),
             worktree: None,
             transcript_path: transcript.display().to_string(),
