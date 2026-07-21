@@ -970,19 +970,6 @@ export function AutonomousGoalDialog({
                 />
               </Field>
 
-              <Field
-                label={agt(t, "dialogs.autonomousGoal.provider.label")}
-                hint={agt(t, "dialogs.autonomousGoal.provider.hint")}
-              >
-                <Select
-                  value={provider}
-                  onValueChange={(value) =>
-                    changeProvider(value as AutonomousGoalProvider)
-                  }
-                  options={providerOptions}
-                />
-              </Field>
-
               <Notice tone="info" density="compact">
                 {agt(
                   t,
@@ -1109,6 +1096,23 @@ export function AutonomousGoalDialog({
                 </>
               ) : (
                 <>
+                  <Field
+                    label={agt(t, "dialogs.autonomousGoal.provider.label")}
+                    hint={agt(t, "dialogs.autonomousGoal.provider.hint")}
+                  >
+                    <Select
+                      aria-label={agt(
+                        t,
+                        "dialogs.autonomousGoal.provider.label",
+                      )}
+                      value={provider}
+                      onValueChange={(value) =>
+                        changeProvider(value as AutonomousGoalProvider)
+                      }
+                      options={providerOptions}
+                    />
+                  </Field>
+
                   <CheckboxRow
                     checked={modelConfig.single_model}
                     onChange={toggleSingleModel}

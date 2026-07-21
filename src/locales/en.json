@@ -1765,7 +1765,7 @@
       "tabs": {
         "label": "Goal execution settings",
         "policy": "Policy",
-        "model": "Model"
+        "model": "Agent & Model"
       },
       "model": {
         "singleModel": "Use one model for every stage",

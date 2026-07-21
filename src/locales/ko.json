@@ -1765,7 +1765,7 @@
       "tabs": {
         "label": "Goal 실행 설정",
         "policy": "Policy",
-        "model": "Model"
+        "model": "에이전트 · 모델"
       },
       "model": {
         "singleModel": "모든 단계에 단일 모델 사용",

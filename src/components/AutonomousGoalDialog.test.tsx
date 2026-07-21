@@ -146,10 +146,22 @@ describe("AutonomousGoalDialog", () => {
     expect(storedAfterDelete.customPresets).toEqual([]);
   });
 
-  it("loads CLI models and reveals seven stage routes when disabled", async () => {
+  it("keeps the agent in model settings and reveals stage routes", async () => {
     await renderDialog();
 
-    act(() => button("Model").click());
+    expect(
+      document.body.querySelector<HTMLButtonElement>(
+        'button[aria-label="Agent"]',
+      ),
+    ).toBeNull();
+
+    act(() => button("Agent & Model").click());
+
+    expect(
+      document.body.querySelector<HTMLButtonElement>(
+        'button[aria-label="Agent"]',
+      ),
+    ).toBeInstanceOf(HTMLButtonElement);
 
     const singleModel = document.body.querySelector<HTMLInputElement>(
       'input[type="checkbox"]',
