@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+#[cfg(test)]
+use std::path::PathBuf;
 
 use acorn_session::{Session, SessionKind, SessionMode, SessionOwner, SessionTitleSource};
 
@@ -30,6 +33,7 @@ Rules:
 pub struct ResolvedTitleInput {
     pub transcript_id: String,
     pub title_context: String,
+    pub native_session: Option<agent_resume::LiveTranscript>,
 }
 
 pub fn can_generate_title(session: &Session, transcript_id: Option<&str>) -> bool {
@@ -88,12 +92,17 @@ fn effective_prompt(prompt: Option<&str>) -> String {
 }
 
 pub fn resolve_title_input(session_id: uuid::Uuid) -> Option<ResolvedTitleInput> {
-    let (path, provider, transcript_id) = resolve_transcript(session_id)?;
-    let title_context =
-        agent_history::transcript_title_context(provider, &path, TITLE_CONTEXT_CHARS)?;
+    let native_session = resolve_native_session(session_id)?;
+    let provider: AgentHistoryProvider = native_session.kind.into();
+    let title_context = agent_history::transcript_title_context(
+        provider,
+        &native_session.path,
+        TITLE_CONTEXT_CHARS,
+    )?;
     Some(ResolvedTitleInput {
-        transcript_id,
+        transcript_id: native_session.id.clone(),
         title_context,
+        native_session: Some(native_session),
     })
 }
 
@@ -128,6 +137,7 @@ pub fn chat_title_input_from_state(
     Some(ResolvedTitleInput {
         transcript_id: format!("chat:{}", first_user_message.id),
         title_context: title_context.chars().take(TITLE_CONTEXT_CHARS).collect(),
+        native_session: None,
     })
 }
 
@@ -220,15 +230,19 @@ fn title_generation_command(mut resolved: ResolvedAiCommand) -> ResolvedAiComman
     resolved
 }
 
-fn resolve_transcript(session_id: uuid::Uuid) -> Option<(PathBuf, AgentHistoryProvider, String)> {
+pub fn resolve_native_session(session_id: uuid::Uuid) -> Option<agent_resume::LiveTranscript> {
     if let Some(live) = agent_resume::live_transcript(session_id) {
-        return Some((live.path, live.kind.into(), live.id));
+        return Some(live);
     }
 
     todos::locate_transcript_for(&session_id.to_string())
         .ok()
         .flatten()
-        .map(|path| (path, AgentHistoryProvider::Claude, session_id.to_string()))
+        .map(|path| agent_resume::LiveTranscript {
+            path,
+            kind: acorn_agent::AgentKind::Claude,
+            id: session_id.to_string(),
+        })
 }
 
 #[cfg(test)]
