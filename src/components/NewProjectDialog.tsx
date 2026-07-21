@@ -29,6 +29,7 @@ interface NewProjectDialogProps {
     parentPath: string,
     name: string,
     ignoreSafeName: boolean,
+    initCommit: boolean,
   ) => Promise<void>;
 }
 
@@ -42,6 +43,7 @@ export function NewProjectDialog({
   const [parentPath, setParentPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [ignoreSafeName, setIgnoreSafeName] = useState(false);
+  const [initCommit, setInitCommit] = useState(true);
   const [pending, setPending] = useState(false);
   const locationPickedRef = useRef(false);
 
@@ -53,6 +55,7 @@ export function NewProjectDialog({
     setParentPath("");
     setError(null);
     setIgnoreSafeName(false);
+    setInitCommit(true);
     setPending(false);
     void api
       .getLastProjectParentFolder()
@@ -116,7 +119,7 @@ export function NewProjectDialog({
     setPending(true);
     setError(null);
     try {
-      await onCreate(parentPath, trimmedName, ignoreSafeName);
+      await onCreate(parentPath, trimmedName, ignoreSafeName, initCommit);
       onClose();
     } catch (err) {
       setError(errorMessage(err));
@@ -210,6 +213,15 @@ export function NewProjectDialog({
               </Button>
             </div>
           </Field>
+          <label className="flex items-center gap-2 text-xs text-fg-muted">
+            <input
+              type="checkbox"
+              checked={initCommit}
+              onChange={(e) => setInitCommit(e.target.checked)}
+              className="acorn-check"
+            />
+            <span>{dt(t, "dialogs.newProject.initCommit")}</span>
+          </label>
           {finalPath ? (
             <div className="space-y-1 text-xs">
               <div className="text-fg-muted">

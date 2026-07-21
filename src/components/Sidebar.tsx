@@ -1352,9 +1352,9 @@ export function Sidebar() {
       <NewProjectDialog
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
-        onCreate={async (parentPath, name, ignoreSafeName) => {
+        onCreate={async (parentPath, name, ignoreSafeName, initCommit) => {
           try {
-            await createNewProject(parentPath, name, ignoreSafeName);
+            await createNewProject(parentPath, name, ignoreSafeName, initCommit);
           } catch (e) {
             showToast(`${t("toasts.project.createFailed")} ${String(e)}`);
             throw e;

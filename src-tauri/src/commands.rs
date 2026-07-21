@@ -4832,6 +4832,7 @@ pub fn create_new_project(
     parent_path: String,
     name: String,
     ignore_safe_name: Option<bool>,
+    init_commit: Option<bool>,
 ) -> AppResult<Project> {
     let name = validate_new_project_name(&name, ignore_safe_name.unwrap_or(false))?;
     let parent = PathBuf::from(&parent_path);
@@ -4848,9 +4849,24 @@ pub fn create_new_project(
     }
 
     std::fs::create_dir(&target)?;
-    if let Err(err) = git2::Repository::init(&target) {
-        let _ = std::fs::remove_dir(&target);
-        return Err(AppError::Git(err));
+    let repo = match git2::Repository::init(&target) {
+        Ok(repo) => repo,
+        Err(err) => {
+            let _ = std::fs::remove_dir(&target);
+            return Err(AppError::Git(err));
+        }
+    };
+    // `Repository::init` leaves HEAD unborn (no commit), so `refs/heads/<default>`
+    // does not exist yet and any op that resolves HEAD — worktree creation, the
+    // GitHub menu — fails with "reference 'refs/heads/master' not found". Seeding
+    // an empty initial commit makes a brand-new project immediately usable; the
+    // caller can opt out to keep an unborn HEAD (defaults on).
+    if init_commit.unwrap_or(true) {
+        if let Err(err) = seed_initial_commit(&repo) {
+            drop(repo);
+            let _ = std::fs::remove_dir_all(&target);
+            return Err(AppError::Git(err));
+        }
     }
 
     let project = state
@@ -4858,6 +4874,23 @@ pub fn create_new_project(
         .ensure(target.clone(), project_basename(&target));
     persist(&state);
     Ok(project)
+}
+
+/// Create the empty initial commit that makes a freshly `init`-ed repo usable.
+/// Prefers the user's configured git identity, falling back to a generic Acorn
+/// signature when `user.name`/`user.email` are unset. Committing to the unborn
+/// `HEAD` symref creates whatever default branch git resolved (`main`/`master`).
+fn seed_initial_commit(repo: &git2::Repository) -> Result<(), git2::Error> {
+    let sig = repo
+        .signature()
+        .or_else(|_| git2::Signature::now("Acorn", "acorn@localhost"))?;
+    let tree_id = {
+        let mut index = repo.index()?;
+        index.write_tree()?
+    };
+    let tree = repo.find_tree(tree_id)?;
+    repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -8909,7 +8942,7 @@ mod tests {
         create_unique_worktree, daemon_spawn_name_for_session, detach_requested_by_stale_renderer,
         font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
         memory_root_pids, poll_defers_to_hook, remove_linked_worktree_at_path,
-        restore_pending_session_removal, should_remove_local_project_mirror,
+        restore_pending_session_removal, seed_initial_commit, should_remove_local_project_mirror,
         validate_editor_command, validate_new_project_name, ChatProviderAdapter,
         ProcessMemorySnapshot,
     };
@@ -11443,6 +11476,21 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    #[test]
+    fn seeded_repo_supports_worktree_creation() {
+        // Regression: a `Repository::init`-only project has an unborn HEAD, so
+        // worktree creation fails with "reference 'refs/heads/master' not found".
+        // seed_initial_commit must make the repo immediately worktree-capable.
+        let repo_dir = unique_repo_dir("seed-initial-commit");
+        let repo = git2::Repository::init(&repo_dir).expect("init repo");
+        assert!(repo.head().is_err(), "fresh init must have unborn HEAD");
+        seed_initial_commit(&repo).expect("seed initial commit");
+        assert!(repo.head().is_ok(), "seeded repo must resolve HEAD");
+        drop(repo);
+        crate::worktree::create_worktree(&repo_dir, "feature")
+            .expect("worktree creation on seeded repo");
     }
 
     fn init_repo_with_commit(path: &Path) -> git2::Repository {

@@ -533,6 +533,7 @@ interface AppStateModel {
     parentPath: string,
     name: string,
     ignoreSafeName?: boolean,
+    initCommit?: boolean,
   ) => Promise<Project>;
   removeProject: (
     repoPath: string,
@@ -3263,12 +3264,13 @@ export const useAppStore = create<AppStateModel>()(
     }
   },
 
-  async createNewProject(parentPath, name, ignoreSafeName = false) {
+  async createNewProject(parentPath, name, ignoreSafeName = false, initCommit = true) {
     try {
       const project = await api.createNewProject(
         parentPath,
         name,
         ignoreSafeName,
+        initCommit,
       );
       await get().refreshProjects();
       get().setActiveProject(project.repo_path);
