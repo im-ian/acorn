@@ -1534,7 +1534,8 @@
       "resumeSessionName": "resume",
       "recoverableSignal": "Recoverable content: {items}",
       "recoverableQueued": "{count} queued message(s)",
-      "recoverableSubagents": "{count} subagent transcript(s)",
+      "subagentCount": "Subagents · {count}",
+      "subagentCountTruncated": "Subagents · {count}+",
       "createFailed": "Failed to create terminal session"
     },
     "staged": {

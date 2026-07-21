@@ -1856,6 +1856,35 @@ test.describe("right panel: groups", () => {
     ).toHaveCount(0);
   });
 
+  test("History rows surface grouped subagent counts", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_agent_history", [
+      {
+        provider: "codex",
+        id: "codex-parent",
+        title: "Coordinate repository review",
+        preview: "Review complete.",
+        queued_message_count: 0,
+        subagent_transcript_count: 3,
+        cwd: "/tmp/demo",
+        worktree: null,
+        transcript_path: "/tmp/codex-parent.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-parent",
+      },
+    ]);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+
+    await expect(page.getByText("Coordinate repository review")).toBeVisible();
+    await expect(page.getByText("Subagents · 3", { exact: true })).toBeVisible();
+  });
+
   test("History provider filter scopes visible rows", async ({
     page,
     tauri,

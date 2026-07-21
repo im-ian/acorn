@@ -1534,7 +1534,8 @@
       "resumeSessionName": "resume",
       "recoverableSignal": "복구 가능한 내용: {items}",
       "recoverableQueued": "대기 메시지 {count}개",
-      "recoverableSubagents": "subagent transcript {count}개",
+      "subagentCount": "서브 에이전트 {count}개",
+      "subagentCountTruncated": "서브 에이전트 {count}개 이상",
       "createFailed": "터미널 세션을 만들지 못했습니다"
     },
     "staged": {

@@ -343,6 +343,7 @@ export interface AgentHistoryItem {
   preview: string | null;
   queued_message_count: number;
   subagent_transcript_count: number;
+  subagent_transcript_count_truncated?: boolean;
   cwd: string | null;
   worktree: AgentHistoryWorktree | null;
   transcript_path: string;
