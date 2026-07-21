@@ -1523,6 +1523,7 @@
       "moveTranscriptToTrash": "Move transcript to Trash...",
       "worktreeMissing": "missing",
       "worktreeUnavailable": "That worktree is no longer available.",
+      "worktreeFallback": "That worktree is no longer available. Resumed from the project root instead.",
       "worktreeRunTitle": "Running in worktree",
       "worktreeRunBody": "The resumed session was started in worktree {name}.",
       "worktreeRunConfirm": "OK",

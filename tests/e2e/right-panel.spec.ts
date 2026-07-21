@@ -1998,6 +1998,117 @@ test.describe("right panel: groups", () => {
     ).toBeVisible();
   });
 
+  test("History resume falls back to the project root when its cached worktree disappeared", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __historyFallbackSession?: Record<string, unknown>;
+      };
+      const sessions: Record<string, unknown>[] = [
+        {
+          id: "s-1",
+          name: "sess",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+        },
+      ];
+      if (w.__historyFallbackSession) {
+        sessions.push(w.__historyFallbackSession);
+      }
+      return sessions;
+    });
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "codex",
+        id: "codex-stale-worktree",
+        title: "Resume after goal cleanup",
+        preview: null,
+        queued_message_count: 0,
+        subagent_transcript_count: 0,
+        cwd: "/tmp/demo/.acorn/worktrees/removed-goal",
+        worktree: {
+          name: "removed-goal",
+          path: "/tmp/demo/.acorn/worktrees/removed-goal",
+          exists: true,
+        },
+        transcript_path: "/tmp/codex-stale-worktree.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-stale-worktree",
+      },
+    ]);
+    await tauri.handle("create_session", (args) => {
+      const input = args as { name: string; repoPath: string };
+      const created = {
+        id: "created-fallback",
+        name: input.name,
+        repo_path: input.repoPath,
+        worktree_path: input.repoPath,
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      };
+      (
+        window as unknown as {
+          __historyFallbackSession?: Record<string, unknown>;
+        }
+      ).__historyFallbackSession = created;
+      return created;
+    });
+    await tauri.handle("update_session_worktree", () => {
+      throw new Error("io error: No such file or directory (os error 2)");
+    });
+    await tauri.handle("pty_write", (args) => {
+      const w = window as unknown as { __historyFallbackWrites?: string[] };
+      w.__historyFallbackWrites = w.__historyFallbackWrites ?? [];
+      const input = args as { data?: string };
+      const decoded = input.data
+        ? new TextDecoder().decode(
+            Uint8Array.from(atob(input.data), (char) => char.charCodeAt(0)),
+          )
+        : "";
+      w.__historyFallbackWrites.push(decoded);
+      return undefined;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    const title = page.getByText("Resume after goal cleanup");
+    const historyRow = title.locator(
+      "xpath=ancestor::div[contains(@class, 'rounded-md')][1]",
+    );
+    await dblclickRowRightSide(page, historyRow);
+
+    await expect(title).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText(
+      "Resumed from the project root instead",
+    );
+    await expect(
+      page.getByRole("dialog", { name: "Running in worktree" }),
+    ).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __historyFallbackWrites?: string[] })
+              .__historyFallbackWrites ?? [],
+        ),
+      )
+      .toContain("codex resume codex-stale-worktree\r");
+  });
+
   test("History run in new terminal hosts resumed sessions in the project root", async ({
     page,
     tauri,

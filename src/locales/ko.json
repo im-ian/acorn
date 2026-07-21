@@ -1523,6 +1523,7 @@
       "moveTranscriptToTrash": "transcript를 휴지통으로 이동...",
       "worktreeMissing": "없음",
       "worktreeUnavailable": "해당 워크트리를 더 이상 사용할 수 없습니다.",
+      "worktreeFallback": "해당 워크트리를 더 이상 사용할 수 없어 프로젝트 루트에서 대신 재개했습니다.",
       "worktreeRunTitle": "워크트리에서 실행 중",
       "worktreeRunBody": "resume 세션이 {name} 워크트리에서 시작되었습니다.",
       "worktreeRunConfirm": "확인",
