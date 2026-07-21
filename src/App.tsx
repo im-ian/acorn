@@ -121,7 +121,10 @@ import { useAppStore } from "./store";
 import type { TranslationKey, Translator } from "./lib/i18n";
 import type { Session } from "./lib/types";
 import { useTranslation } from "./lib/useTranslation";
-import { showStoreWorktreeRemovalToast } from "./lib/operationToasts";
+import {
+  showStoreSessionRemovalToast,
+  showStoreWorktreeRemovalToast,
+} from "./lib/operationToasts";
 
 const FOCUSABLE_SELECTOR =
   "textarea, input:not([type='hidden']), button, [tabindex]:not([tabindex='-1']), a[href]";
@@ -1247,14 +1250,14 @@ function App() {
       !pendingRemoveHasOwnedSessions
     ) {
       clearPendingRemove();
-      void removeSession(pendingRemove.id, true).then((removedWorktree) =>
-        showStoreWorktreeRemovalToast(
-          removedWorktree,
-          "toasts.session.worktreeRemoved",
-          "toasts.session.worktreeRemovedUndo",
-          "toasts.session.worktreeRemoveFailed",
-          "toasts.session.worktreeRestored",
-          "toasts.session.worktreeRestoreFailed",
+      void removeSession(pendingRemove.id, true).then((removal) =>
+        showStoreSessionRemovalToast(
+          removal,
+          "toasts.session.sessionWorktreeRemoved",
+          "toasts.session.sessionWorktreeRemovedUndo",
+          "toasts.session.sessionWorktreeRemoveFailed",
+          "toasts.session.sessionWorktreeRestored",
+          "toasts.session.sessionWorktreeRestoreFailed",
         ),
       );
       return;
@@ -1939,15 +1942,15 @@ function App() {
           clearPendingRemove();
           if (!target || choice === "cancel") return;
           void removeSession(target.id, choice === "session_and_worktree").then(
-            (removedWorktree) => {
+            (removal) => {
               if (choice === "session_and_worktree") {
-                showStoreWorktreeRemovalToast(
-                  removedWorktree,
-                  "toasts.session.worktreeRemoved",
-                  "toasts.session.worktreeRemovedUndo",
-                  "toasts.session.worktreeRemoveFailed",
-                  "toasts.session.worktreeRestored",
-                  "toasts.session.worktreeRestoreFailed",
+                showStoreSessionRemovalToast(
+                  removal,
+                  "toasts.session.sessionWorktreeRemoved",
+                  "toasts.session.sessionWorktreeRemovedUndo",
+                  "toasts.session.sessionWorktreeRemoveFailed",
+                  "toasts.session.sessionWorktreeRestored",
+                  "toasts.session.sessionWorktreeRestoreFailed",
                 );
                 return;
               }

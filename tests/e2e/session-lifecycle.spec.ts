@@ -370,6 +370,117 @@ test.describe("session lifecycle", () => {
     expect(calls[0]).toEqual({ id: "s-1", removeWorktree: true });
   });
 
+  test("worktree removal toast restores the Acorn session and worktree together", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessions: {
+            confirmRemove: true,
+            confirmDeleteIsolatedWorktrees: false,
+            showRestartPromptOnExit: true,
+          },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessionRemoved?: boolean;
+        __sessionRestored?: boolean;
+      };
+      return !w.__sessionRemoved || w.__sessionRestored
+        ? [
+            {
+              id: "s-1",
+              name: "alpha",
+              repo_path: "/tmp/demo",
+              worktree_path: "/tmp/demo/.acorn/worktrees/alpha",
+              branch: "main",
+              isolated: true,
+              in_worktree: true,
+              status: "ready",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:05Z",
+              last_message: null,
+            },
+          ]
+        : [];
+    });
+    await tauri.handle("remove_session", () => {
+      const w = window as unknown as { __sessionRemoved?: boolean };
+      w.__sessionRemoved = true;
+      return {
+        token: "session-undo-token",
+        repoPath: "/tmp/demo",
+        worktreePath: "/tmp/demo/.acorn/worktrees/alpha",
+        gitCommonDir: "/tmp/demo/.git",
+        sessionIds: ["s-1"],
+      };
+    });
+    await tauri.handle("restore_removed_session", (args) => {
+      const w = window as unknown as {
+        __restoreSessionCalls?: unknown[];
+        __sessionRestored?: boolean;
+      };
+      w.__restoreSessionCalls = w.__restoreSessionCalls ?? [];
+      w.__restoreSessionCalls.push(args);
+      w.__sessionRestored = true;
+      return null;
+    });
+    await tauri.handle("discard_removed_session", (args) => {
+      const w = window as unknown as { __discardSessionCalls?: unknown[] };
+      w.__discardSessionCalls = w.__discardSessionCalls ?? [];
+      w.__discardSessionCalls.push(args);
+      return null;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const row = sidebar
+      .getByRole("button", { name: /^alpha worktree main · Ready/ })
+      .first();
+    await row.hover();
+    await sidebar
+      .getByRole("button", { name: "Remove session", exact: true })
+      .click();
+
+    await expect(row).toHaveCount(0);
+    await page
+      .getByText(/Session and worktree removed\. Restore within \d+s/)
+      .click();
+
+    await expect(
+      sidebar
+        .getByRole("button", { name: /^alpha worktree main · Ready/ })
+        .first(),
+    ).toBeVisible();
+    const restoreCalls = (await page.evaluate(
+      () =>
+        (window as unknown as { __restoreSessionCalls?: unknown[] })
+          .__restoreSessionCalls,
+    )) as Array<Record<string, unknown>>;
+    expect(restoreCalls).toEqual([
+      {
+        token: "session-undo-token",
+        repoPath: "/tmp/demo",
+        worktreePath: "/tmp/demo/.acorn/worktrees/alpha",
+        gitCommonDir: "/tmp/demo/.git",
+      },
+    ]);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __discardSessionCalls?: unknown[] })
+            .__discardSessionCalls,
+      ),
+    ).toBeUndefined();
+  });
+
   test("standalone isolated worktree prompt can enable future auto-delete", async ({
     page,
     tauri,

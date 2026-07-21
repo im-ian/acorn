@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -12,8 +13,15 @@ use crate::ipc::workspaces::PendingWorkspaceRequests;
 use crate::power_assertion::PowerAssertionState;
 use crate::pty_output::PtyOutputRouter;
 use crate::staged_rev_reconcile::StagedRevMismatch;
+use crate::worktree::RemovedWorktree;
 use acorn_pty::PtyManager;
-use acorn_session::{ProjectStore, SessionStore};
+use acorn_session::{ProjectStore, Session, SessionStore};
+
+#[derive(Clone)]
+pub struct PendingSessionRemoval {
+    pub worktree: RemovedWorktree,
+    pub sessions: Vec<Session>,
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -30,6 +38,11 @@ pub struct AppState {
     /// persisted layout. Defaults to true (clean) for fresh installs.
     pub sessions_loaded_cleanly: Arc<AtomicBool>,
     pub projects_loaded_cleanly: Arc<AtomicBool>,
+    /// Session snapshots held while the matching worktree-removal toast can
+    /// still be undone. The worktree token is the capability used by the
+    /// restore/discard commands, so the renderer never sends session records
+    /// back into the backend.
+    pub pending_session_removals: Arc<Mutex<HashMap<String, PendingSessionRemoval>>>,
     /// Shutdown handle for the currently running IPC listener thread.
     /// `None` when bind failed at boot. `ipc_restart` swaps in a new handle
     /// after signaling the previous listener to exit.
@@ -89,6 +102,7 @@ impl AppState {
             pty_output: Arc::new(PtyOutputRouter::default()),
             sessions_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             projects_loaded_cleanly: Arc::new(AtomicBool::new(true)),
+            pending_session_removals: Arc::new(Mutex::new(HashMap::new())),
             ipc_handle: Arc::new(Mutex::new(None)),
             ipc_workspace_requests: Arc::new(Mutex::new(Default::default())),
             daemon_bridge: DaemonBridge::new(),
