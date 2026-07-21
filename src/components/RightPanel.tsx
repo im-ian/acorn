@@ -1333,24 +1333,11 @@ function agentHistoryRecoverableSignalLabel(
   t: Translator,
   item: AgentHistoryItem,
 ): string | null {
-  const parts: string[] = [];
-  if (item.queued_message_count > 0) {
-    parts.push(
-      rtf(t, "rightPanel.history.recoverableQueued", {
-        count: item.queued_message_count,
-      }),
-    );
-  }
-  if (item.subagent_transcript_count > 0) {
-    parts.push(
-      rtf(t, "rightPanel.history.recoverableSubagents", {
-        count: item.subagent_transcript_count,
-      }),
-    );
-  }
-  if (parts.length === 0) return null;
+  if (item.queued_message_count === 0) return null;
   return rtf(t, "rightPanel.history.recoverableSignal", {
-    items: parts.join(" + "),
+    items: rtf(t, "rightPanel.history.recoverableQueued", {
+      count: item.queued_message_count,
+    }),
   });
 }
 
@@ -1720,6 +1707,17 @@ function AgentHistoryTab({
                             {relativeTime(item.updated_at, t)}
                           </span>
                         </Tooltip>
+                        {item.subagent_transcript_count > 0 ? (
+                          <span className="shrink-0">
+                            {rtf(
+                              t,
+                              item.subagent_transcript_count_truncated
+                                ? "rightPanel.history.subagentCountTruncated"
+                                : "rightPanel.history.subagentCount",
+                              { count: item.subagent_transcript_count },
+                            )}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   </div>
