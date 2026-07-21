@@ -1354,6 +1354,14 @@ function agentHistoryRecoverableSignalLabel(
   });
 }
 
+function isUnavailableHistoryWorktreeError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("no such file or directory") ||
+    normalized.includes("worktree is not registered")
+  );
+}
+
 function AgentHistoryTab({
   scope,
   repoPath,
@@ -1495,26 +1503,35 @@ function AgentHistoryTab({
         showToast(`${t("toasts.session.createFailed")} ${message}`);
         return;
       }
+      let adoptedWorktree = false;
       if (shouldUseWorktree && item.worktree) {
+        let adoptionError: string | null = null;
         try {
           await adoptSessionWorktree(created.id, item.worktree.path);
-          const error = useAppStore.getState().consumeError();
-          if (error) {
-            setError(error);
-            showToast(`${t("toasts.session.worktreeAdoptFailed")} ${error}`);
+          adoptionError = useAppStore.getState().consumeError();
+        } catch (e) {
+          adoptionError = String(e);
+        }
+        if (adoptionError) {
+          if (
+            mode !== "auto" ||
+            !isUnavailableHistoryWorktreeError(adoptionError)
+          ) {
+            setError(adoptionError);
+            showToast(
+              `${t("toasts.session.worktreeAdoptFailed")} ${adoptionError}`,
+            );
             return;
           }
-        } catch (e) {
-          const message = String(e);
-          setError(message);
-          showToast(`${t("toasts.session.worktreeAdoptFailed")} ${message}`);
-          return;
+          setError(rt(t, "rightPanel.history.worktreeFallback"));
+        } else {
+          adoptedWorktree = true;
         }
       }
       setPendingTerminalInput(created.id, item.resume_command, {
         agentProvider,
       });
-      if (shouldUseWorktree && item.worktree) {
+      if (adoptedWorktree && item.worktree) {
         setWorktreeNotice(item.worktree);
       }
     } catch (e) {
@@ -1581,19 +1598,29 @@ function AgentHistoryTab({
       </div>
       <div className="acorn-no-scrollbar flex-1 overflow-x-hidden overflow-y-auto">
         {error ? (
-          <div className="p-3 text-xs text-danger">{error}</div>
-        ) : !historyItems ? (
           <div
-            role="status"
-            aria-busy="true"
-            aria-label={rt(t, "rightPanel.history.loading")}
+            role="alert"
+            className="border-b border-danger/20 p-3 text-xs text-danger"
           >
-            {Array.from({ length: 8 }).map((_, i) => (
-              <HistorySkeletonRow key={i} index={i} />
-            ))}
+            {error}
           </div>
+        ) : null}
+        {!historyItems ? (
+          error ? null : (
+            <div
+              role="status"
+              aria-busy="true"
+              aria-label={rt(t, "rightPanel.history.loading")}
+            >
+              {Array.from({ length: 8 }).map((_, i) => (
+                <HistorySkeletonRow key={i} index={i} />
+              ))}
+            </div>
+          )
         ) : historyItems.length === 0 ? (
-          <Empty msg={rt(t, "rightPanel.history.empty")} />
+          error ? null : (
+            <Empty msg={rt(t, "rightPanel.history.empty")} />
+          )
         ) : visibleItems.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.history.emptyForFilter")} />
         ) : (
