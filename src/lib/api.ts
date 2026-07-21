@@ -292,11 +292,13 @@ export const api = {
     parentPath: string,
     name: string,
     ignoreSafeName = false,
+    initCommit = true,
   ): Promise<Project> {
     return invoke<Project>("create_new_project", {
       parentPath,
       name,
       ignoreSafeName,
+      initCommit,
     });
   },
   removeProject(
