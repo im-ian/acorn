@@ -70,7 +70,7 @@ import {
   buildAgentContextMenuItems,
   createEmptySessionAgentDetection,
 } from "../lib/agentContextMenu";
-import { api, type WorktreeRemoval } from "../lib/api";
+import { api, type SessionRemoval } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
@@ -98,7 +98,10 @@ import {
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import { useCurrentPullRequest } from "../lib/useCurrentPullRequest";
-import { showWorktreeRemovalToast } from "../lib/operationToasts";
+import {
+  showSessionRemovalToast,
+  showWorktreeRemovalToast,
+} from "../lib/operationToasts";
 import {
   buildLocalSessions,
 } from "../lib/sessionGrouping";
@@ -512,10 +515,10 @@ export function Sidebar() {
     folderGroup: ProjectFolderGroup,
   ) {
     try {
-      const removedWorktrees: WorktreeRemoval[] = [];
+      const removedSessions: SessionRemoval[] = [];
       for (const session of folderGroup.sessions) {
         const currentState = useAppStore.getState();
-        const removedWorktree = await removeSession(
+        const removal = await removeSession(
           session.id,
           deleteIsolatedWorktreesWithoutPrompt &&
             shouldAutoDeleteSessionWorktree(
@@ -524,8 +527,8 @@ export function Sidebar() {
               currentState.sessions,
             ),
         );
-        if (removedWorktree) {
-          removedWorktrees.push(removedWorktree);
+        if (removal) {
+          removedSessions.push(removal);
         }
         const error = useAppStore.getState().consumeError();
         if (error) {
@@ -534,13 +537,13 @@ export function Sidebar() {
         }
       }
       removeProjectFolder(folderGroup.folder.id);
-      if (removedWorktrees.length > 0) {
-        showWorktreeRemovalToast(
-          removedWorktrees,
-          "toasts.project.worktreesRemoved",
-          "toasts.project.worktreesRemovedUndo",
-          "toasts.project.worktreesRestored",
-          "toasts.project.worktreesRestoreFailed",
+      if (removedSessions.length > 0) {
+        showSessionRemovalToast(
+          removedSessions,
+          "toasts.session.sessionWorktreeRemoved",
+          "toasts.session.sessionWorktreeRemovedUndo",
+          "toasts.session.sessionWorktreeRestored",
+          "toasts.session.sessionWorktreeRestoreFailed",
         );
       }
     } catch (e) {

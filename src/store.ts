@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import { api, type AiExecutionRequest, type WorktreeRemoval } from "./lib/api";
+import {
+  api,
+  type AiExecutionRequest,
+  type SessionRemoval,
+  type WorktreeRemoval,
+} from "./lib/api";
 import type {
   AgentTranscriptSummary,
   Project,
@@ -509,7 +514,7 @@ interface AppStateModel {
   removeSession: (
     id: string,
     removeWorktree?: boolean,
-  ) => Promise<WorktreeRemoval | null>;
+  ) => Promise<SessionRemoval | null>;
   renameSession: (id: string, name: string) => Promise<void>;
   generateSessionTitle: (
     id: string,
@@ -3158,10 +3163,10 @@ export const useAppStore = create<AppStateModel>()(
     }
 
     try {
-      const removedWorktree = await api.removeSession(id, removeWorktree);
+      const removal = await api.removeSession(id, removeWorktree);
       await get().refreshAll();
       set({ error: null });
-      return removedWorktree ?? null;
+      return removal ?? null;
     } catch (e) {
       const message = errorMessage(e);
       await get().refreshAll();
