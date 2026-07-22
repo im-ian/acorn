@@ -1989,6 +1989,7 @@
       "projectNameHint": "Use a single folder name.",
       "ignoreSafeName": "Ignore safe-name check",
       "initCommit": "Create an initial commit (needed for worktrees and GitHub)",
+      "initCommitUnavailable": "An initial commit is unavailable because Git user.name and user.email are not configured. The repository will be created without a commit.",
       "locationLabel": "Location",
       "locationPlaceholder": "Choose a parent folder",
       "locationAriaLabel": "Project location",

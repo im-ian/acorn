@@ -1989,6 +1989,7 @@
       "projectNameHint": "단일 폴더 이름을 사용하세요.",
       "ignoreSafeName": "안전한 이름 검사 무시",
       "initCommit": "초기 커밋 생성 (worktree·GitHub 사용에 필요)",
+      "initCommitUnavailable": "Git user.name과 user.email이 설정되지 않아 초기 커밋을 만들 수 없습니다. 저장소는 커밋 없이 생성됩니다.",
       "locationLabel": "위치",
       "locationPlaceholder": "상위 폴더 선택",
       "locationAriaLabel": "프로젝트 위치",

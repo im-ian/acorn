@@ -316,6 +316,9 @@ export const api = {
   getLastProjectParentFolder(): Promise<string | null> {
     return invoke<string | null>("get_last_project_parent_folder");
   },
+  hasGitIdentity(): Promise<boolean> {
+    return invoke<boolean>("has_git_identity");
+  },
   createNewProject(
     parentPath: string,
     name: string,
