@@ -186,15 +186,23 @@ pub enum SessionGoalStagePolicy {
     Disabled,
 }
 
+impl Default for SessionGoalStagePolicy {
+    fn default() -> Self {
+        Self::Disabled
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionGoalPolicies {
-    pub interpretation: SessionGoalStagePolicy,
     pub plan: SessionGoalStagePolicy,
     pub implementation: SessionGoalStagePolicy,
     pub validation: SessionGoalStagePolicy,
     pub auto_fix: SessionGoalStagePolicy,
     pub self_review: SessionGoalStagePolicy,
-    pub draft_pr: SessionGoalStagePolicy,
+    #[serde(alias = "draft_pr")]
+    pub open_pr: SessionGoalStagePolicy,
+    #[serde(default)]
+    pub merge: SessionGoalStagePolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -215,8 +223,6 @@ pub struct SessionGoalModelSelection {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionGoalStageModels {
     #[serde(default)]
-    pub interpretation: SessionGoalModelSelection,
-    #[serde(default)]
     pub plan: SessionGoalModelSelection,
     #[serde(default)]
     pub implementation: SessionGoalModelSelection,
@@ -226,8 +232,10 @@ pub struct SessionGoalStageModels {
     pub auto_fix: SessionGoalModelSelection,
     #[serde(default)]
     pub self_review: SessionGoalModelSelection,
+    #[serde(default, alias = "draft_pr")]
+    pub open_pr: SessionGoalModelSelection,
     #[serde(default)]
-    pub draft_pr: SessionGoalModelSelection,
+    pub merge: SessionGoalModelSelection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -253,13 +261,15 @@ impl Default for SessionGoalModelConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionGoalStage {
-    Interpretation,
+    #[serde(alias = "interpretation")]
     Plan,
     Implementation,
     Validation,
     AutoFix,
     SelfReview,
-    DraftPr,
+    #[serde(alias = "draft_pr")]
+    OpenPr,
+    Merge,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -296,7 +306,7 @@ pub struct SessionGoalProgress {
 impl SessionGoalProgress {
     pub fn initial() -> Self {
         Self {
-            current_stage: Some(SessionGoalStage::Interpretation),
+            current_stage: Some(SessionGoalStage::Plan),
             state: SessionGoalRunState::Pending,
             revision_review: false,
             approval_pending: false,
@@ -1322,13 +1332,13 @@ mod tests {
                 id: "builtin:balanced".to_string(),
                 name: "Balanced".to_string(),
                 policies: SessionGoalPolicies {
-                    interpretation: SessionGoalStagePolicy::Auto,
                     plan: SessionGoalStagePolicy::Approval,
                     implementation: SessionGoalStagePolicy::Auto,
                     validation: SessionGoalStagePolicy::Auto,
                     auto_fix: SessionGoalStagePolicy::Auto,
                     self_review: SessionGoalStagePolicy::Auto,
-                    draft_pr: SessionGoalStagePolicy::Disabled,
+                    open_pr: SessionGoalStagePolicy::Disabled,
+                    merge: SessionGoalStagePolicy::Disabled,
                 },
             },
             model_config: SessionGoalModelConfig::default(),
@@ -1883,6 +1893,72 @@ mod tests {
         let restored: Session = serde_json::from_value(json).expect("goal session deserializes");
 
         assert_eq!(restored.goal, session.goal);
+    }
+
+    #[test]
+    fn previous_goal_pipeline_maps_to_plan_and_never_enables_merge() {
+        let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+        session.mode = SessionMode::Chat;
+        let mut goal = fake_goal(3);
+        goal.model_config.stages.open_pr.model = Some("legacy-pr-model".to_string());
+        session.goal = Some(goal);
+        let mut json = serde_json::to_value(&session).expect("goal session serializes");
+        let goal = json
+            .get_mut("goal")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("goal is an object");
+
+        let policies = goal
+            .get_mut("preset")
+            .and_then(|preset| preset.get_mut("policies"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("policies are an object");
+        let open_pr = policies.remove("open_pr").expect("open PR policy");
+        policies.insert("draft_pr".to_string(), open_pr);
+        policies.insert("interpretation".to_string(), serde_json::json!("auto"));
+        policies.remove("merge");
+
+        let stages = goal
+            .get_mut("model_config")
+            .and_then(|config| config.get_mut("stages"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("stage models are an object");
+        let open_pr = stages.remove("open_pr").expect("open PR model");
+        stages.insert("draft_pr".to_string(), open_pr);
+        stages.insert("interpretation".to_string(), serde_json::json!({}));
+        stages.remove("merge");
+
+        goal.get_mut("progress")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("progress is an object")
+            .insert(
+                "current_stage".to_string(),
+                serde_json::json!("interpretation"),
+            );
+
+        let restored: Session = serde_json::from_value(json).expect("old goal deserializes");
+        let restored_goal = restored.goal.expect("goal remains present");
+
+        assert_eq!(
+            restored_goal.progress.current_stage,
+            Some(SessionGoalStage::Plan)
+        );
+        assert_eq!(
+            restored_goal.preset.policies.open_pr,
+            SessionGoalStagePolicy::Disabled
+        );
+        assert_eq!(
+            restored_goal.preset.policies.merge,
+            SessionGoalStagePolicy::Disabled
+        );
+        assert_eq!(
+            restored_goal.model_config.stages.open_pr.model.as_deref(),
+            Some("legacy-pr-model")
+        );
+        assert_eq!(
+            restored_goal.model_config.stages.merge,
+            SessionGoalModelSelection::default()
+        );
     }
 
     #[test]

@@ -286,7 +286,8 @@ describe("AutonomousGoalDialog", () => {
     expect(singleModel?.checked).toBe(false);
     expect(modelPickers()).toHaveLength(7);
     expect(document.body.textContent).toContain("Automatic fixes");
-    expect(document.body.textContent).toContain("Draft PR");
+    expect(document.body.textContent).toContain("Open PR");
+    expect(document.body.textContent).toContain("Merge");
   });
 
   it("persists editable Agent & Model presets and resets routes when the agent changes", async () => {

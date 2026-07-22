@@ -52,13 +52,13 @@ export type SessionGoalProvider = Extract<
 export type SessionGoalStagePolicy = "auto" | "approval" | "disabled";
 
 export interface SessionGoalPolicies {
-  interpretation: SessionGoalStagePolicy;
   plan: SessionGoalStagePolicy;
   implementation: SessionGoalStagePolicy;
   validation: SessionGoalStagePolicy;
   auto_fix: SessionGoalStagePolicy;
   self_review: SessionGoalStagePolicy;
-  draft_pr: SessionGoalStagePolicy;
+  open_pr: SessionGoalStagePolicy;
+  merge: SessionGoalStagePolicy;
 }
 
 export interface SessionGoalPreset {
@@ -103,13 +103,13 @@ export interface GoalAgentCapabilities {
 }
 
 export interface SessionGoalStageModels {
-  interpretation: SessionGoalModelSelection;
   plan: SessionGoalModelSelection;
   implementation: SessionGoalModelSelection;
   validation: SessionGoalModelSelection;
   auto_fix: SessionGoalModelSelection;
   self_review: SessionGoalModelSelection;
-  draft_pr: SessionGoalModelSelection;
+  open_pr: SessionGoalModelSelection;
+  merge: SessionGoalModelSelection;
 }
 
 export interface SessionGoalModelConfig {
@@ -119,13 +119,13 @@ export interface SessionGoalModelConfig {
 }
 
 export type SessionGoalStage =
-  | "interpretation"
   | "plan"
   | "implementation"
   | "validation"
   | "auto_fix"
   | "self_review"
-  | "draft_pr";
+  | "open_pr"
+  | "merge";
 
 export type SessionGoalRunState =
   | "legacy"

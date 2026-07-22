@@ -1840,20 +1840,20 @@
         "copySuffix": "copy"
       },
       "stages": {
-        "interpretation": "Interpretation",
         "plan": "Plan",
         "implementation": "Implementation",
         "validation": "Validation",
         "autoFix": "Automatic fixes",
         "selfReview": "Self-review",
-        "draftPr": "Draft PR"
+        "openPr": "Open PR",
+        "merge": "Merge"
       },
       "policies": {
         "auto": "Automatic",
         "approval": "Ask first",
         "disabled": "Disabled"
       },
-      "prototypeNotice": "This Goal starts immediately in a new isolated worktree. Each stage follows its selected policy and model. Draft PR can push and open a draft when enabled; merge, deploy, publish, and release remain blocked.",
+      "prototypeNotice": "This Goal starts immediately in a new isolated worktree. Each stage follows its selected policy and model. Open PR can push and create a ready-for-review pull request; Merge waits for required CI and follows its own approval policy. Deploy, publish, and release remain blocked.",
       "revisionNotice": "Opening this editor pauses active work. Saving makes this revision the current authority, then Acorn replans and resumes with the selected policies.",
       "footerHint": "Starting creates the session and submits this goal immediately.",
       "editFooterHint": "The current preset snapshot remains unchanged unless you select another preset.",
