@@ -977,7 +977,7 @@ fn write_claude_settings(dir: &Path) -> io::Result<()> {
     let body = format!(
         r#"{{
   "hooks": {{
-    "SessionStart": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
+    "SessionStart": [{{"matcher":"startup|resume|clear","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "UserPromptSubmit": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Stop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Notification": [{{"matcher":"permission_prompt|elicitation_dialog|agent_needs_input","hooks":[{{"type":"command","command":"{cmd}"}}]}}],
@@ -3097,6 +3097,7 @@ printf '{}\n' >> "$CODEX_TUI_SESSION_LOG_PATH"
         let settings = fs::read_to_string(dir.join("acorn-claude-settings.json")).unwrap();
         let notify_path = dir.join("acorn-claude-notify").display().to_string();
         assert!(settings.contains("\"SessionStart\""));
+        assert!(settings.contains("\"matcher\":\"startup|resume|clear\""));
         assert!(settings.contains("\"UserPromptSubmit\""));
         assert!(!settings.contains("\"PostToolUse\""));
         assert!(!settings.contains("\"PostToolUseFailure\""));
