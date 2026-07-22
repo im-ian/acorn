@@ -123,6 +123,9 @@ test.describe("chat message actions", () => {
     await expect(
       page.getByRole("button", { name: "Collapse agent activity" }),
     ).toBeVisible();
+    await expect(page.locator("[data-chat-activity-summary]")).toHaveText(
+      "Working · Search source files",
+    );
     await expect(
       page.getByText("Locate the relevant files first."),
     ).toBeVisible();
