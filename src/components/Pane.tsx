@@ -36,6 +36,7 @@ import { createPortal } from "react-dom";
 import { selectSessionsById, useAppStore } from "../store";
 import { FileViewer } from "./FileViewer";
 import { mediaKindFromPath } from "../lib/mediaFiles";
+import { writeClipboardText } from "../lib/clipboardText";
 import { ChatPane } from "./ChatPane";
 import { WorkSummaryView } from "./WorkSummaryView";
 import { api } from "../lib/api";
@@ -1932,7 +1933,7 @@ function buildPaneMenuItems({
 
 async function copyToClipboard(text: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text);
+    await writeClipboardText(text);
   } catch (err) {
     console.warn("[Pane] clipboard write failed", err);
   }

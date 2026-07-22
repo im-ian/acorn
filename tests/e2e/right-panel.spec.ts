@@ -832,6 +832,79 @@ test.describe("right panel: tab switching", () => {
     ).toHaveClass(/acorn-tab-active-bg/);
   });
 
+  test("copies a pull request number through the native clipboard", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: () =>
+            Promise.reject(
+              new DOMException(
+                "The request is not allowed by the user agent or the platform in the current context.",
+                "NotAllowedError",
+              ),
+            ),
+        },
+      });
+    });
+    await seedActiveSession(tauri);
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 91,
+          title: "Copy this pull request number",
+          state: "OPEN",
+          author: "im-ian",
+          head_branch: "fix/native-clipboard",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/91",
+          updated_at: "2026-07-22T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.handle("plugin:clipboard-manager|write_text", (args) => {
+      const w = window as unknown as {
+        __nativeClipboardWrites?: unknown[];
+      };
+      w.__nativeClipboardWrites = w.__nativeClipboardWrites ?? [];
+      w.__nativeClipboardWrites.push(args);
+      return undefined;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "PRs" }).click();
+
+    const prRow = page
+      .getByText("Copy this pull request number")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await prRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Copy PR number" }).click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              (window as unknown as {
+                __nativeClipboardWrites?: Array<{ text?: string }>;
+              }).__nativeClipboardWrites ?? []
+            ).at(-1)?.text,
+        ),
+      )
+      .toBe("#91");
+    await expect(page.getByText(/NotAllowedError/)).toHaveCount(0);
+    await expect(prRow).toBeVisible();
+  });
+
   test("posting from the pull request detail modal appends a conversation comment", async ({
     page,
     tauri,
@@ -2358,18 +2431,11 @@ test.describe("right panel: groups", () => {
     page,
     tauri,
   }) => {
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: {
-          writeText: (text: string) => {
-            const w = window as unknown as { __clipboardWrites?: string[] };
-            w.__clipboardWrites = w.__clipboardWrites ?? [];
-            w.__clipboardWrites.push(text);
-            return Promise.resolve();
-          },
-        },
-      });
+    await tauri.handle("plugin:clipboard-manager|write_text", (args) => {
+      const w = window as unknown as { __clipboardWrites?: string[] };
+      w.__clipboardWrites = w.__clipboardWrites ?? [];
+      w.__clipboardWrites.push((args as { text?: string })?.text ?? "");
+      return undefined;
     });
     await seedActiveSession(tauri);
     await tauri.handle("list_agent_history", () => [

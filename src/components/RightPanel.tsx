@@ -47,6 +47,7 @@ import { Panel, PanelGroup } from "react-resizable-panels";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, FS_CHANGED_EVENT, type FsChangePayload } from "../lib/api";
+import { writeClipboardText } from "../lib/clipboardText";
 import { cn } from "../lib/cn";
 import { openFileInEditor } from "../lib/editor";
 import {
@@ -1445,7 +1446,7 @@ function AgentHistoryTab({
 
   async function copy(text: string) {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboardText(text);
     } catch (e) {
       setError(String(e));
     }
@@ -2064,7 +2065,7 @@ function CommitsTab({
         <Tooltip label={rt(t, "rightPanel.tooltips.copySha")} side="bottom">
           <button
             type="button"
-            onClick={() => void navigator.clipboard.writeText(c.sha)}
+            onClick={() => void writeClipboardText(c.sha)}
             className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
           >
             {c.short_sha}
@@ -2147,7 +2148,7 @@ function CommitsTab({
 
   async function copyToClipboard(text: string) {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboardText(text);
     } catch (e) {
       setError(String(e));
     }
@@ -2531,7 +2532,7 @@ function StagedTab({
 
   async function copyText(text: string) {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboardText(text);
     } catch (e) {
       setListError(String(e));
     }
@@ -2812,7 +2813,7 @@ function usePrRowActions(
 
   async function copyText(text: string) {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboardText(text);
     } catch (e) {
       setError(String(e));
     }
@@ -3443,7 +3444,7 @@ function useIssueRowActions(onOpenDetail: (number: number) => void) {
 
   async function copyText(text: string) {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboardText(text);
     } catch (e) {
       setError(String(e));
     }
