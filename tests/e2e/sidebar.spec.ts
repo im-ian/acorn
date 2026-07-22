@@ -2760,12 +2760,13 @@ test.describe("sidebar: project lifecycle", () => {
     const menuLabels = await page.getByRole("menuitem").evaluateAll((items) =>
       items.map((item) => item.textContent?.replace(/\s+/g, " ").trim()),
     );
-    expect(menuLabels.slice(0, 3)).toEqual([
+    expect(menuLabels.slice(0, 4)).toEqual([
       "New workspace",
       "New worktree workspace",
+      "New goal session",
       "New chat session",
     ]);
-    expect(menuLabels[3]).toMatch(
+    expect(menuLabels[4]).toMatch(
       /^New control session(?:⌥⇧⌘T|Ctrl\+Alt\+Shift\+T)$/,
     );
     await expect(
@@ -2774,6 +2775,9 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(
       page.getByRole("menuitem", { name: /New worktree session/i }),
     ).toHaveCount(0);
+    await expect(
+      page.getByRole("menuitem", { name: "New goal session" }),
+    ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "New chat session" }),
     ).toBeVisible();
@@ -3747,13 +3751,71 @@ test.describe("sidebar: project lifecycle", () => {
       () =>
         (window as unknown as { __newProjectCalls?: unknown[] })
           .__newProjectCalls,
-    )) as Array<{ parentPath: string; name: string }>;
+    )) as Array<{ parentPath: string; name: string; initCommit: boolean }>;
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({
       parentPath: "/tmp/parent",
       name: "fresh-app",
       ignoreSafeName: false,
+      initCommit: true,
     });
+  });
+
+  test("New project hides the initial commit option when Git identity is missing", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("has_git_identity", () => false);
+    await tauri.handle("select_project_parent_folder", () => "/tmp/parent");
+    await tauri.handle("create_new_project", (args) => {
+      const w = window as unknown as { __newProjectCalls?: unknown[] };
+      w.__newProjectCalls = w.__newProjectCalls ?? [];
+      w.__newProjectCalls.push(args);
+      const a = args as { parentPath: string; name: string };
+      return {
+        repo_path: `${a.parentPath}/${a.name}`,
+        name: a.name,
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "New project" }).click();
+
+    await expect(
+      page.getByLabel(
+        "Create an initial commit (needed for worktrees and GitHub)",
+      ),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText(
+        "An initial commit is unavailable because Git user.name and user.email are not configured. The repository will be created without a commit.",
+      ),
+    ).toBeVisible();
+
+    await page.getByLabel("Project name").fill("no-identity-app");
+    await page.getByRole("button", { name: "Choose" }).click();
+    await page.getByRole("button", { name: "Create project" }).click();
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __newProjectCalls?: unknown[] })
+          .__newProjectCalls,
+    )) as Array<{
+      parentPath: string;
+      name: string;
+      ignoreSafeName: boolean;
+      initCommit: boolean;
+    }>;
+    expect(calls).toEqual([
+      {
+        parentPath: "/tmp/parent",
+        name: "no-identity-app",
+        ignoreSafeName: false,
+        initCommit: false,
+      },
+    ]);
   });
 
   test("New project remembers the most recently selected parent folder", async ({
@@ -3867,12 +3929,18 @@ test.describe("sidebar: project lifecycle", () => {
       () =>
         (window as unknown as { __newProjectCalls?: unknown[] })
           .__newProjectCalls,
-    )) as Array<{ parentPath: string; name: string; ignoreSafeName: boolean }>;
+    )) as Array<{
+      parentPath: string;
+      name: string;
+      ignoreSafeName: boolean;
+      initCommit: boolean;
+    }>;
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({
       parentPath: "/tmp/parent",
       name: "a".repeat(256),
       ignoreSafeName: true,
+      initCommit: true,
     });
   });
 

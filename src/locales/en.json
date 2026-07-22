@@ -21,6 +21,12 @@
       "worktreeAdoptFailed": "Failed to adopt worktree:",
       "worktreeMissing": "Worktree folder no longer exists on disk."
     },
+    "autonomousGoal": {
+      "started": "Goal session started in {name}.",
+      "updated": "Goal updated in {name}. Replanning has started.",
+      "startFailed": "Goal session failed:",
+      "pauseFailed": "Goal session could not be paused:"
+    },
     "project": {
       "addFailed": "Failed to add project:",
       "createFailed": "Failed to create project:",
@@ -1205,6 +1211,7 @@
       "newIsolatedSession": "New isolated session",
       "newIsolatedSessionWorktree": "New worktree session",
       "newChatSession": "New chat session",
+      "newAutonomousGoalSession": "New goal session",
       "newControlSession": "New control session",
       "newProjectFolder": "New workspace",
       "newProjectFolderWithWorktree": "New worktree workspace",
@@ -1260,9 +1267,11 @@
       "newSessionMenuInProjectFolder": "Create session in this workspace",
       "newSessionInProject": "New session in this project",
       "newSessionInProjectFolder": "New session in this workspace",
+      "newAutonomousGoalSession": "New goal session",
       "newIsolatedSessionInProject": "New worktree session in this project",
       "newChatSessionInProject": "New chat session in this project",
       "newControlSessionInProject": "New control session in this project",
+      "goalSession": "goal session",
       "dragToReorderSession": "Drag to reorder session",
       "localTerminalSessions": "Local terminal sessions",
       "worktree": "worktree",
@@ -1317,6 +1326,14 @@
       "isolatedWorktree": "Isolated worktree"
     }
   },
+  "chat": {
+    "goalSession": {
+      "label": "Project goal",
+      "revision": "Revision",
+      "edit": "Edit goal",
+      "pauseAndEdit": "Pause & edit"
+    }
+  },
   "pane": {
     "empty": {
       "dropTabOrDoubleClick": "Drop a tab here or double-click to start a session",
@@ -1326,6 +1343,7 @@
       "worktree": "worktree",
       "controlSession": "control session",
       "chatSession": "chat session",
+      "goalSession": "goal session",
       "workSummary": "work summary",
       "generatingSessionTitle": "Generating session title",
       "notificationsSilenced": "Notifications silenced",
@@ -1373,6 +1391,7 @@
       "closeOthers": "Close Others",
       "closeAll": "Close All",
       "newSessionInThisPane": "New Session in This Pane",
+      "newGoalSessionInThisPane": "New Goal Session in This Pane",
       "closePane": "Close Pane"
     }
   },
@@ -1719,6 +1738,130 @@
       "dontShowAgain": "Don't show this again",
       "gotIt": "Got it"
     },
+    "autonomousGoal": {
+      "title": "New goal session",
+      "subtitle": "Add a durable goal session to this project and let the selected agent work in an isolated worktree.",
+      "editTitle": "Edit project goal",
+      "editSubtitle": "Pause active work, save the revised goal, then replan and continue with the current policies.",
+      "projectScopeRequired": "Goal sessions must be created inside a project.",
+      "selectRepository": "Select a Git repository for the autonomous goal",
+      "sections": {
+        "goalTitle": "Define the outcome",
+        "goalDescription": "Give the agent a durable brief. Add only the details that materially change what done means.",
+        "executionTitle": "Choose how Acorn runs it",
+        "executionDescription": "Set the approval boundaries, agent, model, and effort routing saved with this session."
+      },
+      "goal": {
+        "label": "Goal",
+        "hint": "Required. Write the outcome you want, not an issue to select.",
+        "placeholder": "For example: Add keyboard navigation to the command palette and verify it with tests."
+      },
+      "completionCriteria": {
+        "label": "Completion criteria",
+        "placeholder": "What must be true when the work is done?"
+      },
+      "constraints": {
+        "label": "Constraints",
+        "placeholder": "APIs to preserve, files to avoid, compatibility requirements..."
+      },
+      "tests": {
+        "label": "Tests",
+        "placeholder": "Commands or behaviors that should be verified"
+      },
+      "optionalFieldHint": "Optional — the agent infers omitted details.",
+      "provider": {
+        "label": "Agent",
+        "hint": "The provider stays fixed for this session; there is no automatic fallback.",
+        "capabilityLoading": "Checking CLI capabilities...",
+        "available": "CLI available",
+        "unavailable": "CLI unavailable"
+      },
+      "tabs": {
+        "label": "Goal execution settings",
+        "policy": "Policy",
+        "model": "Agent & Model"
+      },
+      "model": {
+        "singleModel": "Use one model for every stage",
+        "singleModelHint": "Enabled by default. Turn it off to route each of the seven Goal stages independently.",
+        "modelLabel": "Model",
+        "effortLabel": "Effort",
+        "agentDefault": "Default",
+        "customModel": "Custom model...",
+        "customModelPlaceholder": "Model ID or alias",
+        "chooseDiscoveredModel": "Choose from discovered models",
+        "searchModels": "Search models",
+        "loadingCapabilities": "Loading models and effort levels from the installed agent CLIs...",
+        "agentUnavailable": "This agent CLI was not found. You can still save a custom model, but the Goal cannot run until the CLI is available.",
+        "codexCapabilities": "Loaded {count} models and their supported effort levels from Codex app-server.",
+        "claudeCapabilities": "Loaded the aliases and effort levels exposed by Claude CLI. Use Custom model for a full model ID.",
+        "capabilityFallback": "The CLI model catalog could not be loaded. Default and custom model values remain available.",
+        "allStages": "All stages",
+        "snapshotHint": "The selected agent and model preset is saved as a snapshot with this Goal session. Default lets the selected agent CLI choose its current default."
+      },
+      "modelPreset": {
+        "label": "Agent & model preset",
+        "hint": "Built-ins are read-only. Add or duplicate a slot to customize the agent, model, and effort routing.",
+        "currentSession": "Current session settings",
+        "builtInReadonly": "This built-in preset cannot be changed. Duplicate it to make an editable copy.",
+        "currentSessionReadonly": "Current session settings are not a reusable preset. Choose or create a preset to replace them."
+      },
+      "modelPresets": {
+        "codexDefault": "Codex · Agent default",
+        "claudeDefault": "Claude · Agent default",
+        "builtIn": "Built-in · read-only",
+        "custom": "Custom preset",
+        "customDefault": "Model preset",
+        "customEmpty": "No custom presets yet",
+        "customEmptyHint": "Create or duplicate a preset to add an editable slot."
+      },
+      "preset": {
+        "label": "Policy preset",
+        "hint": "Built-ins are read-only. Add or duplicate a slot to customize it.",
+        "add": "New preset",
+        "duplicate": "Duplicate",
+        "delete": "Delete",
+        "name": "Preset name",
+        "currentSession": "Current session policy",
+        "builtInReadonly": "This built-in preset cannot be changed. Duplicate it to make an editable copy.",
+        "currentSessionReadonly": "The current session policy is already snapshotted and is not a reusable preset. Choose or create a preset to replace it.",
+        "snapshotHint": "The session receives a snapshot. Renaming, editing, or deleting this preset later will not change a running session."
+      },
+      "presets": {
+        "review": "Review-centered",
+        "balanced": "Balanced",
+        "fullAutonomy": "Full autonomy",
+        "builtIn": "Built-in · read-only",
+        "builtInSeparator": "Built-ins above · read-only",
+        "custom": "Custom preset",
+        "customDefault": "Custom preset",
+        "customEmpty": "No custom presets yet",
+        "customEmptyHint": "Create or duplicate a preset to add an editable slot.",
+        "copySuffix": "copy"
+      },
+      "stages": {
+        "plan": "Plan",
+        "implementation": "Implementation",
+        "validation": "Validation",
+        "autoFix": "Automatic fixes",
+        "selfReview": "Self-review",
+        "openPr": "Open PR",
+        "merge": "Merge"
+      },
+      "policies": {
+        "auto": "Automatic",
+        "approval": "Ask first",
+        "disabled": "Disabled"
+      },
+      "prototypeNotice": "This Goal starts immediately in a new isolated worktree. Each stage follows its selected policy and model. Open PR can push and create a ready-for-review pull request; Merge waits for required CI and follows its own approval policy. Deploy, publish, and release remain blocked.",
+      "revisionNotice": "Opening this editor pauses active work. Saving makes this revision the current authority, then Acorn replans and resumes with the selected policies.",
+      "footerHint": "Starting creates the session and submits this goal immediately.",
+      "editFooterHint": "The current preset snapshot remains unchanged unless you select another preset.",
+      "start": "Start goal",
+      "starting": "Creating worktree...",
+      "saveAndReplan": "Save & continue",
+      "replanning": "Saving revision..."
+    },
     "removeSession": {
       "title": "Remove session",
       "confirmPrefix": "Remove session",
@@ -1846,6 +1989,7 @@
       "projectNameHint": "Use a single folder name.",
       "ignoreSafeName": "Ignore safe-name check",
       "initCommit": "Create an initial commit (needed for worktrees and GitHub)",
+      "initCommitUnavailable": "An initial commit is unavailable because Git user.name and user.email are not configured. The repository will be created without a commit.",
       "locationLabel": "Location",
       "locationPlaceholder": "Choose a parent folder",
       "locationAriaLabel": "Project location",
@@ -2109,6 +2253,7 @@
       "newIsolatedSession": "New isolated session",
       "newControlSession": "New control session",
       "newChatSession": "New chat session",
+      "newAutonomousGoalSession": "New goal session",
       "newProject": "New project",
       "addExistingProject": "Add existing project",
       "refreshSessions": "Refresh sessions",

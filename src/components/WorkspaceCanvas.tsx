@@ -11,6 +11,7 @@ import {
   Plus,
   RotateCcw,
   Scan,
+  Sparkles,
   Terminal as TerminalIcon,
   Undo2,
   X,
@@ -31,6 +32,7 @@ import {
   AgentProviderIcon,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
+import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
 import { formatHotkey } from "../lib/hotkeys";
 import { basename } from "../lib/pathUtils";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -161,6 +163,8 @@ function canvasAlignmentGuideStyle(
 
 function canvasSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
   switch (id) {
+    case "goal":
+      return <Sparkles size={12} />;
     case "terminal":
       return <CirclePlus size={12} />;
     case "isolated":
@@ -173,6 +177,10 @@ function canvasSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
 }
 
 function dispatchCanvasSessionCreate(action: ProjectSessionCreateAction) {
+  if (action.flow === "goal") {
+    requestNewAutonomousGoalSession();
+    return;
+  }
   const eventName =
     action.id === "terminal"
       ? "acorn:new-session"
@@ -977,12 +985,21 @@ export function WorkspaceCanvas({
             <Button
               size="xs"
               variant="accentSoft"
-              onClick={() =>
-                window.dispatchEvent(new CustomEvent("acorn:new-session"))
-              }
+              aria-haspopup="menu"
+              aria-expanded={createMenu !== null}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setContextMenu(null);
+                setCreateMenu((current) =>
+                  current === null
+                    ? { x: rect.left, y: rect.bottom + 4 }
+                    : null,
+                );
+              }}
             >
               <CirclePlus size={12} />
-              {canvasText(t, "workspace.canvas.newSession")}
+              {canvasText(t, "workspace.canvas.contextCreateSession")}
+              <ChevronDown size={12} aria-hidden="true" />
             </Button>
           </div>
         </div>

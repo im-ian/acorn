@@ -43,7 +43,10 @@ export function NewProjectDialog({
   const [parentPath, setParentPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [ignoreSafeName, setIgnoreSafeName] = useState(false);
-  const [initCommit, setInitCommit] = useState(true);
+  const [initCommit, setInitCommit] = useState(false);
+  const [gitIdentityConfigured, setGitIdentityConfigured] = useState<
+    boolean | null
+  >(null);
   const [pending, setPending] = useState(false);
   const locationPickedRef = useRef(false);
 
@@ -55,7 +58,8 @@ export function NewProjectDialog({
     setParentPath("");
     setError(null);
     setIgnoreSafeName(false);
-    setInitCommit(true);
+    setInitCommit(false);
+    setGitIdentityConfigured(null);
     setPending(false);
     void api
       .getLastProjectParentFolder()
@@ -67,6 +71,20 @@ export function NewProjectDialog({
       .catch(() => {
         if (!cancelled && !locationPickedRef.current) {
           setParentPath("");
+        }
+      });
+    void api
+      .hasGitIdentity()
+      .then((configured) => {
+        if (!cancelled) {
+          setGitIdentityConfigured(configured);
+          setInitCommit(configured);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGitIdentityConfigured(false);
+          setInitCommit(false);
         }
       });
     return () => {
@@ -96,6 +114,7 @@ export function NewProjectDialog({
         : dt(t, `dialogs.newProject.validation.${validation.reason}`);
   const canCreate =
     !pending &&
+    gitIdentityConfigured !== null &&
     parentPath !== "" &&
     (validation.kind === "ok" ||
       (validation.kind === "safe" && ignoreSafeName));
@@ -119,7 +138,12 @@ export function NewProjectDialog({
     setPending(true);
     setError(null);
     try {
-      await onCreate(parentPath, trimmedName, ignoreSafeName, initCommit);
+      await onCreate(
+        parentPath,
+        trimmedName,
+        ignoreSafeName,
+        initCommit && gitIdentityConfigured === true,
+      );
       onClose();
     } catch (err) {
       setError(errorMessage(err));
@@ -213,15 +237,21 @@ export function NewProjectDialog({
               </Button>
             </div>
           </Field>
-          <label className="flex items-center gap-2 text-xs text-fg-muted">
-            <input
-              type="checkbox"
-              checked={initCommit}
-              onChange={(e) => setInitCommit(e.target.checked)}
-              className="acorn-check"
-            />
-            <span>{dt(t, "dialogs.newProject.initCommit")}</span>
-          </label>
+          {gitIdentityConfigured === true ? (
+            <label className="flex items-center gap-2 text-xs text-fg-muted">
+              <input
+                type="checkbox"
+                checked={initCommit}
+                onChange={(e) => setInitCommit(e.target.checked)}
+                className="acorn-check"
+              />
+              <span>{dt(t, "dialogs.newProject.initCommit")}</span>
+            </label>
+          ) : gitIdentityConfigured === false ? (
+            <p className="text-xs text-fg-muted">
+              {dt(t, "dialogs.newProject.initCommitUnavailable")}
+            </p>
+          ) : null}
           {finalPath ? (
             <div className="space-y-1 text-xs">
               <div className="text-fg-muted">

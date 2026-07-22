@@ -73,6 +73,10 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 import { Pane } from "./Pane";
 import { useAppStore } from "../store";
 import {
+  NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
+  type NewAutonomousGoalSessionEventDetail,
+} from "../lib/autonomousGoal";
+import {
   clearFileDropTargetsForTest,
   dropFilePayloadsAtPoint,
   resolveFileDropTargetAtPoint,
@@ -393,6 +397,53 @@ describe("Pane empty state", () => {
       "regular",
       null,
     );
+  });
+
+  it("opens a project-scoped Goal dialog from the pane context menu", () => {
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const emptyPane = container.querySelector<HTMLElement>('[role="button"]');
+    expect(emptyPane).not.toBeNull();
+    act(() => {
+      emptyPane?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 40,
+          clientY: 50,
+        }),
+      );
+    });
+
+    const goalItem = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "New Goal Session in This Pane");
+    expect(goalItem).not.toBeUndefined();
+
+    let detail: NewAutonomousGoalSessionEventDetail | undefined;
+    window.addEventListener(
+      NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
+      (event) => {
+        detail = (
+          event as CustomEvent<NewAutonomousGoalSessionEventDetail>
+        ).detail;
+      },
+      { once: true },
+    );
+    act(() => goalItem?.click());
+
+    expect(detail).toEqual({
+      scope: {
+        placement: {
+          repoPath: REPO,
+          projectScoped: true,
+          projectFolderId: REPO,
+        },
+        launch: { kind: "workspaceCwd", cwdPath: REPO },
+      },
+    });
   });
 
   it("starts empty-pane project sessions at the project root from an active worktree workspace", async () => {

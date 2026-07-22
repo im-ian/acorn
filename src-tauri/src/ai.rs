@@ -22,6 +22,10 @@ const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct AiExecutionRequest {
     pub provider: AiProvider,
     #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
     pub ollama_model: Option<String>,
     #[serde(default)]
     pub llm_model: Option<String>,
@@ -59,21 +63,29 @@ pub enum AiProcessStreamEvent<'a> {
 impl AiExecutionRequest {
     pub fn resolve(&self) -> AppResult<ResolvedAiCommand> {
         match self.provider {
-            AiProvider::Claude => Ok(ResolvedAiCommand {
-                command: "claude",
-                args: vec!["-p".into(), "--output-format".into(), "text".into()],
-                prompt_transport: PromptTransport::Stdin,
-            }),
+            AiProvider::Claude => {
+                let mut args = vec!["-p".into(), "--output-format".into(), "text".into()];
+                append_native_model_and_effort_args(self, &mut args)?;
+                Ok(ResolvedAiCommand {
+                    command: "claude",
+                    args,
+                    prompt_transport: PromptTransport::Stdin,
+                })
+            }
             AiProvider::Antigravity => Ok(ResolvedAiCommand {
                 command: "agy",
                 args: vec!["-p".into()],
                 prompt_transport: PromptTransport::Argument,
             }),
-            AiProvider::Codex => Ok(ResolvedAiCommand {
-                command: "codex",
-                args: vec!["exec".into(), "--skip-git-repo-check".into()],
-                prompt_transport: PromptTransport::Stdin,
-            }),
+            AiProvider::Codex => {
+                let mut args = vec!["exec".into(), "--skip-git-repo-check".into()];
+                append_native_model_and_effort_args(self, &mut args)?;
+                Ok(ResolvedAiCommand {
+                    command: "codex",
+                    args,
+                    prompt_transport: PromptTransport::Stdin,
+                })
+            }
             AiProvider::Ollama => {
                 let model = normalize_model_arg(self.ollama_model.as_deref(), "llama3")?;
                 Ok(ResolvedAiCommand {
@@ -102,11 +114,44 @@ impl AiExecutionRequest {
     }
 }
 
+pub(crate) fn append_native_model_and_effort_args(
+    request: &AiExecutionRequest,
+    args: &mut Vec<String>,
+) -> AppResult<()> {
+    if let Some(model) = normalize_optional_model_arg(request.model.as_deref())? {
+        match request.provider {
+            AiProvider::Claude => {
+                args.push("--model".to_string());
+                args.push(model);
+            }
+            AiProvider::Codex => {
+                args.push("-m".to_string());
+                args.push(model);
+            }
+            _ => {}
+        }
+    }
+    if let Some(effort) = normalize_effort_arg(request.effort.as_deref())? {
+        match request.provider {
+            AiProvider::Claude => {
+                args.push("--effort".to_string());
+                args.push(effort);
+            }
+            AiProvider::Codex => {
+                args.push("-c".to_string());
+                args.push(format!("model_reasoning_effort=\"{effort}\""));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn normalize_model_arg(raw: Option<&str>, default: &str) -> AppResult<String> {
     normalize_optional_model_arg(raw).map(|model| model.unwrap_or_else(|| default.to_string()))
 }
 
-fn normalize_optional_model_arg(raw: Option<&str>) -> AppResult<Option<String>> {
+pub(crate) fn normalize_optional_model_arg(raw: Option<&str>) -> AppResult<Option<String>> {
     let Some(raw) = raw else {
         return Ok(None);
     };
@@ -126,6 +171,27 @@ fn normalize_optional_model_arg(raw: Option<&str>) -> AppResult<Option<String>> 
         ));
     }
     Ok(Some(model.to_string()))
+}
+
+pub(crate) fn normalize_effort_arg(raw: Option<&str>) -> AppResult<Option<String>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let effort = raw.trim().to_ascii_lowercase();
+    if effort.is_empty() {
+        return Ok(None);
+    }
+    if effort.len() > 32
+        || effort.starts_with('-')
+        || !effort
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        return Err(AppError::Other(format!(
+            "invalid reasoning effort '{effort}': expected a short CLI capability identifier"
+        )));
+    }
+    Ok(Some(effort))
 }
 
 pub fn run_resolved_oneshot(
@@ -851,6 +917,8 @@ mod tests {
     fn resolves_known_ai_provider_commands() {
         let req = AiExecutionRequest {
             provider: AiProvider::Codex,
+            model: None,
+            effort: None,
             ollama_model: None,
             llm_model: None,
         };
@@ -866,9 +934,84 @@ mod tests {
     }
 
     #[test]
+    fn resolves_codex_model_and_reasoning_effort() {
+        let req = AiExecutionRequest {
+            provider: AiProvider::Codex,
+            model: Some("gpt-5.4".to_string()),
+            effort: Some("xhigh".to_string()),
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        assert_eq!(
+            req.resolve().unwrap().args,
+            vec![
+                "exec",
+                "--skip-git-repo-check",
+                "-m",
+                "gpt-5.4",
+                "-c",
+                "model_reasoning_effort=\"xhigh\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolves_claude_model_and_effort() {
+        let req = AiExecutionRequest {
+            provider: AiProvider::Claude,
+            model: Some("claude-opus-4-1".to_string()),
+            effort: Some("max".to_string()),
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        assert_eq!(
+            req.resolve().unwrap().args,
+            vec![
+                "-p",
+                "--output-format",
+                "text",
+                "--model",
+                "claude-opus-4-1",
+                "--effort",
+                "max",
+            ]
+        );
+    }
+
+    #[test]
+    fn accepts_new_cli_advertised_effort_identifiers() {
+        let req = AiExecutionRequest {
+            provider: AiProvider::Codex,
+            model: None,
+            effort: Some("ultra".to_string()),
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        assert!(req.resolve().is_ok());
+    }
+
+    #[test]
+    fn rejects_unsafe_effort_identifiers() {
+        let req = AiExecutionRequest {
+            provider: AiProvider::Codex,
+            model: None,
+            effort: Some("high\" model=\"other".to_string()),
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        assert!(req.resolve().is_err());
+    }
+
+    #[test]
     fn resolves_antigravity_prompt_as_print_argument() {
         let req = AiExecutionRequest {
             provider: AiProvider::Antigravity,
+            model: None,
+            effort: None,
             ollama_model: None,
             llm_model: None,
         };
@@ -887,6 +1030,8 @@ mod tests {
     fn rejects_custom_ai_commands() {
         let req = AiExecutionRequest {
             provider: AiProvider::Custom,
+            model: None,
+            effort: None,
             ollama_model: None,
             llm_model: None,
         };
@@ -898,6 +1043,8 @@ mod tests {
     fn rejects_model_names_that_can_be_interpreted_as_options() {
         let req = AiExecutionRequest {
             provider: AiProvider::Ollama,
+            model: None,
+            effort: None,
             ollama_model: Some("--help".to_string()),
             llm_model: None,
         };
