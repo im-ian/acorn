@@ -1360,6 +1360,64 @@ test.describe("workspace kanban mode", () => {
     await expect(runner).toBeFocused();
   });
 
+  test("keeps arrow-key focus on session cards from nested card actions", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("alpha", "alpha", "ready"),
+      session("shell", "shell", "ready"),
+    ]);
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test",
+      items: [
+        {
+          number: 902,
+          title: "Shell keyboard navigation",
+          state: "OPEN",
+          author: "ian",
+          head_branch: "feat/shell",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/902",
+          updated_at: "2026-01-01T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    await board.getByLabel("Sort sessions").selectOption("name-asc");
+    const alpha = board.getByRole("button", { name: "Open alpha" });
+    const shell = board.getByRole("button", { name: "Open shell" });
+    const shellPrAction = shell
+      .getByTestId("workspace-kanban-card-context")
+      .getByRole("button", { name: "Open PR #902" });
+    await expect(shellPrAction).toBeVisible();
+
+    await shellPrAction.focus();
+    await expect(shellPrAction).toBeFocused();
+    await shellPrAction.press("ArrowUp");
+
+    await expect(alpha).toBeFocused();
+    expect(
+      await alpha.evaluate((element) => element.matches(":focus-visible")),
+    ).toBe(true);
+
+    await alpha.press("ArrowDown");
+    await expect(shell).toBeFocused();
+    expect(
+      await shell.evaluate((element) => element.matches(":focus-visible")),
+    ).toBe(true);
+  });
+
   test("card context menu and terminal popover header can rename a session", async ({
     page,
     tauri,
