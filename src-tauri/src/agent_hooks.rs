@@ -223,6 +223,12 @@ impl AgentHookReducer {
                     reason: "missing lifecycle id after lifecycle attachment",
                 });
             }
+            if signal == CodexSignal::NativeToolResult {
+                return Ok(AgentHookApplyOutcome::Ignored {
+                    status: current_status,
+                    reason: "tool result is missing lifecycle correlation",
+                });
+            }
             let effects = unsequenced_codex_effects(signal, &event);
             let status = apply_validated_agent_hook_event(&self.sessions, event, effects)?;
             return Ok(AgentHookApplyOutcome::Applied(status));
@@ -268,6 +274,7 @@ fn unsequenced_codex_effects(signal: CodexSignal, event: &AgentHookEvent) -> Cod
             clear_permission_waiting: true,
             ..Default::default()
         },
+        CodexSignal::NativeToolResult => CodexStoreEffects::default(),
         CodexSignal::NativePermission | CodexSignal::JsonlApproval => CodexStoreEffects {
             mark_permission_waiting: true,
             ..Default::default()
@@ -354,6 +361,7 @@ enum CodexSignal {
     NativeStop,
     NativePermission,
     NativeToolStart,
+    NativeToolResult,
     JsonlUser,
     JsonlTask,
     JsonlTool,
@@ -374,6 +382,9 @@ impl CodexSignal {
             }
             "native_tool_start" if event.event == AgentHookEventKind::Start => {
                 Self::NativeToolStart
+            }
+            "native_tool_result" if event.event == AgentHookEventKind::Start => {
+                Self::NativeToolResult
             }
             "jsonl_user" if event.event == AgentHookEventKind::Start => Self::JsonlUser,
             "jsonl_task" if event.event == AgentHookEventKind::Start => Self::JsonlTask,
@@ -665,6 +676,13 @@ impl CodexInvocation {
             CodexSignal::NativeToolStart => {
                 self.resume_from_tool(provider_turn_id, false, provider_tool_id)
             }
+            CodexSignal::NativeToolResult => {
+                if !self.matches_pending_permission(provider_turn_id, provider_tool_id) {
+                    CodexReduction::Ignore("tool result does not match the pending request")
+                } else {
+                    self.resume_from_tool_result(provider_tool_id)
+                }
+            }
             CodexSignal::JsonlTool => {
                 if self.has_native_tool_id(provider_turn_id, provider_tool_id)
                     && !self.duplicate_native_tool_resumes_permission(
@@ -879,6 +897,36 @@ impl CodexInvocation {
                 .then(|| provider_turn_id.map(str::to_string))
                 .flatten(),
             mark_tool_started: true,
+            clear_permission_waiting: true,
+            ..Default::default()
+        })
+    }
+
+    fn matches_pending_permission(
+        &self,
+        provider_turn_id: Option<&str>,
+        provider_tool_id: Option<&str>,
+    ) -> bool {
+        let Some(provider_tool_id) = provider_tool_id else {
+            return false;
+        };
+        self.turn.as_ref().is_some_and(|turn| {
+            turn.phase == CodexTurnPhase::AwaitingPermission
+                && !provider_ids_conflict(turn.provider_turn_id.as_deref(), provider_turn_id)
+                && turn.pending_permission_tool_id.as_deref() == Some(provider_tool_id)
+        })
+    }
+
+    fn resume_from_tool_result(&mut self, provider_tool_id: Option<&str>) -> CodexReduction {
+        let turn = self
+            .turn
+            .as_mut()
+            .expect("matching pending permission requires an active turn");
+        turn.phase = CodexTurnPhase::Working;
+        turn.pending_permission_tool_id = None;
+        mark_permission_receipts_resumed(&mut turn.native_permission_receipts, provider_tool_id);
+        mark_permission_receipts_resumed(&mut turn.fallback_permission_receipts, provider_tool_id);
+        CodexReduction::Apply(CodexStoreEffects {
             clear_permission_waiting: true,
             ..Default::default()
         })
@@ -1293,7 +1341,7 @@ pub fn apply_agent_hook_event(
     }
 
     // The TUI recorder is an asynchronous compatibility preview and can lag
-    // behind native UserPromptSubmit or Stop. PTY writes and native hooks own
+    // behind native UserPromptSubmit or Stop. Provider lifecycle signals own
     // the real transition, so a delayed preview must never overwrite them.
     if event.provider == SessionAgentProvider::Codex && event.source.as_deref() == Some("preview") {
         return Ok(session.status);
@@ -2120,6 +2168,7 @@ fn parse_raw_codex_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentH
             "native" => None,
             "native_prompt" => Some("UserPromptSubmit"),
             "native_tool_start" => Some("PreToolUse"),
+            "native_tool_result" => Some("PostToolUse"),
             "native_permission" => Some("PermissionRequest"),
             "native_stop" => Some("Stop"),
             _ => return Err(format!("unsupported Codex hook source: {raw_source}")),
@@ -2143,6 +2192,7 @@ fn parse_raw_codex_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentH
                 (AgentHookEventKind::NeedsInput, "native_permission")
             }
             "PreToolUse" => (AgentHookEventKind::Start, "native_tool_start"),
+            "PostToolUse" => (AgentHookEventKind::Start, "native_tool_result"),
             "PermissionRequest" => (AgentHookEventKind::NeedsInput, "native_permission"),
             "Stop" => (AgentHookEventKind::NeedsInput, "native_stop"),
             other => return Err(format!("unsupported Codex hook event: {other}")),
@@ -4686,6 +4736,79 @@ mod tests {
     }
 
     #[test]
+    fn reducer_matching_tool_result_resumes_request_user_input() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+        apply_codex(&reducer, session_id, "native_prompt", Some("turn-1"));
+
+        let mut request = codex_event(session_id, "native_permission", Some("turn-1"));
+        request.provider_tool_id = Some("input-1".to_string());
+        reducer.apply(request).expect("input request waits");
+
+        let mut answer = codex_event(session_id, "native_tool_result", Some("turn-1"));
+        answer.provider_tool_id = Some("input-1".to_string());
+        assert!(matches!(
+            reducer.apply(answer).expect("matching result applies"),
+            AgentHookApplyOutcome::Applied(SessionStatus::Working)
+        ));
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+        assert_eq!(sessions.codex_permission_waiting_at(&session_id), None);
+    }
+
+    #[test]
+    fn reducer_stale_tool_result_cannot_clear_a_newer_request() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+        apply_codex(&reducer, session_id, "native_prompt", Some("turn-1"));
+
+        let mut request = codex_event(session_id, "native_permission", Some("turn-1"));
+        request.provider_tool_id = Some("input-new".to_string());
+        reducer.apply(request).expect("input request waits");
+
+        let mut stale_answer = codex_event(session_id, "native_tool_result", Some("turn-1"));
+        stale_answer.provider_tool_id = Some("input-old".to_string());
+        assert!(matches!(
+            reducer
+                .apply(stale_answer)
+                .expect("stale result is classified"),
+            AgentHookApplyOutcome::Ignored { .. }
+        ));
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+        assert!(sessions.codex_permission_waiting_at(&session_id).is_some());
+    }
+
+    #[test]
+    fn reducer_tool_result_does_not_claim_the_next_anonymous_permission() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+        apply_codex(&reducer, session_id, "native_prompt", Some("turn-1"));
+
+        let mut request = codex_event(session_id, "native_permission", Some("turn-1"));
+        request.provider_tool_id = Some("input-1".to_string());
+        reducer.apply(request).expect("input request waits");
+        let mut result = codex_event(session_id, "native_tool_result", Some("turn-1"));
+        result.provider_tool_id = Some("input-1".to_string());
+        reducer.apply(result).expect("input result resumes");
+
+        apply_codex(&reducer, session_id, "native_permission", Some("turn-1"));
+        let mut delayed_result = codex_event(session_id, "native_tool_result", Some("turn-1"));
+        delayed_result.provider_tool_id = Some("input-1".to_string());
+        assert!(matches!(
+            reducer
+                .apply(delayed_result)
+                .expect("delayed result is classified"),
+            AgentHookApplyOutcome::Ignored { .. }
+        ));
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
     fn reducer_matching_jsonl_tool_resumes_when_fallback_permission_arrives_first() {
         let (sessions, session_id, reducer) = codex_reducer_fixture();
         apply_codex(&reducer, session_id, "native_prompt", Some("turn-1"));
@@ -5024,6 +5147,31 @@ mod tests {
             assert_eq!(event.event, expected_kind);
             assert!(event.provider_turn_id.is_some());
         }
+    }
+
+    #[test]
+    fn raw_post_tool_use_preserves_correlation_ids() {
+        let (tx, rx) = mpsc::channel();
+        let hooks = AgentHookServer::start_with_handler(move |event| {
+            tx.send(event).expect("send event");
+        })
+        .expect("hook server starts");
+        let body = serde_json::json!({
+            "session_id": "019f6338-6021-77d0-9120-54428d3e2a42",
+            "turn_id": "turn-1",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "request_user_input",
+            "tool_use_id": "input-1"
+        })
+        .to_string();
+
+        assert!(post_raw_codex_hook(&hooks, Uuid::new_v4(), &body)
+            .starts_with("HTTP/1.1 204 No Content"));
+        let event = rx.recv_timeout(Duration::from_secs(1)).expect("event");
+        assert_eq!(event.event, AgentHookEventKind::Start);
+        assert_eq!(event.source.as_deref(), Some("native_tool_result"));
+        assert_eq!(event.provider_turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(event.provider_tool_id.as_deref(), Some("input-1"));
     }
 
     #[test]
