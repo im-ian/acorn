@@ -36,17 +36,17 @@ enum ReaderEvent {
     Eof,
 }
 
-/// Queue a provider-native title update without delaying or failing the Acorn
-/// operation that produced it. Antigravity has no verified naming interface,
-/// so it is intentionally left unchanged.
-pub fn enqueue(target: LiveTranscript, title: impl Into<String>) {
-    if target.kind == AgentKind::Antigravity {
-        return;
+fn prepare_request(
+    enabled: bool,
+    target: LiveTranscript,
+    title: impl Into<String>,
+) -> Option<TitleSyncRequest> {
+    if !enabled || target.kind == AgentKind::Antigravity {
+        return None;
     }
-
     let title = title.into().trim().to_string();
     if title.is_empty() {
-        return;
+        return None;
     }
     if title.len() > MAX_PROVIDER_TITLE_BYTES {
         tracing::warn!(
@@ -55,13 +55,23 @@ pub fn enqueue(target: LiveTranscript, title: impl Into<String>) {
             title_bytes = title.len(),
             "skipping provider session name sync because the title is too large"
         );
-        return;
+        return None;
     }
+    Some(TitleSyncRequest { target, title })
+}
+
+/// Queue a provider-native title update without delaying or failing the Acorn
+/// operation that produced it. Disabled settings and Antigravity targets are
+/// intentionally left unchanged.
+pub fn enqueue(enabled: bool, target: LiveTranscript, title: impl Into<String>) {
+    let Some(request) = prepare_request(enabled, target, title) else {
+        return;
+    };
 
     let Some(sender) = worker_sender() else {
         return;
     };
-    if let Err(err) = sender.send(TitleSyncRequest { target, title }) {
+    if let Err(err) = sender.send(request) {
         tracing::warn!(error = %err, "provider session name worker is unavailable");
     }
 }
@@ -70,9 +80,9 @@ pub fn enqueue(target: LiveTranscript, title: impl Into<String>) {
 /// session id. Manual names apply to the newly-bound conversation; generated
 /// names apply only when they were generated from that exact transcript, so a
 /// `/new` conversation never inherits the previous conversation's title.
-pub fn enqueue_existing_title(session: &Session, target: LiveTranscript) {
+pub fn enqueue_existing_title(enabled: bool, session: &Session, target: LiveTranscript) {
     if should_sync_existing_title(session, &target.id) {
-        enqueue(target, session.name.clone());
+        enqueue(enabled, target, session.name.clone());
     }
 }
 
@@ -389,6 +399,14 @@ mod tests {
         );
         session.title_source = source;
         session
+    }
+
+    #[test]
+    fn disabled_setting_drops_title_sync_before_starting_the_worker() {
+        let id = "019c1464-9f4e-7302-bc0f-81a1449fc365";
+        let target = claude_target(Path::new("/tmp/transcript.jsonl"), id);
+
+        assert!(prepare_request(false, target, "release fix").is_none());
     }
 
     #[test]

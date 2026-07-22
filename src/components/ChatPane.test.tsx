@@ -1990,6 +1990,7 @@ describe("ChatPane", () => {
     expect(mocks.renameSession).toHaveBeenCalledWith(
       "fork1",
       "Exploring chat runtime",
+      false,
     );
     const saved = mocks.saveChatSessionState.mock.calls[0]?.[0] as
       | ChatSessionState

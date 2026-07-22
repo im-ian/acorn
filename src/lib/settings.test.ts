@@ -1493,6 +1493,10 @@ describe("AI commit command resolution", () => {
     expect(DEFAULT_SETTINGS.agents.autoGenerateSessionTitles).toBe(true);
   });
 
+  it("disables agent session title sync by default", () => {
+    expect(DEFAULT_SETTINGS.agents.syncAgentSessionTitles).toBe(false);
+  });
+
   it("loads a persisted automatic session title preference", async () => {
     localStorage.setItem(
       "acorn:settings:v1",
@@ -1505,6 +1509,20 @@ describe("AI commit command resolution", () => {
     expect(
       useSettings.getState().settings.agents.autoGenerateSessionTitles,
     ).toBe(false);
+  });
+
+  it("loads a persisted agent session title sync preference", async () => {
+    localStorage.setItem(
+      "acorn:settings:v1",
+      JSON.stringify({ agents: { syncAgentSessionTitles: true } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(
+      useSettings.getState().settings.agents.syncAgentSessionTitles,
+    ).toBe(true);
   });
 
   it("keeps the default session title prompt in settings", () => {

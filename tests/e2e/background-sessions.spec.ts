@@ -209,8 +209,11 @@ test.describe("background sessions settings", () => {
       () =>
         (window as unknown as { __statusPollCalls?: unknown[] })
           .__statusPollCalls ?? [],
-    )) as Array<{ ids: string[] }>;
-    expect(statusPollCalls).toContainEqual({ ids: ["s-1"] });
+    )) as Array<{ ids: string[]; syncAgentSessionTitles: boolean }>;
+    expect(statusPollCalls).toContainEqual({
+      ids: ["s-1"],
+      syncAgentSessionTitles: false,
+    });
     await expect(
       page
         .locator('[data-panel-id="sidebar"]')

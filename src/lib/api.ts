@@ -192,8 +192,16 @@ export const api = {
       goal,
     });
   },
-  renameSession(id: string, name: string): Promise<Session> {
-    return invoke<Session>("rename_session", { id, name });
+  renameSession(
+    id: string,
+    name: string,
+    syncAgentSessionTitles: boolean,
+  ): Promise<Session> {
+    return invoke<Session>("rename_session", {
+      id,
+      name,
+      syncAgentSessionTitles,
+    });
   },
   sessionTitleReadiness(id: string): Promise<SessionTitleReadinessResult> {
     return invoke<SessionTitleReadinessResult>("session_title_readiness", {
@@ -205,12 +213,14 @@ export const api = {
     ai: AiExecutionRequest,
     prompt: string,
     force = false,
+    syncAgentSessionTitles = false,
   ): Promise<GenerateSessionTitleResult> {
     return invoke<GenerateSessionTitleResult>("generate_session_title", {
       id,
       ai,
       prompt,
       force,
+      syncAgentSessionTitles,
     });
   },
   previewSessionTitle(
@@ -691,6 +701,7 @@ export const api = {
   },
   detectSessionStatuses(
     ids: string[],
+    syncAgentSessionTitles: boolean,
   ): Promise<
     {
       id: string;
@@ -734,7 +745,7 @@ export const api = {
         branch: string | null;
         auto_title_enabled?: boolean | null;
       }[]
-    >("detect_session_statuses", { ids });
+    >("detect_session_statuses", { ids, syncAgentSessionTitles });
   },
   /**
    * Inspect on-disk markers to determine which agent CLI (if any) the user has

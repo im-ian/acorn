@@ -1440,6 +1440,43 @@ describe("SettingsModal font controls", () => {
     });
   });
 
+  it("patches the agent session title sync toggle", async () => {
+    const patchAgents = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchAgents,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAgentsTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const toggle = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ).find((input) =>
+      input
+        .closest("label")
+        ?.textContent?.includes("Sync titles to Codex and Claude"),
+    );
+
+    expect(document.body.textContent).toContain("Agent title sync");
+    expect(toggle).toBeInstanceOf(HTMLInputElement);
+    expect(toggle?.checked).toBe(false);
+
+    act(() => {
+      toggle?.click();
+    });
+
+    expect(patchAgents).toHaveBeenCalledWith({
+      syncAgentSessionTitles: true,
+    });
+  });
+
   it("patches and resets the session title prompt", async () => {
     const patchAgents = vi.fn();
     useSettings.setState({
