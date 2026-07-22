@@ -1334,6 +1334,15 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
     onOpen(session.id, event.currentTarget);
   }
 
+  function handleArrowKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (editing || event.altKey || event.ctrlKey || event.metaKey) return;
+    const direction = kanbanCardFocusDirection(event.key);
+    if (!direction) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onFocusAdjacent(session.id, direction);
+  }
+
   function handleKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
     if (editing) return;
     if (
@@ -1351,10 +1360,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
       onOpen(session.id, event.currentTarget);
       return;
     }
-    const direction = kanbanCardFocusDirection(event.key);
-    if (!direction) return;
-    event.preventDefault();
-    onFocusAdjacent(session.id, direction);
   }
 
   async function submitRename(next: string) {
@@ -1550,6 +1555,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
           onClick={editing ? undefined : handleOpen}
           onPointerDown={handlePointerDown}
           onContextMenu={handleContextMenu}
+          onKeyDownCapture={handleArrowKeyDown}
           onKeyDown={handleKeyDown}
           className="group flex w-full cursor-pointer flex-col gap-2 rounded-md border border-border bg-bg-elevated/45 p-2 text-left transition hover:border-accent/45 hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           aria-label={openLabel}
