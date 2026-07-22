@@ -1503,6 +1503,12 @@ fn validate_agent_hook_session(
 }
 
 fn event_can_switch_provider(event: &AgentHookEvent) -> bool {
+    if event.provider == SessionAgentProvider::Claude
+        && event.event == AgentHookEventKind::Stop
+        && event.source.as_deref() == Some("native_session_start")
+    {
+        return true;
+    }
     if event.event != AgentHookEventKind::Start {
         return false;
     }
@@ -2034,16 +2040,26 @@ fn parse_raw_claude_hook_request(
         .get("hook_event_name")
         .and_then(Value::as_str)
         .ok_or_else(|| "Claude hook payload has no hook_event_name".to_string())?;
-    let event = match hook_event_name {
-        "SessionStart" | "UserPromptSubmit" => AgentHookEventKind::Start,
+    let (event, source) = match hook_event_name {
+        // SessionStart reports provider initialization, not a submitted turn.
+        // Compaction can emit it while an existing turn is still running, so
+        // that source carries no independent status boundary.
+        "SessionStart" => match payload.get("source").and_then(Value::as_str) {
+            Some("compact") => return Ok(None),
+            Some("startup" | "resume" | "clear") | None => {
+                (AgentHookEventKind::Stop, "native_session_start")
+            }
+            Some(_) => return Ok(None),
+        },
+        "UserPromptSubmit" => (AgentHookEventKind::Start, "native"),
         // Claude can emit Stop while background tasks or session crons are
         // still able to wake the parent turn. Those sessions stay Working;
         // only a Stop with no pending background work is actually awaiting
         // the user's next prompt.
         "Stop" if claude_stop_has_pending_background_work(&payload) => return Ok(None),
-        "Stop" => AgentHookEventKind::NeedsInput,
-        "Notification" | "PermissionRequest" => AgentHookEventKind::NeedsInput,
-        "Error" => AgentHookEventKind::Error,
+        "Stop" => (AgentHookEventKind::NeedsInput, "native"),
+        "Notification" | "PermissionRequest" => (AgentHookEventKind::NeedsInput, "native"),
+        "Error" => (AgentHookEventKind::Error, "native"),
         // The settings file registers exactly the events above; anything
         // else is a future Claude addition we have no mapping for yet.
         _ => return Ok(None),
@@ -2063,7 +2079,7 @@ fn parse_raw_claude_hook_request(
         provider: SessionAgentProvider::Claude,
         event,
         message: None,
-        source: Some("native".to_string()),
+        source: Some(source.to_string()),
         lifecycle_id: None,
         provider_session_id,
         provider_turn_id: None,
@@ -2709,19 +2725,30 @@ mod tests {
         let session_id = Uuid::new_v4();
         let claude_uuid = "019e4818-7c15-4e60-9b3b-898a1c7803d6";
 
-        for (hook_event_name, expected_event) in [
-            ("SessionStart", AgentHookEventKind::Start),
-            ("UserPromptSubmit", AgentHookEventKind::Start),
-            ("Notification", AgentHookEventKind::NeedsInput),
-            ("PermissionRequest", AgentHookEventKind::NeedsInput),
-            ("Error", AgentHookEventKind::Error),
+        for (hook_event_name, expected_event, expected_source) in [
+            (
+                "SessionStart",
+                AgentHookEventKind::Stop,
+                "native_session_start",
+            ),
+            ("UserPromptSubmit", AgentHookEventKind::Start, "native"),
+            ("Notification", AgentHookEventKind::NeedsInput, "native"),
+            (
+                "PermissionRequest",
+                AgentHookEventKind::NeedsInput,
+                "native",
+            ),
+            ("Error", AgentHookEventKind::Error, "native"),
         ] {
-            let body = serde_json::json!({
+            let mut payload = serde_json::json!({
                 "session_id": claude_uuid,
                 "transcript_path": format!("/home/user/.claude/projects/repo/{claude_uuid}.jsonl"),
                 "hook_event_name": hook_event_name,
-            })
-            .to_string();
+            });
+            if hook_event_name == "SessionStart" {
+                payload["source"] = "startup".into();
+            }
+            let body = payload.to_string();
             let response = post_raw_claude_hook(&hooks, session_id, &body);
             assert!(
                 response.starts_with("HTTP/1.1 204 No Content"),
@@ -2733,10 +2760,22 @@ mod tests {
             assert_eq!(event.session_id, session_id);
             assert_eq!(event.provider, SessionAgentProvider::Claude);
             assert_eq!(event.event, expected_event, "{hook_event_name}");
-            assert_eq!(event.source.as_deref(), Some("native"));
+            assert_eq!(event.source.as_deref(), Some(expected_source));
             assert_eq!(event.provider_session_id.as_deref(), Some(claude_uuid));
             assert_eq!(event.ownership, super::AgentHookOwnership::Owner);
         }
+
+        let compact = serde_json::json!({
+            "session_id": claude_uuid,
+            "hook_event_name": "SessionStart",
+            "source": "compact",
+        });
+        let response = post_raw_claude_hook(&hooks, session_id, &compact.to_string());
+        assert!(response.starts_with("HTTP/1.1 202 Accepted"));
+        assert!(
+            rx.try_recv().is_err(),
+            "compaction must preserve the current turn status"
+        );
 
         let stop = serde_json::json!({
             "session_id": claude_uuid,
@@ -2751,6 +2790,57 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("Stop delivered");
         assert_eq!(event.event, AgentHookEventKind::NeedsInput);
+    }
+
+    #[test]
+    fn claude_session_start_claims_a_resting_session_without_starting_a_turn() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Agent".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.status = SessionStatus::Ready;
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.hook_provider = Some(SessionAgentProvider::Codex);
+        session.hook_active = true;
+        let session_id = session.id;
+        sessions.insert(session);
+        let reducer = AgentHookReducer::new(sessions.clone());
+
+        let outcome = reducer
+            .apply(AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Claude,
+                event: AgentHookEventKind::Stop,
+                message: None,
+                source: Some("native_session_start".to_string()),
+                lifecycle_id: None,
+                provider_session_id: Some("019e4818-7c15-4e60-9b3b-898a1c7803d6".to_string()),
+                provider_turn_id: None,
+                provider_tool_id: None,
+                provider_version: None,
+                native_hooks_enabled: None,
+                ownership: AgentHookOwnership::Owner,
+            })
+            .expect("Claude session start applies");
+
+        assert_eq!(
+            outcome,
+            AgentHookApplyOutcome::Applied(SessionStatus::Ready)
+        );
+        let observed = sessions.get(&session_id).expect("session");
+        assert_eq!(observed.status, SessionStatus::Ready);
+        assert_eq!(observed.agent_provider, Some(SessionAgentProvider::Claude));
+        assert_eq!(observed.hook_provider, Some(SessionAgentProvider::Claude));
+        assert!(observed.hook_active);
+        assert_eq!(
+            sessions.agent_status_source(&session_id),
+            Some(AgentStatusSource::Hook)
+        );
     }
 
     #[test]
