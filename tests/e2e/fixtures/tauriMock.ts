@@ -114,6 +114,9 @@ export const tauriMockSource = `
     if (cmd === 'get_last_project_parent_folder') {
       return Promise.resolve(null);
     }
+    if (cmd === 'has_git_identity') {
+      return Promise.resolve(true);
+    }
     if (cmd === 'create_session_from_dialog') {
       return Promise.resolve(null);
     }

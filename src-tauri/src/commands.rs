@@ -5563,6 +5563,25 @@ fn get_last_project_parent_folder_from_dir(
     }
 }
 
+fn configured_git_identity(config: &git2::Config) -> Option<(String, String)> {
+    let name = config.get_string("user.name").ok()?;
+    let email = config.get_string("user.email").ok()?;
+    let name = name.trim();
+    let email = email.trim();
+    if name.is_empty() || email.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), email.to_string()))
+}
+
+#[tauri::command]
+pub fn has_git_identity() -> bool {
+    git2::Config::open_default()
+        .ok()
+        .and_then(|config| configured_git_identity(&config))
+        .is_some()
+}
+
 #[tauri::command]
 pub fn create_new_project(
     state: State<'_, AppState>,
@@ -5614,13 +5633,17 @@ pub fn create_new_project(
 }
 
 /// Create the empty initial commit that makes a freshly `init`-ed repo usable.
-/// Prefers the user's configured git identity, falling back to a generic Acorn
-/// signature when `user.name`/`user.email` are unset. Committing to the unborn
-/// `HEAD` symref creates whatever default branch git resolved (`main`/`master`).
+/// Committing to the unborn `HEAD` symref creates whatever default branch git
+/// resolved (`main`/`master`). A configured Git identity is required so Acorn
+/// never authors a commit under a synthetic identity.
 fn seed_initial_commit(repo: &git2::Repository) -> Result<(), git2::Error> {
-    let sig = repo
-        .signature()
-        .or_else(|_| git2::Signature::now("Acorn", "acorn@localhost"))?;
+    let config = repo.config()?;
+    let (name, email) = configured_git_identity(&config).ok_or_else(|| {
+        git2::Error::from_str(
+            "Git user.name and user.email must be configured to create an initial commit",
+        )
+    })?;
+    let sig = git2::Signature::now(&name, &email)?;
     let tree_id = {
         let mut index = repo.index()?;
         index.write_tree()?
@@ -9674,12 +9697,13 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 mod tests {
     use super::{
         auto_title_enabled_for_new_session, collect_memory_usage_from_roots,
-        create_unique_worktree, daemon_spawn_name_for_session, detach_requested_by_stale_renderer,
-        font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
-        memory_root_pids, normalize_session_goal, poll_defers_to_hook,
-        remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
-        should_remove_local_project_mirror, validate_editor_command, validate_new_project_name,
-        ChatProviderAdapter, ProcessMemorySnapshot,
+        configured_git_identity, create_unique_worktree, daemon_spawn_name_for_session,
+        detach_requested_by_stale_renderer, font_name_from_path,
+        infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
+        normalize_session_goal, poll_defers_to_hook, remove_linked_worktree_at_path,
+        restore_pending_session_removal, seed_initial_commit, should_remove_local_project_mirror,
+        validate_editor_command, validate_new_project_name, ChatProviderAdapter,
+        ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingSessionRemoval};
@@ -12151,6 +12175,31 @@ mod tests {
     }
 
     #[test]
+    fn configured_git_identity_requires_non_empty_name_and_email() {
+        let config_dir = unique_repo_dir("git-identity-config");
+        let config_path = config_dir.join("config");
+        std::fs::write(&config_path, "").expect("create config file");
+        let mut config = git2::Config::open(&config_path).expect("open config");
+        assert!(configured_git_identity(&config).is_none());
+
+        config
+            .set_str("user.name", "Acorn Tester")
+            .expect("set name");
+        assert!(configured_git_identity(&config).is_none());
+
+        config.set_str("user.email", "   ").expect("set email");
+        assert!(configured_git_identity(&config).is_none());
+
+        config
+            .set_str("user.email", "tester@example.com")
+            .expect("set email");
+        assert_eq!(
+            configured_git_identity(&config),
+            Some(("Acorn Tester".to_string(), "tester@example.com".to_string()))
+        );
+    }
+
+    #[test]
     fn validate_new_project_name_rejects_path_like_names() {
         assert!(validate_new_project_name("", false).is_err());
         assert!(validate_new_project_name("../fresh-app", false).is_err());
@@ -12614,6 +12663,14 @@ mod tests {
         // seed_initial_commit must make the repo immediately worktree-capable.
         let repo_dir = unique_repo_dir("seed-initial-commit");
         let repo = git2::Repository::init(&repo_dir).expect("init repo");
+        let mut config = repo.config().expect("open repo config");
+        config
+            .set_str("user.name", "Acorn Tester")
+            .expect("set name");
+        config
+            .set_str("user.email", "tester@example.com")
+            .expect("set email");
+        drop(config);
         assert!(repo.head().is_err(), "fresh init must have unborn HEAD");
         seed_initial_commit(&repo).expect("seed initial commit");
         assert!(repo.head().is_ok(), "seeded repo must resolve HEAD");
