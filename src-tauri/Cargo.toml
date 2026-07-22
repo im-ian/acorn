@@ -100,6 +100,7 @@ acorn-session = { path = "crates/acorn-session" }
 acorn-transcript = { path = "crates/acorn-transcript" }
 tauri = { workspace = true }
 tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"

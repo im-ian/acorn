@@ -36,6 +36,7 @@ import {
   hasDetectedAgent,
 } from "../lib/agentContextMenu";
 import { cn } from "../lib/cn";
+import { writeClipboardText } from "../lib/clipboardText";
 import { retainRecentGitStatPaths } from "../lib/fileExplorerGitStats";
 import { matchesHotkeyEvent } from "../lib/hotkeys";
 import {
@@ -1092,7 +1093,7 @@ export function FileExplorer({
         mode === "absolute" ? p : relativeTo(rootPath, p),
       );
       try {
-        await navigator.clipboard.writeText(lines.join("\n"));
+        await writeClipboardText(lines.join("\n"));
         showToast(t("toasts.files.pathsCopied"));
       } catch {
         setError(fileExplorerText(t, "fileExplorer.errors.clipboardWriteFailed"));
@@ -1317,7 +1318,7 @@ export function FileExplorer({
         label: fileExplorerText(t, "fileExplorer.menu.copyRelativePath"),
         icon: <Link2 size={13} />,
         onClick: () => {
-          void navigator.clipboard.writeText(rel).catch(() => {
+          void writeClipboardText(rel).catch(() => {
             setError(fileExplorerText(t, "fileExplorer.errors.clipboardWriteFailed"));
           });
         },
@@ -1326,7 +1327,7 @@ export function FileExplorer({
         label: fileExplorerText(t, "fileExplorer.menu.copyAbsolutePath"),
         icon: <Copy size={13} />,
         onClick: () => {
-          void navigator.clipboard.writeText(entry.path).catch(() => {
+          void writeClipboardText(entry.path).catch(() => {
             setError(fileExplorerText(t, "fileExplorer.errors.clipboardWriteFailed"));
           });
         },
