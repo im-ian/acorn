@@ -6011,8 +6011,14 @@ pub fn update_session_goal(
 }
 
 #[tauri::command]
-pub fn rename_session(state: State<'_, AppState>, id: String, name: String) -> AppResult<Session> {
+pub fn rename_session(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+    sync_agent_session_titles: Option<bool>,
+) -> AppResult<Session> {
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
+    let sync_agent_session_titles = sync_agent_session_titles.unwrap_or(false);
     let trimmed = name.trim().to_string();
     if trimmed.is_empty() {
         return Err(AppError::Other("name must not be empty".to_string()));
@@ -6023,14 +6029,19 @@ pub fn rename_session(state: State<'_, AppState>, id: String, name: String) -> A
             "control-session owned tabs cannot be renamed".to_string(),
         ));
     }
-    let native_session = (current.kind == SessionKind::Regular
+    let native_session = (sync_agent_session_titles
+        && current.kind == SessionKind::Regular
         && current.mode == SessionMode::Terminal)
         .then(|| crate::session_titles::resolve_native_session(id))
         .flatten();
     let updated = state.sessions.rename(&id, trimmed)?;
     persist(&state);
     if let Some(native_session) = native_session {
-        crate::agent_session_names::enqueue(native_session, updated.name.clone());
+        crate::agent_session_names::enqueue(
+            sync_agent_session_titles,
+            native_session,
+            updated.name.clone(),
+        );
     }
     Ok(enrich_session(updated))
 }
@@ -6126,10 +6137,18 @@ pub async fn generate_session_title(
     ai: crate::ai::AiExecutionRequest,
     prompt: Option<String>,
     force: Option<bool>,
+    sync_agent_session_titles: Option<bool>,
 ) -> AppResult<GenerateSessionTitleResult> {
     let state = state.inner().clone();
     run_blocking("generate_session_title", move || {
-        generate_session_title_inner(state, id, ai, prompt, force.unwrap_or(false))
+        generate_session_title_inner(
+            state,
+            id,
+            ai,
+            prompt,
+            force.unwrap_or(false),
+            sync_agent_session_titles.unwrap_or(false),
+        )
     })
     .await
 }
@@ -6140,6 +6159,7 @@ fn generate_session_title_inner(
     ai: crate::ai::AiExecutionRequest,
     prompt: Option<String>,
     force: bool,
+    sync_agent_session_titles: bool,
 ) -> AppResult<GenerateSessionTitleResult> {
     let id = parse_id(&id)?;
     let session = state.sessions.get(&id)?;
@@ -6189,7 +6209,11 @@ fn generate_session_title_inner(
         .set_generated_title(&id, generated, Some(transcript_id))?;
     persist(&state);
     if let Some(native_session) = native_session {
-        crate::agent_session_names::enqueue(native_session, updated.name.clone());
+        crate::agent_session_names::enqueue(
+            sync_agent_session_titles,
+            native_session,
+            updated.name.clone(),
+        );
     }
     Ok(GenerateSessionTitleResult {
         status: GenerateSessionTitleStatus::Generated,
@@ -7783,6 +7807,7 @@ fn git_context_for_path(path: &std::path::Path) -> Option<(String, String)> {
 pub async fn detect_session_statuses(
     state: State<'_, AppState>,
     ids: Vec<String>,
+    sync_agent_session_titles: Option<bool>,
 ) -> AppResult<Vec<SessionStatusEntry>> {
     let state = state.inner().clone();
     // The process-table refresh, per-session branch probes, and the daemon
@@ -7790,7 +7815,7 @@ pub async fn detect_session_statuses(
     // seconds) are all blocking — keep them off the async executor, or the
     // frontend's status poll stalls every other Tauri command.
     run_blocking("detect_session_statuses", move || {
-        detect_session_statuses_blocking(state, ids)
+        detect_session_statuses_blocking(state, ids, sync_agent_session_titles.unwrap_or(false))
     })
     .await
 }
@@ -7878,6 +7903,7 @@ fn hook_boot_reconciled_status(
 fn detect_session_statuses_blocking(
     state: AppState,
     ids: Vec<String>,
+    sync_agent_session_titles: bool,
 ) -> AppResult<Vec<SessionStatusEntry>> {
     // Fence every poll write against lifecycle events that arrive while the
     // process table and transcripts are being inspected. The clear-on-exit
@@ -8317,7 +8343,11 @@ fn detect_session_statuses_blocking(
             };
             if agent_metadata_applied && agent_binding_changed {
                 if let (Some(session), Some(transcript)) = (session.as_ref(), live.clone()) {
-                    crate::agent_session_names::enqueue_existing_title(session, transcript);
+                    crate::agent_session_names::enqueue_existing_title(
+                        sync_agent_session_titles,
+                        session,
+                        transcript,
+                    );
                 }
             }
             SessionStatusEntry {

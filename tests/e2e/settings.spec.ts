@@ -49,6 +49,34 @@ test.describe("settings modal", () => {
     await expect(modal).toHaveCount(0);
   });
 
+  test("keeps agent title sync off by default and persists opt-in", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Agents|에이전트)$/ }).click();
+
+    const toggle = modal.getByRole("checkbox", {
+      name: /^(Sync titles to Codex and Claude|Codex 및 Claude에 제목 동기화)$/,
+    });
+    await expect(toggle).not.toBeChecked();
+
+    await toggle.check();
+    await expect(toggle).toBeChecked();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw
+            ? JSON.parse(raw).agents?.syncAgentSessionTitles
+            : null;
+        }),
+      )
+      .toBe(true);
+  });
+
   test("downloads, selects, and removes a catalog theme", async ({
     page,
     tauri,

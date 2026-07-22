@@ -1434,10 +1434,15 @@ test.describe("workspace kanban mode", () => {
     const calls = (await page.evaluate(
       () =>
         (window as unknown as { __renameCalls?: unknown[] }).__renameCalls,
-    )) as Array<{ id: string; name: string }>;
+    )) as Array<{
+      id: string;
+      name: string;
+      syncAgentSessionTitles: boolean;
+    }>;
     expect(calls[0]).toEqual({
       id: "rename-me",
       name: "renamed from kanban",
+      syncAgentSessionTitles: false,
     });
     await expect(
       board.getByRole("button", { name: "Open renamed from kanban" }),

@@ -1140,7 +1140,11 @@ export function ChatPane({
         worktreeMode === "same" && shouldAdoptSourceWorktree(session)
           ? await api.updateSessionWorktree(created.id, session!.worktree_path)
           : created;
-      const renamed = await api.renameSession(adopted.id, name);
+      const renamed = await api.renameSession(
+        adopted.id,
+        name,
+        settings.agents.syncAgentSessionTitles,
+      );
       const forkState = buildForkedChatState(state, renamed, forkMessages);
       await api.saveChatSessionState(forkState);
       await useAppStore.getState().refreshAll();

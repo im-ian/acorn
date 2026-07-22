@@ -687,6 +687,11 @@
         "hint": "When enabled, acorn sends transcript context from a new agent session to the selected AI CLI and replaces the default tab name with a concise title.",
         "checkbox": "Auto-generate session titles"
       },
+      "sessionTitleSync": {
+        "label": "Agent title sync",
+        "hint": "When enabled, Acorn mirrors manual and generated terminal tab titles to the matching Codex or Claude conversation.",
+        "checkbox": "Sync titles to Codex and Claude"
+      },
       "sessionTitlePrompt": {
         "label": "Session title prompt",
         "hint": "Instructions sent before the transcript context. Leave blank to use the default prompt.",

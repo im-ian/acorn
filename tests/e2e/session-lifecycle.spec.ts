@@ -28,7 +28,10 @@ test.describe("session lifecycle", () => {
     await page.addInitScript(() => {
       localStorage.setItem(
         "acorn:settings:v1",
-        JSON.stringify({ shortcuts: { renameItem: "F3" } }),
+        JSON.stringify({
+          shortcuts: { renameItem: "F3" },
+          agents: { syncAgentSessionTitles: true },
+        }),
       );
     });
     await tauri.respond("list_projects", [PROJECT]);
@@ -80,8 +83,16 @@ test.describe("session lifecycle", () => {
     const calls = (await page.evaluate(
       () =>
         (window as unknown as { __renameCalls?: unknown[] }).__renameCalls,
-    )) as Array<{ id: string; name: string }>;
-    expect(calls[0]).toEqual({ id: "s-1", name: "renamed" });
+    )) as Array<{
+      id: string;
+      name: string;
+      syncAgentSessionTitles: boolean;
+    }>;
+    expect(calls[0]).toEqual({
+      id: "s-1",
+      name: "renamed",
+      syncAgentSessionTitles: true,
+    });
   });
 
   test("double-clicking a project session row starts rename", async ({
@@ -114,10 +125,15 @@ test.describe("session lifecycle", () => {
     const calls = (await page.evaluate(
       () =>
         (window as unknown as { __renameCalls?: unknown[] }).__renameCalls,
-    )) as Array<{ id: string; name: string }>;
+    )) as Array<{
+      id: string;
+      name: string;
+      syncAgentSessionTitles: boolean;
+    }>;
     expect(calls[0]).toEqual({
       id: "s-1",
       name: "renamed from double click",
+      syncAgentSessionTitles: false,
     });
   });
 

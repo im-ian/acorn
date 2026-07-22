@@ -2780,6 +2780,22 @@ function AgentSettings({
           </Tooltip>
         </div>
       </Field>
+      <Field
+        label={st(t, "settings.agents.sessionTitleSync.label")}
+        hint={st(t, "settings.agents.sessionTitleSync.hint")}
+      >
+        <label className="flex items-center gap-2 text-xs text-fg">
+          <input
+            type="checkbox"
+            checked={settings.agents.syncAgentSessionTitles}
+            onChange={(e) =>
+              patchAgents({ syncAgentSessionTitles: e.target.checked })
+            }
+            className="acorn-check"
+          />
+          {st(t, "settings.agents.sessionTitleSync.checkbox")}
+        </label>
+      </Field>
       <SessionTitlePromptModal
         open={sessionTitlePromptOpen}
         onClose={() => onSessionTitlePromptOpenChange(false)}
