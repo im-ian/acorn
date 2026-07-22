@@ -48,6 +48,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { api } from "../lib/api";
+import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { isInAcornFloatingLayer } from "../lib/floatingLayer";
@@ -58,6 +59,7 @@ import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
   PROJECT_SESSION_CREATE_MENU,
+  type DirectProjectSessionCreateAction,
   type ProjectSessionCreateAction,
 } from "../lib/projectSessionCreateActions";
 import {
@@ -981,7 +983,7 @@ type KanbanActionEvent =
   | "acorn:new-control-session";
 
 const KANBAN_CREATE_ACTION_EVENTS: Record<
-  ProjectSessionCreateAction["id"],
+  DirectProjectSessionCreateAction["id"],
   KanbanActionEvent
 > = {
   terminal: "acorn:new-session",
@@ -990,12 +992,20 @@ const KANBAN_CREATE_ACTION_EVENTS: Record<
   control: "acorn:new-control-session",
 };
 
-function dispatchKanbanAction(eventName: KanbanActionEvent) {
-  window.dispatchEvent(new CustomEvent(eventName));
+function dispatchKanbanAction(action: ProjectSessionCreateAction) {
+  if (action.flow === "goal") {
+    requestNewAutonomousGoalSession();
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent(KANBAN_CREATE_ACTION_EVENTS[action.id]),
+  );
 }
 
 function kanbanSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
   switch (id) {
+    case "goal":
+      return <Sparkles size={12} />;
     case "terminal":
       return <Plus size={12} />;
     case "isolated":
@@ -1123,8 +1133,7 @@ function KanbanCreateSessionDropdown({ t }: { t: Translator }) {
           shortcut: action.hotkeyId
             ? formatHotkey(shortcuts[action.hotkeyId])
             : undefined,
-          onClick: () =>
-            dispatchKanbanAction(KANBAN_CREATE_ACTION_EVENTS[action.id]),
+          onClick: () => dispatchKanbanAction(action),
         };
       }),
     ],

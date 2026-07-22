@@ -307,6 +307,8 @@ mod tests {
         let claude = title_generation_command(
             (AiExecutionRequest {
                 provider: crate::ai::AiProvider::Claude,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             })
@@ -320,6 +322,8 @@ mod tests {
         let codex = title_generation_command(
             (AiExecutionRequest {
                 provider: crate::ai::AiProvider::Codex,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             })
@@ -335,6 +339,8 @@ mod tests {
 
         let base = AiExecutionRequest {
             provider: crate::ai::AiProvider::Codex,
+            model: None,
+            effort: None,
             ollama_model: None,
             llm_model: None,
         }
@@ -363,6 +369,8 @@ mod tests {
 
         let base = AiExecutionRequest {
             provider: crate::ai::AiProvider::Claude,
+            model: None,
+            effort: None,
             ollama_model: None,
             llm_model: None,
         }
@@ -385,6 +393,8 @@ mod tests {
 
         let base = AiExecutionRequest {
             provider: crate::ai::AiProvider::Ollama,
+            model: None,
+            effort: None,
             ollama_model: Some("llama3".to_string()),
             llm_model: None,
         }

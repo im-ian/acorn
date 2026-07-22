@@ -44,6 +44,31 @@ test.describe("command palette", () => {
     await expect(palette).toHaveCount(0);
   });
 
+  test("opens a project Goal dialog from the sessions group", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", []);
+
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "p" });
+    await page
+      .getByRole("option", { name: "New goal session", exact: true })
+      .click();
+
+    await expect(
+      page.getByRole("dialog", { name: "New goal session" }),
+    ).toBeVisible();
+  });
+
   test("New chat session creates a chat-mode session in the active project", async ({
     page,
     tauri,

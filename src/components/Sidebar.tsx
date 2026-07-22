@@ -71,6 +71,11 @@ import {
   createEmptySessionAgentDetection,
 } from "../lib/agentContextMenu";
 import { api, type SessionRemoval } from "../lib/api";
+import {
+  EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
+  NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
+  type NewAutonomousGoalSessionEventDetail,
+} from "../lib/autonomousGoal";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
@@ -130,6 +135,7 @@ import {
   applySessionCreateRequest,
   buildSessionCreateRequest,
   buildSessionCreateRequestFromScope,
+  resolveActiveProjectSessionScope,
   resolveActiveSessionScope,
   scopeForSession,
   scopeWithProjectRootLaunch,
@@ -159,6 +165,7 @@ import type {
   SessionStatus,
   SessionStatusReason,
 } from "../lib/types";
+import { AutonomousGoalDialog } from "./AutonomousGoalDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
@@ -329,6 +336,11 @@ export function Sidebar() {
     );
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [autonomousGoalOpen, setAutonomousGoalOpen] = useState(false);
+  const [autonomousGoalScope, setAutonomousGoalScope] =
+    useState<SessionCreateScope | null>(null);
+  const [autonomousGoalSession, setAutonomousGoalSession] =
+    useState<Session | null>(null);
   const [settingsProject, setSettingsProject] =
     useState<ProjectFolderProjectGroup | null>(null);
   const [pendingRemoveProjectFolderId, setPendingRemoveProjectFolderId] =
@@ -677,6 +689,62 @@ export function Sidebar() {
         "chat",
       );
     };
+    const newAutonomousGoal = (event: Event) => {
+      const requestedScope = (
+        event as CustomEvent<NewAutonomousGoalSessionEventDetail>
+      ).detail?.scope;
+      const state = useAppStore.getState();
+      const scope =
+        requestedScope ??
+        resolveActiveProjectSessionScope({
+          sessions: state.sessions,
+          projects: state.projects,
+          activeSessionId: state.activeSessionId,
+          activeWorkspaceRepoPath: state.activeProject,
+          activeWorkspaceCwdPath:
+            findProjectFolderById(
+              state.projectFolders,
+              state.activeProjectFolderId,
+            )?.cwdPath ?? null,
+          activeProjectFolderId: state.activeProjectFolderId,
+        });
+      if (!scope?.placement.projectScoped) {
+        useToasts
+          .getState()
+          .show(t("dialogs.autonomousGoal.projectScopeRequired"));
+        return;
+      }
+      setAutonomousGoalSession(null);
+      setAutonomousGoalScope(scope);
+      setAutonomousGoalOpen(true);
+    };
+    const editAutonomousGoal = (event: Event) => {
+      const sessionId = (event as CustomEvent<{ sessionId?: string }>).detail
+        ?.sessionId;
+      if (!sessionId) return;
+      const target = useAppStore
+        .getState()
+        .sessions.find((candidate) => candidate.id === sessionId);
+      if (!target?.goal || target.project_scoped === false) return;
+      void (async () => {
+        try {
+          await api.cancelChatMessage(target.id);
+          await useAppStore.getState().refreshSessions();
+          const current = useAppStore
+            .getState()
+            .sessions.find((candidate) => candidate.id === sessionId);
+          if (!current?.goal) return;
+          setAutonomousGoalScope(null);
+          setAutonomousGoalSession(current);
+          setAutonomousGoalOpen(true);
+        } catch (error) {
+          console.error("pause goal session before editing failed", error);
+          useToasts
+            .getState()
+            .show(`${t("toasts.autonomousGoal.pauseFailed")} ${String(error)}`);
+        }
+      })();
+    };
     const newProject = () => {
       setNewProjectOpen(true);
     };
@@ -687,6 +755,14 @@ export function Sidebar() {
     window.addEventListener("acorn:new-isolated-session", newIsolated);
     window.addEventListener("acorn:new-control-session", newControl);
     window.addEventListener("acorn:new-chat-session", newChat);
+    window.addEventListener(
+      NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
+      newAutonomousGoal,
+    );
+    window.addEventListener(
+      EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
+      editAutonomousGoal,
+    );
     window.addEventListener("acorn:new-project", newProject);
     window.addEventListener("acorn:add-project", addProj);
     return () => {
@@ -694,6 +770,14 @@ export function Sidebar() {
       window.removeEventListener("acorn:new-isolated-session", newIsolated);
       window.removeEventListener("acorn:new-control-session", newControl);
       window.removeEventListener("acorn:new-chat-session", newChat);
+      window.removeEventListener(
+        NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
+        newAutonomousGoal,
+      );
+      window.removeEventListener(
+        EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
+        editAutonomousGoal,
+      );
       window.removeEventListener("acorn:new-project", newProject);
       window.removeEventListener("acorn:add-project", addProj);
     };
@@ -794,6 +878,19 @@ export function Sidebar() {
   onNewSessionRef.current = onNewSession;
   onNewLocalSessionRef.current = onNewLocalSession;
   onAddProjectRef.current = onAddExistingProject;
+
+  function openAutonomousGoalForFolder(folder: ProjectFolder) {
+    setAutonomousGoalSession(null);
+    setAutonomousGoalScope({
+      placement: {
+        repoPath: folder.repoPath,
+        projectScoped: true,
+        projectFolderId: folder.id,
+      },
+      launch: { kind: "workspaceCwd", cwdPath: folder.cwdPath },
+    });
+    setAutonomousGoalOpen(true);
+  }
 
   const projectIds = useMemo(
     () => projectGroups.map((p) => projectDragId(p.repoPath)),
@@ -1292,6 +1389,7 @@ export function Sidebar() {
                             mode,
                           )
                         }
+                        onAddAutonomousGoal={openAutonomousGoalForFolder}
                         onAddFolder={() => onAddProjectFolder(project.repoPath)}
                         onAddWorktreeFolder={() =>
                           void onAddProjectFolderWorktree(project.repoPath)
@@ -1349,6 +1447,16 @@ export function Sidebar() {
         </DndContext>
         <SessionActivityInbox />
       </div>
+      <AutonomousGoalDialog
+        open={autonomousGoalOpen}
+        scope={autonomousGoalScope}
+        session={autonomousGoalSession}
+        onClose={() => {
+          setAutonomousGoalOpen(false);
+          setAutonomousGoalScope(null);
+          setAutonomousGoalSession(null);
+        }}
+      />
       <NewProjectDialog
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
@@ -1503,6 +1611,7 @@ function SessionRowPreview({
         isGeneratingTitle={false}
         generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
         chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
+        goalLabel={sidebarText(t, "sidebar.aria.goalSession")}
       />
       <SessionRowLabel
         editing={false}
@@ -1796,6 +1905,8 @@ function pickSessionToActivate(
 
 function projectSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
   switch (id) {
+    case "goal":
+      return <Sparkles size={12} />;
     case "terminal":
       return <Plus size={12} />;
     case "isolated":
@@ -1849,6 +1960,7 @@ interface ProjectGroupViewProps {
     kind: SessionKind,
     mode?: SessionMode,
   ) => void;
+  onAddAutonomousGoal: (folder: ProjectFolder) => void;
   onAddFolder: () => void;
   onAddWorktreeFolder: () => void;
   onRenameFolder: (folderId: string, name: string) => void;
@@ -1876,6 +1988,7 @@ function ProjectGroupView({
   onSelectSession,
   onRemoveSession,
   onAddSession,
+  onAddAutonomousGoal,
   onAddFolder,
   onAddWorktreeFolder,
   onRenameFolder,
@@ -1924,29 +2037,43 @@ function ProjectGroupView({
     ) ?? project.folders[0] ?? null;
   const projectSessionCreationFolder = defaultFolderGroup?.folder ?? null;
 
+  const runCreateAction = useCallback(
+    (action: ProjectSessionCreateAction) => {
+      if (!projectSessionCreationFolder) return;
+      if (action.flow === "goal") {
+        onAddAutonomousGoal(projectSessionCreationFolder);
+        return;
+      }
+      onAddSession(
+        projectSessionCreationFolder,
+        action.isolated,
+        action.kind,
+        action.mode,
+      );
+    },
+    [onAddAutonomousGoal, onAddSession, projectSessionCreationFolder],
+  );
+
   const createMenuItems = useMemo<ContextMenuItem[]>(
-    () =>
-      PROJECT_SESSION_CREATE_MENU.map((item) => {
-        if (item.type === "separator") return { type: "separator" };
-        const action = item.action;
-        return {
-          label: sidebarText(t, action.labelKey),
-          icon: projectSessionCreateIcon(action.id),
-          shortcut: action.hotkeyId
-            ? formatHotkey(shortcuts[action.hotkeyId])
-            : undefined,
-          onClick: () =>
-            projectSessionCreationFolder
-              ? onAddSession(
-                  projectSessionCreationFolder,
-                  action.isolated,
-                  action.kind,
-                  action.mode,
-                )
+    () => {
+      const items: ContextMenuItem[] = [];
+      items.push(
+        ...PROJECT_SESSION_CREATE_MENU.map<ContextMenuItem>((item) => {
+          if (item.type === "separator") return { type: "separator" };
+          const action = item.action;
+          return {
+            label: sidebarText(t, action.labelKey),
+            icon: projectSessionCreateIcon(action.id),
+            shortcut: action.hotkeyId
+              ? formatHotkey(shortcuts[action.hotkeyId])
               : undefined,
-        };
-      }),
-    [onAddSession, projectSessionCreationFolder, shortcuts, t],
+            onClick: () => runCreateAction(action),
+          };
+        }),
+      );
+      return items;
+    },
+    [runCreateAction, shortcuts, t],
   );
   const overflowCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => {
@@ -1958,15 +2085,7 @@ function ProjectGroupView({
             shortcut: action.hotkeyId
               ? formatHotkey(shortcuts[action.hotkeyId])
               : undefined,
-            onClick: () =>
-              projectSessionCreationFolder
-                ? onAddSession(
-                    projectSessionCreationFolder,
-                    action.isolated,
-                    action.kind,
-                    action.mode,
-                  )
-                : undefined,
+            onClick: () => runCreateAction(action),
           };
         });
       return [
@@ -1988,14 +2107,7 @@ function ProjectGroupView({
         ...sessionItems,
       ];
     },
-    [
-      onAddFolder,
-      onAddSession,
-      onAddWorktreeFolder,
-      projectSessionCreationFolder,
-      shortcuts,
-      t,
-    ],
+    [onAddFolder, onAddWorktreeFolder, runCreateAction, shortcuts, t],
   );
 
   async function copyText(text: string) {
@@ -2116,14 +2228,7 @@ function ProjectGroupView({
                   e.stopPropagation();
                   setMenu(null);
                   setCreateMenu(null);
-                  if (projectSessionCreationFolder) {
-                    onAddSession(
-                      projectSessionCreationFolder,
-                      action.isolated,
-                      action.kind,
-                      action.mode,
-                    );
-                  }
+                  runCreateAction(action);
                 }}
                 className="flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
                 aria-label={sidebarText(t, action.ariaKey)}
@@ -2310,6 +2415,9 @@ function ProjectGroupView({
                         mode,
                       )
                     }
+                    onAddAutonomousGoal={() =>
+                      onAddAutonomousGoal(item.folderGroup.folder)
+                    }
                     onMoveSessionToFolder={onMoveSessionToFolder}
                   />
                 ),
@@ -2350,6 +2458,7 @@ interface ProjectFolderViewProps {
     kind: SessionKind,
     mode: SessionMode,
   ) => void;
+  onAddAutonomousGoal: () => void;
   onMoveSessionToFolder: (sessionId: string, folderId: string | null) => void;
 }
 
@@ -2367,6 +2476,7 @@ function ProjectFolderView({
   onRenameFolder,
   onRemoveFolder,
   onAddSession,
+  onAddAutonomousGoal,
   onMoveSessionToFolder,
 }: ProjectFolderViewProps) {
   const t = useTranslation();
@@ -2419,6 +2529,18 @@ function ProjectFolderView({
     () => projectSessionCreateMenuForWorkspace(folder, false),
     [folder],
   );
+
+  const runCreateAction = useCallback(
+    (action: ProjectSessionCreateAction) => {
+      if (action.flow === "goal") {
+        onAddAutonomousGoal();
+        return;
+      }
+      onAddSession(action.isolated, action.kind, action.mode);
+    },
+    [onAddAutonomousGoal, onAddSession],
+  );
+
   const folderCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => [
       contextMenuGroupTitle(t, "session"),
@@ -2431,12 +2553,11 @@ function ProjectFolderView({
           shortcut: action.hotkeyId
             ? formatHotkey(shortcuts[action.hotkeyId])
             : undefined,
-          onClick: () =>
-            onAddSession(action.isolated, action.kind, action.mode),
+          onClick: () => runCreateAction(action),
         };
       }),
     ],
-    [folderCreateMenu, onAddSession, shortcuts, t],
+    [folderCreateMenu, runCreateAction, shortcuts, t],
   );
   const folderOverflowCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => [
@@ -2450,12 +2571,11 @@ function ProjectFolderView({
           shortcut: action.hotkeyId
             ? formatHotkey(shortcuts[action.hotkeyId])
             : undefined,
-          onClick: () =>
-            onAddSession(action.isolated, action.kind, action.mode),
+          onClick: () => runCreateAction(action),
         };
       }),
     ],
-    [folderOverflowCreateMenu, onAddSession, shortcuts, t],
+    [folderOverflowCreateMenu, runCreateAction, shortcuts, t],
   );
 
   function submitRename(next: string) {
@@ -3169,6 +3289,7 @@ function SessionRow({
         isGeneratingTitle={isGeneratingTitle}
         generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
         chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
+        goalLabel={sidebarText(t, "sidebar.aria.goalSession")}
       />
       <SessionRowLabel
         editing={editing}
@@ -3367,17 +3488,26 @@ function SessionStatusMarker({
   isGeneratingTitle,
   generatingLabel,
   chatLabel,
+  goalLabel,
 }: {
   session: Session;
   agentProvider: SessionAgentProvider | null;
   isGeneratingTitle: boolean;
   generatingLabel: string;
   chatLabel: string;
+  goalLabel: string;
 }) {
   return (
     <span className="flex h-5 w-3 shrink-0 items-center justify-center">
       {isGeneratingTitle ? (
         <SessionTitleGeneratingIndicator label={generatingLabel} side="right" />
+      ) : session.goal ? (
+        <Tooltip label={goalLabel} side="right">
+          <Sparkles
+            size={12}
+            className={cn("shrink-0", STATUS_ICON[session.status])}
+          />
+        </Tooltip>
       ) : session.mode === "chat" ? (
         <Tooltip label={chatLabel} side="right">
           <MessageSquareText
@@ -4514,6 +4644,7 @@ function LocalSessionRow({
         isGeneratingTitle={isGeneratingTitle}
         generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
         chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
+        goalLabel={sidebarText(t, "sidebar.aria.goalSession")}
       />
       <SessionRowLabel
         editing={editing}
