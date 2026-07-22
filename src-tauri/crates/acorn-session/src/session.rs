@@ -178,6 +178,167 @@ pub enum SessionMode {
     Chat,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionGoalStagePolicy {
+    Auto,
+    Approval,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionGoalPolicies {
+    pub interpretation: SessionGoalStagePolicy,
+    pub plan: SessionGoalStagePolicy,
+    pub implementation: SessionGoalStagePolicy,
+    pub validation: SessionGoalStagePolicy,
+    pub auto_fix: SessionGoalStagePolicy,
+    pub self_review: SessionGoalStagePolicy,
+    pub draft_pr: SessionGoalStagePolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionGoalPreset {
+    pub id: String,
+    pub name: String,
+    pub policies: SessionGoalPolicies,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionGoalModelSelection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionGoalStageModels {
+    #[serde(default)]
+    pub interpretation: SessionGoalModelSelection,
+    #[serde(default)]
+    pub plan: SessionGoalModelSelection,
+    #[serde(default)]
+    pub implementation: SessionGoalModelSelection,
+    #[serde(default)]
+    pub validation: SessionGoalModelSelection,
+    #[serde(default)]
+    pub auto_fix: SessionGoalModelSelection,
+    #[serde(default)]
+    pub self_review: SessionGoalModelSelection,
+    #[serde(default)]
+    pub draft_pr: SessionGoalModelSelection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionGoalModelConfig {
+    #[serde(default = "default_true")]
+    pub single_model: bool,
+    #[serde(default)]
+    pub default: SessionGoalModelSelection,
+    #[serde(default)]
+    pub stages: SessionGoalStageModels,
+}
+
+impl Default for SessionGoalModelConfig {
+    fn default() -> Self {
+        Self {
+            single_model: true,
+            default: SessionGoalModelSelection::default(),
+            stages: SessionGoalStageModels::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionGoalStage {
+    Interpretation,
+    Plan,
+    Implementation,
+    Validation,
+    AutoFix,
+    SelfReview,
+    DraftPr,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionGoalRunState {
+    /// Persisted Goal sessions created before staged execution was introduced
+    /// remain readable and are never restarted implicitly.
+    #[default]
+    Legacy,
+    Pending,
+    Running,
+    Waiting,
+    Paused,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionGoalProgress {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_stage: Option<SessionGoalStage>,
+    #[serde(default)]
+    pub state: SessionGoalRunState,
+    /// Marks a Plan generated from a durable Goal edit. The stored Plan
+    /// policy still decides whether execution pauses for approval.
+    #[serde(default)]
+    pub revision_review: bool,
+    /// True only while the current stage still owes its policy-mandated
+    /// approval boundary. A user's reply clears this before work resumes.
+    #[serde(default)]
+    pub approval_pending: bool,
+}
+
+impl SessionGoalProgress {
+    pub fn initial() -> Self {
+        Self {
+            current_stage: Some(SessionGoalStage::Interpretation),
+            state: SessionGoalRunState::Pending,
+            revision_review: false,
+            approval_pending: false,
+        }
+    }
+
+    pub fn revised_plan() -> Self {
+        Self {
+            current_stage: Some(SessionGoalStage::Plan),
+            state: SessionGoalRunState::Pending,
+            revision_review: true,
+            approval_pending: false,
+        }
+    }
+}
+
+fn default_goal_revision() -> u32 {
+    1
+}
+
+/// Durable goal specification for a project-owned chat session. Preset
+/// policies are copied into the session so later preset edits or deletion do
+/// not change work that is already running.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionGoal {
+    pub objective: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_criteria: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests: Option<String>,
+    pub provider: SessionAgentProvider,
+    pub preset: SessionGoalPreset,
+    #[serde(default)]
+    pub model_config: SessionGoalModelConfig,
+    #[serde(default)]
+    pub progress: SessionGoalProgress,
+    #[serde(default = "default_goal_revision")]
+    pub revision: u32,
+}
+
 /// Ownership boundary for control-session-created worker sessions.
 ///
 /// User-created and legacy sessions default to `User`. Sessions created through
@@ -257,6 +418,8 @@ pub struct Session {
     pub kind: SessionKind,
     #[serde(default)]
     pub mode: SessionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<SessionGoal>,
     #[serde(default)]
     pub owner: SessionOwner,
     /// User-defined display order within the project group. `None` means the
@@ -345,6 +508,7 @@ impl Session {
             generated_title_transcript_id: None,
             kind,
             mode: SessionMode::Terminal,
+            goal: None,
             owner: SessionOwner::User,
             position: None,
             daemon_session_id: None,
@@ -976,6 +1140,46 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
+    pub fn update_goal(
+        &self,
+        id: &Uuid,
+        expected_revision: u32,
+        goal: SessionGoal,
+    ) -> SessionResult<Option<Session>> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        if entry.goal.as_ref().map(|current| current.revision) != Some(expected_revision) {
+            return Ok(None);
+        }
+        entry.agent_provider = Some(goal.provider);
+        entry.goal = Some(goal);
+        entry.updated_at = Utc::now();
+        Ok(Some(entry.clone()))
+    }
+
+    pub fn update_goal_progress_if_revision(
+        &self,
+        id: &Uuid,
+        expected_revision: u32,
+        progress: SessionGoalProgress,
+    ) -> SessionResult<Option<Session>> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let Some(goal) = entry.goal.as_mut() else {
+            return Ok(None);
+        };
+        if goal.revision != expected_revision {
+            return Ok(None);
+        }
+        goal.progress = progress;
+        entry.updated_at = Utc::now();
+        Ok(Some(entry.clone()))
+    }
+
     pub fn rename(&self, id: &Uuid, name: String) -> SessionResult<Session> {
         let mut entry = self
             .inner
@@ -1105,6 +1309,32 @@ mod tests {
             isolated,
             SessionKind::Regular,
         )
+    }
+
+    fn fake_goal(revision: u32) -> SessionGoal {
+        SessionGoal {
+            objective: "Ship project goal sessions".to_string(),
+            completion_criteria: Some("Goal survives restart".to_string()),
+            constraints: None,
+            tests: Some("cargo test".to_string()),
+            provider: SessionAgentProvider::Codex,
+            preset: SessionGoalPreset {
+                id: "builtin:balanced".to_string(),
+                name: "Balanced".to_string(),
+                policies: SessionGoalPolicies {
+                    interpretation: SessionGoalStagePolicy::Auto,
+                    plan: SessionGoalStagePolicy::Approval,
+                    implementation: SessionGoalStagePolicy::Auto,
+                    validation: SessionGoalStagePolicy::Auto,
+                    auto_fix: SessionGoalStagePolicy::Auto,
+                    self_review: SessionGoalStagePolicy::Auto,
+                    draft_pr: SessionGoalStagePolicy::Disabled,
+                },
+            },
+            model_config: SessionGoalModelConfig::default(),
+            progress: SessionGoalProgress::initial(),
+            revision,
+        }
     }
 
     #[test]
@@ -1627,6 +1857,100 @@ mod tests {
         let restored: Session = serde_json::from_value(json).expect("session deserializes");
 
         assert_eq!(restored.mode, SessionMode::Terminal);
+    }
+
+    #[test]
+    fn persisted_sessions_without_goal_load_as_non_goal_sessions() {
+        let mut json =
+            serde_json::to_value(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false))
+                .expect("session serializes");
+        json.as_object_mut()
+            .expect("session json is an object")
+            .remove("goal");
+
+        let restored: Session = serde_json::from_value(json).expect("session deserializes");
+
+        assert_eq!(restored.goal, None);
+    }
+
+    #[test]
+    fn goal_metadata_round_trips_with_the_session() {
+        let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+        session.mode = SessionMode::Chat;
+        session.goal = Some(fake_goal(3));
+
+        let json = serde_json::to_value(&session).expect("goal session serializes");
+        let restored: Session = serde_json::from_value(json).expect("goal session deserializes");
+
+        assert_eq!(restored.goal, session.goal);
+    }
+
+    #[test]
+    fn legacy_goal_metadata_loads_without_restarting_staged_execution() {
+        let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+        session.mode = SessionMode::Chat;
+        session.goal = Some(fake_goal(3));
+        let mut json = serde_json::to_value(&session).expect("goal session serializes");
+        let goal = json
+            .get_mut("goal")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("goal is an object");
+        goal.remove("model_config");
+        goal.remove("progress");
+
+        let restored: Session = serde_json::from_value(json).expect("legacy goal deserializes");
+        let restored_goal = restored.goal.expect("goal remains present");
+
+        assert!(restored_goal.model_config.single_model);
+        assert_eq!(restored_goal.progress.state, SessionGoalRunState::Legacy);
+        assert_eq!(restored_goal.progress.current_stage, None);
+    }
+
+    #[test]
+    fn goal_updates_require_the_current_revision() {
+        let store = SessionStore::new();
+        let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+        session.mode = SessionMode::Chat;
+        session.goal = Some(fake_goal(1));
+        let session = store.insert(session);
+
+        assert!(store
+            .update_goal(&session.id, 0, fake_goal(2))
+            .expect("session exists")
+            .is_none());
+        let updated = store
+            .update_goal(&session.id, 1, fake_goal(2))
+            .expect("session exists")
+            .expect("revision matches");
+
+        assert_eq!(updated.goal.as_ref().map(|goal| goal.revision), Some(2));
+        assert_eq!(updated.agent_provider, Some(SessionAgentProvider::Codex));
+    }
+
+    #[test]
+    fn goal_progress_updates_are_fenced_by_goal_revision() {
+        let store = SessionStore::new();
+        let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+        session.mode = SessionMode::Chat;
+        session.goal = Some(fake_goal(2));
+        let session = store.insert(session);
+        let progress = SessionGoalProgress {
+            current_stage: Some(SessionGoalStage::Implementation),
+            state: SessionGoalRunState::Running,
+            revision_review: false,
+            approval_pending: false,
+        };
+
+        assert!(store
+            .update_goal_progress_if_revision(&session.id, 1, progress.clone())
+            .expect("session exists")
+            .is_none());
+        let updated = store
+            .update_goal_progress_if_revision(&session.id, 2, progress.clone())
+            .expect("session exists")
+            .expect("revision matches");
+
+        assert_eq!(updated.goal.expect("goal").progress, progress);
     }
 
     #[test]

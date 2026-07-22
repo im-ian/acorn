@@ -27,8 +27,9 @@ use acorn_session::scrollback;
 use acorn_session::status as session_status;
 use acorn_session::status::StatusReason as SessionStatusReason;
 use acorn_session::{
-    AgentStatusSource, Project, Session, SessionAgentProvider, SessionKind, SessionMode,
-    SessionOwner, SessionStatus,
+    AgentStatusSource, Project, Session, SessionAgentProvider, SessionGoal,
+    SessionGoalModelSelection, SessionGoalProgress, SessionGoalRunState, SessionGoalStage,
+    SessionGoalStagePolicy, SessionKind, SessionMode, SessionOwner, SessionStatus,
 };
 use acorn_transcript::{assistant_message_text, collapse_preview};
 
@@ -598,6 +599,7 @@ fn backfill_missing_assistant_provider_metadata(chat_state: &mut persistence::Ch
 
 fn chat_model_label(ai: &crate::ai::AiExecutionRequest) -> Option<String> {
     match ai.provider {
+        crate::ai::AiProvider::Claude | crate::ai::AiProvider::Codex => ai.model.clone(),
         crate::ai::AiProvider::Ollama => ai.ollama_model.clone(),
         crate::ai::AiProvider::Llm => ai.llm_model.clone(),
         _ => None,
@@ -2335,7 +2337,11 @@ fn resolve_chat_cli_invocation(
     ai: &crate::ai::AiExecutionRequest,
     input: &ChatProviderInput,
 ) -> AppResult<ChatCliInvocation> {
-    let _requested_model = input.model.as_deref();
+    debug_assert_eq!(
+        input.model.as_deref(),
+        chat_model_label(ai).as_deref(),
+        "chat turn model must match the resolved AI request"
+    );
     let prompt = chat_prompt_for_provider_input(input);
     let cursor = provider_thread_resume_cursor(input.thread.as_ref());
     match ai.provider {
@@ -2347,6 +2353,7 @@ fn resolve_chat_cli_invocation(
                 "--verbose".to_string(),
                 "--include-partial-messages".to_string(),
             ];
+            crate::ai::append_native_model_and_effort_args(ai, &mut args)?;
             let thread_id = match cursor {
                 Some(cursor) => {
                     args.push("--resume".to_string());
@@ -2374,18 +2381,18 @@ fn resolve_chat_cli_invocation(
             })
         }
         crate::ai::AiProvider::Codex => {
+            let mut base_args = vec![
+                "exec".to_string(),
+                "--skip-git-repo-check".to_string(),
+                "--json".to_string(),
+            ];
+            crate::ai::append_native_model_and_effort_args(ai, &mut base_args)?;
             if let Some(cursor) = cursor {
+                base_args.extend(["resume".to_string(), cursor.clone(), "-".to_string()]);
                 Ok(ChatCliInvocation {
                     cli: crate::ai::ResolvedAiCommand {
                         command: "codex",
-                        args: vec![
-                            "exec".to_string(),
-                            "--skip-git-repo-check".to_string(),
-                            "--json".to_string(),
-                            "resume".to_string(),
-                            cursor.clone(),
-                            "-".to_string(),
-                        ],
+                        args: base_args,
                         prompt_transport: crate::ai::PromptTransport::Stdin,
                     },
                     prompt,
@@ -2398,11 +2405,7 @@ fn resolve_chat_cli_invocation(
                 Ok(ChatCliInvocation {
                     cli: crate::ai::ResolvedAiCommand {
                         command: "codex",
-                        args: vec![
-                            "exec".to_string(),
-                            "--skip-git-repo-check".to_string(),
-                            "--json".to_string(),
-                        ],
+                        args: base_args,
                         prompt_transport: crate::ai::PromptTransport::Stdin,
                     },
                     prompt,
@@ -3256,6 +3259,25 @@ fn chat_session_status_for_message_status(status: persistence::ChatMessageStatus
     }
 }
 
+fn chat_state_requests_user_input(chat_state: &persistence::ChatSessionState) -> bool {
+    chat_state.messages.last().is_some_and(|message| {
+        message.role == persistence::ChatRole::Assistant
+            && !matches!(
+                message.status,
+                Some(
+                    persistence::ChatMessageStatus::Pending
+                        | persistence::ChatMessageStatus::Streaming
+                        | persistence::ChatMessageStatus::Error
+                        | persistence::ChatMessageStatus::Cancelled
+                )
+            )
+            && message
+                .content
+                .lines()
+                .any(|line| line.trim_start().starts_with("WAITING:"))
+    })
+}
+
 fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> SessionStatus {
     if chat_state_has_running_message(chat_state) {
         return SessionStatus::Working;
@@ -3268,6 +3290,8 @@ fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> 
         || last_turn.is_some_and(|turn| turn.status == persistence::ChatTurnStatus::Error)
     {
         SessionStatus::Errored
+    } else if chat_state_requests_user_input(chat_state) {
+        SessionStatus::WaitingForInput
     } else {
         SessionStatus::Ready
     }
@@ -4313,6 +4337,7 @@ pub async fn create_session(
     agent_provider: Option<SessionAgentProvider>,
     project_scoped: Option<bool>,
     mode: Option<SessionMode>,
+    goal: Option<SessionGoal>,
 ) -> AppResult<Session> {
     create_session_inner(
         state.inner(),
@@ -4324,6 +4349,7 @@ pub async fn create_session(
         agent_provider,
         project_scoped.unwrap_or(true),
         mode.unwrap_or_default(),
+        goal,
         false,
     )
 }
@@ -4353,6 +4379,7 @@ pub async fn create_session_from_dialog<R: Runtime>(
         agent_provider,
         project_scoped.unwrap_or(true),
         mode.unwrap_or_default(),
+        None,
         true,
     )?))
 }
@@ -4367,8 +4394,25 @@ fn create_session_inner(
     agent_provider: Option<SessionAgentProvider>,
     project_scoped: bool,
     mode: SessionMode,
+    goal: Option<SessionGoal>,
     allow_project_registration: bool,
 ) -> AppResult<Session> {
+    let goal = goal
+        .map(normalize_session_goal)
+        .transpose()?
+        .map(|mut goal| {
+            goal.revision = 1;
+            goal.progress = SessionGoalProgress::initial();
+            goal
+        });
+    validate_goal_session_creation(
+        goal.as_ref(),
+        isolated,
+        kind,
+        agent_provider,
+        project_scoped,
+        mode,
+    )?;
     let selected_path = canonical_existing_path(&selected_path)?;
     let cwd_path = cwd_path
         .map(|path| canonical_existing_path(&path))
@@ -4416,12 +4460,107 @@ fn create_session_inner(
     ));
     session.agent_provider = agent_provider;
     session.mode = mode;
+    session.goal = goal;
     let inserted = state.sessions.insert(session);
     if project_scoped {
         state.projects.ensure(repo.clone(), project_basename(&repo));
     }
     persist(state);
     Ok(enrich_session(inserted))
+}
+
+fn validate_goal_session_creation(
+    goal: Option<&SessionGoal>,
+    isolated: bool,
+    kind: SessionKind,
+    agent_provider: Option<SessionAgentProvider>,
+    project_scoped: bool,
+    mode: SessionMode,
+) -> AppResult<()> {
+    let Some(goal) = goal else {
+        return Ok(());
+    };
+    if !isolated || !project_scoped || kind != SessionKind::Regular || mode != SessionMode::Chat {
+        return Err(AppError::Other(
+            "goal sessions must be isolated regular project chat sessions".to_string(),
+        ));
+    }
+    if agent_provider != Some(goal.provider) {
+        return Err(AppError::Other(
+            "goal session provider must match the selected agent".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_session_goal(mut goal: SessionGoal) -> AppResult<SessionGoal> {
+    goal.objective = goal.objective.trim().to_string();
+    if goal.objective.is_empty() {
+        return Err(AppError::Other(
+            "goal objective must not be empty".to_string(),
+        ));
+    }
+    if !matches!(
+        goal.provider,
+        SessionAgentProvider::Claude | SessionAgentProvider::Codex
+    ) {
+        return Err(AppError::Other(
+            "goal sessions support only Claude or Codex".to_string(),
+        ));
+    }
+    goal.completion_criteria = normalize_optional_goal_text(goal.completion_criteria);
+    goal.constraints = normalize_optional_goal_text(goal.constraints);
+    goal.tests = normalize_optional_goal_text(goal.tests);
+    goal.preset.id = goal.preset.id.trim().to_string();
+    goal.preset.name = goal.preset.name.trim().to_string();
+    if goal.preset.id.is_empty() || goal.preset.name.is_empty() {
+        return Err(AppError::Other(
+            "goal preset id and name must not be empty".to_string(),
+        ));
+    }
+    if goal.revision == 0 {
+        goal.revision = 1;
+    }
+    normalize_goal_model_selection(&mut goal.model_config.default)?;
+    normalize_goal_model_selection(&mut goal.model_config.stages.interpretation)?;
+    normalize_goal_model_selection(&mut goal.model_config.stages.plan)?;
+    normalize_goal_model_selection(&mut goal.model_config.stages.implementation)?;
+    normalize_goal_model_selection(&mut goal.model_config.stages.validation)?;
+    normalize_goal_model_selection(&mut goal.model_config.stages.auto_fix)?;
+    normalize_goal_model_selection(&mut goal.model_config.stages.self_review)?;
+    normalize_goal_model_selection(&mut goal.model_config.stages.draft_pr)?;
+    Ok(goal)
+}
+
+fn goal_ai_provider(provider: SessionAgentProvider) -> crate::ai::AiProvider {
+    match provider {
+        SessionAgentProvider::Claude => crate::ai::AiProvider::Claude,
+        SessionAgentProvider::Codex => crate::ai::AiProvider::Codex,
+        SessionAgentProvider::Antigravity => crate::ai::AiProvider::Antigravity,
+    }
+}
+
+fn normalize_goal_model_selection(selection: &mut SessionGoalModelSelection) -> AppResult<()> {
+    selection.model = crate::ai::normalize_optional_model_arg(selection.model.as_deref())?;
+    selection.effort = crate::ai::normalize_effort_arg(selection.effort.as_deref())?;
+    Ok(())
+}
+
+fn normalize_optional_goal_text(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
+}
+
+#[tauri::command]
+pub async fn get_goal_agent_capabilities(
+    provider: SessionAgentProvider,
+) -> AppResult<crate::agent_capabilities::GoalAgentCapabilities> {
+    run_blocking("discover goal agent capabilities", move || {
+        Ok(crate::agent_capabilities::discover(provider))
+    })
+    .await
 }
 
 fn auto_title_enabled_for_new_session(
@@ -4510,6 +4649,440 @@ pub async fn update_chat_message(
     .await
 }
 
+fn goal_stage_policy(goal: &SessionGoal, stage: SessionGoalStage) -> SessionGoalStagePolicy {
+    match stage {
+        SessionGoalStage::Interpretation => goal.preset.policies.interpretation,
+        SessionGoalStage::Plan => goal.preset.policies.plan,
+        SessionGoalStage::Implementation => goal.preset.policies.implementation,
+        SessionGoalStage::Validation => goal.preset.policies.validation,
+        SessionGoalStage::AutoFix => goal.preset.policies.auto_fix,
+        SessionGoalStage::SelfReview => goal.preset.policies.self_review,
+        SessionGoalStage::DraftPr => goal.preset.policies.draft_pr,
+    }
+}
+
+fn goal_stage_model_selection(
+    goal: &SessionGoal,
+    stage: SessionGoalStage,
+) -> &SessionGoalModelSelection {
+    if goal.model_config.single_model {
+        return &goal.model_config.default;
+    }
+    match stage {
+        SessionGoalStage::Interpretation => &goal.model_config.stages.interpretation,
+        SessionGoalStage::Plan => &goal.model_config.stages.plan,
+        SessionGoalStage::Implementation => &goal.model_config.stages.implementation,
+        SessionGoalStage::Validation => &goal.model_config.stages.validation,
+        SessionGoalStage::AutoFix => &goal.model_config.stages.auto_fix,
+        SessionGoalStage::SelfReview => &goal.model_config.stages.self_review,
+        SessionGoalStage::DraftPr => &goal.model_config.stages.draft_pr,
+    }
+}
+
+fn goal_ai_request(
+    goal: &SessionGoal,
+    stage: Option<SessionGoalStage>,
+) -> crate::ai::AiExecutionRequest {
+    let selection = stage
+        .map(|stage| goal_stage_model_selection(goal, stage))
+        .unwrap_or(&goal.model_config.default);
+    crate::ai::AiExecutionRequest {
+        provider: goal_ai_provider(goal.provider),
+        model: selection.model.clone(),
+        effort: selection.effort.clone(),
+        ollama_model: None,
+        llm_model: None,
+    }
+}
+
+fn goal_next_stage(stage: SessionGoalStage) -> Option<SessionGoalStage> {
+    match stage {
+        SessionGoalStage::Interpretation => Some(SessionGoalStage::Plan),
+        SessionGoalStage::Plan => Some(SessionGoalStage::Implementation),
+        SessionGoalStage::Implementation => Some(SessionGoalStage::Validation),
+        SessionGoalStage::Validation => Some(SessionGoalStage::AutoFix),
+        SessionGoalStage::AutoFix => Some(SessionGoalStage::SelfReview),
+        SessionGoalStage::SelfReview => Some(SessionGoalStage::DraftPr),
+        SessionGoalStage::DraftPr => None,
+    }
+}
+
+fn goal_stage_label(stage: SessionGoalStage) -> &'static str {
+    match stage {
+        SessionGoalStage::Interpretation => "Interpretation",
+        SessionGoalStage::Plan => "Plan",
+        SessionGoalStage::Implementation => "Implementation",
+        SessionGoalStage::Validation => "Validation",
+        SessionGoalStage::AutoFix => "Automatic fixes",
+        SessionGoalStage::SelfReview => "Self-review",
+        SessionGoalStage::DraftPr => "Draft PR",
+    }
+}
+
+fn goal_stage_instruction(stage: SessionGoalStage) -> &'static str {
+    match stage {
+        SessionGoalStage::Interpretation => {
+            "Interpret the requested outcome, success criteria, constraints, and important assumptions. Do not implement or plan beyond what is needed to make the goal unambiguous."
+        }
+        SessionGoalStage::Plan => {
+            "Inspect the repository and produce a concrete implementation and verification plan. Do not implement changes during this stage."
+        }
+        SessionGoalStage::Implementation => {
+            "Implement the approved/current plan in the worktree. Keep the work scoped to the durable goal and preserve unrelated user changes."
+        }
+        SessionGoalStage::Validation => {
+            "Run the relevant tests and checks, inspect the resulting behavior, and report concrete failures. Leave non-trivial repairs for the Automatic fixes stage."
+        }
+        SessionGoalStage::AutoFix => {
+            "Repair failures found by validation and rerun the relevant checks. If two consecutive repair attempts make no meaningful progress, stop and request input with WAITING: instead of looping."
+        }
+        SessionGoalStage::SelfReview => {
+            "Review the complete diff and behavior for correctness, regressions, edge cases, and goal drift. Correct issues you find and rerun any directly affected checks."
+        }
+        SessionGoalStage::DraftPr => {
+            "Prepare the work for review: use an appropriate descriptive branch, commit only goal-related files, push the branch, and create or update a Draft pull request. Never merge it."
+        }
+    }
+}
+
+fn append_goal_optional_section(prompt: &mut String, heading: &str, value: Option<&str>) {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        prompt.push_str("\n\n## ");
+        prompt.push_str(heading);
+        prompt.push('\n');
+        prompt.push_str(value);
+    }
+}
+
+fn build_goal_stage_prompt(
+    goal: &SessionGoal,
+    stage: SessionGoalStage,
+    revision_review: bool,
+) -> String {
+    let policy = goal_stage_policy(goal, stage);
+    let mut prompt = format!(
+        "# Acorn Goal · {}\n\nYou are executing exactly one stage of a durable Acorn Goal session. Acorn, not you, advances to the next stage and may use a different model there. Complete only this stage.\n\n## Goal\n{}",
+        goal_stage_label(stage),
+        goal.objective
+    );
+    append_goal_optional_section(
+        &mut prompt,
+        "Completion criteria",
+        goal.completion_criteria.as_deref(),
+    );
+    append_goal_optional_section(&mut prompt, "Constraints", goal.constraints.as_deref());
+    append_goal_optional_section(&mut prompt, "Requested tests", goal.tests.as_deref());
+    prompt.push_str("\n\n## This stage\n");
+    prompt.push_str(goal_stage_instruction(stage));
+    prompt.push_str("\n\n## Policy\n");
+    match policy {
+        SessionGoalStagePolicy::Auto => prompt.push_str(
+            "AUTO: perform this stage without routine confirmation. Ask only when genuinely blocked, missing required authority, or facing a consequential choice the goal does not resolve. In that case, end with a line beginning `WAITING:` and state the exact input needed.",
+        ),
+        SessionGoalStagePolicy::Approval => prompt.push_str(
+            "APPROVAL: prepare the stage result or proposed action, but do not cross this stage's commitment boundary yet. End with a line beginning `WAITING:` that asks the user to approve or revise it. After the user replies in this chat, carry out the approved stage work before reporting completion.",
+        ),
+        SessionGoalStagePolicy::Disabled => {}
+    }
+    if revision_review {
+        prompt.push_str("\n\nThis is a revised Goal. Treat the saved revision as the current authority. Compare it with the work already present in the worktree, explain what remains valid and what changed, then present the revised plan. Follow the configured Plan policy and do not request confirmation solely because the Goal changed.");
+    }
+    prompt.push_str(
+        "\n\n## Guardrails\n- Treat GitHub issues or other external references as inputs only when the user explicitly named them.\n- Destructive changes are allowed only when the user explicitly requested them and they are necessary for this stage.\n- Draft PR policy controls push and Draft PR creation. Never merge, deploy, publish, or release.\n- Do not begin or simulate the next Goal stage in this response.\n- Finish with a concise stage outcome. Use `WAITING:` only when the policy or a real blocker requires user input.",
+    );
+    prompt
+}
+
+fn save_goal_progress_if_current(
+    state: &AppState,
+    session_id: &Uuid,
+    expected_revision: u32,
+    progress: SessionGoalProgress,
+) -> AppResult<bool> {
+    let updated =
+        state
+            .sessions
+            .update_goal_progress_if_revision(session_id, expected_revision, progress)?;
+    if updated.is_some() {
+        persist(state);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+fn pause_goal_progress_if_current(state: &AppState, session: &Session) -> AppResult<()> {
+    let Some(goal) = session.goal.as_ref() else {
+        return Ok(());
+    };
+    let Some(stage) = goal.progress.current_stage else {
+        return Ok(());
+    };
+    if matches!(
+        goal.progress.state,
+        SessionGoalRunState::Legacy | SessionGoalRunState::Completed
+    ) {
+        return Ok(());
+    }
+    let _ = save_goal_progress_if_current(
+        state,
+        &session.id,
+        goal.revision,
+        SessionGoalProgress {
+            current_stage: Some(stage),
+            state: SessionGoalRunState::Paused,
+            revision_review: goal.progress.revision_review,
+            approval_pending: goal.progress.approval_pending,
+        },
+    )?;
+    Ok(())
+}
+
+fn advance_goal_stage(
+    state: &AppState,
+    session_id: &Uuid,
+    expected_revision: u32,
+    stage: SessionGoalStage,
+) -> AppResult<bool> {
+    let next_stage = goal_next_stage(stage);
+    let completed = next_stage.is_none();
+    let progress = SessionGoalProgress {
+        current_stage: next_stage,
+        state: if completed {
+            SessionGoalRunState::Completed
+        } else {
+            SessionGoalRunState::Pending
+        },
+        revision_review: false,
+        approval_pending: false,
+    };
+    let saved = save_goal_progress_if_current(state, session_id, expected_revision, progress)?;
+    if saved && completed {
+        state
+            .sessions
+            .update_status(session_id, SessionStatus::Ready)?;
+        persist(state);
+    }
+    Ok(saved && !completed)
+}
+
+fn finish_goal_stage_turn(
+    state: &AppState,
+    session_id: &Uuid,
+    expected_revision: u32,
+    stage: SessionGoalStage,
+    chat_state: &persistence::ChatSessionState,
+    force_approval_wait: bool,
+) -> AppResult<bool> {
+    let last_status = chat_state
+        .messages
+        .last()
+        .and_then(|message| message.status);
+    let (run_state, session_status) =
+        if last_status == Some(persistence::ChatMessageStatus::Cancelled) {
+            (
+                Some(SessionGoalRunState::Paused),
+                Some(SessionStatus::Ready),
+            )
+        } else if last_status == Some(persistence::ChatMessageStatus::Error) {
+            (
+                Some(SessionGoalRunState::Failed),
+                Some(SessionStatus::Errored),
+            )
+        } else if force_approval_wait || chat_state_requests_user_input(chat_state) {
+            (
+                Some(SessionGoalRunState::Waiting),
+                Some(SessionStatus::WaitingForInput),
+            )
+        } else {
+            (None, None)
+        };
+
+    if let Some(run_state) = run_state {
+        let saved = save_goal_progress_if_current(
+            state,
+            session_id,
+            expected_revision,
+            SessionGoalProgress {
+                current_stage: Some(stage),
+                state: run_state,
+                revision_review: false,
+                approval_pending: force_approval_wait,
+            },
+        )?;
+        if saved {
+            if let Some(session_status) = session_status {
+                state.sessions.update_status(session_id, session_status)?;
+                persist(state);
+            }
+        }
+        return Ok(false);
+    }
+
+    advance_goal_stage(state, session_id, expected_revision, stage)
+}
+
+fn ensure_goal_approval_waiting_marker<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    mut chat_state: persistence::ChatSessionState,
+) -> AppResult<persistence::ChatSessionState> {
+    if chat_state_requests_user_input(&chat_state) {
+        return Ok(chat_state);
+    }
+    let Some(message) = chat_state.messages.last_mut().filter(|message| {
+        message.role == persistence::ChatRole::Assistant
+            && !matches!(
+                message.status,
+                Some(
+                    persistence::ChatMessageStatus::Pending
+                        | persistence::ChatMessageStatus::Streaming
+                        | persistence::ChatMessageStatus::Error
+                        | persistence::ChatMessageStatus::Cancelled
+                )
+            )
+    }) else {
+        return Ok(chat_state);
+    };
+    if !message.content.trim().is_empty() {
+        message.content.push_str("\n\n");
+    }
+    message
+        .content
+        .push_str("WAITING: Approve or revise this Goal stage to continue.");
+    let chat_state = persistence::save_chat_session_state(chat_state)?;
+    emit_chat_session_state_changed(app, &chat_state);
+    persist(state);
+    Ok(chat_state)
+}
+
+fn load_goal_chat_state(
+    state: &AppState,
+    session_id: &Uuid,
+) -> AppResult<persistence::ChatSessionState> {
+    let session = state.sessions.get(session_id)?;
+    let mut chat_state = persistence::load_chat_session_state(&session_id.to_string())?;
+    apply_acorn_session_metadata(&mut chat_state, &session);
+    Ok(chat_state)
+}
+
+fn wait_for_previous_goal_turn(state: &AppState, session_id: &Uuid) -> AppResult<()> {
+    for _ in 0..200 {
+        if !state.chat_runs.is_active(session_id) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    Err(AppError::Other(
+        "the previous goal turn is still stopping; try again shortly".to_string(),
+    ))
+}
+
+fn run_goal_session_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    session_id: Uuid,
+) -> AppResult<persistence::ChatSessionState> {
+    wait_for_previous_goal_turn(state, &session_id)?;
+    loop {
+        let session = state.sessions.get(&session_id)?;
+        let goal = session
+            .goal
+            .clone()
+            .ok_or_else(|| AppError::Other("session is not a Goal session".to_string()))?;
+        let Some(stage) = goal.progress.current_stage else {
+            return load_goal_chat_state(state, &session_id);
+        };
+        if !matches!(
+            goal.progress.state,
+            SessionGoalRunState::Pending | SessionGoalRunState::Running
+        ) {
+            return load_goal_chat_state(state, &session_id);
+        }
+
+        let revision_review = goal.progress.revision_review && stage == SessionGoalStage::Plan;
+        let policy = goal_stage_policy(&goal, stage);
+        if policy == SessionGoalStagePolicy::Disabled {
+            if !advance_goal_stage(state, &session_id, goal.revision, stage)? {
+                return load_goal_chat_state(state, &session_id);
+            }
+            continue;
+        }
+
+        if !save_goal_progress_if_current(
+            state,
+            &session_id,
+            goal.revision,
+            SessionGoalProgress {
+                current_stage: Some(stage),
+                state: SessionGoalRunState::Running,
+                revision_review,
+                approval_pending: policy == SessionGoalStagePolicy::Approval,
+            },
+        )? {
+            return load_goal_chat_state(state, &session_id);
+        }
+        let prompt = build_goal_stage_prompt(&goal, stage, revision_review);
+        let ai = goal_ai_request(&goal, Some(stage));
+        let current_session = state.sessions.get(&session_id)?;
+        let chat_state =
+            match send_goal_stage_message_inner(app, state, current_session, ai, prompt) {
+                Ok(chat_state) => chat_state,
+                Err(error) => {
+                    let _ = save_goal_progress_if_current(
+                        state,
+                        &session_id,
+                        goal.revision,
+                        SessionGoalProgress {
+                            current_stage: Some(stage),
+                            state: SessionGoalRunState::Failed,
+                            revision_review,
+                            approval_pending: policy == SessionGoalStagePolicy::Approval,
+                        },
+                    );
+                    let _ = state
+                        .sessions
+                        .update_status(&session_id, SessionStatus::Errored);
+                    persist(state);
+                    return Err(error);
+                }
+            };
+        let chat_state = if policy == SessionGoalStagePolicy::Approval {
+            ensure_goal_approval_waiting_marker(app, state, chat_state)?
+        } else {
+            chat_state
+        };
+        let should_continue = finish_goal_stage_turn(
+            state,
+            &session_id,
+            goal.revision,
+            stage,
+            &chat_state,
+            policy == SessionGoalStagePolicy::Approval,
+        )?;
+        if !should_continue {
+            return Ok(chat_state);
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn run_goal_session<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<persistence::ChatSessionState> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    if session.goal.is_none() {
+        return Err(AppError::Other("session is not a Goal session".to_string()));
+    }
+    let app_state = state.inner().clone();
+    run_blocking("run goal session", move || {
+        run_goal_session_inner(&app, &app_state, session.id)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn send_chat_message<R: Runtime>(
     app: AppHandle<R>,
@@ -4521,7 +5094,45 @@ pub async fn send_chat_message<R: Runtime>(
     let session = authorize_chat_session(state.inner(), &session_id)?;
     let app_state = state.inner().clone();
     run_blocking("send chat message", move || {
-        send_chat_message_inner(&app, &app_state, session, ai, content)
+        let goal_continuation = session.goal.as_ref().and_then(|goal| {
+            matches!(
+                goal.progress.state,
+                SessionGoalRunState::Waiting | SessionGoalRunState::Paused
+            )
+            .then_some((goal.revision, goal.progress.current_stage?))
+        });
+        let effective_ai = session
+            .goal
+            .as_ref()
+            .map(|goal| goal_ai_request(goal, goal.progress.current_stage))
+            .unwrap_or(ai);
+        if let Some((revision, stage)) = goal_continuation {
+            if !save_goal_progress_if_current(
+                &app_state,
+                &session.id,
+                revision,
+                SessionGoalProgress {
+                    current_stage: Some(stage),
+                    state: SessionGoalRunState::Running,
+                    revision_review: false,
+                    approval_pending: false,
+                },
+            )? {
+                return Err(AppError::Other(
+                    "goal changed before the response could be sent".to_string(),
+                ));
+            }
+        }
+        let chat_state =
+            send_chat_message_inner(&app, &app_state, session.clone(), effective_ai, content)?;
+        let Some((revision, stage)) = goal_continuation else {
+            return Ok(chat_state);
+        };
+        if finish_goal_stage_turn(&app_state, &session.id, revision, stage, &chat_state, false)? {
+            run_goal_session_inner(&app, &app_state, session.id)
+        } else {
+            Ok(chat_state)
+        }
     })
     .await
 }
@@ -4535,6 +5146,40 @@ fn send_chat_message_inner<R: Runtime>(
 ) -> AppResult<persistence::ChatSessionState> {
     let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
     send_chat_message_from_state_inner(app, state, session, ai, content, chat_state)
+}
+
+fn send_goal_stage_message_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    session: Session,
+    ai: crate::ai::AiExecutionRequest,
+    content: String,
+) -> AppResult<persistence::ChatSessionState> {
+    let mut chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
+    reset_stale_goal_provider_thread(&mut chat_state, &ai);
+    send_chat_message_from_state_inner(app, state, session, ai, content, chat_state)
+}
+
+fn reset_stale_goal_provider_thread(
+    chat_state: &mut persistence::ChatSessionState,
+    ai: &crate::ai::AiExecutionRequest,
+) {
+    let provider = chat_provider_label(ai);
+    let model = chat_model_label(ai);
+    if chat_state.session.active_provider.as_deref() == Some(provider)
+        && chat_state.session.active_model == model
+    {
+        return;
+    }
+    if let Some(thread) = chat_state
+        .provider_threads
+        .iter_mut()
+        .find(|thread| thread.provider == provider && thread.model.as_deref() == model.as_deref())
+    {
+        thread.native_thread_id = None;
+        thread.resume_token = None;
+        thread.last_response_id = None;
+    }
 }
 
 fn send_chat_message_from_state_inner<R: Runtime>(
@@ -4598,25 +5243,35 @@ fn send_chat_message_from_state_inner<R: Runtime>(
         adapter.send_message(provider_input)
     };
     let was_cancelled = cancellation.is_cancelled();
-    state.chat_runs.finish(&session.id, &started.turn_id);
-    let final_session_status = chat_session_status_for_message_status(if was_cancelled {
+    let turn_id = started.turn_id.clone();
+    let final_message_status = if was_cancelled {
         persistence::ChatMessageStatus::Cancelled
     } else if provider_result.is_ok() {
         persistence::ChatMessageStatus::Complete
     } else {
         persistence::ChatMessageStatus::Error
-    });
-    let chat_state = finish_chat_turn(
-        started,
-        chat_turn_finish_from_result(provider_result, was_cancelled),
-    );
-    let chat_state = persistence::save_chat_session_state(chat_state)?;
-    state
-        .sessions
-        .update_status(&session.id, final_session_status)?;
-    persist(state);
-    emit_chat_session_state_changed(app, &chat_state);
-    Ok(chat_state)
+    };
+    let finalize_result = (|| {
+        let chat_state = finish_chat_turn(
+            started,
+            chat_turn_finish_from_result(provider_result, was_cancelled),
+        );
+        let chat_state = persistence::save_chat_session_state(chat_state)?;
+        let final_session_status = if final_message_status == persistence::ChatMessageStatus::Error
+        {
+            SessionStatus::Errored
+        } else {
+            chat_session_status_for_state(&chat_state)
+        };
+        state
+            .sessions
+            .update_status(&session.id, final_session_status)?;
+        persist(state);
+        emit_chat_session_state_changed(app, &chat_state);
+        Ok(chat_state)
+    })();
+    state.chat_runs.finish(&session.id, &turn_id);
+    finalize_result
 }
 
 #[tauri::command]
@@ -4631,7 +5286,69 @@ pub async fn retry_chat_message<R: Runtime>(
     let session = authorize_chat_session(state.inner(), &session_id)?;
     let app_state = state.inner().clone();
     run_blocking("retry chat message", move || {
-        retry_chat_message_inner(&app, &app_state, session, ai, message_id, content)
+        let goal_retry = session.goal.as_ref().and_then(|goal| {
+            matches!(
+                goal.progress.state,
+                SessionGoalRunState::Failed
+                    | SessionGoalRunState::Waiting
+                    | SessionGoalRunState::Paused
+            )
+            .then_some((
+                goal.revision,
+                goal.progress.current_stage?,
+                goal.progress.approval_pending,
+            ))
+        });
+        let effective_ai = session
+            .goal
+            .as_ref()
+            .map(|goal| goal_ai_request(goal, goal.progress.current_stage))
+            .unwrap_or(ai);
+        if let Some((revision, stage, approval_pending)) = goal_retry {
+            if !save_goal_progress_if_current(
+                &app_state,
+                &session.id,
+                revision,
+                SessionGoalProgress {
+                    current_stage: Some(stage),
+                    state: SessionGoalRunState::Running,
+                    revision_review: false,
+                    approval_pending,
+                },
+            )? {
+                return Err(AppError::Other(
+                    "goal changed before the retry could be sent".to_string(),
+                ));
+            }
+        }
+        let chat_state = retry_chat_message_inner(
+            &app,
+            &app_state,
+            session.clone(),
+            effective_ai,
+            message_id,
+            content,
+        )?;
+        let Some((revision, stage, force_approval_wait)) = goal_retry else {
+            return Ok(chat_state);
+        };
+        let chat_state = if force_approval_wait {
+            ensure_goal_approval_waiting_marker(&app, &app_state, chat_state)?
+        } else {
+            chat_state
+        };
+        if finish_goal_stage_turn(
+            &app_state,
+            &session.id,
+            revision,
+            stage,
+            &chat_state,
+            force_approval_wait,
+        )? {
+            run_goal_session_inner(&app, &app_state, session.id)
+        } else {
+            Ok(chat_state)
+        }
     })
     .await
 }
@@ -4704,9 +5421,11 @@ fn cancel_chat_message_inner<R: Runtime>(
     session: Session,
 ) -> AppResult<persistence::ChatSessionState> {
     let session_id = session.id.to_string();
+    pause_goal_progress_if_current(state, &session)?;
     let Some(cancellation) = state.chat_runs.cancel(&session.id) else {
         let mut chat_state = persistence::load_chat_session_state(&session_id)?;
-        apply_acorn_session_metadata(&mut chat_state, &session);
+        let current_session = state.sessions.get(&session.id)?;
+        apply_acorn_session_metadata(&mut chat_state, &current_session);
         return Ok(chat_state);
     };
 
@@ -5219,6 +5938,35 @@ pub fn set_session_status(
     let updated = state.sessions.update_status(&id, status)?;
     persist(&state);
     Ok(updated)
+}
+
+#[tauri::command]
+pub fn update_session_goal(
+    state: State<'_, AppState>,
+    id: String,
+    expected_revision: u32,
+    goal: SessionGoal,
+) -> AppResult<Session> {
+    let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
+    let current = state.sessions.get(&id)?;
+    if !current.project_scoped || current.mode != SessionMode::Chat || current.goal.is_none() {
+        return Err(AppError::Other(
+            "session is not a project goal session".to_string(),
+        ));
+    }
+    let next_revision = expected_revision
+        .checked_add(1)
+        .ok_or_else(|| AppError::Other("goal revision overflow".to_string()))?;
+    let mut goal = normalize_session_goal(goal)?;
+    goal.revision = next_revision;
+    goal.progress = SessionGoalProgress::revised_plan();
+    let Some(updated) = state.sessions.update_goal(&id, expected_revision, goal)? else {
+        return Err(AppError::Other(
+            "goal changed since this editor was opened".to_string(),
+        ));
+    };
+    persist(&state);
+    Ok(enrich_session(updated))
 }
 
 #[tauri::command]
@@ -8910,16 +9658,19 @@ mod tests {
         auto_title_enabled_for_new_session, collect_memory_usage_from_roots,
         create_unique_worktree, daemon_spawn_name_for_session, detach_requested_by_stale_renderer,
         font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
-        memory_root_pids, poll_defers_to_hook, remove_linked_worktree_at_path,
-        restore_pending_session_removal, seed_initial_commit, should_remove_local_project_mirror,
-        validate_editor_command, validate_new_project_name, ChatProviderAdapter,
-        ProcessMemorySnapshot,
+        memory_root_pids, normalize_session_goal, poll_defers_to_hook,
+        remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
+        should_remove_local_project_mirror, validate_editor_command, validate_new_project_name,
+        ChatProviderAdapter, ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingSessionRemoval};
     #[cfg(unix)]
     use acorn_session::{AgentStatusSource, SessionStatus};
-    use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionMode};
+    use acorn_session::{
+        Session, SessionAgentProvider, SessionGoal, SessionGoalModelConfig, SessionGoalPolicies,
+        SessionGoalPreset, SessionGoalProgress, SessionGoalStagePolicy, SessionKind, SessionMode,
+    };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     #[cfg(unix)]
@@ -8953,6 +9704,209 @@ mod tests {
         );
         session.in_worktree = true;
         session
+    }
+
+    fn goal_spec(provider: SessionAgentProvider) -> SessionGoal {
+        SessionGoal {
+            objective: "  Persist this goal  ".to_string(),
+            completion_criteria: Some("  Sessions reload  ".to_string()),
+            constraints: Some("   ".to_string()),
+            tests: None,
+            provider,
+            preset: SessionGoalPreset {
+                id: " builtin:balanced ".to_string(),
+                name: " Balanced ".to_string(),
+                policies: SessionGoalPolicies {
+                    interpretation: SessionGoalStagePolicy::Auto,
+                    plan: SessionGoalStagePolicy::Approval,
+                    implementation: SessionGoalStagePolicy::Auto,
+                    validation: SessionGoalStagePolicy::Auto,
+                    auto_fix: SessionGoalStagePolicy::Auto,
+                    self_review: SessionGoalStagePolicy::Auto,
+                    draft_pr: SessionGoalStagePolicy::Approval,
+                },
+            },
+            model_config: SessionGoalModelConfig::default(),
+            progress: SessionGoalProgress::initial(),
+            revision: 1,
+        }
+    }
+
+    #[test]
+    fn goal_spec_normalization_preserves_a_durable_snapshot() {
+        let normalized = normalize_session_goal(goal_spec(SessionAgentProvider::Codex))
+            .expect("valid goal normalizes");
+
+        assert_eq!(normalized.objective, "Persist this goal");
+        assert_eq!(
+            normalized.completion_criteria.as_deref(),
+            Some("Sessions reload")
+        );
+        assert_eq!(normalized.constraints, None);
+        assert_eq!(normalized.preset.id, "builtin:balanced");
+        assert_eq!(normalized.preset.name, "Balanced");
+    }
+
+    #[test]
+    fn goal_spec_rejects_unsupported_agents() {
+        let error = normalize_session_goal(goal_spec(SessionAgentProvider::Antigravity))
+            .expect_err("unsupported goal provider is rejected");
+
+        assert!(error.to_string().contains("only Claude or Codex"));
+    }
+
+    #[test]
+    fn goal_creation_requires_an_isolated_project_chat_session() {
+        let goal = goal_spec(SessionAgentProvider::Codex);
+
+        assert!(super::validate_goal_session_creation(
+            Some(&goal),
+            true,
+            SessionKind::Regular,
+            Some(SessionAgentProvider::Codex),
+            true,
+            SessionMode::Chat,
+        )
+        .is_ok());
+        assert!(super::validate_goal_session_creation(
+            Some(&goal),
+            false,
+            SessionKind::Regular,
+            Some(SessionAgentProvider::Codex),
+            true,
+            SessionMode::Chat,
+        )
+        .is_err());
+        assert!(super::validate_goal_session_creation(
+            Some(&goal),
+            true,
+            SessionKind::Regular,
+            Some(SessionAgentProvider::Claude),
+            true,
+            SessionMode::Chat,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn goal_stage_routes_to_its_configured_model_and_effort() {
+        let mut goal = goal_spec(SessionAgentProvider::Codex);
+        goal.model_config.single_model = false;
+        goal.model_config.stages.implementation.model = Some("gpt-5.4".to_string());
+        goal.model_config.stages.implementation.effort = Some("ultra".to_string());
+
+        let request =
+            super::goal_ai_request(&goal, Some(acorn_session::SessionGoalStage::Implementation));
+
+        assert_eq!(request.provider, crate::ai::AiProvider::Codex);
+        assert_eq!(request.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(request.effort.as_deref(), Some("ultra"));
+    }
+
+    #[test]
+    fn goal_model_switch_resets_only_the_stale_target_thread() {
+        let mut state = chat_state_for_runtime(Vec::new());
+        state.session.active_provider = Some("claude".to_string());
+        state.session.active_model = Some("sonnet".to_string());
+        state
+            .provider_threads
+            .push(crate::persistence::ProviderThread {
+                session_id: state.session_id.clone(),
+                provider: "codex".to_string(),
+                model: Some("gpt-5.4".to_string()),
+                native_thread_id: Some("stale-thread".to_string()),
+                resume_token: Some("stale-thread".to_string()),
+                last_response_id: Some("stale-response".to_string()),
+                updated_at: chrono::Utc::now(),
+            });
+        let ai = crate::ai::AiExecutionRequest {
+            provider: crate::ai::AiProvider::Codex,
+            model: Some("gpt-5.4".to_string()),
+            effort: Some("high".to_string()),
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        super::reset_stale_goal_provider_thread(&mut state, &ai);
+
+        let thread = &state.provider_threads[0];
+        assert_eq!(thread.native_thread_id, None);
+        assert_eq!(thread.resume_token, None);
+        assert_eq!(thread.last_response_id, None);
+
+        state.session.active_provider = Some("codex".to_string());
+        state.session.active_model = Some("gpt-5.4".to_string());
+        state.provider_threads[0].resume_token = Some("current-thread".to_string());
+        super::reset_stale_goal_provider_thread(&mut state, &ai);
+        assert_eq!(
+            state.provider_threads[0].resume_token.as_deref(),
+            Some("current-thread")
+        );
+    }
+
+    #[test]
+    fn goal_model_normalization_accepts_discovered_effort_and_rejects_unsafe_values() {
+        let mut goal = goal_spec(SessionAgentProvider::Claude);
+        goal.model_config.default.effort = Some("future-level".to_string());
+
+        let normalized =
+            normalize_session_goal(goal).expect("CLI identifiers stay forward compatible");
+        assert_eq!(
+            normalized.model_config.default.effort.as_deref(),
+            Some("future-level")
+        );
+
+        let mut unsafe_goal = goal_spec(SessionAgentProvider::Codex);
+        unsafe_goal.model_config.default.effort = Some("high!".to_string());
+        assert!(normalize_session_goal(unsafe_goal).is_err());
+    }
+
+    #[test]
+    fn draft_pr_auto_prompt_allows_push_but_keeps_release_boundary() {
+        let goal = goal_spec(SessionAgentProvider::Codex);
+        let prompt =
+            super::build_goal_stage_prompt(&goal, acorn_session::SessionGoalStage::DraftPr, false);
+
+        assert!(prompt.contains("push the branch"));
+        assert!(prompt.contains("create or update a Draft pull request"));
+        assert!(prompt.contains("Never merge, deploy, publish, or release"));
+        assert!(!prompt.contains("Do not push"));
+    }
+
+    #[test]
+    fn revised_plan_prompt_keeps_the_configured_policy_and_goal_guardrails() {
+        let mut goal = goal_spec(SessionAgentProvider::Claude);
+        goal.preset.policies.plan = SessionGoalStagePolicy::Auto;
+        goal.completion_criteria = Some("Done".to_string());
+        goal.constraints = Some("Keep the API stable".to_string());
+        goal.tests = Some("cargo test".to_string());
+        let prompt =
+            super::build_goal_stage_prompt(&goal, acorn_session::SessionGoalStage::Plan, true);
+
+        assert!(prompt.contains("Persist this goal"));
+        assert!(prompt.contains("Done"));
+        assert!(prompt.contains("Keep the API stable"));
+        assert!(prompt.contains("cargo test"));
+        assert!(prompt.contains("AUTO:"));
+        assert!(!prompt.contains("APPROVAL:"));
+        assert!(prompt.contains("This is a revised Goal"));
+        assert!(prompt.contains("current authority"));
+        assert!(prompt.contains("do not request confirmation solely"));
+        assert!(prompt.contains("user explicitly named them"));
+        assert!(prompt.contains("Destructive changes are allowed only"));
+        assert!(prompt.contains("Never merge, deploy, publish, or release"));
+        assert!(prompt.contains("Do not begin or simulate the next Goal stage"));
+    }
+
+    #[test]
+    fn automatic_fix_prompt_stops_after_repeated_no_progress() {
+        let goal = goal_spec(SessionAgentProvider::Codex);
+        let prompt =
+            super::build_goal_stage_prompt(&goal, acorn_session::SessionGoalStage::AutoFix, false);
+
+        assert!(prompt.contains("two consecutive repair attempts"));
+        assert!(prompt.contains("no meaningful progress"));
+        assert!(prompt.contains("WAITING:"));
     }
 
     fn chat_state_for_runtime(
@@ -9447,6 +10401,26 @@ mod tests {
         )]);
         assert_eq!(
             super::chat_session_status_for_state(&completed),
+            acorn_session::SessionStatus::Ready
+        );
+
+        let waiting = chat_state_for_runtime(vec![chat_message(
+            "a2",
+            crate::persistence::ChatRole::Assistant,
+            "Plan prepared.\n\nWAITING: Confirm the plan to continue.",
+        )]);
+        assert_eq!(
+            super::chat_session_status_for_state(&waiting),
+            acorn_session::SessionStatus::WaitingForInput
+        );
+
+        let mentioned_waiting = chat_state_for_runtime(vec![chat_message(
+            "a3",
+            crate::persistence::ChatRole::Assistant,
+            "The literal WAITING: marker is documented here.",
+        )]);
+        assert_eq!(
+            super::chat_session_status_for_state(&mentioned_waiting),
             acorn_session::SessionStatus::Ready
         );
 
@@ -10261,6 +11235,8 @@ mod tests {
             state,
             crate::ai::AiExecutionRequest {
                 provider: crate::ai::AiProvider::Codex,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             },
@@ -10322,6 +11298,8 @@ mod tests {
             state,
             crate::ai::AiExecutionRequest {
                 provider: crate::ai::AiProvider::Claude,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             },
@@ -10361,6 +11339,8 @@ mod tests {
             let adapter = super::CliChatProviderAdapter {
                 ai: crate::ai::AiExecutionRequest {
                     provider,
+                    model: None,
+                    effort: None,
                     ollama_model: None,
                     llm_model: None,
                 },
@@ -10403,6 +11383,8 @@ mod tests {
         let invocation = super::resolve_chat_cli_invocation(
             &crate::ai::AiExecutionRequest {
                 provider: crate::ai::AiProvider::Claude,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             },
@@ -10466,6 +11448,8 @@ mod tests {
         let invocation = super::resolve_chat_cli_invocation(
             &crate::ai::AiExecutionRequest {
                 provider: crate::ai::AiProvider::Claude,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             },
@@ -10520,6 +11504,8 @@ mod tests {
         let invocation = super::resolve_chat_cli_invocation(
             &crate::ai::AiExecutionRequest {
                 provider: crate::ai::AiProvider::Codex,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             },
@@ -10548,6 +11534,56 @@ mod tests {
     }
 
     #[test]
+    fn chat_cli_invocation_applies_codex_model_and_effort_before_resume() {
+        let input = super::ChatProviderInput {
+            thread: Some(crate::persistence::ProviderThread {
+                session_id: Uuid::new_v4().to_string(),
+                provider: "codex".to_string(),
+                model: Some("gpt-5.4".to_string()),
+                native_thread_id: Some("019e2001-3250-76b0-8410-2e073b38a2c1".to_string()),
+                resume_token: Some("019e2001-3250-76b0-8410-2e073b38a2c1".to_string()),
+                last_response_id: None,
+                updated_at: chrono::Utc::now(),
+            }),
+            message: chat_message(
+                "current-user",
+                crate::persistence::ChatRole::User,
+                "continue codex",
+            ),
+            context: None,
+            model: Some("gpt-5.4".to_string()),
+        };
+
+        let invocation = super::resolve_chat_cli_invocation(
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Codex,
+                model: Some("gpt-5.4".to_string()),
+                effort: Some("high".to_string()),
+                ollama_model: None,
+                llm_model: None,
+            },
+            &input,
+        )
+        .unwrap();
+
+        assert_eq!(
+            invocation.cli.args,
+            vec![
+                "exec",
+                "--skip-git-repo-check",
+                "--json",
+                "-m",
+                "gpt-5.4",
+                "-c",
+                "model_reasoning_effort=\"high\"",
+                "resume",
+                "019e2001-3250-76b0-8410-2e073b38a2c1",
+                "-"
+            ]
+        );
+    }
+
+    #[test]
     fn chat_cli_invocation_passes_antigravity_prompt_as_print_argument() {
         let input = super::ChatProviderInput {
             thread: None,
@@ -10563,6 +11599,8 @@ mod tests {
         let invocation = super::resolve_chat_cli_invocation(
             &crate::ai::AiExecutionRequest {
                 provider: crate::ai::AiProvider::Antigravity,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             },
@@ -10603,6 +11641,8 @@ mod tests {
         let invocation = super::resolve_chat_cli_invocation(
             &crate::ai::AiExecutionRequest {
                 provider: crate::ai::AiProvider::Antigravity,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             },
@@ -10656,6 +11696,8 @@ mod tests {
             state,
             crate::ai::AiExecutionRequest {
                 provider: crate::ai::AiProvider::Claude,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             },
@@ -10700,6 +11742,8 @@ mod tests {
             state,
             crate::ai::AiExecutionRequest {
                 provider: crate::ai::AiProvider::Antigravity,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             },
@@ -10736,6 +11780,8 @@ mod tests {
             state,
             crate::ai::AiExecutionRequest {
                 provider: crate::ai::AiProvider::Codex,
+                model: None,
+                effort: None,
                 ollama_model: None,
                 llm_model: None,
             },

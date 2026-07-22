@@ -122,6 +122,12 @@ test.describe("workspace canvas mode", () => {
       position: { x: canvasBox.width / 2, y: canvasBox.height / 2 },
     });
     await expect(
+      page.getByRole("menuitem", {
+        name: "New goal session",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
       page.getByRole("menuitem", { name: "New session", exact: true }),
     ).toBeVisible();
     await expect(
@@ -141,9 +147,19 @@ test.describe("workspace canvas mode", () => {
     ).toBeVisible();
     await page.keyboard.press("Escape");
 
-    const createButton = canvas.getByRole("button", {
-      name: "Create session",
+    const createButton = canvas
+      .locator("[data-workspace-canvas-toolbar]")
+      .getByRole("button", { name: "Create session" });
+    await createButton.click();
+    await page
+      .getByRole("menuitem", { name: "New goal session", exact: true })
+      .click();
+    const goalDialog = page.getByRole("dialog", {
+      name: "New goal session",
     });
+    await expect(goalDialog).toBeVisible();
+    await goalDialog.getByRole("button", { name: "Cancel" }).click();
+
     await createButton.click();
     await page
       .getByRole("menuitem", { name: "New session", exact: true })

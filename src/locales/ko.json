@@ -21,6 +21,12 @@
       "worktreeAdoptFailed": "워크트리를 가져오지 못했습니다:",
       "worktreeMissing": "워크트리 폴더가 디스크에 더 이상 존재하지 않습니다."
     },
+    "autonomousGoal": {
+      "started": "{name}에서 Goal 세션을 시작했습니다.",
+      "updated": "{name}의 Goal을 수정했습니다. 재계획을 시작합니다.",
+      "startFailed": "Goal 세션을 실행하지 못했습니다:",
+      "pauseFailed": "Goal 세션을 일시정지하지 못했습니다:"
+    },
     "project": {
       "addFailed": "프로젝트를 추가하지 못했습니다:",
       "createFailed": "프로젝트를 만들지 못했습니다:",
@@ -1205,6 +1211,7 @@
       "newIsolatedSession": "새 격리 세션",
       "newIsolatedSessionWorktree": "새 워크트리 세션",
       "newChatSession": "새 채팅 세션",
+      "newAutonomousGoalSession": "새 Goal 세션",
       "newControlSession": "새 컨트롤 세션",
       "newProjectFolder": "새 작업공간",
       "newProjectFolderWithWorktree": "새 워크트리 작업공간",
@@ -1260,9 +1267,11 @@
       "newSessionMenuInProjectFolder": "이 작업공간에 세션 만들기",
       "newSessionInProject": "이 프로젝트에 새 세션 만들기",
       "newSessionInProjectFolder": "이 작업공간에 새 세션 만들기",
+      "newAutonomousGoalSession": "새 Goal 세션",
       "newIsolatedSessionInProject": "이 프로젝트에 새 워크트리 세션 만들기",
       "newChatSessionInProject": "이 프로젝트에 새 채팅 세션 만들기",
       "newControlSessionInProject": "이 프로젝트에 새 컨트롤 세션 만들기",
+      "goalSession": "Goal 세션",
       "dragToReorderSession": "세션 순서를 바꾸려면 드래그",
       "localTerminalSessions": "로컬 터미널 세션",
       "worktree": "워크트리",
@@ -1317,6 +1326,14 @@
       "isolatedWorktree": "격리된 워크트리"
     }
   },
+  "chat": {
+    "goalSession": {
+      "label": "프로젝트 Goal",
+      "revision": "리비전",
+      "edit": "Goal 수정",
+      "pauseAndEdit": "일시정지 후 수정"
+    }
+  },
   "pane": {
     "empty": {
       "dropTabOrDoubleClick": "여기에 탭을 놓거나 더블 클릭해 세션을 시작하세요",
@@ -1326,6 +1343,7 @@
       "worktree": "워크트리",
       "controlSession": "컨트롤 세션",
       "chatSession": "채팅 세션",
+      "goalSession": "Goal 세션",
       "workSummary": "작업 요약",
       "generatingSessionTitle": "세션 제목 생성 중",
       "notificationsSilenced": "알림 꺼짐",
@@ -1373,6 +1391,7 @@
       "closeOthers": "다른 탭 닫기",
       "closeAll": "모두 닫기",
       "newSessionInThisPane": "이 패널에서 새 세션",
+      "newGoalSessionInThisPane": "이 패널에서 새 Goal 세션",
       "closePane": "패널 닫기"
     }
   },
@@ -1718,6 +1737,130 @@
       "copy": "복사",
       "dontShowAgain": "다시 표시하지 않기",
       "gotIt": "확인"
+    },
+    "autonomousGoal": {
+      "title": "새 Goal 세션",
+      "subtitle": "이 프로젝트에 Goal 세션을 추가하면 선택한 에이전트가 격리된 워크트리에서 진행합니다.",
+      "editTitle": "프로젝트 Goal 수정",
+      "editSubtitle": "진행 중인 작업을 일시정지하고 수정된 Goal을 저장한 뒤, 현재 정책으로 재계획해 계속 진행합니다.",
+      "projectScopeRequired": "Goal 세션은 프로젝트 안에서만 만들 수 있습니다.",
+      "selectRepository": "자율 목표를 실행할 Git 저장소 선택",
+      "sections": {
+        "goalTitle": "원하는 결과 정의",
+        "goalDescription": "에이전트가 계속 참고할 작업 기준을 작성하세요. 완료의 의미를 바꾸는 세부사항만 추가하면 됩니다.",
+        "executionTitle": "실행 방식 선택",
+        "executionDescription": "이 세션에 저장할 승인 범위와 에이전트, 모델, effort 경로를 설정합니다."
+      },
+      "goal": {
+        "label": "목표",
+        "hint": "필수 항목입니다. 선택할 이슈가 아니라 원하는 결과를 작성하세요.",
+        "placeholder": "예: 커맨드 팔레트에 키보드 탐색을 추가하고 테스트로 검증해줘."
+      },
+      "completionCriteria": {
+        "label": "완료 조건",
+        "placeholder": "작업이 끝났을 때 무엇이 충족되어야 하나요?"
+      },
+      "constraints": {
+        "label": "제약",
+        "placeholder": "유지할 API, 건드리지 않을 파일, 호환성 요구사항..."
+      },
+      "tests": {
+        "label": "테스트",
+        "placeholder": "검증할 명령어나 동작"
+      },
+      "optionalFieldHint": "선택 사항 — 비워두면 에이전트가 판단합니다.",
+      "provider": {
+        "label": "에이전트",
+        "hint": "이 세션에서는 선택한 제공자를 유지하며 자동 전환하지 않습니다.",
+        "capabilityLoading": "CLI 기능 확인 중...",
+        "available": "CLI 사용 가능",
+        "unavailable": "CLI 사용 불가"
+      },
+      "tabs": {
+        "label": "Goal 실행 설정",
+        "policy": "Policy",
+        "model": "에이전트 · 모델"
+      },
+      "model": {
+        "singleModel": "모든 단계에 단일 모델 사용",
+        "singleModelHint": "기본으로 켜져 있습니다. 끄면 Goal의 7단계마다 모델과 effort를 따로 지정할 수 있습니다.",
+        "modelLabel": "모델",
+        "effortLabel": "Effort",
+        "agentDefault": "기본값",
+        "customModel": "직접 입력...",
+        "customModelPlaceholder": "모델 ID 또는 별칭",
+        "chooseDiscoveredModel": "조회된 모델에서 선택",
+        "searchModels": "모델 검색",
+        "loadingCapabilities": "설치된 에이전트 CLI에서 모델과 effort를 불러오는 중입니다...",
+        "agentUnavailable": "이 에이전트 CLI를 찾지 못했습니다. 커스텀 모델은 저장할 수 있지만 CLI를 사용할 수 있을 때까지 Goal을 실행할 수 없습니다.",
+        "codexCapabilities": "Codex app-server에서 모델 {count}개와 각 모델이 지원하는 effort를 불러왔습니다.",
+        "claudeCapabilities": "Claude CLI가 노출하는 모델 별칭과 effort를 불러왔습니다. 전체 모델 ID는 직접 입력을 사용하세요.",
+        "capabilityFallback": "CLI 모델 목록을 불러오지 못했습니다. 기본값 또는 커스텀 모델을 사용할 수 있습니다.",
+        "allStages": "모든 단계",
+        "snapshotHint": "선택한 에이전트·모델 프리셋은 Goal 세션에 스냅샷으로 저장됩니다. 기본값은 선택한 에이전트 CLI의 현재 기본 설정을 사용합니다."
+      },
+      "modelPreset": {
+        "label": "에이전트 · 모델 프리셋",
+        "hint": "기본 프리셋은 읽기 전용입니다. 슬롯을 추가하거나 복제해 에이전트, 모델, effort 경로를 수정하세요.",
+        "currentSession": "현재 세션 설정",
+        "builtInReadonly": "기본 프리셋은 변경할 수 없습니다. 복제하면 편집 가능한 사본이 만들어집니다.",
+        "currentSessionReadonly": "현재 세션 설정은 재사용 프리셋이 아닙니다. 다른 프리셋을 선택하거나 새로 만들어 교체하세요."
+      },
+      "modelPresets": {
+        "codexDefault": "Codex · 에이전트 기본값",
+        "claudeDefault": "Claude · 에이전트 기본값",
+        "builtIn": "기본 · 읽기 전용",
+        "custom": "사용자 프리셋",
+        "customDefault": "모델 프리셋",
+        "customEmpty": "사용자 프리셋이 아직 없습니다",
+        "customEmptyHint": "새로 만들거나 복제하면 편집 가능한 슬롯이 추가됩니다."
+      },
+      "preset": {
+        "label": "정책 프리셋",
+        "hint": "기본 프리셋은 읽기 전용입니다. 슬롯을 추가하거나 복제해 수정하세요.",
+        "add": "새 프리셋",
+        "duplicate": "복제",
+        "delete": "삭제",
+        "name": "프리셋 이름",
+        "currentSession": "현재 세션 정책",
+        "builtInReadonly": "기본 프리셋은 변경할 수 없습니다. 복제하면 편집 가능한 사본이 만들어집니다.",
+        "currentSessionReadonly": "현재 세션 정책은 이미 스냅샷으로 저장되어 재사용 프리셋이 아닙니다. 다른 프리셋을 선택하거나 새로 만들어 교체하세요.",
+        "snapshotHint": "세션에는 현재 설정의 스냅샷이 전달됩니다. 나중에 이 프리셋을 변경하거나 삭제해도 실행 중인 세션에는 영향이 없습니다."
+      },
+      "presets": {
+        "review": "검토 중심",
+        "balanced": "균형",
+        "fullAutonomy": "완전 자율",
+        "builtIn": "기본 · 읽기 전용",
+        "builtInSeparator": "위 기본 프리셋 · 변경 불가",
+        "custom": "사용자 프리셋",
+        "customDefault": "사용자 프리셋",
+        "customEmpty": "사용자 프리셋이 아직 없습니다",
+        "customEmptyHint": "새로 만들거나 복제하면 편집 가능한 슬롯이 추가됩니다.",
+        "copySuffix": "사본"
+      },
+      "stages": {
+        "interpretation": "목표 해석",
+        "plan": "계획",
+        "implementation": "구현",
+        "validation": "검증",
+        "autoFix": "자동 수정",
+        "selfReview": "자체 검토",
+        "draftPr": "Draft PR"
+      },
+      "policies": {
+        "auto": "자동 진행",
+        "approval": "먼저 확인",
+        "disabled": "사용 안 함"
+      },
+      "prototypeNotice": "Goal은 새 격리 워크트리에서 즉시 시작하고, 각 단계에 선택한 정책과 모델을 적용합니다. Draft PR 단계가 활성화되면 push와 초안 PR 생성까지 수행할 수 있지만 merge, 배포, 게시, release는 하지 않습니다.",
+      "revisionNotice": "이 편집기를 열면 진행 중인 작업을 일시정지합니다. 저장한 리비전은 새로운 실행 권한이 되며, Acorn이 선택한 정책으로 재계획한 뒤 자동 재개합니다.",
+      "footerHint": "시작하면 세션을 만들고 이 목표를 즉시 전달합니다.",
+      "editFooterHint": "다른 프리셋을 선택하지 않으면 현재 세션의 정책 스냅샷을 유지합니다.",
+      "start": "목표 시작",
+      "starting": "워크트리 생성 중...",
+      "saveAndReplan": "저장 후 계속",
+      "replanning": "리비전 저장 중..."
     },
     "removeSession": {
       "title": "세션 제거",
@@ -2109,6 +2252,7 @@
       "newIsolatedSession": "새 격리 세션",
       "newControlSession": "새 제어 세션",
       "newChatSession": "새 채팅 세션",
+      "newAutonomousGoalSession": "새 Goal 세션",
       "newProject": "새 프로젝트",
       "addExistingProject": "기존 프로젝트 추가",
       "refreshSessions": "세션 새로고침",

@@ -26,6 +26,7 @@ import {
 import { RESET_PANEL_SIZES_EVENT } from "../lib/layoutEvents";
 import { useAppStore, type WorkspaceViewMode } from "../store";
 import { api } from "../lib/api";
+import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
@@ -126,6 +127,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   function handleNewControlSession() {
     window.dispatchEvent(new CustomEvent("acorn:new-control-session"));
+    close();
+  }
+
+  function handleNewAutonomousGoalSession() {
+    requestNewAutonomousGoalSession();
     close();
   }
 
@@ -367,6 +373,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           >
             <MessageSquareText size={14} className="text-accent" />
             <span>{cpt(t, "commandPalette.commands.newChatSession")}</span>
+          </Command.Item>
+          <Command.Item
+            value="new-autonomous-goal-session"
+            onSelect={handleNewAutonomousGoalSession}
+            keywords={["autonomous", "goal", "agent", "codex", "claude"]}
+          >
+            <Sparkles size={14} className="text-accent" />
+            <span>
+              {cpt(t, "commandPalette.commands.newAutonomousGoalSession")}
+            </span>
           </Command.Item>
           <Command.Item
             value="new-project"
