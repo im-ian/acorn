@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  AUTONOMOUS_GOAL_STAGE_IDS,
   AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY,
   AUTONOMOUS_GOAL_PRESET_STORAGE_KEY,
   BALANCED_AUTONOMOUS_GOAL_PRESET,
@@ -37,12 +38,22 @@ describe("autonomous goal presets", () => {
     expect(Object.isFrozen(REVIEW_AUTONOMOUS_GOAL_PRESET)).toBe(true);
     expect(Object.isFrozen(REVIEW_AUTONOMOUS_GOAL_PRESET.policies)).toBe(true);
     expect(REVIEW_AUTONOMOUS_GOAL_PRESET.policies.autoFix).toBe("approval");
+    expect(REVIEW_AUTONOMOUS_GOAL_PRESET.policies.merge).toBe("approval");
     expect(BALANCED_AUTONOMOUS_GOAL_PRESET.policies.plan).toBe("approval");
     expect(
       Object.values(
         BUILTIN_AUTONOMOUS_GOAL_PRESETS[2]?.policies ?? {},
       ),
     ).toEqual(Array(7).fill("auto"));
+    expect(AUTONOMOUS_GOAL_STAGE_IDS).toEqual([
+      "plan",
+      "implementation",
+      "validation",
+      "autoFix",
+      "selfReview",
+      "openPr",
+      "merge",
+    ]);
   });
 
   it("defaults a first run to full autonomy and a stale binding to balanced", () => {
@@ -84,7 +95,7 @@ describe("autonomous goal presets", () => {
       "Second",
     );
     const preferences: AutonomousGoalPreferences = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       customPresets: [first, second],
       lastPresetId: first.id,
     };
@@ -131,6 +142,55 @@ describe("autonomous goal presets", () => {
           "null",
       ),
     ).toEqual(loaded);
+  });
+
+  it("migrates the previous interpretation and Draft PR policies safely", () => {
+    window.localStorage.setItem(
+      "acorn:autonomous-goal-presets:v1",
+      JSON.stringify({
+        schemaVersion: 1,
+        customPresets: [
+          {
+            id: "custom:legacy",
+            name: "Legacy",
+            policies: {
+              interpretation: "auto",
+              plan: "approval",
+              implementation: "auto",
+              validation: "auto",
+              autoFix: "auto",
+              selfReview: "auto",
+              draftPr: "approval",
+            },
+          },
+        ],
+        lastPresetId: "custom:legacy",
+      }),
+    );
+
+    const loaded = loadAutonomousGoalPreferences();
+
+    expect(loaded).toMatchObject({
+      schemaVersion: 2,
+      lastPresetId: "custom:legacy",
+      customPresets: [
+        {
+          policies: {
+            plan: "approval",
+            implementation: "auto",
+            validation: "auto",
+            autoFix: "auto",
+            selfReview: "auto",
+            openPr: "approval",
+            merge: "disabled",
+          },
+        },
+      ],
+    });
+    saveAutonomousGoalPreferences(loaded);
+    expect(
+      window.localStorage.getItem(AUTONOMOUS_GOAL_PRESET_STORAGE_KEY),
+    ).not.toBeNull();
   });
 });
 
@@ -192,7 +252,7 @@ describe("autonomous goal model presets", () => {
       "My route",
     );
     const preferences: AutonomousGoalModelPreferences = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       customPresets: [custom],
       lastPresetId: custom.id,
     };
@@ -239,6 +299,59 @@ describe("autonomous goal model presets", () => {
       ),
     ).toEqual(loaded);
   });
+
+  it("migrates the previous stage model routing without enabling Merge", () => {
+    window.localStorage.setItem(
+      "acorn:autonomous-goal-model-presets:v1",
+      JSON.stringify({
+        schemaVersion: 1,
+        customPresets: [
+          {
+            id: "custom:legacy-model",
+            name: "Legacy model",
+            provider: "codex",
+            modelConfig: {
+              single_model: false,
+              default: {},
+              stages: {
+                interpretation: { model: "old-plan" },
+                plan: { model: "plan" },
+                implementation: {},
+                validation: {},
+                auto_fix: {},
+                self_review: {},
+                draft_pr: { model: "pr-model" },
+              },
+            },
+          },
+        ],
+        lastPresetId: "custom:legacy-model",
+      }),
+    );
+
+    const loaded = loadAutonomousGoalModelPreferences();
+
+    expect(loaded).toMatchObject({
+      schemaVersion: 2,
+      customPresets: [
+        {
+          modelConfig: {
+            stages: {
+              plan: { model: "plan" },
+              open_pr: { model: "pr-model" },
+              merge: {},
+            },
+          },
+        },
+      ],
+    });
+    saveAutonomousGoalModelPreferences(loaded);
+    expect(
+      window.localStorage.getItem(
+        AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY,
+      ),
+    ).not.toBeNull();
+  });
 });
 
 describe("autonomous goal sessions", () => {
@@ -264,7 +377,8 @@ describe("autonomous goal sessions", () => {
         policies: {
           auto_fix: "auto",
           self_review: "auto",
-          draft_pr: "approval",
+          open_pr: "approval",
+          merge: "approval",
         },
       },
       model_config: {
@@ -272,7 +386,7 @@ describe("autonomous goal sessions", () => {
         default: {},
       },
       progress: {
-        current_stage: "interpretation",
+        current_stage: "plan",
         state: "pending",
         approval_pending: false,
       },

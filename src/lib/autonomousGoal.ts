@@ -8,8 +8,12 @@ import type {
 import type { SessionCreateScope } from "./sessionCreation";
 
 export const AUTONOMOUS_GOAL_PRESET_STORAGE_KEY =
-  "acorn:autonomous-goal-presets:v1";
+  "acorn:autonomous-goal-presets:v2";
 export const AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY =
+  "acorn:autonomous-goal-model-presets:v2";
+const LEGACY_AUTONOMOUS_GOAL_PRESET_STORAGE_KEY =
+  "acorn:autonomous-goal-presets:v1";
+const LEGACY_AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY =
   "acorn:autonomous-goal-model-presets:v1";
 export const NEW_AUTONOMOUS_GOAL_SESSION_EVENT =
   "acorn:new-autonomous-goal-session";
@@ -32,13 +36,13 @@ export function requestNewAutonomousGoalSession(
 }
 
 export const AUTONOMOUS_GOAL_STAGE_IDS = [
-  "interpretation",
   "plan",
   "implementation",
   "validation",
   "autoFix",
   "selfReview",
-  "draftPr",
+  "openPr",
+  "merge",
 ] as const;
 
 export type AutonomousGoalStage = (typeof AUTONOMOUS_GOAL_STAGE_IDS)[number];
@@ -57,13 +61,13 @@ export const AUTONOMOUS_GOAL_STAGE_MODEL_KEYS: Record<
   AutonomousGoalStage,
   keyof SessionGoalModelConfig["stages"]
 > = {
-  interpretation: "interpretation",
   plan: "plan",
   implementation: "implementation",
   validation: "validation",
   autoFix: "auto_fix",
   selfReview: "self_review",
-  draftPr: "draft_pr",
+  openPr: "open_pr",
+  merge: "merge",
 };
 
 export interface AutonomousGoalPreset {
@@ -78,7 +82,7 @@ export interface CustomAutonomousGoalPreset extends AutonomousGoalPreset {
 }
 
 export interface AutonomousGoalPreferences {
-  schemaVersion: 1;
+  schemaVersion: 2;
   customPresets: CustomAutonomousGoalPreset[];
   /**
    * `null` means the user has never selected a preset. A non-null value that
@@ -102,7 +106,7 @@ export interface CustomAutonomousGoalModelPreset
 }
 
 export interface AutonomousGoalModelPreferences {
-  schemaVersion: 1;
+  schemaVersion: 2;
   customPresets: CustomAutonomousGoalModelPreset[];
   lastPresetId: string | null;
 }
@@ -133,13 +137,13 @@ export function createDefaultGoalModelConfig(): SessionGoalModelConfig {
     single_model: true,
     default: {},
     stages: {
-      interpretation: {},
       plan: {},
       implementation: {},
       validation: {},
       auto_fix: {},
       self_review: {},
-      draft_pr: {},
+      open_pr: {},
+      merge: {},
     },
   };
 }
@@ -152,13 +156,13 @@ export function cloneGoalModelConfig(
     single_model: source.single_model,
     default: normalizedModelSelection(source.default),
     stages: {
-      interpretation: normalizedModelSelection(source.stages.interpretation),
       plan: normalizedModelSelection(source.stages.plan),
       implementation: normalizedModelSelection(source.stages.implementation),
       validation: normalizedModelSelection(source.stages.validation),
       auto_fix: normalizedModelSelection(source.stages.auto_fix),
       self_review: normalizedModelSelection(source.stages.self_review),
-      draft_pr: normalizedModelSelection(source.stages.draft_pr),
+      open_pr: normalizedModelSelection(source.stages.open_pr),
+      merge: normalizedModelSelection(source.stages.merge),
     },
   };
 }
@@ -167,13 +171,13 @@ function sessionGoalPolicies(
   policies: AutonomousGoalPolicies,
 ): SessionGoalPolicies {
   return {
-    interpretation: policies.interpretation,
     plan: policies.plan,
     implementation: policies.implementation,
     validation: policies.validation,
     auto_fix: policies.autoFix,
     self_review: policies.selfReview,
-    draft_pr: policies.draftPr,
+    open_pr: policies.openPr,
+    merge: policies.merge,
   };
 }
 
@@ -181,13 +185,13 @@ function autonomousGoalPolicies(
   policies: SessionGoalPolicies,
 ): AutonomousGoalPolicies {
   return {
-    interpretation: policies.interpretation,
     plan: policies.plan,
     implementation: policies.implementation,
     validation: policies.validation,
     autoFix: policies.auto_fix,
     selfReview: policies.self_review,
-    draftPr: policies.draft_pr,
+    openPr: policies.open_pr,
+    merge: policies.merge,
   };
 }
 
@@ -213,7 +217,7 @@ export function createSessionGoal(
     },
     model_config: cloneGoalModelConfig(modelConfig),
     progress: {
-      current_stage: "interpretation",
+      current_stage: "plan",
       state: "pending",
       revision_review: false,
       approval_pending: false,
@@ -283,13 +287,13 @@ export const REVIEW_AUTONOMOUS_GOAL_PRESET = immutableBuiltinPreset(
   REVIEW_AUTONOMOUS_GOAL_PRESET_ID,
   "Review-centered",
   {
-    interpretation: "approval",
     plan: "approval",
     implementation: "approval",
     validation: "auto",
     autoFix: "approval",
     selfReview: "auto",
-    draftPr: "approval",
+    openPr: "approval",
+    merge: "approval",
   },
 );
 
@@ -297,13 +301,13 @@ export const BALANCED_AUTONOMOUS_GOAL_PRESET = immutableBuiltinPreset(
   BALANCED_AUTONOMOUS_GOAL_PRESET_ID,
   "Balanced",
   {
-    interpretation: "auto",
     plan: "approval",
     implementation: "auto",
     validation: "auto",
     autoFix: "auto",
     selfReview: "auto",
-    draftPr: "approval",
+    openPr: "approval",
+    merge: "approval",
   },
 );
 
@@ -311,13 +315,13 @@ export const FULL_AUTONOMY_GOAL_PRESET = immutableBuiltinPreset(
   FULL_AUTONOMY_GOAL_PRESET_ID,
   "Full autonomy",
   {
-    interpretation: "auto",
     plan: "auto",
     implementation: "auto",
     validation: "auto",
     autoFix: "auto",
     selfReview: "auto",
-    draftPr: "auto",
+    openPr: "auto",
+    merge: "auto",
   },
 );
 
@@ -341,13 +345,13 @@ function immutableModelConfig(
     single_model: cloned.single_model,
     default: immutableModelSelection(cloned.default),
     stages: Object.freeze({
-      interpretation: immutableModelSelection(cloned.stages.interpretation),
       plan: immutableModelSelection(cloned.stages.plan),
       implementation: immutableModelSelection(cloned.stages.implementation),
       validation: immutableModelSelection(cloned.stages.validation),
       auto_fix: immutableModelSelection(cloned.stages.auto_fix),
       self_review: immutableModelSelection(cloned.stages.self_review),
-      draft_pr: immutableModelSelection(cloned.stages.draft_pr),
+      open_pr: immutableModelSelection(cloned.stages.open_pr),
+      merge: immutableModelSelection(cloned.stages.merge),
     }),
   });
 }
@@ -386,13 +390,13 @@ export const BUILTIN_AUTONOMOUS_GOAL_MODEL_PRESETS = Object.freeze([
 ]);
 
 const EMPTY_PREFERENCES: AutonomousGoalPreferences = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   customPresets: [],
   lastPresetId: null,
 };
 
 const EMPTY_MODEL_PREFERENCES: AutonomousGoalModelPreferences = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   customPresets: [],
   lastPresetId: null,
 };
@@ -411,7 +415,12 @@ function sanitizePolicies(value: unknown): AutonomousGoalPolicies | null {
   if (!isRecord(value)) return null;
   const policies = {} as AutonomousGoalPolicies;
   for (const stage of AUTONOMOUS_GOAL_STAGE_IDS) {
-    const policy = value[stage];
+    const policy =
+      stage === "openPr"
+        ? (value.openPr ?? value.draftPr)
+        : stage === "merge"
+          ? (value.merge ?? "disabled")
+          : value[stage];
     if (
       typeof policy !== "string" ||
       !STAGE_POLICY_VALUES.has(policy as AutonomousGoalStagePolicy)
@@ -470,22 +479,24 @@ function sanitizeModelConfig(value: unknown): SessionGoalModelConfig | null {
     return null;
   }
   const defaultSelection = sanitizeModelSelection(value.default);
-  const interpretation = sanitizeModelSelection(value.stages.interpretation);
   const plan = sanitizeModelSelection(value.stages.plan);
   const implementation = sanitizeModelSelection(value.stages.implementation);
   const validation = sanitizeModelSelection(value.stages.validation);
   const autoFix = sanitizeModelSelection(value.stages.auto_fix);
   const selfReview = sanitizeModelSelection(value.stages.self_review);
-  const draftPr = sanitizeModelSelection(value.stages.draft_pr);
+  const openPr = sanitizeModelSelection(
+    value.stages.open_pr ?? value.stages.draft_pr,
+  );
+  const merge = sanitizeModelSelection(value.stages.merge ?? {});
   if (
     !defaultSelection ||
-    !interpretation ||
     !plan ||
     !implementation ||
     !validation ||
     !autoFix ||
     !selfReview ||
-    !draftPr
+    !openPr ||
+    !merge
   ) {
     return null;
   }
@@ -493,13 +504,13 @@ function sanitizeModelConfig(value: unknown): SessionGoalModelConfig | null {
     single_model: value.single_model,
     default: defaultSelection,
     stages: {
-      interpretation,
       plan,
       implementation,
       validation,
       auto_fix: autoFix,
       self_review: selfReview,
-      draft_pr: draftPr,
+      open_pr: openPr,
+      merge,
     },
   };
 }
@@ -537,7 +548,9 @@ export function loadAutonomousGoalPreferences(): AutonomousGoalPreferences {
   const storage = storageOrNull();
   if (!storage) return { ...EMPTY_PREFERENCES, customPresets: [] };
   try {
-    const raw = storage.getItem(AUTONOMOUS_GOAL_PRESET_STORAGE_KEY);
+    const raw =
+      storage.getItem(AUTONOMOUS_GOAL_PRESET_STORAGE_KEY) ??
+      storage.getItem(LEGACY_AUTONOMOUS_GOAL_PRESET_STORAGE_KEY);
     if (!raw) return { ...EMPTY_PREFERENCES, customPresets: [] };
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed)) {
@@ -553,7 +566,7 @@ export function loadAutonomousGoalPreferences(): AutonomousGoalPreferences {
         })
       : [];
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       customPresets,
       lastPresetId:
         typeof parsed.lastPresetId === "string"
@@ -574,7 +587,7 @@ export function saveAutonomousGoalPreferences(
     storage.setItem(
       AUTONOMOUS_GOAL_PRESET_STORAGE_KEY,
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         customPresets: preferences.customPresets,
         lastPresetId: preferences.lastPresetId,
       } satisfies AutonomousGoalPreferences),
@@ -590,7 +603,9 @@ export function loadAutonomousGoalModelPreferences(
   const storage = storageOrNull();
   if (!storage) return { ...EMPTY_MODEL_PREFERENCES, customPresets: [] };
   try {
-    const raw = storage.getItem(AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY);
+    const raw =
+      storage.getItem(AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY) ??
+      storage.getItem(LEGACY_AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY);
     if (!raw) return { ...EMPTY_MODEL_PREFERENCES, customPresets: [] };
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed)) {
@@ -606,7 +621,7 @@ export function loadAutonomousGoalModelPreferences(
         })
       : [];
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       customPresets,
       lastPresetId:
         typeof parsed.lastPresetId === "string" ? parsed.lastPresetId : null,
@@ -625,7 +640,7 @@ export function saveAutonomousGoalModelPreferences(
     storage.setItem(
       AUTONOMOUS_GOAL_MODEL_PRESET_STORAGE_KEY,
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         customPresets: preferences.customPresets,
         lastPresetId: preferences.lastPresetId,
       } satisfies AutonomousGoalModelPreferences),

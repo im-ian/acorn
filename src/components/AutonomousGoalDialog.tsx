@@ -110,13 +110,13 @@ const STAGE_TRANSLATION_KEYS: Record<
   AutonomousGoalStage,
   AutonomousGoalTranslationKey
 > = {
-  interpretation: "dialogs.autonomousGoal.stages.interpretation",
   plan: "dialogs.autonomousGoal.stages.plan",
   implementation: "dialogs.autonomousGoal.stages.implementation",
   validation: "dialogs.autonomousGoal.stages.validation",
   autoFix: "dialogs.autonomousGoal.stages.autoFix",
   selfReview: "dialogs.autonomousGoal.stages.selfReview",
-  draftPr: "dialogs.autonomousGoal.stages.draftPr",
+  openPr: "dialogs.autonomousGoal.stages.openPr",
+  merge: "dialogs.autonomousGoal.stages.merge",
 };
 
 const POLICY_TRANSLATION_KEYS: Record<
@@ -698,13 +698,13 @@ export function AutonomousGoalDialog({
         ...modelConfig,
         single_model: false,
         stages: {
-          interpretation: inherited(),
           plan: inherited(),
           implementation: inherited(),
           validation: inherited(),
           auto_fix: inherited(),
           self_review: inherited(),
-          draft_pr: inherited(),
+          open_pr: inherited(),
+          merge: inherited(),
         },
       };
     })();

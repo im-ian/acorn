@@ -1840,20 +1840,20 @@
         "copySuffix": "사본"
       },
       "stages": {
-        "interpretation": "목표 해석",
         "plan": "계획",
         "implementation": "구현",
         "validation": "검증",
         "autoFix": "자동 수정",
         "selfReview": "자체 검토",
-        "draftPr": "Draft PR"
+        "openPr": "PR 열기",
+        "merge": "Merge"
       },
       "policies": {
         "auto": "자동 진행",
         "approval": "먼저 확인",
         "disabled": "사용 안 함"
       },
-      "prototypeNotice": "Goal은 새 격리 워크트리에서 즉시 시작하고, 각 단계에 선택한 정책과 모델을 적용합니다. Draft PR 단계가 활성화되면 push와 초안 PR 생성까지 수행할 수 있지만 merge, 배포, 게시, release는 하지 않습니다.",
+      "prototypeNotice": "Goal은 새 격리 워크트리에서 즉시 시작하고, 각 단계에 선택한 정책과 모델을 적용합니다. PR 열기 단계는 push와 검토 가능한 일반 PR 생성을 수행하며, Merge 단계는 필수 CI를 기다린 뒤 자체 승인 정책을 따릅니다. 배포, 게시, release는 하지 않습니다.",
       "revisionNotice": "이 편집기를 열면 진행 중인 작업을 일시정지합니다. 저장한 리비전은 새로운 실행 권한이 되며, Acorn이 선택한 정책으로 재계획한 뒤 자동 재개합니다.",
       "footerHint": "시작하면 세션을 만들고 이 목표를 즉시 전달합니다.",
       "editFooterHint": "다른 프리셋을 선택하지 않으면 현재 세션의 정책 스냅샷을 유지합니다.",
