@@ -4757,13 +4757,9 @@ fn append_goal_optional_section(prompt: &mut String, heading: &str, value: Optio
 fn build_goal_stage_prompt(
     goal: &SessionGoal,
     stage: SessionGoalStage,
-    force_revision_review: bool,
+    revision_review: bool,
 ) -> String {
-    let policy = if force_revision_review {
-        SessionGoalStagePolicy::Approval
-    } else {
-        goal_stage_policy(goal, stage)
-    };
+    let policy = goal_stage_policy(goal, stage);
     let mut prompt = format!(
         "# Acorn Goal · {}\n\nYou are executing exactly one stage of a durable Acorn Goal session. Acorn, not you, advances to the next stage and may use a different model there. Complete only this stage.\n\n## Goal\n{}",
         goal_stage_label(stage),
@@ -4788,8 +4784,8 @@ fn build_goal_stage_prompt(
         ),
         SessionGoalStagePolicy::Disabled => {}
     }
-    if force_revision_review {
-        prompt.push_str("\n\nThis is a revised Goal. Compare the durable revision with the work already present in the worktree, explain what remains valid and what changed, then present the revised plan. Confirmation is mandatory before implementation resumes.");
+    if revision_review {
+        prompt.push_str("\n\nThis is a revised Goal. Treat the saved revision as the current authority. Compare it with the work already present in the worktree, explain what remains valid and what changed, then present the revised plan. Follow the configured Plan policy and do not request confirmation solely because the Goal changed.");
     }
     prompt.push_str(
         "\n\n## Guardrails\n- Treat GitHub issues or other external references as inputs only when the user explicitly named them.\n- Destructive changes are allowed only when the user explicitly requested them and they are necessary for this stage.\n- Draft PR policy controls push and Draft PR creation. Never merge, deploy, publish, or release.\n- Do not begin or simulate the next Goal stage in this response.\n- Finish with a concise stage outcome. Use `WAITING:` only when the policy or a real blocker requires user input.",
@@ -5005,11 +5001,7 @@ fn run_goal_session_inner<R: Runtime>(
         }
 
         let revision_review = goal.progress.revision_review && stage == SessionGoalStage::Plan;
-        let policy = if revision_review {
-            SessionGoalStagePolicy::Approval
-        } else {
-            goal_stage_policy(&goal, stage)
-        };
+        let policy = goal_stage_policy(&goal, stage);
         if policy == SessionGoalStagePolicy::Disabled {
             if !advance_goal_stage(state, &session_id, goal.revision, stage)? {
                 return load_goal_chat_state(state, &session_id);
@@ -9907,8 +9899,9 @@ mod tests {
     }
 
     #[test]
-    fn revised_plan_prompt_enforces_confirmation_and_goal_guardrails() {
+    fn revised_plan_prompt_keeps_the_configured_policy_and_goal_guardrails() {
         let mut goal = goal_spec(SessionAgentProvider::Claude);
+        goal.preset.policies.plan = SessionGoalStagePolicy::Auto;
         goal.completion_criteria = Some("Done".to_string());
         goal.constraints = Some("Keep the API stable".to_string());
         goal.tests = Some("cargo test".to_string());
@@ -9919,9 +9912,11 @@ mod tests {
         assert!(prompt.contains("Done"));
         assert!(prompt.contains("Keep the API stable"));
         assert!(prompt.contains("cargo test"));
-        assert!(prompt.contains("APPROVAL:"));
+        assert!(prompt.contains("AUTO:"));
+        assert!(!prompt.contains("APPROVAL:"));
         assert!(prompt.contains("This is a revised Goal"));
-        assert!(prompt.contains("Confirmation is mandatory"));
+        assert!(prompt.contains("current authority"));
+        assert!(prompt.contains("do not request confirmation solely"));
         assert!(prompt.contains("user explicitly named them"));
         assert!(prompt.contains("Destructive changes are allowed only"));
         assert!(prompt.contains("Never merge, deploy, publish, or release"));

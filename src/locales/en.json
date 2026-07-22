@@ -1742,9 +1742,15 @@
       "title": "New goal session",
       "subtitle": "Add a durable goal session to this project and let the selected agent work in an isolated worktree.",
       "editTitle": "Edit project goal",
-      "editSubtitle": "Pause this project session, revise its durable goal, then review the new plan before work resumes.",
+      "editSubtitle": "Pause active work, save the revised goal, then replan and continue with the current policies.",
       "projectScopeRequired": "Goal sessions must be created inside a project.",
       "selectRepository": "Select a Git repository for the autonomous goal",
+      "sections": {
+        "goalTitle": "Define the outcome",
+        "goalDescription": "Give the agent a durable brief. Add only the details that materially change what done means.",
+        "executionTitle": "Choose how Acorn runs it",
+        "executionDescription": "Set the approval boundaries, agent, model, and effort routing saved with this session."
+      },
       "goal": {
         "label": "Goal",
         "hint": "Required. Write the outcome you want, not an issue to select.",
@@ -1805,7 +1811,9 @@
         "claudeDefault": "Claude · Agent default",
         "builtIn": "Built-in · read-only",
         "custom": "Custom preset",
-        "customDefault": "Model preset"
+        "customDefault": "Model preset",
+        "customEmpty": "No custom presets yet",
+        "customEmptyHint": "Create or duplicate a preset to add an editable slot."
       },
       "preset": {
         "label": "Policy preset",
@@ -1824,8 +1832,11 @@
         "balanced": "Balanced",
         "fullAutonomy": "Full autonomy",
         "builtIn": "Built-in · read-only",
+        "builtInSeparator": "Built-ins above · read-only",
         "custom": "Custom preset",
         "customDefault": "Custom preset",
+        "customEmpty": "No custom presets yet",
+        "customEmptyHint": "Create or duplicate a preset to add an editable slot.",
         "copySuffix": "copy"
       },
       "stages": {
@@ -1843,12 +1854,12 @@
         "disabled": "Disabled"
       },
       "prototypeNotice": "This Goal starts immediately in a new isolated worktree. Each stage follows its selected policy and model. Draft PR can push and open a draft when enabled; merge, deploy, publish, and release remain blocked.",
-      "revisionNotice": "Opening this editor pauses active work. Saving persists a new goal revision, asks the agent to replan, and waits for your confirmation before implementation resumes.",
+      "revisionNotice": "Opening this editor pauses active work. Saving makes this revision the current authority, then Acorn replans and resumes with the selected policies.",
       "footerHint": "Starting creates the session and submits this goal immediately.",
       "editFooterHint": "The current preset snapshot remains unchanged unless you select another preset.",
       "start": "Start goal",
       "starting": "Creating worktree...",
-      "saveAndReplan": "Save & replan",
+      "saveAndReplan": "Save & continue",
       "replanning": "Saving revision..."
     },
     "removeSession": {

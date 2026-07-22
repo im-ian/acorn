@@ -1742,9 +1742,15 @@
       "title": "새 Goal 세션",
       "subtitle": "이 프로젝트에 Goal 세션을 추가하면 선택한 에이전트가 격리된 워크트리에서 진행합니다.",
       "editTitle": "프로젝트 Goal 수정",
-      "editSubtitle": "프로젝트 세션을 일시정지하고 Goal을 수정한 뒤, 새 계획을 확인하고 작업을 재개합니다.",
+      "editSubtitle": "진행 중인 작업을 일시정지하고 수정된 Goal을 저장한 뒤, 현재 정책으로 재계획해 계속 진행합니다.",
       "projectScopeRequired": "Goal 세션은 프로젝트 안에서만 만들 수 있습니다.",
       "selectRepository": "자율 목표를 실행할 Git 저장소 선택",
+      "sections": {
+        "goalTitle": "원하는 결과 정의",
+        "goalDescription": "에이전트가 계속 참고할 작업 기준을 작성하세요. 완료의 의미를 바꾸는 세부사항만 추가하면 됩니다.",
+        "executionTitle": "실행 방식 선택",
+        "executionDescription": "이 세션에 저장할 승인 범위와 에이전트, 모델, effort 경로를 설정합니다."
+      },
       "goal": {
         "label": "목표",
         "hint": "필수 항목입니다. 선택할 이슈가 아니라 원하는 결과를 작성하세요.",
@@ -1805,7 +1811,9 @@
         "claudeDefault": "Claude · 에이전트 기본값",
         "builtIn": "기본 · 읽기 전용",
         "custom": "사용자 프리셋",
-        "customDefault": "모델 프리셋"
+        "customDefault": "모델 프리셋",
+        "customEmpty": "사용자 프리셋이 아직 없습니다",
+        "customEmptyHint": "새로 만들거나 복제하면 편집 가능한 슬롯이 추가됩니다."
       },
       "preset": {
         "label": "정책 프리셋",
@@ -1824,8 +1832,11 @@
         "balanced": "균형",
         "fullAutonomy": "완전 자율",
         "builtIn": "기본 · 읽기 전용",
+        "builtInSeparator": "위 기본 프리셋 · 변경 불가",
         "custom": "사용자 프리셋",
         "customDefault": "사용자 프리셋",
+        "customEmpty": "사용자 프리셋이 아직 없습니다",
+        "customEmptyHint": "새로 만들거나 복제하면 편집 가능한 슬롯이 추가됩니다.",
         "copySuffix": "사본"
       },
       "stages": {
@@ -1843,12 +1854,12 @@
         "disabled": "사용 안 함"
       },
       "prototypeNotice": "Goal은 새 격리 워크트리에서 즉시 시작하고, 각 단계에 선택한 정책과 모델을 적용합니다. Draft PR 단계가 활성화되면 push와 초안 PR 생성까지 수행할 수 있지만 merge, 배포, 게시, release는 하지 않습니다.",
-      "revisionNotice": "이 편집기를 열면 진행 중인 작업을 일시정지합니다. 저장하면 새 Goal 리비전을 보존하고, 에이전트가 재계획한 뒤 사용자의 확인을 기다립니다.",
+      "revisionNotice": "이 편집기를 열면 진행 중인 작업을 일시정지합니다. 저장한 리비전은 새로운 실행 권한이 되며, Acorn이 선택한 정책으로 재계획한 뒤 자동 재개합니다.",
       "footerHint": "시작하면 세션을 만들고 이 목표를 즉시 전달합니다.",
       "editFooterHint": "다른 프리셋을 선택하지 않으면 현재 세션의 정책 스냅샷을 유지합니다.",
       "start": "목표 시작",
       "starting": "워크트리 생성 중...",
-      "saveAndReplan": "저장 후 재계획",
+      "saveAndReplan": "저장 후 계속",
       "replanning": "리비전 저장 중..."
     },
     "removeSession": {

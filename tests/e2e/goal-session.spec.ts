@@ -161,7 +161,7 @@ test("creates and revises a durable goal session inside a project", async ({
       "For example: Add keyboard navigation to the command palette and verify it with tests.",
     )
     .fill("Add durable project-owned goal sessions");
-  await editDialog.getByRole("button", { name: "Save & replan" }).click();
+  await editDialog.getByRole("button", { name: "Save & continue" }).click();
 
   await expect(page.locator("[data-goal-session-header]")).toContainText(
     "Add durable project-owned goal sessions",

@@ -283,8 +283,8 @@ pub struct SessionGoalProgress {
     pub current_stage: Option<SessionGoalStage>,
     #[serde(default)]
     pub state: SessionGoalRunState,
-    /// Goal edits always pause after the revised plan, even when the stored
-    /// Plan policy is automatic.
+    /// Marks a Plan generated from a durable Goal edit. The stored Plan
+    /// policy still decides whether execution pauses for approval.
     #[serde(default)]
     pub revision_review: bool,
     /// True only while the current stage still owes its policy-mandated

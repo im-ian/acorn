@@ -1,4 +1,14 @@
-import { ChevronsUpDown, Copy, Plus, Sparkles, Trash2 } from "lucide-react";
+import {
+  Bot,
+  ChevronsUpDown,
+  Copy,
+  FileText,
+  LockKeyhole,
+  Plus,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import {
   useEffect,
   useId,
@@ -124,6 +134,8 @@ type GoalModelSlot = "default" | keyof SessionGoalModelConfig["stages"];
 
 const GOAL_AGENT_PROVIDERS = ["codex", "claude"] as const;
 const CUSTOM_MODEL_OPTION = "__acorn_custom_model__";
+const EMPTY_POLICY_PRESET_OPTION = "__acorn_empty_policy_presets__";
+const EMPTY_MODEL_PRESET_OPTION = "__acorn_empty_model_presets__";
 
 function defaultProvider(selected: string): AutonomousGoalProvider {
   return selected === "claude" ? "claude" : "codex";
@@ -884,23 +896,76 @@ export function AutonomousGoalDialog({
     }
   }
 
-  const presetOptions = presets.map((preset) => ({
-    value: preset.id,
-    label: presetDisplayName(t, preset),
-    description: preset.builtIn
-      ? agt(t, "dialogs.autonomousGoal.presets.builtIn")
-      : agt(t, "dialogs.autonomousGoal.presets.custom"),
-  }));
-  const modelPresetOptions = modelPresets.map((preset) => ({
-    value: preset.id,
-    label: modelPresetDisplayName(t, preset),
-    description: preset.builtIn
-      ? agt(t, "dialogs.autonomousGoal.modelPresets.builtIn")
-      : `${preset.provider === "codex" ? "Codex" : "Claude"} · ${agt(
-          t,
-          "dialogs.autonomousGoal.modelPresets.custom",
-        )}`,
-  }));
+  const builtInPresetOptions: SelectItem[] = presets
+    .filter((preset) => preset.builtIn)
+    .map((preset) => ({
+      value: preset.id,
+      label: presetDisplayName(t, preset),
+      description: agt(t, "dialogs.autonomousGoal.presets.builtIn"),
+    }));
+  const customPresetOptions: SelectItem[] = preferences.customPresets.map(
+    (preset) => ({
+      value: preset.id,
+      label: preset.name,
+      description: agt(t, "dialogs.autonomousGoal.presets.custom"),
+    }),
+  );
+  const presetOptions: SelectItem[] = [
+    ...builtInPresetOptions,
+    {
+      type: "separator",
+      label: agt(t, "dialogs.autonomousGoal.presets.builtInSeparator"),
+    },
+    ...(customPresetOptions.length > 0
+      ? customPresetOptions
+      : [
+          {
+            value: EMPTY_POLICY_PRESET_OPTION,
+            label: agt(t, "dialogs.autonomousGoal.presets.customEmpty"),
+            description: agt(
+              t,
+              "dialogs.autonomousGoal.presets.customEmptyHint",
+            ),
+            disabled: true,
+          },
+        ]),
+  ];
+  const builtInModelPresetOptions: SelectItem[] = modelPresets
+    .filter((preset) => preset.builtIn)
+    .map((preset) => ({
+      value: preset.id,
+      label: modelPresetDisplayName(t, preset),
+      description: agt(t, "dialogs.autonomousGoal.modelPresets.builtIn"),
+    }));
+  const customModelPresetOptions: SelectItem[] =
+    modelPreferences.customPresets.map((preset) => ({
+      value: preset.id,
+      label: preset.name,
+      description: `${preset.provider === "codex" ? "Codex" : "Claude"} · ${agt(
+        t,
+        "dialogs.autonomousGoal.modelPresets.custom",
+      )}`,
+    }));
+  const modelPresetOptions: SelectItem[] = [
+    ...builtInModelPresetOptions,
+    {
+      type: "separator",
+      label: agt(t, "dialogs.autonomousGoal.presets.builtInSeparator"),
+    },
+    ...(customModelPresetOptions.length > 0
+      ? customModelPresetOptions
+      : [
+          {
+            value: EMPTY_MODEL_PRESET_OPTION,
+            label: agt(t, "dialogs.autonomousGoal.modelPresets.customEmpty"),
+            description: agt(
+              t,
+              "dialogs.autonomousGoal.modelPresets.customEmptyHint",
+            ),
+            disabled: true,
+          },
+        ]),
+  ];
   const policyOptions = (["auto", "approval", "disabled"] as const).map(
     (policy) => ({
       value: policy,
@@ -1134,9 +1199,9 @@ export function AutonomousGoalDialog({
       open={open}
       onClose={close}
       variant="dialog"
-      size="3xl"
+      size="5xl"
       ariaLabelledBy={titleId}
-      className="flex max-h-[calc(100vh-8rem)] flex-col"
+      className="flex h-[min(760px,calc(100dvh-7rem))] max-h-[calc(100dvh-7rem)] flex-col"
     >
       <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
         <ModalHeader
@@ -1158,9 +1223,23 @@ export function AutonomousGoalDialog({
           onClose={close}
         />
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
-            <section className="flex min-w-0 flex-col gap-3">
+        <div className="min-h-0 flex-1 overflow-y-auto border-t border-border/70 md:overflow-hidden">
+          <div className="grid md:h-full md:grid-cols-[minmax(0,1.08fr)_minmax(390px,0.92fr)]">
+            <section className="flex min-w-0 flex-col gap-5 px-5 py-5 md:overflow-y-auto md:border-r md:border-border/70 md:px-6 md:py-6">
+              <div className="flex items-start gap-3">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                  <FileText size={15} />
+                </span>
+                <div className="min-w-0">
+                  <h4 className="text-sm font-semibold tracking-tight text-fg">
+                    {agt(t, "dialogs.autonomousGoal.sections.goalTitle")}
+                  </h4>
+                  <p className="mt-0.5 max-w-[62ch] text-xs leading-relaxed text-fg-muted">
+                    {agt(t, "dialogs.autonomousGoal.sections.goalDescription")}
+                  </p>
+                </div>
+              </div>
+
               <Field
                 label={agt(t, "dialogs.autonomousGoal.goal.label")}
                 hint={agt(t, "dialogs.autonomousGoal.goal.hint")}
@@ -1176,12 +1255,12 @@ export function AutonomousGoalDialog({
                   )}
                   className={cn(
                     TEXT_INPUT_CLASS,
-                    "h-28 resize-y py-2 leading-relaxed",
+                    "h-32 resize-y py-2.5 leading-relaxed",
                   )}
                 />
               </Field>
 
-              <div className="grid gap-3">
+              <div className="flex flex-col gap-4 border-t border-border/70 pt-4">
                 <Field
                   label={agt(
                     t,
@@ -1227,25 +1306,24 @@ export function AutonomousGoalDialog({
                     )}
                   />
                 </Field>
+                <Field
+                  label={agt(t, "dialogs.autonomousGoal.tests.label")}
+                  hint={agt(t, "dialogs.autonomousGoal.optionalFieldHint")}
+                >
+                  <textarea
+                    value={tests}
+                    onChange={(event) => setTests(event.target.value)}
+                    placeholder={agt(
+                      t,
+                      "dialogs.autonomousGoal.tests.placeholder",
+                    )}
+                    className={cn(
+                      TEXT_INPUT_CLASS,
+                      "h-16 resize-y py-2 leading-relaxed",
+                    )}
+                  />
+                </Field>
               </div>
-
-              <Field
-                label={agt(t, "dialogs.autonomousGoal.tests.label")}
-                hint={agt(t, "dialogs.autonomousGoal.optionalFieldHint")}
-              >
-                <textarea
-                  value={tests}
-                  onChange={(event) => setTests(event.target.value)}
-                  placeholder={agt(
-                    t,
-                    "dialogs.autonomousGoal.tests.placeholder",
-                  )}
-                  className={cn(
-                    TEXT_INPUT_CLASS,
-                    "h-16 resize-y py-2 leading-relaxed",
-                  )}
-                />
-              </Field>
 
               <Notice tone="info" density="compact">
                 {agt(
@@ -1255,112 +1333,151 @@ export function AutonomousGoalDialog({
                     : "dialogs.autonomousGoal.prototypeNotice",
                 )}
               </Notice>
+
+              {error ? <Notice tone="danger">{error}</Notice> : null}
             </section>
 
-            <section className="flex min-w-0 flex-col gap-3 rounded-xl border border-border bg-bg-sidebar/35 p-3">
+            <section className="flex min-w-0 flex-col gap-4 border-t border-border/70 bg-bg-sidebar/30 px-5 py-5 md:overflow-y-auto md:border-t-0 md:px-6 md:py-6">
+              <div className="flex items-start gap-3">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-fill text-fg-muted">
+                  <ShieldCheck size={15} />
+                </span>
+                <div className="min-w-0">
+                  <h4 className="text-sm font-semibold tracking-tight text-fg">
+                    {agt(t, "dialogs.autonomousGoal.sections.executionTitle")}
+                  </h4>
+                  <p className="mt-0.5 text-xs leading-relaxed text-fg-muted">
+                    {agt(
+                      t,
+                      "dialogs.autonomousGoal.sections.executionDescription",
+                    )}
+                  </p>
+                </div>
+              </div>
+
               <SegmentedControl
                 activeId={settingsTab}
                 onChange={setSettingsTab}
                 surface="dialog"
                 size="sm"
                 ariaLabel={agt(t, "dialogs.autonomousGoal.tabs.label")}
+                className="grid grid-cols-2 rounded-lg bg-bg/55 p-1 [&>button]:w-full"
                 items={[
                   {
                     id: "policy",
                     label: agt(t, "dialogs.autonomousGoal.tabs.policy"),
+                    icon: <ShieldCheck size={13} />,
                   },
                   {
                     id: "model",
                     label: agt(t, "dialogs.autonomousGoal.tabs.model"),
+                    icon: <Bot size={13} />,
                   },
                 ]}
               />
 
               {settingsTab === "policy" ? (
-                <>
-                  <Field
-                    label={agt(t, "dialogs.autonomousGoal.preset.label")}
-                    hint={agt(t, "dialogs.autonomousGoal.preset.hint")}
-                  >
-                    <Select
-                      aria-label={agt(
-                        t,
-                        "dialogs.autonomousGoal.preset.label",
-                      )}
-                      value={selectedPresetId}
-                      placeholder={agt(
-                        t,
-                        "dialogs.autonomousGoal.preset.currentSession",
-                      )}
-                      onValueChange={selectPreset}
-                      options={presetOptions}
-                    />
-                  </Field>
-
-                  <div className="flex flex-wrap gap-1.5">
-                    <Button size="xs" variant="outline" onClick={addPreset}>
-                      <Plus size={12} />
-                      {agt(t, "dialogs.autonomousGoal.preset.add")}
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={duplicatePreset}
-                      disabled={!selectedStoredPreset}
-                    >
-                      <Copy size={12} />
-                      {agt(t, "dialogs.autonomousGoal.preset.duplicate")}
-                    </Button>
-                    {selectedStoredPreset && !selectedStoredPreset.builtIn ? (
-                      <Button
-                        size="xs"
-                        variant="dangerGhost"
-                        onClick={deletePreset}
-                      >
-                        <Trash2 size={12} />
-                        {agt(t, "dialogs.autonomousGoal.preset.delete")}
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  {selectedStoredPreset && !selectedStoredPreset.builtIn ? (
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-3 rounded-xl border border-border bg-bg-elevated/55 p-3">
                     <Field
-                      label={agt(t, "dialogs.autonomousGoal.preset.name")}
+                      label={agt(t, "dialogs.autonomousGoal.preset.label")}
+                      hint={agt(t, "dialogs.autonomousGoal.preset.hint")}
                     >
-                      <TextInput
-                        value={presetNameDraft}
-                        maxLength={80}
-                        onChange={(event) =>
-                          setPresetNameDraft(event.target.value)
-                        }
-                        onBlur={commitPresetName}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            commitPresetName();
-                          }
-                        }}
+                      <Select
+                        aria-label={agt(
+                          t,
+                          "dialogs.autonomousGoal.preset.label",
+                        )}
+                        value={selectedPresetId}
+                        placeholder={agt(
+                          t,
+                          "dialogs.autonomousGoal.preset.currentSession",
+                        )}
+                        onValueChange={selectPreset}
+                        options={presetOptions}
                       />
                     </Field>
-                  ) : (
-                    <Notice tone="neutral" density="compact">
-                      {agt(
-                        t,
-                        selectedStoredPreset
-                          ? "dialogs.autonomousGoal.preset.builtInReadonly"
-                          : "dialogs.autonomousGoal.preset.currentSessionReadonly",
-                      )}
-                    </Notice>
-                  )}
 
-                  <div className="flex flex-col gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 pt-3">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={addPreset}
+                      >
+                        <Plus size={12} />
+                        {agt(t, "dialogs.autonomousGoal.preset.add")}
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={duplicatePreset}
+                        disabled={!selectedStoredPreset}
+                      >
+                        <Copy size={12} />
+                        {agt(t, "dialogs.autonomousGoal.preset.duplicate")}
+                      </Button>
+                      {selectedStoredPreset && !selectedStoredPreset.builtIn ? (
+                        <Button
+                          size="xs"
+                          variant="dangerGhost"
+                          onClick={deletePreset}
+                        >
+                          <Trash2 size={12} />
+                          {agt(t, "dialogs.autonomousGoal.preset.delete")}
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    {selectedStoredPreset && !selectedStoredPreset.builtIn ? (
+                      <Field
+                        label={agt(t, "dialogs.autonomousGoal.preset.name")}
+                      >
+                        <TextInput
+                          value={presetNameDraft}
+                          maxLength={80}
+                          onChange={(event) =>
+                            setPresetNameDraft(event.target.value)
+                          }
+                          onBlur={commitPresetName}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              commitPresetName();
+                            }
+                          }}
+                        />
+                      </Field>
+                    ) : (
+                      <Notice tone="neutral" density="compact">
+                        <span className="flex items-start gap-2">
+                          <LockKeyhole
+                            size={13}
+                            className="mt-0.5 shrink-0"
+                          />
+                          <span>
+                            {agt(
+                              t,
+                              selectedStoredPreset
+                                ? "dialogs.autonomousGoal.preset.builtInReadonly"
+                                : "dialogs.autonomousGoal.preset.currentSessionReadonly",
+                            )}
+                          </span>
+                        </span>
+                      </Notice>
+                    )}
+                  </div>
+
+                  <div className="overflow-hidden rounded-xl border border-border bg-bg-elevated/35">
                     {selectedPreset
-                      ? AUTONOMOUS_GOAL_STAGE_IDS.map((stage) => (
+                      ? AUTONOMOUS_GOAL_STAGE_IDS.map((stage, index) => (
                           <div
                             key={stage}
-                            className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-2"
+                            className={cn(
+                              "grid grid-cols-[minmax(0,1fr)_148px] items-center gap-3 px-3 py-2.5 transition-colors hover:bg-bg-elevated/70",
+                              index > 0 && "border-t border-border/70",
+                            )}
                           >
-                            <span className="truncate text-xs text-fg">
+                            <span className="truncate text-xs font-medium text-fg">
                               {agt(t, STAGE_TRANSLATION_KEYS[stage])}
                             </span>
                             <Select
@@ -1383,96 +1500,106 @@ export function AutonomousGoalDialog({
                       : null}
                   </div>
 
-                  <p className="text-[11px] leading-relaxed text-fg-muted">
+                  <p className="border-t border-border/70 pt-3 text-[11px] leading-relaxed text-fg-muted">
                     {agt(t, "dialogs.autonomousGoal.preset.snapshotHint")}
                   </p>
-                </>
+                </div>
               ) : (
-                <>
-                  <Field
-                    label={agt(
-                      t,
-                      "dialogs.autonomousGoal.modelPreset.label",
-                    )}
-                    hint={agt(
-                      t,
-                      "dialogs.autonomousGoal.modelPreset.hint",
-                    )}
-                  >
-                    <Select
-                      aria-label={agt(
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-3 rounded-xl border border-border bg-bg-elevated/55 p-3">
+                    <Field
+                      label={agt(
                         t,
                         "dialogs.autonomousGoal.modelPreset.label",
                       )}
-                      value={selectedModelPresetId}
-                      placeholder={agt(
+                      hint={agt(
                         t,
-                        "dialogs.autonomousGoal.modelPreset.currentSession",
+                        "dialogs.autonomousGoal.modelPreset.hint",
                       )}
-                      onValueChange={selectModelPreset}
-                      options={modelPresetOptions}
-                    />
-                  </Field>
-
-                  <div className="flex flex-wrap gap-1.5">
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={addModelPreset}
                     >
-                      <Plus size={12} />
-                      {agt(t, "dialogs.autonomousGoal.preset.add")}
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={duplicateModelPreset}
-                      disabled={!selectedModelPreset}
-                    >
-                      <Copy size={12} />
-                      {agt(t, "dialogs.autonomousGoal.preset.duplicate")}
-                    </Button>
-                    {selectedModelPreset && !selectedModelPreset.builtIn ? (
-                      <Button
-                        size="xs"
-                        variant="dangerGhost"
-                        onClick={deleteModelPreset}
-                      >
-                        <Trash2 size={12} />
-                        {agt(t, "dialogs.autonomousGoal.preset.delete")}
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  {selectedModelPreset && !selectedModelPreset.builtIn ? (
-                    <Field
-                      label={agt(t, "dialogs.autonomousGoal.preset.name")}
-                    >
-                      <TextInput
-                        value={modelPresetNameDraft}
-                        maxLength={80}
-                        onChange={(event) =>
-                          setModelPresetNameDraft(event.target.value)
-                        }
-                        onBlur={commitModelPresetName}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            commitModelPresetName();
-                          }
-                        }}
+                      <Select
+                        aria-label={agt(
+                          t,
+                          "dialogs.autonomousGoal.modelPreset.label",
+                        )}
+                        value={selectedModelPresetId}
+                        placeholder={agt(
+                          t,
+                          "dialogs.autonomousGoal.modelPreset.currentSession",
+                        )}
+                        onValueChange={selectModelPreset}
+                        options={modelPresetOptions}
                       />
                     </Field>
-                  ) : (
-                    <Notice tone="neutral" density="compact">
-                      {agt(
-                        t,
-                        selectedModelPreset
-                          ? "dialogs.autonomousGoal.modelPreset.builtInReadonly"
-                          : "dialogs.autonomousGoal.modelPreset.currentSessionReadonly",
-                      )}
-                    </Notice>
-                  )}
+
+                    <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 pt-3">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={addModelPreset}
+                      >
+                        <Plus size={12} />
+                        {agt(t, "dialogs.autonomousGoal.preset.add")}
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={duplicateModelPreset}
+                        disabled={!selectedModelPreset}
+                      >
+                        <Copy size={12} />
+                        {agt(t, "dialogs.autonomousGoal.preset.duplicate")}
+                      </Button>
+                      {selectedModelPreset && !selectedModelPreset.builtIn ? (
+                        <Button
+                          size="xs"
+                          variant="dangerGhost"
+                          onClick={deleteModelPreset}
+                        >
+                          <Trash2 size={12} />
+                          {agt(t, "dialogs.autonomousGoal.preset.delete")}
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    {selectedModelPreset && !selectedModelPreset.builtIn ? (
+                      <Field
+                        label={agt(t, "dialogs.autonomousGoal.preset.name")}
+                      >
+                        <TextInput
+                          value={modelPresetNameDraft}
+                          maxLength={80}
+                          onChange={(event) =>
+                            setModelPresetNameDraft(event.target.value)
+                          }
+                          onBlur={commitModelPresetName}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              commitModelPresetName();
+                            }
+                          }}
+                        />
+                      </Field>
+                    ) : (
+                      <Notice tone="neutral" density="compact">
+                        <span className="flex items-start gap-2">
+                          <LockKeyhole
+                            size={13}
+                            className="mt-0.5 shrink-0"
+                          />
+                          <span>
+                            {agt(
+                              t,
+                              selectedModelPreset
+                                ? "dialogs.autonomousGoal.modelPreset.builtInReadonly"
+                                : "dialogs.autonomousGoal.modelPreset.currentSessionReadonly",
+                            )}
+                          </span>
+                        </span>
+                      </Notice>
+                    )}
+                  </div>
 
                   <Field
                     label={agt(t, "dialogs.autonomousGoal.provider.label")}
@@ -1520,7 +1647,7 @@ export function AutonomousGoalDialog({
                   </Notice>
 
                   {modelConfig.single_model ? (
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex flex-col gap-2 rounded-xl border border-border bg-bg-elevated/35 p-3">
                       <div className="grid grid-cols-[minmax(0,1fr)_116px] gap-2 text-[10px] uppercase tracking-wide text-fg-muted">
                         <span>
                           {agt(t, "dialogs.autonomousGoal.model.modelLabel")}
@@ -1538,8 +1665,8 @@ export function AutonomousGoalDialog({
                       )}
                     </div>
                   ) : (
-                    <div className="flex flex-col gap-2">
-                      <div className="grid grid-cols-[minmax(0,1fr)_116px] gap-2 px-2 text-[10px] uppercase tracking-wide text-fg-muted">
+                    <div className="overflow-hidden rounded-xl border border-border bg-bg-elevated/35">
+                      <div className="grid grid-cols-[minmax(0,1fr)_116px] gap-2 border-b border-border/70 px-3 py-2 text-[10px] uppercase tracking-wide text-fg-muted">
                         <span>
                           {agt(t, "dialogs.autonomousGoal.model.modelLabel")}
                         </span>
@@ -1547,13 +1674,16 @@ export function AutonomousGoalDialog({
                           {agt(t, "dialogs.autonomousGoal.model.effortLabel")}
                         </span>
                       </div>
-                      {AUTONOMOUS_GOAL_STAGE_IDS.map((stage) => {
+                      {AUTONOMOUS_GOAL_STAGE_IDS.map((stage, index) => {
                         const stageKey = AUTONOMOUS_GOAL_STAGE_MODEL_KEYS[stage];
                         const label = agt(t, STAGE_TRANSLATION_KEYS[stage]);
                         return (
                           <div
                             key={stage}
-                            className="flex flex-col gap-1 rounded-lg border border-border bg-bg/65 p-2"
+                            className={cn(
+                              "flex flex-col gap-1.5 px-3 py-2.5 transition-colors hover:bg-bg-elevated/70",
+                              index > 0 && "border-t border-border/70",
+                            )}
                           >
                             <span className="text-[11px] font-medium text-fg">
                               {label}
@@ -1573,23 +1703,20 @@ export function AutonomousGoalDialog({
                     </div>
                   )}
 
-                  <p className="text-[11px] leading-relaxed text-fg-muted">
+                  <p className="border-t border-border/70 pt-3 text-[11px] leading-relaxed text-fg-muted">
                     {agt(t, "dialogs.autonomousGoal.model.snapshotHint")}
                   </p>
-                </>
+                </div>
               )}
             </section>
           </div>
-
-          {error ? (
-            <Notice tone="danger" className="mt-3">
-              {error}
-            </Notice>
-          ) : null}
         </div>
 
-        <ModalFooter className="border-t border-border" align="between">
-          <span className="text-[11px] text-fg-muted">
+        <ModalFooter
+          className="border-t border-border bg-bg-elevated/95"
+          align="between"
+        >
+          <span className="max-w-[58ch] text-[11px] leading-relaxed text-fg-muted">
             {agt(
               t,
               editingSession

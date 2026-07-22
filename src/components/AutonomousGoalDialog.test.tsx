@@ -164,6 +164,10 @@ describe("AutonomousGoalDialog", () => {
   it("opens on the full-autonomy built-in with a required goal", async () => {
     await renderDialog();
 
+    expect(
+      document.body.querySelector<HTMLElement>('[role="dialog"] > div')
+        ?.className,
+    ).toContain("max-w-5xl");
     expect(document.body.textContent).toContain(
       "New goal session",
     );
@@ -172,6 +176,43 @@ describe("AutonomousGoalDialog", () => {
       "This built-in preset cannot be changed",
     );
     expect(button("Start goal").disabled).toBe(true);
+  });
+
+  it("separates read-only built-ins from editable policy slots", async () => {
+    await renderDialog();
+
+    const policyPreset = document.body.querySelector<HTMLButtonElement>(
+      'button[aria-label="Policy preset"]',
+    );
+    await act(async () => policyPreset?.click());
+    expect(
+      document.body.querySelector(
+        '[data-select-separator][aria-label="Built-ins above · read-only"]',
+      ),
+    ).toBeInstanceOf(HTMLElement);
+    expect(document.body.textContent).toContain("No custom presets yet");
+  });
+
+  it("separates read-only built-ins from editable model slots", async () => {
+    await renderDialog();
+
+    act(() => button("Agent & Model").click());
+    const modelPreset = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>(
+        'button[role="combobox"]',
+      ),
+    ).find(
+      (candidate) =>
+        candidate.getAttribute("aria-label") === "Agent & model preset",
+    );
+    expect(modelPreset).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => modelPreset?.click());
+    expect(
+      document.body.querySelector(
+        '[data-select-separator][aria-label="Built-ins above · read-only"]',
+      ),
+    ).toBeInstanceOf(HTMLElement);
+    expect(document.body.textContent).toContain("No custom presets yet");
   });
 
   it("duplicates and deletes an editable preset without changing built-ins", async () => {
