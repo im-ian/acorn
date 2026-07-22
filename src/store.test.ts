@@ -2598,12 +2598,21 @@ describe("pollSessionStatuses", () => {
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
       { id: "a2", status: "working", branch: "feat/a2-live" },
     ]);
+    useSettings.setState((state) => ({
+      settings: {
+        ...state.settings,
+        agents: {
+          ...state.settings.agents,
+          syncAgentSessionTitles: true,
+        },
+      },
+    }));
 
     await useAppStore
       .getState()
       .pollSessionStatuses(["a2", "missing", "a2"]);
 
-    expect(mockApi.detectSessionStatuses).toHaveBeenCalledWith(["a2"]);
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledWith(["a2"], true);
     const sessions = useAppStore.getState().sessions;
     expect(sessions.find((s) => s.id === "a1")?.status).toBe("ready");
     expect(sessions.find((s) => s.id === "a2")?.status).toBe("working");
@@ -3020,13 +3029,21 @@ describe("pollSessionStatuses", () => {
     const second = useAppStore.getState().pollSessionStatuses(["a2"]);
 
     expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(1);
-    expect(mockApi.detectSessionStatuses).toHaveBeenNthCalledWith(1, ["a1"]);
+    expect(mockApi.detectSessionStatuses).toHaveBeenNthCalledWith(
+      1,
+      ["a1"],
+      false,
+    );
 
     releaseFirst();
     await Promise.all([first, second]);
 
     expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(2);
-    expect(mockApi.detectSessionStatuses).toHaveBeenNthCalledWith(2, ["a2"]);
+    expect(mockApi.detectSessionStatuses).toHaveBeenNthCalledWith(
+      2,
+      ["a2"],
+      false,
+    );
     const sessions = useAppStore.getState().sessions;
     expect(sessions.find((s) => s.id === "a1")?.status).toBe("working");
     expect(sessions.find((s) => s.id === "a2")?.status).toBe("waiting_for_input");
@@ -3053,7 +3070,10 @@ describe("pollSessionStatuses", () => {
     const subset = useAppStore.getState().pollSessionStatuses(["a2"]);
 
     expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(1);
-    expect(mockApi.detectSessionStatuses).toHaveBeenCalledWith(["a1", "a2"]);
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledWith(
+      ["a1", "a2"],
+      false,
+    );
 
     releaseFull();
     await Promise.all([full, subset]);
@@ -3088,13 +3108,17 @@ describe("pollSessionStatuses", () => {
       .pollSessionStatuses(["a2"]);
 
     expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(1);
-    expect(mockApi.detectSessionStatuses).toHaveBeenCalledWith(["a1"]);
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledWith(["a1"], false);
 
     releaseFull();
     await Promise.all([full, newSessionPoll]);
 
     expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(2);
-    expect(mockApi.detectSessionStatuses).toHaveBeenNthCalledWith(2, ["a2"]);
+    expect(mockApi.detectSessionStatuses).toHaveBeenNthCalledWith(
+      2,
+      ["a2"],
+      false,
+    );
     const sessions = useAppStore.getState().sessions;
     expect(sessions.find((s) => s.id === "a1")?.status).toBe("working");
     expect(sessions.find((s) => s.id === "a2")?.status).toBe("waiting_for_input");
@@ -3118,8 +3142,38 @@ describe("generateSessionTitle", () => {
     expect(mockApi.renameSession).not.toHaveBeenCalled();
   });
 
+  it("forwards the agent title sync preference when renaming", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    useSettings.setState((state) => ({
+      settings: {
+        ...state.settings,
+        agents: {
+          ...state.settings.agents,
+          syncAgentSessionTitles: true,
+        },
+      },
+    }));
+
+    await useAppStore.getState().renameSession("a1", "Manual title");
+
+    expect(mockApi.renameSession).toHaveBeenCalledWith(
+      "a1",
+      "Manual title",
+      true,
+    );
+  });
+
   it("merges the generated session title without refreshing all sessions", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    useSettings.setState((state) => ({
+      settings: {
+        ...state.settings,
+        agents: {
+          ...state.settings.agents,
+          syncAgentSessionTitles: true,
+        },
+      },
+    }));
     mockApi.generateSessionTitle.mockResolvedValueOnce(
       {
         status: "generated",
@@ -3141,6 +3195,7 @@ describe("generateSessionTitle", () => {
       ai,
       "Title prompt",
       false,
+      true,
     );
     expect(mockApi.listSessions).toHaveBeenCalledTimes(1);
     expect(useAppStore.getState().sessions[0]?.name).toBe(
@@ -3180,6 +3235,7 @@ describe("generateSessionTitle", () => {
       ai,
       "Title prompt",
       true,
+      false,
     );
     expect(useAppStore.getState().sessions[0]?.name).toBe("fresh-title");
   });

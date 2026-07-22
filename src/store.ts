@@ -1913,7 +1913,12 @@ export const useAppStore = create<AppStateModel>()(
           activeStatusPollAll = pollAll;
           activeStatusPollIds = new Set(idsToPoll);
           try {
-            const updates = await api.detectSessionStatuses(idsToPoll);
+            const syncAgentSessionTitles =
+              useSettings.getState().settings.agents.syncAgentSessionTitles;
+            const updates = await api.detectSessionStatuses(
+              idsToPoll,
+              syncAgentSessionTitles,
+            );
             const map = new Map(updates.map((u) => [u.id, u]));
             const pollObservedAt = new Date().toISOString();
             set((s) => {
@@ -3195,7 +3200,9 @@ export const useAppStore = create<AppStateModel>()(
     if (get().generatingSessionTitleIds[id]) return;
 
     try {
-      await api.renameSession(id, name);
+      const syncAgentSessionTitles =
+        useSettings.getState().settings.agents.syncAgentSessionTitles;
+      await api.renameSession(id, name, syncAgentSessionTitles);
       await get().refreshSessions();
       set({ error: null });
     } catch (e) {
@@ -3218,7 +3225,15 @@ export const useAppStore = create<AppStateModel>()(
       },
     }));
     try {
-      const result = await api.generateSessionTitle(id, ai, prompt, force);
+      const syncAgentSessionTitles =
+        useSettings.getState().settings.agents.syncAgentSessionTitles;
+      const result = await api.generateSessionTitle(
+        id,
+        ai,
+        prompt,
+        force,
+        syncAgentSessionTitles,
+      );
       resultStatus = result.status;
       const updated = result.session;
       if (result.status === "generated" && updated?.id) {

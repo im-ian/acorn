@@ -687,6 +687,11 @@
         "hint": "켜면 새 에이전트 세션의 transcript context를 선택한 AI CLI로 보내고 기본 탭 이름을 간결한 제목으로 바꿉니다.",
         "checkbox": "세션 제목 자동 생성"
       },
+      "sessionTitleSync": {
+        "label": "에이전트 제목 동기화",
+        "hint": "켜면 수동 및 자동 생성된 터미널 탭 제목을 연결된 Codex 또는 Claude 대화 이름에 반영합니다.",
+        "checkbox": "Codex 및 Claude에 제목 동기화"
+      },
       "sessionTitlePrompt": {
         "label": "세션 제목 프롬프트",
         "hint": "transcript context 앞에 함께 보낼 지시문입니다. 비워 두면 기본 프롬프트를 사용합니다.",

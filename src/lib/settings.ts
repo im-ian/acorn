@@ -351,6 +351,12 @@ export interface AcornSettings {
      */
     autoGenerateSessionTitles: boolean;
     /**
+     * Mirror Acorn's manual and generated terminal tab titles into matching
+     * Codex and Claude conversations. Default off because this changes
+     * provider-owned conversation metadata and transcript files.
+     */
+    syncAgentSessionTitles: boolean;
+    /**
      * Instructions prepended to transcript context when Acorn asks the
      * selected AI CLI to name a new session tab.
      */
@@ -556,6 +562,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   agents: {
     selected: "claude",
     autoGenerateSessionTitles: true,
+    syncAgentSessionTitles: false,
     sessionTitlePrompt: DEFAULT_SESSION_TITLE_PROMPT,
     customCommand: "",
     ollama: { model: "" },
@@ -1173,6 +1180,7 @@ function loadSettings(): AcornSettings {
     const agentsRaw = (parsed.agents ?? {}) as {
       selected?: string;
       autoGenerateSessionTitles?: boolean;
+      syncAgentSessionTitles?: boolean;
       sessionTitlePrompt?: unknown;
       customCommand?: string;
       ollama?: { model?: string };
@@ -1341,6 +1349,10 @@ function loadSettings(): AcornSettings {
           typeof agentsRaw.autoGenerateSessionTitles === "boolean"
             ? agentsRaw.autoGenerateSessionTitles
             : DEFAULT_SETTINGS.agents.autoGenerateSessionTitles,
+        syncAgentSessionTitles:
+          typeof agentsRaw.syncAgentSessionTitles === "boolean"
+            ? agentsRaw.syncAgentSessionTitles
+            : DEFAULT_SETTINGS.agents.syncAgentSessionTitles,
         sessionTitlePrompt: normalizeSessionTitlePrompt(
           agentsRaw.sessionTitlePrompt,
           DEFAULT_SETTINGS.agents.sessionTitlePrompt,
@@ -1528,6 +1540,7 @@ interface SettingsState {
     patch: Partial<{
       selected: SelectedAgent;
       autoGenerateSessionTitles: boolean;
+      syncAgentSessionTitles: boolean;
       sessionTitlePrompt: string;
       customCommand: string;
       ollama: Partial<AcornSettings["agents"]["ollama"]>;
@@ -1698,6 +1711,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
           ...(patch.selected !== undefined ? { selected: patch.selected } : {}),
           ...(patch.autoGenerateSessionTitles !== undefined
             ? { autoGenerateSessionTitles: patch.autoGenerateSessionTitles }
+            : {}),
+          ...(patch.syncAgentSessionTitles !== undefined
+            ? { syncAgentSessionTitles: patch.syncAgentSessionTitles }
             : {}),
           ...(patch.sessionTitlePrompt !== undefined
             ? {
