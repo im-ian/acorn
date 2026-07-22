@@ -141,6 +141,9 @@ trash = { workspace = true }
 # markers; tests also use it for scratch directories.
 tempfile = { workspace = true }
 
+[dev-dependencies]
+tauri = { workspace = true, features = ["test"] }
+
 [target.'cfg(unix)'.dependencies]
 # `setsid()` and `getpid()` wrappers for detaching the daemon from the
 # spawning Acorn app's process group. Feature-flagged to only what we use

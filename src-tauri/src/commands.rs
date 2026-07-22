@@ -6486,16 +6486,11 @@ pub fn pty_unsubscribe_output(
 }
 
 #[tauri::command]
-pub fn pty_write<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, AppState>,
-    session_id: String,
-    data: String,
-) -> AppResult<()> {
+pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let bytes = decode_b64(&data)?;
-    let submit_revision =
-        is_terminal_submit_frame(&bytes).then(|| state.sessions.hook_revision(&id));
+    // Terminal input is transport-only: keystrokes express user intent, not
+    // confirmed agent lifecycle. Native hooks and runtime evidence own status.
     // Daemon-managed sessions route stdin through the control socket.
     // Keystrokes are small; one RPC round-trip per keystroke is well
     // under the typing-feedback threshold and avoids managing a second
@@ -6513,33 +6508,7 @@ pub fn pty_write<R: Runtime>(
             .write(&id, &bytes)
             .map_err(|e| AppError::Pty(e.to_string()))?;
     }
-
-    if let Some(revision) = submit_revision {
-        match state.sessions.refresh_status_if_hook_revision(
-            &id,
-            SessionStatus::WaitingForInput,
-            revision,
-            SessionStatus::Working,
-        ) {
-            Ok(true) => {
-                persist(&state);
-                if let Err(err) =
-                    app.emit(crate::agent_hooks::AGENT_HOOK_STATUS_EVENT, id.to_string())
-                {
-                    tracing::warn!(%id, error = %err, "terminal submit status emit failed");
-                }
-            }
-            Ok(false) => {}
-            Err(err) => {
-                tracing::warn!(%id, error = %err, "terminal submit status refresh failed");
-            }
-        }
-    }
     Ok(())
-}
-
-fn is_terminal_submit_frame(bytes: &[u8]) -> bool {
-    matches!(bytes, b"\r" | b"\n" | b"\r\n")
 }
 
 #[tauri::command]
@@ -8948,10 +8917,16 @@ mod tests {
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingSessionRemoval};
+    #[cfg(unix)]
+    use acorn_session::{AgentStatusSource, SessionStatus};
     use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionMode};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::sync::Arc;
     use std::sync::Mutex;
+    #[cfg(unix)]
+    use tauri::Manager;
     use uuid::Uuid;
 
     fn scoped_session(id: &str, repo_path: &str, project_scoped: bool) -> Session {
@@ -9228,20 +9203,68 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn terminal_submit_frame_requires_a_standalone_line_ending() {
-        assert!(super::is_terminal_submit_frame(b"\r"));
-        assert!(super::is_terminal_submit_frame(b"\n"));
-        assert!(super::is_terminal_submit_frame(b"\r\n"));
+    fn pty_write_does_not_infer_lifecycle_from_terminal_bytes() {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::new())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("build mock app");
+        let state = app.state::<AppState>();
+        state.daemon_bridge.set_enabled(false);
 
-        for input in [
-            b"answer".as_slice(),
-            b"\x1b[A".as_slice(),
-            b"answer\r".as_slice(),
-            b"\x1b[200~line one\nline two\x1b[201~".as_slice(),
+        let session = state
+            .sessions
+            .insert(scoped_session("pty-lifecycle", "/tmp", false));
+        state
+            .sessions
+            .refresh_status_with_source(
+                &session.id,
+                SessionStatus::WaitingForInput,
+                Some(AgentStatusSource::Hook),
+            )
+            .expect("mark session waiting on a lifecycle hook");
+        state
+            .pty
+            .spawn(
+                app.handle().clone(),
+                Arc::new(|_, _, _| {}),
+                session.id,
+                std::env::temp_dir(),
+                "/bin/cat".to_string(),
+                Vec::new(),
+                |_| {},
+                80,
+                24,
+            )
+            .expect("spawn test PTY");
+
+        let before = state
+            .sessions
+            .lifecycle_snapshot(&session.id)
+            .expect("read lifecycle before terminal input");
+        for (label, data) in [
+            ("carriage return", "DQ=="),
+            ("line feed", "Cg=="),
+            ("text followed by carriage return", "YW5zd2VyDQ=="),
         ] {
-            assert!(!super::is_terminal_submit_frame(input));
+            super::pty_write(
+                app.state::<AppState>(),
+                session.id.to_string(),
+                data.to_string(),
+            )
+            .unwrap_or_else(|error| panic!("write {label} to PTY: {error}"));
+            assert_eq!(
+                state
+                    .sessions
+                    .lifecycle_snapshot(&session.id)
+                    .expect("read lifecycle after terminal input"),
+                before,
+                "terminal transport changed lifecycle for {label}"
+            );
         }
+
+        state.pty.kill(&session.id).expect("kill test PTY");
     }
 
     #[test]
