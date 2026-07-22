@@ -4522,13 +4522,13 @@ fn normalize_session_goal(mut goal: SessionGoal) -> AppResult<SessionGoal> {
         goal.revision = 1;
     }
     normalize_goal_model_selection(&mut goal.model_config.default)?;
-    normalize_goal_model_selection(&mut goal.model_config.stages.interpretation)?;
     normalize_goal_model_selection(&mut goal.model_config.stages.plan)?;
     normalize_goal_model_selection(&mut goal.model_config.stages.implementation)?;
     normalize_goal_model_selection(&mut goal.model_config.stages.validation)?;
     normalize_goal_model_selection(&mut goal.model_config.stages.auto_fix)?;
     normalize_goal_model_selection(&mut goal.model_config.stages.self_review)?;
-    normalize_goal_model_selection(&mut goal.model_config.stages.draft_pr)?;
+    normalize_goal_model_selection(&mut goal.model_config.stages.open_pr)?;
+    normalize_goal_model_selection(&mut goal.model_config.stages.merge)?;
     Ok(goal)
 }
 
@@ -4651,13 +4651,13 @@ pub async fn update_chat_message(
 
 fn goal_stage_policy(goal: &SessionGoal, stage: SessionGoalStage) -> SessionGoalStagePolicy {
     match stage {
-        SessionGoalStage::Interpretation => goal.preset.policies.interpretation,
         SessionGoalStage::Plan => goal.preset.policies.plan,
         SessionGoalStage::Implementation => goal.preset.policies.implementation,
         SessionGoalStage::Validation => goal.preset.policies.validation,
         SessionGoalStage::AutoFix => goal.preset.policies.auto_fix,
         SessionGoalStage::SelfReview => goal.preset.policies.self_review,
-        SessionGoalStage::DraftPr => goal.preset.policies.draft_pr,
+        SessionGoalStage::OpenPr => goal.preset.policies.open_pr,
+        SessionGoalStage::Merge => goal.preset.policies.merge,
     }
 }
 
@@ -4669,13 +4669,13 @@ fn goal_stage_model_selection(
         return &goal.model_config.default;
     }
     match stage {
-        SessionGoalStage::Interpretation => &goal.model_config.stages.interpretation,
         SessionGoalStage::Plan => &goal.model_config.stages.plan,
         SessionGoalStage::Implementation => &goal.model_config.stages.implementation,
         SessionGoalStage::Validation => &goal.model_config.stages.validation,
         SessionGoalStage::AutoFix => &goal.model_config.stages.auto_fix,
         SessionGoalStage::SelfReview => &goal.model_config.stages.self_review,
-        SessionGoalStage::DraftPr => &goal.model_config.stages.draft_pr,
+        SessionGoalStage::OpenPr => &goal.model_config.stages.open_pr,
+        SessionGoalStage::Merge => &goal.model_config.stages.merge,
     }
 }
 
@@ -4697,35 +4697,32 @@ fn goal_ai_request(
 
 fn goal_next_stage(stage: SessionGoalStage) -> Option<SessionGoalStage> {
     match stage {
-        SessionGoalStage::Interpretation => Some(SessionGoalStage::Plan),
         SessionGoalStage::Plan => Some(SessionGoalStage::Implementation),
         SessionGoalStage::Implementation => Some(SessionGoalStage::Validation),
         SessionGoalStage::Validation => Some(SessionGoalStage::AutoFix),
         SessionGoalStage::AutoFix => Some(SessionGoalStage::SelfReview),
-        SessionGoalStage::SelfReview => Some(SessionGoalStage::DraftPr),
-        SessionGoalStage::DraftPr => None,
+        SessionGoalStage::SelfReview => Some(SessionGoalStage::OpenPr),
+        SessionGoalStage::OpenPr => Some(SessionGoalStage::Merge),
+        SessionGoalStage::Merge => None,
     }
 }
 
 fn goal_stage_label(stage: SessionGoalStage) -> &'static str {
     match stage {
-        SessionGoalStage::Interpretation => "Interpretation",
         SessionGoalStage::Plan => "Plan",
         SessionGoalStage::Implementation => "Implementation",
         SessionGoalStage::Validation => "Validation",
         SessionGoalStage::AutoFix => "Automatic fixes",
         SessionGoalStage::SelfReview => "Self-review",
-        SessionGoalStage::DraftPr => "Draft PR",
+        SessionGoalStage::OpenPr => "Open PR",
+        SessionGoalStage::Merge => "Merge",
     }
 }
 
 fn goal_stage_instruction(stage: SessionGoalStage) -> &'static str {
     match stage {
-        SessionGoalStage::Interpretation => {
-            "Interpret the requested outcome, success criteria, constraints, and important assumptions. Do not implement or plan beyond what is needed to make the goal unambiguous."
-        }
         SessionGoalStage::Plan => {
-            "Inspect the repository and produce a concrete implementation and verification plan. Do not implement changes during this stage."
+            "Interpret the requested outcome, success criteria, constraints, and important assumptions. Inspect the repository and produce a concrete implementation and verification plan. Do not implement changes during this stage."
         }
         SessionGoalStage::Implementation => {
             "Implement the approved/current plan in the worktree. Keep the work scoped to the durable goal and preserve unrelated user changes."
@@ -4739,8 +4736,25 @@ fn goal_stage_instruction(stage: SessionGoalStage) -> &'static str {
         SessionGoalStage::SelfReview => {
             "Review the complete diff and behavior for correctness, regressions, edge cases, and goal drift. Correct issues you find and rerun any directly affected checks."
         }
-        SessionGoalStage::DraftPr => {
-            "Prepare the work for review: use an appropriate descriptive branch, commit only goal-related files, push the branch, and create or update a Draft pull request. Never merge it."
+        SessionGoalStage::OpenPr => {
+            "Prepare the work for review: use an appropriate descriptive branch, commit only goal-related files, push the branch, and create or update a non-draft pull request that is ready for review. If the existing pull request is a draft, mark it ready for review. Never merge it during this stage."
+        }
+        SessionGoalStage::Merge => {
+            "Locate the pull request for this Goal branch and wait for every required CI check. If a required check fails because of goal-related work, make a targeted fix, rerun the affected validation, self-review the resulting diff, commit and push it, then wait for CI again. Merge only when required checks pass, the pull request is mergeable, and this stage's policy authorizes the merge. Never bypass branch protection or merge an unrelated pull request."
+        }
+    }
+}
+
+fn goal_stage_git_guardrail(stage: SessionGoalStage) -> &'static str {
+    match stage {
+        SessionGoalStage::OpenPr => {
+            "- The Open PR stage alone controls branch preparation, commits, pushes, and opening or updating a ready-for-review pull request. Never merge during this stage."
+        }
+        SessionGoalStage::Merge => {
+            "- Merge only the pull request for this Goal branch, only after required CI passes, and only when this stage's policy authorizes it. Never bypass repository protections."
+        }
+        _ => {
+            "- Do not push, open a pull request, or merge before the dedicated Open PR and Merge stages."
         }
     }
 }
@@ -4788,7 +4802,11 @@ fn build_goal_stage_prompt(
         prompt.push_str("\n\nThis is a revised Goal. Treat the saved revision as the current authority. Compare it with the work already present in the worktree, explain what remains valid and what changed, then present the revised plan. Follow the configured Plan policy and do not request confirmation solely because the Goal changed.");
     }
     prompt.push_str(
-        "\n\n## Guardrails\n- Treat GitHub issues or other external references as inputs only when the user explicitly named them.\n- Destructive changes are allowed only when the user explicitly requested them and they are necessary for this stage.\n- Draft PR policy controls push and Draft PR creation. Never merge, deploy, publish, or release.\n- Do not begin or simulate the next Goal stage in this response.\n- Finish with a concise stage outcome. Use `WAITING:` only when the policy or a real blocker requires user input.",
+        "\n\n## Guardrails\n- Treat GitHub issues or other external references as inputs only when the user explicitly named them.\n- Destructive changes are allowed only when the user explicitly requested them and they are necessary for this stage.\n",
+    );
+    prompt.push_str(goal_stage_git_guardrail(stage));
+    prompt.push_str(
+        "\n- Never deploy, publish, or release.\n- Do not begin or simulate the next Goal stage in this response.\n- Finish with a concise stage outcome. Use `WAITING:` only when the policy or a real blocker requires user input.",
     );
     prompt
 }
@@ -9717,13 +9735,13 @@ mod tests {
                 id: " builtin:balanced ".to_string(),
                 name: " Balanced ".to_string(),
                 policies: SessionGoalPolicies {
-                    interpretation: SessionGoalStagePolicy::Auto,
                     plan: SessionGoalStagePolicy::Approval,
                     implementation: SessionGoalStagePolicy::Auto,
                     validation: SessionGoalStagePolicy::Auto,
                     auto_fix: SessionGoalStagePolicy::Auto,
                     self_review: SessionGoalStagePolicy::Auto,
-                    draft_pr: SessionGoalStagePolicy::Approval,
+                    open_pr: SessionGoalStagePolicy::Approval,
+                    merge: SessionGoalStagePolicy::Approval,
                 },
             },
             model_config: SessionGoalModelConfig::default(),
@@ -9804,6 +9822,31 @@ mod tests {
     }
 
     #[test]
+    fn goal_stage_sequence_opens_a_ready_pr_before_merge() {
+        use acorn_session::SessionGoalStage;
+
+        let mut stage = Some(SessionGoalStage::Plan);
+        let mut sequence = Vec::new();
+        while let Some(current) = stage {
+            sequence.push(current);
+            stage = super::goal_next_stage(current);
+        }
+
+        assert_eq!(
+            sequence,
+            vec![
+                SessionGoalStage::Plan,
+                SessionGoalStage::Implementation,
+                SessionGoalStage::Validation,
+                SessionGoalStage::AutoFix,
+                SessionGoalStage::SelfReview,
+                SessionGoalStage::OpenPr,
+                SessionGoalStage::Merge,
+            ]
+        );
+    }
+
+    #[test]
     fn goal_model_switch_resets_only_the_stale_target_thread() {
         let mut state = chat_state_for_runtime(Vec::new());
         state.session.active_provider = Some("claude".to_string());
@@ -9862,15 +9905,31 @@ mod tests {
     }
 
     #[test]
-    fn draft_pr_auto_prompt_allows_push_but_keeps_release_boundary() {
+    fn open_pr_prompt_creates_a_ready_pull_request_without_merging() {
         let goal = goal_spec(SessionAgentProvider::Codex);
         let prompt =
-            super::build_goal_stage_prompt(&goal, acorn_session::SessionGoalStage::DraftPr, false);
+            super::build_goal_stage_prompt(&goal, acorn_session::SessionGoalStage::OpenPr, false);
 
         assert!(prompt.contains("push the branch"));
-        assert!(prompt.contains("create or update a Draft pull request"));
-        assert!(prompt.contains("Never merge, deploy, publish, or release"));
+        assert!(prompt.contains("non-draft pull request that is ready for review"));
+        assert!(prompt.contains("Never merge during this stage"));
+        assert!(prompt.contains("Never deploy, publish, or release"));
         assert!(!prompt.contains("Do not push"));
+    }
+
+    #[test]
+    fn merge_prompt_waits_for_required_ci_and_preserves_release_boundary() {
+        let mut goal = goal_spec(SessionAgentProvider::Codex);
+        goal.preset.policies.merge = SessionGoalStagePolicy::Auto;
+        let prompt =
+            super::build_goal_stage_prompt(&goal, acorn_session::SessionGoalStage::Merge, false);
+
+        assert!(prompt.contains("wait for every required CI check"));
+        assert!(prompt.contains("self-review the resulting diff"));
+        assert!(prompt.contains("Merge only when required checks pass"));
+        assert!(prompt.contains("Never bypass branch protection"));
+        assert!(prompt.contains("Never deploy, publish, or release"));
+        assert!(prompt.contains("AUTO:"));
     }
 
     #[test]
@@ -9894,7 +9953,8 @@ mod tests {
         assert!(prompt.contains("do not request confirmation solely"));
         assert!(prompt.contains("user explicitly named them"));
         assert!(prompt.contains("Destructive changes are allowed only"));
-        assert!(prompt.contains("Never merge, deploy, publish, or release"));
+        assert!(prompt.contains("Do not push, open a pull request, or merge"));
+        assert!(prompt.contains("Never deploy, publish, or release"));
         assert!(prompt.contains("Do not begin or simulate the next Goal stage"));
     }
 
