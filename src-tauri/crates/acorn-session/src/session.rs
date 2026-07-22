@@ -730,31 +730,6 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
-    /// Refresh status only when both the stored state and hook generation
-    /// still match the caller's observation. Hook handlers advance the
-    /// generation before waiting on the session row, so a concurrent event
-    /// either rejects this write or overwrites it afterward.
-    pub fn refresh_status_if_hook_revision(
-        &self,
-        id: &Uuid,
-        expected_status: SessionStatus,
-        expected_hook_revision: u64,
-        status: SessionStatus,
-    ) -> SessionResult<bool> {
-        let mut runtime = self.lock_hook_runtime();
-        let mut entry = self
-            .inner
-            .get_mut(id)
-            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
-        let state = runtime.entry(*id).or_default();
-        if entry.status != expected_status || state.revision != expected_hook_revision {
-            return Ok(false);
-        }
-        entry.status = status;
-        state.advance_lifecycle_revision();
-        Ok(true)
-    }
-
     /// Refresh status and lifecycle authority only if the complete state
     /// observed by a poll is still current. Comparing both source and hook
     /// generation rejects stale polls after a fallback transition, because
@@ -1534,62 +1509,6 @@ mod tests {
         store.mark_codex_permission_waiting_at(&session.id, requested_at);
         store.remove(&session.id).expect("session exists");
         assert_eq!(store.codex_permission_waiting_at(&session.id), None);
-    }
-
-    #[test]
-    fn hook_revision_guards_conditional_status_refresh() {
-        let store = SessionStore::new();
-        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
-        store
-            .refresh_status(&session.id, SessionStatus::WaitingForInput)
-            .expect("session exists");
-
-        let waiting_revision = store.hook_revision(&session.id);
-        assert!(store
-            .refresh_status_if_hook_revision(
-                &session.id,
-                SessionStatus::WaitingForInput,
-                waiting_revision,
-                SessionStatus::Working,
-            )
-            .expect("session exists"));
-        store
-            .refresh_status(&session.id, SessionStatus::WaitingForInput)
-            .expect("session exists");
-        store.mark_hook_active(&session.id, SessionAgentProvider::Codex);
-
-        assert!(!store
-            .refresh_status_if_hook_revision(
-                &session.id,
-                SessionStatus::WaitingForInput,
-                waiting_revision,
-                SessionStatus::Working,
-            )
-            .expect("session exists"));
-        assert_eq!(
-            store.get(&session.id).expect("session exists").status,
-            SessionStatus::WaitingForInput
-        );
-    }
-
-    #[test]
-    fn conditional_status_refresh_requires_the_expected_status() {
-        let store = SessionStore::new();
-        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
-        let revision = store.hook_revision(&session.id);
-
-        assert!(!store
-            .refresh_status_if_hook_revision(
-                &session.id,
-                SessionStatus::WaitingForInput,
-                revision,
-                SessionStatus::Working,
-            )
-            .expect("session exists"));
-        assert_eq!(
-            store.get(&session.id).expect("session exists").status,
-            SessionStatus::Ready
-        );
     }
 
     #[test]

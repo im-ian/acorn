@@ -108,7 +108,7 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
   # Codex requires command hooks to carry their exact trusted fingerprint.
   # Keep this session-scoped: user/project config remains untouched, and the
   # legacy notify callback below remains available to older Codex releases.
-  _acorn_codex_hooks='hooks={UserPromptSubmit=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],PreToolUse=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],PermissionRequest=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],Stop=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],state={"/<session-flags>/config.toml:pre_tool_use:0:0"={enabled=true,trusted_hash="sha256:b7f07d6514fc12ca8e976ae4bd5b6e61ca13d61c174616789ab3b4464200b1d3"},"/<session-flags>/config.toml:permission_request:0:0"={enabled=true,trusted_hash="sha256:074c27d6eb1e0c1aad3e4fd979c6f80b6ffe5a00a9d2993c857850e7e55b2d64"},"/<session-flags>/config.toml:user_prompt_submit:0:0"={enabled=true,trusted_hash="sha256:71869cae863c34d6bc113940040d9e5e3f0d6173e1f8ff50c77d2c479ecd70a1"},"/<session-flags>/config.toml:stop:0:0"={enabled=true,trusted_hash="sha256:9162891a8f1d1790bc6752f46c9ca2a7e8cc0c6440d496ba9331eecc20a16865"}}}'
+  _acorn_codex_hooks='hooks={UserPromptSubmit=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],PreToolUse=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],PermissionRequest=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],PostToolUse=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],Stop=[{hooks=[{type="command",command="sh \"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"",timeout=5}]}],state={"/<session-flags>/config.toml:pre_tool_use:0:0"={enabled=true,trusted_hash="sha256:b7f07d6514fc12ca8e976ae4bd5b6e61ca13d61c174616789ab3b4464200b1d3"},"/<session-flags>/config.toml:permission_request:0:0"={enabled=true,trusted_hash="sha256:074c27d6eb1e0c1aad3e4fd979c6f80b6ffe5a00a9d2993c857850e7e55b2d64"},"/<session-flags>/config.toml:post_tool_use:0:0"={enabled=true,trusted_hash="sha256:ecd139e174de9a8d3cd7f9503b359587fade68c65f838bb0cddc785f438909cc"},"/<session-flags>/config.toml:user_prompt_submit:0:0"={enabled=true,trusted_hash="sha256:71869cae863c34d6bc113940040d9e5e3f0d6173e1f8ff50c77d2c479ecd70a1"},"/<session-flags>/config.toml:stop:0:0"={enabled=true,trusted_hash="sha256:9162891a8f1d1790bc6752f46c9ca2a7e8cc0c6440d496ba9331eecc20a16865"}}}'
   _acorn_codex_notify_config="notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]"
   _acorn_codex_version=$("$REAL_BIN" --version 2>/dev/null |
     sed -n 's/^[^0-9]*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*$/\1/p' |
@@ -218,7 +218,10 @@ if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
         *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)
           printf '%s\n' "$_acorn_line" | "$_acorn_notify" "" jsonl_approval >/dev/null 2>&1 || true
           ;;
-        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"exec_command_begin"'*)
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"exec_command_begin"'*|\
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"patch_apply_begin"'*|\
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"mcp_tool_call_begin"'*|\
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"web_search_begin"'*)
           printf '%s\n' "$_acorn_line" | "$_acorn_notify" "" jsonl_tool >/dev/null 2>&1 || true
           ;;
       esac
@@ -2306,8 +2309,12 @@ done
         assert!(wrapper.contains("UserPromptSubmit"));
         assert!(wrapper.contains("PreToolUse"));
         assert!(wrapper.contains("PermissionRequest"));
+        assert!(wrapper.contains("PostToolUse"));
         assert!(wrapper.contains("Stop"));
         assert!(wrapper.contains("trusted_hash"));
+        assert!(wrapper.contains(
+            "post_tool_use:0:0\"={enabled=true,trusted_hash=\"sha256:ecd139e174de9a8d3cd7f9503b359587fade68c65f838bb0cddc785f438909cc\"}"
+        ));
         assert!(wrapper.contains("/<session-flags>/config.toml"));
         assert!(!wrapper.contains("SubagentStop"));
         assert!(!wrapper.contains("dangerously-bypass-hook-trust"));
@@ -2385,6 +2392,27 @@ done
 
     #[cfg(unix)]
     #[test]
+    fn codex_wrapper_reports_all_provider_tool_begin_events_as_activity() {
+        for event_type in [
+            "exec_command_begin",
+            "patch_apply_begin",
+            "mcp_tool_call_begin",
+            "web_search_begin",
+        ] {
+            let line = format!(
+                r#"{{"dir":"to_tui","kind":"codex_event","msg":{{"type":"{event_type}","turn_id":"turn-1","call_id":"call-1"}}}}"#
+            );
+            let (notifications, _) = codex_wrapper_notifications_for_tui_line(&line);
+            assert_eq!(
+                notifications,
+                format!("jsonl_tool\t{line}\n"),
+                "{event_type}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn codex_native_hooks_forward_raw_payloads_for_rust_validation() {
         let turn_id = "019f6338-6250-7303-88a6-a7add31dba1d";
         let owner_fields = serde_json::json!({
@@ -2394,7 +2422,12 @@ done
             "agent_type": null,
         });
 
-        for hook_event_name in ["UserPromptSubmit", "PreToolUse", "PermissionRequest"] {
+        for hook_event_name in [
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PermissionRequest",
+            "PostToolUse",
+        ] {
             let mut payload = owner_fields.clone();
             payload["hook_event_name"] = hook_event_name.into();
             let posted =
