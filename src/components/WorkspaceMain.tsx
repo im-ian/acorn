@@ -48,6 +48,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { api } from "../lib/api";
+import { writeClipboardText } from "../lib/clipboardText";
 import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
@@ -3083,7 +3084,7 @@ function cssAttributeEscape(value: string): string {
 
 async function copyToClipboard(text: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text);
+    await writeClipboardText(text);
   } catch (err) {
     console.warn("[WorkspaceMain] clipboard write failed", err);
   }

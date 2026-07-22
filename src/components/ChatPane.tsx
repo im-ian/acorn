@@ -40,6 +40,7 @@ import {
   isSessionAgentProvider,
 } from "../lib/agentProvider";
 import { pathRelativeToCwd } from "../lib/fileMention";
+import { writeClipboardText } from "../lib/clipboardText";
 import { EDIT_AUTONOMOUS_GOAL_SESSION_EVENT } from "../lib/autonomousGoal";
 import { useDialogShortcuts } from "../lib/dialog";
 import { useAppStore } from "../store";
@@ -1000,7 +1001,7 @@ export function ChatPane({
   async function handleCopyMessage(messageId: string, content: string) {
     if (!content.trim()) return;
     try {
-      await navigator.clipboard.writeText(content);
+      await writeClipboardText(content);
       setCopiedMessageId(messageId);
       if (copyResetTimer.current !== null) {
         window.clearTimeout(copyResetTimer.current);

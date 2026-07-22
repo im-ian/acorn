@@ -71,6 +71,7 @@ import {
   createEmptySessionAgentDetection,
 } from "../lib/agentContextMenu";
 import { api, type SessionRemoval } from "../lib/api";
+import { writeClipboardText } from "../lib/clipboardText";
 import {
   EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
   NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
@@ -2112,7 +2113,7 @@ function ProjectGroupView({
 
   async function copyText(text: string) {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboardText(text);
     } catch {
       // ignore
     }
@@ -3535,7 +3536,7 @@ function SessionStatusMarker({
 
 async function copyToClipboard(text: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text);
+    await writeClipboardText(text);
   } catch (err) {
     console.warn("[Sidebar] clipboard write failed", err);
   }

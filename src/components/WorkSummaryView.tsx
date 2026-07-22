@@ -25,6 +25,7 @@ import {
   type FsGitDiffStatsRequest,
   type FsGitStatus,
 } from "../lib/api";
+import { writeClipboardText } from "../lib/clipboardText";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { fsChangeTouchesRoot } from "../lib/workSummaryInvalidation";
@@ -265,7 +266,7 @@ export function WorkSummaryView({
 
   const copyText = useCallback(async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboardText(text);
     } catch (err) {
       console.warn("[WorkSummaryView] clipboard write failed", err);
     }

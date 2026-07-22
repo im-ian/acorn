@@ -607,16 +607,10 @@ test.describe("sidebar: project lifecycle", () => {
     tauri,
   }) => {
     const transcriptPath = "/Users/me/.codex/sessions/copyable.jsonl";
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: {
-          writeText: async (text: string) => {
-            (window as unknown as { __copiedText?: string }).__copiedText =
-              text;
-          },
-        },
-      });
+    await tauri.handle("plugin:clipboard-manager|write_text", (args) => {
+      (window as unknown as { __copiedText?: string }).__copiedText =
+        (args as { text?: string })?.text;
+      return undefined;
     });
     await tauri.respond("list_projects", [
       {

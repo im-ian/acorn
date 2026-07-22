@@ -11,6 +11,7 @@
     "core:app:default",
     "core:resources:default",
     "core:window:allow-destroy",
+    "clipboard-manager:allow-write-text",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

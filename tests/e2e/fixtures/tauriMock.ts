@@ -56,6 +56,7 @@ export const tauriMockSource = `
     if (cmd === 'plugin:notification|is_permission_granted') return Promise.resolve(true);
     if (cmd === 'plugin:notification|request_permission') return Promise.resolve('granted');
     if (cmd === 'plugin:notification|notify') return Promise.resolve(undefined);
+    if (cmd === 'plugin:clipboard-manager|write_text') return Promise.resolve(undefined);
     if (cmd === 'plugin:window|destroy') return Promise.resolve(undefined);
     if (cmd === 'plugin:window|close') return Promise.resolve(undefined);
     if (cmd === 'plugin:window|scale_factor') return Promise.resolve(1);

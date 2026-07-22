@@ -4,6 +4,7 @@ import { api, type AgentKind, type ResumeCandidate } from "../lib/api";
 import { buildAgentResumeCommand } from "../lib/agentProvider";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useToasts } from "../lib/toasts";
+import { writeClipboardText } from "../lib/clipboardText";
 import { useTranslation } from "../lib/useTranslation";
 import { Button, CodeValue, Modal, ModalFooter, ModalHeader } from "./ui";
 
@@ -104,8 +105,7 @@ export function AgentResumeModal({
   };
 
   const handleCopy = () => {
-    void navigator.clipboard
-      .writeText(candidate.uuid)
+    void writeClipboardText(candidate.uuid)
       .then(() => showToast(dt(t, "dialogs.agentResume.sessionIdCopied")))
       .catch(() => showToast(dt(t, "dialogs.agentResume.copyFailed")));
     onDismiss();

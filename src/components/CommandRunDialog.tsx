@@ -5,6 +5,7 @@ import { useToasts } from "../lib/toasts";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
+import { writeClipboardText } from "../lib/clipboardText";
 import { Button, CodeValue, Modal, ModalFooter, ModalHeader, Notice } from "./ui";
 import {
   applySessionCreateRequest,
@@ -124,7 +125,7 @@ export function CommandRunDialog({
 
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(command);
+      await writeClipboardText(command);
       showToast(`${dt(t, "dialogs.commandRun.copiedPrefix")} ${command}`);
       onClose();
     } catch (e) {
