@@ -16,6 +16,8 @@ pub mod status;
 
 pub use session::{
     AgentStatusSource, Project, ProjectStore, Session, SessionAgentProvider, SessionError,
-    SessionKind, SessionMode, SessionOwner, SessionResult, SessionStatus, SessionStore,
-    SessionTitleSource,
+    SessionGoal, SessionGoalModelConfig, SessionGoalModelSelection, SessionGoalPolicies,
+    SessionGoalPreset, SessionGoalProgress, SessionGoalRunState, SessionGoalStage,
+    SessionGoalStageModels, SessionGoalStagePolicy, SessionKind, SessionMode, SessionOwner,
+    SessionResult, SessionStatus, SessionStore, SessionTitleSource,
 };

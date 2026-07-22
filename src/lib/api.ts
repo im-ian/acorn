@@ -14,6 +14,7 @@ import type {
   DiffPayload,
   GenerateSessionTitleResult,
   GeneratedCommitMessage,
+  GoalAgentCapabilities,
   IssueDetailListing,
   IssueListing,
   IssueStateFilter,
@@ -30,6 +31,7 @@ import type {
   Session,
   SessionAgentDetection,
   SessionAgentProvider,
+  SessionGoal,
   SessionKind,
   SessionMode,
   SessionProcessSummary,
@@ -74,6 +76,8 @@ export interface PreventSleepStatus {
 
 export interface AiExecutionRequest {
   provider: "claude" | "antigravity" | "codex" | "ollama" | "llm" | "custom";
+  model?: string | null;
+  effort?: string | null;
   ollamaModel?: string | null;
   llmModel?: string | null;
 }
@@ -124,6 +128,7 @@ export const api = {
     projectScoped?: boolean,
     mode: SessionMode = "terminal",
     cwdPath?: string,
+    goal?: SessionGoal,
   ): Promise<Session> {
     const args: {
       name: string;
@@ -134,6 +139,7 @@ export const api = {
       projectScoped?: boolean;
       mode: SessionMode;
       cwdPath?: string;
+      goal?: SessionGoal;
     } = {
       name,
       repoPath,
@@ -144,6 +150,7 @@ export const api = {
     };
     if (projectScoped !== undefined) args.projectScoped = projectScoped;
     if (cwdPath !== undefined) args.cwdPath = cwdPath;
+    if (goal !== undefined) args.goal = goal;
     return invoke<Session>("create_session", args);
   },
   createSessionFromDialog(
@@ -173,6 +180,17 @@ export const api = {
   },
   setSessionStatus(id: string, status: SessionStatus): Promise<Session> {
     return invoke<Session>("set_session_status", { id, status });
+  },
+  updateSessionGoal(
+    id: string,
+    expectedRevision: number,
+    goal: SessionGoal,
+  ): Promise<Session> {
+    return invoke<Session>("update_session_goal", {
+      id,
+      expectedRevision,
+      goal,
+    });
   },
   renameSession(id: string, name: string): Promise<Session> {
     return invoke<Session>("rename_session", { id, name });
@@ -237,6 +255,16 @@ export const api = {
       messageId,
       patch,
     });
+  },
+  getGoalAgentCapabilities(
+    provider: "claude" | "codex",
+  ): Promise<GoalAgentCapabilities> {
+    return invoke<GoalAgentCapabilities>("get_goal_agent_capabilities", {
+      provider,
+    });
+  },
+  runGoalSession(sessionId: string): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("run_goal_session", { sessionId });
   },
   sendChatMessage(
     sessionId: string,

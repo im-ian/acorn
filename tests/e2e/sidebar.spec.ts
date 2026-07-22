@@ -2760,12 +2760,13 @@ test.describe("sidebar: project lifecycle", () => {
     const menuLabels = await page.getByRole("menuitem").evaluateAll((items) =>
       items.map((item) => item.textContent?.replace(/\s+/g, " ").trim()),
     );
-    expect(menuLabels.slice(0, 3)).toEqual([
+    expect(menuLabels.slice(0, 4)).toEqual([
       "New workspace",
       "New worktree workspace",
+      "New goal session",
       "New chat session",
     ]);
-    expect(menuLabels[3]).toMatch(
+    expect(menuLabels[4]).toMatch(
       /^New control session(?:⌥⇧⌘T|Ctrl\+Alt\+Shift\+T)$/,
     );
     await expect(
@@ -2774,6 +2775,9 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(
       page.getByRole("menuitem", { name: /New worktree session/i }),
     ).toHaveCount(0);
+    await expect(
+      page.getByRole("menuitem", { name: "New goal session" }),
+    ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "New chat session" }),
     ).toBeVisible();
@@ -3747,12 +3751,13 @@ test.describe("sidebar: project lifecycle", () => {
       () =>
         (window as unknown as { __newProjectCalls?: unknown[] })
           .__newProjectCalls,
-    )) as Array<{ parentPath: string; name: string }>;
+    )) as Array<{ parentPath: string; name: string; initCommit: boolean }>;
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({
       parentPath: "/tmp/parent",
       name: "fresh-app",
       ignoreSafeName: false,
+      initCommit: true,
     });
   });
 
@@ -3867,12 +3872,18 @@ test.describe("sidebar: project lifecycle", () => {
       () =>
         (window as unknown as { __newProjectCalls?: unknown[] })
           .__newProjectCalls,
-    )) as Array<{ parentPath: string; name: string; ignoreSafeName: boolean }>;
+    )) as Array<{
+      parentPath: string;
+      name: string;
+      ignoreSafeName: boolean;
+      initCommit: boolean;
+    }>;
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({
       parentPath: "/tmp/parent",
       name: "a".repeat(256),
       ignoreSafeName: true,
+      initCommit: true,
     });
   });
 

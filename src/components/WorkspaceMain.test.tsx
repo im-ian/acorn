@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LayoutNode } from "../lib/layout";
 import type { Session } from "../lib/types";
+import { NEW_AUTONOMOUS_GOAL_SESSION_EVENT } from "../lib/autonomousGoal";
 
 vi.mock("./LayoutRenderer", async () => {
   const React = await vi.importActual<typeof import("react")>("react");
@@ -221,6 +222,42 @@ describe("WorkspaceMain", () => {
     expect(queryCanvas()).toBeNull();
     expect(queryLayout()).toBe(initial);
   });
+
+  it.each(["canvas", "kanban"] as const)(
+    "offers Goal creation from the %s session menu",
+    (viewMode) => {
+      render(viewMode);
+      const createButton =
+        viewMode === "canvas"
+          ? document.querySelector<HTMLButtonElement>(
+              "[data-workspace-canvas-toolbar] button[aria-haspopup='menu']",
+            )
+          : document.querySelector<HTMLButtonElement>(
+              "[data-testid='workspace-kanban'] button[aria-haspopup='menu']",
+            );
+      expect(createButton).not.toBeNull();
+      if (viewMode === "canvas") {
+        expect(
+          document.querySelectorAll(
+            "[data-testid='workspace-canvas'] button[aria-haspopup='menu']",
+          ),
+        ).toHaveLength(2);
+      }
+
+      act(() => createButton?.click());
+      const goalItem = Array.from(
+        document.querySelectorAll<HTMLElement>("[role='menuitem']"),
+      ).find((item) => item.textContent?.includes("New goal session"));
+      expect(goalItem).not.toBeUndefined();
+
+      const requested = vi.fn();
+      window.addEventListener(NEW_AUTONOMOUS_GOAL_SESSION_EVENT, requested, {
+        once: true,
+      });
+      act(() => goalItem?.click());
+      expect(requested).toHaveBeenCalledOnce();
+    },
+  );
 
   it("moves and resizes canvas terminals and persists their geometry", () => {
     installCanvasSessions(["alpha", "beta"]);
