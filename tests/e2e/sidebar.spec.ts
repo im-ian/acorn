@@ -3751,12 +3751,13 @@ test.describe("sidebar: project lifecycle", () => {
       () =>
         (window as unknown as { __newProjectCalls?: unknown[] })
           .__newProjectCalls,
-    )) as Array<{ parentPath: string; name: string }>;
+    )) as Array<{ parentPath: string; name: string; initCommit: boolean }>;
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({
       parentPath: "/tmp/parent",
       name: "fresh-app",
       ignoreSafeName: false,
+      initCommit: true,
     });
   });
 
@@ -3871,12 +3872,18 @@ test.describe("sidebar: project lifecycle", () => {
       () =>
         (window as unknown as { __newProjectCalls?: unknown[] })
           .__newProjectCalls,
-    )) as Array<{ parentPath: string; name: string; ignoreSafeName: boolean }>;
+    )) as Array<{
+      parentPath: string;
+      name: string;
+      ignoreSafeName: boolean;
+      initCommit: boolean;
+    }>;
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({
       parentPath: "/tmp/parent",
       name: "a".repeat(256),
       ignoreSafeName: true,
+      initCommit: true,
     });
   });
 
