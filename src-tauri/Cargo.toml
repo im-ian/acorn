@@ -33,7 +33,7 @@ parking_lot = "0.12"
 dashmap = "6"
 directories = "6"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
-base64 = "0.22"
+base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 interprocess = "2"
 notify = "8"
