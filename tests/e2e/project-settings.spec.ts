@@ -173,7 +173,7 @@ test.describe("project settings", () => {
 
     await page.goto("/");
 
-    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const sidebar = page.locator('[data-testid="sidebar"]');
     await expect(
       sidebar.getByRole("button", {
         name: /^alpha terminal worktree main · Ready/,

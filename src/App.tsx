@@ -228,8 +228,10 @@ function dispatchTerminalPaste(sessionId: string) {
 }
 
 function focusPanel(id: "sidebar" | "main" | "right") {
+  // v4 assigns the `id` prop to `data-testid` (and `id`); `data-panel-id` is
+  // gone, and `data-panel` is now a bare boolean marker.
   const panel = document.querySelector(
-    `[data-panel-id="${id}"]`,
+    `[data-testid="${id}"][data-panel]`,
   ) as HTMLElement | null;
   if (!panel) return;
   // For the main pane, prefer xterm's hidden textarea so keystrokes route

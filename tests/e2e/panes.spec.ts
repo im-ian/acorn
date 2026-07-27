@@ -244,32 +244,33 @@ test.describe("pane / sidebar shortcuts", () => {
     expect(calls[0].cwdPath).toBeUndefined();
   });
 
-  // react-resizable-panels publishes the current size on `data-panel-size`
-  // (string, e.g. "18.0" for the default 18%). Collapsed panels get "0.0".
+  // react-resizable-panels v4 dropped `data-panel-size` and drives sizing off
+  // the inline flex-grow it writes on the panel element instead. A collapsed
+  // panel grows to 0; any open panel has a non-zero share.
   test("$mod+B collapses then re-expands the sidebar", async ({ page }) => {
     await page.goto("/");
 
-    const sidebar = page.locator('[data-panel-id="sidebar"]');
-    await expect(sidebar).not.toHaveAttribute("data-panel-size", "0.0");
+    const sidebar = page.locator('[data-testid="sidebar"]');
+    await expect(sidebar).not.toHaveCSS("flex-grow", "0");
 
     await pressHotkey(page, { mod: true, key: "b" });
-    await expect(sidebar).toHaveAttribute("data-panel-size", "0.0");
+    await expect(sidebar).toHaveCSS("flex-grow", "0");
 
     await pressHotkey(page, { mod: true, key: "b" });
-    await expect(sidebar).not.toHaveAttribute("data-panel-size", "0.0");
+    await expect(sidebar).not.toHaveCSS("flex-grow", "0");
   });
 
   test("$mod+J collapses then re-expands the right panel", async ({ page }) => {
     await page.goto("/");
 
-    const right = page.locator('[data-panel-id="right"]');
-    await expect(right).not.toHaveAttribute("data-panel-size", "0.0");
+    const right = page.locator('[data-testid="right"]');
+    await expect(right).not.toHaveCSS("flex-grow", "0");
 
     await pressHotkey(page, { mod: true, key: "j" });
-    await expect(right).toHaveAttribute("data-panel-size", "0.0");
+    await expect(right).toHaveCSS("flex-grow", "0");
 
     await pressHotkey(page, { mod: true, key: "j" });
-    await expect(right).not.toHaveAttribute("data-panel-size", "0.0");
+    await expect(right).not.toHaveCSS("flex-grow", "0");
   });
 
   test("$mod+D splits the focused pane horizontally", async ({
@@ -283,7 +284,7 @@ test.describe("pane / sidebar shortcuts", () => {
 
     // Activate the session so a pane is focused with content.
     await page
-      .locator('[data-panel-id="sidebar"]')
+      .locator('[data-testid="sidebar"]')
       .getByRole("button", { name: /^alpha main · Ready/ })
       .first()
       .click();
@@ -309,7 +310,7 @@ test.describe("pane / sidebar shortcuts", () => {
     await page.goto("/");
 
     await page
-      .locator('[data-panel-id="sidebar"]')
+      .locator('[data-testid="sidebar"]')
       .getByRole("button", { name: /^alpha main · Ready/ })
       .first()
       .click();
@@ -388,7 +389,7 @@ test.describe("pane / sidebar shortcuts", () => {
     await page.goto("/");
 
     await page
-      .locator('[data-panel-id="sidebar"]')
+      .locator('[data-testid="sidebar"]')
       .getByRole("button", { name: /^alpha main · Ready/ })
       .first()
       .click();
@@ -486,7 +487,7 @@ test.describe("pane / sidebar shortcuts", () => {
     await page.goto("/");
 
     await page
-      .locator('[data-panel-id="sidebar"]')
+      .locator('[data-testid="sidebar"]')
       .getByRole("button", { name: /^alpha main · Ready/ })
       .first()
       .click();
@@ -773,7 +774,7 @@ test.describe("pane / sidebar shortcuts", () => {
 
     await page.goto("/");
 
-    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const sidebar = page.locator('[data-testid="sidebar"]');
     await sidebar
       .getByRole("button", { name: /^alpha main · Ready/ })
       .first()
