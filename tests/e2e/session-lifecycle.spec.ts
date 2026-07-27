@@ -53,7 +53,7 @@ test.describe("session lifecycle", () => {
     // Scope to the sidebar — once the session is activated, the main pane's
     // tab and right panel's controls also surface the session name, breaking
     // a global getByRole match.
-    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const sidebar = page.locator('[data-testid="sidebar"]');
     const row = sidebar
       .getByRole("button", { name: /^alpha main · Ready/ })
       .first();
@@ -111,7 +111,7 @@ test.describe("session lifecycle", () => {
 
     await page.goto("/");
 
-    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const sidebar = page.locator('[data-testid="sidebar"]');
     const row = sidebar
       .getByRole("button", { name: /^alpha main · Ready/ })
       .first();
@@ -177,7 +177,7 @@ test.describe("session lifecycle", () => {
 
     await page.goto("/");
 
-    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const sidebar = page.locator('[data-testid="sidebar"]');
     const row = sidebar
       .getByRole("button", { name: /^alpha main · Ready/ })
       .first();
@@ -260,7 +260,7 @@ test.describe("session lifecycle", () => {
 
     await page.goto("/");
 
-    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const sidebar = page.locator('[data-testid="sidebar"]');
     const row = sidebar
       .getByRole("button", { name: /^alpha main · Working/ })
       .first();
@@ -362,7 +362,7 @@ test.describe("session lifecycle", () => {
 
     await page.goto("/");
 
-    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const sidebar = page.locator('[data-testid="sidebar"]');
     const row = sidebar
       .getByRole("button", { name: /^alpha worktree main · Ready/ })
       .first();
@@ -456,7 +456,7 @@ test.describe("session lifecycle", () => {
 
     await page.goto("/");
 
-    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const sidebar = page.locator('[data-testid="sidebar"]');
     const row = sidebar
       .getByRole("button", { name: /^alpha worktree main · Ready/ })
       .first();
@@ -547,7 +547,7 @@ test.describe("session lifecycle", () => {
 
     await page.goto("/");
 
-    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const sidebar = page.locator('[data-testid="sidebar"]');
     const row = sidebar
       .getByRole("button", { name: /^alpha worktree main · Ready/ })
       .first();
@@ -681,7 +681,7 @@ test.describe("session lifecycle", () => {
 
     await page.goto("/");
 
-    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const sidebar = page.locator('[data-testid="sidebar"]');
     const row = sidebar
       .getByRole("button", { name: /^alpha main · Ready/ })
       .first();

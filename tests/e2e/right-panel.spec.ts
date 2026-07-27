@@ -1633,7 +1633,7 @@ test.describe("right panel: tab switching", () => {
 
     await page.goto("/");
     await page
-      .locator('[data-panel-id="sidebar"]')
+      .locator('[data-testid="sidebar"]')
       .getByRole("button", { name: /^alpha worktree alpha · Ready$/ })
       .click();
     await page.getByRole("button", { name: "GitHub" }).click();
@@ -1647,7 +1647,7 @@ test.describe("right panel: tab switching", () => {
 
     await pressHotkey(page, { mod: true, key: "d" });
     await page
-      .locator('[data-panel-id="sidebar"]')
+      .locator('[data-testid="sidebar"]')
       .getByRole("button", { name: /^beta worktree beta · Ready$/ })
       .click();
     await expect(page.locator("[data-pane-body]")).toHaveCount(2);

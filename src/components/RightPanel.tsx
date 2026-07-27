@@ -43,7 +43,8 @@ import {
   X,
 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Panel, PanelGroup } from "react-resizable-panels";
+import { Panel } from "react-resizable-panels";
+import { PersistentGroup } from "./PersistentGroup";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, FS_CHANGED_EVENT, type FsChangePayload } from "../lib/api";
@@ -2176,27 +2177,27 @@ function CommitsTab({
   if (error) return <div className="p-3 text-xs text-danger">{error}</div>;
   if (loadingFirst && commits.length === 0) {
     return (
-      <PanelGroup direction="vertical" autoSaveId="acorn:layout:commits">
-        <Panel id="commits-list" order={1} defaultSize={50} minSize={20}>
+      <PersistentGroup orientation="vertical" id="acorn:layout:commits">
+        <Panel id="commits-list" defaultSize="50%" minSize="20%">
           <div className="acorn-no-scrollbar h-full overflow-y-auto">
             <SkeletonList count={8} />
           </div>
         </Panel>
         <ResizeHandle direction="vertical" gap />
-        <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
+        <Panel id="commits-diff" defaultSize="50%" minSize="15%">
           <div className="acorn-no-scrollbar h-full overflow-y-auto p-3">
             <SkeletonBlock className="h-3 w-1/2 bg-fg-muted/15" />
             <SkeletonBlock className="mt-2 h-3 w-3/4" />
             <SkeletonBlock className="mt-2 h-3 w-2/3" />
           </div>
         </Panel>
-      </PanelGroup>
+      </PersistentGroup>
     );
   }
 
   return (
-    <PanelGroup direction="vertical" autoSaveId="acorn:layout:commits">
-      <Panel id="commits-list" order={1} defaultSize={50} minSize={20}>
+    <PersistentGroup orientation="vertical" id="acorn:layout:commits">
+      <Panel id="commits-list" defaultSize="50%" minSize="20%">
         <div
           ref={scrollRef}
           className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto"
@@ -2293,7 +2294,7 @@ function CommitsTab({
         </div>
       </Panel>
       <ResizeHandle direction="vertical" gap />
-      <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
+      <Panel id="commits-diff" defaultSize="50%" minSize="15%">
         <div className="acorn-no-scrollbar h-full overflow-y-auto">
           {selected && diff ? (
             <DiffView
@@ -2362,7 +2363,7 @@ function CommitsTab({
         }
         onClose={() => setMenu(null)}
       />
-    </PanelGroup>
+    </PersistentGroup>
   );
 }
 
@@ -2571,8 +2572,8 @@ function StagedTab({
   }
 
   return (
-    <PanelGroup direction="vertical" autoSaveId="acorn:layout:staged">
-      <Panel id="staged-list" order={1} defaultSize={35} minSize={15}>
+    <PersistentGroup orientation="vertical" id="acorn:layout:staged">
+      <Panel id="staged-list" defaultSize="35%" minSize="15%">
         <ListBox className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto">
           {files.map((f) => {
             const canOpen = !isDeleted(f);
@@ -2620,7 +2621,7 @@ function StagedTab({
         </ListBox>
       </Panel>
       <ResizeHandle direction="vertical" gap />
-      <Panel id="staged-diff" order={2} defaultSize={65} minSize={15}>
+      <Panel id="staged-diff" defaultSize="65%" minSize="15%">
         <div className="acorn-no-scrollbar h-full overflow-y-auto">
           {selectedDiff ? (
             <DiffView
@@ -2689,7 +2690,7 @@ function StagedTab({
         }
         onClose={() => setMenu(null)}
       />
-    </PanelGroup>
+    </PersistentGroup>
   );
 }
 

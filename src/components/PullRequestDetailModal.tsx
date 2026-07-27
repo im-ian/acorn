@@ -22,7 +22,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Panel, PanelGroup } from "react-resizable-panels";
+import { Panel } from "react-resizable-panels";
+import { PersistentGroup } from "./PersistentGroup";
 import { api } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboardText";
 import { cn } from "../lib/cn";
@@ -744,12 +745,12 @@ function DetailBody({
       </header>
 
       {hasBody ? (
-        <PanelGroup
-          direction="vertical"
-          autoSaveId="acorn:pr-detail-body-main"
+        <PersistentGroup
+          orientation="vertical"
+          id="acorn:pr-detail-body-main"
           className="min-h-0 flex-1"
         >
-          <Panel id="pr-body" order={1} defaultSize={22} minSize={10} maxSize={60}>
+          <Panel id="pr-body" defaultSize="22%" minSize="10%" maxSize="60%">
             <div className="acorn-selectable h-full overflow-y-auto bg-bg-sidebar/40 px-4 py-3">
               <Markdown content={body} softBreaks onTaskToggle={onTaskToggle} />
               {bodySaveError ? (
@@ -761,10 +762,10 @@ function DetailBody({
             </div>
           </Panel>
           <ResizeHandle direction="vertical" gap />
-          <Panel id="pr-main" order={2} defaultSize={78} minSize={30}>
+          <Panel id="pr-main" defaultSize="78%" minSize="30%">
             <div className="flex h-full min-h-0 flex-col">{mainSection}</div>
           </Panel>
-        </PanelGroup>
+        </PersistentGroup>
       ) : (
         mainSection
       )}
@@ -1527,12 +1528,12 @@ function CommitsPane({
     orderedCommits.find((c) => c.oid === selectedOid) ?? null;
 
   return (
-    <PanelGroup
-      direction="horizontal"
-      autoSaveId="acorn:pr-commits-split"
+    <PersistentGroup
+      orientation="horizontal"
+      id="acorn:pr-commits-split"
       className="h-full min-h-0"
     >
-      <Panel id="list" order={1} defaultSize={28} minSize={18} maxSize={50}>
+      <Panel id="list" defaultSize="28%" minSize="18%" maxSize="50%">
         <aside className="flex h-full flex-col overflow-y-auto rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar text-xs">
           <ListBox layout="flex" text="none">
             {orderedCommits.map((c) => (
@@ -1548,7 +1549,7 @@ function CommitsPane({
         </aside>
       </Panel>
       <ResizeHandle gap />
-      <Panel id="detail" order={2} defaultSize={72} minSize={40}>
+      <Panel id="detail" defaultSize="72%" minSize="40%">
         <div className="flex h-full min-w-0 flex-col">
           {selected ? (
             <CommitDetailView
@@ -1560,7 +1561,7 @@ function CommitsPane({
           ) : null}
         </div>
       </Panel>
-    </PanelGroup>
+    </PersistentGroup>
   );
 }
 
@@ -1801,19 +1802,19 @@ function CommitDetailView({
   return (
     <div className="flex h-full min-w-0 flex-col">
       {hasBody ? (
-        <PanelGroup
-          direction="vertical"
-          autoSaveId="acorn:pr-commit-body-diff"
+        <PersistentGroup
+          orientation="vertical"
+          id="acorn:pr-commit-body-diff"
           className="h-full"
         >
-          <Panel id="info" order={1} defaultSize={24} minSize={12} maxSize={70}>
+          <Panel id="info" defaultSize="24%" minSize="12%" maxSize="70%">
             {infoCard}
           </Panel>
           <ResizeHandle direction="vertical" gap />
-          <Panel id="diff" order={2} defaultSize={76} minSize={20}>
+          <Panel id="diff" defaultSize="76%" minSize="20%">
             {diffSection}
           </Panel>
-        </PanelGroup>
+        </PersistentGroup>
       ) : (
         <div className="flex h-full min-h-0 flex-col gap-1.5">
           <div className="shrink-0">{infoCard}</div>

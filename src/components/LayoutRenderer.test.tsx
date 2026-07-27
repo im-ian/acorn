@@ -13,25 +13,27 @@ vi.mock("./Pane", async () => {
 });
 
 // react-resizable-panels measures real DOM; in jsdom its imperative setLayout
-// throws "Invalid 0 panel layout" because no panels register. Stub it to a
-// passthrough with a no-op imperative handle so the test exercises only the
-// equalize event wiring and its effect on the persisted store layout.
+// throws because no panels register. Stub it to a passthrough with a no-op
+// imperative handle so the test exercises only the equalize event wiring and
+// its effect on the persisted store layout.
 vi.mock("react-resizable-panels", async () => {
   const React = await vi.importActual<typeof import("react")>("react");
   return {
-    PanelGroup: React.forwardRef(
-      (
-        { children }: { children?: React.ReactNode },
-        ref: React.Ref<{ setLayout: (sizes: number[]) => void }>,
-      ) => {
-        React.useImperativeHandle(ref, () => ({ setLayout: () => {} }));
-        return React.createElement("div", { "data-testid": "panel-group" }, children);
-      },
-    ),
+    Group: ({
+      children,
+      groupRef,
+    }: {
+      children?: React.ReactNode;
+      groupRef?: React.RefObject<{ setLayout: () => void } | null>;
+    }) => {
+      if (groupRef) groupRef.current = { setLayout: () => {} };
+      return React.createElement("div", { "data-testid": "group" }, children);
+    },
     Panel: ({ children }: { children?: React.ReactNode }) =>
       React.createElement("div", null, children),
-    PanelResizeHandle: ({ children }: { children?: React.ReactNode }) =>
+    Separator: ({ children }: { children?: React.ReactNode }) =>
       React.createElement("div", null, children),
+    useGroupRef: () => React.useRef(null),
   };
 });
 

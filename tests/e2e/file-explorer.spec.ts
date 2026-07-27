@@ -230,7 +230,7 @@ test.describe("file explorer", () => {
     });
     const sourceBox = await fileRow.boundingBox();
     const terminalDragBox = await terminal.boundingBox();
-    const rightPanelBox = await page.locator('[data-panel-id="right"]').boundingBox();
+    const rightPanelBox = await page.locator('[data-testid="right"]').boundingBox();
     expect(sourceBox).not.toBeNull();
     expect(terminalDragBox).not.toBeNull();
     expect(rightPanelBox).not.toBeNull();

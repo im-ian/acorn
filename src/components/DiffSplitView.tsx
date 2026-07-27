@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Panel, PanelGroup } from "react-resizable-panels";
+import { Panel } from "react-resizable-panels";
+import { PersistentGroup } from "./PersistentGroup";
 import { ExternalLink } from "lucide-react";
 import { cn } from "../lib/cn";
 import { countStats, parseDiff } from "../lib/diff";
@@ -133,12 +134,12 @@ export function DiffSplitView({ payload, cwd, imageContext }: DiffSplitViewProps
 
   return (
     <>
-    <PanelGroup
-      direction="horizontal"
-      autoSaveId="acorn:diff-split"
+    <PersistentGroup
+      orientation="horizontal"
+      id="acorn:diff-split"
       className="h-full"
     >
-      <Panel id="files" order={1} defaultSize={28} minSize={18} maxSize={50}>
+      <Panel id="files" defaultSize="28%" minSize="18%" maxSize="50%">
         <aside className="flex h-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar">
           <header className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2 text-[11px] uppercase tracking-wider text-fg-muted">
             <span>
@@ -208,7 +209,7 @@ export function DiffSplitView({ payload, cwd, imageContext }: DiffSplitViewProps
         </aside>
       </Panel>
       <ResizeHandle gap />
-      <Panel id="content" order={2} defaultSize={72} minSize={40}>
+      <Panel id="content" defaultSize="72%" minSize="40%">
         <section className="flex h-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg">
           <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-bg-elevated px-3 py-2 font-mono text-xs">
             <Tooltip label={selected.path} side="bottom" multiline>
@@ -231,7 +232,7 @@ export function DiffSplitView({ payload, cwd, imageContext }: DiffSplitViewProps
           />
         </section>
       </Panel>
-    </PanelGroup>
+    </PersistentGroup>
     <ContextMenu
       open={menu !== null}
       x={menu?.x ?? 0}

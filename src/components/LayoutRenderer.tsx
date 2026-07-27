@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo } from "react";
 import {
+  Group,
   Panel,
-  PanelGroup,
-  type ImperativePanelGroupHandle,
+  useGroupRef,
+  type Layout,
 } from "react-resizable-panels";
 import {
   normalizeSplitSizes,
@@ -41,7 +42,7 @@ interface LayoutRendererProps {
 
 /**
  * Recursively renders a workspace layout tree using react-resizable-panels.
- * Leaves render `<Pane>`; internal nodes render a nested `<PanelGroup>` with
+ * Leaves render `<Pane>`; internal nodes render a nested `<Group>` with
  * a resize handle between the two children.
  */
 export function LayoutRenderer({ node }: LayoutRendererProps) {
@@ -49,9 +50,9 @@ export function LayoutRenderer({ node }: LayoutRendererProps) {
   if (node.kind === "pane") {
     return <Pane paneId={node.id} />;
   }
-  // For react-resizable-panels, `direction="horizontal"` arranges children
+  // For react-resizable-panels, `orientation="horizontal"` arranges children
   // side-by-side and the handle is a vertical bar (cursor-col-resize).
-  // `direction="vertical"` stacks them and the handle is horizontal.
+  // `orientation="vertical"` stacks them and the handle is horizontal.
   const handleDirection =
     node.direction === "horizontal" ? "horizontal" : "vertical";
   // Weight by co-axial leaves so each row/column is divided evenly along
@@ -71,11 +72,11 @@ export function LayoutRenderer({ node }: LayoutRendererProps) {
       equalizedSizes={[equalizedLeftPct, equalizedRightPct]}
       onLayout={(sizes) => setPaneSplitSizes(node.id, sizes)}
     >
-      <Panel id={`${node.id}:a`} order={1} defaultSize={leftPct} minSize={10}>
+      <Panel id={`${node.id}:a`} defaultSize={`${leftPct}%`} minSize="10%">
         <LayoutRenderer node={node.a} />
       </Panel>
       <ResizeHandle direction={handleDirection} gap />
-      <Panel id={`${node.id}:b`} order={2} defaultSize={rightPct} minSize={10}>
+      <Panel id={`${node.id}:b`} defaultSize={`${rightPct}%`} minSize="10%">
         <LayoutRenderer node={node.b} />
       </Panel>
     </EqualizablePanelGroup>
@@ -90,7 +91,7 @@ interface EqualizablePanelGroupProps {
   children: React.ReactNode;
 }
 
-/** PanelGroup wrapper that listens for the equalize event and resets its own
+/** Group wrapper that listens for the equalize event and resets its own
  * children to leaf-count-weighted sizes. We attach per-group rather than
  * enumerating all groups from a parent because react-resizable-panels does
  * not expose a registry; the event-bus pattern keeps the recursion local. */
@@ -101,7 +102,7 @@ function EqualizablePanelGroup({
   onLayout,
   children,
 }: EqualizablePanelGroupProps) {
-  const ref = useRef<ImperativePanelGroupHandle | null>(null);
+  const ref = useGroupRef();
   const equalizedLayout = useMemo(
     () => equalizedSizes,
     [equalizedSizes[0], equalizedSizes[1]],
@@ -114,17 +115,40 @@ function EqualizablePanelGroup({
       // the hidden pane splits, so only act while the panes view is visible.
       if (useAppStore.getState().workspaceViewMode !== "panes") return;
       onLayout(equalizedLayout);
-      ref.current?.setLayout(equalizedLayout);
+      ref.current?.setLayout(toGroupLayout(id, equalizedLayout));
     };
     window.addEventListener(EQUALIZE_PANES_EVENT, onEqualize);
     return () => {
       window.removeEventListener(EQUALIZE_PANES_EVENT, onEqualize);
     };
-  }, [equalizedLayout, onLayout]);
+  }, [equalizedLayout, id, onLayout, ref]);
 
   return (
-    <PanelGroup ref={ref} direction={direction} id={id} onLayout={onLayout}>
+    <Group
+      groupRef={ref}
+      orientation={direction}
+      id={id}
+      onLayoutChange={(layout) => onLayout(fromGroupLayout(id, layout))}
+    >
       {children}
-    </PanelGroup>
+    </Group>
   );
+}
+
+/**
+ * v4 reports and accepts layouts as a `{ panelId: weight }` map rather than
+ * v3's positional array. Only the ratio between the two children matters here
+ * — `normalizeSplitSizes` rescales whatever comes back to sum to 100 — so the
+ * weights round-trip without caring whether the library hands us flex-grow
+ * values or percentages.
+ */
+function fromGroupLayout(splitId: string, layout: Layout): number[] {
+  return [layout[`${splitId}:a`] ?? 0, layout[`${splitId}:b`] ?? 0];
+}
+
+function toGroupLayout(splitId: string, sizes: readonly number[]): Layout {
+  return {
+    [`${splitId}:a`]: sizes[0],
+    [`${splitId}:b`]: sizes[1],
+  };
 }
