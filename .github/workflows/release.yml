@@ -35,7 +35,7 @@ jobs:
       release_tag: ${{ steps.release_source.outputs.tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Tag-push events already carry an immutable commit SHA. Manual
           # runs resolve their requested tag once here; every downstream job
@@ -108,7 +108,7 @@ jobs:
           - x86_64-apple-darwin
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.frontend.outputs.release_commit }}
           persist-credentials: false
@@ -273,7 +273,7 @@ jobs:
     needs: frontend
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.frontend.outputs.release_commit }}
           persist-credentials: false
@@ -323,7 +323,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.frontend.outputs.release_commit }}
           fetch-depth: 0
