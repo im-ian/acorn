@@ -216,7 +216,7 @@ test.describe("background sessions settings", () => {
     });
     await expect(
       page
-        .locator('[data-panel-id="sidebar"]')
+        .locator('[data-testid="sidebar"]')
         .getByRole("button", { name: /^alpha main · Ready/ }),
     ).toBeVisible();
     await expect

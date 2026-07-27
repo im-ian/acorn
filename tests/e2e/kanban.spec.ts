@@ -253,7 +253,7 @@ test.describe("workspace kanban mode", () => {
 
     await expect(page.getByRole("menu")).toHaveCount(0);
     await page
-      .locator('[data-panel-id="sidebar"]')
+      .locator('[data-testid="sidebar"]')
       .getByRole("button", { name: /^completed worktree/ })
       .first()
       .click({ button: "right" });

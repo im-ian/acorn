@@ -45,7 +45,7 @@ const scenes: CaptureScene[] = [
     name: "workspace",
     file: "workspace.png",
     prepare: async (page) => {
-      const rightPanel = page.locator('[data-panel-id="right"]');
+      const rightPanel = page.locator('[data-testid="right"]');
       await rightPanel.getByRole("button", { name: "Code", exact: true }).click();
       await rightPanel
         .getByRole("button", { name: "Files", exact: true })
@@ -216,7 +216,7 @@ const scenes: CaptureScene[] = [
     name: "staged-diff",
     file: "staged-diff.png",
     prepare: async (page) => {
-      const rightPanel = page.locator('[data-panel-id="right"]');
+      const rightPanel = page.locator('[data-testid="right"]');
       await rightPanel.getByRole("button", { name: "Code", exact: true }).click();
       await rightPanel
         .getByRole("button", { name: "Staged", exact: true })
@@ -233,7 +233,7 @@ const scenes: CaptureScene[] = [
     name: "agent-history",
     file: "agent-history.png",
     prepare: async (page) => {
-      const rightPanel = page.locator('[data-panel-id="right"]');
+      const rightPanel = page.locator('[data-testid="right"]');
       await rightPanel
         .getByRole("button", { name: "Agents", exact: true })
         .click();

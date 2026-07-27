@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
-import { Panel, PanelGroup } from "react-resizable-panels";
+import { Panel } from "react-resizable-panels";
+import { PersistentGroup } from "./PersistentGroup";
 import { DiffSplitView } from "./DiffSplitView";
 import { ResizeHandle } from "./ResizeHandle";
 import type { DiffImageContext, DiffPayload } from "../lib/types";
@@ -58,25 +59,25 @@ export function DiffViewerModal({
   let content: ReactNode = null;
   if (payload && hasBody) {
     content = (
-      <PanelGroup
-        direction="vertical"
-        autoSaveId="acorn:commit-viewer-body-diff"
+      <PersistentGroup
+        orientation="vertical"
+        id="acorn:commit-viewer-body-diff"
         className="h-full"
       >
-        <Panel id="body" order={1} defaultSize={25} minSize={8} maxSize={70}>
+        <Panel id="body" defaultSize="25%" minSize="8%" maxSize="70%">
           <div className="acorn-selectable h-full overflow-y-auto rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 px-4 py-2">
             <Markdown content={body!} />
           </div>
         </Panel>
         <ResizeHandle direction="vertical" gap />
-        <Panel id="diff" order={2} defaultSize={75} minSize={20}>
+        <Panel id="diff" defaultSize="75%" minSize="20%">
           <DiffSplitView
             payload={payload}
             cwd={cwd}
             imageContext={imageContext}
           />
         </Panel>
-      </PanelGroup>
+      </PersistentGroup>
     );
   } else if (payload) {
     content = (

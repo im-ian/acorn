@@ -6,7 +6,7 @@ import {
   type HTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
-import { PanelResizeHandle } from "react-resizable-panels";
+import { Separator } from "react-resizable-panels";
 import { cn } from "../lib/cn";
 import {
   EXPAND_PANEL_EVENT,
@@ -33,8 +33,9 @@ interface ResizeHandleProps
  * Resize handle behaviour:
  *
  * 1. Open state: the handle is visually quiet at rest unless its caller
- *    opts into a divider. Thin handles render as 1px while
- *    `hitAreaMargins` preserves a forgiving resize target. The cursor flips
+ *    opts into a divider. Thin handles render as 1px and the library's
+ *    default `resizeTargetMinimumSize` (20px coarse / 10px fine, set on the
+ *    parent `Group`) keeps the resize target forgiving. The cursor flips
  *    to col/row resize on hover, and a 1px accent line appears during drag.
  * 2. Closed state (an adjacent collapsible panel is collapsed): the bar
  *    fades to a faint white tint on hover and shows a fixed-size white
@@ -76,22 +77,24 @@ export function ResizeHandle({
   const effectiveDragging = mode === "manual" ? manualDragging : dragging;
   const effectiveHovered = mode === "manual" ? manualHovered : hovered;
 
-  // Mirror the lib's `data-resize-handle-state` into React state. CSS
-  // arbitrary variants (`data-[resize-handle-state=hover]:...`) compiled
-  // unreliably in this project's Tailwind 4 setup, so drive visibility
-  // off React state instead.
+  // Mirror the lib's `data-separator` state into React state. CSS arbitrary
+  // variants (`data-[separator=hover]:...`) compiled unreliably in this
+  // project's Tailwind 4 setup, so drive visibility off React state instead.
+  // v4 folds the old `onDragging` callback into this same attribute:
+  // "inactive" | "hover" | "active" | "focus" | "disabled".
   useEffect(() => {
     const handle = findHandle(handleId);
     if (!handle) return;
     const read = () => {
-      const state = handle.getAttribute("data-resize-handle-state");
-      setHovered(state === "hover" || state === "drag");
+      const state = handle.getAttribute("data-separator");
+      setHovered(state === "hover" || state === "active");
+      setDragging(state === "active");
     };
     read();
     const observer = new MutationObserver(read);
     observer.observe(handle, {
       attributes: true,
-      attributeFilter: ["data-resize-handle-state"],
+      attributeFilter: ["data-separator"],
     });
     return () => observer.disconnect();
   }, [handleId]);
@@ -107,17 +110,15 @@ export function ResizeHandle({
     );
     if (adjacents.length === 0) return;
     const recompute = () => {
-      const collapsed = gatherAdjacents(handle).find((a) => a.sizePct < 0.5);
-      setCollapsedPanelId(
-        collapsed?.panel.getAttribute("data-panel-id") ?? null,
-      );
+      const collapsed = gatherAdjacents(handle).find((a) => a.isCollapsed);
+      setCollapsedPanelId(collapsed?.panel.getAttribute("id") ?? null);
     };
     recompute();
     const observer = new MutationObserver(recompute);
     for (const panel of adjacents) {
       observer.observe(panel, {
         attributes: true,
-        attributeFilter: ["data-panel-size", "data-panel-collapsible"],
+        attributeFilter: ["style"],
       });
     }
     return () => observer.disconnect();
@@ -273,17 +274,17 @@ export function ResizeHandle({
 
   return (
     <>
-      <PanelResizeHandle
+      <Separator
         id={handleId}
-        hitAreaMargins={
-          thin || gap ? { coarse: 12, fine: 6 } : { coarse: 0, fine: 0 }
-        }
-        onDragging={setDragging}
+        // v4 resets the neighbouring panel to its `defaultSize` on
+        // double-click. Acorn binds that gesture to re-expanding a collapsed
+        // panel instead, so the built-in behaviour is turned off.
+        disableDoubleClick
         onDoubleClick={handleDoubleClick}
         className={handleClassName}
       >
         {handleContent}
-      </PanelResizeHandle>
+      </Separator>
       {tooltipAnchor && !dragging
         ? createPortal(
             <HandleTooltip
@@ -305,53 +306,58 @@ function cssEscape(value: string): string {
 
 function findHandle(handleId: string): HTMLElement | null {
   return document.querySelector<HTMLElement>(
-    `[data-panel-resize-handle-id="${cssEscape(handleId)}"]`,
+    `[data-testid="${cssEscape(handleId)}"][data-separator]`,
   );
 }
 
+/**
+ * Panels and separators are siblings inside their Group, so walking the DOM in
+ * both directions finds the pair this handle sits between. v3 resolved the
+ * leading panel through `aria-controls`; v4 keeps that attribute but sibling
+ * walking covers both sides with one code path.
+ */
 function findAdjacentPanels(
   handle: HTMLElement,
 ): [HTMLElement | null, HTMLElement | null] {
-  const beforeId = handle.getAttribute("aria-controls");
-  const before = beforeId
-    ? document.querySelector<HTMLElement>(
-        `[data-panel-id="${cssEscape(beforeId)}"]`,
-      )
-    : null;
+  return [
+    findSiblingPanel(handle, "previousElementSibling"),
+    findSiblingPanel(handle, "nextElementSibling"),
+  ];
+}
 
-  let after: HTMLElement | null = null;
-  let cursor = handle.nextElementSibling;
+function findSiblingPanel(
+  handle: HTMLElement,
+  direction: "previousElementSibling" | "nextElementSibling",
+): HTMLElement | null {
+  let cursor = handle[direction];
   while (cursor) {
-    if (cursor instanceof HTMLElement && cursor.hasAttribute("data-panel-id")) {
-      after = cursor;
-      break;
+    if (cursor instanceof HTMLElement && cursor.hasAttribute("data-panel")) {
+      return cursor;
     }
-    cursor = cursor.nextElementSibling;
+    cursor = cursor[direction];
   }
-  return [before, after];
+  return null;
 }
 
 interface AdjacentInfo {
   panel: HTMLElement;
-  sizePct: number;
+  isCollapsed: boolean;
 }
 
+/**
+ * v4 dropped the `data-panel-size` and `data-panel-collapsible` attributes
+ * this used to read, so collapse is inferred from the flex-grow the library
+ * writes inline instead. Non-collapsible panels never reach zero — every
+ * Acorn panel declares a `minSize` — so a zero-ish grow means a collapsible
+ * neighbour actually collapsed.
+ */
 function gatherAdjacents(handle: HTMLElement): AdjacentInfo[] {
-  const [before, after] = findAdjacentPanels(handle);
-  const out: AdjacentInfo[] = [];
-  if (before && before.getAttribute("data-panel-collapsible") === "true") {
-    out.push({
-      panel: before,
-      sizePct: Number(before.getAttribute("data-panel-size") ?? "0"),
-    });
-  }
-  if (after && after.getAttribute("data-panel-collapsible") === "true") {
-    out.push({
-      panel: after,
-      sizePct: Number(after.getAttribute("data-panel-size") ?? "0"),
-    });
-  }
-  return out;
+  return findAdjacentPanels(handle)
+    .filter((panel): panel is HTMLElement => panel !== null)
+    .map((panel) => ({
+      panel,
+      isCollapsed: Number(panel.style.flexGrow || "0") < 0.005,
+    }));
 }
 
 function HandleTooltip({

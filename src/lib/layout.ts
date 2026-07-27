@@ -5,7 +5,7 @@
  * and internal nodes are splits with a direction. The tree shape mirrors what
  * `react-resizable-panels` will render.
  *
- * `direction` matches `PanelGroup`'s prop:
+ * `direction` matches the `orientation` prop on `Group`:
  * - "horizontal" → side-by-side (left/right) split
  * - "vertical"   → stacked (top/bottom) split
  *

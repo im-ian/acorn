@@ -5,7 +5,7 @@
  * circular import.
  */
 
-/** Reset every nested PanelGroup in the active workspace to an even split. */
+/** Reset every nested Group in the active workspace to an even split. */
 export const EQUALIZE_PANES_EVENT = "acorn:equalize-panes";
 
 /** Restore the root sidebar/right panel widths and equalize the workspace. */
