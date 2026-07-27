@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Panel,
-  PanelGroup,
-  type ImperativePanelHandle,
-} from "react-resizable-panels";
+import { Panel, usePanelRef } from "react-resizable-panels";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
@@ -14,6 +10,7 @@ import { RunningSessionCloseWarningDialog } from "./components/RunningSessionClo
 import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
 import { WorkspaceMain } from "./components/WorkspaceMain";
 import { RightPanel } from "./components/RightPanel";
+import { PersistentGroup } from "./components/PersistentGroup";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { AcornRain } from "./components/AcornRain";
 import { AgentResumeModal } from "./components/AgentResumeModal";
@@ -131,10 +128,13 @@ const FOCUSABLE_SELECTOR =
 const SESSION_TITLE_RETRY_MS = 30_000;
 const SESSION_TITLE_NOT_READY_RETRY_MS = 1_000;
 
-const SIDEBAR_DEFAULT_SIZE = 18;
-const SIDEBAR_MIN_SIZE = 12;
-const RIGHT_PANEL_DEFAULT_SIZE = 26;
-const RIGHT_PANEL_MIN_SIZE = 16;
+// Percent-suffixed because react-resizable-panels v4 reads bare numbers as
+// pixels; these same constants feed both the `Panel` props and the imperative
+// `resize()` calls below.
+const SIDEBAR_DEFAULT_SIZE = "18%";
+const SIDEBAR_MIN_SIZE = "12%";
+const RIGHT_PANEL_DEFAULT_SIZE = "26%";
+const RIGHT_PANEL_MIN_SIZE = "16%";
 
 type AppTranslationKey = Extract<TranslationKey, `app.${string}`>;
 
@@ -408,8 +408,8 @@ function App() {
           : appText(t, "app.toast.multiInputOff"),
       );
   }, [t]);
-  const sidebarPanelRef = useRef<ImperativePanelHandle | null>(null);
-  const rightPanelRef = useRef<ImperativePanelHandle | null>(null);
+  const sidebarPanelRef = usePanelRef();
+  const rightPanelRef = usePanelRef();
   const statusPollLastPolledAtRef = useRef<Map<string, number>>(new Map());
   const themes = useThemes((s) => s.themes);
   const refreshThemes = useThemes((s) => s.refresh);
@@ -1811,37 +1811,35 @@ function App() {
       </div>
       <ToastHost />
       <div className="relative z-10 flex min-h-0 flex-1 p-1.5">
-        <PanelGroup direction="horizontal" autoSaveId="acorn:layout:root">
+        <PersistentGroup orientation="horizontal" id="acorn:layout:root">
           <Panel
-            ref={sidebarPanelRef}
+            panelRef={sidebarPanelRef}
             id="sidebar"
-            order={1}
             defaultSize={SIDEBAR_DEFAULT_SIZE}
             minSize={SIDEBAR_MIN_SIZE}
-            maxSize={40}
+            maxSize="40%"
             collapsible
-            collapsedSize={0}
+            collapsedSize="0%"
           >
             <Sidebar />
           </Panel>
           <ResizeHandle gap />
-          <Panel id="main" order={2} defaultSize={56} minSize={30}>
+          <Panel id="main" defaultSize="56%" minSize="30%">
             <WorkspaceMain layout={layout} viewMode={workspaceViewMode} />
           </Panel>
           <ResizeHandle gap />
           <Panel
-            ref={rightPanelRef}
+            panelRef={rightPanelRef}
             id="right"
-            order={3}
             defaultSize={RIGHT_PANEL_DEFAULT_SIZE}
             minSize={RIGHT_PANEL_MIN_SIZE}
-            maxSize={50}
+            maxSize="50%"
             collapsible
-            collapsedSize={0}
+            collapsedSize="0%"
           >
             <RightPanel />
           </Panel>
-        </PanelGroup>
+        </PersistentGroup>
       </div>
       <div className="relative z-10">
         <StatusBar />

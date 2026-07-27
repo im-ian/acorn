@@ -51,3 +51,20 @@ if (typeof window !== "undefined") {
     writable: true,
   });
 }
+
+// jsdom ships no ResizeObserver, and react-resizable-panels v4 constructs one
+// unconditionally when a Group mounts. Nothing under test asserts on resize
+// behaviour — jsdom reports zero-size elements anyway — so a no-op observer is
+// enough to let those components mount.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  class NoopResizeObserver implements ResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    value: NoopResizeObserver,
+    configurable: true,
+    writable: true,
+  });
+}
