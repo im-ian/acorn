@@ -2231,6 +2231,118 @@ test.describe("terminal: spawn", () => {
     ).toHaveCount(0);
   });
 
+  test("opens terminal file URLs in Acorn after click", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __fileUrlLinkChannelId?: number;
+      };
+      w.__fileUrlLinkChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("fs_grant_external_file", (args) => {
+      const { path } = args as { path: string };
+      const w = window as unknown as { __fileUrlGrants?: string[] };
+      w.__fileUrlGrants = [...(w.__fileUrlGrants ?? []), path];
+      return null;
+    });
+    await tauri.handle("fs_prepare_asset", (args) => {
+      const { path } = args as { path: string };
+      const w = window as unknown as { __fileUrlGrants?: string[] };
+      if (!w.__fileUrlGrants?.includes(path)) {
+        throw new Error(`terminal file URL was not granted: ${path}`);
+      }
+      return { size: 512 };
+    });
+    await tauri.handle("fs_read_file", () => {
+      throw new Error("terminal image file URLs should use the media viewer");
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __fileUrlLinkChannelId?: number })
+              .__fileUrlLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const uri =
+      "file:///Users/tester/.codex/generated_images/run/preview%20image%20(1).png";
+    const path =
+      "/Users/tester/.codex/generated_images/run/preview image (1).png";
+    await emitSubscribedPtyOutput(
+      page,
+      "__fileUrlLinkChannelId",
+      `Saved to: ${uri}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(uri);
+
+    const textRect = await terminalTextRect(page, uri);
+    expect(textRect).not.toBeNull();
+    const x = textRect!.left + Math.min(12, textRect!.width / 2);
+    const y = (textRect!.top + textRect!.bottom) / 2;
+    await page.mouse.move(x, y);
+    await page.waitForTimeout(50);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __fileUrlGrants?: string[] })
+            .__fileUrlGrants ?? [],
+      ),
+    ).toEqual([]);
+
+    await page.mouse.click(x, y);
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __fileUrlGrants?: string[] })
+              .__fileUrlGrants ?? [],
+        ),
+      )
+      .toContain(path);
+    await expect(
+      page.getByRole("button", { name: /preview image \(1\)\.png Close tab/ }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-acorn-media-viewer="image"]'),
+    ).toBeVisible();
+    await expect(page.locator('img[alt="preview image (1).png"]')).toBeVisible();
+  });
+
   test("keeps modifier-click link tooltip mounted while output streams", async ({
     page,
     tauri,
