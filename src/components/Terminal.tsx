@@ -77,6 +77,7 @@ import {
   type ClipboardImageFile,
 } from "../lib/terminalPaste";
 import { normalizeShellCommandWhitespace } from "../lib/shellCommandWhitespace";
+import { fileUrlToPath } from "../lib/paths";
 import { saveClipboardImageAttachment } from "../lib/clipboardImageAttachment";
 import {
   createTerminalFileLinkProvider,
@@ -678,11 +679,10 @@ export function Terminal({
     // sees live changes without rebuilding the terminal.
     let linkActivation: TerminalLinkActivation =
       initialSettings.terminal.linkActivation;
-    // Hand link clicks to the OS so URLs open in the user's default browser
-    // instead of trying to navigate the Tauri WebView (which is gated by the
-    // app's CSP and would either fail or replace the app shell). When the user
-    // opts into modifier-click activation, plain clicks are swallowed so a
-    // stray click on a URL in shell output doesn't steal focus.
+    // Hand web links to the OS instead of navigating the Tauri WebView. Explicit
+    // file URLs open in Acorn after the click grants that one external file;
+    // terminal output alone must not expand the viewer's filesystem scope.
+    // Modifier-click mode swallows plain clicks for both link kinds.
     let linkTooltipFrame: number | null = null;
     let linkTooltipHideTimer: number | null = null;
     const cancelLinkTooltipHide = () => {
@@ -726,12 +726,25 @@ export function Terminal({
         setLinkTooltip(null);
       }, LINK_TOOLTIP_HIDE_GRACE_MS);
     };
-    const activateExternalLink = (event: MouseEvent, uri: string) => {
+    const activateTerminalUri = (event: MouseEvent, uri: string) => {
       event.preventDefault();
       hideLinkTooltip(true);
       if (linkActivation === "modifier-click" && !modifierHeld(event)) {
         return;
       }
+      const filePath = fileUrlToPath(uri);
+      if (filePath) {
+        void api
+          .fsGrantExternalFile(filePath)
+          .then(() => {
+            useAppStore.getState().openCodeViewerTab(filePath, cwd);
+          })
+          .catch((err: unknown) => {
+            console.error("failed to open terminal file link", uri, err);
+          });
+        return;
+      }
+      if (/^file:/iu.test(uri)) return;
       void openUrl(uri).catch((err: unknown) => {
         console.error("failed to open terminal link", uri, err);
       });
@@ -748,7 +761,7 @@ export function Terminal({
       showLinkTooltip(uri, range);
     };
     term.options.linkHandler = {
-      activate: activateExternalLink,
+      activate: activateTerminalUri,
       hover: (_event, uri, range) => {
         hoverExternalLink(uri, range as IViewportRange);
       },
@@ -877,7 +890,7 @@ export function Terminal({
     };
     let webLinksDisposable: IDisposable | null = term.registerLinkProvider(
       createTerminalWebLinkProvider(term, {
-        activate: activateExternalLink,
+        activate: activateTerminalUri,
         hover: (_event, uri, link) => {
           hoverExternalLink(uri, link.range);
         },

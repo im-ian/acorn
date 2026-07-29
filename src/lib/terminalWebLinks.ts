@@ -3,6 +3,7 @@ import type {
   ILinkProvider,
   Terminal as XTerm,
 } from "@xterm/xterm";
+import { fileUrlToPath } from "./paths";
 
 export interface TerminalWebLinkProviderOptions {
   activate: (event: MouseEvent, uri: string) => void;
@@ -12,7 +13,7 @@ export interface TerminalWebLinkProviderOptions {
 }
 
 const STRICT_URL_RE =
-  /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\\^<>`]*[^\s"':,.!?{}|\\\^~\[\]`()<>]/;
+  /(?:https?:[/]{2}[^\s"'!*(){}|\\\^<>`]*[^\s"':,.!?{}|\\\^~\[\]`()<>]|file:[/]{2}[^\s"'<>`]+)/i;
 
 export function createTerminalWebLinkProvider(
   terminal: XTerm,
@@ -49,7 +50,7 @@ function computeWebLinks(
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(line)) !== null) {
-    const text = match[0];
+    const text = trimDetectedUrl(match[0]);
     if (!isUrl(text)) continue;
 
     const [startY, startX] = mapStringIndex(
@@ -90,6 +91,40 @@ function computeWebLinks(
   }
 
   return links;
+}
+
+function trimDetectedUrl(value: string): string {
+  if (!/^file:/iu.test(value)) return value;
+
+  // File URL serializers leave balanced brackets unescaped, while terminal
+  // prose commonly appends punctuation or one unmatched closing delimiter.
+  let end = value.length;
+  while (end > 0) {
+    const char = value[end - 1];
+    if (".,!?;:".includes(char)) {
+      end -= 1;
+      continue;
+    }
+    const opener =
+      char === ")" ? "(" : char === "]" ? "[" : char === "}" ? "{" : null;
+    if (
+      opener &&
+      countCharacter(value, char, end) > countCharacter(value, opener, end)
+    ) {
+      end -= 1;
+      continue;
+    }
+    break;
+  }
+  return value.slice(0, end);
+}
+
+function countCharacter(value: string, target: string, end: number): number {
+  let count = 0;
+  for (let index = 0; index < end; index += 1) {
+    if (value[index] === target) count += 1;
+  }
+  return count;
 }
 
 function getWindowedLineStrings(
@@ -173,6 +208,7 @@ function mapStringIndex(
 function isUrl(value: string): boolean {
   try {
     const url = new URL(value);
+    if (url.protocol === "file:" && !fileUrlToPath(value)) return false;
     const parsedBase =
       url.password && url.username
         ? `${url.protocol}//${url.username}:${url.password}@${url.host}`
