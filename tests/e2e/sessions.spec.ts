@@ -1,6 +1,69 @@
 import { test, expect } from "./support";
 
 test.describe("sessions: list rendering", () => {
+  test("highlights the active session in the Projects panel", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-alpha",
+        name: "alpha",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+      {
+        id: "s-beta",
+        name: "beta",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:04Z",
+        last_message: null,
+      },
+    ]);
+
+    await page.goto("/");
+
+    const projectsPanel = page.locator("aside").first();
+    const alpha = projectsPanel
+      .getByRole("button", { name: /^alpha main · Ready/ })
+      .first();
+    const beta = projectsPanel
+      .getByRole("button", { name: /^beta main · Ready/ })
+      .first();
+
+    await alpha.click();
+    await expect(alpha).toHaveClass(/acorn-tab-active-bg/);
+    await expect(beta).not.toHaveClass(/acorn-tab-active-bg/);
+
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+    await expect(alpha).toHaveClass(/acorn-tab-active-bg/);
+    await expect(beta).not.toHaveClass(/acorn-tab-active-bg/);
+
+    await beta.click();
+    await expect(beta).toHaveClass(/acorn-tab-active-bg/);
+    await expect(alpha).not.toHaveClass(/acorn-tab-active-bg/);
+  });
+
   test("each status renders its label", async ({ page, tauri }) => {
     await tauri.handle("list_projects", () => [
       {

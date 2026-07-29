@@ -2370,10 +2370,7 @@ function ProjectGroupView({
                   <SessionRow
                     key={item.id}
                     session={item.session}
-                    active={
-                      workspaceViewMode === "panes" &&
-                      item.session.id === activeSessionId
-                    }
+                    active={item.session.id === activeSessionId}
                     onSelect={() =>
                       onSelectSession(item.folderId, item.session.id)
                     }
@@ -2387,9 +2384,7 @@ function ProjectGroupView({
                     key={item.id}
                     folderGroup={item.folderGroup}
                     projectFolders={projectFoldersForRows}
-                    activeSessionId={
-                      workspaceViewMode === "panes" ? activeSessionId : null
-                    }
+                    activeSessionId={activeSessionId}
                     active={
                       workspaceViewMode === "panes" &&
                       activeProjectFolderId === item.folderGroup.folder.id
@@ -3276,7 +3271,7 @@ function SessionRow({
         density: "sidebar",
         interactive: true,
         selected: active,
-        selectedClassName: "bg-bg-elevated shadow-sm",
+        selectedClassName: "acorn-tab-active-bg text-fg shadow-sm",
         surface: "sidebar",
         className: cn(
           "group flex w-full cursor-pointer items-start gap-1.5 text-left",
@@ -4631,7 +4626,7 @@ function LocalSessionRow({
         density: "sidebar",
         interactive: true,
         selected: active,
-        selectedClassName: "bg-bg-elevated shadow-sm",
+        selectedClassName: "acorn-tab-active-bg text-fg shadow-sm",
         surface: "sidebar",
         className: cn(
           "group flex w-full cursor-pointer items-start gap-1.5 text-left",
