@@ -8,6 +8,8 @@ interface RefreshButtonProps {
   onClick: () => void | Promise<void>;
   /** Parent-owned in-flight flag. true → spin, false→true edge → show ✓. */
   loading: boolean;
+  /** Keep the action available when the caller can safely supersede an older request. */
+  allowWhileLoading?: boolean;
   /** Icon size in px. Default 14. */
   size?: number;
   /** Tooltip + accessible name. */
@@ -28,6 +30,7 @@ const FADE_MS = 250;
 export function RefreshButton({
   onClick,
   loading,
+  allowWhileLoading = false,
   size = 14,
   title = "Refresh",
   ariaLabel,
@@ -65,7 +68,7 @@ export function RefreshButton({
     <Tooltip label={title} side="bottom">
       <IconButton
         onClick={onClick}
-        disabled={loading}
+        disabled={loading && !allowWhileLoading}
         aria-label={ariaLabel ?? title}
         size="sm"
         className={cn("relative", className)}

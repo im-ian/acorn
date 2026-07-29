@@ -139,6 +139,101 @@ test.describe("right panel: tab switching", () => {
     expect(colors.border).not.toBe("rgb(0, 0, 0)");
   });
 
+  test("manual PR refresh supersedes an in-flight automatic refresh", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("list_pull_requests", (args) => {
+      const state = (args as { state?: string }).state;
+      if (state !== "open") {
+        return { kind: "ok", account: "test-account", items: [] };
+      }
+
+      const w = window as unknown as {
+        __openPrListCalls?: number;
+        __allowFreshPrList?: boolean;
+        __releaseStalePrLists?: boolean;
+        __settledStalePrLists?: number;
+      };
+      w.__openPrListCalls = (w.__openPrListCalls ?? 0) + 1;
+      const listing = (number: number, title: string) => ({
+        kind: "ok",
+        account: "test-account",
+        items: [
+          {
+            number,
+            title,
+            state: "OPEN",
+            author: "im-ian",
+            head_branch: `fix/pr-${number}`,
+            base_branch: "main",
+            url: `https://github.com/im-ian/acorn/pull/${number}`,
+            updated_at: `2026-07-28T08:${number}:00Z`,
+            closed_at: null,
+            merged_at: null,
+            is_draft: false,
+            checks: null,
+            labels: [],
+          },
+        ],
+      });
+
+      if (!w.__allowFreshPrList) {
+        return new Promise((resolve) => {
+          const finishWhenReleased = () => {
+            if (w.__releaseStalePrLists) {
+              w.__settledStalePrLists = (w.__settledStalePrLists ?? 0) + 1;
+              resolve(listing(35, "Stale pull request list"));
+              return;
+            }
+            setTimeout(finishWhenReleased, 20);
+          };
+          finishWhenReleased();
+        });
+      }
+
+      return listing(36, "Fresh pull request list");
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __openPrListCalls?: number })
+              .__openPrListCalls ?? 0,
+        ),
+      )
+      .toBeGreaterThan(0);
+
+    const refresh = page.getByRole("button", { name: "Refresh" });
+    await expect(refresh).toBeEnabled();
+    await page.evaluate(() => {
+      (window as unknown as { __allowFreshPrList?: boolean })
+        .__allowFreshPrList = true;
+    });
+    await refresh.click();
+    await expect(page.getByText("Fresh pull request list")).toBeVisible();
+
+    await page.evaluate(() => {
+      (window as unknown as { __releaseStalePrLists?: boolean })
+        .__releaseStalePrLists = true;
+    });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __settledStalePrLists?: number })
+              .__settledStalePrLists ?? 0,
+        ),
+      )
+      .toBeGreaterThan(0);
+    await expect(page.getByText("Stale pull request list")).toHaveCount(0);
+    await expect(page.getByText("Fresh pull request list")).toBeVisible();
+  });
+
   test("double-clicking a commit opens the diff modal before the diff finishes loading", async ({
     page,
     tauri,

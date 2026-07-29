@@ -3307,6 +3307,7 @@ function PullRequestsTab({
         <RefreshButton
           onClick={() => void fetchActivePrs()}
           loading={loading}
+          allowWhileLoading
           size={12}
         />
       </div>
