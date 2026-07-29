@@ -81,9 +81,71 @@ describe("terminal web links", () => {
     });
   });
 
+  it.each([
+    [
+      "POSIX paths",
+      "file:///Users/jthefloor/.codex/generated_images/019fac49-00b2-75e0-864d-5c2d6951e441/exec-59ed6210-8c1d-440b-916d-26f791750b80.png",
+    ],
+    ["localhost paths", "file://localhost/Users/me/report.txt"],
+    ["Windows drive paths", "file:///C:/Users/me/report.txt"],
+    ["UNC paths", "file://server/share/report.txt"],
+    ["case-insensitive schemes", "FILE:///Users/me/report.txt"],
+    [
+      "parenthesized file names",
+      "file:///Users/me/Desktop/Screenshot%20(1).png",
+    ],
+  ])("provides local file URL links for %s", (_label, uri) => {
+    const provider = createTerminalWebLinkProvider(
+      makeTerminalWithLines([makeBufferLine(`Saved to: (${uri}).`)]),
+      { activate: () => undefined },
+    );
+
+    provider.provideLinks(1, (links) => {
+      expect(links?.[0]?.text).toBe(uri);
+      expect(links?.[0]?.range).toEqual({
+        start: { x: 12, y: 1 },
+        end: { x: 11 + uri.length, y: 1 },
+      });
+    });
+  });
+
+  it("provides file URL links across wrapped terminal lines", () => {
+    const firstLine =
+      "Saved to: file:///Users/me/.codex/generated_images/";
+    const secondLine = "run/preview.png";
+    const provider = createTerminalWebLinkProvider(
+      makeTerminalWithLines([
+        makeBufferLine(firstLine),
+        makeBufferLine(secondLine, undefined, true),
+      ]),
+      { activate: () => undefined },
+    );
+
+    provider.provideLinks(2, (links) => {
+      expect(links?.[0]?.text).toBe(
+        "file:///Users/me/.codex/generated_images/run/preview.png",
+      );
+      expect(links?.[0]?.range).toEqual({
+        start: { x: 11, y: 1 },
+        end: { x: secondLine.length, y: 2 },
+      });
+    });
+  });
+
   it("skips URL-shaped text that cannot parse as a URL", () => {
     const provider = createTerminalWebLinkProvider(
       makeTerminalWithLines([makeBufferLine("open https://")]),
+      { activate: () => undefined },
+    );
+
+    provider.provideLinks(1, (links) => {
+      expect(links).toBeUndefined();
+    });
+  });
+
+  it("skips file URLs that cannot convert to paths", () => {
+    const provider = createTerminalWebLinkProvider(
+      makeTerminalWithLines([makeBufferLine("open file:///tmp/bad%escape.png")]),
       { activate: () => undefined },
     );
 
