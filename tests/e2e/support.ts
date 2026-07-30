@@ -2,7 +2,7 @@ import { test as base, expect, type Page } from "@playwright/test";
 import { tauriMockSource } from "./fixtures/tauriMock";
 
 type InvokeHandler = (args: unknown) => unknown | Promise<unknown>;
-type TestLanguage = "en" | "ko";
+type TestLanguage = "en" | "ko" | "zh-CN";
 
 const SETTINGS_STORAGE_KEY = "acorn:settings:v1";
 

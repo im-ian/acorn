@@ -5,7 +5,7 @@ import {
   seedSettingsLanguage,
 } from "./support";
 
-const SETTINGS_DIALOG_NAME = /^(Settings|설정)$/;
+const SETTINGS_DIALOG_NAME = /^(Settings|설정|设置)$/;
 
 // Each Settings tab has a label / heading unique enough to anchor against.
 // Asserting one element per tab is enough to catch "clicked tab N but
@@ -167,5 +167,46 @@ test.describe("settings modal: tab content", () => {
     await modal.getByRole("button", { name: "터미널", exact: true }).click();
     await expect(modal.getByText("글꼴 패밀리")).toBeVisible();
     await expect(modal.getByText("링크 열기 방식")).toBeVisible();
+  });
+
+  test("Simplified Chinese mode localizes Settings and the language selector", async ({
+    page,
+  }) => {
+    await seedSettingsLanguage(page, "zh-CN");
+
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: "设置" });
+    await expect(modal).toBeVisible();
+
+    for (const tab of [
+      "界面",
+      "外观",
+      "主题",
+      "终端",
+      "会话",
+      "智能体",
+      "GitHub",
+      "编辑器",
+      "通知",
+      "快捷键",
+      "存储",
+      "实验",
+      "关于",
+    ]) {
+      await expect(
+        modal.getByRole("button", { name: tab, exact: true }),
+      ).toBeVisible();
+    }
+
+    await modal.getByRole("button", { name: "界面", exact: true }).click();
+    await expect(modal.getByText("语言", { exact: true })).toBeVisible();
+    await expect(modal.getByRole("combobox", { name: "语言" })).toContainText(
+      "简体中文",
+    );
+    await expect(
+      modal.getByRole("button", { name: "重置为默认值" }),
+    ).toBeVisible();
   });
 });
