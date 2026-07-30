@@ -1,0 +1,2369 @@
+{
+  "toasts": {
+    "session": {
+      "createFailed": "无法创建会话：",
+      "removeFailed": "无法删除会话：",
+      "worktreeRemoved": "工作树从磁盘中删除。",
+      "worktreeRemovedUndo": "将在 {seconds} 秒后删除 {name} 工作树。撤销",
+      "worktreeRestored": "工作树已恢复。",
+      "worktreeRestoreFailed": "无法恢复工作树：",
+      "worktreeRemoveFailed": "无法删除工作树：",
+      "sessionWorktreeRemoved": "会话已删除，工作树已从磁盘中删除。",
+      "sessionWorktreeRemovedUndo": "会话和工作树已移除。可在 {seconds} 秒内恢复",
+      "sessionWorktreeRemoveFailed": "无法删除会话和工作树：",
+      "sessionWorktreeRestored": "会话和工作树已恢复。",
+      "sessionWorktreeRestoreFailed": "无法恢复会话和工作树：",
+      "refreshFailed": "无法刷新会话：",
+      "renameFailed": "无法重命名会话：",
+      "titleNotReady": "尚无可用于此会话的对话记录。",
+      "titleRegenerateSkipped": "会话名称未重新生成。",
+      "worktreeAdopted": "已采用工作树：{name}",
+      "worktreeAdoptFailed": "未能采用工作树：",
+      "worktreeMissing": "工作树文件夹磁盘上不再存在。"
+    },
+    "autonomousGoal": {
+      "started": "已在 {name} 中启动目标会话。",
+      "updated": "已更新 {name} 中的目标，并开始重新规划。",
+      "startFailed": "目标会话失败：",
+      "pauseFailed": "目标会话无法暂停："
+    },
+    "project": {
+      "addFailed": "无法添加项目：",
+      "createFailed": "无法创建项目：",
+      "removeFailed": "无法删除项目：",
+      "worktreesRemoved": "项目工作树从磁盘中删除。",
+      "worktreesRemovedUndo": "将在 {seconds} 秒后删除 {count} 个项目工作树。撤销",
+      "worktreesRestored": "项目工作树已恢复。",
+      "worktreesRestoreFailed": "无法恢复项目工作树：",
+      "worktreesRemoveFailed": "无法删除项目工作树："
+    },
+    "ipc": {
+      "restarted": "IPC 服务器已重新启动。",
+      "restartFailed": "无法重新启动 IPC 服务器："
+    },
+    "files": {
+      "renameFailed": "无法重命名文件：",
+      "trashFailed": "无法移至垃圾箱：",
+      "pathsCopied": "已复制文件路径。",
+      "copyFailed": "无法复制文件路径。"
+    },
+    "pullRequests": {
+      "mergeFailed": "无法合并拉取请求：",
+      "closeFailed": "无法关闭拉取请求：",
+      "bodyUpdateFailed": "无法更新拉取请求："
+    }
+  },
+  "settings": {
+    "title": "设置",
+    "reset": "重置为默认值",
+    "resetConfirm": {
+      "title": "重置为默认值？",
+      "message": "这会将每个设置恢复为其默认值。这无法撤消。",
+      "confirm": "重置"
+    },
+    "tabs": {
+      "interface": "界面",
+      "appearance": "外观",
+      "themes": "主题",
+      "terminal": "终端",
+      "agents": "智能体",
+      "sessions": "会话",
+      "github": "GitHub",
+      "editor": "编辑器",
+      "notifications": "通知",
+      "shortcuts": "快捷键",
+      "storage": "存储",
+      "permissions": "权限",
+      "experiments": "实验",
+      "about": "关于"
+    },
+    "language": {
+      "label": "语言",
+      "hint": "Acorn 界面使用的语言。新的翻译正在逐渐添加。"
+    },
+    "interface": {
+      "defaultWorkspaceViewMode": {
+        "label": "默认工作区模式",
+        "hint": "Acorn 创建新的项目工作区时使用的模式。现有的项目特定选择保持不变。"
+      },
+      "projectTabs": {
+        "label": "项目标签页",
+        "hint": "控制左侧侧边栏中每个项目内的会话和工作区的顺序。",
+        "priority": {
+          "label": "将等待和错误标签页移至顶部",
+          "description": "保留手动排序，但将等待您处理或因错误受阻的标签页显示在其他工作之前。"
+        }
+      },
+      "kanbanTerminalPopover": {
+        "title": "看板终端弹出窗口",
+        "description": "控制卡片终端的打开位置和初始大小。",
+        "openOnCreate": {
+          "label": "立即打开新的会话终端",
+          "description": "当您在看板模式下创建终端会话时，立即打开其终端弹出窗口。"
+        },
+        "placement": {
+          "label": "打开位置",
+          "hint": "从看板卡片打开终端时的初始位置。",
+          "card": {
+            "label": "卡片旁边",
+            "description": "在选定的看板项目旁边打开。"
+          },
+          "center": {
+            "label": "屏幕中心",
+            "description": "在工作区中间打开。"
+          }
+        },
+        "defaultSize": {
+          "label": "默认大小",
+          "hint": "新打开的终端弹出窗口的初始大小模式。",
+          "custom": {
+            "label": "小 / 自定义",
+            "description": "使用记住的弹出窗口大小；调整大小会更新它。"
+          },
+          "fullscreen": {
+            "label": "全屏",
+            "description": "在应用程序窗口内打开展开。"
+          }
+        }
+      }
+    },
+    "terminal": {
+      "fontPreset": {
+        "label": "字体预设",
+        "hint": "将当前的终端字体设置保存为您自己的预设，然后再应用。",
+        "selectLabel": "保存的字体预设",
+        "custom": "自定义",
+        "customHint": "当前设置未保存为预设。",
+        "empty": "未保存预设",
+        "nameLabel": "预设名称",
+        "namePlaceholder": "例如紧凑型D2Coding",
+        "save": "保存当前",
+        "delete": "删除",
+        "deleteLabel": "删除所选字体预设"
+      },
+      "fontFamily": {
+        "label": "字体系列",
+        "hint": "使用逗号分隔字体列表；系统将采用第一个可用字体。"
+      },
+      "fontSize": {
+        "label": "字体大小",
+        "hint": "以 CSS 像素为单位。范围 8-32。"
+      },
+      "letterSpacing": {
+        "label": "字母间距",
+        "hint": "终端单元格之间的水平间距（以像素为单位）。支持 0.25px 步长。范围-2到6。"
+      },
+      "fontSmoothing": {
+        "label": "抗锯齿",
+        "hint": "仅控制终端字体平滑。灰度与 Acorn 当前的渲染相匹配。",
+        "options": {
+          "grayscale": "灰度",
+          "subpixel": "次像素",
+          "system": "系统",
+          "none": "无"
+        }
+      },
+      "fontWeight": {
+        "label": "字体粗细",
+        "hint": "普通文本的字重。实际效果取决于所选字体支持的字重。"
+      },
+      "boldFontWeight": {
+        "label": "粗体字体粗细",
+        "hint": "终端渲染粗体单元格时使用的字重。"
+      },
+      "lineHeight": {
+        "label": "行高",
+        "hint": "单元格高度倍数。1.00 使行紧密排列；调高可增加垂直间距。范围 1.00–2.00。"
+      },
+      "canvasInactiveRefreshRate": {
+        "label": "非活动画布刷新率",
+        "hint": "可见但未选中的画布终端渲染新输出的频率。所选的终端始终保持全速。",
+        "options": {
+          "fullSpeed": {
+            "label": "全速 · ~60 FPS",
+            "description": "几乎与所选的终端一样流畅，渲染成本最高。"
+          },
+          "balanced": {
+            "label": "平衡·~25 FPS（默认）",
+            "description": "多个并发会话的响应式平衡。"
+          },
+          "reduced": {
+            "label": "低速 · ~12 FPS",
+            "description": "减少较大画布工作区中的渲染工作。"
+          },
+          "minimal": {
+            "label": "最低 · ~8 FPS",
+            "description": "渲染成本最低；后台输出的更新更加明显。"
+          }
+        }
+      },
+      "maxMountedTerminals": {
+        "label": "常驻终端上限",
+        "hint": "在分离由守护进程管理的会话前，最多在内存中保留多少个屏幕外终端视图。可见终端始终保留。"
+      },
+      "detachOffscreenTerminals": {
+        "label": "启用常驻终端上限",
+        "hint": "超过上限后，分离由守护进程管理的屏幕外终端视图。关闭后会保留所有已打开的终端视图。",
+        "checkbox": "分离超出上限的屏幕外终端"
+      },
+      "openLinksOn": {
+        "label": "打开链接",
+        "hint": "如何跟踪 xterm 在终端输出中检测到的 URL。",
+        "click": {
+          "label": "单击（默认）",
+          "description": "单击鼠标即可在默认浏览器中打开 URL。"
+        },
+        "modifierClick": {
+          "description": "按住 {modifier} 单击打开。停止对包含 URL 的输出进行误点击，从而将焦点拉到浏览器。"
+        }
+      },
+      "rightClickPasteSelection": {
+        "label": "右键单击时粘贴所选文本",
+        "description": "选中终端文本后，右键单击会将所选内容粘贴到终端输入。默认关闭。"
+      }
+    },
+    "sessions": {
+      "lifecycle": {
+        "title": "会话生命周期",
+        "description": "关闭会话和工作树支持的工作区的确认和清理行为。"
+      },
+      "runtime": {
+        "title": "会话运行时",
+        "description": "控制运行时行为，使长时间运行的终端在 Acorn 打开或重启期间保持可用。"
+      },
+      "confirmRemove": {
+        "label": "会话删除确认",
+        "hint": "适用于普通会话。共享工作树会话删除前仍询问。",
+        "checkbox": "在删除普通会话之前显示确认"
+      },
+      "warnBeforeClosingRunning": {
+        "label": "运行中会话关闭警告",
+        "hint": "关闭仍在运行的会话前显示警告。关闭会终止其活动 shell 或智能体进程。",
+        "checkbox": "关闭运行中的会话前显示警告"
+      },
+      "confirmDeleteIsolatedWorktrees": {
+        "label": "隔离工作树清理提示",
+        "hint": "关闭此功能可从磁盘删除独立的隔离工作树，而无需保留/删除提示。共享的工作树工作区被保留。",
+        "checkbox": "删除独立隔离工作树之前询问"
+      },
+      "confirmDeleteEmptyWorktreeWorkspaces": {
+        "label": "空工作树工作区清理提示",
+        "hint": "关闭此选项可从磁盘删除空的工作树工作区目录，而无需保留/删除提示。",
+        "checkbox": "删除空工作树工作区目录之前询问"
+      },
+      "showRestartPromptOnExit": {
+        "label": "进程退出后的重启提示",
+        "hint": "关闭后，shell 或智能体退出时会自动关闭标签页；由工作树支持的标签页仍遵循上方的清理提示设置。",
+        "checkbox": "进程退出后显示重启提示"
+      },
+      "background": {
+        "title": "后台会话",
+        "description": "acornd 守护进程拥有长期运行的 PTY，因此终端会话在 Acorn 重新启动后仍然存在。"
+      },
+      "controlCli": {
+        "label": "控制会话 (acorn-ipc CLI)",
+        "errorHint": "无法查询安装状态。",
+        "loadingHint": "正在加载安装状态...",
+        "hint": "控制会话可通过 acorn-ipc CLI 向同级会话分派命令。该 CLI 随应用提供；将其符号链接到 $PATH 后即可从任意终端使用。",
+        "bundledBinary": "捆绑可执行文件",
+        "found": "已找到",
+        "missing": "缺失",
+        "installedShim": "已安装 shim",
+        "installed": "已安装",
+        "notInstalled": "未安装",
+        "recheck": "重新检查"
+      }
+    },
+    "power": {
+      "title": "电源管理",
+      "description": "控制 Acorn 在运行时如何与 macOS 睡眠交互。",
+      "preventSleep": {
+        "label": "让这台 Mac 保持唤醒状态",
+        "description": "Acorn 打开时防止系统因空闲而睡眠。显示器仍可关闭，手动睡眠或合盖操作仍然有效。"
+      }
+    },
+    "github": {
+      "refreshInterval": {
+        "label": "刷新间隔",
+        "hint": "从 gh 自动刷新 PR、议题和 Actions 标签页的频率。间隔越短，更新越及时，但会消耗更多 API 配额。"
+      },
+      "manualRefresh": "无论此间隔如何，手动刷新（每个标签页中的图标）始终有效。",
+      "listDensity": {
+        "label": "列表密度",
+        "hint": "选择每个 PR 或议题行中显示的可选详细信息。"
+      },
+      "showAuthorAvatars": {
+        "label": "显示作者头像",
+        "description": "在每个 PR 或议题行旁边渲染 GitHub 头像。"
+      },
+      "showLabels": {
+        "label": "显示标签",
+        "description": "在每个 PR 或议题行标题旁边渲染 GitHub 标签。"
+      },
+      "showBranches": {
+        "label": "显示分支",
+        "description": "在每个 PR 行中呈现源分支名称和目标分支名称。"
+      },
+      "showChecks": {
+        "label": "显示 CI 状态",
+        "description": "在每个 PR 行中呈现 CI/检查完成摘要。"
+      }
+    },
+    "appearance": {
+      "uiScale": {
+        "label": "UI 比例",
+        "hint": "以 5% 为步长缩放应用界面。终端文本仍使用独立的字号设置。"
+      },
+      "theme": {
+        "label": "主题",
+        "hint": "内置调色板和从主题文件夹下载的自定义 CSS 文件。",
+        "custom": "(自定义)",
+        "searchPlaceholder": "搜索主题",
+        "groups": {
+          "acorn": "Acorn 主题",
+          "dark": "已下载的深色主题",
+          "light": "已下载的浅色主题",
+          "custom": "自定义主题"
+        },
+        "rescanTitle": "重新扫描主题文件夹",
+        "refresh": "刷新",
+        "revealFolder": "在 Finder 中显示文件夹",
+        "library": {
+          "title": "主题库",
+          "description": "从 Acorn 主题仓库下载和更新主题。删除已下载主题不会影响自定义 CSS 文件。",
+          "preview": "预览主题",
+          "refresh": "刷新库",
+          "searchPlaceholder": "搜索主题库",
+          "noMatches": "没有主题与您的搜索匹配。",
+          "loading": "正在加载主题库...",
+          "loadFailed": "无法加载主题库。",
+          "download": "下载",
+          "update": "更新",
+          "remove": "删除",
+          "status": {
+            "available": "可供下载",
+            "installing": "正在下载...",
+            "removing": "正在删除...",
+            "custom": "已有自定义 CSS 文件使用此主题 ID",
+            "updateAvailable": "更新可用",
+            "installed": "已下载"
+          },
+          "toasts": {
+            "installed": "已下载 {theme}。",
+            "installFailed": "无法下载主题。",
+            "removed": "删除了 {theme}。",
+            "removeFailed": "无法删除主题。"
+          }
+        }
+      },
+      "toastPosition": {
+        "label": "提示消息位置",
+        "hint": "选择临时应用程序消息的显示位置。",
+        "options": {
+          "top": "顶部",
+          "bottom": "底部"
+        }
+      },
+      "background": {
+        "label": "背景图像",
+        "hint": "一张图像可以应用于应用程序区域、终端区域或两者。",
+        "pickImage": "选择图像",
+        "replace": "替换",
+        "noImage": "未选择图像",
+        "remove": "删除",
+        "applyToApp": "应用于应用程序背景",
+        "applyToTerminal": "应用于终端背景",
+        "fit": {
+          "label": "适应方式",
+          "cover": "覆盖",
+          "contain": "完整显示",
+          "tile": "平铺"
+        },
+        "opacity": {
+          "label": "不透明度",
+          "hint": "0是透明，100是不透明。"
+        },
+        "blur": "模糊",
+        "toasts": {
+          "imported": "导入的背景图像。",
+          "importFailed": "无法导入背景图像：",
+          "removed": "已删除背景图像。",
+          "removeFailed": "无法删除背景图像："
+        }
+      },
+      "sessionDisplay": {
+        "title": {
+          "label": "会话标题",
+          "hint": "哪个字段成为每个侧边栏会话行的粗体第一行。",
+          "options": {
+            "name": {
+              "label": "会话名称",
+              "description": "您为每个会话指定的可编辑名称（默认）。"
+            },
+            "workingDirectory": {
+              "label": "工作目录",
+              "description": "工作树目录基本名称。"
+            },
+            "branch": {
+              "label": "分支",
+              "description": "活动 Git 分支。"
+            }
+          }
+        },
+        "metadata": {
+          "label": "附加元数据",
+          "hint": "标题下方的辅助信息；全部关闭时只显示一行。",
+          "branch": {
+            "label": "分支",
+            "description": "活动 Git 分支。"
+          },
+          "workingDirectory": {
+            "label": "工作目录",
+            "description": "工作树目录基本名称。"
+          },
+          "status": {
+            "label": "状态",
+            "description": "空闲/正在运行/需要输入/失败/已完成。"
+          }
+        },
+        "hover": {
+          "label": "悬停时显示详细信息",
+          "hint": "将鼠标悬停在会话行上时，会弹出每个字段的工具提示，无论该行本身显示哪些字段。",
+          "checkbox": "启用悬停工具提示"
+        }
+      },
+      "statusBar": {
+        "label": "状态栏",
+        "hint": "选择底部状态栏中显示的可选徽章。",
+        "sessionActivity": {
+          "label": "会话活动",
+          "description": "未读会话活动的铃铛快捷入口。隐藏后仍可从侧边栏活动列表查看。"
+        },
+        "sessionCount": {
+          "label": "会话计数",
+          "description": "活动项目 (`sessions: N`) 上的会话总数。"
+        },
+        "activeSessionStatus": {
+          "label": "当前会话状态",
+          "description": "活动会话的生命周期状态（空闲/正在运行/需要输入/失败/已完成）。"
+        },
+        "githubAccount": {
+          "label": "GitHub 帐户",
+          "description": "用于列出活动仓库的 GitHub 数据的 `gh` 帐户。"
+        },
+        "workingDirectory": {
+          "label": "工作目录",
+          "description": "当前会话的工作树路径（相对于 $HOME 缩写显示）。"
+        },
+        "agentTokenUsage": {
+          "label": "智能体令牌用量",
+          "description": "Codex 读取本地速率限制事件；Claude 读取兼容令牌小组件的状态行捕获。显示时每分钟轮询一次。"
+        },
+        "memoryUsage": {
+          "label": "内存用量",
+          "description": "Acorn 及其子 shell 的实时内存读数。禁用还会停止 2 秒的轮询循环，因此隐藏时不会产生任何费用。"
+        }
+      }
+    },
+    "editor": {
+      "command": {
+        "label": "编辑器命令",
+        "hint": "留空则使用操作系统默认程序。仅填写已知的编辑器命令，例如 `code`、`cursor --wait`、`subl`、`idea`；文件路径会作为最后一个参数附加。",
+        "placeholder": "（使用操作系统默认值）",
+        "description": "由差异和已暂存文件列表上的“在编辑器中打开”右键单击操作使用。"
+      }
+    },
+    "notifications": {
+      "system": {
+        "label": "系统通知",
+        "hint": "当会话更改状态时，发送 macOS 通知。",
+        "enable": "启用通知"
+      },
+      "triggers": {
+        "label": "触发",
+        "waitingForInput": {
+          "label": "等待输入",
+          "description": "智能体或 shell 命令正在等待用户。"
+        },
+        "errored": {
+          "label": "错误",
+          "description": "会话遇到智能体或运行时错误。"
+        }
+      },
+      "history": {
+        "label": "通知历史记录",
+        "hint": "控制 Acorn 的应用内通知日志。这些设置不会清除操作系统传送的警报。",
+        "maxCount": "最大记录数",
+        "autoDeleteRead": {
+          "label": "自动删除已读通知",
+          "description": "当会话标签页获得焦点并且标记为已读时，从 Acorn 的历史记录中删除通知。"
+        }
+      },
+      "test": {
+        "label": "测试",
+        "hint": "验证操作系统权限以及通知是否实际出现，独立于上面的启用/触发设置。",
+        "send": "发送测试通知",
+        "sending": "正在发送...",
+        "result": {
+          "sent": "测试通知已发送。如果没有出现，请检查通知中心。",
+          "denied": "通知权限被拒绝。请在系统设置 → 通知中允许 Acorn。",
+          "failed": "无法发送测试通知。有关详细信息，请参阅控制台。"
+        }
+      },
+      "permissionHint": "macOS 第一次触发通知时可能会询问一次权限。"
+    },
+    "shortcuts": {
+      "record": "记录",
+      "cancel": "取消",
+      "recording": "按键",
+      "recordShortcut": "为 {command} 录制快捷键",
+      "cancelRecording": "取消录制 {command}",
+      "resetShortcut": "重置 {command} 的快捷键",
+      "resetAll": "重置所有快捷键",
+      "errors": {
+        "modifierOnly": "按非修饰键。",
+        "conflict": "{shortcut} 已被 {command} 使用。"
+      },
+      "groups": {
+        "general": "常规",
+        "navigation": "导航",
+        "layout": "布局",
+        "rightPanel": "右侧面板",
+        "terminal": "终端",
+        "view": "查看"
+      },
+      "items": {
+        "openPalette": {
+          "label": "打开命令面板"
+        },
+        "openSettings": {
+          "label": "打开设置"
+        },
+        "newSession": {
+          "label": "新建会话"
+        },
+        "newIsolatedSession": {
+          "label": "新建隔离会话"
+        },
+        "newControlSession": {
+          "label": "新建控制会话"
+        },
+        "addProject": {
+          "label": "添加项目"
+        },
+        "findInView": {
+          "label": "在当前视图中查找"
+        },
+        "renameItem": {
+          "label": "重命名所选项目"
+        },
+        "focusSidebar": {
+          "label": "聚焦侧边栏"
+        },
+        "focusMain": {
+          "label": "聚焦主区域"
+        },
+        "focusRight": {
+          "label": "聚焦右侧面板"
+        },
+        "nextTab": {
+          "label": "下一个标签页"
+        },
+        "prevTab": {
+          "label": "上一个标签页"
+        },
+        "focusLatestNeedsInput": {
+          "label": "最近需要输入的标签页"
+        },
+        "nextProject": {
+          "label": "下一个项目"
+        },
+        "prevProject": {
+          "label": "上一个项目"
+        },
+        "toggleSidebar": {
+          "label": "切换侧边栏"
+        },
+        "toggleRightPanel": {
+          "label": "切换右侧面板"
+        },
+        "focusPaneLeft": {
+          "label": "聚焦左侧窗格"
+        },
+        "focusPaneRight": {
+          "label": "聚焦右侧窗格"
+        },
+        "focusPaneUp": {
+          "label": "聚焦上方窗格"
+        },
+        "focusPaneDown": {
+          "label": "聚焦下方窗格"
+        },
+        "splitVertical": {
+          "label": "垂直分割窗格"
+        },
+        "splitHorizontal": {
+          "label": "水平分割窗格"
+        },
+        "equalizePanes": {
+          "label": "均衡窗格大小"
+        },
+        "closeTab": {
+          "label": "关闭当前标签页"
+        },
+        "closeEmptyPane": {
+          "label": "关闭空窗格",
+          "description": "仅当聚焦的窗格没有标签页时才有效。"
+        },
+        "toggleTodos": {
+          "label": "显示待办事项"
+        },
+        "toggleCommits": {
+          "label": "显示提交"
+        },
+        "toggleStaged": {
+          "label": "显示已暂存更改"
+        },
+        "togglePrs": {
+          "label": "显示拉取请求"
+        },
+        "toggleFiles": {
+          "label": "显示文件"
+        },
+        "clearTerminal": {
+          "label": "清除终端"
+        },
+        "previousConversation": {
+          "label": "上一个对话"
+        },
+        "nextConversation": {
+          "label": "下一个对话"
+        },
+        "toggleMultiInput": {
+          "label": "切换多输入"
+        },
+        "reloadShellEnv": {
+          "label": "重新加载 shell 环境"
+        },
+        "uiScaleDown": {
+          "label": "缩小 UI 比例"
+        },
+        "uiScaleUp": {
+          "label": "放大 UI 比例"
+        },
+        "uiScaleReset": {
+          "label": "重置 UI 比例"
+        }
+      }
+    },
+    "agents": {
+      "intro": {
+        "before": "所选智能体为 Acorn 的 AI 功能提供支持；目前用于合并对话框中的“",
+        "action": "使用 AI 生成",
+        "after": "”按钮。"
+      },
+      "agent": {
+        "label": "智能体",
+        "hint": "选择 Acorn 使用的 AI CLI。"
+      },
+      "customOption": {
+        "label": "自定义命令",
+        "description": "旧版选项。原生 AI 生成功能现在需要内置提供商。"
+      },
+      "ollamaModel": {
+        "label": "Ollama 模型",
+        "hint": "传递到 `ollama run <model>`。空白时默认为 `llama3`。"
+      },
+      "llmModel": {
+        "label": "llm 模型",
+        "hint": "通过 `llm -m <model>` 传递（会话使用 `llm chat -m <model>`）。留空则使用 llm 配置的默认值。"
+      },
+      "customCommand": {
+        "label": "自定义命令",
+        "hint": "为现有设置保留。原生 AI 生成功能需要内置提供商。"
+      },
+      "sessionTitles": {
+        "label": "会话标题",
+        "hint": "启用后，Acorn 将对话记录上下文从新的智能体会话发送到选定的 AI CLI，并用简洁的标题替换默认的标签页名称。",
+        "checkbox": "自动生成会话标题"
+      },
+      "sessionTitleSync": {
+        "label": "智能体标题同步",
+        "hint": "启用后，Acorn 会将手动设置和自动生成的终端标签页标题同步到对应的 Codex 或 Claude 对话。",
+        "checkbox": "将标题同步到 Codex 和 Claude"
+      },
+      "sessionTitlePrompt": {
+        "label": "会话标题提示词",
+        "hint": "在对话记录上下文之前发送的指令。留空则使用默认提示词。",
+        "open": "配置标题提示词",
+        "shortButton": "提示词",
+        "editorLabel": "提示词",
+        "count": "{count} / {max}",
+        "reset": "重置提示词",
+        "preview": {
+          "sample": "Acorn 示例第一条消息",
+          "generate": "生成预览",
+          "generating": "生成预览",
+          "result": "标签页",
+          "failed": "预览失败"
+        }
+      },
+      "requirement": "所选智能体的 CLI 必须已在本机上安装并经过身份验证。当可执行文件丢失时，会出现明显的错误。"
+    },
+    "storage": {
+      "title": "可回收缓存",
+      "description": "Acorn 无法通过正常会话生命周期清理的磁盘内容，例如因崩溃或 Acorn 离线期间的编辑而遗留的文件。不会触及会话、项目、设置或活动终端的回滚记录。",
+      "cacheCategories": {
+        "scrollbackOrphans": {
+          "label": "孤立的终端回滚记录",
+          "description": "已不存在的会话留下的 ANSI 回滚记录文件，例如会话在 Acorn 离线时或启动清理逻辑加入前被删除。不会触及活动会话的回滚记录，只显示可安全回收的遗留内容。"
+        }
+      },
+      "status": {
+        "clearedSingular": "已清除 {count} 缓存的文件。",
+        "clearedPlural": "已清除 {count} 缓存的文件。",
+        "nothingToClear": "没有什么需要清除的。",
+        "clearFailed": "无法清除缓存。有关详细信息，请参阅控制台。"
+      },
+      "confirm": {
+        "message": "这将永久删除上面列出的缓存数据 ({size})。继续？",
+        "cancel": "取消"
+      },
+      "clear": {
+        "button": "清除缓存",
+        "clearing": "正在清除..."
+      },
+      "total": "总计：{size}"
+    },
+    "permissions": {
+      "title": "权限",
+      "description": "重置 Acorn 的 macOS 隐私决策并立即检查受保护的文件夹，以便 macOS 可以再次询问。",
+      "notice": "当文件夹、Playwright、浏览器自动化或捕获工具因 macOS 保存了过期的权限决定而持续失败时，请使用此功能。",
+      "kind": {
+        "folder": "文件夹",
+        "developer": "Acorn",
+        "external": "外部"
+      },
+      "groups": {
+        "folders": {
+          "title": "受保护的文件夹",
+          "description": "只需短暂读取文件夹即可检查这些权限。"
+        },
+        "automation": {
+          "title": "自动化和捕获",
+          "description": "这些操作会重置 macOS 对 Acorn 的隐私授权决定。Acorn 下次使用受保护功能时，macOS 会再次询问。"
+        },
+        "browser": {
+          "title": "浏览器和 Playwright 媒体",
+          "description": "这些权限通常属于 Chrome、Chromium 或 Playwright 浏览器进程，而不是 Acorn。"
+        }
+      },
+      "list": {
+        "title": "权限区域",
+        "description": "可在此重置属于 Acorn 的权限。浏览器和 Playwright 媒体权限会单独显示，因为 macOS 将它们授予浏览器进程。"
+      },
+      "folderAccess": {
+        "label": "macOS 隐私权限",
+        "description": "重置受保护的文件夹和通用开发者工具权限的已保存 Acorn 决策，然后读取受保护的文件夹一次以显示文件夹提示。"
+      },
+      "reset": {
+        "button": "重置权限",
+        "running": "正在重置..."
+      },
+      "confirm": {
+        "message": "这将撤销 Acorn 授予的所有 macOS 权限 — 受保护的文件夹以及开发者工具权限，例如屏幕录制、辅助功能、自动化和输入监控。 macOS 下次使用每一个时都会再次询问。继续？",
+        "cancel": "取消",
+        "confirm": "重置所有权限"
+      },
+      "status": {
+        "ready": "文件夹访问权限已重置并检查。",
+        "needsAttention": "一些文件夹仍然需要注意。",
+        "empty": "在此平台上未检查受 macOS 保护的文件夹。",
+        "failed": "无法重置 macOS 权限。",
+        "checkOnReset": "检查重置",
+        "promptedByTool": "使用时提示",
+        "browserManaged": "浏览器管理",
+        "reset": "将再次询问",
+        "skipped": "仅限 macOS",
+        "resetFailed": "重置失败"
+      },
+      "items": {
+        "desktop": {
+          "label": "桌面",
+          "description": "桌面下的文件和文件夹。"
+        },
+        "documents": {
+          "label": "文档",
+          "description": "文档下的文件和文件夹。"
+        },
+        "downloads": {
+          "label": "下载",
+          "description": "下载下的文件和文件夹。"
+        },
+        "icloud": {
+          "label": "iCloud Drive",
+          "description": "iCloud Drive 下的文件和文件夹（如果存在）。"
+        },
+        "screenCapture": {
+          "label": "屏幕录制",
+          "description": "由屏幕截图、屏幕捕获和可视化自动化工具使用。"
+        },
+        "accessibility": {
+          "label": "辅助功能",
+          "description": "由检查或控制其他应用程序窗口的工具使用。"
+        },
+        "automation": {
+          "label": "自动化",
+          "description": "由控制其他应用程序的 Apple 事件和脚本使用。"
+        },
+        "inputMonitoring": {
+          "label": "输入监控",
+          "description": "由侦听键盘输入的工具使用。"
+        },
+        "appData": {
+          "label": "应用数据",
+          "description": "Acorn 读取用于历史记录、恢复候选项或项目上下文的智能体及开发者工具数据文件时使用。"
+        },
+        "camera": {
+          "label": "相机",
+          "description": "由浏览器测试或打开相机设备的工具使用。"
+        },
+        "microphone": {
+          "label": "麦克风",
+          "description": "由浏览器测试或打开音频输入设备的工具使用。"
+        },
+        "developerTools": {
+          "label": "开发者工具",
+          "description": "由附加到其他进程的调试和自动化工具使用。"
+        }
+      }
+    },
+    "experiments": {
+      "warning": "未完成的功能。不同版本之间的行为可能会发生变化；开关本身是稳定的。",
+      "stickyPrompt": {
+        "label": "将最后一个用户提示固定在终端上方",
+        "description": "检测渲染的终端缓冲区中最新的 Claude 提示行，并将其固定在窗格的顶部，以便在阅读回复时它保持在视图中。 Cmd+K 将其与回滚记录的其余部分一起清除。"
+      },
+      "cjkCellWidthHeuristic": {
+        "label": "CJK 终端单元格宽度校正",
+        "description": "针对 CJK 等宽字体（D2Coding、Sarasa Mono 等）的启发式修正：当 `W` 与 `ga` 测得宽度相同时，将单元格宽度减半，使 CJK 字形对齐网格。宽度不同时跳过，因此不会修正依赖系统 CJK 回退的 ASCII 字体。已知限制：切换标签页时可能短暂闪烁一帧，因为 xterm 调整大小时会先把 `cell.width` 重置为 W 的自然宽度，随后插件才重新应用减半值。默认关闭。"
+      },
+      "resumeModal": {
+        "label": "冷启动时显示“继续上次对话”对话框",
+        "description": "Acorn 启动时检查每个持久会话是否有未完成的 Claude 或 Codex 对话记录；聚焦会话时显示一次性对话框，便于从上次中断处继续。关闭后不再显示此对话框。"
+      },
+      "normalizeTerminalUnicodeSpaces": {
+        "label": "标准化终端输入中的 Unicode 空格",
+        "description": "将键入和粘贴的终端文本中类似 NBSP 的 Unicode 分隔符转换为常规空格，以便 shell 命令继续解析为单独的单词。关闭以在 TUI、REPL 或测试中保留文字 Unicode 空间。"
+      }
+    },
+    "about": {
+      "title": "关于 Acorn",
+      "description": "Acorn 在启动时自动检查更新，每 24 小时检查一次。您也可以在下面手动检查。",
+      "currentVersion": "当前版本",
+      "lastChecked": "上次检查",
+      "loading": "正在加载...",
+      "updateAvailable": "更新可用",
+      "updateReady": "Acorn {version} 已准备好安装。",
+      "whatsNew": "新增内容",
+      "installing": "正在安装...",
+      "installRelaunch": "安装并重新启动",
+      "whatsNewInVersion": "{version} 中的新增功能",
+      "checking": "正在检查...",
+      "checkForUpdates": "检查更新",
+      "toasts": {
+        "upToDate": "Acorn 是最新的。",
+        "updateAvailable": "Acorn {version} 可用。",
+        "checkFailed": "无法检查更新：",
+        "installFailed": "无法安装更新：",
+        "releaseNotesFailed": "无法加载发行说明："
+      },
+      "relative": {
+        "never": "从不",
+        "justNow": "刚才",
+        "minutesAgo": "{count} 分钟前",
+        "hoursAgo": "{count} 小时前",
+        "daysAgo": "{count} 天前"
+      }
+    }
+  },
+  "app": {
+    "toast": {
+      "multiInputOn": "启用多输入。",
+      "multiInputOff": "禁用多输入。",
+      "shellEnvironmentReloaded": "shell 环境已重新加载。请打开新会话以应用更改。",
+      "shellEnvironmentReloadFailed": "无法重新加载 shell 环境。"
+    }
+  },
+  "statusBar": {
+    "sessionCount": "会话：{count}",
+    "status": "状态：{status}",
+    "multiInputOn": "多输入：打开",
+    "working": "正在工作...",
+    "error": "错误：{error}",
+    "githubAccountTooltip": "PRs 通过 gh 帐户列出 {account}",
+    "workspaceView": "视图：{mode}",
+    "workspaceViewTooltip": "工作区视图",
+    "branch": "分支：{branch}",
+    "memoryTooltip": "单击查看每个进程的细分",
+    "memory": "内存：{memory}",
+    "agentTokens": "令牌：{summary}",
+    "agentTokensUnavailable": "正在加载",
+    "agentTokensNoData": "无数据",
+    "agentTokensWindowFiveHour": "5h",
+    "agentTokensWindowWeekly": "每周",
+    "agentTokensResetUnknown": "-",
+    "agentTokensRemaining": "剩余 {remaining}",
+    "agentTokensResetIn": "{reset} 后重置",
+    "agentTokensUpdated": "{time} 更新",
+    "sessionStatus": {
+      "ready": "准备就绪",
+      "working": "运行中",
+      "waitingForInput": "等待输入",
+      "errored": "错误"
+    },
+    "agentStatusSource": {
+      "hook": "原生钩子",
+      "transcript_fallback": "对话记录回退（降级）",
+      "process_fallback": "进程回退（降级）"
+    },
+    "sessionStatusReason": {
+      "turn_complete": "智能体轮次完成",
+      "shell_prompt": "检测到 shell 提示"
+    },
+    "notifications": {
+      "ariaLabel": "会话通知",
+      "tooltipEmpty": "没有未读会话通知",
+      "tooltipWithCount": "{count} 未读会话通知",
+      "title": "会话通知",
+      "unreadCount": "{count} 未读",
+      "empty": "会话状态尚未更改。",
+      "itemTitle": "{project}·{session}",
+      "kind": {
+        "waitingForInput": "等待输入",
+        "errored": "错误"
+      },
+      "actions": {
+        "markAllRead": "标记全部已读",
+        "clearRead": "清除已读",
+        "dismiss": "关闭"
+      }
+    },
+    "services": {
+      "ariaLabel": "服务状态",
+      "tooltip": {
+        "ipcLoading": "ipc：正在加载",
+        "ipcOn": "IPC：开启",
+        "ipcOff": "IPC：关闭",
+        "daemonLoading": "守护进程：正在加载",
+        "daemonDisabled": "守护进程：已禁用",
+        "daemonOn": "守护进程：打开",
+        "daemonOnWithSessions": "守护进程：开启 ({count})",
+        "daemonDown": "守护进程：已停止",
+        "detailsHint": "点击查看详情"
+      },
+      "status": {
+        "loading": "正在加载",
+        "running": "正在运行",
+        "down": "已停止",
+        "disabled": "已禁用",
+        "runningSessions": "正在运行·{count} 会话"
+      },
+      "ipc": {
+        "label": "IPC 服务器",
+        "description": "控制会话 ↔ 应用套接字"
+      },
+      "daemon": {
+        "label": "acornd 守护进程",
+        "description": "持久 PTY 会话"
+      },
+      "actions": {
+        "restart": "重新启动",
+        "restarting": "正在重新启动...",
+        "settings": "设置"
+      }
+    }
+  },
+  "workspace": {
+    "mode": {
+      "ariaLabel": "工作区查看模式",
+      "panes": "窗格",
+      "kanban": "看板",
+      "canvas": "画布"
+    },
+    "canvas": {
+      "regionLabel": "工作区画布",
+      "toolbarLabel": "画布控件",
+      "empty": "此画布上没有会话。",
+      "hint": "右键单击执行会话操作 · 拖动空白区域或使用鼠标中键拖动进行平移 · 捏合或修饰键滚动进行缩放 · Alt 跳过捕捉",
+      "showHelp": "显示画布控件帮助",
+      "sessionCountOne": "1 会话",
+      "sessionCountOther": "{count} 会话",
+      "zoomOut": "缩小",
+      "zoomIn": "放大",
+      "fit": "适合所有会话",
+      "reset": "重置会话布局",
+      "resetComplete": "会话布局重置。工具栏中可以进行撤消操作。",
+      "undoReset": "撤消重置",
+      "overviewLabel": "画布概述",
+      "overviewTitle": "概述",
+      "overviewSession": "在画布上显示 {name}",
+      "overviewHint": "使用箭头键平移画布。选择会话标记以显示它。",
+      "overviewCollapse": "折叠画布概述",
+      "overviewExpand": "展开画布概述",
+      "newSession": "新建会话",
+      "contextSession": "会话",
+      "contextCreateSession": "创建会话",
+      "contextLayout": "布局",
+      "moveSession": "移动 {name}",
+      "resizeSession": "调整 {name} 的大小",
+      "expandSession": "展开 {name}",
+      "openInPanes": "在窗格中打开 {name}",
+      "closeSession": "关闭会话",
+      "closeSessionButton": "关闭 {name}"
+    },
+    "kanban": {
+      "title": "工作区看板",
+      "empty": "此工作区中没有会话。",
+      "emptyColumn": "无会话",
+      "filterLabel": "筛选会话",
+      "filterPlaceholder": "筛选会话",
+      "newSession": "新建会话",
+      "resizeColumn": "调整 {name} 列大小",
+      "actions": {
+        "createSession": "创建会话",
+        "resetColumnSizes": "重置大小",
+        "equalizeColumnSizes": "均衡大小",
+        "newSession": "新建会话",
+        "newWorktreeSession": "新建工作树",
+        "newChatSession": "新聊天",
+        "newControlSession": "控制",
+        "markAsDone": "标记为完成",
+        "restoreFromDone": "从完成中恢复"
+      },
+      "sort": {
+        "label": "排序会话",
+        "updatedDesc": "最近更新",
+        "createdDesc": "最新",
+        "nameAsc": "名称"
+      },
+      "openSession": "打开 {name}",
+      "preview": {
+        "user": "用户",
+        "agent": "智能体"
+      },
+      "tooltip": {
+        "title": "标题",
+        "lastUserMessage": "最后的用户消息",
+        "lastAgentMessage": "最后一条智能体消息",
+        "lastMessage": "最后一条消息",
+        "noLastMessage": "没有最后一条消息",
+        "branch": "分支",
+        "detached": "（独立）",
+        "worktree": "工作树"
+      },
+      "console": {
+        "ariaLabel": "会话控制台",
+        "terminal": "终端",
+        "chat": "聊天"
+      },
+      "terminalPopover": {
+        "ariaLabel": "会话终端",
+        "expand": "展开终端",
+        "restore": "恢复终端大小",
+        "resetPosition": "重置终端位置",
+        "resetSize": "重置终端大小",
+        "resize": "调整终端大小"
+      },
+      "popover": {
+        "ariaLabel": "会话对话",
+        "userPrompt": "我的上一个提示",
+        "agentMessage": "智能体最后一条消息",
+        "emptyUser": "尚无用户提示",
+        "emptyAgent": "尚无智能体消息",
+        "messagePlaceholder": "回复此会话...",
+        "disabledPlaceholder": "打开终端以输入此会话",
+        "send": "发送",
+        "sending": "发送",
+        "openTerminal": "打开终端",
+        "sendUnavailable": "打开终端发送到此会话。",
+        "sendError": "无法发送消息。"
+      },
+      "stage": {
+        "idle": "空闲",
+        "working": "正在工作",
+        "waiting": "等待",
+        "review": "审核",
+        "done": "完成"
+      },
+      "card": {
+        "stalled": "已停止",
+        "dwellTitle": "已在此列停留 {duration}",
+        "openPullRequest": "打开拉取请求 #{number}"
+      }
+    }
+  },
+  "topBar": {
+    "noSessionSelected": "未选择会话"
+  },
+  "updateBanner": {
+    "available": "可用。该应用程序将在安装后重新启动。",
+    "whatsNew": "新增内容",
+    "installing": "正在安装...",
+    "installRelaunch": "安装并重新启动",
+    "hideUntilNextVersion": "隐藏到下一个版本",
+    "dismissError": "关闭错误提示"
+  },
+  "imageLightbox": {
+    "imagePreview": "图像预览",
+    "openInBrowser": "在浏览器中打开",
+    "close": "关闭"
+  },
+  "remoteImage": {
+    "load": "加载远程图像"
+  },
+  "mediaViewer": {
+    "zoomControls": "图像缩放控件",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "resetZoom": "重置缩放"
+  },
+  "codeViewer": {
+    "loading": "正在加载...",
+    "binaryFile": "二进制文件",
+    "binaryFileBody": "{bytes} 字节 - 未显示在只读查看器中。",
+    "truncated": "文件被截断为 2 MB。外部打开即可查看其余内容。",
+    "showPreview": "预览",
+    "showSource": "源码",
+    "findInFile": "在文件中查找",
+    "findControls": "查找控件",
+    "findPrompt": "查找",
+    "noMatches": "没有匹配项",
+    "matchCount": "{current}/{total}",
+    "previousMatch": "上一个匹配项",
+    "nextMatch": "下一个匹配项",
+    "closeFind": "关闭查找"
+  },
+  "fileDropHover": {
+    "previewTitle": "拖放到预览",
+    "terminalTitle": "放入终端",
+    "tabTitle": "拖放打开标签页",
+    "previewHint": "在窗格中打开这个文件。",
+    "terminalHint": "插入文件路径。",
+    "tabHint": "将此文件作为标签页打开。"
+  },
+  "diffView": {
+    "noChanges": "此差异中没有更改。",
+    "filesChanged": "{count} 文件已更改",
+    "filesCount": "{count} 文件",
+    "expandAll": "全部展开",
+    "collapseAll": "全部折叠",
+    "openFullDiff": "打开完整的差异",
+    "openInEditor": "在编辑器中打开",
+    "image": "图像",
+    "selectImageToLoad": "选择图像文件以加载其预览。",
+    "loadingImage": "正在加载图像预览...",
+    "imageLoadFailed": "无法加载图像预览",
+    "binaryImageNoPreview": "二进制图像更改（无法预览）",
+    "none": "（无）",
+    "imageLabels": {
+      "added": "已添加",
+      "deleted": "已删除",
+      "before": "之前",
+      "after": "之后"
+    }
+  },
+  "ui": {
+    "openGitHubProfile": "打开 GitHub 配置文件",
+    "stepper": {
+      "decrease": "减少",
+      "increase": "增加",
+      "value": "值"
+    },
+    "commandHint": {
+      "title": "单击复制或运行"
+    }
+  },
+  "sidebar": {
+    "status": {
+      "ready": "就绪",
+      "working": "正在工作",
+      "waiting_for_input": "等待输入",
+      "errored": "错误"
+    },
+    "statusReason": {
+      "turn_complete": "智能体轮次完成",
+      "shell_prompt": "检测到 shell 提示"
+    },
+    "dialog": {
+      "selectExistingProject": "选择现有的项目",
+      "selectIsolatedRepository": "选择 Git 仓库 (隔离工作树)",
+      "selectControlDirectory": "选择目录（控制会话）",
+      "selectDirectory": "选择目录"
+    },
+    "projects": {
+      "title": "项目",
+      "newProject": "新建项目",
+      "addExistingProject": "添加现有项目"
+    },
+    "actions": {
+      "dragToReorder": "拖动以重新排序",
+      "expandProject": "展开项目",
+      "collapseProject": "折叠项目",
+      "expandProjectFolder": "展开工作区",
+      "collapseProjectFolder": "折叠工作区",
+      "newSession": "新建会话",
+      "newIsolatedSession": "新建隔离会话",
+      "newIsolatedSessionWorktree": "新建工作树会话",
+      "newChatSession": "新聊天会话",
+      "newAutonomousGoalSession": "新建目标会话",
+      "newControlSession": "新建控制会话",
+      "newProjectFolder": "新建工作区",
+      "newProjectFolderWithWorktree": "新建工作树工作区",
+      "createWorkspaceFromWorktree": "从工作树创建工作区",
+      "renameProjectFolder": "重命名工作区",
+      "removeProjectFolder": "删除工作区",
+      "moveToProjectFolder": "移至",
+      "moveToProjectRoot": "项目根目录",
+      "projectSettings": "项目设置",
+      "closeProject": "关闭项目",
+      "revealInFinder": "在 Finder 中显示",
+      "copy": "复制",
+      "copyPath": "复制路径",
+      "rename": "重命名",
+      "regenerateName": "重新生成名称",
+      "openWorkSummary": "打开工作摘要",
+      "silenceNotifications": "静音通知",
+      "resumeNotifications": "恢复通知",
+      "forkClaudeSession": "派生 Claude 会话",
+      "forkSession": "派生会话",
+      "forkClaudeInNewWorktree": "在新工作树中派生 Claude",
+      "forkInNewWorktree": "在新工作树中派生",
+      "forkCodexSession": "派生 Codex 会话",
+      "forkCodexInNewWorktree": "在新工作树中派生 Codex",
+      "forkAntigravitySession": "派生 Antigravity 会话",
+      "forkAntigravityInNewWorktree": "在新工作树中派生 Antigravity",
+      "equalizePaneSizes": "均衡窗格大小",
+      "openWorktreeInEditor": "在编辑器中打开工作树",
+      "worktreePath": "工作树路径",
+      "transcriptPath": "对话记录路径",
+      "worktreeName": "工作树名称",
+      "branchName": "分支名称",
+      "sessionId": "会话 ID",
+      "copyWorktreePath": "复制工作树路径",
+      "copyTranscriptPath": "复制对话记录路径",
+      "remove": "删除",
+      "removeSession": "删除会话",
+      "removeSessionMenu": "删除会话"
+    },
+    "contextMenu": {
+      "session": "会话",
+      "fork": "派生",
+      "workspace": "工作区",
+      "project": "项目",
+      "open": "打开",
+      "copy": "复制",
+      "danger": "危险"
+    },
+    "aria": {
+      "project": "项目",
+      "dragToReorderProject": "拖动以重新排序项目",
+      "newSessionMenuInProject": "在此项目中创建会话",
+      "newSessionMenuInProjectFolder": "在此工作区中创建会话",
+      "newSessionInProject": "此项目中的新会话",
+      "newSessionInProjectFolder": "此工作区中的新会话",
+      "newAutonomousGoalSession": "新建目标会话",
+      "newIsolatedSessionInProject": "此项目中的新工作树会话",
+      "newChatSessionInProject": "此项目中的新聊天会话",
+      "newControlSessionInProject": "此项目中的新控制会话",
+      "goalSession": "目标会话",
+      "dragToReorderSession": "拖动以重新排序会话",
+      "localTerminalSessions": "本地终端会话",
+      "worktree": "工作树",
+      "controlSession": "控制会话",
+      "chatSession": "聊天会话",
+      "generatingSessionTitle": "生成会话标题",
+      "notificationsSilenced": "通知已静音"
+    },
+    "localTerminals": {
+      "title": "即时会话",
+      "newSession": "新建即时会话",
+      "newWorkspace": "新建工作区",
+      "empty": "双击启动即时会话。"
+    },
+    "activity": {
+      "ariaLabel": "会话活动",
+      "title": "活动",
+      "unreadCount": "{count} 未读",
+      "readCount": "{count} 已读",
+      "empty": "尚无会话活动",
+      "itemTitle": "{project}·{session}",
+      "kind": {
+        "waitingForInput": "等待输入",
+        "errored": "错误"
+      },
+      "actions": {
+        "markAllRead": "标记全部已读",
+        "clearRead": "清除已读",
+        "resize": "调整活动面板大小",
+        "dismiss": "关闭"
+      }
+    },
+    "emptyProject": {
+      "createSession": "双击启动会话。"
+    },
+    "emptyProjectFolder": {
+      "noSessions": "无会话"
+    },
+    "emptyProjects": {
+      "openProject": "单击可打开项目。"
+    },
+    "metadata": {
+      "name": "名称",
+      "branch": "分支",
+      "detached": "（独立）",
+      "workingDirectory": "工作目录",
+      "openPullRequest": "打开 PR",
+      "processes": "进程",
+      "status": "状态",
+      "kind": "类型",
+      "controlSession": "控制会话",
+      "isolatedWorktree": "隔离工作树"
+    }
+  },
+  "chat": {
+    "goalSession": {
+      "label": "项目目标",
+      "revision": "修订",
+      "edit": "编辑目标",
+      "pauseAndEdit": "暂停和编辑"
+    }
+  },
+  "pane": {
+    "empty": {
+      "dropTabOrDoubleClick": "将标签页拖放到此处或双击启动会话",
+      "createProject": "创建项目开始。双击此处。"
+    },
+    "aria": {
+      "worktree": "工作树",
+      "controlSession": "控制会话",
+      "chatSession": "聊天会话",
+      "goalSession": "目标会话",
+      "workSummary": "工作总结",
+      "generatingSessionTitle": "生成会话标题",
+      "notificationsSilenced": "通知已静音",
+      "closeSession": "关闭会话",
+      "closeTab": "关闭标签页"
+    },
+    "contextMenu": {
+      "session": "会话",
+      "fork": "派生",
+      "layout": "布局",
+      "open": "打开",
+      "copy": "复制",
+      "close": "关闭"
+    },
+    "menu": {
+      "rename": "重命名",
+      "regenerateName": "重新生成名称",
+      "openWorkSummary": "打开工作摘要",
+      "silenceNotifications": "静音通知",
+      "resumeNotifications": "恢复通知",
+      "forkClaudeSession": "派生 Claude 会话",
+      "forkSession": "派生会话",
+      "forkClaudeInNewWorktree": "在新工作树中派生 Claude",
+      "forkInNewWorktree": "在新工作树中派生",
+      "forkCodexSession": "派生 Codex 会话",
+      "forkCodexInNewWorktree": "在新工作树中派生 Codex",
+      "forkAntigravitySession": "派生 Antigravity 会话",
+      "forkAntigravityInNewWorktree": "在新工作树中派生 Antigravity",
+      "splitRight": "向右拆分",
+      "splitDown": "向下拆分",
+      "equalizePaneSizes": "均衡窗格大小",
+      "openWorktreeInEditor": "在编辑器中打开工作树",
+      "openFileInEditor": "在编辑器中打开文件",
+      "revealInFinder": "在 Finder 中显示",
+      "copy": "复制",
+      "worktreePath": "工作树路径",
+      "filePath": "文件路径",
+      "worktreeName": "工作树名称",
+      "fileName": "文件名称",
+      "branchName": "分支名称",
+      "sessionId": "会话 ID",
+      "copyWorktreePath": "复制工作树路径",
+      "copyWorktreeName": "复制工作树名称",
+      "close": "关闭",
+      "closeOthers": "关闭其他",
+      "closeAll": "全部关闭",
+      "newSessionInThisPane": "在此窗格中新建会话",
+      "newGoalSessionInThisPane": "在此窗格中新建目标会话",
+      "closePane": "关闭窗格"
+    }
+  },
+  "workSummary": {
+    "title": "工作摘要",
+    "refresh": "刷新摘要",
+    "loading": "正在加载...",
+    "notAvailable": "N/A",
+    "metrics": {
+      "files": "已更改文件",
+      "lines": "行增量",
+      "messages": "消息",
+      "tokens": "令牌"
+    },
+    "values": {
+      "files": "{count} 文件",
+      "messages": "{count} 消息",
+      "turns": "{count} 轮",
+      "tokens": "{count} 令牌"
+    },
+    "metadata": {
+      "scope": "范围",
+      "session": "会话",
+      "branch": "分支",
+      "status": "状态",
+      "mode": "模式",
+      "transcript": "对话记录",
+      "transcriptProvider": "对话记录提供商",
+      "transcriptPath": "对话记录路径",
+      "copyTranscriptPath": "复制对话记录路径",
+      "updated": "已更新"
+    },
+    "files": {
+      "title": "已更改文件",
+      "empty": "没有工作树更改",
+      "huge": "显示第一个 {limit} 文件",
+      "openFile": "打开 {path}"
+    },
+    "details": {
+      "title": "详细信息"
+    },
+    "conversation": {
+      "title": "对话",
+      "user": "用户",
+      "assistant": "助手",
+      "recentMessages": "最近消息",
+      "turns": "轮次",
+      "completeTurns": "已完成轮次",
+      "runningTurns": "进行中轮次",
+      "terminalHint": "对话计数可用于原生聊天会话。"
+    },
+    "tokens": {
+      "title": "令牌用量",
+      "empty": "尚无可用的令牌用量元数据。",
+      "input": "输入",
+      "output": "输出",
+      "cache": "缓存",
+      "reasoning": "推理",
+      "start": "开始",
+      "current": "当前",
+      "sinceStart": "自启动以来",
+      "sessionUsed": "本会话已用",
+      "summaryStart": "摘要开始",
+      "sinceSummary": "自摘要以来",
+      "fromMessages": "来自 {count} 条助手消息"
+    },
+    "charts": {
+      "title": "更改细分"
+    },
+    "status": {
+      "added": "已添加",
+      "clean": "无更改",
+      "conflicted": "冲突",
+      "deleted": "已删除",
+      "modified": "已修改",
+      "renamed": "已重命名"
+    }
+  },
+  "rightPanel": {
+    "groups": {
+      "code": "代码",
+      "github": "GitHub",
+      "agents": "智能体"
+    },
+    "tabs": {
+      "files": "文件",
+      "todos": "待办事项",
+      "commits": "提交",
+      "staged": "已暂存",
+      "prs": "PRs",
+      "issues": "议题",
+      "activity": "活动",
+      "history": "历史记录",
+      "actions": "操作"
+    },
+    "empty": {
+      "noTodos": "此会话中没有待办事项",
+      "noProject": "未选择项目"
+    },
+    "todos": {
+      "doneCount": "{completed}/{total} 完成",
+      "inProgressCount": "{count} 正在进行中"
+    },
+    "activity": {
+      "unreadCount": "{count} 未读",
+      "readCount": "{count} 已读",
+      "empty": "尚无会话活动",
+      "itemTitle": "{project}·{session}",
+      "kind": {
+        "waitingForInput": "等待输入",
+        "errored": "错误"
+      },
+      "actions": {
+        "markAllRead": "标记全部已读",
+        "clearRead": "清除已读",
+        "dismiss": "关闭"
+      }
+    },
+    "loading": {
+      "more": "正在加载更多...",
+      "moreLower": "正在加载更多...",
+      "diffLower": "正在加载差异..."
+    },
+    "tooltips": {
+      "copySha": "复制 SHA",
+      "openOnGitHub": "在 GitHub 上打开"
+    },
+    "commits": {
+      "pushed": "已推送",
+      "notPushed": "未推送",
+      "selectToSeeDiff": "选择提交以查看差异"
+    },
+    "history": {
+      "loading": "扫描智能体会话…",
+      "count": "{count} 智能体会话",
+      "filterByAgent": "按智能体过滤",
+      "allAgents": "全部智能体",
+      "codex": "Codex",
+      "claude": "Claude",
+      "antigravity": "Antigravity",
+      "empty": "找不到此项目的 Claude、Codex 或 Antigravity 会话",
+      "emptyForFilter": "没有会话与此过滤器匹配。",
+      "runSession": "在新终端中运行",
+      "runInWorktree": "在工作树中运行",
+      "copyResume": "复制恢复命令",
+      "copyTranscriptPath": "复制对话记录路径",
+      "copyWorktreePath": "复制工作树路径",
+      "moveTranscriptToTrash": "将对话记录移至垃圾箱...",
+      "worktreeMissing": "缺失",
+      "worktreeUnavailable": "工作树不再可用。",
+      "worktreeFallback": "该工作树不再可用，已改为从项目根目录继续。",
+      "worktreeRunTitle": "在工作树中运行",
+      "worktreeRunBody": "已在工作树 {name} 中启动恢复的会话。",
+      "worktreeRunConfirm": "确定",
+      "trashTranscriptTitle": "将对话记录移至垃圾箱？",
+      "trashTranscriptBody": "这会将原始智能体对话记录 JSONL 移至操作系统垃圾箱。此历史记录项可能无法再恢复，但文件通常可从垃圾箱还原。",
+      "trashTranscriptCancel": "取消",
+      "trashTranscriptConfirm": "移至垃圾箱",
+      "resumeSessionName": "恢复",
+      "recoverableSignal": "可恢复内容：{items}",
+      "recoverableQueued": "{count} 排队消息",
+      "subagentCount": "子智能体·{count}",
+      "subagentCountTruncated": "子智能体·{count}+",
+      "createFailed": "无法创建终端会话"
+    },
+    "staged": {
+      "empty": "无已暂存或修改后的文件",
+      "workingTreeChanges": "工作树更改",
+      "noDiff": "无差异"
+    },
+    "errors": {
+      "deletedFile": "文件已删除；没有什么可打开的。",
+      "notGitHubRemote": "此仓库的源远程仓库不在 GitHub 上。",
+      "originNotGitHub": "源远程仓库不是 GitHub 仓库。",
+      "noAccessToSlug": "无法访问 {slug}。"
+    },
+    "menu": {
+      "expandDiff": "展开差异",
+      "viewOnGitHub": "在 GitHub 上查看",
+      "copyShaWithValue": "复制 SHA ({sha})",
+      "openInEditor": "在编辑器中打开",
+      "copyRelativePath": "复制相对路径",
+      "copyAbsolutePath": "复制绝对路径",
+      "openDetail": "打开详细信息",
+      "openInBrowser": "在浏览器中打开",
+      "openSession": "打开会话",
+      "openSessionWithName": "打开会话 ({name})",
+      "copyPrNumber": "复制 PR 编号",
+      "copyIssueNumber": "复制议题编号",
+      "copyUrl": "复制 URL",
+      "copyBranchWithValue": "复制分支 ({branch})",
+      "merge": "合并...",
+      "close": "关闭..."
+    },
+    "prStates": {
+      "open": "打开",
+      "closed": "已关闭",
+      "merged": "已合并",
+      "all": "全部",
+      "draft": "DRAFT"
+    },
+    "issueStates": {
+      "open": "打开",
+      "closed": "已关闭",
+      "all": "全部"
+    },
+    "prs": {
+      "emptyByState": "没有{state}的拉取请求。",
+      "reachedMax": "显示前 {count} 项。使用搜索查找更早的 PR。"
+    },
+    "issues": {
+      "emptyByState": "没有{state}的议题。",
+      "reachedMax": "显示前 {count} 项。使用搜索查找更早的议题。"
+    },
+    "search": {
+      "aria": "搜索拉取请求",
+      "placeholder": "搜索标题、作者、标签、分支……",
+      "searching": "正在搜索...",
+      "typeToSearch": "键入以搜索拉取请求。",
+      "noGhAccessThisRepo": "没有已登录的 gh 帐户可访问此仓库。",
+      "noMatches": "没有匹配的拉取请求。",
+      "reachedMax": "显示前 {count} 项。请优化查询以查找更早的 PR。"
+    },
+    "issueSearch": {
+      "aria": "搜索议题",
+      "placeholder": "搜索标题、作者、标签……",
+      "searching": "正在搜索...",
+      "typeToSearch": "键入以搜索议题。",
+      "noGhAccessThisRepo": "没有已登录的 gh 帐户可访问此仓库。",
+      "noMatches": "没有匹配的议题。",
+      "reachedMax": "显示前 {count} 项。请优化查询以查找更早的议题。"
+    },
+    "actions": {
+      "filterByWorkflow": "按工作流过滤",
+      "allWorkflows": "全部工作流",
+      "noRuns": "尚未运行工作流。",
+      "noRunsForFilter": "没有运行与此过滤器匹配。",
+      "workflowRun": "工作流运行",
+      "workflowRunFallbackTitle": "{workflow} 运行",
+      "doubleClickDetails": "双击查看详细信息",
+      "retryAttempt": "重试 #{attempt}",
+      "github": "GitHub",
+      "status": "状态",
+      "totalDuration": "总持续时间",
+      "runningParenthetical": "（运行）",
+      "attempt": "尝试",
+      "retriedParenthetical": "（重试）",
+      "commit": "提交",
+      "created": "已创建",
+      "updated": "已更新",
+      "jobsCount": "作业 ({count})",
+      "noJobs": "未报告作业。",
+      "openJobOnGitHub": "在 GitHub 上打开作业"
+    },
+    "checks": {
+      "allPassed": "所有 {count} 检查均已通过",
+      "allFailed": "所有 {count} 检查失败",
+      "summary": "{passed} 通过，{failed} 失败，{pending} 待定"
+    },
+    "noAccess": {
+      "noGhAccountCanAccess": "没有已登录的 gh 帐户可访问 {slug}。",
+      "tried": "尝试过：",
+      "noAccounts": "没有针对 github.com 进行身份验证的帐户。",
+      "run": "运行",
+      "withAccess": "使用具有访问权限的帐户，或接受 github.com 上的邀请。"
+    },
+    "time": {
+      "secondsAgo": "{count}s 前",
+      "minutesAgo": "{count}m 前",
+      "hoursAgo": "{count}h 前",
+      "daysAgo": "{count}d 前",
+      "monthsAgo": "{count} 个月前",
+      "yearsAgo": "{count} 年前"
+    },
+    "duration": {
+      "seconds": "{count}s",
+      "minutes": "{count}m",
+      "minutesSeconds": "{minutes}m {seconds}s",
+      "hours": "{count}h",
+      "hoursMinutes": "{hours}h {minutes}m"
+    }
+  },
+  "fileExplorer": {
+    "defaults": {
+      "sessionName": "会话"
+    },
+    "errorBanner": {
+      "dismiss": "关闭错误提示"
+    },
+    "errors": {
+      "clipboardWriteFailed": "剪贴板写入失败",
+      "noActiveProject": "没有活动项目",
+      "noActiveSession": "没有活动的会话 - 首先打开终端"
+    },
+    "menu": {
+      "attachAllToConversation": "将全部附加到对话",
+      "attachToClaude": "附加到 Claude",
+      "attachToCodex": "附加到 Codex",
+      "attachToAntigravity": "附加到 Antigravity",
+      "copyAbsolutePath": "复制绝对路径",
+      "copyAbsolutePaths": "复制绝对路径",
+      "copyRelativePath": "复制相对路径",
+      "copyRelativePaths": "复制相对路径",
+      "moveToTrash": "移至垃圾箱",
+      "openIn": "打开方式",
+      "openInNewTab": "在新标签页中打开",
+      "openWithDefaultProgram": "使用默认程序打开",
+      "rename": "重命名",
+      "revealInFileManager": "在文件管理器中显示"
+    },
+    "search": {
+      "close": "关闭 (Esc)",
+      "closeSearch": "关闭搜索",
+      "excludePlaceholder": "例如 node_modules、*.lock",
+      "filesToExclude": "要排除的文件",
+      "filesToInclude": "要包含的文件",
+      "includePlaceholder": "例如*.ts、*.tsx",
+      "matchCase": "区分大小写",
+      "regexPlaceholder": "正则表达式...",
+      "searchFilesPlaceholder": "搜索文件",
+      "toggleRegex": "切换正则表达式",
+      "useRegularExpression": "使用正则表达式"
+    },
+    "toolbar": {
+      "closeSearch": "关闭搜索",
+      "hideDotfiles": "隐藏点文件",
+      "hideGitignored": "隐藏被 Git 忽略的文件",
+      "search": "搜索 (⌘F)",
+      "showDotfiles": "显示点文件",
+      "showGitignored": "显示被 Git 忽略的文件"
+    },
+    "tree": {
+      "empty": "（空）",
+      "gitStatus": "Git 状态",
+      "loading": "正在加载...",
+      "renameInput": "重命名条目"
+    }
+  },
+  "dialogs": {
+    "common": {
+      "cancel": "取消",
+      "close": "关闭",
+      "copy": "复制",
+      "dontShowAgain": "不再显示此内容",
+      "gotIt": "明白了"
+    },
+    "autonomousGoal": {
+      "title": "新建目标会话",
+      "subtitle": "向此项目添加持久的目标会话，并让选定的智能体在隔离工作树中工作。",
+      "editTitle": "编辑项目目标",
+      "editSubtitle": "暂停活动工作，保存修改后的目标，然后重新计划并继续当前策略。",
+      "projectScopeRequired": "目标会话必须在项目内创建。",
+      "selectRepository": "为自主目标选择 Git 仓库",
+      "sections": {
+        "goalTitle": "定义结果",
+        "goalDescription": "为智能体提供持久的任务说明。只添加会实质改变完成定义的细节。",
+        "executionTitle": "选择 Acorn 的运行方式",
+        "executionDescription": "设置随此会话保存的审批边界、智能体、模型和推理强度路由。"
+      },
+      "goal": {
+        "label": "目标",
+        "hint": "必填。描述您希望达成的结果，而不是选择某个议题。",
+        "placeholder": "例如：为命令面板添加键盘导航并通过测试验证。"
+      },
+      "completionCriteria": {
+        "label": "完成标准",
+        "placeholder": "工作完成后必须满足什么条件？"
+      },
+      "constraints": {
+        "label": "约束",
+        "placeholder": "要保留的 API、要避免的文件、兼容性要求..."
+      },
+      "tests": {
+        "label": "测试",
+        "placeholder": "命令或应验证的行为"
+      },
+      "optionalFieldHint": "可选 — 省略的细节由智能体推断。",
+      "provider": {
+        "label": "智能体",
+        "hint": "提供商对于此会话保持固定；没有自动回退。",
+        "capabilityLoading": "检查 CLI 功能...",
+        "available": "CLI 可用",
+        "unavailable": "CLI 不可用"
+      },
+      "tabs": {
+        "label": "目标执行设置",
+        "policy": "策略",
+        "model": "智能体和模型"
+      },
+      "model": {
+        "singleModel": "每个阶段使用一个模型",
+        "singleModelHint": "默认启用。关闭后可为七个目标阶段分别配置模型。",
+        "modelLabel": "模型",
+        "effortLabel": "推理强度",
+        "agentDefault": "默认",
+        "customModel": "自定义模型...",
+        "customModelPlaceholder": "模型 ID 或别名",
+        "chooseDiscoveredModel": "从发现的模型中选择",
+        "searchModels": "搜索模型",
+        "loadingCapabilities": "正在从已安装的智能体 CLI 加载模型和推理强度级别...",
+        "agentUnavailable": "未找到此智能体 CLI。您仍然可以保存自定义模型，但在 CLI 可用之前，目标无法运行。",
+        "codexCapabilities": "已从 Codex app-server 加载 {count} 个模型及其支持的推理强度级别。",
+        "claudeCapabilities": "已加载 Claude CLI 提供的别名和推理强度级别。完整模型 ID 请使用自定义模型。",
+        "capabilityFallback": "无法加载 CLI 模型目录。默认值和自定义模型值仍然可用。",
+        "allStages": "所有阶段",
+        "snapshotHint": "所选的智能体和模型预设与此目标会话一起保存为快照。默认值让选定的智能体 CLI 选择其当前默认值。"
+      },
+      "modelPreset": {
+        "label": "智能体和模型预设",
+        "hint": "内置项为只读。添加或复制槽位以自定义智能体、模型和推理强度路由。",
+        "currentSession": "当前会话设置",
+        "builtInReadonly": "此内置预设无法更改。复制它以制作可编辑的副本。",
+        "currentSessionReadonly": "当前会话设置不是可重用的预设。选择或创建预设来替换它们。"
+      },
+      "modelPresets": {
+        "codexDefault": "Codex·智能体默认",
+        "claudeDefault": "Claude·智能体默认",
+        "builtIn": "内置·只读",
+        "custom": "自定义预设",
+        "customDefault": "模型预设",
+        "customEmpty": "尚无自定义预设",
+        "customEmptyHint": "创建或复制预设以添加可编辑槽位。"
+      },
+      "preset": {
+        "label": "策略预设",
+        "hint": "内置项为只读。添加或复制槽位以进行自定义。",
+        "add": "新建预设",
+        "duplicate": "重复",
+        "delete": "删除",
+        "name": "预设名称",
+        "currentSession": "当前会话策略",
+        "builtInReadonly": "此内置预设无法更改。复制它以制作可编辑的副本。",
+        "currentSessionReadonly": "当前的会话策略已被快照，并且不是可重用的预设。选择或创建一个预设来替换它。",
+        "snapshotHint": "会话接收快照。稍后重命名、编辑或删除此预设不会更改正在运行的会话。"
+      },
+      "presets": {
+        "review": "以评论为中心",
+        "balanced": "平衡",
+        "fullAutonomy": "完全自主",
+        "builtIn": "内置·只读",
+        "builtInSeparator": "上面内置·只读",
+        "custom": "自定义预设",
+        "customDefault": "自定义预设",
+        "customEmpty": "尚无自定义预设",
+        "customEmptyHint": "创建或复制预设以添加可编辑槽位。",
+        "copySuffix": "复制"
+      },
+      "stages": {
+        "plan": "计划",
+        "implementation": "实现",
+        "validation": "验证",
+        "autoFix": "自动修复",
+        "selfReview": "自我审查",
+        "openPr": "打开 PR",
+        "merge": "合并"
+      },
+      "policies": {
+        "auto": "自动",
+        "approval": "先询问",
+        "disabled": "已禁用"
+      },
+      "prototypeNotice": "此目标会立即在新的隔离工作树中启动。每个阶段遵循所选策略和模型。“打开 PR”可推送并创建可供审核的拉取请求；“合并”会等待所需 CI，并遵循自身审批策略。部署、发布和版本发布仍处于禁用状态。",
+      "revisionNotice": "打开此编辑器会暂停当前工作。保存后，此修订将成为当前目标，Acorn 会按所选策略重新规划并继续。",
+      "footerHint": "启动后会创建会话并立即提交此目标。",
+      "editFooterHint": "当前预设快照保持不变，除非您选择另一个预设。",
+      "start": "启动目标",
+      "starting": "正在创建工作树...",
+      "saveAndReplan": "保存并继续",
+      "replanning": "正在保存修订..."
+    },
+    "removeSession": {
+      "title": "删除会话",
+      "confirmPrefix": "删除会话",
+      "isolatedWorktree": "这是隔离工作树：",
+      "linkedWorktree": "此会话使用链接的 Git 工作树：",
+      "ownedSessionsWillBeRemovedPrefix": "这也将删除",
+      "ownedSessionsWillBeRemovedSuffix": "个由控制会话创建的会话。",
+      "deleteWorktreeQuestion": "仅删除会话，还是同时从磁盘中删除工作树？",
+      "filesIn": "以下位置中的文件",
+      "willNotBeTouched": "不会受到影响。",
+      "keepSharedWorktree": "此工作树由工作区共享，并将保留在磁盘上。",
+      "dontAskAgain": "不要再询问（在设置 → 会话中切换）",
+      "autoDeleteIsolatedWorktreesNextTime": "删除独立的隔离工作树，下次无需询问",
+      "keepWorktree": "仅删除",
+      "deleteWorktree": "删除会话和工作树",
+      "remove": "删除"
+    },
+    "runningSessionClose": {
+      "title": "关闭工作会话？",
+      "message": "此会话仍在工作。关闭它将终止活动的 shell 或智能体进程。",
+      "sessionLabel": "会话",
+      "dontWarnAgain": "不再警告（在设置 → 会话中切换）",
+      "continue": "关闭会话"
+    },
+    "commentDraftDiscard": {
+      "title": "放弃评论草稿？",
+      "message": "您有一条未发送的评论。关闭此视图将丢弃它。",
+      "keepEditing": "继续编辑",
+      "discard": "放弃"
+    },
+    "githubComment": {
+      "edit": "编辑评论",
+      "delete": "删除评论",
+      "editAriaLabel": "编辑评论",
+      "save": "保存",
+      "saving": "正在保存...",
+      "cancel": "取消",
+      "updateFailed": "无法更新评论：",
+      "deleteTitle": "删除评论？",
+      "deleteMessage": "该评论将从GitHub中删除。这无法撤消。",
+      "deleteConfirm": "删除",
+      "deleting": "正在删除...",
+      "deleteFailed": "无法删除评论："
+    },
+    "removeProject": {
+      "title": "关闭项目",
+      "confirmPrefix": "关闭项目",
+      "sessionSingular": "会话",
+      "sessionPlural": "会话",
+      "willBeRemoved": "将被删除",
+      "isolatedWorktreeSingular": "隔离工作树",
+      "isolatedWorktreePlural": "隔离工作树",
+      "linkedWorktreeSingular": "链接工作树",
+      "linkedWorktreePlural": "链接工作树",
+      "closeKeepWorktrees": "关闭·保留工作树",
+      "closeDeleteWorktrees": "关闭·删除工作树",
+      "closeProject": "关闭项目"
+    },
+    "removeProjectFolder": {
+      "title": "删除工作区",
+      "confirmPrefix": "删除工作区",
+      "sessionSingular": "会话",
+      "sessionPlural": "会话",
+      "sessionsWillBeRemoved": "将使用此工作区从 Acorn 中删除。",
+      "worktreeSessionsWillBeRemovedOnly": "工作树工作区会话将仅从 Acorn 中删除。",
+      "emptyFolder": "此工作区没有会话。",
+      "filesWillNotBeTouched": "文件和工作树不会被删除。",
+      "worktreesWillBeDeleted": "独立隔离会话也将从磁盘中删除其工作树。",
+      "worktreeWorkspacePath": "此工作区使用链接的 Git 工作树：",
+      "deleteWorkspaceWorktreeQuestion": "还要从磁盘中删除此工作树吗？",
+      "sharedWorktreeWillBeKept": "工作区工作树将保留在磁盘上。",
+      "rememberDeleteWorktree": "删除空工作树工作区目录之前询问",
+      "removeFolder": "删除工作区",
+      "keepWorktree": "保留工作树",
+      "deleteWorktree": "删除工作树",
+      "removeWithSessions": "连同会话一起删除"
+    },
+    "projectSettings": {
+      "title": "项目设置",
+      "tabs": {
+        "general": "常规",
+        "pullRequests": "拉取请求",
+        "worktrees": "工作树"
+      },
+      "general": "常规",
+      "generalHint": "项目身份和持久性行为。",
+      "pullRequests": "拉取请求",
+      "pullRequestsHint": "项目特定的默认值为拉取请求工作流。",
+      "worktrees": "工作树",
+      "worktreesHint": "为此项目注册的链接 Git 工作树。",
+      "generationPrompt": "生成 PR 标题、评论和合并消息的提示词",
+      "generationPromptHint": "当 Acorn 要求选定的 AI CLI 生成此项目的拉取请求标题、审阅注释或合并消息时使用。",
+      "generationPromptPlaceholder": "示例：使用标准 GitHub 风格的拉取请求合并消息，包含 Conventional Commit 主题和简洁、突出影响的正文。",
+      "promptCount": "{count} / {max}",
+      "rememberAfterClose": "关闭此项目后保留项目设置",
+      "rememberAfterCloseHint": "禁用后，当您关闭项目时，Acorn 会删除此项目保存的设置。",
+      "loadingWorktrees": "正在加载工作树...",
+      "noWorktrees": "此项目没有链接的工作树。",
+      "lastModified": "上次修改",
+      "lastModifiedUnknown": "上次修改未知",
+      "usedBySession": "由 1 会话使用",
+      "usedBySessions": "由 {count} 会话使用",
+      "removeWorktree": "删除",
+      "removeWorktreeAria": "删除 {name} 工作树",
+      "removeWorktreeBlockedByOtherSessions": "在删除之前关闭使用此工作树的其他会话。",
+      "confirmRemoveDialog": "删除工作树",
+      "confirmRemoveTitle": "删除 {name}？",
+      "confirmRemoveBody": "这会从磁盘删除链接的 Git 工作树目录。使用它的会话可能需要从主项目重新打开。",
+      "confirmRemoveInUseBody": "此工作树由 {count} 会话使用。删除它将关闭那些会话，将它们从侧边栏中删除，并从磁盘中删除链接的 Git 工作树。",
+      "sessionsToRemoveSingular": "1 会话将被删除",
+      "sessionsToRemovePlural": "{count} 会话将被删除",
+      "cancelRemove": "取消",
+      "deletingWorktree": "正在删除...",
+      "deleteWorktree": "删除工作树",
+      "deleteWorktreeAndSessions": "删除会话并删除工作树",
+      "loadWorktreesFailed": "无法加载工作树：",
+      "removeWorktreeFailed": "无法删除工作树：",
+      "saving": "正在保存...",
+      "save": "保存"
+    },
+    "newProject": {
+      "title": "新建项目",
+      "subtitle": "创建 Git 仓库并将其添加到 Acorn",
+      "projectNameLabel": "项目名称",
+      "projectNameHint": "使用单个文件夹名称。",
+      "ignoreSafeName": "忽略安全名称检查结果",
+      "initCommit": "创建初始提交（工作树和 GitHub 需要）",
+      "initCommitUnavailable": "初始提交不可用，因为未配置 Git user.name 和 user.email。将在没有提交的情况下创建仓库。",
+      "locationLabel": "位置",
+      "locationPlaceholder": "选择父级文件夹",
+      "locationAriaLabel": "项目位置",
+      "choose": "选择",
+      "creates": "创建",
+      "creating": "正在创建...",
+      "createProject": "创建项目",
+      "selectParentFolder": "选择父级文件夹",
+      "chooseLocationError": "为新项目选择位置。",
+      "validation": {
+        "required": "项目名称为必填项。",
+        "single_folder_name": "项目名称必须是单个文件夹名称。",
+        "null_character": "项目名称不能包含空字符。",
+        "component_too_long": "项目名称长度超过 255 个字节，常见文件系统拒绝这样做。"
+      }
+    },
+    "agentResume": {
+      "title": "继续上次对话",
+      "bodyClaude": "此会话中有未完成的 Claude 对话。您可以从上次中断处继续，或关闭此对话框重新开始。",
+      "bodyCodex": "此会话中有未完成的 Codex 对话。您可以从上次中断处继续，或关闭此对话框重新开始。",
+      "bodyAntigravity": "此会话中有未完成的 Antigravity 对话。您可以从上次中断处继续，或关闭此对话框重新开始。",
+      "sessionIdCopied": "会话 ID 已复制。",
+      "copyFailed": "无法复制会话 ID。",
+      "copyId": "复制 ID",
+      "resume": "继续",
+      "lastUser": "用户",
+      "lastAgent": "智能体",
+      "lastActivityUnknown": "最后活动未知",
+      "justNow": "刚才",
+      "minutesAgo": "分钟前",
+      "hoursAgo": "小时前",
+      "dayAgo": "一天前",
+      "daysAgo": "几天前"
+    },
+    "controlSessionGuide": {
+      "title": "控制会话",
+      "subtitle": "一个终端驱动此项目中的其他会话",
+      "bodyIntro": "控制会话是一项即将推出的功能，可从一处协调多个终端；适合需要向同一项目内其他会话分派命令的智能体和脚本。",
+      "pointKeystrokes": "将击键发送到此项目中的任何会话。",
+      "pointListSessions": "列出其他会话及其状态。",
+      "pointReadOutput": "读取目标会话的最新输出。",
+      "createdPrefix": "您刚刚创建了控制会话。用于驱动它的",
+      "createdSuffix": "CLI 将在下次更新中提供；在此之前，该终端会像普通 shell 一样启动。"
+    },
+    "folderPermissionWarmup": {
+      "title": "现在检查文件夹权限吗？",
+      "subtitle": "更新并重启后准备 macOS 文件夹访问",
+      "question": "您希望 Acorn 在开始工作之前检查文件夹访问权限吗？",
+      "complete": "文件夹访问已准备就绪。",
+      "needsAttention": "一些受保护的文件夹需要注意。",
+      "reason": "更新或重启后，macOS 可能重新评估受保护文件夹访问权限，并在稍后再次询问。此检查会提前触发桌面、文档、下载和 iCloud Drive 的提示。",
+      "bodyPrompt": "Acorn 只会短暂读取这些文件夹以触发 macOS 权限检查，不会更改任何文件。",
+      "check": "立即检查",
+      "checking": "正在检查...",
+      "reset": "重置权限",
+      "resetting": "正在重置...",
+      "skip": "暂不检查",
+      "done": "完成",
+      "genericError": "无法检查文件夹访问。",
+      "deniedHint": "如果macOS已经保存了拒绝，则可能不会再次显示提示。在系统设置 > 隐私和安全 > 文件和文件夹中重新启用 Acorn。",
+      "folder": {
+        "desktop": "桌面",
+        "documents": "文档",
+        "downloads": "下载",
+        "icloud": "iCloud Drive"
+      },
+      "status": {
+        "ok": "就绪",
+        "missing": "未找到",
+        "denied": "拒绝",
+        "error": "错误"
+      }
+    },
+    "commandRun": {
+      "title": "运行此命令？",
+      "ariaLabel": "运行命令",
+      "description": "将打开并运行新的终端会话：",
+      "cwdLabel": "cwd：",
+      "noProjectHint": "未注册项目 - 在运行此命令之前添加项目，或使用“复制”将其粘贴到现有终端中。",
+      "noProjectError": "没有可用于托管新会话的项目。",
+      "createFailed": "无法创建会话。",
+      "copiedPrefix": "命令复制：",
+      "copyFailedPrefix": "无法复制命令：",
+      "runningPrefix": "运行命令：",
+      "running": "正在运行...",
+      "run": "运行"
+    },
+    "closePullRequest": {
+      "titlePrefix": "关闭",
+      "loadingDetails": "正在加载拉取请求详细信息...",
+      "confirmPrefix": "关闭拉取请求",
+      "confirmSuffix": "不合并？",
+      "closing": "正在关闭...",
+      "closePr": "关闭 PR"
+    },
+    "mergePullRequest": {
+      "titlePrefix": "合并",
+      "loadingDetails": "正在加载拉取请求详细信息...",
+      "mergeMethod": "合并方法",
+      "methodSquash": "Squash",
+      "methodSquashHint": "在基础分支上合并为一个提交。",
+      "methodMerge": "合并",
+      "methodMergeHint": "创建保留历史记录的合并提交。",
+      "methodRebase": "Rebase",
+      "methodRebaseHint": "将提交变基到基础分支。",
+      "commitMessage": "提交消息",
+      "generating": "正在生成...",
+      "generateVia": "生成方式",
+      "generateWithAi": "使用 AI 生成",
+      "goToProjectSettings": "转到项目设置",
+      "subjectPlaceholder": "主题",
+      "bodyPlaceholder": "正文（可选）",
+      "rebaseMessageLocked": "Rebase 会将原始提交变基到基础分支，因此无法在此自定义提交消息。",
+      "merging": "正在合并...",
+      "merge": "合并",
+      "checksFailing": "头部分支有 {count} 项检查失败。",
+      "checksPending": "头部分支仍有 {count} 项检查在运行。",
+      "checksBlocking": "合并被分支保护阻止，直到检查完成或通过。",
+      "adminMerge": "管理合并（覆盖分支保护）",
+      "adminMergeHint": "通过将 --admin 传递给 gh 来强制合并。仅当仓库策略允许并且您接受覆盖所需的检查时才使用。"
+    },
+    "stagedRevMismatch": {
+      "title": "shell 环境已更新",
+      "background": "后台",
+      "sessionSingular": "会话",
+      "sessionPlural": "会话",
+      "needRestart": "需要重新启动",
+      "bodyIntro": "Acorn 在此次更新中刷新了 shell-init 文件。由旧版本启动的后台会话仍在旧环境中运行，可能导致输入乱码或提示词重绘异常。",
+      "bodyRestart": "立即重启以应用新环境。打开的智能体对话（Claude / Codex）会在下次聚焦时从中断处继续。",
+      "later": "稍后",
+      "restarting": "正在重新启动...",
+      "restartSessions": "重新启动会话"
+    },
+    "memoryBreakdown": {
+      "title": "内存细分",
+      "totalRssSum": "总计（RSS，总和）",
+      "processes": "进程",
+      "pid": "PID",
+      "processTree": "进程树",
+      "rss": "RSS",
+      "subtree": "子树",
+      "subtreeTooltip": "此进程及其所有后代的总和",
+      "share": "占比",
+      "footer": "进程树按父级 → 子级（DFS）排序，同级进程按子树 RSS 降序排列。由于共享内存会重复计入，RSS 总和可能偏高；其中包含 WebView 辅助进程和 PTY 子进程（Claude、Node）。"
+    },
+    "whatsNew": {
+      "titlePrefix": "Acorn 中的新增功能",
+      "latestPublished": "最新已发布版本 — 无公开版本：",
+      "yourVersion": "您的版本",
+      "currentlyRunning": "当前正在运行",
+      "onThisVersion": "您使用的是此版本",
+      "loadingReleaseNotes": "正在加载发行说明...",
+      "noReleaseNotes": "此版本未发布发行说明。",
+      "viewOnGithub": "在 GitHub 上查看",
+      "installing": "正在安装...",
+      "installRelaunch": "安装并重新启动"
+    },
+    "pullRequestDetail": {
+      "notGithub": "源远程不是 GitHub 仓库。",
+      "noAccessPrefix": "未登录",
+      "noAccessSuffix": "账户可以访问",
+      "files": "文件",
+      "openOnGithub": "在 GitHub 上打开",
+      "checkboxSaveFailed": "无法保存复选框：",
+      "tabConversation": "对话",
+      "tabCommits": "提交",
+      "tabChecks": "检查",
+      "tabFiles": "文件",
+      "merge": "合并",
+      "cannotMergeConflicting": "无法合并 - 冲突分支",
+      "mergeReadinessPending": "合并准备情况仍在确定中...",
+      "resizePrBody": "调整 PR 主体大小",
+      "resizeHint": "拖动以调整大小·双击以重置",
+      "noComments": "尚无评论或审核。",
+      "commentAriaLabel": "拉取请求评论",
+      "commentPlaceholder": "添加 Markdown 评论...",
+      "commentWrite": "写入",
+      "commentPreview": "预览",
+      "commentPreviewEmpty": "尚无可供预览的内容。",
+      "commentSubmit": "评论",
+      "commentSubmitting": "正在发布...",
+      "commentFailed": "无法发表评论：",
+      "oldestFirst": "最早优先",
+      "newestFirst": "最新优先",
+      "toggleSortOrder": "切换排序顺序",
+      "commented": "已评论",
+      "empty": "（空）",
+      "noReviewComment": "（无审核评论）",
+      "reviewApproved": "已批准",
+      "reviewChangesRequested": "请求更改",
+      "reviewDismissed": "已驳回",
+      "noCommits": "此拉取请求中没有提交。",
+      "viewOnGithub": "在 GitHub 上查看",
+      "copySha": "复制 SHA",
+      "noMessage": "（无消息）",
+      "unknown": "未知",
+      "loadingDiff": "正在加载差异...",
+      "noFileChanges": "此提交中没有文件更改。",
+      "openCommitOnGithub": "在 GitHub 上打开提交",
+      "now": "现在",
+      "minuteAbbrev": "m",
+      "hourAbbrev": "h",
+      "dayAbbrev": "d",
+      "noChecks": "未报告检查。",
+      "openRun": "打开运行",
+      "checkSuccess": "成功",
+      "checkFailure": "失败",
+      "checkTimedOut": "超时",
+      "checkActionRequired": "需要执行操作",
+      "checkCancelled": "已取消",
+      "checkNeutral": "中性",
+      "checkSkipped": "已跳过",
+      "checkCompleted": "已完成"
+    },
+    "issueDetail": {
+      "notGithub": "源远程不是 GitHub 仓库。",
+      "noAccessPrefix": "未登录",
+      "noAccessSuffix": "账户可以访问",
+      "openOnGithub": "在 GitHub 上打开",
+      "openCommentOnGithub": "在 GitHub 上打开评论",
+      "created": "已创建",
+      "updated": "已更新",
+      "comments": "评论",
+      "commented": "已评论",
+      "noComments": "尚无评论。",
+      "commentAriaLabel": "议题评论",
+      "commentPlaceholder": "添加 Markdown 评论...",
+      "commentWrite": "写入",
+      "commentPreview": "预览",
+      "commentPreviewEmpty": "尚无可供预览的内容。",
+      "commentSubmit": "评论",
+      "commentSubmitting": "正在发布...",
+      "commentFailed": "无法发表评论：",
+      "oldestFirst": "最早优先",
+      "newestFirst": "最新优先",
+      "toggleSortOrder": "切换排序顺序",
+      "noBody": "无议题描述。",
+      "empty": "（空）",
+      "stateOpen": "打开",
+      "stateCompleted": "已完成",
+      "stateNotPlanned": "未计划",
+      "assignees": "受让人：",
+      "milestone": "里程碑："
+    }
+  },
+  "commandPalette": {
+    "dialogLabel": "命令面板",
+    "placeholder": "键入命令或搜索...",
+    "empty": "没有结果。",
+    "groups": {
+      "sessions": "会话",
+      "switchSession": "切换会话",
+      "activity": "未读活动",
+      "view": "查看",
+      "terminal": "终端",
+      "ipc": "IPC",
+      "dangerZone": "危险区域"
+    },
+    "commands": {
+      "newSession": "新建会话",
+      "newIsolatedSession": "新建隔离会话",
+      "newControlSession": "新建控制会话",
+      "newChatSession": "新聊天会话",
+      "newAutonomousGoalSession": "新建目标会话",
+      "newProject": "新建项目",
+      "addExistingProject": "添加现有项目",
+      "refreshSessions": "刷新会话",
+      "switchSessionPrefix": "切换到",
+      "viewTodos": "查看待办事项",
+      "viewCommits": "查看提交",
+      "viewStaged": "查看已暂存",
+      "viewPullRequests": "查看拉取请求",
+      "toggleWorkspaceView": "切换工作区视图",
+      "resetPanelSizes": "重置面板尺寸",
+      "reloadShellEnvironment": "重新加载 shell 环境",
+      "restartIpcServer": "重新启动 IPC 服务器",
+      "removeSessionPrefix": "删除会话：",
+      "shakeTree": "摇动树"
+    },
+    "toasts": {
+      "shellEnvReloaded": "shell 环境已重新加载。请打开新会话以应用更改。",
+      "shellEnvReloadFailed": "无法重新加载 shell 环境。",
+      "ipcRestarted": "IPC 服务器已重新启动。",
+      "ipcRestartFailedPrefix": "无法重新启动 IPC 服务器："
+    },
+    "activity": {
+      "kind": {
+        "waitingForInput": "等待输入",
+        "errored": "错误"
+      }
+    }
+  },
+  "backgroundSessions": {
+    "daemon": {
+      "label": "守护进程",
+      "hint": "acornd 守护进程管理长时间运行的终端会话。启用后，Acorn 可退出并重新打开而不会丢失 PTY；禁用后会回退到传统的进程内路径，应用退出时会话也会结束。",
+      "enableLabel": "启用后台会话 (acornd)",
+      "enabledDescription": "会话在 Acorn 重新启动期间持续存在，直到您明确退出它们。",
+      "disabledDescription": "会话绑定到当前 Acorn 进程；关闭应用会终止这些会话。"
+    },
+    "status": {
+      "label": "状态",
+      "hint": "正在运行的守护进程的实时状态。此面板打开时每 3 秒更新一次。",
+      "disabled": "已禁用",
+      "running": "正在运行",
+      "down": "已停止",
+      "up": "正常",
+      "sessions": "会话",
+      "log": "日志"
+    },
+    "controls": {
+      "label": "控制",
+      "hint": "“重新启动”会重新连接桥接，适用于从终端终止守护进程后的情况。“清除非活动会话”会删除非活动守护进程元数据。“退出”会终止所有运行中的 PTY 并关闭守护进程。",
+      "restart": "重新启动守护进程",
+      "clearInactive": "清除非活动会话",
+      "clearInactiveTooltip": "从守护进程注册表中删除每个非活动会话行",
+      "confirmShutdownPrompt": "终止所有 PTY？",
+      "confirm": "确认",
+      "cancel": "取消",
+      "quit": "退出守护进程"
+    },
+    "sessions": {
+      "label": "会话",
+      "hint": "守护进程当前跟踪的活动 PTY。非活动的守护进程元数据默认隐藏，可从控制区域清除。",
+      "disabled": "守护进程已禁用；会话由旧的进程内路径管理。",
+      "notRunning": "守护进程未运行。",
+      "loading": "正在加载...",
+      "empty": "未跟踪任何活动会话。",
+      "controlSession": "控制会话"
+    },
+    "actions": {
+      "killPty": "终止 PTY",
+      "open": "打开会话",
+      "openTooltip": "在其项目标签页中打开此会话",
+      "restoreTooltip": "将这个会话放回 Acorn 的侧边栏",
+      "restore": "恢复会话",
+      "forgetDisabledTooltip": "请先终止，再移除记录",
+      "forgetTooltip": "从守护进程注册表中删除此行",
+      "forget": "忘记会话"
+    },
+    "metadata": {
+      "tab": "标签页",
+      "branch": "分支",
+      "status": "状态",
+      "worktree": "工作树",
+      "last": "最后",
+      "repo": "仓库",
+      "orphaned": "无应用程序端行 - 在守护进程中孤立。"
+    },
+    "relativeTime": {
+      "ago": "前"
+    },
+    "toasts": {
+      "enabled": "已启用后台会话。",
+      "disabled": "后台会话已禁用。",
+      "toggleFailed": "无法更新后台会话：",
+      "restarted": "守护进程已重新启动。",
+      "restartFailed": "无法重新启动守护进程：",
+      "shutdown": "守护进程关闭。",
+      "shutdownFailed": "无法退出守护进程：",
+      "sessionKilled": "PTY 已终止。",
+      "sessionKillStillRunning": "PTY 在终止请求后仍在运行。",
+      "sessionOpened": "会话打开。",
+      "sessionRestored": "会话已恢复。",
+      "sessionForgotten": "会话从守护进程列表中删除。",
+      "inactiveCleared": "无效守护进程会话已清除。",
+      "inactiveNone": "没有要清除的非活动守护进程会话。",
+      "inactiveClearFailed": "无法清除非活动守护进程会话：",
+      "sessionActionFailed": "无法运行守护进程会话操作："
+    }
+  }
+}

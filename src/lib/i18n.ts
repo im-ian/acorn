@@ -1,7 +1,8 @@
 import en from "../locales/en.json";
 import ko from "../locales/ko.json";
+import zhCN from "../locales/zh-CN.json";
 
-export type Language = "en" | "ko";
+export type Language = "en" | "ko" | "zh-CN";
 
 export const LANGUAGE_OPTIONS: ReadonlyArray<{
   value: Language;
@@ -10,6 +11,11 @@ export const LANGUAGE_OPTIONS: ReadonlyArray<{
 }> = [
   { value: "en", label: "English", nativeLabel: "English" },
   { value: "ko", label: "Korean", nativeLabel: "한국어" },
+  {
+    value: "zh-CN",
+    label: "Simplified Chinese",
+    nativeLabel: "简体中文",
+  },
 ];
 
 const LANGUAGE_VALUES = new Set<Language>(LANGUAGE_OPTIONS.map((o) => o.value));
@@ -33,6 +39,7 @@ export type Translator = (key: TranslationKey) => string;
 const TRANSLATIONS: Record<Language, LocaleTree> = {
   en,
   ko,
+  "zh-CN": zhCN,
 };
 
 function lookup(tree: LocaleTree, key: TranslationKey): string {
