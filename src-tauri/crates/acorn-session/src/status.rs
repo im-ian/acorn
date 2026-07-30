@@ -38,7 +38,7 @@ use std::path::PathBuf;
 
 use acorn_agent::AgentKind;
 use acorn_pty::ShellHint;
-use acorn_transcript::{latest_turn_state, read_tail, TurnState};
+use acorn_transcript::{latest_turn_observation, read_tail, TurnObservation, TurnState};
 use serde::Serialize;
 
 use crate::session::SessionStatus;
@@ -65,11 +65,15 @@ pub enum StatusEvidence {
     Previous,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct StatusDetection {
     pub status: SessionStatus,
     pub reason: Option<StatusReason>,
     pub evidence: StatusEvidence,
+    /// Codex turn identity carried by the completion event that produced
+    /// `TurnComplete`. Other providers and unscoped completion formats leave
+    /// this empty.
+    pub completed_provider_turn_id: Option<String>,
 }
 
 impl StatusDetection {
@@ -78,7 +82,13 @@ impl StatusDetection {
             status,
             reason,
             evidence,
+            completed_provider_turn_id: None,
         }
+    }
+
+    fn with_completed_provider_turn_id(mut self, provider_turn_id: Option<String>) -> Self {
+        self.completed_provider_turn_id = provider_turn_id;
+        self
     }
 }
 
@@ -131,17 +141,22 @@ pub fn detect_with_reason(
 
     let classified = read_tail(&path, TAIL_BYTES)
         .ok()
-        .and_then(|tail| latest_turn_state(kind, &tail.text, tail.read_full));
+        .and_then(|tail| latest_turn_observation(kind, &tail.text, tail.read_full));
 
     match classified {
-        Some(TurnState::Ready) => StatusDetection::new(
+        Some(TurnObservation {
+            state: TurnState::Ready,
+            provider_turn_id,
+        }) => StatusDetection::new(
             SessionStatus::Ready,
             Some(StatusReason::TurnComplete),
             StatusEvidence::Transcript,
-        ),
-        Some(TurnState::Working) => {
-            StatusDetection::new(SessionStatus::Working, None, StatusEvidence::Transcript)
-        }
+        )
+        .with_completed_provider_turn_id(provider_turn_id),
+        Some(TurnObservation {
+            state: TurnState::Working,
+            ..
+        }) => StatusDetection::new(SessionStatus::Working, None, StatusEvidence::Transcript),
         // Transcript exists but the tail held no turn lines; keep
         // whatever the caller previously observed instead of regressing
         // to Ready. The next poll that lands on a real turn line corrects
@@ -202,7 +217,7 @@ mod tests {
     }
 
     fn classify_tail(kind: AgentKind, tail: &str, read_full: bool) -> Option<TurnState> {
-        latest_turn_state(kind, tail, read_full)
+        acorn_transcript::latest_turn_state(kind, tail, read_full)
     }
 
     #[test]
@@ -493,6 +508,7 @@ mod tests {
         assert_eq!(detection.status, SessionStatus::Ready);
         assert_eq!(detection.reason, Some(StatusReason::TurnComplete));
         assert_eq!(detection.evidence, StatusEvidence::Transcript);
+        assert_eq!(detection.completed_provider_turn_id.as_deref(), Some("t1"));
     }
 
     #[test]
