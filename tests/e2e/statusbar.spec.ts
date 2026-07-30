@@ -149,7 +149,7 @@ test.describe("status bar", () => {
     });
   }
 
-  test("shows only Codex token usage for an active Codex tab", async ({
+  test("shows both Codex windows when the 5h limit is reported", async ({
     page,
     tauri,
   }) => {
@@ -184,6 +184,45 @@ test.describe("status bar", () => {
     await expect(tooltip).toContainText("resets in 19h 27m");
     await expect(tooltip.locator("svg")).toHaveCount(5);
     await expect(tooltip).not.toContainText(/used|12%|34%/);
+  });
+
+  test("shows only the weekly Codex window when the 5h limit is absent", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      { ...BASE_SESSION, name: "codex", agent_provider: "codex" },
+    ]);
+    await tauri.respond("get_agent_token_usage", {
+      updated_at: 1779860000,
+      metrics: [
+        {
+          provider: "codex",
+          window: "weekly",
+          used_percent: 36,
+          remaining_percent: 64,
+          reset_at: 1779930000,
+          source: "~/.codex/sessions rate_limits",
+          error: null,
+        },
+      ],
+    });
+
+    await page.goto("/");
+    await enableAgentTokenUsage(page);
+
+    const tokenBadge = page.locator("footer").getByTestId("agent-token-usage");
+    await expect(tokenBadge).toContainText("tokens:");
+    await expect(tokenBadge).toContainText("w");
+    await expect(tokenBadge).toContainText("64%");
+    await expect(tokenBadge).not.toContainText("5h");
+
+    await tokenBadge.hover();
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("weekly");
+    await expect(tooltip).toContainText("64% left");
+    await expect(tooltip).not.toContainText("5h");
   });
 
   test("shows only Claude token usage for an active Claude tab", async ({

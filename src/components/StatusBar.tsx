@@ -558,8 +558,12 @@ function renderAgentTokenSummary(
     <>
       <span>{agentTokensPrefix(t)}</span>
       <span className="inline-flex items-center gap-2">
-        <TokenWindowReadout label="5h" value={fiveHourText ?? "-"} />
-        <TokenWindowReadout label="w" value={weeklyText ?? "-"} />
+        {fiveHourText ? (
+          <TokenWindowReadout label="5h" value={fiveHourText} />
+        ) : null}
+        {weeklyText ? (
+          <TokenWindowReadout label="w" value={weeklyText} />
+        ) : null}
       </span>
     </>
   );
@@ -606,9 +610,15 @@ function renderAgentTokenTooltip(
     );
   }
 
+  const reportedWindows = TOKEN_WINDOWS.filter(
+    (window) => tokenMetric(snapshot, provider, window) !== null,
+  );
+  const displayedWindows =
+    reportedWindows.length > 0 ? reportedWindows : TOKEN_WINDOWS;
+
   return (
     <span className="flex w-64 max-w-full flex-col gap-2">
-      {TOKEN_WINDOWS.map((window) => {
+      {displayedWindows.map((window) => {
         const metric = tokenMetric(snapshot, provider, window);
         return (
           <AgentTokenTooltipWindow
