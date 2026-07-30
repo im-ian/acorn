@@ -7826,8 +7826,8 @@ pub async fn detect_session_statuses(
 /// Agent lifecycle hooks are the authoritative turn-boundary signal. While an
 /// agent process is alive under a hooked session the poll defers the entire
 /// Working/Ready/WaitingForInput distinction to the hook-set store value and
-/// does not consult the transcript tail at all, because the tail is stale in
-/// *both* directions around a turn boundary:
+/// does not apply ordinary transcript-tail classification, because the tail is
+/// stale in *both* directions around a turn boundary:
 /// - just after a turn ends, a long/tool-heavy turn's `end_turn` line may be
 ///   outside the 256 KiB window (or absent entirely), so the tail still reads
 ///   Working;
@@ -7842,8 +7842,9 @@ pub async fn detect_session_statuses(
 /// Once no matching agent process is live (the agent exited, another provider
 /// now owns the PTY, or an unrelated command owns the PTY), the poll drives
 /// status again.
-/// Trade-off: a dropped terminating hook can leave status lagging at the last
-/// hook value until the next hook or the agent exits.
+/// A scoped Codex `task_complete` can recover a dropped terminating hook when
+/// its turn id still matches the active hook turn. Providers without that
+/// correlation remain at the last hook value until the next hook or exit.
 fn poll_defers_to_hook(
     hook_active: bool,
     hook_provider: Option<AgentKind>,
@@ -7871,7 +7872,13 @@ fn fallback_agent_status_source(
     }
 }
 
-/// Recover a turn boundary that was crossed while the app was closed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HookStatusReconciliation {
+    Boot,
+    CurrentCodexTurn(String),
+}
+
+/// Recover a hook-owned Working status from a durable turn-complete marker.
 ///
 /// `hook_active` persists across restarts, so right after boot the poll
 /// already defers to the persisted hook-set status. Durable hook delivery
@@ -7881,23 +7888,35 @@ fn fallback_agent_status_source(
 /// event of this run confirms the channel, allow exactly one recovery:
 /// Working -> WaitingForInput backed by a real turn-complete marker.
 ///
-/// One-directional on purpose: while the app is closed nobody can submit a
-/// prompt to the session, so a resting status cannot regress to Working
-/// offline and a stale-tail Working must never demote a persisted resting
-/// status. Once an event lands this run (`hook_confirmed_this_run`), hooks
-/// own both directions again and this reconciliation switches off — leaving
-/// it open in-run would recreate the UserPromptSubmit-vs-stale-tail race the
-/// full hook deference exists to close.
-fn hook_boot_reconciled_status(
+/// During the current run, Codex completion recovery is allowed only when the
+/// transcript carries a provider turn id. The store compares that id with the
+/// active native-hook turn under the lifecycle lock before applying it, so a
+/// new prompt cannot be overwritten by the previous turn's completion.
+fn hook_status_reconciliation(
     stored: SessionStatus,
     hook_confirmed_this_run: bool,
-    detection: session_status::StatusDetection,
-) -> Option<SessionStatus> {
-    (!hook_confirmed_this_run
-        && stored == SessionStatus::Working
-        && detection.status == SessionStatus::Ready
-        && detection.reason == Some(SessionStatusReason::TurnComplete))
-    .then_some(SessionStatus::WaitingForInput)
+    hook_provider: Option<AgentKind>,
+    detection: &session_status::StatusDetection,
+) -> Option<HookStatusReconciliation> {
+    if stored != SessionStatus::Working {
+        return None;
+    }
+    if detection.status != SessionStatus::Ready
+        || detection.reason != Some(SessionStatusReason::TurnComplete)
+        || detection.evidence != session_status::StatusEvidence::Transcript
+    {
+        return None;
+    }
+    if !hook_confirmed_this_run {
+        return Some(HookStatusReconciliation::Boot);
+    }
+    if hook_provider != Some(AgentKind::Codex) {
+        return None;
+    }
+    detection
+        .completed_provider_turn_id
+        .clone()
+        .map(HookStatusReconciliation::CurrentCodexTurn)
 }
 
 fn detect_session_statuses_blocking(
@@ -8207,27 +8226,45 @@ fn detect_session_statuses_blocking(
                         observed_hook_revision,
                         observed_lifecycle_revision,
                     ));
-                // Reconcile only while this app instance has not received a
-                // native event. The revision/source checks make the status
-                // and diagnostic provenance one conditional write.
-                let reconciliation_requested =
-                    hook_boot_reconciled_status(stored, hook_revision > 0, detection);
+                // Boot recovery is allowed before this app instance receives
+                // a native event. In-run recovery is limited to an exact
+                // Codex turn id; the store checks that id together with the
+                // revision/source fence in one conditional write.
+                let reconciliation_requested = hook_status_reconciliation(
+                    stored,
+                    hook_revision > 0,
+                    hook_provider,
+                    &detection,
+                );
                 let reconciled = parsed_id.and_then(|uuid| {
-                    reconciliation_requested.and_then(|reconciled| {
-                        state
-                            .sessions
-                            .refresh_status_and_source_if_lifecycle_revision(
-                                &uuid,
-                                stored,
-                                stored_source,
-                                lifecycle_revision,
-                                reconciled,
-                                Some(AgentStatusSource::TranscriptFallback),
-                            )
-                            .ok()
-                            .flatten()
-                            .map(|_| reconciled)
-                    })
+                    reconciliation_requested
+                        .as_ref()
+                        .and_then(|reconciliation| {
+                            let applied = match reconciliation {
+                                HookStatusReconciliation::Boot => state
+                                    .sessions
+                                    .refresh_status_and_source_if_lifecycle_revision(
+                                        &uuid,
+                                        stored,
+                                        stored_source,
+                                        lifecycle_revision,
+                                        SessionStatus::WaitingForInput,
+                                        Some(AgentStatusSource::TranscriptFallback),
+                                    ),
+                                HookStatusReconciliation::CurrentCodexTurn(completed_turn_id) => {
+                                    state.sessions.reconcile_codex_turn_completion_if_current(
+                                        &uuid,
+                                        stored_source,
+                                        lifecycle_revision,
+                                        completed_turn_id,
+                                    )
+                                }
+                            };
+                            applied
+                                .ok()
+                                .flatten()
+                                .map(|_| SessionStatus::WaitingForInput)
+                        })
                 });
                 if reconciliation_requested.is_some() && reconciled.is_none() {
                     metadata_write_allowed = false;
@@ -10345,14 +10382,16 @@ mod tests {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
             evidence: super::session_status::StatusEvidence::Transcript,
+            completed_provider_turn_id: None,
         };
         assert_eq!(
-            super::hook_boot_reconciled_status(
+            super::hook_status_reconciliation(
                 acorn_session::SessionStatus::Working,
                 false,
-                detection
+                None,
+                &detection,
             ),
-            Some(acorn_session::SessionStatus::WaitingForInput)
+            Some(super::HookStatusReconciliation::Boot)
         );
     }
 
@@ -10364,12 +10403,14 @@ mod tests {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
             evidence: super::session_status::StatusEvidence::Transcript,
+            completed_provider_turn_id: None,
         };
         assert_eq!(
-            super::hook_boot_reconciled_status(
+            super::hook_status_reconciliation(
                 acorn_session::SessionStatus::WaitingForInput,
                 false,
-                detection
+                None,
+                &detection,
             ),
             None
         );
@@ -10389,12 +10430,14 @@ mod tests {
             status: acorn_session::SessionStatus::Working,
             reason: None,
             evidence: super::session_status::StatusEvidence::Previous,
+            completed_provider_turn_id: None,
         };
         assert_eq!(
-            super::hook_boot_reconciled_status(
+            super::hook_status_reconciliation(
                 acorn_session::SessionStatus::WaitingForInput,
                 false,
-                detection
+                None,
+                &detection,
             ),
             None
         );
@@ -10406,32 +10449,75 @@ mod tests {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
             evidence: super::session_status::StatusEvidence::Transcript,
+            completed_provider_turn_id: Some("turn-1".to_string()),
         };
         assert_eq!(
-            super::hook_boot_reconciled_status(
+            super::hook_status_reconciliation(
                 acorn_session::SessionStatus::WaitingForInput,
                 true,
-                detection
+                Some(super::AgentKind::Codex),
+                &detection,
             ),
             None
         );
     }
 
     #[test]
-    fn boot_reconciliation_is_off_once_a_hook_event_confirms_the_channel() {
-        // An event reached this run's hook server — hooks own both directions
-        // again; re-opening the transcript passthrough would recreate the
-        // UserPromptSubmit-vs-stale-tail race.
+    fn confirmed_hook_requires_a_scoped_codex_completion() {
+        // An unscoped completion cannot be correlated with the active turn,
+        // so it must not reopen the UserPromptSubmit-vs-stale-tail race.
         let detection = super::session_status::StatusDetection {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::TurnComplete),
             evidence: super::session_status::StatusEvidence::Transcript,
+            completed_provider_turn_id: None,
         };
         assert_eq!(
-            super::hook_boot_reconciled_status(
+            super::hook_status_reconciliation(
                 acorn_session::SessionStatus::Working,
                 true,
-                detection
+                Some(super::AgentKind::Codex),
+                &detection,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn confirmed_codex_hook_accepts_a_scoped_completion_candidate() {
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::Ready,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+            evidence: super::session_status::StatusEvidence::Transcript,
+            completed_provider_turn_id: Some("turn-1".to_string()),
+        };
+        assert_eq!(
+            super::hook_status_reconciliation(
+                acorn_session::SessionStatus::Working,
+                true,
+                Some(super::AgentKind::Codex),
+                &detection,
+            ),
+            Some(super::HookStatusReconciliation::CurrentCodexTurn(
+                "turn-1".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn confirmed_non_codex_hook_rejects_a_scoped_completion() {
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::Ready,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+            evidence: super::session_status::StatusEvidence::Transcript,
+            completed_provider_turn_id: Some("turn-1".to_string()),
+        };
+        assert_eq!(
+            super::hook_status_reconciliation(
+                acorn_session::SessionStatus::Working,
+                true,
+                Some(super::AgentKind::Claude),
+                &detection,
             ),
             None
         );
@@ -10445,12 +10531,14 @@ mod tests {
             status: acorn_session::SessionStatus::Working,
             reason: None,
             evidence: super::session_status::StatusEvidence::Previous,
+            completed_provider_turn_id: None,
         };
         assert_eq!(
-            super::hook_boot_reconciled_status(
+            super::hook_status_reconciliation(
                 acorn_session::SessionStatus::Ready,
                 false,
-                detection
+                None,
+                &detection,
             ),
             None
         );
@@ -10464,12 +10552,14 @@ mod tests {
             status: acorn_session::SessionStatus::Ready,
             reason: Some(super::SessionStatusReason::ShellPrompt),
             evidence: super::session_status::StatusEvidence::Process,
+            completed_provider_turn_id: None,
         };
         assert_eq!(
-            super::hook_boot_reconciled_status(
+            super::hook_status_reconciliation(
                 acorn_session::SessionStatus::Working,
                 false,
-                detection
+                None,
+                &detection,
             ),
             None
         );

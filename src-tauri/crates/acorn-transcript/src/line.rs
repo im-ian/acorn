@@ -29,6 +29,15 @@ pub enum TurnState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TurnObservation {
+    pub state: TurnState,
+    /// Provider-scoped turn identity when the transcript event carries one.
+    /// Codex completion events use this to correlate a durable `task_complete`
+    /// with the native hook turn that currently owns session status.
+    pub provider_turn_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedTranscriptLine {
     /// Source timestamp for this transcript event, when the provider emits one.
     pub timestamp: Option<String>,
@@ -49,6 +58,7 @@ pub struct ParsedTranscriptLine {
     /// before any assistant role line has been seen.
     pub response_text: Option<String>,
     pub turn_state: Option<TurnState>,
+    pub provider_turn_id: Option<String>,
     pub session_id: Option<String>,
     pub cwd: Option<String>,
 }
@@ -65,6 +75,7 @@ impl Default for ParsedTranscriptLine {
             preview_text: None,
             response_text: None,
             turn_state: None,
+            provider_turn_id: None,
             session_id: None,
             cwd: None,
         }
@@ -94,12 +105,23 @@ pub fn parse_transcript_value(kind: AgentKind, value: &Value) -> ParsedTranscrip
 }
 
 pub fn latest_turn_state(kind: AgentKind, tail: &str, read_full: bool) -> Option<TurnState> {
+    latest_turn_observation(kind, tail, read_full).map(|observation| observation.state)
+}
+
+pub fn latest_turn_observation(
+    kind: AgentKind,
+    tail: &str,
+    read_full: bool,
+) -> Option<TurnObservation> {
     for line in tail_lines_newest_first(tail, read_full) {
         let Some(parsed) = parse_transcript_line(kind, line) else {
             continue;
         };
-        if parsed.turn_state.is_some() {
-            return parsed.turn_state;
+        if let Some(state) = parsed.turn_state {
+            return Some(TurnObservation {
+                state,
+                provider_turn_id: parsed.provider_turn_id,
+            });
         }
     }
     None
@@ -204,6 +226,10 @@ fn parse_codex_value(value: &Value) -> ParsedTranscriptLine {
         preview_text,
         response_text,
         turn_state: codex_turn_state(value),
+        provider_turn_id: string_at(Some(event), "turn_id")
+            .or_else(|| string_at(Some(event), "turn-id"))
+            .or_else(|| string_at(Some(value), "turn_id"))
+            .or_else(|| string_at(Some(value), "turn-id")),
         session_id: string_at(Some(event), "id")
             .or_else(|| string_at(Some(event), "session_id"))
             .or_else(|| string_at(Some(value), "session_id")),
@@ -1087,6 +1113,13 @@ mod tests {
         assert_eq!(
             classify(AgentKind::Codex, tail, true),
             Some(TurnState::Ready),
+        );
+        assert_eq!(
+            latest_turn_observation(AgentKind::Codex, tail, true),
+            Some(TurnObservation {
+                state: TurnState::Ready,
+                provider_turn_id: Some("t1".to_string()),
+            }),
         );
     }
 
