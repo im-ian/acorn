@@ -74,36 +74,20 @@ fn read_agent_token_usage() -> AgentTokenUsageSnapshot {
     let claude = read_claude_rate_limits();
 
     let mut metrics = Vec::with_capacity(4);
-    push_metric(
+    push_provider_metrics(
         &mut metrics,
         AgentTokenProvider::Codex,
-        AgentTokenWindow::FiveHour,
-        codex.five_hour,
+        codex,
         "~/.codex/sessions rate_limits",
         "No Codex 5h rate-limit event found",
-    );
-    push_metric(
-        &mut metrics,
-        AgentTokenProvider::Codex,
-        AgentTokenWindow::Weekly,
-        codex.weekly,
-        "~/.codex/sessions rate_limits",
         "No Codex weekly rate-limit event found",
     );
-    push_metric(
+    push_provider_metrics(
         &mut metrics,
         AgentTokenProvider::Claude,
-        AgentTokenWindow::FiveHour,
-        claude.five_hour,
+        claude,
         "~/.claude/token-widget/claude-rate-limits.json",
         "No Claude 5h statusline rate-limit capture found",
-    );
-    push_metric(
-        &mut metrics,
-        AgentTokenProvider::Claude,
-        AgentTokenWindow::Weekly,
-        claude.weekly,
-        "~/.claude/token-widget/claude-rate-limits.json",
         "No Claude weekly statusline rate-limit capture found",
     );
 
@@ -111,6 +95,57 @@ fn read_agent_token_usage() -> AgentTokenUsageSnapshot {
         metrics,
         updated_at,
     }
+}
+
+fn push_provider_metrics(
+    metrics: &mut Vec<AgentTokenUsageMetric>,
+    provider: AgentTokenProvider,
+    rate_limits: ProviderRateLimits,
+    fallback_source: &str,
+    five_hour_fallback_error: &str,
+    weekly_fallback_error: &str,
+) {
+    let has_reported_window = rate_limits.five_hour.is_some() || rate_limits.weekly.is_some();
+    if has_reported_window {
+        if let Some(five_hour) = rate_limits.five_hour {
+            push_metric(
+                metrics,
+                provider,
+                AgentTokenWindow::FiveHour,
+                Some(five_hour),
+                fallback_source,
+                five_hour_fallback_error,
+            );
+        }
+        if let Some(weekly) = rate_limits.weekly {
+            push_metric(
+                metrics,
+                provider,
+                AgentTokenWindow::Weekly,
+                Some(weekly),
+                fallback_source,
+                weekly_fallback_error,
+            );
+        }
+        return;
+    }
+
+    push_metric(
+        metrics,
+        provider,
+        AgentTokenWindow::FiveHour,
+        None,
+        fallback_source,
+        five_hour_fallback_error,
+    );
+    push_metric(
+        metrics,
+        provider,
+        AgentTokenWindow::Weekly,
+        None,
+        fallback_source,
+        weekly_fallback_error,
+    );
 }
 
 fn push_metric(
@@ -239,20 +274,33 @@ fn read_codex_rate_limits_from_sqlite() -> ProviderRateLimits {
 }
 
 fn parse_codex_rate_limits(value: &Value, source: &str) -> ProviderRateLimits {
-    ProviderRateLimits {
-        five_hour: parse_rate_limit_window(
-            value.get("primary"),
+    let mut parsed = ProviderRateLimits::default();
+    for (key, fallback_window) in [
+        ("primary", AgentTokenWindow::FiveHour),
+        ("secondary", AgentTokenWindow::Weekly),
+    ] {
+        let Some(value) = value.get(key) else {
+            continue;
+        };
+        let Some(rate_limit) = parse_rate_limit_window(
+            Some(value),
             &["used_percent"],
             &["reset_at", "resets_at"],
             source,
-        ),
-        weekly: parse_rate_limit_window(
-            value.get("secondary"),
-            &["used_percent"],
-            &["reset_at", "resets_at"],
-            source,
-        ),
+        ) else {
+            continue;
+        };
+        let window = match number(value.get("window_minutes")) {
+            Some(300.0) => AgentTokenWindow::FiveHour,
+            Some(10_080.0) => AgentTokenWindow::Weekly,
+            _ => fallback_window,
+        };
+        match window {
+            AgentTokenWindow::FiveHour => parsed.five_hour = Some(rate_limit),
+            AgentTokenWindow::Weekly => parsed.weekly = Some(rate_limit),
+        }
     }
+    parsed
 }
 
 fn read_claude_rate_limits() -> ProviderRateLimits {
@@ -625,8 +673,16 @@ mod tests {
     #[test]
     fn parses_codex_primary_and_secondary_windows() {
         let value: Value = serde_json::json!({
-            "primary": { "used_percent": 12, "resets_at": 1779860400 },
-            "secondary": { "used_percent": 34.5, "reset_at": 1779930000 }
+            "primary": {
+                "used_percent": 12,
+                "window_minutes": 300,
+                "resets_at": 1779860400
+            },
+            "secondary": {
+                "used_percent": 34.5,
+                "window_minutes": 10080,
+                "reset_at": 1779930000
+            }
         });
 
         let limits = parse_codex_rate_limits(&value, "codex");
@@ -637,6 +693,84 @@ mod tests {
         assert_eq!(five_hour.reset_at, Some(1779860400.0));
         assert_eq!(weekly.used_percent, 34.5);
         assert_eq!(weekly.reset_at, Some(1779930000.0));
+    }
+
+    #[test]
+    fn parses_weekly_codex_limit_from_primary_window_metadata() {
+        let value: Value = serde_json::json!({
+            "primary": {
+                "used_percent": 36,
+                "window_minutes": 10080,
+                "resets_at": 1785902976
+            },
+            "secondary": null
+        });
+
+        let limits = parse_codex_rate_limits(&value, "codex");
+
+        assert_eq!(limits.five_hour, None);
+        let weekly = limits.weekly.unwrap();
+        assert_eq!(weekly.used_percent, 36.0);
+        assert_eq!(weekly.reset_at, Some(1785902976.0));
+    }
+
+    #[test]
+    fn parses_five_hour_codex_limit_when_it_is_the_only_window() {
+        let value: Value = serde_json::json!({
+            "primary": {
+                "used_percent": 21,
+                "window_minutes": 300,
+                "resets_at": 1785902976
+            },
+            "secondary": null
+        });
+
+        let limits = parse_codex_rate_limits(&value, "codex");
+
+        let five_hour = limits.five_hour.unwrap();
+        assert_eq!(five_hour.used_percent, 21.0);
+        assert_eq!(five_hour.reset_at, Some(1785902976.0));
+        assert_eq!(limits.weekly, None);
+    }
+
+    #[test]
+    fn preserves_positional_fallback_for_codex_events_without_window_metadata() {
+        let value: Value = serde_json::json!({
+            "primary": { "used_percent": 12 },
+            "secondary": { "used_percent": 34.5 }
+        });
+
+        let limits = parse_codex_rate_limits(&value, "codex");
+
+        assert_eq!(limits.five_hour.unwrap().used_percent, 12.0);
+        assert_eq!(limits.weekly.unwrap().used_percent, 34.5);
+    }
+
+    #[test]
+    fn omits_unreported_windows_when_provider_has_usage() {
+        let mut metrics = Vec::new();
+        let limits = ProviderRateLimits {
+            five_hour: None,
+            weekly: Some(RateLimitWindow {
+                used_percent: 36.0,
+                reset_at: Some(1785902976.0),
+                source: "codex".to_string(),
+            }),
+        };
+
+        push_provider_metrics(
+            &mut metrics,
+            AgentTokenProvider::Codex,
+            limits,
+            "codex",
+            "missing 5h",
+            "missing weekly",
+        );
+
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].window, AgentTokenWindow::Weekly);
+        assert_eq!(metrics[0].remaining_percent, Some(64.0));
+        assert_eq!(metrics[0].error, None);
     }
 
     #[test]
@@ -658,15 +792,15 @@ mod tests {
         writeln!(file).expect("end prefix line");
         writeln!(
             file,
-            r#"{{"payload":{{"type":"event_msg","rate_limits":{{"primary":{{"used_percent":42,"resets_at":1779860400}}}}}}}}"#
+            r#"{{"payload":{{"type":"event_msg","rate_limits":{{"primary":{{"used_percent":42,"window_minutes":10080,"resets_at":1779860400}},"secondary":null}}}}}}"#
         )
         .expect("write rate limit event");
         drop(file);
 
         let parsed = read_codex_rate_limits_from_session_file(&path).expect("rate limits");
 
-        assert_eq!(parsed.five_hour.unwrap().used_percent, 42.0);
-        assert_eq!(parsed.weekly, None);
+        assert_eq!(parsed.five_hour, None);
+        assert_eq!(parsed.weekly.unwrap().used_percent, 42.0);
         let tail = read_tail(&path, CODEX_SESSION_TAIL_BYTES)
             .expect("read tail")
             .text;
