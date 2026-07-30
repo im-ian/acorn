@@ -30,6 +30,16 @@ const COPY = {
     resetFailed:
       "화면 설정을 초기화하지 못했습니다. 앱을 완전히 종료한 뒤 다시 시도해 주세요.",
   },
+  "zh-CN": {
+    eyebrow: "启动错误",
+    title: "Acorn 无法打开",
+    description: "更新后，保存的工作区配置可能与当前版本不兼容。",
+    resetHint: "终端会话和项目会保留；只会重置本地工作区偏好设置。",
+    reload: "重试",
+    reset: "重置工作区视图并重新打开",
+    details: "错误详情",
+    resetFailed: "无法重置工作区视图。请完全退出应用后重试。",
+  },
 } as const;
 
 type RecoveryLanguage = keyof typeof COPY;
@@ -38,7 +48,9 @@ function recoveryLanguage(): RecoveryLanguage {
   try {
     const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
     const parsed = raw ? (JSON.parse(raw) as { language?: unknown }) : null;
-    return parsed?.language === "ko" ? "ko" : "en";
+    return parsed?.language === "ko" || parsed?.language === "zh-CN"
+      ? parsed.language
+      : "en";
   } catch {
     return "en";
   }

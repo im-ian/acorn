@@ -68,6 +68,15 @@ describe("language settings", () => {
     expect(useSettings.getState().settings.language).toBe("ko");
   });
 
+  it("loads a persisted Simplified Chinese language selection", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ language: "zh-CN" }));
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.language).toBe("zh-CN");
+  });
+
   it("falls back to English for an unsupported stored language", async () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ language: "fr" }));
 
