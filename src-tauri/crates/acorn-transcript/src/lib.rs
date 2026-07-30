@@ -47,8 +47,9 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, U
 mod line;
 
 pub use line::{
-    assistant_message_text, collapse_preview, latest_turn_state, parse_transcript_line,
-    parse_transcript_value, read_tail, ParsedTranscriptLine, TailRead, TranscriptRole, TurnState,
+    assistant_message_text, collapse_preview, latest_turn_observation, latest_turn_state,
+    parse_transcript_line, parse_transcript_value, read_tail, ParsedTranscriptLine, TailRead,
+    TranscriptRole, TurnObservation, TurnState,
 };
 
 // Maximum age (mtime → now) of a transcript that will be paired with

@@ -570,11 +570,14 @@ pub struct SessionStore {
     /// (Start/Stop/NeedsInput/Error) *this run*. Runtime-only. The status
     /// poll consults hook activity to decide whether hooks own the
     /// Working/Ready/WaitingForInput classification: once a session proves
-    /// its hook channel is live, the transcript-tail poll stops second-guessing
-    /// turn completion (a long or tool-heavy Claude turn often leaves no
-    /// `end_turn` line inside the tail window, so the tail keeps reading
-    /// Working long after the turn ended) and only keeps ownership of the
-    /// process-liveness edge after no agent remains.
+    /// its hook channel is live, the transcript-tail poll stops heuristically
+    /// second-guessing turn completion (a long or tool-heavy Claude turn often
+    /// leaves no `end_turn` line inside the tail window, so the tail keeps
+    /// reading Working long after the turn ended). The one in-run exception is
+    /// a Codex `task_complete` carrying the exact current hook turn id, which
+    /// can be reconciled under this ledger's lock without admitting a stale
+    /// previous-turn completion. The poll otherwise only keeps ownership of
+    /// the process-liveness edge after no agent remains.
     ///
     /// Hook activity itself also persists across restarts via the session's
     /// `hook_active` field; this ledger distinguishes "confirmed live this run"
@@ -798,6 +801,46 @@ impl SessionStore {
         }
         entry.status = status;
         state.status_source = source;
+        Ok(Some(state.advance_lifecycle_revision()))
+    }
+
+    /// Reconcile a Codex completion observed in its durable transcript while
+    /// the native hook channel still owns status. The completed turn id is
+    /// checked under the same runtime lock as the lifecycle fence so a new
+    /// `UserPromptSubmit` cannot race an old `task_complete` into a resting
+    /// status.
+    pub fn reconcile_codex_turn_completion_if_current(
+        &self,
+        id: &Uuid,
+        expected_source: Option<AgentStatusSource>,
+        expected_lifecycle_revision: u64,
+        completed_turn_id: &str,
+    ) -> SessionResult<Option<u64>> {
+        let completed_turn_id = completed_turn_id.trim();
+        if completed_turn_id.is_empty() {
+            return Ok(None);
+        }
+
+        let mut runtime = self.lock_hook_runtime();
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let state = runtime.entry(*id).or_default();
+        if entry.status != SessionStatus::Working
+            || state.status_source != expected_source
+            || state.lifecycle_revision != expected_lifecycle_revision
+            || !state.confirmed
+            || !entry.hook_active
+            || entry.hook_provider != Some(SessionAgentProvider::Codex)
+            || state.turn_id.as_deref() != Some(completed_turn_id)
+        {
+            return Ok(None);
+        }
+
+        entry.status = SessionStatus::WaitingForInput;
+        state.status_source = Some(AgentStatusSource::TranscriptFallback);
+        state.permission_waiting_at = None;
         Ok(Some(state.advance_lifecycle_revision()))
     }
 
@@ -1632,6 +1675,84 @@ mod tests {
             store.get(&session.id).expect("session exists").status,
             SessionStatus::Working
         );
+    }
+
+    #[test]
+    fn matching_codex_transcript_completion_reconciles_hook_status() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        let requested_at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(123_456);
+
+        store.begin_hook_turn(&session.id, Some("turn-1"));
+        store
+            .apply_native_status(
+                &session.id,
+                SessionAgentProvider::Codex,
+                SessionStatus::Working,
+            )
+            .expect("session exists");
+        store.mark_codex_permission_waiting_at(&session.id, requested_at);
+        let (_, source, _, lifecycle_revision) = store
+            .lifecycle_snapshot(&session.id)
+            .expect("session exists");
+
+        assert!(store
+            .reconcile_codex_turn_completion_if_current(
+                &session.id,
+                source,
+                lifecycle_revision,
+                "turn-1",
+            )
+            .expect("session exists")
+            .is_some());
+        assert_eq!(
+            store.get(&session.id).expect("session exists").status,
+            SessionStatus::WaitingForInput
+        );
+        assert_eq!(
+            store.agent_status_source(&session.id),
+            Some(AgentStatusSource::TranscriptFallback)
+        );
+        assert_eq!(store.codex_permission_waiting_at(&session.id), None);
+    }
+
+    #[test]
+    fn codex_transcript_completion_cannot_overwrite_a_new_turn() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+
+        store.begin_hook_turn(&session.id, Some("turn-1"));
+        store
+            .apply_native_status(
+                &session.id,
+                SessionAgentProvider::Codex,
+                SessionStatus::Working,
+            )
+            .expect("session exists");
+        let (_, source, _, lifecycle_revision) = store
+            .lifecycle_snapshot(&session.id)
+            .expect("session exists");
+
+        // `begin_hook_turn` deliberately precedes the native status write.
+        // The turn-id check must close that narrow window even before the
+        // lifecycle revision advances.
+        store.begin_hook_turn(&session.id, Some("turn-2"));
+        assert_eq!(
+            store
+                .reconcile_codex_turn_completion_if_current(
+                    &session.id,
+                    source,
+                    lifecycle_revision,
+                    "turn-1",
+                )
+                .expect("session exists"),
+            None
+        );
+        assert_eq!(
+            store.get(&session.id).expect("session exists").status,
+            SessionStatus::Working
+        );
+        assert_eq!(store.hook_turn_id(&session.id).as_deref(), Some("turn-2"));
     }
 
     #[test]
