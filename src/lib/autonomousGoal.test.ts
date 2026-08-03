@@ -401,6 +401,6 @@ describe("autonomous goal sessions", () => {
       deriveAutonomousGoalSessionName(
         "\n# Add a configurable autonomous goal session\nMore detail",
       ),
-    ).toBe("Goal · Add a configurable autonomous goal session");
+    ).toBe("Loop · Add a configurable autonomous goal session");
   });
 });

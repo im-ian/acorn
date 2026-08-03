@@ -263,6 +263,7 @@ export const tauriMockSource = `
             turn_id: 'mock-turn',
             role: 'user',
             content: args?.content || '',
+            graph_prompt_plan: args?.graphPromptPlan || null,
             created_at: now,
             status: 'complete',
             metadata: null,

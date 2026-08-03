@@ -760,7 +760,7 @@ export function Sidebar() {
           setAutonomousGoalSession(current);
           setAutonomousGoalOpen(true);
         } catch (error) {
-          console.error("pause goal session before editing failed", error);
+          console.error("pause Loop session before editing failed", error);
           useToasts
             .getState()
             .show(`${t("toasts.autonomousGoal.pauseFailed")} ${String(error)}`);

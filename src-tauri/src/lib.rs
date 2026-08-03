@@ -33,6 +33,7 @@ mod state;
 mod todos;
 mod token_usage;
 mod unified_diff;
+mod work_graph;
 mod worktree;
 
 use std::io::Write;

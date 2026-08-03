@@ -22,10 +22,10 @@
       "worktreeMissing": "工作树文件夹磁盘上不再存在。"
     },
     "autonomousGoal": {
-      "started": "已在 {name} 中启动目标会话。",
+      "started": "已在 {name} 中启动 Loop 会话。",
       "updated": "已更新 {name} 中的目标，并开始重新规划。",
-      "startFailed": "目标会话失败：",
-      "pauseFailed": "目标会话无法暂停："
+      "startFailed": "Loop 会话失败：",
+      "pauseFailed": "Loop 会话无法暂停："
     },
     "project": {
       "addFailed": "无法添加项目：",
@@ -1231,7 +1231,7 @@
       "newIsolatedSession": "新建隔离会话",
       "newIsolatedSessionWorktree": "新建工作树会话",
       "newChatSession": "新聊天会话",
-      "newAutonomousGoalSession": "新建目标会话",
+      "newAutonomousGoalSession": "新建 Loop 会话",
       "newControlSession": "新建控制会话",
       "newProjectFolder": "新建工作区",
       "newProjectFolderWithWorktree": "新建工作树工作区",
@@ -1291,11 +1291,11 @@
       "newSessionMenuInProjectFolder": "在此工作区中创建会话",
       "newSessionInProject": "此项目中的新会话",
       "newSessionInProjectFolder": "此工作区中的新会话",
-      "newAutonomousGoalSession": "新建目标会话",
+      "newAutonomousGoalSession": "新建 Loop 会话",
       "newIsolatedSessionInProject": "此项目中的新工作树会话",
       "newChatSessionInProject": "此项目中的新聊天会话",
       "newControlSessionInProject": "此项目中的新控制会话",
-      "goalSession": "目标会话",
+      "goalSession": "Loop 会话",
       "dragToReorderSession": "拖动以重新排序会话",
       "localTerminalSessions": "本地终端会话",
       "worktree": "工作树",
@@ -1354,10 +1354,47 @@
   },
   "chat": {
     "goalSession": {
-      "label": "项目目标",
+      "label": "Loop 目标",
       "revision": "修订",
       "edit": "编辑目标",
       "pauseAndEdit": "暂停和编辑"
+    },
+    "graphEditor": {
+      "title": "图工程",
+      "subtitle": "让 Acorn 自动设计工作图，或自行定义执行 DAG。",
+      "automatic": "自动",
+      "manual": "手动图",
+      "controlAuto": "图 · 自动",
+      "controlManual": "图 · 手动",
+      "autoTitle": "自动图工程",
+      "autoDescription": "Acorn 会对每个提示执行 prompt → loop → graph 决策。复杂工作会分解为并行、上下文隔离的节点，并带有验证和重试门。",
+      "nodes": "执行节点",
+      "edges": "执行顺序",
+      "kinds": {
+        "agent": "智能体",
+        "validator": "验证器",
+        "merge": "合并",
+        "human": "人工"
+      },
+      "nodeId": "稳定 ID",
+      "nodeTitle": "标题",
+      "instruction": "指令",
+      "remove": "删除",
+      "removeNode": "删除节点",
+      "goalDescription": "每个可执行节点都必须到达这个固定汇点。",
+      "from": "从",
+      "to": "到",
+      "addEdge": "连接",
+      "removeEdge": "删除连接",
+      "valid": "可以运行",
+      "invalid": "图尚未完成",
+      "invalidHelp": "添加指令，并通过无环路径将每个可执行节点连接到 GOAL。",
+      "validationErrors": "图验证错误",
+      "continuationProtocolError": "图继续执行结果既没有 WAITING: 也没有 FINAL:。活动图已保留；请回复以继续，或重试该响应。",
+      "mermaidPreview": "Mermaid 预览",
+      "previewUnavailable": "完成并连接图后即可生成 Mermaid。",
+      "cancel": "取消",
+      "apply": "应用图"
     }
   },
   "pane": {
@@ -1369,7 +1406,7 @@
       "worktree": "工作树",
       "controlSession": "控制会话",
       "chatSession": "聊天会话",
-      "goalSession": "目标会话",
+      "goalSession": "Loop 会话",
       "workSummary": "工作总结",
       "generatingSessionTitle": "生成会话标题",
       "notificationsSilenced": "通知已静音",
@@ -1419,7 +1456,7 @@
       "closeOthers": "关闭其他",
       "closeAll": "全部关闭",
       "newSessionInThisPane": "在此窗格中新建会话",
-      "newGoalSessionInThisPane": "在此窗格中新建目标会话",
+      "newGoalSessionInThisPane": "在此窗格中新建 Loop 会话",
       "closePane": "关闭窗格"
     }
   },
@@ -1769,12 +1806,12 @@
       "gotIt": "明白了"
     },
     "autonomousGoal": {
-      "title": "新建目标会话",
-      "subtitle": "向此项目添加持久的目标会话，并让选定的智能体在隔离工作树中工作。",
-      "editTitle": "编辑项目目标",
+      "title": "新建 Loop 会话",
+      "subtitle": "向此项目添加持久的 Loop 会话，并让选定的智能体在隔离工作树中工作。",
+      "editTitle": "编辑 Loop 目标",
       "editSubtitle": "暂停活动工作，保存修改后的目标，然后重新计划并继续当前策略。",
-      "projectScopeRequired": "目标会话必须在项目内创建。",
-      "selectRepository": "为自主目标选择 Git 仓库",
+      "projectScopeRequired": "Loop 会话必须在项目内创建。",
+      "selectRepository": "为 Loop 会话选择 Git 仓库",
       "sections": {
         "goalTitle": "定义结果",
         "goalDescription": "为智能体提供持久的任务说明。只添加会实质改变完成定义的细节。",
@@ -1807,13 +1844,13 @@
         "unavailable": "CLI 不可用"
       },
       "tabs": {
-        "label": "目标执行设置",
+        "label": "Loop 执行设置",
         "policy": "策略",
         "model": "智能体和模型"
       },
       "model": {
         "singleModel": "每个阶段使用一个模型",
-        "singleModelHint": "默认启用。关闭后可为七个目标阶段分别配置模型。",
+        "singleModelHint": "默认启用。关闭后可为七个 Loop 阶段分别配置模型。",
         "modelLabel": "模型",
         "effortLabel": "推理强度",
         "agentDefault": "默认",
@@ -1822,12 +1859,12 @@
         "chooseDiscoveredModel": "从发现的模型中选择",
         "searchModels": "搜索模型",
         "loadingCapabilities": "正在从已安装的智能体 CLI 加载模型和推理强度级别...",
-        "agentUnavailable": "未找到此智能体 CLI。您仍然可以保存自定义模型，但在 CLI 可用之前，目标无法运行。",
+        "agentUnavailable": "未找到此智能体 CLI。您仍然可以保存自定义模型，但在 CLI 可用之前，Loop 无法运行。",
         "codexCapabilities": "已从 Codex app-server 加载 {count} 个模型及其支持的推理强度级别。",
         "claudeCapabilities": "已加载 Claude CLI 提供的别名和推理强度级别。完整模型 ID 请使用自定义模型。",
         "capabilityFallback": "无法加载 CLI 模型目录。默认值和自定义模型值仍然可用。",
         "allStages": "所有阶段",
-        "snapshotHint": "所选的智能体和模型预设与此目标会话一起保存为快照。默认值让选定的智能体 CLI 选择其当前默认值。"
+        "snapshotHint": "所选的智能体和模型预设与此 Loop 会话一起保存为快照。默认值让选定的智能体 CLI 选择其当前默认值。"
       },
       "modelPreset": {
         "label": "智能体和模型预设",
@@ -1883,7 +1920,7 @@
         "approval": "先询问",
         "disabled": "已禁用"
       },
-      "prototypeNotice": "此目标会立即在新的隔离工作树中启动。每个阶段遵循所选策略和模型。“打开 PR”可推送并创建可供审核的拉取请求；“合并”会等待所需 CI，并遵循自身审批策略。部署、发布和版本发布仍处于禁用状态。",
+      "prototypeNotice": "此 Loop 会立即在新的隔离工作树中启动。每个阶段遵循所选策略和模型。“打开 PR”可推送并创建可供审核的拉取请求；“合并”会等待所需 CI，并遵循自身审批策略。部署、发布和版本发布仍处于禁用状态。",
       "revisionNotice": "打开此编辑器会暂停当前工作。保存后，此修订将成为当前目标，Acorn 会按所选策略重新规划并继续。",
       "footerHint": "启动后会创建会话并立即提交此目标。",
       "editFooterHint": "当前预设快照保持不变，除非您选择另一个预设。",
@@ -2313,7 +2350,7 @@
       "newIsolatedSession": "新建隔离会话",
       "newControlSession": "新建控制会话",
       "newChatSession": "新聊天会话",
-      "newAutonomousGoalSession": "新建目标会话",
+      "newAutonomousGoalSession": "新建 Loop 会话",
       "newProject": "新建项目",
       "addExistingProject": "添加现有项目",
       "refreshSessions": "刷新会话",

@@ -1,3 +1,5 @@
+import type { GraphPromptPlan } from "./workGraph";
+
 export type SessionStatus =
   | "ready"
   | "working"
@@ -300,6 +302,7 @@ export interface ChatMessage {
   turn_id?: string | null;
   role: ChatRole;
   content: string;
+  graph_prompt_plan?: GraphPromptPlan | null;
   created_at: string;
   status?: ChatMessageStatus | null;
   metadata?: unknown;

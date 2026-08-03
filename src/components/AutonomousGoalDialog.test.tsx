@@ -108,7 +108,7 @@ describe("AutonomousGoalDialog", () => {
   function goalSession(): Session {
     return {
       id: "goal-1",
-      name: "Goal · Existing work",
+      name: "Loop · Existing work",
       repo_path: "/tmp/acorn-project",
       worktree_path: "/tmp/acorn-project/.acorn/worktrees/goal-1",
       branch: "goal-1",
@@ -169,13 +169,13 @@ describe("AutonomousGoalDialog", () => {
         ?.className,
     ).toContain("max-w-5xl");
     expect(document.body.textContent).toContain(
-      "New goal session",
+      "New Loop session",
     );
     expect(document.body.textContent).toContain("Full autonomy");
     expect(document.body.textContent).toContain(
       "This built-in preset cannot be changed",
     );
-    expect(button("Start goal").disabled).toBe(true);
+    expect(button("Start Loop").disabled).toBe(true);
   });
 
   it("separates read-only built-ins from editable policy slots", async () => {

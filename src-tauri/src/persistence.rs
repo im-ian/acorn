@@ -130,6 +130,8 @@ pub struct ChatMessage {
     pub turn_id: Option<String>,
     pub role: ChatRole,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_prompt_plan: Option<crate::work_graph::GraphPromptPlan>,
     pub created_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<ChatMessageStatus>,
@@ -1170,6 +1172,7 @@ mod tests {
             turn_id: None,
             role: ChatRole::User,
             content: "hello".to_string(),
+            graph_prompt_plan: None,
             created_at: chrono::Utc::now(),
             status: Some(ChatMessageStatus::Complete),
             metadata: None,
@@ -1183,6 +1186,24 @@ mod tests {
     }
 
     #[test]
+    fn chat_message_without_graph_plan_remains_backward_compatible() {
+        let message: ChatMessage = serde_json::from_value(serde_json::json!({
+            "id": "legacy-message",
+            "role": "user",
+            "content": "raw content",
+            "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .expect("message without graph plan loads");
+
+        assert_eq!(message.content, "raw content");
+        assert_eq!(message.graph_prompt_plan, None);
+        assert!(serde_json::to_value(message)
+            .expect("message serializes")
+            .get("graph_prompt_plan")
+            .is_none());
+    }
+
+    #[test]
     fn updated_chat_message_survives_reload() {
         let tmp = tempfile::tempdir().unwrap();
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -1192,6 +1213,7 @@ mod tests {
             turn_id: None,
             role: ChatRole::Assistant,
             content: "hel".to_string(),
+            graph_prompt_plan: None,
             created_at: chrono::Utc::now(),
             status: Some(ChatMessageStatus::Streaming),
             metadata: None,

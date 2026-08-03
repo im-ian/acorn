@@ -50,6 +50,7 @@ import type {
   MacosPermissionResetResult,
 } from "./permissionWarmup";
 import type { IpcListWorkspacesResponsePayload } from "./ipcWorkspaces";
+import type { GraphPromptPlan } from "./workGraph";
 
 export type {
   ChatMessage,
@@ -65,6 +66,14 @@ export type {
   ProviderThread,
   SessionMemory,
 } from "./types";
+export type {
+  GraphPromptContinuation,
+  GraphPromptPlan,
+  WorkGraph,
+  WorkGraphEdge,
+  WorkGraphNode,
+  WorkGraphNodeKind,
+} from "./workGraph";
 
 export interface LoadStatus {
   sessionsClean: boolean;
@@ -289,11 +298,13 @@ export const api = {
     sessionId: string,
     ai: AiExecutionRequest,
     content: string,
+    graphPromptPlan?: GraphPromptPlan,
   ): Promise<ChatSessionState> {
     return invoke<ChatSessionState>("send_chat_message", {
       sessionId,
       ai,
       content,
+      graphPromptPlan,
     });
   },
   retryChatMessage(

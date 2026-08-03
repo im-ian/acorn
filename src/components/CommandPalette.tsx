@@ -377,7 +377,15 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           <Command.Item
             value="new-autonomous-goal-session"
             onSelect={handleNewAutonomousGoalSession}
-            keywords={["autonomous", "goal", "agent", "codex", "claude"]}
+            keywords={[
+              "loop",
+              "objective",
+              "autonomous",
+              "goal",
+              "agent",
+              "codex",
+              "claude",
+            ]}
           >
             <Sparkles size={14} className="text-accent" />
             <span>

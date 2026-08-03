@@ -22,10 +22,10 @@
       "worktreeMissing": "Worktree folder no longer exists on disk."
     },
     "autonomousGoal": {
-      "started": "Goal session started in {name}.",
-      "updated": "Goal updated in {name}. Replanning has started.",
-      "startFailed": "Goal session failed:",
-      "pauseFailed": "Goal session could not be paused:"
+      "started": "Loop session started in {name}.",
+      "updated": "Objective updated in {name}. Replanning has started.",
+      "startFailed": "Loop session failed:",
+      "pauseFailed": "Loop session could not be paused:"
     },
     "project": {
       "addFailed": "Failed to add project:",
@@ -1231,7 +1231,7 @@
       "newIsolatedSession": "New isolated session",
       "newIsolatedSessionWorktree": "New worktree session",
       "newChatSession": "New chat session",
-      "newAutonomousGoalSession": "New goal session",
+      "newAutonomousGoalSession": "New Loop session",
       "newControlSession": "New control session",
       "newProjectFolder": "New workspace",
       "newProjectFolderWithWorktree": "New worktree workspace",
@@ -1291,11 +1291,11 @@
       "newSessionMenuInProjectFolder": "Create session in this workspace",
       "newSessionInProject": "New session in this project",
       "newSessionInProjectFolder": "New session in this workspace",
-      "newAutonomousGoalSession": "New goal session",
+      "newAutonomousGoalSession": "New Loop session",
       "newIsolatedSessionInProject": "New worktree session in this project",
       "newChatSessionInProject": "New chat session in this project",
       "newControlSessionInProject": "New control session in this project",
-      "goalSession": "goal session",
+      "goalSession": "Loop session",
       "dragToReorderSession": "Drag to reorder session",
       "localTerminalSessions": "Local terminal sessions",
       "worktree": "worktree",
@@ -1354,10 +1354,47 @@
   },
   "chat": {
     "goalSession": {
-      "label": "Project goal",
+      "label": "Loop objective",
       "revision": "Revision",
-      "edit": "Edit goal",
+      "edit": "Edit objective",
       "pauseAndEdit": "Pause & edit"
+    },
+    "graphEditor": {
+      "title": "Graph Engineering",
+      "subtitle": "Let Acorn design the work graph automatically, or define the execution DAG yourself.",
+      "automatic": "Automatic",
+      "manual": "Manual graph",
+      "controlAuto": "Graph · Auto",
+      "controlManual": "Graph · Manual",
+      "autoTitle": "Automatic Graph Engineering",
+      "autoDescription": "Acorn compiles each prompt with a prompt → loop → graph decision. Complex work is decomposed into parallel, context-isolated nodes with validation and retry gates.",
+      "nodes": "Execution nodes",
+      "edges": "Execution order",
+      "kinds": {
+        "agent": "Agent",
+        "validator": "Validator",
+        "merge": "Merge",
+        "human": "Human"
+      },
+      "nodeId": "Stable ID",
+      "nodeTitle": "Title",
+      "instruction": "Instruction",
+      "remove": "Remove",
+      "removeNode": "Remove node",
+      "goalDescription": "Every executable node must reach this fixed sink.",
+      "from": "From",
+      "to": "To",
+      "addEdge": "Connect",
+      "removeEdge": "Remove edge",
+      "valid": "Ready to run",
+      "invalid": "Graph is incomplete",
+      "invalidHelp": "Add instructions and connect every executable node through an acyclic path to GOAL.",
+      "validationErrors": "Graph validation errors",
+      "continuationProtocolError": "The graph continuation returned neither WAITING: nor FINAL:. The active graph was preserved; reply to continue or retry the response.",
+      "mermaidPreview": "Mermaid preview",
+      "previewUnavailable": "Complete and connect the graph to generate Mermaid.",
+      "cancel": "Cancel",
+      "apply": "Apply graph"
     }
   },
   "pane": {
@@ -1369,7 +1406,7 @@
       "worktree": "worktree",
       "controlSession": "control session",
       "chatSession": "chat session",
-      "goalSession": "goal session",
+      "goalSession": "Loop session",
       "workSummary": "work summary",
       "generatingSessionTitle": "Generating session title",
       "notificationsSilenced": "Notifications silenced",
@@ -1419,7 +1456,7 @@
       "closeOthers": "Close Others",
       "closeAll": "Close All",
       "newSessionInThisPane": "New Session in This Pane",
-      "newGoalSessionInThisPane": "New Goal Session in This Pane",
+      "newGoalSessionInThisPane": "New Loop Session in This Pane",
       "closePane": "Close Pane"
     }
   },
@@ -1769,12 +1806,12 @@
       "gotIt": "Got it"
     },
     "autonomousGoal": {
-      "title": "New goal session",
-      "subtitle": "Add a durable goal session to this project and let the selected agent work in an isolated worktree.",
-      "editTitle": "Edit project goal",
-      "editSubtitle": "Pause active work, save the revised goal, then replan and continue with the current policies.",
-      "projectScopeRequired": "Goal sessions must be created inside a project.",
-      "selectRepository": "Select a Git repository for the autonomous goal",
+      "title": "New Loop session",
+      "subtitle": "Add a durable Loop session to this project and let the selected agent work in an isolated worktree.",
+      "editTitle": "Edit Loop objective",
+      "editSubtitle": "Pause active work, save the revised objective, then replan and continue with the current policies.",
+      "projectScopeRequired": "Loop sessions must be created inside a project.",
+      "selectRepository": "Select a Git repository for the Loop session",
       "sections": {
         "goalTitle": "Define the outcome",
         "goalDescription": "Give the agent a durable brief. Add only the details that materially change what done means.",
@@ -1782,7 +1819,7 @@
         "executionDescription": "Set the approval boundaries, agent, model, and effort routing saved with this session."
       },
       "goal": {
-        "label": "Goal",
+        "label": "Objective",
         "hint": "Required. Write the outcome you want, not an issue to select.",
         "placeholder": "For example: Add keyboard navigation to the command palette and verify it with tests."
       },
@@ -1807,13 +1844,13 @@
         "unavailable": "CLI unavailable"
       },
       "tabs": {
-        "label": "Goal execution settings",
+        "label": "Loop execution settings",
         "policy": "Policy",
         "model": "Agent & Model"
       },
       "model": {
         "singleModel": "Use one model for every stage",
-        "singleModelHint": "Enabled by default. Turn it off to route each of the seven Goal stages independently.",
+        "singleModelHint": "Enabled by default. Turn it off to route each of the seven Loop stages independently.",
         "modelLabel": "Model",
         "effortLabel": "Effort",
         "agentDefault": "Default",
@@ -1822,12 +1859,12 @@
         "chooseDiscoveredModel": "Choose from discovered models",
         "searchModels": "Search models",
         "loadingCapabilities": "Loading models and effort levels from the installed agent CLIs...",
-        "agentUnavailable": "This agent CLI was not found. You can still save a custom model, but the Goal cannot run until the CLI is available.",
+        "agentUnavailable": "This agent CLI was not found. You can still save a custom model, but the Loop cannot run until the CLI is available.",
         "codexCapabilities": "Loaded {count} models and their supported effort levels from Codex app-server.",
         "claudeCapabilities": "Loaded the aliases and effort levels exposed by Claude CLI. Use Custom model for a full model ID.",
         "capabilityFallback": "The CLI model catalog could not be loaded. Default and custom model values remain available.",
         "allStages": "All stages",
-        "snapshotHint": "The selected agent and model preset is saved as a snapshot with this Goal session. Default lets the selected agent CLI choose its current default."
+        "snapshotHint": "The selected agent and model preset is saved as a snapshot with this Loop session. Default lets the selected agent CLI choose its current default."
       },
       "modelPreset": {
         "label": "Agent & model preset",
@@ -1883,11 +1920,11 @@
         "approval": "Ask first",
         "disabled": "Disabled"
       },
-      "prototypeNotice": "This Goal starts immediately in a new isolated worktree. Each stage follows its selected policy and model. Open PR can push and create a ready-for-review pull request; Merge waits for required CI and follows its own approval policy. Deploy, publish, and release remain blocked.",
+      "prototypeNotice": "This Loop starts immediately in a new isolated worktree. Each stage follows its selected policy and model. Open PR can push and create a ready-for-review pull request; Merge waits for required CI and follows its own approval policy. Deploy, publish, and release remain blocked.",
       "revisionNotice": "Opening this editor pauses active work. Saving makes this revision the current authority, then Acorn replans and resumes with the selected policies.",
-      "footerHint": "Starting creates the session and submits this goal immediately.",
+      "footerHint": "Starting creates the session and submits this objective immediately.",
       "editFooterHint": "The current preset snapshot remains unchanged unless you select another preset.",
-      "start": "Start goal",
+      "start": "Start Loop",
       "starting": "Creating worktree...",
       "saveAndReplan": "Save & continue",
       "replanning": "Saving revision..."
@@ -2313,7 +2350,7 @@
       "newIsolatedSession": "New isolated session",
       "newControlSession": "New control session",
       "newChatSession": "New chat session",
-      "newAutonomousGoalSession": "New goal session",
+      "newAutonomousGoalSession": "New Loop session",
       "newProject": "New project",
       "addExistingProject": "Add existing project",
       "refreshSessions": "Refresh sessions",

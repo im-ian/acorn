@@ -2758,7 +2758,7 @@ test.describe("sidebar: project lifecycle", () => {
       "New workspace",
       "New worktree workspace",
       "Add source folder",
-      "New goal session",
+      "New Loop session",
       "New chat session",
     ]);
     expect(menuLabels[5]).toMatch(
@@ -2771,7 +2771,7 @@ test.describe("sidebar: project lifecycle", () => {
       page.getByRole("menuitem", { name: /New worktree session/i }),
     ).toHaveCount(0);
     await expect(
-      page.getByRole("menuitem", { name: "New goal session" }),
+      page.getByRole("menuitem", { name: "New Loop session" }),
     ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "New chat session" }),

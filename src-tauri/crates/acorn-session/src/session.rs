@@ -320,8 +320,8 @@ pub enum SessionGoalStage {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionGoalRunState {
-    /// Persisted Goal sessions created before staged execution was introduced
-    /// remain readable and are never restarted implicitly.
+    /// Persisted Loop sessions without staged progress remain readable and are
+    /// never restarted implicitly.
     #[default]
     Legacy,
     Pending,
@@ -372,9 +372,9 @@ fn default_goal_revision() -> u32 {
     1
 }
 
-/// Durable goal specification for a project-owned chat session. Preset
-/// policies are copied into the session so later preset edits or deletion do
-/// not change work that is already running.
+/// Durable Loop objective for a project-owned chat session. Preset policies
+/// are copied into the session so later preset edits or deletion do not change
+/// work that is already running.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionGoal {
     pub objective: String,

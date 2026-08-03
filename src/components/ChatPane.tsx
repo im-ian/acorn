@@ -11,6 +11,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Waypoints,
   X,
 } from "lucide-react";
 import {
@@ -45,6 +46,13 @@ import { EDIT_AUTONOMOUS_GOAL_SESSION_EVENT } from "../lib/autonomousGoal";
 import { useDialogShortcuts } from "../lib/dialog";
 import { useAppStore } from "../store";
 import { useTranslation } from "../lib/useTranslation";
+import {
+  AUTOMATIC_GRAPH_PROMPT_PLAN,
+  isGraphPromptPlanContinuation,
+  markGraphPromptPlanContinuation,
+  validateGraphPromptPlan,
+  type GraphPromptPlan,
+} from "../lib/workGraph";
 import type {
   ChatMessage,
   Session,
@@ -53,6 +61,7 @@ import type {
 } from "../lib/types";
 import { ChatActivityTimeline } from "./chat/ChatActivityTimeline";
 import { ChatMessageBody } from "./chat/ChatMessageBody";
+import { GraphEditorModal } from "./GraphEditorModal";
 import { Tooltip } from "./Tooltip";
 import { Button, Modal, ModalFooter, ModalHeader, Select } from "./ui";
 
@@ -141,16 +150,73 @@ function sessionStatusFromChatState(state: ChatSessionState): SessionStatus {
   if (lastMessage?.status === "error" || lastTurn?.status === "error") {
     return "errored";
   }
-  if (
-    lastMessage?.role === "assistant" &&
-    lastMessage.status !== "cancelled" &&
-    lastMessage.content
-      .split(/\r?\n/u)
-      .some((line) => line.trimStart().startsWith("WAITING:"))
-  ) {
+  if (assistantMessageRequestsInput(lastMessage)) {
     return "waiting_for_input";
   }
   return "ready";
+}
+
+function assistantMessageHasProtocolLine(
+  message: ChatMessage | undefined,
+  prefix: "WAITING:" | "FINAL:",
+): boolean {
+  return Boolean(
+    message?.role === "assistant" &&
+      message.status !== "pending" &&
+      message.status !== "streaming" &&
+      message.status !== "error" &&
+      message.status !== "cancelled" &&
+      message.content
+        .split(/\r?\n/u)
+        .some((line) => line.trimStart().startsWith(prefix)),
+  );
+}
+
+function assistantMessageRequestsInput(message: ChatMessage | undefined): boolean {
+  return assistantMessageHasProtocolLine(message, "WAITING:");
+}
+
+function assistantMessageReachesFinal(message: ChatMessage | undefined): boolean {
+  return assistantMessageHasProtocolLine(message, "FINAL:");
+}
+
+function activeWaitingAssistantIndex(state: ChatSessionState): number | null {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const message = state.messages[index];
+    if (assistantMessageReachesFinal(message)) return null;
+    if (assistantMessageRequestsInput(message)) return index;
+  }
+  return null;
+}
+
+function persistedContinuationPlan(
+  state: ChatSessionState,
+): GraphPromptPlan | null {
+  const waitingIndex = activeWaitingAssistantIndex(state);
+  if (waitingIndex === null) return null;
+  const assistant = state.messages[waitingIndex];
+  for (let index = waitingIndex - 1; index >= 0; index -= 1) {
+    const message = state.messages[index];
+    if (message.role !== "user" || !message.graph_prompt_plan) continue;
+    if (assistant?.turn_id && assistant.turn_id !== message.turn_id) {
+      continue;
+    }
+    if (!validateGraphPromptPlan(message.graph_prompt_plan).valid) return null;
+    return markGraphPromptPlanContinuation(message.graph_prompt_plan);
+  }
+  return null;
+}
+
+function graphContinuationProtocolViolated(state: ChatSessionState): boolean {
+  const waitingIndex = activeWaitingAssistantIndex(state);
+  if (waitingIndex === null || chatStateIsRunning(state)) return false;
+  const latestIndex = state.messages.length - 1;
+  if (latestIndex <= waitingIndex) return false;
+  const latest = state.messages[latestIndex];
+  return (
+    !assistantMessageRequestsInput(latest) &&
+    !assistantMessageReachesFinal(latest)
+  );
 }
 
 function isChatScrolledBack(element: HTMLElement): boolean {
@@ -632,6 +698,7 @@ export function ChatPane({
   repoPath,
   session,
 }: ChatPaneProps) {
+  const t = useTranslation();
   const [state, setState] = useState<ChatSessionState | null>(null);
   const latestChatStateRef = useRef<ChatSessionState | null>(null);
   const [loading, setLoading] = useState(true);
@@ -639,6 +706,10 @@ export function ChatPane({
   const [cancelling, setCancelling] = useState(false);
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [graphPromptPlan, setGraphPromptPlan] = useState<GraphPromptPlan>(
+    AUTOMATIC_GRAPH_PROMPT_PLAN,
+  );
+  const [graphEditorOpen, setGraphEditorOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -682,6 +753,7 @@ export function ChatPane({
     composerIsCentered &&
     canUseNewWorktree &&
     !(session?.isolated || session?.in_worktree);
+  const graphPromptPlanValid = validateGraphPromptPlan(graphPromptPlan).valid;
 
   function syncScrollState() {
     const element = scrollRef.current;
@@ -714,6 +786,19 @@ export function ChatPane({
         defaultProvider(useSettings.getState().settings),
     );
     setSending(chatStateIsRunning(loaded));
+    if (!session?.goal) {
+      const continuation = persistedContinuationPlan(loaded);
+      if (continuation) {
+        setGraphPromptPlan(continuation);
+        if (graphContinuationProtocolViolated(loaded)) {
+          setError(t("chat.graphEditor.continuationProtocolError"));
+        }
+      } else if (
+        assistantMessageReachesFinal(loaded.messages[loaded.messages.length - 1])
+      ) {
+        setGraphPromptPlan(AUTOMATIC_GRAPH_PROMPT_PLAN);
+      }
+    }
     return true;
   }
 
@@ -791,6 +876,8 @@ export function ChatPane({
     setEditingMessageId(null);
     setEditDraft("");
     setMessageActionBusyId(null);
+    setGraphPromptPlan(AUTOMATIC_GRAPH_PROMPT_PLAN);
+    setGraphEditorOpen(false);
   }, [sessionId]);
 
   useEffect(() => {
@@ -870,7 +957,10 @@ export function ChatPane({
       submittedAttachments,
       repoPath,
     );
-    if (!content) return;
+    if (!content || (!session?.goal && !graphPromptPlanValid)) return;
+    const submittedGraphPromptPlan = session?.goal
+      ? undefined
+      : graphPromptPlan;
 
     const previousState =
       latestChatStateRef.current?.session_id === sessionId
@@ -900,6 +990,7 @@ export function ChatPane({
             turn_id: `local-turn-${now}`,
             role: "user",
             content,
+            graph_prompt_plan: submittedGraphPromptPlan,
             created_at: now,
             status: "complete",
             metadata: null,
@@ -924,8 +1015,25 @@ export function ChatPane({
         sessionId,
         chatAiRequest(provider, settings),
         content,
+        submittedGraphPromptPlan,
       );
       applyChatState(saved);
+      if (submittedGraphPromptPlan) {
+        const assistant = saved.messages[saved.messages.length - 1];
+        if (assistantMessageRequestsInput(assistant)) {
+          setGraphPromptPlan(
+            markGraphPromptPlanContinuation(submittedGraphPromptPlan),
+          );
+        } else if (
+          isGraphPromptPlanContinuation(submittedGraphPromptPlan) &&
+          !assistantMessageReachesFinal(assistant)
+        ) {
+          setGraphPromptPlan(submittedGraphPromptPlan);
+          setError(t("chat.graphEditor.continuationProtocolError"));
+        } else {
+          setGraphPromptPlan(AUTOMATIC_GRAPH_PROMPT_PLAN);
+        }
+      }
       setLocalChatSessionStatus(sessionId, sessionStatusFromChatState(saved));
     } catch (err) {
       const latestState = latestChatStateRef.current;
@@ -1618,6 +1726,38 @@ export function ChatPane({
                   <Paperclip size={composerIsCentered ? 17 : 15} />
                 </button>
               </Tooltip>
+              {!session?.goal ? (
+                <Tooltip label={t("chat.graphEditor.title")} side="top">
+                  <button
+                    type="button"
+                    aria-label={`${t("chat.graphEditor.title")}: ${
+                      graphPromptPlan.mode === "automatic"
+                        ? t("chat.graphEditor.controlAuto")
+                        : t("chat.graphEditor.controlManual")
+                    }`}
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded border px-2 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50 ${
+                      graphPromptPlan.mode === "manual"
+                        ? "border-accent/35 bg-accent/10 text-accent hover:bg-accent/15"
+                        : "border-transparent text-fg-muted hover:bg-bg-sidebar hover:text-fg"
+                    } ${composerIsCentered ? "h-9" : "h-8"}`}
+                    disabled={
+                      sending || isGraphPromptPlanContinuation(graphPromptPlan)
+                    }
+                    onClick={() => setGraphEditorOpen(true)}
+                  >
+                    <Waypoints size={14} />
+                    <span>
+                      {graphPromptPlan.mode === "automatic"
+                        ? t("chat.graphEditor.controlAuto")
+                        : `${t("chat.graphEditor.controlManual")} · ${
+                            graphPromptPlan.graph.nodes.filter(
+                              (node) => node.kind !== "goal_sink",
+                            ).length
+                          }`}
+                    </span>
+                  </button>
+                </Tooltip>
+              ) : null}
               {attachments.length > 0 ? (
                 <div className="flex min-w-0 flex-wrap items-center gap-1">
                   {attachments.map((attachment) => (
@@ -1700,7 +1840,10 @@ export function ChatPane({
                   className={`inline-flex shrink-0 items-center justify-center rounded bg-accent/20 text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-50 ${
                     composerIsCentered ? "h-9 w-9" : "h-8 w-8"
                   }`}
-                  disabled={draft.trim().length === 0 && attachments.length === 0}
+                  disabled={
+                    (draft.trim().length === 0 && attachments.length === 0) ||
+                    !graphPromptPlanValid
+                  }
                   type="submit"
                 >
                   <Send size={composerIsCentered ? 18 : 16} />
@@ -1721,6 +1864,17 @@ export function ChatPane({
           void handleForkBeforeMessage(forkTargetIndex, mode);
         }}
       />
+      {!session?.goal ? (
+        <GraphEditorModal
+          open={graphEditorOpen}
+          plan={graphPromptPlan}
+          onClose={() => setGraphEditorOpen(false)}
+          onApply={(plan) => {
+            setGraphPromptPlan(plan);
+            setGraphEditorOpen(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
