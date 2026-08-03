@@ -684,7 +684,7 @@ pub fn run() {
                 .ok();
 
             // Watcher that mirrors live agent transcripts into per-session
-            // `claude.id` / `codex.id` / `antigravity.id` files. The focus-time resume modal
+            // `claude.id` / `codex.id` / `antigravity.id` / `grok.id` files. The focus-time resume modal
             // reads those files; no shim or PATH injection is required.
             agent_resume_persister::spawn(state.inner().clone());
 

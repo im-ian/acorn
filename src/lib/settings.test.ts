@@ -1757,7 +1757,17 @@ Rules:
       ["claude", "Claude Code"],
       ["codex", "Codex"],
       ["antigravity", "Antigravity"],
+      ["grok", "Grok Build"],
     ]);
+  });
+
+  it("runs Grok through the official headless CLI mode", () => {
+    expect(
+      resolveAiExecutionRequest({
+        ...DEFAULT_SETTINGS,
+        agents: { ...DEFAULT_SETTINGS.agents, selected: "grok" },
+      }),
+    ).toEqual({ provider: "grok", ollamaModel: "", llmModel: "" });
   });
 
   it("falls back from persisted hidden agents to the default agent", async () => {

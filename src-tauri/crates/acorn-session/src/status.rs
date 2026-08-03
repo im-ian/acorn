@@ -23,6 +23,13 @@
 //! - last `type=PLANNER_RESPONSE` with non-empty `tool_calls` -> Working.
 //! - last `type=USER_INPUT` or any non-DONE model/tool line -> Working.
 //!
+//! Grok transcripts:
+//! - last `sessionUpdate=turn_completed` -> WaitingForInput while the Grok
+//!   process remains live (the TUI has returned to its prompt).
+//! - user/agent/thought chunks and tool call updates -> Working.
+//! - hook and other metadata updates are ignored when selecting the last turn
+//!   event.
+//!
 //! Meta-only lines (claude: `last-prompt` / `permission-mode` /
 //! `attachment` / `file-history-snapshot` / `queue-operation` / `system`;
 //! codex: `token_count` and other event_msg telemetry) are ignored when
@@ -70,9 +77,10 @@ pub struct StatusDetection {
     pub status: SessionStatus,
     pub reason: Option<StatusReason>,
     pub evidence: StatusEvidence,
-    /// Codex turn identity carried by the completion event that produced
-    /// `TurnComplete`. Other providers and unscoped completion formats leave
-    /// this empty.
+    /// Provider turn identity carried by the completion event that produced
+    /// `TurnComplete`. Codex uses `turn_id` and Grok uses `prompt_id`;
+    /// providers or completion formats without a scoped identity leave this
+    /// empty.
     pub completed_provider_turn_id: Option<String>,
     /// Provider timestamp of the transcript line this detection classified.
     /// Only transcript evidence carries one.
@@ -124,8 +132,10 @@ impl StatusDetection {
 /// completed turn long after the agent process exited. When the PTY is idle
 /// (or gone), the durable marker is stale for status purposes and the session
 /// should be Ready. When a live descendant exists, the transcript tail refines
-/// that live process into Working or Ready; explicit input requests arrive
-/// through agent lifecycle hooks.
+/// that live process into Working or a provider-specific resting status. Grok
+/// has no Acorn lifecycle-hook channel, so its durable `turn_completed` event
+/// maps directly to WaitingForInput; providers with hooks continue to receive
+/// explicit input requests through those hooks.
 pub fn detect(
     transcript: Option<(PathBuf, AgentKind)>,
     previous: SessionStatus,
@@ -158,7 +168,7 @@ pub fn detect_with_reason(
             provider_turn_id,
             timestamp,
         }) => StatusDetection::new(
-            SessionStatus::Ready,
+            completed_turn_status(kind),
             Some(StatusReason::TurnComplete),
             StatusEvidence::Transcript,
         )
@@ -175,6 +185,17 @@ pub fn detect_with_reason(
         // to Ready. The next poll that lands on a real turn line corrects
         // it.
         None => StatusDetection::new(previous, None, StatusEvidence::Previous),
+    }
+}
+
+fn completed_turn_status(kind: AgentKind) -> SessionStatus {
+    match kind {
+        // A live Grok process writes `turn_completed` after rendering the final
+        // answer and returning to its input prompt. Unlike the other providers,
+        // Grok currently has no Acorn lifecycle-hook integration that can turn
+        // that boundary into an explicit NeedsInput event.
+        AgentKind::Grok => SessionStatus::WaitingForInput,
+        AgentKind::Claude | AgentKind::Codex | AgentKind::Antigravity => SessionStatus::Ready,
     }
 }
 
@@ -426,6 +447,31 @@ mod tests {
     }
 
     #[test]
+    fn grok_turn_completed_maps_to_ready_over_trailing_metadata() {
+        let tail = concat!(
+            r#"{"method":"session/update","params":{"sessionId":"0198c151-f3ee-7991-9768-741923bb6b50","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Done"}}}}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"sessionId":"0198c151-f3ee-7991-9768-741923bb6b50","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+            "\n",
+            r#"{"method":"_x.ai/session/update","params":{"update":{"sessionUpdate":"hook_execution","hookName":"Stop"}}}"#,
+        );
+
+        assert_eq!(
+            classify_tail(AgentKind::Grok, tail, true),
+            Some(TurnState::Ready),
+        );
+    }
+
+    #[test]
+    fn grok_tool_update_maps_to_working() {
+        let tail = r#"{"method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"tool-1","status":"completed"}}}"#;
+        assert_eq!(
+            classify_tail(AgentKind::Grok, tail, true),
+            Some(TurnState::Working),
+        );
+    }
+
+    #[test]
     fn antigravity_done_planner_maps_to_ready() {
         let tail = r#"{"type":"PLANNER_RESPONSE","status":"DONE","content":"done"}"#;
         assert_eq!(
@@ -522,6 +568,87 @@ mod tests {
         assert_eq!(detection.reason, Some(StatusReason::TurnComplete));
         assert_eq!(detection.evidence, StatusEvidence::Transcript);
         assert_eq!(detection.completed_provider_turn_id.as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn detect_reports_grok_waiting_with_prompt_id_for_finished_transcript() {
+        let path = write_status_transcript(
+            r#"{"method":"session/update","params":{"sessionId":"0198c151-f3ee-7991-9768-741923bb6b50","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+        );
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::WaitingForInput);
+        assert_eq!(detection.reason, Some(StatusReason::TurnComplete));
+        assert_eq!(detection.evidence, StatusEvidence::Transcript);
+        assert_eq!(
+            detection.completed_provider_turn_id.as_deref(),
+            Some("prompt-7")
+        );
+    }
+
+    #[test]
+    fn grok_live_turn_transitions_working_waiting_working() {
+        let first_prompt = r#"{"method":"session/update","params":{"sessionId":"0198c151-f3ee-7991-9768-741923bb6b50","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"first"}}}}"#;
+        let completed = r#"{"method":"session/update","params":{"sessionId":"0198c151-f3ee-7991-9768-741923bb6b50","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#;
+        let second_prompt = r#"{"method":"session/update","params":{"sessionId":"0198c151-f3ee-7991-9768-741923bb6b50","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"second"}}}}"#;
+        let path = write_status_transcript(first_prompt);
+
+        let working = detect_with_reason(
+            Some((path.clone(), AgentKind::Grok)),
+            SessionStatus::Ready,
+            Some(ShellHint::Running),
+        );
+        assert_eq!(working.status, SessionStatus::Working);
+        assert_eq!(working.evidence, StatusEvidence::Transcript);
+
+        std::fs::write(&path, format!("{first_prompt}\n{completed}"))
+            .expect("append Grok completion");
+        let waiting = detect_with_reason(
+            Some((path.clone(), AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+        assert_eq!(waiting.status, SessionStatus::WaitingForInput);
+        assert_eq!(waiting.reason, Some(StatusReason::TurnComplete));
+        assert_eq!(
+            waiting.completed_provider_turn_id.as_deref(),
+            Some("prompt-7")
+        );
+
+        std::fs::write(
+            &path,
+            format!("{first_prompt}\n{completed}\n{second_prompt}"),
+        )
+        .expect("append second Grok prompt");
+        let resumed = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::WaitingForInput,
+            Some(ShellHint::Running),
+        );
+        assert_eq!(resumed.status, SessionStatus::Working);
+        assert_eq!(resumed.evidence, StatusEvidence::Transcript);
+    }
+
+    #[test]
+    fn completed_grok_transcript_returns_ready_after_process_exit() {
+        let path = write_status_transcript(
+            r#"{"method":"session/update","params":{"sessionId":"0198c151-f3ee-7991-9768-741923bb6b50","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+        );
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::WaitingForInput,
+            Some(ShellHint::Idle),
+        );
+
+        assert_eq!(detection.status, SessionStatus::Ready);
+        assert_eq!(detection.reason, None);
+        assert_eq!(detection.evidence, StatusEvidence::Process);
     }
 
     #[test]

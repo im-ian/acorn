@@ -227,6 +227,7 @@ pub enum AgentKind {
     OpenInterpreter,
     Codex,
     Antigravity,
+    Grok,
     Unknown,
 }
 
@@ -239,6 +240,7 @@ impl From<InteractiveAgentKind> for AgentKind {
             InteractiveAgentKind::Claude => Self::ClaudeCode,
             InteractiveAgentKind::Codex => Self::Codex,
             InteractiveAgentKind::Antigravity => Self::Antigravity,
+            InteractiveAgentKind::Grok => Self::Grok,
         }
     }
 }
@@ -251,10 +253,10 @@ impl TryFrom<AgentKind> for InteractiveAgentKind {
             AgentKind::ClaudeCode => Ok(Self::Claude),
             AgentKind::Codex => Ok(Self::Codex),
             AgentKind::Antigravity => Ok(Self::Antigravity),
-            AgentKind::Aider
-            | AgentKind::Llm
-            | AgentKind::OpenInterpreter
-            | AgentKind::Unknown => Err(NonInteractiveAgentKind(kind)),
+            AgentKind::Grok => Ok(Self::Grok),
+            AgentKind::Aider | AgentKind::Llm | AgentKind::OpenInterpreter | AgentKind::Unknown => {
+                Err(NonInteractiveAgentKind(kind))
+            }
         }
     }
 }
@@ -429,11 +431,15 @@ mod tests {
             serde_json::to_string(&AgentKind::ClaudeCode).unwrap(),
             "\"claude-code\""
         );
-        assert_eq!(serde_json::to_string(&AgentKind::Codex).unwrap(), "\"codex\"");
+        assert_eq!(
+            serde_json::to_string(&AgentKind::Codex).unwrap(),
+            "\"codex\""
+        );
         assert_eq!(
             serde_json::to_string(&AgentKind::Antigravity).unwrap(),
             "\"antigravity\""
         );
+        assert_eq!(serde_json::to_string(&AgentKind::Grok).unwrap(), "\"grok\"");
 
         assert_eq!(
             AgentKind::from(InteractiveAgentKind::Claude),
@@ -450,6 +456,10 @@ mod tests {
         assert_eq!(
             InteractiveAgentKind::try_from(AgentKind::Antigravity).unwrap(),
             InteractiveAgentKind::Antigravity
+        );
+        assert_eq!(
+            InteractiveAgentKind::try_from(AgentKind::Grok).unwrap(),
+            InteractiveAgentKind::Grok
         );
         assert!(InteractiveAgentKind::try_from(AgentKind::Aider).is_err());
     }

@@ -48,6 +48,10 @@ const COPY: Record<AgentKind, AgentCopy> = {
     bodyKey: "dialogs.agentResume.bodyAntigravity",
     ariaLabelledBy: "acorn-antigravity-resume-title",
   },
+  grok: {
+    bodyKey: "dialogs.agentResume.bodyGrok",
+    ariaLabelledBy: "acorn-grok-resume-title",
+  },
 };
 
 /**

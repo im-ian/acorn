@@ -42,7 +42,7 @@ export type SessionOwner =
 
 export type SessionTitleSource = "default" | "generated" | "manual";
 
-export type SessionAgentProvider = "claude" | "codex" | "antigravity";
+export type SessionAgentProvider = "claude" | "codex" | "antigravity" | "grok";
 
 export type SessionGoalProvider = Extract<
   SessionAgentProvider,

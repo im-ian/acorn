@@ -1833,7 +1833,7 @@ function session(
   branch: string,
   options: {
     status: "ready" | "working" | "waiting_for_input" | "errored";
-    agent: "claude" | "codex" | "antigravity";
+    agent: "claude" | "codex" | "antigravity" | "grok";
     position: number;
     cwd?: string;
     isolated?: boolean;
