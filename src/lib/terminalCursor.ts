@@ -15,6 +15,17 @@ export function xtermCursorStyle(
   }
 }
 
+/** Resolve the native cursor shape selected by a DECSCUSR control sequence. */
+export function cursorStyleFromDecscusr(
+  parameter: number | undefined,
+): XtermCursorStyle | null {
+  const value = parameter ?? 1;
+  if (value === 1 || value === 2) return "block";
+  if (value === 3 || value === 4) return "underline";
+  if (value === 5 || value === 6) return "bar";
+  return null;
+}
+
 export function nextCursorApplicationOverride(
   current: boolean,
   parameter: number | undefined,

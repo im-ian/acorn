@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  cursorStyleFromDecscusr,
   nextCursorApplicationOverride,
   xtermCursorStyle,
 } from "./terminalCursor";
@@ -33,5 +34,25 @@ describe("nextCursorApplicationOverride", () => {
     expect(nextCursorApplicationOverride(false, 7)).toBe(false);
     expect(nextCursorApplicationOverride(true, 7)).toBe(true);
     expect(nextCursorApplicationOverride(true, 1.5)).toBe(true);
+  });
+});
+
+describe("cursorStyleFromDecscusr", () => {
+  it.each([
+    [undefined, "block"],
+    [1, "block"],
+    [2, "block"],
+    [3, "underline"],
+    [4, "underline"],
+    [5, "bar"],
+    [6, "bar"],
+  ] as const)("maps DECSCUSR %s to %s", (parameter, expected) => {
+    expect(cursorStyleFromDecscusr(parameter)).toBe(expected);
+  });
+
+  it("returns null for reset and unsupported values", () => {
+    expect(cursorStyleFromDecscusr(0)).toBeNull();
+    expect(cursorStyleFromDecscusr(7)).toBeNull();
+    expect(cursorStyleFromDecscusr(1.5)).toBeNull();
   });
 });

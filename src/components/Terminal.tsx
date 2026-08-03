@@ -86,7 +86,9 @@ import {
 } from "../lib/terminalFileLinks";
 import { createTerminalWebLinkProvider } from "../lib/terminalWebLinks";
 import {
+  cursorStyleFromDecscusr,
   nextCursorApplicationOverride,
+  type XtermCursorStyle,
   xtermCursorStyle,
 } from "../lib/terminalCursor";
 import {
@@ -197,6 +199,7 @@ const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
 const SCROLL_TO_BOTTOM_VISIBLE_ROWS = 10;
+const COMPOSING_CLASS = "acorn-terminal-composing";
 // xterm briefly leaves and re-enters hovered links when refreshed rows repaint.
 const LINK_TOOLTIP_HIDE_GRACE_MS = 80;
 
@@ -1134,8 +1137,17 @@ export function Terminal({
     };
 
     let cursorApplicationOverride = false;
-    const setCursorApplicationOverride = (active: boolean) => {
+    let cursorApplicationStyle: XtermCursorStyle | null = null;
+    const setCursorApplicationOverride = (
+      active: boolean,
+      style: XtermCursorStyle | null = null,
+    ) => {
       cursorApplicationOverride = active;
+      if (!active) {
+        cursorApplicationStyle = null;
+      } else if (style) {
+        cursorApplicationStyle = style;
+      }
       container.toggleAttribute(
         "data-acorn-cursor-application-override",
         active,
@@ -1154,6 +1166,7 @@ export function Terminal({
             cursorApplicationOverride,
             parameter,
           ),
+          cursorStyleFromDecscusr(parameter),
         );
         return false;
       },
@@ -1559,6 +1572,9 @@ export function Terminal({
     };
     const compositionTextView = document.createElement("span");
     compositionTextView.className = "acorn-ime-composition-text";
+    const compositionCursorView = document.createElement("span");
+    compositionCursorView.className = "acorn-ime-composition-cursor";
+    compositionCursorView.setAttribute("aria-hidden", "true");
     const compositionTailView = document.createElement("span");
     compositionTailView.className = "acorn-ime-line-tail xterm-rows";
     let composingText = "";
@@ -1584,6 +1600,14 @@ export function Terminal({
         compositionView.style.top = `${cursorViewportY * cell.height}px`;
         compositionView.style.minHeight = `${cell.height}px`;
         compositionView.style.lineHeight = `${cell.height}px`;
+        compositionView.style.setProperty(
+          "--acorn-ime-cell-width",
+          `${cell.width}px`,
+        );
+        compositionView.style.setProperty(
+          "--acorn-ime-cell-height",
+          `${cell.height}px`,
+        );
       }
     };
     const renderComposing = () => {
@@ -1593,8 +1617,12 @@ export function Terminal({
       // the text under and after the cursor in the old position. Mirror that
       // tail after the preview so mid-line composition reads as insertion.
       renderTerminalLineTail(term, container, compositionTailView);
+      compositionCursorView.dataset.acornImeCursorStyle =
+        cursorApplicationStyle ??
+        useSettings.getState().settings.terminal.cursorStyle;
       compositionView.replaceChildren(
         compositionTextView,
+        compositionCursorView,
         compositionTailView,
       );
 
@@ -1628,6 +1656,7 @@ export function Terminal({
     };
     const hideComposing = () => {
       composingText = "";
+      container.classList.remove(COMPOSING_CLASS);
       if (!compositionView) return;
       compositionView.classList.remove("active");
       compositionView.replaceChildren();
@@ -1639,6 +1668,7 @@ export function Terminal({
         return;
       }
       composingText = text;
+      container.classList.add(COMPOSING_CLASS);
       renderComposing();
       positionComposing();
       compositionView.classList.add("active");
@@ -2994,6 +3024,7 @@ export function Terminal({
       try { cursorSoftResetParserDisposable.dispose(); } catch { /* ignore */ }
       try { cursorFullResetParserDisposable.dispose(); } catch { /* ignore */ }
       container.removeAttribute("data-acorn-cursor-application-override");
+      container.classList.remove(COMPOSING_CLASS);
       try { fitAddon.dispose(); } catch { /* ignore */ }
       try { serializeAddon.dispose(); } catch { /* ignore */ }
       term.dispose();
