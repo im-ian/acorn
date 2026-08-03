@@ -1,7 +1,7 @@
 {
   "name": "acorn",
   "private": true,
-  "version": "1.29.2",
+  "version": "1.30.0",
   "packageManager": "pnpm@9.15.0",
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -39,7 +39,7 @@
     "@shikijs/engine-javascript": "^4.3.1",
     "@shikijs/langs": "^4.3.1",
     "@shikijs/themes": "^4.3.1",
-    "@tanstack/react-virtual": "^3.14.8",
+    "@tanstack/react-virtual": "^3.14.9",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.7.2",
@@ -71,8 +71,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",
-    "@storybook/addon-docs": "10.5.4",
-    "@storybook/react-vite": "10.5.4",
+    "@storybook/addon-docs": "10.5.5",
+    "@storybook/react-vite": "10.5.5",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.11.4",
     "@types/react": "^19.2.17",
@@ -80,9 +80,9 @@
     "@vitejs/plugin-react": "^6.0.4",
     "@vitest/ui": "^4.1.10",
     "esbuild": "^0.28.1",
-    "jsdom": "^29.1.1",
-    "postcss": "^8.5.23",
-    "storybook": "10.5.4",
+    "jsdom": "^30.0.1",
+    "postcss": "^8.5.25",
+    "storybook": "10.5.5",
     "tailwindcss": "^4.3.3",
     "typescript": "~7.0.2",
     "vite": "^8.1.5",

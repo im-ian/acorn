@@ -541,6 +541,14 @@ struct HookRuntimeState {
     tool_started_at: Option<SystemTime>,
     turn_id: Option<String>,
     permission_waiting_at: Option<SystemTime>,
+    /// When an attention request (permission prompt, elicitation dialog) was
+    /// raised by a hook that has no resolving counterpart. Claude emits
+    /// `Notification`/`PermissionRequest` when the dialog opens but nothing
+    /// when the user answers, so the poll needs this instant to recognise a
+    /// transcript turn line written afterwards as proof the agent resumed.
+    /// Kept apart from `permission_waiting_at`, whose clearing rules belong
+    /// to the Codex turn lifecycle.
+    attention_at: Option<SystemTime>,
 }
 
 impl HookRuntimeState {
@@ -560,6 +568,7 @@ impl HookRuntimeState {
         self.tool_started_at = None;
         self.turn_id = None;
         self.permission_waiting_at = None;
+        self.attention_at = None;
     }
 }
 
@@ -977,6 +986,65 @@ impl SessionStore {
         self.lock_hook_runtime()
             .get(id)
             .and_then(|state| state.tool_started_at)
+    }
+
+    /// Record that an attention request without a resolving hook is open.
+    pub fn mark_attention_at(&self, id: &Uuid, requested_at: SystemTime) {
+        self.lock_hook_runtime()
+            .entry(*id)
+            .or_default()
+            .attention_at = Some(requested_at);
+    }
+
+    pub fn attention_at(&self, id: &Uuid) -> Option<SystemTime> {
+        self.lock_hook_runtime()
+            .get(id)
+            .and_then(|state| state.attention_at)
+    }
+
+    pub fn clear_attention(&self, id: &Uuid) {
+        if let Some(state) = self.lock_hook_runtime().get_mut(id) {
+            state.attention_at = None;
+        }
+    }
+
+    /// Resolve an open attention request from transcript evidence.
+    ///
+    /// Claude raises `Notification`/`PermissionRequest` when a dialog opens
+    /// and emits nothing when it closes, so `WaitingForInput` would otherwise
+    /// hold until the turn ends — the session reads as "needs you" through
+    /// minutes of tool calls the user already approved. A turn line written
+    /// after the request is the missing close: the agent only reaches it by
+    /// getting past the dialog. The attention instant, the lifecycle fence
+    /// and the visible status are compared under one lock so a dialog opened
+    /// during the poll's transcript read cannot be cleared by this write.
+    pub fn resolve_attention_if_current(
+        &self,
+        id: &Uuid,
+        expected_source: Option<AgentStatusSource>,
+        expected_lifecycle_revision: u64,
+        resumed_at: SystemTime,
+    ) -> SessionResult<Option<u64>> {
+        let mut runtime = self.lock_hook_runtime();
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let state = runtime.entry(*id).or_default();
+        if entry.status != SessionStatus::WaitingForInput
+            || state.status_source != expected_source
+            || state.lifecycle_revision != expected_lifecycle_revision
+            || !state.confirmed
+            || !entry.hook_active
+            || state.attention_at.is_none_or(|at| resumed_at <= at)
+        {
+            return Ok(None);
+        }
+
+        entry.status = SessionStatus::Working;
+        state.status_source = Some(AgentStatusSource::TranscriptFallback);
+        state.attention_at = None;
+        Ok(Some(state.advance_lifecycle_revision()))
     }
 
     pub fn mark_codex_permission_waiting_at(&self, id: &Uuid, requested_at: SystemTime) {

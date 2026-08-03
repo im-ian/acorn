@@ -35,6 +35,10 @@ pub struct TurnObservation {
     /// Codex completion events use this to correlate a durable `task_complete`
     /// with the native hook turn that currently owns session status.
     pub provider_turn_id: Option<String>,
+    /// Provider timestamp of the classified line. Attention recovery compares
+    /// it against the moment the hook raised the attention request: a turn
+    /// line written afterwards proves the agent resumed past the dialog.
+    pub timestamp: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,6 +125,7 @@ pub fn latest_turn_observation(
             return Some(TurnObservation {
                 state,
                 provider_turn_id: parsed.provider_turn_id,
+                timestamp: parsed.timestamp,
             });
         }
     }
