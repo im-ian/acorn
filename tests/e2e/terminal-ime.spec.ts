@@ -63,6 +63,12 @@ async function seed(tauri: TauriMock): Promise<void> {
   ]);
   // Spawn is a no-op for these tests — we only care about pty_write.
   await tauri.handle("pty_spawn", () => null);
+  await tauri.handle("pty_subscribe_output", (args: unknown) => {
+    const { channel } = args as { channel: { id: number } };
+    const w = window as unknown as { __imeOutputChannelId?: number };
+    w.__imeOutputChannelId = channel.id;
+    return 1;
+  });
   // Record every pty_write call as a decoded UTF-8 string on `window`.
   // Handlers are serialized into page context — no closures over Node-side
   // helpers, so the base64 decode is inlined here.
@@ -146,7 +152,181 @@ async function getWrites(page: Page): Promise<string[]> {
   );
 }
 
+async function emitPtyOutput(page: Page, text: string): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __imeOutputChannelId?: number })
+            .__imeOutputChannelId ?? null,
+      ),
+    )
+    .not.toBeNull();
+  await page.evaluate((output) => {
+    const w = window as unknown as {
+      __imeOutputChannelId?: number;
+      [key: string]: unknown;
+    };
+    const id = w.__imeOutputChannelId;
+    if (typeof id !== "number") throw new Error("IME output channel missing");
+    const callback = w[`_${id}`] as
+      | ((payload: { index: number; message: number[] }) => void)
+      | undefined;
+    if (!callback) throw new Error("IME output callback missing");
+    callback({
+      index: 0,
+      message: Array.from(new TextEncoder().encode(output)),
+    });
+  }, text);
+}
+
 test.describe("terminal: IME (PR #104 regression)", () => {
+  test("mid-line Korean composition previews as insertion without hiding the following text", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Render "테스트" and place the terminal cursor immediately before "트".
+    await emitPtyOutput(page, "› 테스트\x1b[2D");
+    await expect(page.locator(".xterm-rows")).toContainText("› 테스트");
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+
+    const composition = page.locator(".composition-view.active");
+    await expect(composition.locator(".acorn-ime-composition-text")).toHaveText(
+      "한",
+    );
+    await expect(composition.locator(".acorn-ime-line-tail")).toHaveText("트");
+    await expect(composition).toHaveText("한트");
+  });
+
+  test("composition preserves the dim color of a prompt placeholder", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    const placeholder = "Use /skills to list available skills";
+    // Render the placeholder dimmed, then return to the first placeholder
+    // column. This matches agent prompts that paint guidance after the cursor.
+    await emitPtyOutput(
+      page,
+      `› \x1b[2m${placeholder}\x1b[0m\x1b[3G`,
+    );
+    await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
+      placeholder,
+    );
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+
+    const colors = await page.evaluate((expectedPlaceholder) => {
+      const tailRun = document.querySelector<HTMLElement>(
+        ".composition-view.active .acorn-ime-tail-run",
+      );
+      const sourceRow = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          ".xterm-screen > .xterm-rows > div",
+        ),
+      ).find((row) => row.textContent?.includes(expectedPlaceholder));
+      const sourceSpan = Array.from(
+        sourceRow?.querySelectorAll<HTMLElement>("span") ?? [],
+      ).find((span) => span.textContent?.includes("/skills"));
+      const compositionText = document.querySelector<HTMLElement>(
+        ".composition-view.active .acorn-ime-composition-text",
+      );
+      if (!tailRun || !sourceSpan || !compositionText) {
+        throw new Error("IME placeholder style nodes missing");
+      }
+      return {
+        tailText: tailRun.textContent,
+        tail: getComputedStyle(tailRun).color,
+        source: getComputedStyle(sourceSpan).color,
+        composition: getComputedStyle(compositionText).color,
+      };
+    }, placeholder);
+
+    expect(colors.tailText).toBe(placeholder);
+    expect(colors.tail).toBe(colors.source);
+    expect(colors.tail).not.toBe(colors.composition);
+  });
+
+  test("composition preserves each ANSI color after the cursor", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    await emitPtyOutput(
+      page,
+      "› \x1b[31mred\x1b[32mgreen\x1b[34mblue\x1b[0m\x1b[3G",
+    );
+    await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
+      "redgreenblue",
+    );
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+
+    const colors = await page.evaluate(() => {
+      const row = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          ".xterm-screen > .xterm-rows > div",
+        ),
+      ).find((candidate) => candidate.textContent?.includes("redgreenblue"));
+      if (!row) throw new Error("colored source row missing");
+      const sourceSpans = Array.from(
+        row.querySelectorAll<HTMLElement>("span"),
+      );
+      const sourceColor = (text: string) => {
+        const span = sourceSpans.find((candidate) =>
+          candidate.textContent?.includes(text),
+        );
+        if (!span) throw new Error(`colored source span missing: ${text}`);
+        return getComputedStyle(span).color;
+      };
+      const tailRuns = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          ".composition-view.active .acorn-ime-tail-run",
+        ),
+      );
+      return {
+        tailText: tailRuns.map((run) => run.textContent).join(""),
+        tail: tailRuns.map((run) => getComputedStyle(run).color),
+        source: [sourceColor("ed"), sourceColor("green"), sourceColor("blue")],
+      };
+    });
+
+    expect(colors.tailText).toBe("redgreenblue");
+    expect(colors.tail).toEqual(colors.source);
+  });
+
   test("Korean syllable + spacebar terminator emits the syllable exactly once", async ({
     page,
     tauri,
