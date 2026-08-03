@@ -167,6 +167,14 @@ export type TerminalFontWeight =
  * focus to the browser.
  */
 export type TerminalLinkActivation = "click" | "modifier-click";
+export type TerminalCursorStyle =
+  | "block"
+  | "bar"
+  | "underline"
+  | "outline"
+  | "pill";
+export const TERMINAL_CURSOR_STYLE_VALUES: ReadonlyArray<TerminalCursorStyle> =
+  ["block", "bar", "underline", "outline", "pill"];
 export type TerminalFontSmoothing =
   | "grayscale"
   | "subpixel"
@@ -308,6 +316,11 @@ export interface AcornSettings {
      * cramped. Range 1.0–2.0 keeps the cursor / link hit boxes sensible.
      */
     lineHeight: number;
+    /**
+     * Cursor shape used when the shell or foreground application has not
+     * selected one with DECSCUSR.
+     */
+    cursorStyle: TerminalCursorStyle;
     /**
      * Gesture required to follow a URL in terminal output. Plain click is
      * the xterm default; modifier-click matches iTerm2 / Terminal.app so a
@@ -552,6 +565,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     fontWeight: 400,
     fontWeightBold: 700,
     lineHeight: 1.0,
+    cursorStyle: "block",
     linkActivation: "click",
     rightClickPasteSelection: false,
     canvasInactiveTerminalRenderIntervalMs:
@@ -707,6 +721,9 @@ const VALID_CANVAS_INACTIVE_TERMINAL_RENDER_INTERVALS =
   new Set<CanvasInactiveTerminalRenderIntervalMs>(
     CANVAS_INACTIVE_TERMINAL_RENDER_INTERVAL_OPTIONS,
   );
+const VALID_TERMINAL_CURSOR_STYLES = new Set<TerminalCursorStyle>(
+  TERMINAL_CURSOR_STYLE_VALUES,
+);
 
 const VALID_BG_FITS = new Set<BackgroundFit>(["cover", "contain", "tile"]);
 const VALID_TOAST_POSITIONS = new Set<ToastPosition>(["top", "bottom"]);
@@ -791,6 +808,16 @@ function normalizeLinkActivation(
 ): TerminalLinkActivation {
   if (v === "click" || v === "modifier-click") return v;
   return fallback;
+}
+
+function normalizeTerminalCursorStyle(
+  v: unknown,
+  fallback: TerminalCursorStyle,
+): TerminalCursorStyle {
+  return typeof v === "string" &&
+    VALID_TERMINAL_CURSOR_STYLES.has(v as TerminalCursorStyle)
+    ? (v as TerminalCursorStyle)
+    : fallback;
 }
 
 function normalizeTerminalFontSmoothing(
@@ -1312,6 +1339,10 @@ function loadSettings(): AcornSettings {
           (terminalRaw as { lineHeight?: unknown }).lineHeight,
           DEFAULT_SETTINGS.terminal.lineHeight,
         ),
+        cursorStyle: normalizeTerminalCursorStyle(
+          (terminalRaw as { cursorStyle?: unknown }).cursorStyle,
+          DEFAULT_SETTINGS.terminal.cursorStyle,
+        ),
         linkActivation: normalizeLinkActivation(
           (terminalRaw as { linkActivation?: unknown }).linkActivation,
           DEFAULT_SETTINGS.terminal.linkActivation,
@@ -1677,6 +1708,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
               : normalizeLineHeight(
                   patch.lineHeight,
                   s.settings.terminal.lineHeight,
+                ),
+          cursorStyle:
+            patch.cursorStyle === undefined
+              ? s.settings.terminal.cursorStyle
+              : normalizeTerminalCursorStyle(
+                  patch.cursorStyle,
+                  s.settings.terminal.cursorStyle,
                 ),
           rightClickPasteSelection:
             patch.rightClickPasteSelection === undefined

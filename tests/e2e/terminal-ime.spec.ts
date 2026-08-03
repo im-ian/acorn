@@ -181,12 +181,21 @@ async function emitPtyOutput(page: Page, text: string): Promise<void> {
 }
 
 test.describe("terminal: IME (PR #104 regression)", () => {
-  test("mid-line Korean composition previews as insertion without hiding the following text", async ({
+  test("mid-line Korean composition stays intact with the pill cursor", async ({
     page,
     tauri,
   }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { cursorStyle: "pill" } }),
+      );
+    });
     await seed(tauri);
     await activateTerminal(page);
+    await page.addStyleTag({
+      content: ":root { --color-accent: rgb(12, 34, 56) !important; }",
+    });
 
     // Render "테스트" and place the terminal cursor immediately before "트".
     await emitPtyOutput(page, "› 테스트\x1b[2D");
@@ -208,6 +217,129 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     );
     await expect(composition.locator(".acorn-ime-line-tail")).toHaveText("트");
     await expect(composition).toHaveText("한트");
+    await expect(composition.locator(".xterm-cursor")).toHaveCount(0);
+
+    const imeCursor = composition.locator(".acorn-ime-composition-cursor");
+    await expect(imeCursor).toHaveAttribute(
+      "data-acorn-ime-cursor-style",
+      "pill",
+    );
+    await expect(page.locator(".acorn-terminal")).toHaveClass(
+      /acorn-terminal-composing/,
+    );
+
+    const cursorLayout = await composition.evaluate((element) => {
+      const children = Array.from(element.children) as HTMLElement[];
+      const text = element.querySelector<HTMLElement>(
+        ".acorn-ime-composition-text",
+      );
+      const cursor = element.querySelector<HTMLElement>(
+        ".acorn-ime-composition-cursor",
+      );
+      const tail = element.querySelector<HTMLElement>(
+        ".acorn-ime-line-tail",
+      );
+      if (!text || !cursor || !tail) {
+        throw new Error("IME composition layout nodes missing");
+      }
+      const textRect = text.getBoundingClientRect();
+      const cursorRect = cursor.getBoundingClientRect();
+      const tailRect = tail.getBoundingClientRect();
+      const marker = getComputedStyle(cursor, "::after");
+      const nativeCursor = document.querySelector<HTMLElement>(
+        ".acorn-terminal .xterm-cursor",
+      );
+      return {
+        childClasses: children.map((child) => child.className),
+        markerBackground: marker.backgroundColor,
+        markerHeight: Number.parseFloat(marker.height),
+        markerWidth: Number.parseFloat(marker.width),
+        nativeCursorOpacity: nativeCursor
+          ? getComputedStyle(nativeCursor).opacity
+          : null,
+        cursorAnchorWidth: cursorRect.width,
+        cursorAfterText: Math.abs(cursorRect.left - textRect.right),
+        tailAfterCursor: Math.abs(tailRect.left - cursorRect.left),
+      };
+    });
+
+    expect(cursorLayout.childClasses).toEqual([
+      "acorn-ime-composition-text",
+      "acorn-ime-composition-cursor",
+      "acorn-ime-line-tail xterm-rows",
+    ]);
+    expect(cursorLayout.markerBackground).toBe("rgb(12, 34, 56)");
+    expect(cursorLayout.markerWidth).toBe(3);
+    expect(cursorLayout.markerHeight).toBeGreaterThan(0);
+    expect(cursorLayout.nativeCursorOpacity).toBe("0");
+    expect(cursorLayout.cursorAnchorWidth).toBe(0);
+    expect(cursorLayout.cursorAfterText).toBeLessThan(0.5);
+    expect(cursorLayout.tailAfterCursor).toBeLessThan(0.5);
+
+    await runIme(page, [
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+    await expect(page.locator(".acorn-terminal")).not.toHaveClass(
+      /acorn-terminal-composing/,
+    );
+    await expect(imeCursor).toHaveCount(0);
+  });
+
+  test("composition cursor follows an application-owned DECSCUSR shape", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { cursorStyle: "pill" } }),
+      );
+    });
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // A foreground TUI selects a steady underline cursor. Its presentation
+    // must take precedence over the user's pill fallback during composition.
+    await emitPtyOutput(page, "prompt \x1b[4 q");
+    const terminal = page.locator(".acorn-terminal");
+    await expect(terminal).toHaveAttribute(
+      "data-acorn-cursor-application-override",
+      "",
+    );
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+
+    const imeCursor = page.locator(
+      ".composition-view.active .acorn-ime-composition-cursor",
+    );
+    await expect(imeCursor).toHaveAttribute(
+      "data-acorn-ime-cursor-style",
+      "underline",
+    );
+    const marker = await imeCursor.evaluate((element) => {
+      const computed = getComputedStyle(element, "::after");
+      return {
+        bottom: computed.bottom,
+        height: computed.height,
+        width: Number.parseFloat(computed.width),
+      };
+    });
+    expect(marker.bottom).toBe("0px");
+    expect(marker.height).toBe("1px");
+    expect(marker.width).toBeGreaterThan(0);
   });
 
   test("composition preserves the dim color of a prompt placeholder", async ({
