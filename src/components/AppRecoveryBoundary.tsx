@@ -17,6 +17,19 @@ const COPY = {
     resetFailed:
       "Acorn couldn't reset the workspace view. Quit the app and try again.",
   },
+  ja: {
+    eyebrow: "起動エラー",
+    title: "Acorn を開けませんでした",
+    description:
+      "更新後、保存されたワークスペース設定がこのバージョンと互換性がない可能性があります。",
+    resetHint:
+      "ターミナルセッションとプロジェクトは保持されます。リセットされるのはローカルのワークスペース設定のみです。",
+    reload: "再試行",
+    reset: "ワークスペース表示をリセットして再度開く",
+    details: "エラーの詳細",
+    resetFailed:
+      "ワークスペース表示をリセットできませんでした。アプリを終了してからもう一度お試しください。",
+  },
   ko: {
     eyebrow: "시작 오류",
     title: "Acorn을 열지 못했습니다",
@@ -48,7 +61,9 @@ function recoveryLanguage(): RecoveryLanguage {
   try {
     const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
     const parsed = raw ? (JSON.parse(raw) as { language?: unknown }) : null;
-    return parsed?.language === "ko" || parsed?.language === "zh-CN"
+    return parsed?.language === "ja" ||
+      parsed?.language === "ko" ||
+      parsed?.language === "zh-CN"
       ? parsed.language
       : "en";
   } catch {

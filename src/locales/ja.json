@@ -1,0 +1,2369 @@
+{
+  "toasts": {
+    "session": {
+      "createFailed": "セッションの作成に失敗しました:",
+      "removeFailed": "セッションを削除できませんでした:",
+      "worktreeRemoved": "ワークツリーがディスクから削除されました。",
+      "worktreeRemovedUndo": "{seconds}s の {name} ワークツリーを削除しています。元に戻す",
+      "worktreeRestored": "ワークツリーが復元されました。",
+      "worktreeRestoreFailed": "ワークツリーの復元に失敗しました:",
+      "worktreeRemoveFailed": "ワークツリーの削除に失敗しました:",
+      "sessionWorktreeRemoved": "セッションが削除され、ワークツリーがディスクから削除されました。",
+      "sessionWorktreeRemovedUndo": "セッションとワークツリーが削除されました。 {seconds}s 以内に復元します",
+      "sessionWorktreeRemoveFailed": "セッションとワークツリーの削除に失敗しました:",
+      "sessionWorktreeRestored": "セッションとワークツリーが復元されました。",
+      "sessionWorktreeRestoreFailed": "セッションとワークツリーの復元に失敗しました:",
+      "refreshFailed": "セッションを更新できませんでした:",
+      "renameFailed": "セッション名の変更に失敗しました:",
+      "titleNotReady": "このセッションのトランスクリプトはまだありません。",
+      "titleRegenerateSkipped": "セッション名は再生成されませんでした。",
+      "worktreeAdopted": "採用されたワークツリー: {name}",
+      "worktreeAdoptFailed": "ワークツリーの採用に失敗しました:",
+      "worktreeMissing": "Worktree フォルダーはディスク上に存在しません。"
+    },
+    "autonomousGoal": {
+      "started": "目標セッションは {name} に開始されました。",
+      "updated": "{name} で目標が更新されました。再計画が始まりました。",
+      "startFailed": "目標セッションが失敗しました:",
+      "pauseFailed": "目標セッションを一時停止できませんでした:"
+    },
+    "project": {
+      "addFailed": "プロジェクトの追加に失敗しました:",
+      "createFailed": "プロジェクトの作成に失敗しました:",
+      "removeFailed": "プロジェクトの削除に失敗しました:",
+      "worktreesRemoved": "プロジェクトのワークツリーがディスクから削除されました。",
+      "worktreesRemovedUndo": "{seconds}s の {count} プロジェクト ワークツリーを削除しています。元に戻す",
+      "worktreesRestored": "プロジェクトのワークツリーが復元されました。",
+      "worktreesRestoreFailed": "プロジェクトのワークツリーを復元できませんでした:",
+      "worktreesRemoveFailed": "プロジェクトのワークツリーを削除できませんでした:"
+    },
+    "ipc": {
+      "restarted": "IPCサーバーが再起動されました。",
+      "restartFailed": "IPC サーバーの再起動に失敗しました:"
+    },
+    "files": {
+      "renameFailed": "ファイル名の変更に失敗しました:",
+      "trashFailed": "ゴミ箱に移動できませんでした:",
+      "pathsCopied": "ファイルパスがコピーされました。",
+      "copyFailed": "ファイルパスのコピーに失敗しました。"
+    },
+    "pullRequests": {
+      "mergeFailed": "プル リクエストのマージに失敗しました:",
+      "closeFailed": "プルリクエストをクローズできませんでした:",
+      "bodyUpdateFailed": "プル リクエストの更新に失敗しました:"
+    }
+  },
+  "settings": {
+    "title": "設定",
+    "reset": "デフォルトに戻す",
+    "resetConfirm": {
+      "title": "デフォルトにリセットしますか?",
+      "message": "これにより、すべての設定がデフォルト値に復元されます。これを元に戻すことはできません。",
+      "confirm": "リセット"
+    },
+    "tabs": {
+      "interface": "インターフェース",
+      "appearance": "外観",
+      "themes": "テーマ",
+      "terminal": "ターミナル",
+      "agents": "エージェント",
+      "sessions": "セッション",
+      "github": "GitHub",
+      "editor": "エディタ",
+      "notifications": "通知",
+      "shortcuts": "ショートカット",
+      "storage": "ストレージ",
+      "permissions": "権限",
+      "experiments": "実験",
+      "about": "Acorn について"
+    },
+    "language": {
+      "label": "言語",
+      "hint": "Acorn インターフェースに使用される言語。新しい翻訳は徐々に追加されます。"
+    },
+    "interface": {
+      "defaultWorkspaceViewMode": {
+        "label": "デフォルトのワークスペースモード",
+        "hint": "Acorn が新しいプロジェクト ワークスペースを作成するときに使用されるモード。既存のプロジェクト固有の選択肢は変更されません。"
+      },
+      "projectTabs": {
+        "label": "プロジェクトタブ",
+        "hint": "左側のサイドバーの各プロジェクト内のセッションとワークスペースの順序を制御します。",
+        "priority": {
+          "label": "待機中およびエラーのタブを上部に移動します",
+          "description": "手動注文を保存したままにしますが、準備が整う前に待機中またはエラーによってブロックされたタブが表示されます。"
+        }
+      },
+      "kanbanTerminalPopover": {
+        "title": "カンバンターミナルのポップオーバー",
+        "description": "カード端末が開く場所とその開始の大きさを制御します。",
+        "openOnCreate": {
+          "label": "新しいセッション端末をすぐに開きます",
+          "description": "カンバン モードでターミナル セッションを作成したら、ターミナル ポップオーバーをすぐに開きます。"
+        },
+        "placement": {
+          "label": "オープンポジション",
+          "hint": "カンバンカードから端末を開いたときの初期配置。",
+          "card": {
+            "label": "横のカード",
+            "description": "選択したカンバン項目の隣を開きます。"
+          },
+          "center": {
+            "label": "画面中央",
+            "description": "ワークスペースの中央に開きます。"
+          }
+        },
+        "defaultSize": {
+          "label": "デフォルトのサイズ",
+          "hint": "新しく開かれた端末ポップオーバーの初期サイズ モード。",
+          "custom": {
+            "label": "小型/カスタム",
+            "description": "記憶されているポップオーバー サイズを使用します。サイズを変更すると更新されます。"
+          },
+          "fullscreen": {
+            "label": "全画面表示",
+            "description": "アプリウィンドウ内で展開して開きます。"
+          }
+        }
+      }
+    },
+    "terminal": {
+      "fontPreset": {
+        "label": "フォントのプリセット",
+        "hint": "現在の端末のフォント設定を独自のプリセットとして保存し、後で適用します。",
+        "selectLabel": "保存されたフォントプリセット",
+        "custom": "カスタム",
+        "customHint": "現在の設定はプリセットとして保存されません。",
+        "empty": "保存されたプリセットはありません",
+        "nameLabel": "プリセット名",
+        "namePlaceholder": "例:コンパクトなD2コーディング",
+        "save": "現在の保存",
+        "delete": "削除",
+        "deleteLabel": "選択したフォントプリセットを削除します"
+      },
+      "fontFamily": {
+        "label": "フォントファミリー",
+        "hint": "カンマ区切りのスタック。最初に解決した家族が勝ちです。"
+      },
+      "fontSize": {
+        "label": "フォントサイズ",
+        "hint": "CSS ピクセル単位。範囲は 8 ～ 32。"
+      },
+      "letterSpacing": {
+        "label": "文字間隔",
+        "hint": "ターミナルセル間の水平方向の間隔 (ピクセル単位)。 0.25pxステップをサポートします。範囲は -2 ～ 6。"
+      },
+      "fontSmoothing": {
+        "label": "アンチエイリアシング",
+        "hint": "端末のフォント スムージングのみを制御します。グレースケールは Acorn の現在のレンダリングと一致します。",
+        "options": {
+          "grayscale": "グレースケール",
+          "subpixel": "サブピクセル",
+          "system": "システム",
+          "none": "なし"
+        }
+      },
+      "fontWeight": {
+        "label": "フォントの太さ",
+        "hint": "通常のテキストの重み。有効な値は、選択したフォントの使用可能なウェイトによって異なります。"
+      },
+      "boldFontWeight": {
+        "label": "太字のフォントの太さ",
+        "hint": "端末が太字のセルをレンダリングするときに使用される重み。"
+      },
+      "lineHeight": {
+        "label": "行の高さ",
+        "hint": "セルの高さの乗数。 1.00 行をフラッシュしてパックします。垂直方向の呼吸スペースを増やすために上げます。範囲は 1.00 ～ 2.00。"
+      },
+      "canvasInactiveRefreshRate": {
+        "label": "非アクティブなキャンバスのリフレッシュ レート",
+        "hint": "表示されているが選択されていないキャンバス端末が新しい出力をレンダリングする頻度。選択した端末は常にフルスピードのままです。",
+        "options": {
+          "fullSpeed": {
+            "label": "フルスピード · ~60 FPS",
+            "description": "選択した端末とほぼ同じくらいスムーズで、レンダリング コストは最も高くなります。"
+          },
+          "balanced": {
+            "label": "バランス · ~25 FPS (デフォルト)",
+            "description": "複数の同時セッションに対する応答性の高いバランス。"
+          },
+          "reduced": {
+            "label": "減少 · ~12 FPS",
+            "description": "大きなキャンバス ワークスペースでのレンダリング作業を軽減します。"
+          },
+          "minimal": {
+            "label": "最小 · ~8 FPS",
+            "description": "最低のレンダリングコスト。バックグラウンド出力は段階的に更新されることがよりわかりやすくなります。"
+          }
+        }
+      },
+      "maxMountedTerminals": {
+        "label": "常駐端末制限",
+        "hint": "デーモン支援セッションが切断されるまでにメモリにマウントされたままになるオフスクリーン ターミナル ビューの数。可視端子は常に維持されます。"
+      },
+      "detachOffscreenTerminals": {
+        "label": "常駐端末制限を有効にする",
+        "hint": "常駐制限を超えた後、デーモン支援のオフスクリーン ターミナル ビューを切り離します。オフにすると、開いているすべてのターミナル ビューがマウントされたままになります。",
+        "checkbox": "制限を超えて画面外の端末を取り外す"
+      },
+      "openLinksOn": {
+        "label": "リンクを開く方法",
+        "hint": "xterm が端末出力で検出した URL をたどる方法。",
+        "click": {
+          "label": "クリック (デフォルト)",
+          "description": "マウスを 1 回クリックすると、デフォルトのブラウザで URL が開きます。"
+        },
+        "modifierClick": {
+          "description": "{modifier} を押したままクリックして開きます。 URL を含む出力上の不必要なクリックがブラウザーにフォーカスを移すのを防ぎます。"
+        }
+      },
+      "rightClickPasteSelection": {
+        "label": "選択したテキストを右クリックして貼り付けます",
+        "description": "端末テキストが選択されている場合、右クリックすると、その選択内容が端末入力に書き戻されます。デフォルトではオフです。"
+      }
+    },
+    "sessions": {
+      "lifecycle": {
+        "title": "セッションのライフサイクル",
+        "description": "セッションおよびワークツリーに基づくワークスペースを閉じるための確認およびクリーンアップ動作。"
+      },
+      "runtime": {
+        "title": "セッションランタイム",
+        "description": "Acorn が開いているときまたは再起動しているときに、長時間実行されている端末を使用可能な状態に保つランタイム動作。"
+      },
+      "confirmRemove": {
+        "label": "セッション削除の確認",
+        "hint": "プレーンセッションに適用されます。共有ワークツリーセッションでは、削除する前に依然として質問されます。",
+        "checkbox": "プレーンセッションを削除する前に確認を表示する"
+      },
+      "warnBeforeClosingRunning": {
+        "label": "ワーキングセッション終了の警告",
+        "hint": "まだ動作しているセッションを閉じる前に警告を表示します。作業中のセッションを閉じると、そのアクティブなシェルまたはエージェントのプロセスが終了します。",
+        "checkbox": "作業セッションを閉じる前に警告を表示する"
+      },
+      "confirmDeleteIsolatedWorktrees": {
+        "label": "分離されたワークツリーのクリーンアップ プロンプト",
+        "hint": "これをオフにすると、保持/削除プロンプトを表示せずにスタンドアロンの分離ワークツリーをディスクから削除できます。共有ワークツリーのワークスペースは保持されます。",
+        "checkbox": "スタンドアロンの分離されたワークツリーを削除する前に確認してください"
+      },
+      "confirmDeleteEmptyWorktreeWorkspaces": {
+        "label": "空のワークツリー ワークスペースのクリーンアップ プロンプト",
+        "hint": "keep/delete プロンプトを表示せずに空のワークツリー ワークスペース ディレクトリをディスクから削除するには、これをオフにします。",
+        "checkbox": "空のワークツリー ワークスペース ディレクトリを削除する前に確認する"
+      },
+      "showRestartPromptOnExit": {
+        "label": "プロセス終了の再起動プロンプト",
+        "hint": "これをオフにすると、シェルまたはエージェントが終了したときにタブが自動的に閉じます。 Worktree を使用したタブは、上記のクリーンアップ プロンプト設定に従います。",
+        "checkbox": "プロセス終了後に再起動プロンプトを表示する"
+      },
+      "background": {
+        "title": "バックグラウンドセッション",
+        "description": "acornd デーモンは長時間実行される PTY を所有しているため、端末セッションは Acorn の再起動後も存続します。"
+      },
+      "controlCli": {
+        "label": "制御セッション (acorn-ipc CLI)",
+        "errorHint": "インストールステータスをクエリできませんでした。",
+        "loadingHint": "インストール ステータスを読み込んでいます...",
+        "hint": "コントロール セッションは、acorn-ipc CLI を介して兄弟にコマンドをディスパッチできます。 CLI はアプリに同梱されています。任意の端末から使用するには、それを $PATH にシンボリックリンクします。",
+        "bundledBinary": "バンドルされたバイナリ",
+        "found": "見つかりました",
+        "missing": "行方不明",
+        "installedShim": "取り付けたシム",
+        "installed": "インストールされています",
+        "notInstalled": "インストールされていません",
+        "recheck": "再確認"
+      }
+    },
+    "power": {
+      "title": "パワー",
+      "description": "Acorn が実行中に macOS スリープとどのように対話するかを制御します。",
+      "preventSleep": {
+        "label": "この Mac を起動したままにしておく",
+        "description": "Acorn が開いている間、システムがアイドル状態でスリープするのを防ぎます。ディスプレイは依然としてオフになる可能性があり、手動でスリープするか蓋を閉じることが引き続き有効です。"
+      }
+    },
+    "github": {
+      "refreshInterval": {
+        "label": "リフレッシュ間隔",
+        "hint": "[PR]、[問題]、および [アクション] タブが gh から自動再取得される頻度。値を低くすると動作が速くなりますが、API 予算が多くかかります。"
+      },
+      "manualRefresh": "手動更新 (各タブのアイコン) は、この間隔に関係なく常に機能します。",
+      "listDensity": {
+        "label": "リスト密度",
+        "hint": "各 PR 行または問題行に表示するオプションの詳細を選択します。"
+      },
+      "showAuthorAvatars": {
+        "label": "著者のアバターを表示",
+        "description": "各 PR 行または課題行の横に GitHub アバターを表示します。"
+      },
+      "showLabels": {
+        "label": "ラベルを表示する",
+        "description": "各 PR または発行行タイトルの横に GitHub ラベルをレンダリングします。"
+      },
+      "showBranches": {
+        "label": "ブランチを表示",
+        "description": "各 PR 行にソース ブランチ名とターゲット ブランチ名を表示します。"
+      },
+      "showChecks": {
+        "label": "CIステータスの表示",
+        "description": "各 PR 行に CI/チェック完了の概要を表示します。"
+      }
+    },
+    "appearance": {
+      "uiScale": {
+        "label": "UIスケール",
+        "hint": "アプリの Chrome を 5% ステップでスケールします。ターミナルテキストは個別のサイズ設定を保持します。"
+      },
+      "theme": {
+        "label": "テーマ",
+        "hint": "組み込みパレットとテーマ フォルダーからダウンロードまたはカスタム CSS ファイル。",
+        "custom": "(カスタム)",
+        "searchPlaceholder": "テーマを検索する",
+        "groups": {
+          "acorn": "ドングリのテーマ",
+          "dark": "ダウンロードしたダーク",
+          "light": "ダウンロードされた光",
+          "custom": "カスタムテーマ"
+        },
+        "rescanTitle": "テーマフォルダーを再スキャンします",
+        "refresh": "リフレッシュ",
+        "revealFolder": "フォルダーを表示する",
+        "library": {
+          "title": "テーマライブラリ",
+          "description": "acorn-主題リポジトリからテーマをダウンロードして更新します。ダウンロードしたテーマを削除しても、カスタム CSS ファイルには影響しません。",
+          "preview": "テーマのプレビュー",
+          "refresh": "ライブラリを更新する",
+          "searchPlaceholder": "テーマライブラリを検索する",
+          "noMatches": "検索に一致するテーマはありません。",
+          "loading": "テーマライブラリをロード中…",
+          "loadFailed": "テーマライブラリをロードできませんでした。",
+          "download": "ダウンロード",
+          "update": "アップデート",
+          "remove": "削除",
+          "status": {
+            "available": "ダウンロード可能",
+            "installing": "ダウンロード中…",
+            "removing": "削除中…",
+            "custom": "カスタム CSS ファイルはこのテーマ ID を使用します",
+            "updateAvailable": "利用可能なアップデート",
+            "installed": "ダウンロード済み"
+          },
+          "toasts": {
+            "installed": "{theme} をダウンロードしました。",
+            "installFailed": "テーマをダウンロードできませんでした。",
+            "removed": "{theme} を削除しました。",
+            "removeFailed": "テーマを削除できませんでした。"
+          }
+        }
+      },
+      "toastPosition": {
+        "label": "トーストの位置",
+        "hint": "一時的なアプリ メッセージが表示される場所を選択します。",
+        "options": {
+          "top": "トップへ",
+          "bottom": "下"
+        }
+      },
+      "background": {
+        "label": "背景画像",
+        "hint": "1 つの画像をアプリ領域、端末領域、またはその両方に適用できます。",
+        "pickImage": "画像を選択してください",
+        "replace": "交換する",
+        "noImage": "画像が選択されていません",
+        "remove": "削除",
+        "applyToApp": "アプリの背景に適用",
+        "applyToTerminal": "端末の背景に適用",
+        "fit": {
+          "label": "フィット",
+          "cover": "カバー",
+          "contain": "含む",
+          "tile": "タイル"
+        },
+        "opacity": {
+          "label": "不透明度",
+          "hint": "0 は透明、100 は不透明です。"
+        },
+        "blur": "ぼかし",
+        "toasts": {
+          "imported": "背景画像がインポートされました。",
+          "importFailed": "背景画像のインポートに失敗しました:",
+          "removed": "背景画像が削除されました。",
+          "removeFailed": "背景画像を削除できませんでした:"
+        }
+      },
+      "sessionDisplay": {
+        "title": {
+          "label": "セッションタイトル",
+          "hint": "各サイドバーセッション行の太字の最初の行になるフィールド。",
+          "options": {
+            "name": {
+              "label": "セッション名",
+              "description": "各セッションに付ける編集可能な名前 (デフォルト)。"
+            },
+            "workingDirectory": {
+              "label": "作業ディレクトリ",
+              "description": "ワークツリー ディレクトリのベース名。"
+            },
+            "branch": {
+              "label": "支店",
+              "description": "アクティブな git ブランチ。"
+            }
+          }
+        },
+        "metadata": {
+          "label": "追加のメタデータ",
+          "hint": "タイトルの下の 2 行目。単一行の行のすべてをオフに切り替えます。",
+          "branch": {
+            "label": "支店",
+            "description": "アクティブな git ブランチ。"
+          },
+          "workingDirectory": {
+            "label": "作業ディレクトリ",
+            "description": "ワークツリー ディレクトリのベース名。"
+          },
+          "status": {
+            "label": "ステータス",
+            "description": "アイドル / 実行中 / 入力が必要 / 失敗 / 完了。"
+          }
+        },
+        "hover": {
+          "label": "ホバーで詳細を表示",
+          "hint": "行自体にどのフィールドが表示されているかに関係なく、セッション行にカーソルを置くと、すべてのフィールドにツールチップが表示されます。",
+          "checkbox": "ホバーツールチップを有効にする"
+        }
+      },
+      "statusBar": {
+        "label": "ステータスバー",
+        "hint": "下部のステータス バーに表示するオプションのバッジを選択します。",
+        "sessionActivity": {
+          "label": "セッションアクティビティ",
+          "description": "未読セッションアクティビティのベルショートカット。サイドバーのアクティビティ リストは、非表示になっている場合でも引き続き利用できます。"
+        },
+        "sessionCount": {
+          "label": "セッション数",
+          "description": "アクティブなプロジェクト全体のセッションの合計数 (「セッション: N」)。"
+        },
+        "activeSessionStatus": {
+          "label": "アクティブなセッションのステータス",
+          "description": "アクティブなセッションのライフサイクル状態 (アイドル / 実行中 / 入力が必要 / 失敗 / 完了)。"
+        },
+        "githubAccount": {
+          "label": "GitHub アカウント",
+          "description": "アクティブなリポジトリの GitHub データをリストするために使用される「gh」アカウント。"
+        },
+        "workingDirectory": {
+          "label": "作業ディレクトリ",
+          "description": "アクティブなセッションのワークツリー パス ($HOME に対して傾斜)。"
+        },
+        "agentTokenUsage": {
+          "label": "エージェントトークンの使用法",
+          "description": "Codex はローカルのレート制限イベントを読み取ります。クロードは、トークン ウィジェットと互換性のあるステータスライン キャプチャを読み取ります。表示されている場合は 1 分に 1 回ポーリングします。"
+        },
+        "memoryUsage": {
+          "label": "メモリ使用量",
+          "description": "ドングリとその子殻のライブメモリ読み出し。無効にすると 2 秒間のポーリング ループも停止するため、非表示にしてもコストはかかりません。"
+        }
+      }
+    },
+    "editor": {
+      "command": {
+        "label": "エディタコマンド",
+        "hint": "OS のデフォルトの場合は空白のままにします。既知のエディター バイナリのみ。例: 「コード」、「カーソル --wait」、「subl」、「アイデア」。ファイル パスは最後の引数として追加されます。",
+        "placeholder": "(OSのデフォルトを使用)",
+        "description": "diff およびステージングされたファイル リストの「エディタで開く」右クリック アクションによって使用されます。"
+      }
+    },
+    "notifications": {
+      "system": {
+        "label": "システム通知",
+        "hint": "セッションのステータスが変化したときに macOS 通知を送信します。",
+        "enable": "通知を有効にする"
+      },
+      "triggers": {
+        "label": "トリガーオン",
+        "waitingForInput": {
+          "label": "入力を待っています",
+          "description": "エージェントまたはシェル コマンドがユーザーを待機しています。"
+        },
+        "errored": {
+          "label": "エラー",
+          "description": "セッションでエージェントまたはランタイム エラーが発生しました。"
+        }
+      },
+      "history": {
+        "label": "通知履歴",
+        "hint": "Acorn のアプリ内通知ログを制御します。 OS が提供するアラートは、これらの設定ではクリアされません。",
+        "maxCount": "最大レコード数",
+        "autoDeleteRead": {
+          "label": "既読通知を自動削除する",
+          "description": "Acorn のセッション タブがフォーカスされ、既読マークが付けられている場合は、Acorn の履歴から通知を削除します。"
+        }
+      },
+      "test": {
+        "label": "テスト",
+        "hint": "OS の権限を確認し、上記の有効化/トリガー設定とは関係なく、通知が実際に表示できることを確認します。",
+        "send": "テスト通知を送信する",
+        "sending": "送信中...",
+        "result": {
+          "sent": "テスト通知が送信されました。通知センターが表示されない場合は確認してください。",
+          "denied": "通知の許可が拒否されました。システム設定 -> 通知で Acorn を許可します。",
+          "failed": "テスト通知の送信に失敗しました。詳細については、コンソールを参照してください。"
+        }
+      },
+      "permissionHint": "macOS は、初めて通知が発生するときに一度許可を求めることがあります。"
+    },
+    "shortcuts": {
+      "record": "記録",
+      "cancel": "キャンセル",
+      "recording": "キーを押す",
+      "recordShortcut": "{command} のレコードのショートカット",
+      "cancelRecording": "{command} の記録をキャンセルします",
+      "resetShortcut": "{command} のショートカットをリセット",
+      "resetAll": "すべてのショートカットをリセット",
+      "errors": {
+        "modifierOnly": "修飾キー以外のキーを押します。",
+        "conflict": "{shortcut} はすでに {command} によって使用されています。"
+      },
+      "groups": {
+        "general": "一般",
+        "navigation": "ナビゲーション",
+        "layout": "レイアウト",
+        "rightPanel": "右パネル",
+        "terminal": "ターミナル",
+        "view": "見る"
+      },
+      "items": {
+        "openPalette": {
+          "label": "コマンドパレットを開く"
+        },
+        "openSettings": {
+          "label": "設定を開く"
+        },
+        "newSession": {
+          "label": "新しいセッション"
+        },
+        "newIsolatedSession": {
+          "label": "新しい分離セッション"
+        },
+        "newControlSession": {
+          "label": "新しいコントロールセッション"
+        },
+        "addProject": {
+          "label": "プロジェクトの追加"
+        },
+        "findInView": {
+          "label": "現在のビューで検索"
+        },
+        "renameItem": {
+          "label": "選択した項目の名前を変更する"
+        },
+        "focusSidebar": {
+          "label": "サイドバーに焦点を当てる"
+        },
+        "focusMain": {
+          "label": "メインエリアに焦点を当てる"
+        },
+        "focusRight": {
+          "label": "右パネルにフォーカス"
+        },
+        "nextTab": {
+          "label": "次のタブ"
+        },
+        "prevTab": {
+          "label": "前のタブ"
+        },
+        "focusLatestNeedsInput": {
+          "label": "最新ニーズ入力タブ"
+        },
+        "nextProject": {
+          "label": "次のプロジェクト"
+        },
+        "prevProject": {
+          "label": "以前のプロジェクト"
+        },
+        "toggleSidebar": {
+          "label": "サイドバーの切り替え"
+        },
+        "toggleRightPanel": {
+          "label": "右パネルを切り替えます"
+        },
+        "focusPaneLeft": {
+          "label": "左側のペインにフォーカス"
+        },
+        "focusPaneRight": {
+          "label": "右側のフォーカス ペイン"
+        },
+        "focusPaneUp": {
+          "label": "上のフォーカスペイン"
+        },
+        "focusPaneDown": {
+          "label": "下のフォーカスペイン"
+        },
+        "splitVertical": {
+          "label": "ペインを垂直に分割する"
+        },
+        "splitHorizontal": {
+          "label": "ペインを水平に分割する"
+        },
+        "equalizePanes": {
+          "label": "ペインのサイズを均等化する"
+        },
+        "closeTab": {
+          "label": "フォーカスされたタブを閉じる"
+        },
+        "closeEmptyPane": {
+          "label": "空のペインを閉じる",
+          "description": "フォーカスされたペインにタブがない場合にのみ機能します。"
+        },
+        "toggleTodos": {
+          "label": "Todo を表示する"
+        },
+        "toggleCommits": {
+          "label": "コミットを表示"
+        },
+        "toggleStaged": {
+          "label": "段階的な変更を表示する"
+        },
+        "togglePrs": {
+          "label": "プルリクエストを表示"
+        },
+        "toggleFiles": {
+          "label": "ファイルを表示する"
+        },
+        "clearTerminal": {
+          "label": "クリア端子"
+        },
+        "previousConversation": {
+          "label": "前の会話"
+        },
+        "nextConversation": {
+          "label": "次の会話"
+        },
+        "toggleMultiInput": {
+          "label": "マルチ入力の切り替え"
+        },
+        "reloadShellEnv": {
+          "label": "シェル環境をリロードする"
+        },
+        "uiScaleDown": {
+          "label": "UIスケールを小さくする"
+        },
+        "uiScaleUp": {
+          "label": "UIスケールを大きくする"
+        },
+        "uiScaleReset": {
+          "label": "UIスケールをリセット"
+        }
+      }
+    },
+    "agents": {
+      "intro": {
+        "before": "選択したエージェントは、acorn の AI 機能を強化します (現在はマージ ダイアログの) ",
+        "action": "AIで生成",
+        "after": " ボタン。"
+      },
+      "agent": {
+        "label": "エージェント",
+        "hint": "acorn が使用する AI CLI を選択します。"
+      },
+      "customOption": {
+        "label": "カスタムコマンド",
+        "description": "従来のオプション。ネイティブ AI 生成には組み込みプロバイダーが必要になりました。"
+      },
+      "ollamaModel": {
+        "label": "オラマモデル",
+        "hint": "`ollam run <model>` に渡されます。空白の場合、デフォルトは「llama3」です。"
+      },
+      "llmModel": {
+        "label": "llmモデル",
+        "hint": "`llm -m <model>` (およびセッションの場合は `llm chat -m <model>`) 経由で渡されます。空白は、llm で構成されたデフォルトを使用します。"
+      },
+      "customCommand": {
+        "label": "カスタムコマンド",
+        "hint": "既存の設定のために保持されます。ネイティブ AI の生成には組み込みプロバイダーが必要です。"
+      },
+      "sessionTitles": {
+        "label": "セッションタイトル",
+        "hint": "有効にすると、acorn は新しいエージェント セッションから選択された AI CLI にトランスクリプト コンテキストを送信し、デフォルトのタブ名を簡潔なタイトルに置き換えます。",
+        "checkbox": "セッションタイトルを自動生成"
+      },
+      "sessionTitleSync": {
+        "label": "エージェントのタイトルの同期",
+        "hint": "有効にすると、Acorn は手動および生成されたターミナル タブのタイトルを、一致する Codex または Claude の会話にミラーリングします。",
+        "checkbox": "タイトルを Codex と Claude に同期する"
+      },
+      "sessionTitlePrompt": {
+        "label": "セッションタイトルプロンプト",
+        "hint": "トランスクリプトコンテキストの前に送信される指示。デフォルトのプロンプトを使用するには、空白のままにします。",
+        "open": "タイトルプロンプトを構成する",
+        "shortButton": "プロンプト",
+        "editorLabel": "プロンプト",
+        "count": "{count} / {max}",
+        "reset": "プロンプトをリセットする",
+        "preview": {
+          "sample": "ドングリのサンプルの最初のメッセージ",
+          "generate": "プレビューの生成",
+          "generating": "プレビューの生成",
+          "result": "タブ",
+          "failed": "プレビューに失敗しました"
+        }
+      },
+      "requirement": "選択したエージェントの CLI は、このマシンにすでにインストールされ、認証されている必要があります。バイナリが欠落している場合は、明らかなエラーが表示されます。"
+    },
+    "storage": {
+      "title": "再利用可能なキャッシュ",
+      "description": "acorn が通常のセッション ライフサイクルを通じてクリーンアップできないディスク アーティファクト (クラッシュや acorn がオフラインの間に行われた編集によって孤立したファイルなど)。セッション、プロジェクト、設定、およびライブターミナルのスクロールバックには一切触れません。",
+      "cacheCategories": {
+        "scrollbackOrphans": {
+          "label": "孤立したターミナルのスクロールバック",
+          "description": "存在しなくなったセッションによって残された ANSI スクロールバック ファイル (例: acorn がオフラインだったとき、またはブート時プルーン ロジックが存在する前に削除されたもの)。ライブ セッションのスクロールバックには触れず、再利用できない残り物のみが表示されます。"
+        }
+      },
+      "status": {
+        "clearedSingular": "{count} キャッシュ ファイルをクリアしました。",
+        "clearedPlural": "{count} キャッシュ ファイルをクリアしました。",
+        "nothingToClear": "クリアするものは何もありません。",
+        "clearFailed": "キャッシュのクリアに失敗しました。詳細については、コンソールを参照してください。"
+      },
+      "confirm": {
+        "message": "これにより、上記のキャッシュ データ ({size}) が完全に削除されます。続く？",
+        "cancel": "キャンセル"
+      },
+      "clear": {
+        "button": "キャッシュをクリアする",
+        "clearing": "クリア中..."
+      },
+      "total": "合計: {size}"
+    },
+    "permissions": {
+      "title": "権限",
+      "description": "Acorn の macOS プライバシーに関する決定をリセットし、保護されたフォルダーをすぐにチェックして、macOS が再度要求できるようにします。",
+      "notice": "macOS が古い権限決定を保存したために、フォルダー、Playwright、ブラウザ自動化、またはキャプチャ ツールが失敗し続ける場合は、これを使用します。",
+      "kind": {
+        "folder": "フォルダー",
+        "developer": "ドングリ",
+        "external": "外部"
+      },
+      "groups": {
+        "folders": {
+          "title": "保護されたフォルダー",
+          "description": "これらは、フォルダーを簡単に読むことで確認できます。"
+        },
+        "automation": {
+          "title": "自動化とキャプチャ",
+          "description": "これらは、Acorn の macOS プライバシーに関する決定をリセットします。 Acorn が保護された機能を使用すると、macOS でプロンプトが再度表示されます。"
+        },
+        "browser": {
+          "title": "ブラウザとPlaywrightメディア",
+          "description": "これらは通常、Acorn ではなく Chrome、Chromium、または Playwright ブラウザー プロセスによって所有されます。"
+        }
+      },
+      "list": {
+        "title": "許可エリア",
+        "description": "Acorn が所有する権限はここでリセットできます。ブラウザと Playwright のメディア権限は、macOS がブラウザ プロセスに付与するため、個別に表示されます。"
+      },
+      "folderAccess": {
+        "label": "macOS のプライバシー権限",
+        "description": "保護されたフォルダーと共通の開発者ツール権限について保存された Acorn の決定をリセットし、保護されたフォルダーを 1 回読み取ってフォルダー プロンプトを表示します。"
+      },
+      "reset": {
+        "button": "権限をリセットする",
+        "running": "リセット中..."
+      },
+      "confirm": {
+        "message": "これにより、Acorn に付与されたすべての macOS 権限 (保護されたフォルダーに加えて、画面録画、アクセシビリティ、自動化、入力監視などの開発者ツール権限) が取り消されます。 macOS は、次回それぞれを使用するときに再度尋ねます。続く？",
+        "cancel": "キャンセル",
+        "confirm": "すべての権限をリセットする"
+      },
+      "status": {
+        "ready": "フォルダーアクセスがリセットされ、チェックされました。",
+        "needsAttention": "一部のフォルダーにはまだ注意が必要です。",
+        "empty": "このプラットフォームでは、macOS で保護されたフォルダーはチェックされませんでした。",
+        "failed": "macOS の権限をリセットできませんでした。",
+        "checkOnReset": "リセット時のチェック",
+        "promptedByTool": "使用時のプロンプト",
+        "browserManaged": "ブラウザ管理",
+        "reset": "もう一度質問します",
+        "skipped": "macOSのみ",
+        "resetFailed": "リセットに失敗しました"
+      },
+      "items": {
+        "desktop": {
+          "label": "デスクトップ",
+          "description": "デスクトップ下のファイルとフォルダー。"
+        },
+        "documents": {
+          "label": "書類",
+          "description": "「ドキュメント」の下にあるファイルとフォルダー。"
+        },
+        "downloads": {
+          "label": "ダウンロード",
+          "description": "「ダウンロード」の下にあるファイルとフォルダー。"
+        },
+        "icloud": {
+          "label": "iCloudドライブ",
+          "description": "iCloud Drive の下にあるファイルとフォルダー (存在する場合)。"
+        },
+        "screenCapture": {
+          "label": "画面録画",
+          "description": "スクリーンショット、画面キャプチャ、およびビジュアル自動化ツールによって使用されます。"
+        },
+        "accessibility": {
+          "label": "アクセシビリティ",
+          "description": "他のアプリ ウィンドウを検査または制御するツールによって使用されます。"
+        },
+        "automation": {
+          "label": "自動化",
+          "description": "Apple Events および他のアプリを制御するスクリプトによって使用されます。"
+        },
+        "inputMonitoring": {
+          "label": "入力モニタリング",
+          "description": "キーボード入力をリッスンするツールによって使用されます。"
+        },
+        "appData": {
+          "label": "アプリデータ",
+          "description": "Acorn が履歴、履歴書候補者、またはプロジェクトのコンテキストについてエージェントまたは開発者ツールのデータ ファイルを読み取るときに使用されます。"
+        },
+        "camera": {
+          "label": "カメラ",
+          "description": "ブラウザ テストまたはカメラ デバイスを開くツールによって使用されます。"
+        },
+        "microphone": {
+          "label": "マイク",
+          "description": "ブラウザのテストまたはオーディオ入力デバイスを開くツールによって使用されます。"
+        },
+        "developerTools": {
+          "label": "開発者ツール",
+          "description": "他のプロセスに接続するデバッグおよび自動化ツールによって使用されます。"
+        }
+      }
+    },
+    "experiments": {
+      "warning": "未完成の機能。動作はリリース間で変更される可能性があります。トグル自体は安定しています。",
+      "stickyPrompt": {
+        "label": "最後のユーザー プロンプトを端末の上に固定する",
+        "description": "レンダリングされたターミナル バッファー内の最新のクロード プロンプト行を検出し、ペインの上部に固定して、応答を読んでいる間も表示されたままにします。 Cmd+K を押すと、スクロールバックの残りの部分とともにクリアされます。"
+      },
+      "cjkCellWidthHeuristic": {
+        "label": "CJK端末のセル幅修正",
+        "description": "CJK 等幅フォント (D2Coding、Sarasa Mono など) のヒューリスティック: `W` と `ga` の幅が同じ場合、CJK グリフがセル グリッド上に配置されるようにセル幅が半分になります。幅が異なる場合はスキップされるため、システム CJK フォールバックを備えた ASCII フォントは修正されません。既知の制限: アドオンが半分の値を再適用する前に、xterm のサイズ変更パスが `cell.width` を自然な W アドバンスにリセットするため、タブ スイッチで 1 フレームのグリフ サイズのちらつきが一時的に表示されることがあります。デフォルトではオフです。"
+      },
+      "resumeModal": {
+        "label": "コールドブート時に「前の会話を再開」モーダルを表示する",
+        "description": "Acorn の起動時に、すべての永続セッションで未完成のクロードまたはコーデックス トランスクリプトがないか調査し、セッションにフォーカスするとワンショット モーダルがポップされるので、中断したところから再開できます。モーダルを完全に抑制するには無効にします。"
+      },
+      "normalizeTerminalUnicodeSpaces": {
+        "label": "端末入力の Unicode スペースを正規化する",
+        "description": "入力して貼り付けた端末テキスト内の NBSP のような Unicode 区切り文字を通常のスペースに変換し、シェル コマンドが個別の単語として解析し続けるようにします。 TUI、REPL、またはテストでリテラル Unicode スペースを保持するには、オフにします。"
+      }
+    },
+    "about": {
+      "title": "ドングリについて",
+      "description": "Acorn は、起動時と 24 時間ごとに更新を自動的にチェックします。以下で手動で確認することもできます。",
+      "currentVersion": "現在のバージョン",
+      "lastChecked": "最後にチェックした",
+      "loading": "読み込み中...",
+      "updateAvailable": "利用可能なアップデート",
+      "updateReady": "Acorn {version} をインストールする準備ができました。",
+      "whatsNew": "新機能",
+      "installing": "インストール中...",
+      "installRelaunch": "インストールと再起動",
+      "whatsNewInVersion": "{version} の新機能",
+      "checking": "確認中...",
+      "checkForUpdates": "アップデートをチェックする",
+      "toasts": {
+        "upToDate": "ドングリは最新です。",
+        "updateAvailable": "ドングリ {version} が利用可能です。",
+        "checkFailed": "アップデートのチェックに失敗しました:",
+        "installFailed": "アップデートのインストールに失敗しました:",
+        "releaseNotesFailed": "リリースノートをロードできませんでした:"
+      },
+      "relative": {
+        "never": "決して",
+        "justNow": "たった今",
+        "minutesAgo": "{count} 分前",
+        "hoursAgo": "{count} 時間前",
+        "daysAgo": "{count} 日前"
+      }
+    }
+  },
+  "app": {
+    "toast": {
+      "multiInputOn": "複数入力が可能です。",
+      "multiInputOff": "マルチ入力が無効になっています。",
+      "shellEnvironmentReloaded": "シェル環境がリロードされました。新しいセッションを開いて適用します。",
+      "shellEnvironmentReloadFailed": "シェル環境のリロードに失敗しました。"
+    }
+  },
+  "statusBar": {
+    "sessionCount": "セッション: {count}",
+    "status": "ステータス: {status}",
+    "multiInputOn": "マルチ入力: オン",
+    "working": "働いています...",
+    "error": "エラー: {error}",
+    "githubAccountTooltip": "PR は gh アカウント {account} 経由でリストされます",
+    "workspaceView": "ビュー: {mode}",
+    "workspaceViewTooltip": "ワークスペースビュー",
+    "branch": "ブランチ: {branch}",
+    "memoryTooltip": "クリックしてプロセスごとの内訳を表示します",
+    "memory": "メモリ: {memory}",
+    "agentTokens": "トークン: {summary}",
+    "agentTokensUnavailable": "読み込み中",
+    "agentTokensNoData": "データがありません",
+    "agentTokensWindowFiveHour": "5時間",
+    "agentTokensWindowWeekly": "毎週",
+    "agentTokensResetUnknown": "-",
+    "agentTokensRemaining": "{remaining} 残り",
+    "agentTokensResetIn": "{reset} でリセット",
+    "agentTokensUpdated": "{time} を更新しました",
+    "sessionStatus": {
+      "ready": "準備完了",
+      "working": "働いている",
+      "waitingForInput": "入力を待っています",
+      "errored": "エラー"
+    },
+    "agentStatusSource": {
+      "hook": "ネイティブフック",
+      "transcript_fallback": "トランスクリプト フォールバック (劣化)",
+      "process_fallback": "プロセスのフォールバック (劣化)"
+    },
+    "sessionStatusReason": {
+      "turn_complete": "エージェントのターンが完了しました",
+      "shell_prompt": "シェルプロンプトが検出されました"
+    },
+    "notifications": {
+      "ariaLabel": "セッション通知",
+      "tooltipEmpty": "未読のセッション通知はありません",
+      "tooltipWithCount": "{count} 未読セッション通知",
+      "title": "セッション通知",
+      "unreadCount": "{count} 未読",
+      "empty": "セッションステータスはまだ変化していません。",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "waitingForInput": "入力を待っています",
+        "errored": "エラー"
+      },
+      "actions": {
+        "markAllRead": "すべて既読としてマークする",
+        "clearRead": "クリアリード",
+        "dismiss": "解雇する"
+      }
+    },
+    "services": {
+      "ariaLabel": "サービス状況",
+      "tooltip": {
+        "ipcLoading": "IPC: 読み込み中",
+        "ipcOn": "IPC: オン",
+        "ipcOff": "IPC: オフ",
+        "daemonLoading": "デーモン: ロード中",
+        "daemonDisabled": "デーモン: 無効化",
+        "daemonOn": "デーモン: オン",
+        "daemonOnWithSessions": "デーモン: オン ({count})",
+        "daemonDown": "デーモン: ダウン",
+        "detailsHint": "クリックすると詳細が表示されます"
+      },
+      "status": {
+        "loading": "読み込み中",
+        "running": "走っている",
+        "down": "ダウン",
+        "disabled": "無効化された",
+        "runningSessions": "実行中 · {count} セッション"
+      },
+      "ipc": {
+        "label": "IPCサーバー",
+        "description": "コントロールセッション <-> アプリソケット"
+      },
+      "daemon": {
+        "label": "ドングリデーモン",
+        "description": "永続的な PTY セッション"
+      },
+      "actions": {
+        "restart": "再起動",
+        "restarting": "再起動中...",
+        "settings": "設定"
+      }
+    }
+  },
+  "workspace": {
+    "mode": {
+      "ariaLabel": "ワークスペースビューモード",
+      "panes": "ペイン",
+      "kanban": "カンバン",
+      "canvas": "キャンバス"
+    },
+    "canvas": {
+      "regionLabel": "ワークスペースキャンバス",
+      "toolbarLabel": "キャンバスコントロール",
+      "empty": "このキャンバスにはセッションがありません。",
+      "hint": "右クリックしてセッションアクションを実行します。 · 空のスペースをドラッグするか、中ボタンを押しながらドラッグしてパンします。 · ピンチまたは修飾キーを押しながらスクロールしてズームします。 · Alt キーでスナップをスキップします。",
+      "showHelp": "キャンバス コントロールのヘルプを表示する",
+      "sessionCountOne": "1セッション",
+      "sessionCountOther": "{count} セッション",
+      "zoomOut": "ズームアウト",
+      "zoomIn": "ズームイン",
+      "fit": "すべてのセッションに適合",
+      "reset": "セッションレイアウトをリセットする",
+      "resetComplete": "セッションレイアウトがリセットされました。元に戻すはツールバーで使用できます。",
+      "undoReset": "リセットを元に戻す",
+      "overviewLabel": "キャンバスの概要",
+      "overviewTitle": "概要",
+      "overviewSession": "{name} をキャンバスに表示",
+      "overviewHint": "矢印キーを使用してキャンバスをパンします。セッション マーカーを選択して表示します。",
+      "overviewCollapse": "キャンバスの概要を折りたたむ",
+      "overviewExpand": "キャンバスの概要を展開する",
+      "newSession": "新しいセッション",
+      "contextSession": "セッション",
+      "contextCreateSession": "セッションの作成",
+      "contextLayout": "レイアウト",
+      "moveSession": "{name} を移動",
+      "resizeSession": "{name} のサイズを変更する",
+      "expandSession": "{name} を展開します",
+      "openInPanes": "ペインで {name} を開きます",
+      "closeSession": "セッションを閉じる",
+      "closeSessionButton": "{name} を閉じる"
+    },
+    "kanban": {
+      "title": "ワークスペースのカンバン",
+      "empty": "このワークスペースにはセッションがありません。",
+      "emptyColumn": "セッションなし",
+      "filterLabel": "セッションをフィルタリングする",
+      "filterPlaceholder": "セッションをフィルタリングする",
+      "newSession": "新しいセッション",
+      "resizeColumn": "{name} 列のサイズを変更する",
+      "actions": {
+        "createSession": "セッションの作成",
+        "resetColumnSizes": "サイズをリセットする",
+        "equalizeColumnSizes": "サイズを均等化する",
+        "newSession": "新しいセッション",
+        "newWorktreeSession": "新しいワークツリー",
+        "newChatSession": "新しいチャット",
+        "newControlSession": "制御",
+        "markAsDone": "完了としてマークする",
+        "restoreFromDone": "完了から復元する"
+      },
+      "sort": {
+        "label": "セッションを並べ替える",
+        "updatedDesc": "最近更新された",
+        "createdDesc": "最新の",
+        "nameAsc": "名前"
+      },
+      "openSession": "{name} を開く",
+      "preview": {
+        "user": "ユーザー",
+        "agent": "エージェント"
+      },
+      "tooltip": {
+        "title": "タイトル",
+        "lastUserMessage": "最後のユーザーメッセージ",
+        "lastAgentMessage": "最後のエージェントメッセージ",
+        "lastMessage": "最後のメッセージ",
+        "noLastMessage": "最後のメッセージはありません",
+        "branch": "支店",
+        "detached": "(切り離された)",
+        "worktree": "ワークツリー"
+      },
+      "console": {
+        "ariaLabel": "セッションコンソール",
+        "terminal": "ターミナル",
+        "chat": "チャット"
+      },
+      "terminalPopover": {
+        "ariaLabel": "セッション端末",
+        "expand": "端子を拡張する",
+        "restore": "端末サイズを復元する",
+        "resetPosition": "端子位置をリセットする",
+        "resetSize": "端子サイズをリセットする",
+        "resize": "端子のサイズを変更する"
+      },
+      "popover": {
+        "ariaLabel": "セッションでの会話",
+        "userPrompt": "私の最後のプロンプト",
+        "agentMessage": "エージェントの最後のメッセージ",
+        "emptyUser": "ユーザープロンプトはまだありません",
+        "emptyAgent": "エージェントからのメッセージはまだありません",
+        "messagePlaceholder": "このセッションに返信...",
+        "disabledPlaceholder": "ターミナルを開いてこのセッションに入力します",
+        "send": "送信",
+        "sending": "送信中",
+        "openTerminal": "ターミナルを開く",
+        "sendUnavailable": "このセッションに送信するターミナルを開きます。",
+        "sendError": "メッセージを送信できませんでした。"
+      },
+      "stage": {
+        "idle": "アイドル状態",
+        "working": "働く",
+        "waiting": "待っています",
+        "review": "レビュー",
+        "done": "完了"
+      },
+      "card": {
+        "stalled": "停止中",
+        "dwellTitle": "{duration} のこの列",
+        "openPullRequest": "プル リクエスト #{number} を開く"
+      }
+    }
+  },
+  "topBar": {
+    "noSessionSelected": "セッションが選択されていません"
+  },
+  "updateBanner": {
+    "available": "利用可能です。インストール後にアプリが再起動します。",
+    "whatsNew": "新機能",
+    "installing": "インストール中...",
+    "installRelaunch": "インストールと再起動",
+    "hideUntilNextVersion": "次のバージョンまで非表示にする",
+    "dismissError": "エラーを無視"
+  },
+  "imageLightbox": {
+    "imagePreview": "画像プレビュー",
+    "openInBrowser": "ブラウザで開く",
+    "close": "閉じる"
+  },
+  "remoteImage": {
+    "load": "リモート画像の読み込み"
+  },
+  "mediaViewer": {
+    "zoomControls": "画像ズームコントロール",
+    "zoomIn": "ズームイン",
+    "zoomOut": "ズームアウト",
+    "resetZoom": "ズームをリセットする"
+  },
+  "codeViewer": {
+    "loading": "読み込み中...",
+    "binaryFile": "バイナリファイル",
+    "binaryFileBody": "{bytes} バイト - 読み取り専用ビューアには表示されません。",
+    "truncated": "ファイルは 2 MB に切り詰められました。外部から開いて残りを表示します。",
+    "showPreview": "プレビュー",
+    "showSource": "ソース",
+    "findInFile": "ファイル内で検索",
+    "findControls": "コントロールの検索",
+    "findPrompt": "探す",
+    "noMatches": "一致しません",
+    "matchCount": "{current}/{total}",
+    "previousMatch": "前回の試合",
+    "nextMatch": "次の試合",
+    "closeFind": "検索を閉じる"
+  },
+  "fileDropHover": {
+    "previewTitle": "プレビューにドロップ",
+    "terminalTitle": "ターミナルにドロップ",
+    "tabTitle": "開いているタブにドロップ",
+    "previewHint": "このファイルをペインで開きます。",
+    "terminalHint": "ファイルパスを挿入します。",
+    "tabHint": "このファイルをタブとして開きます。"
+  },
+  "diffView": {
+    "noChanges": "この差分には変更はありません。",
+    "filesChanged": "{count} ファイルが変更されました",
+    "filesCount": "{count} ファイル",
+    "expandAll": "すべて展開",
+    "collapseAll": "すべて折りたたむ",
+    "openFullDiff": "完全な差分を開く",
+    "openInEditor": "エディタで開く",
+    "image": "画像",
+    "selectImageToLoad": "画像ファイルを選択してプレビューを読み込みます。",
+    "loadingImage": "画像プレビューを読み込んでいます...",
+    "imageLoadFailed": "画像プレビューの読み込みに失敗しました",
+    "binaryImageNoPreview": "バイナリ イメージの変更 (プレビューは利用できません)",
+    "none": "(なし)",
+    "imageLabels": {
+      "added": "追加されました",
+      "deleted": "削除されました",
+      "before": "以前",
+      "after": "後"
+    }
+  },
+  "ui": {
+    "openGitHubProfile": "GitHub プロファイルを開く",
+    "stepper": {
+      "decrease": "減少",
+      "increase": "増やす",
+      "value": "値"
+    },
+    "commandHint": {
+      "title": "クリックしてコピーまたは実行します"
+    }
+  },
+  "sidebar": {
+    "status": {
+      "ready": "準備完了",
+      "working": "働く",
+      "waiting_for_input": "入力を待っています",
+      "errored": "エラー"
+    },
+    "statusReason": {
+      "turn_complete": "エージェントのターンが完了しました",
+      "shell_prompt": "シェルプロンプトが検出されました"
+    },
+    "dialog": {
+      "selectExistingProject": "既存のプロジェクトを選択します",
+      "selectIsolatedRepository": "git リポジトリ (分離されたワークツリー) を選択します",
+      "selectControlDirectory": "ディレクトリを選択します (コントロール セッション)",
+      "selectDirectory": "ディレクトリを選択してください"
+    },
+    "projects": {
+      "title": "プロジェクト",
+      "newProject": "新しいプロジェクト",
+      "addExistingProject": "既存のプロジェクトを追加する"
+    },
+    "actions": {
+      "dragToReorder": "ドラッグして並べ替えます",
+      "expandProject": "プロジェクトを展開する",
+      "collapseProject": "プロジェクトを折りたたむ",
+      "expandProjectFolder": "ワークスペースを拡張する",
+      "collapseProjectFolder": "ワークスペースを折りたたむ",
+      "newSession": "新しいセッション",
+      "newIsolatedSession": "新しい分離セッション",
+      "newIsolatedSessionWorktree": "新しいワークツリーセッション",
+      "newChatSession": "新しいチャットセッション",
+      "newAutonomousGoalSession": "新しい目標セッション",
+      "newControlSession": "新しいコントロールセッション",
+      "newProjectFolder": "新しいワークスペース",
+      "newProjectFolderWithWorktree": "新しいワークツリーワークスペース",
+      "createWorkspaceFromWorktree": "ワークツリーからワークスペースを作成する",
+      "renameProjectFolder": "ワークスペースの名前を変更する",
+      "removeProjectFolder": "ワークスペースを削除する",
+      "moveToProjectFolder": "に移動します",
+      "moveToProjectRoot": "プロジェクトルート",
+      "projectSettings": "プロジェクト設定",
+      "closeProject": "プロジェクトを閉じる",
+      "revealInFinder": "ファインダーで表示",
+      "copy": "コピー",
+      "copyPath": "パスをコピーする",
+      "rename": "名前の変更",
+      "regenerateName": "名前を再生成する",
+      "openWorkSummary": "オープンワークの概要",
+      "silenceNotifications": "通知をサイレントにする",
+      "resumeNotifications": "再開通知",
+      "forkClaudeSession": "フォーク・クロード・セッション",
+      "forkSession": "フォークセッション",
+      "forkClaudeInNewWorktree": "新しいワークツリーのフォーク クロード",
+      "forkInNewWorktree": "新しいワークツリーのフォーク",
+      "forkCodexSession": "フォークコーデックスセッション",
+      "forkCodexInNewWorktree": "新しいワークツリーのフォーク コーデックス",
+      "forkAntigravitySession": "フォーク反重力セッション",
+      "forkAntigravityInNewWorktree": "新しいワークツリーのフォーク反重力",
+      "equalizePaneSizes": "ペインのサイズを均等化する",
+      "openWorktreeInEditor": "エディタでワークツリーを開く",
+      "worktreePath": "ワークツリーのパス",
+      "transcriptPath": "転写パス",
+      "worktreeName": "ワークツリー名",
+      "branchName": "支店名",
+      "sessionId": "セッションID",
+      "copyWorktreePath": "ワークツリーのパスをコピー",
+      "copyTranscriptPath": "トランスクリプトのパスをコピー",
+      "remove": "削除",
+      "removeSession": "セッションを削除する",
+      "removeSessionMenu": "セッションの削除"
+    },
+    "contextMenu": {
+      "session": "セッション",
+      "fork": "フォーク",
+      "workspace": "ワークスペース",
+      "project": "プロジェクト",
+      "open": "開く",
+      "copy": "コピー",
+      "danger": "危険"
+    },
+    "aria": {
+      "project": "プロジェクト",
+      "dragToReorderProject": "ドラッグしてプロジェクトを並べ替えます",
+      "newSessionMenuInProject": "このプロジェクトにセッションを作成する",
+      "newSessionMenuInProjectFolder": "このワークスペースにセッションを作成する",
+      "newSessionInProject": "このプロジェクトの新しいセッション",
+      "newSessionInProjectFolder": "このワークスペースの新しいセッション",
+      "newAutonomousGoalSession": "新しい目標セッション",
+      "newIsolatedSessionInProject": "このプロジェクトの新しいワークツリー セッション",
+      "newChatSessionInProject": "このプロジェクトの新しいチャット セッション",
+      "newControlSessionInProject": "このプロジェクトの新しいコントロール セッション",
+      "goalSession": "ゴールセッション",
+      "dragToReorderSession": "ドラッグしてセッションを並べ替えます",
+      "localTerminalSessions": "ローカル端末セッション",
+      "worktree": "ワークツリー",
+      "controlSession": "コントロールセッション",
+      "chatSession": "チャットセッション",
+      "generatingSessionTitle": "セッションタイトルの生成",
+      "notificationsSilenced": "通知をサイレントにしました"
+    },
+    "localTerminals": {
+      "title": "インスタントセッション",
+      "newSession": "新しいインスタントセッション",
+      "newWorkspace": "新しいワークスペース",
+      "empty": "ダブルクリックしてインスタント セッションを開始します。"
+    },
+    "activity": {
+      "ariaLabel": "セッションアクティビティ",
+      "title": "アクティビティ",
+      "unreadCount": "{count} 未読",
+      "readCount": "{count} 読み取り",
+      "empty": "まだセッションアクティビティがありません",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "waitingForInput": "入力を待っています",
+        "errored": "エラー"
+      },
+      "actions": {
+        "markAllRead": "すべて既読としてマークする",
+        "clearRead": "クリアリード",
+        "resize": "サイズ変更アクティビティ",
+        "dismiss": "解雇する"
+      }
+    },
+    "emptyProject": {
+      "createSession": "ダブルクリックしてセッションを開始します。"
+    },
+    "emptyProjectFolder": {
+      "noSessions": "セッションなし"
+    },
+    "emptyProjects": {
+      "openProject": "クリックしてプロジェクトを開きます。"
+    },
+    "metadata": {
+      "name": "名前",
+      "branch": "支店",
+      "detached": "(切り離された)",
+      "workingDirectory": "作業ディレクトリ",
+      "openPullRequest": "オープンPR",
+      "processes": "プロセス",
+      "status": "ステータス",
+      "kind": "種類",
+      "controlSession": "コントロールセッション",
+      "isolatedWorktree": "分離されたワークツリー"
+    }
+  },
+  "chat": {
+    "goalSession": {
+      "label": "プロジェクトの目標",
+      "revision": "改訂",
+      "edit": "目標を編集する",
+      "pauseAndEdit": "一時停止して編集する"
+    }
+  },
+  "pane": {
+    "empty": {
+      "dropTabOrDoubleClick": "ここにタブをドロップするか、ダブルクリックしてセッションを開始します",
+      "createProject": "プロジェクトを作成して開始します。ここをダブルクリックします。"
+    },
+    "aria": {
+      "worktree": "ワークツリー",
+      "controlSession": "コントロールセッション",
+      "chatSession": "チャットセッション",
+      "goalSession": "ゴールセッション",
+      "workSummary": "作品概要",
+      "generatingSessionTitle": "セッションタイトルの生成",
+      "notificationsSilenced": "通知をサイレントにしました",
+      "closeSession": "セッションを閉じる",
+      "closeTab": "タブを閉じる"
+    },
+    "contextMenu": {
+      "session": "セッション",
+      "fork": "フォーク",
+      "layout": "レイアウト",
+      "open": "開く",
+      "copy": "コピー",
+      "close": "閉じる"
+    },
+    "menu": {
+      "rename": "名前の変更",
+      "regenerateName": "名前を再生成する",
+      "openWorkSummary": "オープンワークの概要",
+      "silenceNotifications": "通知をサイレントにする",
+      "resumeNotifications": "再開通知",
+      "forkClaudeSession": "フォーク・クロード・セッション",
+      "forkSession": "フォークセッション",
+      "forkClaudeInNewWorktree": "新しいワークツリーのフォーク クロード",
+      "forkInNewWorktree": "新しいワークツリーのフォーク",
+      "forkCodexSession": "フォークコーデックスセッション",
+      "forkCodexInNewWorktree": "新しいワークツリーのフォーク コーデックス",
+      "forkAntigravitySession": "フォーク反重力セッション",
+      "forkAntigravityInNewWorktree": "新しいワークツリーのフォーク反重力",
+      "splitRight": "右に分割",
+      "splitDown": "スプリットダウン",
+      "equalizePaneSizes": "ペインのサイズを均等化する",
+      "openWorktreeInEditor": "エディタでワークツリーを開く",
+      "openFileInEditor": "エディタでファイルを開く",
+      "revealInFinder": "ファインダーで表示",
+      "copy": "コピー",
+      "worktreePath": "ワークツリーのパス",
+      "filePath": "ファイルパス",
+      "worktreeName": "ワークツリー名",
+      "fileName": "ファイル名",
+      "branchName": "支店名",
+      "sessionId": "セッションID",
+      "copyWorktreePath": "ワークツリーのパスをコピー",
+      "copyWorktreeName": "ワークツリー名のコピー",
+      "close": "閉じる",
+      "closeOthers": "その他を閉じる",
+      "closeAll": "すべて閉じる",
+      "newSessionInThisPane": "このペインの新しいセッション",
+      "newGoalSessionInThisPane": "このペインの新しい目標セッション",
+      "closePane": "ペインを閉じる"
+    }
+  },
+  "workSummary": {
+    "title": "作品概要",
+    "refresh": "概要を更新する",
+    "loading": "読み込み中...",
+    "notAvailable": "該当なし",
+    "metrics": {
+      "files": "変更されたファイル",
+      "lines": "ラインデルタ",
+      "messages": "会話",
+      "tokens": "トークン"
+    },
+    "values": {
+      "files": "{count} ファイル",
+      "messages": "{count} メッセージ",
+      "turns": "{count} ターン",
+      "tokens": "{count} トークン"
+    },
+    "metadata": {
+      "scope": "範囲",
+      "session": "セッション",
+      "branch": "支店",
+      "status": "ステータス",
+      "mode": "モード",
+      "transcript": "成績証明書",
+      "transcriptProvider": "トランスクリプトプロバイダー",
+      "transcriptPath": "転写パス",
+      "copyTranscriptPath": "トランスクリプトのパスをコピーする",
+      "updated": "更新されました"
+    },
+    "files": {
+      "title": "変更されたファイル",
+      "empty": "作業ツリーの変更なし",
+      "huge": "最初の {limit} ファイルを表示しています",
+      "openFile": "{path} を開く"
+    },
+    "details": {
+      "title": "詳細"
+    },
+    "conversation": {
+      "title": "会話",
+      "user": "ユーザー",
+      "assistant": "アシスタント",
+      "recentMessages": "最近のメッセージ",
+      "turns": "ターン",
+      "completeTurns": "ターンを完了する",
+      "runningTurns": "ランニング",
+      "terminalHint": "会話数はネイティブ チャット セッションで利用できます。"
+    },
+    "tokens": {
+      "title": "トークンの使用法",
+      "empty": "トークン使用状況のメタデータはまだ利用できません。",
+      "input": "入力",
+      "output": "出力",
+      "cache": "キャッシュ",
+      "reasoning": "推論",
+      "start": "スタート",
+      "current": "現在",
+      "sinceStart": "スタート以来",
+      "sessionUsed": "使用されたセッション",
+      "summaryStart": "概要開始",
+      "sinceSummary": "まとめてから",
+      "fromMessages": "{count} アシスタント メッセージより"
+    },
+    "charts": {
+      "title": "変更の内訳"
+    },
+    "status": {
+      "added": "追加されました",
+      "clean": "クリーン",
+      "conflicted": "矛盾している",
+      "deleted": "削除されました",
+      "modified": "修正済み",
+      "renamed": "名前変更"
+    }
+  },
+  "rightPanel": {
+    "groups": {
+      "code": "コード",
+      "github": "GitHub",
+      "agents": "エージェント"
+    },
+    "tabs": {
+      "files": "ファイル",
+      "todos": "トドス",
+      "commits": "コミット",
+      "staged": "段階的",
+      "prs": "PR",
+      "issues": "問題点",
+      "activity": "アクティビティ",
+      "history": "歴史",
+      "actions": "アクション"
+    },
+    "empty": {
+      "noTodos": "このセッションには ToDo がありません",
+      "noProject": "プロジェクトが選択されていません"
+    },
+    "todos": {
+      "doneCount": "{completed}/{total} 完了",
+      "inProgressCount": "{count} が進行中です"
+    },
+    "activity": {
+      "unreadCount": "{count} 未読",
+      "readCount": "{count} 読み取り",
+      "empty": "まだセッションアクティビティがありません",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "waitingForInput": "入力を待っています",
+        "errored": "エラー"
+      },
+      "actions": {
+        "markAllRead": "すべて既読としてマークする",
+        "clearRead": "クリアリード",
+        "dismiss": "解雇する"
+      }
+    },
+    "loading": {
+      "more": "さらに読み込み中…",
+      "moreLower": "さらに読み込んでいます...",
+      "diffLower": "差分の読み込み中..."
+    },
+    "tooltips": {
+      "copySha": "SHAをコピーする",
+      "openOnGitHub": "GitHub で開く"
+    },
+    "commits": {
+      "pushed": "プッシュされました",
+      "notPushed": "押されていない",
+      "selectToSeeDiff": "コミットを選択して差分を確認します"
+    },
+    "history": {
+      "loading": "エージェントセッションをスキャン中…",
+      "count": "{count} エージェント セッション",
+      "filterByAgent": "エージェントでフィルタリングする",
+      "allAgents": "すべてのエージェント",
+      "codex": "コーデックス",
+      "claude": "クロード",
+      "antigravity": "反重力",
+      "empty": "このプロジェクトのクロード、コーデックス、または反重力セッションが見つかりませんでした",
+      "emptyForFilter": "このフィルターに一致するセッションはありません。",
+      "runSession": "新しいターミナルで実行する",
+      "runInWorktree": "ワークツリーで実行",
+      "copyResume": "コピー再開コマンド",
+      "copyTranscriptPath": "トランスクリプトのパスをコピーする",
+      "copyWorktreePath": "ワークツリーのパスをコピーする",
+      "moveTranscriptToTrash": "トランスクリプトをゴミ箱に移動...",
+      "worktreeMissing": "行方不明",
+      "worktreeUnavailable": "そのワークツリーはもう使用できません。",
+      "worktreeFallback": "そのワークツリーはもう使用できません。代わりにプロジェクトのルートから再開しました。",
+      "worktreeRunTitle": "ワークツリーで実行する",
+      "worktreeRunBody": "再開されたセッションはワークツリー {name} で開始されました。",
+      "worktreeRunConfirm": "OK",
+      "trashTranscriptTitle": "トランスクリプトをゴミ箱に移動しますか?",
+      "trashTranscriptBody": "これにより、元のエージェント トランスクリプト JSONL が OS のゴミ箱に移動されます。この履歴アイテムの再開は機能しなくなる可能性がありますが、通常、ファイルはゴミ箱から復元できます。",
+      "trashTranscriptCancel": "キャンセル",
+      "trashTranscriptConfirm": "ゴミ箱に移動",
+      "resumeSessionName": "履歴書",
+      "recoverableSignal": "回復可能なコンテンツ: {items}",
+      "recoverableQueued": "{count} キューに入れられたメッセージ",
+      "subagentCount": "サブエージェント · {count}",
+      "subagentCountTruncated": "サブエージェント · {count}+",
+      "createFailed": "ターミナルセッションの作成に失敗しました"
+    },
+    "staged": {
+      "empty": "ステージングまたは変更されたファイルはありません",
+      "workingTreeChanges": "ワーキングツリーの変更",
+      "noDiff": "差分なし"
+    },
+    "errors": {
+      "deletedFile": "ファイルが削除されました。何も開けない。",
+      "notGitHubRemote": "このリポジトリのオリジンは GitHub リモートではありません。",
+      "originNotGitHub": "オリジンリモートは GitHub リポジトリではありません。",
+      "noAccessToSlug": "{slug} にアクセスできません。"
+    },
+    "menu": {
+      "expandDiff": "差分を展開する",
+      "viewOnGitHub": "GitHub で見る",
+      "copyShaWithValue": "SHA をコピー ({sha})",
+      "openInEditor": "エディタで開く",
+      "copyRelativePath": "相対パスをコピーする",
+      "copyAbsolutePath": "絶対パスをコピーする",
+      "openDetail": "詳細を開く",
+      "openInBrowser": "ブラウザで開く",
+      "openSession": "オープンセッション",
+      "openSessionWithName": "セッションを開く ({name})",
+      "copyPrNumber": "PR番号をコピーする",
+      "copyIssueNumber": "発行番号をコピーする",
+      "copyUrl": "URLをコピー",
+      "copyBranchWithValue": "ブランチをコピー ({branch})",
+      "merge": "結合…",
+      "close": "閉じる…"
+    },
+    "prStates": {
+      "open": "開く",
+      "closed": "閉店",
+      "merged": "合併しました",
+      "all": "すべて",
+      "draft": "ドラフト"
+    },
+    "issueStates": {
+      "open": "開く",
+      "closed": "閉店",
+      "all": "すべて"
+    },
+    "prs": {
+      "emptyByState": "{state} プル リクエストはありません。",
+      "reachedMax": "最初の {count} を表示しています。検索を使用して古い PR を見つけます。"
+    },
+    "issues": {
+      "emptyByState": "{state} の問題はありません。",
+      "reachedMax": "最初の {count} を表示しています。検索を使用して古い問題を見つけます。"
+    },
+    "search": {
+      "aria": "プルリクエストを検索する",
+      "placeholder": "タイトル、著者、レーベル、ブランチを検索…",
+      "searching": "検索中…",
+      "typeToSearch": "プルリクエストを検索するには「」と入力します。",
+      "noGhAccessThisRepo": "ログインしているアカウントはこのリポジトリにアクセスできません。",
+      "noMatches": "一致するプル リクエストはありません。",
+      "reachedMax": "最初の {count} を表示しています。古い PR のクエリを調整します。"
+    },
+    "issueSearch": {
+      "aria": "検索の問題",
+      "placeholder": "タイトル、著者、レーベルを検索…",
+      "searching": "検索中…",
+      "typeToSearch": "問題を検索するには入力します。",
+      "noGhAccessThisRepo": "ログインしているアカウントはこのリポジトリにアクセスできません。",
+      "noMatches": "マッチングの問題はありません。",
+      "reachedMax": "最初の {count} を表示しています。古い問題のクエリを絞り込みます。"
+    },
+    "actions": {
+      "filterByWorkflow": "ワークフローでフィルタリングする",
+      "allWorkflows": "すべてのワークフロー",
+      "noRuns": "まだワークフローは実行されていません。",
+      "noRunsForFilter": "このフィルターに一致する実行はありません。",
+      "workflowRun": "ワークフローの実行",
+      "workflowRunFallbackTitle": "{workflow} 実行",
+      "doubleClickDetails": "ダブルクリックして詳細を表示します",
+      "retryAttempt": "再試行 #{attempt}",
+      "github": "GitHub",
+      "status": "ステータス",
+      "totalDuration": "合計期間",
+      "runningParenthetical": "（走っている）",
+      "attempt": "試みる",
+      "retriedParenthetical": "(再試行)",
+      "commit": "コミット",
+      "created": "作成されました",
+      "updated": "更新されました",
+      "jobsCount": "ジョブ ({count})",
+      "noJobs": "報告された仕事はありません。",
+      "openJobOnGitHub": "GitHub で求人を開く"
+    },
+    "checks": {
+      "allPassed": "すべての {count} チェックに合格しました",
+      "allFailed": "すべての {count} チェックが失敗しました",
+      "summary": "{passed} は成功、{failed} は失敗、{pending} は保留中"
+    },
+    "noAccess": {
+      "noGhAccountCanAccess": "ログインしているアカウントは {slug} にアクセスできません。",
+      "tried": "試してみた:",
+      "noAccounts": "github.com に対して認証されたアカウントはありません。",
+      "run": "走る",
+      "withAccess": "アクセス権のあるアカウントを使用するか、github.com で招待を受け入れます。"
+    },
+    "time": {
+      "secondsAgo": "{count} 秒前",
+      "minutesAgo": "{count}分前",
+      "hoursAgo": "{count}時間前",
+      "daysAgo": "{count}日前",
+      "monthsAgo": "{count}ヶ月前",
+      "yearsAgo": "{count}年前"
+    },
+    "duration": {
+      "seconds": "{count}s",
+      "minutes": "{count}m",
+      "minutesSeconds": "{minutes}m {seconds}s",
+      "hours": "{count}h",
+      "hoursMinutes": "{hours}h {minutes}m"
+    }
+  },
+  "fileExplorer": {
+    "defaults": {
+      "sessionName": "セッション"
+    },
+    "errorBanner": {
+      "dismiss": "エラーを無視"
+    },
+    "errors": {
+      "clipboardWriteFailed": "クリップボードへの書き込みに失敗しました",
+      "noActiveProject": "アクティブなプロジェクトはありません",
+      "noActiveSession": "アクティブなセッションがありません - まずターミナルを開いてください"
+    },
+    "menu": {
+      "attachAllToConversation": "すべてを会話に結びつける",
+      "attachToClaude": "クロードにくっつく",
+      "attachToCodex": "コーデックスに添付する",
+      "attachToAntigravity": "反重力に取り付ける",
+      "copyAbsolutePath": "絶対パスをコピー",
+      "copyAbsolutePaths": "絶対パスのコピー",
+      "copyRelativePath": "相対パスをコピー",
+      "copyRelativePaths": "相対パスのコピー",
+      "moveToTrash": "ゴミ箱に移動",
+      "openIn": "で開く",
+      "openInNewTab": "新しいタブで開く",
+      "openWithDefaultProgram": "デフォルトのプログラムで開く",
+      "rename": "名前の変更",
+      "revealInFileManager": "ファイルマネージャーで表示"
+    },
+    "search": {
+      "close": "閉じる (Esc)",
+      "closeSearch": "検索を閉じる",
+      "excludePlaceholder": "例:ノードモジュール、*.lock",
+      "filesToExclude": "除外するファイル",
+      "filesToInclude": "含めるファイル",
+      "includePlaceholder": "例: *.ts、*.tsx",
+      "matchCase": "大文字と小文字を区別する",
+      "regexPlaceholder": "正規表現...",
+      "searchFilesPlaceholder": "ファイルの検索",
+      "toggleRegex": "正規表現の切り替え",
+      "useRegularExpression": "正規表現を使用する"
+    },
+    "toolbar": {
+      "closeSearch": "検索を閉じる",
+      "hideDotfiles": "ドットファイルを隠す",
+      "hideGitignored": "gitignored を非表示にする",
+      "search": "検索 (⌘F)",
+      "showDotfiles": "ドットファイルを表示する",
+      "showGitignored": "gitignored を表示"
+    },
+    "tree": {
+      "empty": "(空)",
+      "gitStatus": "git ステータス",
+      "loading": "読み込み中...",
+      "renameInput": "エントリ名の変更"
+    }
+  },
+  "dialogs": {
+    "common": {
+      "cancel": "キャンセル",
+      "close": "閉じる",
+      "copy": "コピー",
+      "dontShowAgain": "今後表示しない",
+      "gotIt": "分かりました"
+    },
+    "autonomousGoal": {
+      "title": "新しい目標セッション",
+      "subtitle": "このプロジェクトに永続的な目標セッションを追加し、選択したエージェントを分離されたワークツリーで動作させます。",
+      "editTitle": "プロジェクトの目標を編集する",
+      "editSubtitle": "アクティブな作業を一時停止し、変更した目標を保存してから再計画し、現在のポリシーを続行します。",
+      "projectScopeRequired": "目標セッションはプロジェクト内に作成する必要があります。",
+      "selectRepository": "自律的な目標の Git リポジトリを選択します",
+      "sections": {
+        "goalTitle": "結果を定義する",
+        "goalDescription": "エージェントに耐久性のある概要を伝えます。完了の意味を大きく変える詳細のみを追加してください。",
+        "executionTitle": "Acorn の実行方法を選択する",
+        "executionDescription": "このセッションで保存された承認境界、エージェント、モデル、作業ルーティングを設定します。"
+      },
+      "goal": {
+        "label": "目標",
+        "hint": "必須。選択する問題ではなく、望む結果を書きます。",
+        "placeholder": "例: キーボード ナビゲーションをコマンド パレットに追加し、テストで検証します。"
+      },
+      "completionCriteria": {
+        "label": "完了基準",
+        "placeholder": "仕事が完了したときに真実でなければならないのは何ですか?"
+      },
+      "constraints": {
+        "label": "制約",
+        "placeholder": "保存すべき API、避けるべきファイル、互換性要件..."
+      },
+      "tests": {
+        "label": "テスト",
+        "placeholder": "検証する必要があるコマンドまたは動作"
+      },
+      "optionalFieldHint": "オプション — エージェントは省略された詳細を推測します。",
+      "provider": {
+        "label": "エージェント",
+        "hint": "このセッションではプロバイダーは固定のままです。自動フォールバックはありません。",
+        "capabilityLoading": "CLI 機能を確認しています...",
+        "available": "CLI が利用可能",
+        "unavailable": "CLI が使用不可"
+      },
+      "tabs": {
+        "label": "目標実行設定",
+        "policy": "ポリシー",
+        "model": "エージェントとモデル"
+      },
+      "model": {
+        "singleModel": "各ステージに 1 つのモデルを使用する",
+        "singleModelHint": "デフォルトで有効になっています。 7 つの目標ステージをそれぞれ独立してルーティングするには、これをオフにします。",
+        "modelLabel": "モデル",
+        "effortLabel": "努力",
+        "agentDefault": "デフォルト",
+        "customModel": "カスタムモデル...",
+        "customModelPlaceholder": "モデルIDまたはエイリアス",
+        "chooseDiscoveredModel": "発見されたモデルから選択する",
+        "searchModels": "モデルを検索する",
+        "loadingCapabilities": "インストールされているエージェント CLI からモデルと作業レベルをロードしています...",
+        "agentUnavailable": "このエージェント CLI が見つかりませんでした。カスタム モデルを保存することはできますが、CLI が使用可能になるまでゴールは実行できません。",
+        "codexCapabilities": "Codex アプリサーバーからロードされた {count} モデルとそのサポートされるエフォート レベル。",
+        "claudeCapabilities": "Claude CLI によって公開されるエイリアスとエフォート レベルをロードしました。完全なモデル ID にはカスタム モデルを使用します。",
+        "capabilityFallback": "CLI モデル カタログをロードできませんでした。デフォルトおよびカスタムのモデル値は引き続き使用できます。",
+        "allStages": "全ステージ",
+        "snapshotHint": "選択したエージェントとモデルのプリセットは、この目標セッションのスナップショットとして保存されます。 [デフォルト] では、選択したエージェント CLI で現在のデフォルトを選択できます。"
+      },
+      "modelPreset": {
+        "label": "エージェントとモデルのプリセット",
+        "hint": "組み込みは読み取り専用です。スロットを追加または複製して、エージェント、モデル、およびエフォートのルーティングをカスタマイズします。",
+        "currentSession": "現在のセッション設定",
+        "builtInReadonly": "この内蔵プリセットは変更できません。編集可能なコピーを作成するには、それを複製します。",
+        "currentSessionReadonly": "現在のセッション設定は再利用可能なプリセットではありません。それらを置き換えるプリセットを選択または作成します。"
+      },
+      "modelPresets": {
+        "codexDefault": "コーデックス・エージェントのデフォルト",
+        "claudeDefault": "クロード・エージェントデフォルト",
+        "builtIn": "組み込み・読み取り専用",
+        "custom": "カスタムプリセット",
+        "customDefault": "モデルプリセット",
+        "customEmpty": "カスタム プリセットはまだありません",
+        "customEmptyHint": "プリセットを作成または複製して、編集可能なスロットを追加します。"
+      },
+      "preset": {
+        "label": "ポリシーのプリセット",
+        "hint": "組み込みは読み取り専用です。スロットを追加または複製してカスタマイズします。",
+        "add": "新しいプリセット",
+        "duplicate": "重複",
+        "delete": "削除",
+        "name": "プリセット名",
+        "currentSession": "現在のセッションポリシー",
+        "builtInReadonly": "この内蔵プリセットは変更できません。編集可能なコピーを作成するには、それを複製します。",
+        "currentSessionReadonly": "現在のセッション ポリシーはすでにスナップショットが作成されており、再利用可能なプリセットではありません。置き換えるプリセットを選択または作成します。",
+        "snapshotHint": "セッションはスナップショットを受け取ります。後でこのプリセットの名前を変更、編集、または削除しても、実行中のセッションは変更されません。"
+      },
+      "presets": {
+        "review": "レビュー中心",
+        "balanced": "バランスの取れた",
+        "fullAutonomy": "完全な自律性",
+        "builtIn": "組み込み・読み取り専用",
+        "builtInSeparator": "上記の組み込み · 読み取り専用",
+        "custom": "カスタムプリセット",
+        "customDefault": "カスタムプリセット",
+        "customEmpty": "カスタム プリセットはまだありません",
+        "customEmptyHint": "プリセットを作成または複製して、編集可能なスロットを追加します。",
+        "copySuffix": "コピー"
+      },
+      "stages": {
+        "plan": "計画",
+        "implementation": "実装",
+        "validation": "検証",
+        "autoFix": "自動修正",
+        "selfReview": "自己レビュー",
+        "openPr": "オープンPR",
+        "merge": "マージ"
+      },
+      "policies": {
+        "auto": "自動",
+        "approval": "まず質問してください",
+        "disabled": "障害者"
+      },
+      "prototypeNotice": "この目標は、新しい分離されたワークツリーですぐに開始されます。各段階は、選択されたポリシーとモデルに従います。 Open PR は、すぐにレビューできるプル リクエストをプッシュして作成できます。 Merge は必要な CI を待ち、独自の承認ポリシーに従います。デプロイ、公開、リリースはブロックされたままになります。",
+      "revisionNotice": "このエディタを開くと、アクティブな作業が一時停止されます。保存すると、このリビジョンが現在の権限になり、Acorn は選択したポリシーを再計画して再開します。",
+      "footerHint": "開始するとセッションが作成され、このゴールがすぐに送信されます。",
+      "editFooterHint": "現在のプリセットのスナップショットは、別のプリセットを選択しない限り変更されません。",
+      "start": "スタートゴール",
+      "starting": "ワークツリーを作成中...",
+      "saveAndReplan": "保存して続行",
+      "replanning": "リビジョンを保存しています..."
+    },
+    "removeSession": {
+      "title": "セッションを削除する",
+      "confirmPrefix": "セッションを削除する",
+      "isolatedWorktree": "これは分離されたワークツリーです。",
+      "linkedWorktree": "このセッションは、リンクされた git ワークツリーを使用しています。",
+      "ownedSessionsWillBeRemovedPrefix": "これも削除されます",
+      "ownedSessionsWillBeRemovedSuffix": "コントロールが所有するセッション。",
+      "deleteWorktreeQuestion": "セッションのみを削除しますか、それともディスクからワークツリーも削除しますか?",
+      "filesIn": "のファイル",
+      "willNotBeTouched": "触れられないだろう。",
+      "keepSharedWorktree": "このワークツリーはワークスペースによって共有され、ディスク上に保持されます。",
+      "dontAskAgain": "二度と質問しないでください ([設定] → [セッション] に切り替えます)",
+      "autoDeleteIsolatedWorktreesNextTime": "次回確認せずにスタンドアロンの分離ワークツリーを削除します",
+      "keepWorktree": "削除のみ",
+      "deleteWorktree": "ワークツリーの削除 + 削除",
+      "remove": "削除"
+    },
+    "runningSessionClose": {
+      "title": "作業セッションを閉じますか?",
+      "message": "このセッションはまだ動作中です。これを閉じると、アクティブなシェルまたはエージェントのプロセスが終了します。",
+      "sessionLabel": "セッション",
+      "dontWarnAgain": "再度警告しない ([設定] → [セッション] で切り替え)",
+      "continue": "セッションを閉じる"
+    },
+    "commentDraftDiscard": {
+      "title": "コメントの下書きを破棄しますか?",
+      "message": "未送信のコメントがあります。このビューを閉じると、ビューは破棄されます。",
+      "keepEditing": "編集を続ける",
+      "discard": "廃棄する"
+    },
+    "githubComment": {
+      "edit": "コメントの編集",
+      "delete": "コメントの削除",
+      "editAriaLabel": "コメントの編集",
+      "save": "保存",
+      "saving": "保存中...",
+      "cancel": "キャンセル",
+      "updateFailed": "コメントを更新できませんでした:",
+      "deleteTitle": "コメントを削除しますか?",
+      "deleteMessage": "このコメントは GitHub から削除されます。これを元に戻すことはできません。",
+      "deleteConfirm": "削除",
+      "deleting": "削除中...",
+      "deleteFailed": "コメントの削除に失敗しました:"
+    },
+    "removeProject": {
+      "title": "プロジェクトを閉じる",
+      "confirmPrefix": "プロジェクトを閉じる",
+      "sessionSingular": "セッション",
+      "sessionPlural": "セッション",
+      "willBeRemoved": "削除されます",
+      "isolatedWorktreeSingular": "分離されたワークツリー",
+      "isolatedWorktreePlural": "分離されたワークツリー",
+      "linkedWorktreeSingular": "リンクされたワークツリー",
+      "linkedWorktreePlural": "リンクされたワークツリー",
+      "closeKeepWorktrees": "ワークツリーを閉じる・保持する",
+      "closeDeleteWorktrees": "ワークツリーを閉じる・削除する",
+      "closeProject": "プロジェクトを閉じる"
+    },
+    "removeProjectFolder": {
+      "title": "ワークスペースを削除する",
+      "confirmPrefix": "ワークスペースを削除する",
+      "sessionSingular": "セッション",
+      "sessionPlural": "セッション",
+      "sessionsWillBeRemoved": "このワークスペースとともに Acorn から削除されます。",
+      "worktreeSessionsWillBeRemovedOnly": "Worktree ワークスペース セッションは、Acorn からのみ削除されます。",
+      "emptyFolder": "このワークスペースにはセッションがありません。",
+      "filesWillNotBeTouched": "ディスク上のファイルとワークツリーは削除されません。",
+      "worktreesWillBeDeleted": "スタンドアロンの分離セッションでも、ワークツリーがディスクから削除されます。",
+      "worktreeWorkspacePath": "このワークスペースは、リンクされた git ワークツリーを使用します。",
+      "deleteWorkspaceWorktreeQuestion": "このワークツリーもディスクから削除しますか?",
+      "sharedWorktreeWillBeKept": "ワークスペースのワークツリーはディスク上に保持されます。",
+      "rememberDeleteWorktree": "空のワークツリー ワークスペース ディレクトリを削除する前に確認する",
+      "removeFolder": "ワークスペースを削除する",
+      "keepWorktree": "ワークツリーを保持する",
+      "deleteWorktree": "ワークツリーの削除",
+      "removeWithSessions": "セッションで削除する"
+    },
+    "projectSettings": {
+      "title": "プロジェクト設定",
+      "tabs": {
+        "general": "一般",
+        "pullRequests": "プルリクエスト",
+        "worktrees": "ワークツリー"
+      },
+      "general": "一般",
+      "generalHint": "プロジェクトのアイデンティティと永続性の動作。",
+      "pullRequests": "プルリクエスト",
+      "pullRequestsHint": "プル リクエスト ワークフローのプロジェクト固有のデフォルト。",
+      "worktrees": "ワークツリー",
+      "worktreesHint": "このプロジェクトに登録されたリンクされた git ワークツリー。",
+      "generationPrompt": "生成された PR タイトル、コメント、およびマージ メッセージの入力を求めるプロンプト",
+      "generationPromptHint": "Acorn が選択された AI CLI にこのプロジェクトのプル リクエスト タイトル、レビュー コメント、またはマージ メッセージを生成するよう要求するときに使用されます。",
+      "generationPromptPlaceholder": "例: 従来のコミットの件名と影響を重視した簡潔な本文を含む、標準の GitHub スタイルのプル リクエスト マージ メッセージを使用します。",
+      "promptCount": "{count} / {max}",
+      "rememberAfterClose": "このプロジェクトを閉じた後もプロジェクト設定を保持します",
+      "rememberAfterCloseHint": "無効にすると、プロジェクトを閉じるときに、Acorn はこのプロジェクトの保存された設定を削除します。",
+      "loadingWorktrees": "ワークツリーをロードしています...",
+      "noWorktrees": "このプロジェクトにはリンクされたワークツリーがありません。",
+      "lastModified": "最終更新日",
+      "lastModifiedUnknown": "最終更新日不明",
+      "usedBySession": "1セッションで使用",
+      "usedBySessions": "{count} セッションで使用されます",
+      "removeWorktree": "削除",
+      "removeWorktreeAria": "{name} ワークツリーを削除します",
+      "removeWorktreeBlockedByOtherSessions": "ワークツリーを削除する前に、このワークツリーを使用している他のセッションを閉じてください。",
+      "confirmRemoveDialog": "ワークツリーの削除",
+      "confirmRemoveTitle": "{name} を削除しますか?",
+      "confirmRemoveBody": "これにより、リンクされた git worktree ディレクトリがディスクから削除されます。これを使用するセッションは、メイン プロジェクトから再度開く必要がある場合があります。",
+      "confirmRemoveInUseBody": "このワークツリーは {count} セッションによって使用されます。これを削除すると、それらのセッションが閉じられ、サイドバーから削除され、リンクされた git ワークツリーがディスクから削除されます。",
+      "sessionsToRemoveSingular": "1セッションが削除されます",
+      "sessionsToRemovePlural": "{count} セッションは削除されます",
+      "cancelRemove": "キャンセル",
+      "deletingWorktree": "削除中...",
+      "deleteWorktree": "ワークツリーの削除",
+      "deleteWorktreeAndSessions": "セッションを削除し、ワークツリーを削除します",
+      "loadWorktreesFailed": "ワークツリーのロードに失敗しました:",
+      "removeWorktreeFailed": "ワークツリーの削除に失敗しました:",
+      "saving": "保存中...",
+      "save": "保存"
+    },
+    "newProject": {
+      "title": "新しいプロジェクト",
+      "subtitle": "git リポジトリを作成して Acorn に追加します",
+      "projectNameLabel": "プロジェクト名",
+      "projectNameHint": "単一のフォルダー名を使用します。",
+      "ignoreSafeName": "安全な名前のチェックを無視する",
+      "initCommit": "初期コミットを作成します (ワークツリーと GitHub に必要)",
+      "initCommitUnavailable": "Git user.name と user.email が構成されていないため、初期コミットは使用できません。リポジトリはコミットなしで作成されます。",
+      "locationLabel": "場所",
+      "locationPlaceholder": "親フォルダーを選択してください",
+      "locationAriaLabel": "プロジェクトの場所",
+      "choose": "選択してください",
+      "creates": "作成します",
+      "creating": "作成中...",
+      "createProject": "プロジェクトの作成",
+      "selectParentFolder": "親フォルダーを選択",
+      "chooseLocationError": "新しいプロジェクトの場所を選択します。",
+      "validation": {
+        "required": "プロジェクト名は必須です。",
+        "single_folder_name": "プロジェクト名は単一のフォルダー名である必要があります。",
+        "null_character": "プロジェクト名にヌル文字を含めることはできません。",
+        "component_too_long": "プロジェクト名が 255 バイトを超えているため、一般的なファイルシステムはこれを拒否します。"
+      }
+    },
+    "agentResume": {
+      "title": "前の会話を再開する",
+      "bodyClaude": "このセッションで進行中のクロードの会話があります。中断したところから再開することも、このダイアログを閉じて最初から始めることもできます。",
+      "bodyCodex": "このセッションではコーデックスに関する会話が進行中です。中断したところから再開することも、このダイアログを閉じて最初から始めることもできます。",
+      "bodyAntigravity": "このセッションでは反重力に関する会話が進行中です。中断したところから再開することも、このダイアログを閉じて最初から始めることもできます。",
+      "sessionIdCopied": "セッションIDがコピーされました。",
+      "copyFailed": "セッションIDのコピーに失敗しました。",
+      "copyId": "IDをコピーする",
+      "resume": "再開",
+      "lastUser": "ユーザー",
+      "lastAgent": "エージェント",
+      "lastActivityUnknown": "最後の活動は不明",
+      "justNow": "たった今",
+      "minutesAgo": "分前",
+      "hoursAgo": "1時間前",
+      "dayAgo": "1日前",
+      "daysAgo": "数日前"
+    },
+    "controlSessionGuide": {
+      "title": "コントロールセッション",
+      "subtitle": "このプロジェクトの他のセッションを駆動するターミナル",
+      "bodyIntro": "コントロール セッションは、単一の場所から端末間で作業を調整するための今後の方法であり、同じプロジェクト内の兄弟にコマンドをディスパッチする必要があるエージェントやスクリプトにとって便利です。",
+      "pointKeystrokes": "このプロジェクト内の任意のセッションにキーストロークを送信します。",
+      "pointListSessions": "他のセッションとそのステータスをリストします。",
+      "pointReadOutput": "ターゲット セッションから最近の出力を読み取ります。",
+      "createdPrefix": "コントロール セッションを作成しました。の",
+      "createdSuffix": "これを駆動する CLI は次のアップデートで同梱されます。それまでは、このターミナルは通常のシェルのように動作し始めます。"
+    },
+    "folderPermissionWarmup": {
+      "title": "今すぐフォルダーのアクセス許可を確認しますか?",
+      "subtitle": "アップデートと再起動後に macOS フォルダーへのアクセスを準備する",
+      "question": "作業を開始する前に、Acorn にフォルダーへのアクセスをチェックさせますか?",
+      "complete": "フォルダーアクセスの準備ができました。",
+      "needsAttention": "一部の保護されたフォルダーには注意が必要です。",
+      "reason": "更新または再起動後、macOS は保護フォルダーへのアクセスを再評価し、後で再度要求することができます。このチェックを行うと、デスクトップ、ドキュメント、ダウンロード、iCloud Drive のプロンプトが前面に表示されます。",
+      "bodyPrompt": "Acorn は、macOS の権限チェックをトリガーするためにのみ、これらのフォルダーを短時間読み取ります。ファイルは変更されません。",
+      "check": "今すぐチェック",
+      "checking": "確認中...",
+      "reset": "権限をリセットする",
+      "resetting": "リセット中...",
+      "skip": "今ではありません",
+      "done": "完了",
+      "genericError": "フォルダーへのアクセスを確認できませんでした。",
+      "deniedHint": "macOS がすでに拒否を保存している場合は、プロンプトが再度表示されない場合があります。 [システム設定] > [プライバシーとセキュリティ] > [ファイルとフォルダー] で Acorn を再度有効にします。",
+      "folder": {
+        "desktop": "デスクトップ",
+        "documents": "書類",
+        "downloads": "ダウンロード",
+        "icloud": "iCloudドライブ"
+      },
+      "status": {
+        "ok": "準備完了",
+        "missing": "見つかりません",
+        "denied": "拒否されました",
+        "error": "エラー"
+      }
+    },
+    "commandRun": {
+      "title": "このコマンドを実行しますか?",
+      "ariaLabel": "コマンドの実行",
+      "description": "新しいターミナル セッションが開き、実行されます。",
+      "cwdLabel": "CWD:",
+      "noProjectHint": "プロジェクトが登録されていません。このコマンドを実行する前にプロジェクトを追加するか、「コピー」を使用して既存のターミナルに貼り付けてください。",
+      "noProjectError": "新しいセッションをホストできるプロジェクトがありません。",
+      "createFailed": "セッションの作成に失敗しました。",
+      "copiedPrefix": "コピーされたコマンド:",
+      "copyFailedPrefix": "コマンドのコピーに失敗しました:",
+      "runningPrefix": "実行中のコマンド:",
+      "running": "走っています...",
+      "run": "走る"
+    },
+    "closePullRequest": {
+      "titlePrefix": "閉じる",
+      "loadingDetails": "プル リクエストの詳細を読み込んでいます...",
+      "confirmPrefix": "プルリクエストを閉じる",
+      "confirmSuffix": "合併せずに？",
+      "closing": "閉会中...",
+      "closePr": "PRを閉じる"
+    },
+    "mergePullRequest": {
+      "titlePrefix": "マージ",
+      "loadingDetails": "プル リクエストの詳細を読み込んでいます...",
+      "mergeMethod": "マージ方法",
+      "methodSquash": "スカッシュ",
+      "methodSquashHint": "ベース ブランチ上の 1 つのコミットに結合します。",
+      "methodMerge": "マージ",
+      "methodMergeHint": "履歴を保存するマージコミットを作成します。",
+      "methodRebase": "リベース",
+      "methodRebaseHint": "ベース ブランチへのコミットを再生します。",
+      "commitMessage": "コミットメッセージ",
+      "generating": "生成中...",
+      "generateVia": "経由で生成",
+      "generateWithAi": "AIで生成",
+      "goToProjectSettings": "プロジェクト設定に移動します",
+      "subjectPlaceholder": "件名",
+      "bodyPlaceholder": "本体（オプション）",
+      "rebaseMessageLocked": "Rebase は元のコミットをベース ブランチに再実行します。ここではコミット メッセージをカスタマイズできません。",
+      "merging": "結合中...",
+      "merge": "マージ",
+      "checksFailing": "{count} ヘッド参照でチェックが失敗しました。",
+      "checksPending": "{count} チェックはヘッド参照でまだ実行中です。",
+      "checksBlocking": "チェックが完了するか合格するまで、マージはブランチ保護によってブロックされます。",
+      "adminMerge": "管理マージ (ブランチ保護をオーバーライド)",
+      "adminMergeHint": "--admin を gh に渡すことでマージを強制します。リポジトリ ポリシーが許可し、必要なチェックのオーバーライドを受け入れる場合にのみ使用してください。"
+    },
+    "stagedRevMismatch": {
+      "title": "シェル環境が更新されました",
+      "background": "背景",
+      "sessionSingular": "セッション",
+      "sessionPlural": "セッション",
+      "needRestart": "再起動が必要です",
+      "bodyIntro": "Acorn は、このアップデートでシェル初期化ファイルを更新しました。以前のバージョンで開始されたバックグラウンド セッションは古い環境に対して引き続き実行されているため、入力が文字化けし、再描画が求められる可能性があります。",
+      "bodyRestart": "今すぐ再起動して新しい環境を適用します。オープン エージェントの会話 (クロード / コーデックス) は、次のフォーカスで中断したところから再開されます。",
+      "later": "後で",
+      "restarting": "再起動中...",
+      "restartSessions": "セッションを再開する"
+    },
+    "memoryBreakdown": {
+      "title": "記憶力の低下",
+      "totalRssSum": "合計 (RSS、合計)",
+      "processes": "プロセス",
+      "pid": "PID",
+      "processTree": "プロセスツリー",
+      "rss": "RSS",
+      "subtree": "サブツリー",
+      "subtreeTooltip": "このプロセスとすべての子孫の合計",
+      "share": "シェアする",
+      "footer": "親 -> 子 (DFS) で順序付けされたツリー。サブツリー RSS 記述順に並べ替えられた兄弟。 RSS の合計は共有メモリを超過します。 WebView ヘルパーと PTY 子 (クロード、ノード) が含まれています。"
+    },
+    "whatsNew": {
+      "titlePrefix": "Acorn の新機能",
+      "latestPublished": "最新の公開 - 公開リリースはありません",
+      "yourVersion": "あなたのバージョン",
+      "currentlyRunning": "現在実行中",
+      "onThisVersion": "あなたはこのバージョンを使用しています",
+      "loadingReleaseNotes": "リリースノートを読み込んでいます...",
+      "noReleaseNotes": "このバージョンではリリース ノートは公開されていません。",
+      "viewOnGithub": "GitHub で見る",
+      "installing": "インストール中...",
+      "installRelaunch": "インストールと再起動"
+    },
+    "pullRequestDetail": {
+      "notGithub": "オリジンリモートは GitHub リポジトリではありません。",
+      "noAccessPrefix": "ログインしていません",
+      "noAccessSuffix": "アカウントがアクセスできる",
+      "files": "ファイル",
+      "openOnGithub": "GitHub で開く",
+      "checkboxSaveFailed": "チェックボックスを保存できませんでした:",
+      "tabConversation": "会話",
+      "tabCommits": "コミット",
+      "tabChecks": "小切手",
+      "tabFiles": "ファイル",
+      "merge": "マージ",
+      "cannotMergeConflicting": "マージできません - ブランチが競合しています",
+      "mergeReadinessPending": "マージの準備がまだ決定中です...",
+      "resizePrBody": "PR 本文のサイズを変更する",
+      "resizeHint": "ドラッグしてサイズ変更、ダブルクリックしてリセット",
+      "noComments": "コメントやレビューはまだありません。",
+      "commentAriaLabel": "プルリクエストのコメント",
+      "commentPlaceholder": "マークダウンコメントを追加...",
+      "commentWrite": "書く",
+      "commentPreview": "プレビュー",
+      "commentPreviewEmpty": "まだプレビューするものはありません。",
+      "commentSubmit": "コメント",
+      "commentSubmitting": "投稿中...",
+      "commentFailed": "コメントの投稿に失敗しました:",
+      "oldestFirst": "古い順",
+      "newestFirst": "新しい順",
+      "toggleSortOrder": "並べ替え順序を切り替える",
+      "commented": "コメントした",
+      "empty": "(空)",
+      "noReviewComment": "(レビューコメントはありません)",
+      "reviewApproved": "承認された",
+      "reviewChangesRequested": "変更が要求されました",
+      "reviewDismissed": "解雇された",
+      "noCommits": "このプル リクエストにはコミットがありません。",
+      "viewOnGithub": "GitHub で見る",
+      "copySha": "SHAをコピーする",
+      "noMessage": "(メッセージはありません)",
+      "unknown": "不明",
+      "loadingDiff": "差分を読み込み中...",
+      "noFileChanges": "このコミットではファイルの変更はありません。",
+      "openCommitOnGithub": "GitHub でコミットを開く",
+      "now": "今",
+      "minuteAbbrev": "メートル",
+      "hourAbbrev": "h",
+      "dayAbbrev": "d",
+      "noChecks": "チェックは報告されていません。",
+      "openRun": "オープンラン",
+      "checkSuccess": "成功",
+      "checkFailure": "失敗",
+      "checkTimedOut": "タイムアウトしました",
+      "checkActionRequired": "必要なアクション",
+      "checkCancelled": "キャンセルされました",
+      "checkNeutral": "中立的な",
+      "checkSkipped": "スキップしました",
+      "checkCompleted": "完了しました"
+    },
+    "issueDetail": {
+      "notGithub": "オリジンリモートは GitHub リポジトリではありません。",
+      "noAccessPrefix": "ログインしていません",
+      "noAccessSuffix": "アカウントがアクセスできる",
+      "openOnGithub": "GitHub で開く",
+      "openCommentOnGithub": "GitHub でコメントを開く",
+      "created": "作成されました",
+      "updated": "更新されました",
+      "comments": "コメント",
+      "commented": "コメントした",
+      "noComments": "コメントはまだありません。",
+      "commentAriaLabel": "問題のコメント",
+      "commentPlaceholder": "マークダウンコメントを追加...",
+      "commentWrite": "書く",
+      "commentPreview": "プレビュー",
+      "commentPreviewEmpty": "まだプレビューするものはありません。",
+      "commentSubmit": "コメント",
+      "commentSubmitting": "投稿中...",
+      "commentFailed": "コメントの投稿に失敗しました:",
+      "oldestFirst": "古い順",
+      "newestFirst": "新しい順",
+      "toggleSortOrder": "並べ替え順序を切り替える",
+      "noBody": "問題の説明はありません。",
+      "empty": "(空)",
+      "stateOpen": "開く",
+      "stateCompleted": "完了しました",
+      "stateNotPlanned": "予定なし",
+      "assignees": "譲受人:",
+      "milestone": "マイルストーン:"
+    }
+  },
+  "commandPalette": {
+    "dialogLabel": "コマンドパレット",
+    "placeholder": "コマンドを入力するか検索...",
+    "empty": "結果はありません。",
+    "groups": {
+      "sessions": "セッション",
+      "switchSession": "セッションの切り替え",
+      "activity": "未読アクティビティ",
+      "view": "見る",
+      "terminal": "ターミナル",
+      "ipc": "IPC",
+      "dangerZone": "危険地帯"
+    },
+    "commands": {
+      "newSession": "新しいセッション",
+      "newIsolatedSession": "新しい分離セッション",
+      "newControlSession": "新しいコントロールセッション",
+      "newChatSession": "新しいチャットセッション",
+      "newAutonomousGoalSession": "新しい目標セッション",
+      "newProject": "新しいプロジェクト",
+      "addExistingProject": "既存のプロジェクトを追加する",
+      "refreshSessions": "セッションを更新する",
+      "switchSessionPrefix": "に切り替えます",
+      "viewTodos": "Todo を表示する",
+      "viewCommits": "コミットの表示",
+      "viewStaged": "ステージングされたビュー",
+      "viewPullRequests": "プルリクエストを表示する",
+      "toggleWorkspaceView": "ワークスペースビューの切り替え",
+      "resetPanelSizes": "パネルサイズをリセットする",
+      "reloadShellEnvironment": "シェル環境をリロードする",
+      "restartIpcServer": "IPCサーバーを再起動します",
+      "removeSessionPrefix": "セッションを削除します:",
+      "shakeTree": "木を揺らす"
+    },
+    "toasts": {
+      "shellEnvReloaded": "シェル環境がリロードされました。新しいセッションを開いて適用します。",
+      "shellEnvReloadFailed": "シェル環境のリロードに失敗しました。",
+      "ipcRestarted": "IPCサーバーが再起動されました。",
+      "ipcRestartFailedPrefix": "IPC サーバーの再起動に失敗しました:"
+    },
+    "activity": {
+      "kind": {
+        "waitingForInput": "入力を待っています",
+        "errored": "エラー"
+      }
+    }
+  },
+  "backgroundSessions": {
+    "daemon": {
+      "label": "デーモン",
+      "hint": "acornd デーモンは、長時間実行される端末セッションを所有します。デーモンがオンになっていると、PTY を失うことなく Acorn を終了して再度開くことができます。 Off は従来のインプロセス パスにフォールバックします。セッションはアプリとともに終了します。",
+      "enableLabel": "バックグラウンドセッションを有効にする (acorn)",
+      "enabledDescription": "セッションは、Acorn が再起動しても、明示的に終了するまで持続します。",
+      "disabledDescription": "セッションはこの Acorn プロセスにバインドされており、アプリを閉じるとセッションが強制終了されます。"
+    },
+    "status": {
+      "label": "ステータス",
+      "hint": "実行中のデーモンのライブ状態。このパネルが開いている間は 3 秒ごとに更新されます。",
+      "disabled": "障害者",
+      "running": "ランニング",
+      "down": "ダウン",
+      "up": "上へ",
+      "sessions": "セッション",
+      "log": "ログ"
+    },
+    "controls": {
+      "label": "コントロール",
+      "hint": "再起動はブリッジを再接続します - 端末からデーモンを強制終了した後に役立ちます。 [非アクティブをクリア] は、非ライブ デーモンのメタデータを削除します。 Quit は実行中のすべての PTY を強制終了し、デーモンを終了します。",
+      "restart": "デーモンを再起動します",
+      "clearInactive": "非アクティブなセッションをクリアする",
+      "clearInactiveTooltip": "デーモン レジストリから非ライブ セッション行をすべて削除します。",
+      "confirmShutdownPrompt": "すべての PTY を殺しますか?",
+      "confirm": "確認する",
+      "cancel": "キャンセル",
+      "quit": "デーモンを終了する"
+    },
+    "sessions": {
+      "label": "セッション",
+      "hint": "デーモンが現在追跡しているライブ PTY。非アクティブなデーモンのメタデータは非表示のままであり、コントロールからクリアできます。",
+      "disabled": "デーモンが無効になっています - セッションは従来のインプロセス パスによって管理されます。",
+      "notRunning": "デーモンが実行されていません。",
+      "loading": "読み込み中...",
+      "empty": "ライブセッションは追跡されません。",
+      "controlSession": "コントロールセッション"
+    },
+    "actions": {
+      "killPty": "PTYを殺す",
+      "open": "オープンセッション",
+      "openTooltip": "プロジェクト タブでこのセッションを開きます",
+      "restoreTooltip": "このセッションを Acorn のサイドバーに採用します",
+      "restore": "セッションを復元する",
+      "forgetDisabledTooltip": "まず殺してから忘れる",
+      "forgetTooltip": "この行をデーモン レジストリから削除します",
+      "forget": "セッションを忘れる"
+    },
+    "metadata": {
+      "tab": "タブ",
+      "branch": "支店",
+      "status": "ステータス",
+      "worktree": "ワークツリー",
+      "last": "最後",
+      "repo": "リポ",
+      "orphaned": "アプリ側の行はありません - デーモン内で孤立しています。"
+    },
+    "relativeTime": {
+      "ago": "前に"
+    },
+    "toasts": {
+      "enabled": "バックグラウンドセッションが有効になっています。",
+      "disabled": "バックグラウンドセッションが無効になりました。",
+      "toggleFailed": "バックグラウンド セッションを更新できませんでした:",
+      "restarted": "デーモンが再起動されました。",
+      "restartFailed": "デーモンの再起動に失敗しました:",
+      "shutdown": "デーモンがシャットダウンしました。",
+      "shutdownFailed": "デーモンの終了に失敗しました:",
+      "sessionKilled": "PTYが死亡した。",
+      "sessionKillStillRunning": "PTY は kill リクエスト後も実行中です。",
+      "sessionOpened": "セッションが開かれました。",
+      "sessionRestored": "セッションが復元されました。",
+      "sessionForgotten": "セッションがデーモン リストから削除されました。",
+      "inactiveCleared": "非アクティブなデーモンセッションがクリアされました。",
+      "inactiveNone": "クリアする非アクティブなデーモン セッションはありません。",
+      "inactiveClearFailed": "非アクティブなデーモン セッションをクリアできませんでした:",
+      "sessionActionFailed": "デーモンセッションアクションの実行に失敗しました:"
+    }
+  }
+}

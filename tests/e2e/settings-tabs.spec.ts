@@ -5,7 +5,7 @@ import {
   seedSettingsLanguage,
 } from "./support";
 
-const SETTINGS_DIALOG_NAME = /^(Settings|설정|设置)$/;
+const SETTINGS_DIALOG_NAME = /^(Settings|設定|설정|设置)$/;
 
 // Each Settings tab has a label / heading unique enough to anchor against.
 // Asserting one element per tab is enough to catch "clicked tab N but
@@ -208,5 +208,52 @@ test.describe("settings modal: tab content", () => {
     await expect(
       modal.getByRole("button", { name: "重置为默认值" }),
     ).toBeVisible();
+  });
+
+  test("Japanese mode localizes Settings and the language selector", async ({
+    page,
+  }) => {
+    await seedSettingsLanguage(page, "ja");
+
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: "設定" });
+    await expect(modal).toBeVisible();
+
+    for (const tab of [
+      "インターフェース",
+      "外観",
+      "テーマ",
+      "ターミナル",
+      "セッション",
+      "エージェント",
+      "GitHub",
+      "エディタ",
+      "通知",
+      "ショートカット",
+      "ストレージ",
+      "実験",
+      "Acorn について",
+    ]) {
+      await expect(
+        modal.getByRole("button", { name: tab, exact: true }),
+      ).toBeVisible();
+    }
+
+    await modal
+      .getByRole("button", { name: "インターフェース", exact: true })
+      .click();
+    await expect(modal.getByText("言語", { exact: true })).toBeVisible();
+    await expect(modal.getByRole("combobox", { name: "言語" })).toContainText(
+      "日本語",
+    );
+    await expect(
+      modal.getByRole("button", { name: "デフォルトに戻す" }),
+    ).toBeVisible();
+
+    await modal.getByRole("button", { name: "ターミナル", exact: true }).click();
+    await expect(modal.getByText("フォントファミリー")).toBeVisible();
+    await expect(modal.getByText("リンクを開く方法")).toBeVisible();
   });
 });
