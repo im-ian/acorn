@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import en from "../locales/en.json";
+import ja from "../locales/ja.json";
 import zhCN from "../locales/zh-CN.json";
 import {
   LANGUAGE_OPTIONS,
@@ -69,6 +70,46 @@ describe("Simplified Chinese translations", () => {
     expect([...chinese.keys()].sort()).toEqual([...english.keys()].sort());
     for (const [key, source] of english) {
       expect(placeholders(chinese.get(key) ?? ""), key).toEqual(
+        placeholders(source),
+      );
+    }
+  });
+});
+
+describe("Japanese translations", () => {
+  it("registers ja as a supported language", () => {
+    expect(isLanguage("ja")).toBe(true);
+    expect(LANGUAGE_OPTIONS).toContainEqual({
+      value: "ja",
+      label: "Japanese",
+      nativeLabel: "日本語",
+    });
+  });
+
+  it("translates representative interface and recovery-adjacent copy", () => {
+    const t = createTranslator("ja");
+
+    expect(t("settings.title")).toBe("設定");
+    expect(t("settings.tabs.sessions")).toBe("セッション");
+    expect(t("dialogs.agentResume.title")).toBe("前の会話を再開する");
+  });
+
+  it("preserves interpolation placeholders", () => {
+    expect(translate("ja", "settings.about.updateReady")).toContain(
+      "{version}",
+    );
+    expect(
+      translate("ja", "toasts.session.worktreeRemovedUndo"),
+    ).toContain("{seconds}");
+  });
+
+  it("matches every English locale key and placeholder contract", () => {
+    const english = leafStrings(en);
+    const japanese = leafStrings(ja);
+
+    expect([...japanese.keys()].sort()).toEqual([...english.keys()].sort());
+    for (const [key, source] of english) {
+      expect(placeholders(japanese.get(key) ?? ""), key).toEqual(
         placeholders(source),
       );
     }
