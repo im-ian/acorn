@@ -7,7 +7,7 @@ export function xtermCursorStyle(
 ): XtermCursorStyle {
   switch (style) {
     case "outline":
-      return "block";
+      return "bar";
     case "pill":
       return "bar";
     default:

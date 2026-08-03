@@ -10,7 +10,7 @@ describe("xtermCursorStyle", () => {
     ["block", "block"],
     ["bar", "bar"],
     ["underline", "underline"],
-    ["outline", "block"],
+    ["outline", "bar"],
     ["pill", "bar"],
   ] as const)("maps %s to %s", (preset, expected) => {
     expect(xtermCursorStyle(preset)).toBe(expected);

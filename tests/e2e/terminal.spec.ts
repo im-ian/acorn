@@ -566,7 +566,7 @@ async function expectOutlineCursor(page: Page): Promise<void> {
     "data-acorn-cursor-application-override",
     "",
   );
-  await expect(cursor).toHaveClass(/xterm-cursor-block/);
+  await expect(cursor).toHaveClass(/xterm-cursor-bar/);
   await expect
     .poll(() =>
       cursor.evaluate((element) => {
@@ -715,7 +715,7 @@ test.describe("terminal: spawn", () => {
       "data-acorn-cursor-style",
       "outline",
     );
-    await expect(activeCursor).toHaveClass(/xterm-cursor-block/);
+    await expect(activeCursor).toHaveClass(/xterm-cursor-bar/);
     await expect
       .poll(() =>
         activeCursor.evaluate((element) => {
@@ -837,6 +837,60 @@ test.describe("terminal: spawn", () => {
       await expect(cursor).toHaveClass(
         style === "underline" ? /xterm-cursor-underline/ : /xterm-cursor-bar/,
       );
+    });
+  }
+
+  for (const style of ["outline", "pill"] as const) {
+    test(`preserves ANSI cell colors beneath the ${style} cursor`, async ({
+      page,
+      tauri,
+    }) => {
+      await seedTerminalCursorStyle(page, style);
+      await seedWritableTerminal(tauri);
+      await tauri.handle("pty_subscribe_output", (args) => {
+        const { channel } = args as { channel: { id: number } };
+        const w = window as unknown as { __cursorOutputChannelId?: number };
+        w.__cursorOutputChannelId = channel.id;
+        return 1;
+      });
+      await gotoWithAccent(page);
+      await page
+        .getByRole("button", { name: /^shell main · Ready$/ })
+        .click();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __cursorOutputChannelId?: number })
+                .__cursorOutputChannelId ?? null,
+          ),
+        )
+        .not.toBeNull();
+
+      await emitSubscribedPtyOutput(
+        page,
+        "__cursorOutputChannelId",
+        "\x1b[38;2;210;211;212;48;2;50;53;56mX       \x1b[8D",
+      );
+
+      const terminal = page.locator("[data-pane-body] .acorn-terminal").first();
+      const cursor = terminal.locator(".xterm-cursor").first();
+      await terminal.locator(".xterm-helper-textarea").focus();
+      await expect(cursor).toBeAttached();
+      await expect
+        .poll(() =>
+          cursor.evaluate((element) => {
+            const computed = getComputedStyle(element);
+            return {
+              backgroundColor: computed.backgroundColor,
+              color: computed.color,
+            };
+          }),
+        )
+        .toEqual({
+          backgroundColor: "rgb(50, 53, 56)",
+          color: "rgb(210, 211, 212)",
+        });
     });
   }
 

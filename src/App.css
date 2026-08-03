@@ -185,10 +185,9 @@
   )
   .xterm
   .xterm-rows
-  .xterm-cursor.xterm-cursor-block {
+  .xterm-cursor {
   animation: none !important;
-  background-color: transparent !important;
-  color: inherit !important;
+  box-shadow: none !important;
   outline: 1px solid currentColor;
   outline-offset: -1px;
 }
@@ -198,7 +197,7 @@
   )
   .xterm
   .xterm-rows
-  .xterm-cursor.xterm-cursor-blink.xterm-cursor-block {
+  .xterm-cursor.xterm-cursor-blink {
   animation: acorn-terminal-cursor-outline-blink 1s step-end infinite !important;
 }
 
@@ -209,9 +208,7 @@
   .xterm-rows
   .xterm-cursor {
   animation: none !important;
-  background-color: transparent !important;
   box-shadow: none !important;
-  color: inherit !important;
   outline: 0 !important;
   position: relative;
 }
@@ -270,7 +267,6 @@
 .acorn-terminal-inactive .xterm-cursor,
 .acorn-terminal-inactive .xterm-cursor.xterm-cursor-block {
   outline: 1px solid color-mix(in oklab, var(--color-fg-muted) 70%, transparent);
-  background-color: transparent !important;
   opacity: 0.55;
 }
 
