@@ -76,6 +76,7 @@ import {
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN,
   TERMINAL_FONT_SIZE_STEP,
+  TERMINAL_CURSOR_STYLE_VALUES,
   TERMINAL_LETTER_SPACING_MAX,
   TERMINAL_LETTER_SPACING_MIN,
   TERMINAL_LETTER_SPACING_STEP,
@@ -90,6 +91,7 @@ import {
   type SessionTitleSource,
   type AcornSettings,
   type DefaultWorkspaceViewMode,
+  type TerminalCursorStyle,
   type TerminalFontSmoothing,
   type TerminalFontWeight,
   type TerminalLinkActivation,
@@ -600,6 +602,24 @@ function terminalFontSmoothingLabel(
   }
 }
 
+function terminalCursorStyleLabel(
+  t: SettingsTranslator,
+  value: TerminalCursorStyle,
+): string {
+  switch (value) {
+    case "block":
+      return st(t, "settings.terminal.cursorStyle.options.block");
+    case "bar":
+      return st(t, "settings.terminal.cursorStyle.options.bar");
+    case "underline":
+      return st(t, "settings.terminal.cursorStyle.options.underline");
+    case "outline":
+      return st(t, "settings.terminal.cursorStyle.options.outline");
+    case "pill":
+      return st(t, "settings.terminal.cursorStyle.options.pill");
+  }
+}
+
 function canvasInactiveRefreshRateOption(
   t: SettingsTranslator,
   value: CanvasInactiveTerminalRenderIntervalMs,
@@ -873,6 +893,27 @@ function TerminalSettings() {
           format={(n) => n.toFixed(2)}
           onChange={(n) => patchTerminal({ lineHeight: n })}
         />
+      </Field>
+      <Field
+        label={st(t, "settings.terminal.cursorStyle.label")}
+        hint={st(t, "settings.terminal.cursorStyle.hint")}
+      >
+        <Select
+          value={settings.terminal.cursorStyle}
+          onChange={(event) =>
+            patchTerminal({
+              cursorStyle: event.target.value as TerminalCursorStyle,
+            })
+          }
+          className="w-48"
+          aria-label={st(t, "settings.terminal.cursorStyle.label")}
+        >
+          {TERMINAL_CURSOR_STYLE_VALUES.map((value) => (
+            <option key={value} value={value}>
+              {terminalCursorStyleLabel(t, value)}
+            </option>
+          ))}
+        </Select>
       </Field>
       <Field
         label={st(t, "settings.terminal.canvasInactiveRefreshRate.label")}

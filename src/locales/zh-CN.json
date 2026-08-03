@@ -175,6 +175,17 @@
         "label": "行高",
         "hint": "单元格高度倍数。1.00 使行紧密排列；调高可增加垂直间距。范围 1.00–2.00。"
       },
+      "cursorStyle": {
+        "label": "光标样式",
+        "hint": "当 shell 或全屏应用未指定光标时使用的默认形状。",
+        "options": {
+          "block": "块",
+          "bar": "竖线",
+          "underline": "下划线",
+          "outline": "轮廓",
+          "pill": "圆角竖线"
+        }
+      },
       "canvasInactiveRefreshRate": {
         "label": "非活动画布刷新率",
         "hint": "可见但未选中的画布终端渲染新输出的频率。所选的终端始终保持全速。",

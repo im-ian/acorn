@@ -11,6 +11,7 @@ import {
   NOTIFICATION_HISTORY_LIMIT_MAX,
   TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS,
   TERMINAL_FONT_PRESET_FIELDS,
+  TERMINAL_CURSOR_STYLE_VALUES,
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN,
   TERMINAL_FONT_SIZE_STEP,
@@ -272,6 +273,85 @@ describe("interface settings", () => {
 describe("terminal.linkActivation default", () => {
   it("defaults to plain click so xterm's stock behaviour is preserved", () => {
     expect(DEFAULT_SETTINGS.terminal.linkActivation).toBe("click");
+  });
+});
+
+describe("terminal.cursorStyle settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("keeps the stock xterm block cursor as the default", () => {
+    expect(DEFAULT_SETTINGS.terminal.cursorStyle).toBe("block");
+    expect(TERMINAL_CURSOR_STYLE_VALUES).toEqual([
+      "block",
+      "bar",
+      "underline",
+      "outline",
+      "pill",
+    ]);
+  });
+
+  it("loads a persisted cursor preset", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { cursorStyle: "pill" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.cursorStyle).toBe("pill");
+  });
+
+  it("falls back for an unsupported persisted cursor preset", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { cursorStyle: "beam" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.cursorStyle).toBe("block");
+  });
+
+  it("normalizes cursor preset patches before persisting them", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings.getState().patchTerminal({ cursorStyle: "outline" });
+    const invalid =
+      "beam" as unknown as typeof DEFAULT_SETTINGS.terminal.cursorStyle;
+    useSettings.getState().patchTerminal({ cursorStyle: invalid });
+
+    expect(useSettings.getState().settings.terminal.cursorStyle).toBe(
+      "outline",
+    );
+    expect(
+      JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}").terminal
+        ?.cursorStyle,
+    ).toBe("outline");
   });
 });
 

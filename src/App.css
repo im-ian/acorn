@@ -168,10 +168,167 @@
   text-underline-offset: 2px;
 }
 
+/* The native cursor stays at the pre-composition buffer position, underneath
+   the IME overlay. Replace it with a marker immediately after the live
+   composition text so the caret tracks what the user is currently building. */
+.acorn-terminal.acorn-terminal-composing .xterm-cursor {
+  opacity: 0 !important;
+}
+
+.acorn-terminal
+  .composition-view
+  .acorn-ime-composition-cursor {
+  display: inline-block;
+  height: var(--acorn-ime-cell-height, 1em);
+  position: relative;
+  vertical-align: top;
+  width: 0;
+}
+
+.acorn-terminal
+  .composition-view
+  .acorn-ime-composition-cursor::after {
+  box-sizing: border-box;
+  content: "";
+  display: block;
+  height: 100%;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  width: var(--acorn-ime-cell-width, 0.6em);
+}
+
+.acorn-terminal
+  .acorn-ime-composition-cursor[data-acorn-ime-cursor-style="block"]::after {
+  background: color-mix(in oklab, currentColor 55%, transparent);
+}
+
+.acorn-terminal
+  .acorn-ime-composition-cursor[data-acorn-ime-cursor-style="bar"]::after {
+  background: currentColor;
+  width: 1px;
+}
+
+.acorn-terminal
+  .acorn-ime-composition-cursor[data-acorn-ime-cursor-style="underline"]::after {
+  background: currentColor;
+  bottom: 0;
+  height: 1px;
+  top: auto;
+}
+
+.acorn-terminal
+  .acorn-ime-composition-cursor[data-acorn-ime-cursor-style="outline"]::after {
+  border: 1px solid currentColor;
+}
+
+.acorn-terminal
+  .acorn-ime-composition-cursor[data-acorn-ime-cursor-style="pill"]::after {
+  background: var(--color-accent, #7dd3fc);
+  border-radius: 999px;
+  width: 3px;
+}
+
+@keyframes acorn-terminal-cursor-outline-blink {
+  50% {
+    outline-color: transparent;
+  }
+}
+
+@keyframes acorn-terminal-cursor-pill-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.acorn-terminal[data-acorn-cursor-style="outline"]:not(
+    [data-acorn-cursor-application-override]
+  )
+  .xterm
+  .xterm-rows
+  .xterm-cursor {
+  animation: none !important;
+  box-shadow: none !important;
+  outline: 1px solid currentColor;
+  outline-offset: -1px;
+}
+
+.acorn-terminal[data-acorn-cursor-style="outline"]:not(
+    [data-acorn-cursor-application-override]
+  )
+  .xterm
+  .xterm-rows
+  .xterm-cursor.xterm-cursor-blink {
+  animation: acorn-terminal-cursor-outline-blink 1s step-end infinite !important;
+}
+
+.acorn-terminal[data-acorn-cursor-style="pill"]:not(
+    [data-acorn-cursor-application-override]
+  )
+  .xterm
+  .xterm-rows
+  .xterm-cursor {
+  animation: none !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+  position: relative;
+}
+
+.acorn-terminal[data-acorn-cursor-style="pill"]:not(
+    [data-acorn-cursor-application-override]
+  )
+  .xterm
+  .xterm-rows
+  .xterm-cursor::after {
+  background: var(--color-accent, #7dd3fc);
+  border-radius: 999px;
+  content: "";
+  display: block;
+  height: 100%;
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 3px;
+}
+
+.acorn-terminal[data-acorn-cursor-style="pill"]:not(
+    [data-acorn-cursor-application-override]
+  )
+  .xterm
+  .xterm-rows
+  .xterm-cursor.xterm-cursor-blink::after {
+  animation: acorn-terminal-cursor-pill-blink 1s step-end infinite;
+}
+
+/* xterm intentionally replaces every focused cursor shape with its inactive
+   outline when the helper textarea blurs. Keep Acorn's non-block fallback
+   markers recognizable while a settings dialog or another control owns
+   focus. Application-owned DECSCUSR cursors are excluded above and retain
+   xterm's neutral inactive outline instead. */
+.acorn-terminal[data-acorn-cursor-style="bar"]:not(
+    [data-acorn-cursor-application-override]
+  )
+  .xterm
+  .xterm-rows
+  .xterm-cursor.xterm-cursor-outline {
+  box-shadow: 1px 0 0 currentColor inset;
+  outline: 0 !important;
+}
+
+.acorn-terminal[data-acorn-cursor-style="underline"]:not(
+    [data-acorn-cursor-application-override]
+  )
+  .xterm
+  .xterm-rows
+  .xterm-cursor.xterm-cursor-outline {
+  box-shadow: 0 -1px 0 currentColor inset;
+  outline: 0 !important;
+}
+
 .acorn-terminal-inactive .xterm-cursor,
 .acorn-terminal-inactive .xterm-cursor.xterm-cursor-block {
   outline: 1px solid color-mix(in oklab, var(--color-fg-muted) 70%, transparent);
-  background-color: transparent !important;
   opacity: 0.55;
 }
 

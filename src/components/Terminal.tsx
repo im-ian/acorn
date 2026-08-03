@@ -86,6 +86,12 @@ import {
 } from "../lib/terminalFileLinks";
 import { createTerminalWebLinkProvider } from "../lib/terminalWebLinks";
 import {
+  cursorStyleFromDecscusr,
+  nextCursorApplicationOverride,
+  type XtermCursorStyle,
+  xtermCursorStyle,
+} from "../lib/terminalCursor";
+import {
   useSettings,
   type TerminalLinkActivation,
 } from "../lib/settings";
@@ -193,6 +199,7 @@ const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
 const SCROLL_TO_BOTTOM_VISIBLE_ROWS = 10;
+const COMPOSING_CLASS = "acorn-terminal-composing";
 // xterm briefly leaves and re-enters hovered links when refreshed rows repaint.
 const LINK_TOOLTIP_HIDE_GRACE_MS = 80;
 
@@ -711,6 +718,7 @@ export function Terminal({
   const fontSmoothing = useSettings(
     (s) => s.settings.terminal.fontSmoothing,
   );
+  const cursorStyle = useSettings((s) => s.settings.terminal.cursorStyle);
   const canvasInactiveTerminalRenderIntervalMs = useSettings(
     (s) => s.settings.terminal.canvasInactiveTerminalRenderIntervalMs,
   );
@@ -753,6 +761,7 @@ export function Terminal({
       fontWeight: initialSettings.terminal.fontWeight,
       fontWeightBold: initialSettings.terminal.fontWeightBold,
       lineHeight: initialSettings.terminal.lineHeight,
+      cursorStyle: xtermCursorStyle(initialSettings.terminal.cursorStyle),
       cursorBlink: isFocusedPane,
       allowProposedApi: true,
       // Let Option+drag force a local selection even while a TUI has mouse
@@ -1127,6 +1136,56 @@ export function Terminal({
       }, 500);
     };
 
+    let cursorApplicationOverride = false;
+    let cursorApplicationStyle: XtermCursorStyle | null = null;
+    const setCursorApplicationOverride = (
+      active: boolean,
+      style: XtermCursorStyle | null = null,
+    ) => {
+      cursorApplicationOverride = active;
+      if (!active) {
+        cursorApplicationStyle = null;
+      } else if (style) {
+        cursorApplicationStyle = style;
+      }
+      container.toggleAttribute(
+        "data-acorn-cursor-application-override",
+        active,
+      );
+    };
+    // Custom outline and pill rendering only represents the user's fallback.
+    // A foreground application that sends DECSCUSR owns the cursor until it
+    // resets the mode, including when it selects the same native xterm shape.
+    const cursorStyleParserDisposable = term.parser.registerCsiHandler(
+      { intermediates: " ", final: "q" },
+      (params) => {
+        const parameter =
+          typeof params[0] === "number" ? params[0] : undefined;
+        setCursorApplicationOverride(
+          nextCursorApplicationOverride(
+            cursorApplicationOverride,
+            parameter,
+          ),
+          cursorStyleFromDecscusr(parameter),
+        );
+        return false;
+      },
+    );
+    const cursorSoftResetParserDisposable = term.parser.registerCsiHandler(
+      { intermediates: "!", final: "p" },
+      () => {
+        setCursorApplicationOverride(false);
+        return false;
+      },
+    );
+    const cursorFullResetParserDisposable = term.parser.registerEscHandler(
+      { final: "c" },
+      () => {
+        setCursorApplicationOverride(false);
+        return false;
+      },
+    );
+
     // OSC 7 cwd tracking. The shell rc we inject via ZDOTDIR emits
     // `\e]7;file://<host><pwd>\e\\` on every prompt. xterm's parser hands
     // us the inner payload (everything between `\e]7;` and the terminator)
@@ -1148,7 +1207,7 @@ export function Terminal({
       return true;
     });
 
-    // Live-apply terminal font setting changes without reinitialising xterm.
+    // Live-apply terminal renderer setting changes without reinitialising xterm.
     const unsubSettings = useSettings.subscribe((state, prev) => {
       const next = state.settings.terminal;
       const previous = prev.settings.terminal;
@@ -1176,6 +1235,9 @@ export function Terminal({
       if (next.lineHeight !== previous.lineHeight) {
         term.options.lineHeight = next.lineHeight;
         changed = true;
+      }
+      if (next.cursorStyle !== previous.cursorStyle) {
+        term.options.cursorStyle = xtermCursorStyle(next.cursorStyle);
       }
       if (next.linkActivation !== previous.linkActivation) {
         linkActivation = next.linkActivation;
@@ -1510,6 +1572,9 @@ export function Terminal({
     };
     const compositionTextView = document.createElement("span");
     compositionTextView.className = "acorn-ime-composition-text";
+    const compositionCursorView = document.createElement("span");
+    compositionCursorView.className = "acorn-ime-composition-cursor";
+    compositionCursorView.setAttribute("aria-hidden", "true");
     const compositionTailView = document.createElement("span");
     compositionTailView.className = "acorn-ime-line-tail xterm-rows";
     let composingText = "";
@@ -1535,6 +1600,14 @@ export function Terminal({
         compositionView.style.top = `${cursorViewportY * cell.height}px`;
         compositionView.style.minHeight = `${cell.height}px`;
         compositionView.style.lineHeight = `${cell.height}px`;
+        compositionView.style.setProperty(
+          "--acorn-ime-cell-width",
+          `${cell.width}px`,
+        );
+        compositionView.style.setProperty(
+          "--acorn-ime-cell-height",
+          `${cell.height}px`,
+        );
       }
     };
     const renderComposing = () => {
@@ -1544,8 +1617,12 @@ export function Terminal({
       // the text under and after the cursor in the old position. Mirror that
       // tail after the preview so mid-line composition reads as insertion.
       renderTerminalLineTail(term, container, compositionTailView);
+      compositionCursorView.dataset.acornImeCursorStyle =
+        cursorApplicationStyle ??
+        useSettings.getState().settings.terminal.cursorStyle;
       compositionView.replaceChildren(
         compositionTextView,
+        compositionCursorView,
         compositionTailView,
       );
 
@@ -1579,6 +1656,7 @@ export function Terminal({
     };
     const hideComposing = () => {
       composingText = "";
+      container.classList.remove(COMPOSING_CLASS);
       if (!compositionView) return;
       compositionView.classList.remove("active");
       compositionView.replaceChildren();
@@ -1590,6 +1668,7 @@ export function Terminal({
         return;
       }
       composingText = text;
+      container.classList.add(COMPOSING_CLASS);
       renderComposing();
       positionComposing();
       compositionView.classList.add("active");
@@ -2854,6 +2933,7 @@ export function Terminal({
             "\x1b[r" +     // DECSTBM full-screen scroll region
             "\x1b[?7h" +   // DECAWM auto-wrap on
             "\x1b[?25h" +  // DECTCEM cursor visible
+            "\x1b[0 q" +   // DECSCUSR cursor back to the user default
             "\x1b[?2004l" + // bracketed paste off
             "\x1b[?1000l" + // X11 mouse tracking off
             "\x1b[?1002l" + // mouse btn-event tracking off
@@ -2940,6 +3020,11 @@ export function Terminal({
       webLinksDisposable = null;
       try { fileLinksDisposable?.dispose(); } catch { /* ignore */ }
       fileLinksDisposable = null;
+      try { cursorStyleParserDisposable.dispose(); } catch { /* ignore */ }
+      try { cursorSoftResetParserDisposable.dispose(); } catch { /* ignore */ }
+      try { cursorFullResetParserDisposable.dispose(); } catch { /* ignore */ }
+      container.removeAttribute("data-acorn-cursor-application-override");
+      container.classList.remove(COMPOSING_CLASS);
       try { fitAddon.dispose(); } catch { /* ignore */ }
       try { serializeAddon.dispose(); } catch { /* ignore */ }
       term.dispose();
@@ -3228,6 +3313,7 @@ export function Terminal({
         className={`acorn-terminal relative z-10 h-full w-full ${
           isFocusedPane ? "" : "acorn-terminal-inactive"
         }`}
+        data-acorn-cursor-style={cursorStyle}
         data-acorn-font-smoothing={fontSmoothing}
       />
       {isScrolledBack ? (
