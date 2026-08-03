@@ -258,6 +258,110 @@ function terminalCellDims(term: XTerm): { width: number; height: number } | null
   return cell ? { width: cell.width, height: cell.height } : null;
 }
 
+function terminalLineTailEndColumn(term: XTerm): number {
+  const buffer = term.buffer.active;
+  const line = buffer.getLine(buffer.baseY + buffer.cursorY);
+  if (!line) return buffer.cursorX;
+
+  const maxColumn = Math.min(term.cols, line.length);
+  for (let column = maxColumn - 1; column >= buffer.cursorX; column -= 1) {
+    const cell = line.getCell(column);
+    if (cell?.getChars()) {
+      return Math.min(
+        maxColumn,
+        column + Math.max(1, cell.getWidth()),
+      );
+    }
+  }
+  return buffer.cursorX;
+}
+
+function renderTerminalLineTail(
+  term: XTerm,
+  container: HTMLElement,
+  tailView: HTMLElement,
+): void {
+  const buffer = term.buffer.active;
+  const line = buffer.getLine(buffer.baseY + buffer.cursorY);
+  const endColumn = terminalLineTailEndColumn(term);
+  const cursorViewportY = buffer.baseY + buffer.cursorY - buffer.viewportY;
+  const sourceRows = container.querySelector<HTMLElement>(
+    ".xterm-screen > .xterm-rows",
+  );
+  const sourceRow = sourceRows?.children.item(cursorViewportY) as
+    | HTMLElement
+    | null;
+  if (!line || !sourceRow || endColumn <= buffer.cursorX) {
+    tailView.replaceChildren();
+    return;
+  }
+
+  // Reuse the DOM renderer's resolved spans instead of reimplementing xterm's
+  // ANSI, true-color, inverse, dim, and decoration rules. The cloned text is
+  // rebuilt from buffer cells so only the tail at/after the cursor is shown.
+  const sourceSpans = Array.from(
+    sourceRow.querySelectorAll<HTMLElement>("span"),
+  ).map((span) => ({ span, rect: span.getBoundingClientRect() }));
+  const rowRect = sourceRow.getBoundingClientRect();
+  const renderedCellWidth = rowRect.width / term.cols;
+  if (renderedCellWidth <= 0 || sourceSpans.length === 0) {
+    tailView.textContent = line.translateToString(true, buffer.cursorX);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  let previousStyleKey = "";
+  let previousClone: HTMLElement | null = null;
+  for (let column = buffer.cursorX; column < endColumn; ) {
+    const cell = line.getCell(column);
+    if (!cell) break;
+    const width = Math.max(1, cell.getWidth());
+    if (cell.getWidth() === 0) {
+      column += 1;
+      continue;
+    }
+
+    const chars = cell.getChars();
+    const text = cell.isInvisible()
+      ? " ".repeat(width)
+      : chars.length > 0
+        ? chars
+        : " ";
+
+    const cellCenter =
+      rowRect.left + (column + width / 2) * renderedCellWidth;
+    const source =
+      sourceSpans.find(
+        ({ rect }) =>
+          rect.left - 0.5 <= cellCenter && cellCenter < rect.right + 0.5,
+      )?.span ?? null;
+    const clone = source
+      ? (source.cloneNode(false) as HTMLElement)
+      : document.createElement("span");
+    for (const className of Array.from(clone.classList)) {
+      // The source cell is where xterm paints its block/bar cursor. Its text
+      // style is still the right one; only the transient cursor classes must
+      // not move into the shifted tail preview.
+      if (className.startsWith("xterm-cursor")) {
+        clone.classList.remove(className);
+      }
+    }
+    clone.removeAttribute("id");
+    clone.classList.add("acorn-ime-tail-run");
+    const styleKey = clone.outerHTML;
+    if (previousClone && previousStyleKey === styleKey) {
+      previousClone.textContent = `${previousClone.textContent ?? ""}${text}`;
+    } else {
+      clone.textContent = text;
+      fragment.append(clone);
+      previousStyleKey = styleKey;
+      previousClone = clone;
+    }
+    column += width;
+  }
+  tailView.replaceChildren(fragment);
+}
+
 function suppressCurrentXtermLinkUnderline(term: XTerm): void {
   const link = (term as unknown as TerminalRenderInternals)._core?.linkifier
     ?.currentLink?.link;
@@ -1404,15 +1508,15 @@ export function Terminal({
       const cell = core?._renderService?.dimensions?.css?.cell;
       return cell ? { width: cell.width, height: cell.height } : null;
     };
-    const showComposing = (text: string) => {
+    const compositionTextView = document.createElement("span");
+    compositionTextView.className = "acorn-ime-composition-text";
+    const compositionTailView = document.createElement("span");
+    compositionTailView.className = "acorn-ime-line-tail xterm-rows";
+    let composingText = "";
+
+    const positionComposing = () => {
       if (!compositionView) return;
-      if (text.length === 0) {
-        compositionView.classList.remove("active");
-        compositionView.textContent = "";
-        return;
-      }
       const cell = getCellDims();
-      compositionView.textContent = text;
       if (cell) {
         const buf = term.buffer.active;
         // xterm's visible cursor row = `baseY + cursorY - viewportY`
@@ -1432,6 +1536,19 @@ export function Terminal({
         compositionView.style.minHeight = `${cell.height}px`;
         compositionView.style.lineHeight = `${cell.height}px`;
       }
+    };
+    const renderComposing = () => {
+      if (!compositionView || composingText.length === 0) return;
+      compositionTextView.textContent = composingText;
+      // Until the PTY receives a committed composition, its buffer still has
+      // the text under and after the cursor in the old position. Mirror that
+      // tail after the preview so mid-line composition reads as insertion.
+      renderTerminalLineTail(term, container, compositionTailView);
+      compositionView.replaceChildren(
+        compositionTextView,
+        compositionTailView,
+      );
+
       // Sync font with the current xterm options so the preview uses the
       // user's configured terminal font/size, not the default sans inherited
       // from the parent.
@@ -1451,12 +1568,31 @@ export function Terminal({
       if (typeof fontWeight === "number" || typeof fontWeight === "string") {
         compositionView.style.fontWeight = String(fontWeight);
       }
-      compositionView.classList.add("active");
+      const theme = term.options.theme;
+      if (theme?.foreground) {
+        compositionView.style.color = theme.foreground;
+      }
+      const background = theme?.cursorAccent ?? theme?.background;
+      if (background) {
+        compositionView.style.backgroundColor = background;
+      }
     };
     const hideComposing = () => {
+      composingText = "";
       if (!compositionView) return;
       compositionView.classList.remove("active");
-      compositionView.textContent = "";
+      compositionView.replaceChildren();
+    };
+    const showComposing = (text: string) => {
+      if (!compositionView) return;
+      if (text.length === 0) {
+        hideComposing();
+        return;
+      }
+      composingText = text;
+      renderComposing();
+      positionComposing();
+      compositionView.classList.add("active");
     };
 
     // WKWebView delivers a single Korean syllable across a mix of
@@ -2181,13 +2317,8 @@ export function Terminal({
       if (!compositionView || !compositionView.classList.contains("active")) {
         return;
       }
-      const cell = getCellDims();
-      if (!cell) return;
-      const buf = term.buffer.active;
-      // See `showComposing` for the full derivation of this formula.
-      const cursorViewportY = buf.baseY + buf.cursorY - buf.viewportY;
-      compositionView.style.left = `${buf.cursorX * cell.width}px`;
-      compositionView.style.top = `${cursorViewportY * cell.height}px`;
+      renderComposing();
+      positionComposing();
     };
     const renderDisposable = term.onRender(repositionComposing);
     // PTY output that arrives while the user is mid-composition can scroll

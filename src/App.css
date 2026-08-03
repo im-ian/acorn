@@ -163,6 +163,11 @@
   background-color: transparent !important;
 }
 
+.acorn-terminal .composition-view .acorn-ime-composition-text {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .acorn-terminal-inactive .xterm-cursor,
 .acorn-terminal-inactive .xterm-cursor.xterm-cursor-block {
   outline: 1px solid color-mix(in oklab, var(--color-fg-muted) 70%, transparent);
