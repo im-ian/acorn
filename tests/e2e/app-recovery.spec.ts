@@ -69,4 +69,42 @@ test.describe("app recovery", () => {
       )
       .not.toBeNull();
   });
+
+  test("uses Japanese copy for incompatible persisted UI state", async ({
+    page,
+    errorTracker,
+  }) => {
+    errorTracker.allow(/cannot read properties of undefined/i);
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ language: "ja" }),
+      );
+      window.localStorage.setItem(
+        "acorn-workspaces",
+        JSON.stringify({
+          state: {
+            workspaces: {
+              "/tmp/legacy-project": {
+                panes: {},
+                focusedPaneId: "legacy-pane",
+              },
+            },
+            activeProject: "/tmp/legacy-project",
+            activeProjectFolderId: "/tmp/legacy-project",
+          },
+          version: 4,
+        }),
+      );
+    });
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("heading", { name: "Acorn を開けませんでした" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "ワークスペース表示をリセットして再度開く" }),
+    ).toBeVisible();
+  });
 });

@@ -1,8 +1,9 @@
 import en from "../locales/en.json";
+import ja from "../locales/ja.json";
 import ko from "../locales/ko.json";
 import zhCN from "../locales/zh-CN.json";
 
-export type Language = "en" | "ko" | "zh-CN";
+export type Language = "en" | "ja" | "ko" | "zh-CN";
 
 export const LANGUAGE_OPTIONS: ReadonlyArray<{
   value: Language;
@@ -10,6 +11,7 @@ export const LANGUAGE_OPTIONS: ReadonlyArray<{
   nativeLabel: string;
 }> = [
   { value: "en", label: "English", nativeLabel: "English" },
+  { value: "ja", label: "Japanese", nativeLabel: "日本語" },
   { value: "ko", label: "Korean", nativeLabel: "한국어" },
   {
     value: "zh-CN",
@@ -38,6 +40,7 @@ export type Translator = (key: TranslationKey) => string;
 
 const TRANSLATIONS: Record<Language, LocaleTree> = {
   en,
+  ja,
   ko,
   "zh-CN": zhCN,
 };
