@@ -74,6 +74,9 @@ pub struct StatusDetection {
     /// `TurnComplete`. Other providers and unscoped completion formats leave
     /// this empty.
     pub completed_provider_turn_id: Option<String>,
+    /// Provider timestamp of the transcript line this detection classified.
+    /// Only transcript evidence carries one.
+    pub turn_timestamp: Option<String>,
 }
 
 impl StatusDetection {
@@ -83,11 +86,17 @@ impl StatusDetection {
             reason,
             evidence,
             completed_provider_turn_id: None,
+            turn_timestamp: None,
         }
     }
 
     fn with_completed_provider_turn_id(mut self, provider_turn_id: Option<String>) -> Self {
         self.completed_provider_turn_id = provider_turn_id;
+        self
+    }
+
+    fn with_turn_timestamp(mut self, timestamp: Option<String>) -> Self {
+        self.turn_timestamp = timestamp;
         self
     }
 }
@@ -147,16 +156,20 @@ pub fn detect_with_reason(
         Some(TurnObservation {
             state: TurnState::Ready,
             provider_turn_id,
+            timestamp,
         }) => StatusDetection::new(
             SessionStatus::Ready,
             Some(StatusReason::TurnComplete),
             StatusEvidence::Transcript,
         )
-        .with_completed_provider_turn_id(provider_turn_id),
+        .with_completed_provider_turn_id(provider_turn_id)
+        .with_turn_timestamp(timestamp),
         Some(TurnObservation {
             state: TurnState::Working,
+            timestamp,
             ..
-        }) => StatusDetection::new(SessionStatus::Working, None, StatusEvidence::Transcript),
+        }) => StatusDetection::new(SessionStatus::Working, None, StatusEvidence::Transcript)
+            .with_turn_timestamp(timestamp),
         // Transcript exists but the tail held no turn lines; keep
         // whatever the caller previously observed instead of regressing
         // to Ready. The next poll that lands on a real turn line corrects
