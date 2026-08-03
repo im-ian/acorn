@@ -181,10 +181,16 @@ async function emitPtyOutput(page: Page, text: string): Promise<void> {
 }
 
 test.describe("terminal: IME (PR #104 regression)", () => {
-  test("mid-line Korean composition previews as insertion without hiding the following text", async ({
+  test("mid-line Korean composition stays intact with the pill cursor", async ({
     page,
     tauri,
   }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { cursorStyle: "pill" } }),
+      );
+    });
     await seed(tauri);
     await activateTerminal(page);
 
@@ -208,6 +214,7 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     );
     await expect(composition.locator(".acorn-ime-line-tail")).toHaveText("트");
     await expect(composition).toHaveText("한트");
+    await expect(composition.locator(".xterm-cursor")).toHaveCount(0);
   });
 
   test("composition preserves the dim color of a prompt placeholder", async ({

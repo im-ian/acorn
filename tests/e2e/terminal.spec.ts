@@ -441,6 +441,18 @@ async function enableTerminalRightClickPasteSelection(
   });
 }
 
+async function seedTerminalCursorStyle(
+  page: Page,
+  cursorStyle: "block" | "bar" | "underline" | "outline" | "pill",
+): Promise<void> {
+  await page.addInitScript((style) => {
+    window.localStorage.setItem(
+      "acorn:settings:v1",
+      JSON.stringify({ terminal: { cursorStyle: style } }),
+    );
+  }, cursorStyle);
+}
+
 async function rightClickSelectedTerminalText(
   page: Page,
   text: string,
@@ -495,39 +507,82 @@ async function gotoWithAccent(page: Page): Promise<void> {
   });
 }
 
-function makePillCursorAssertion(page: Page): () => Promise<void> {
+function makePillCursorAssertion(
+  page: Page,
+): (focus?: boolean) => Promise<void> {
+  const terminal = page.locator("[data-pane-body] .acorn-terminal").first();
   const activeCursor = page
     .locator("[data-pane-body] .acorn-terminal .xterm-cursor")
     .first();
-  return async () => {
+  return async (focus = true) => {
     const textarea = page
       .locator("[data-pane-body] .xterm-helper-textarea")
       .first();
     await textarea.waitFor({ state: "attached" });
-    await textarea.focus();
-    await textarea.evaluate((el) => el.blur());
+    if (focus) await textarea.focus();
+    await expect(terminal).toHaveAttribute("data-acorn-cursor-style", "pill");
+    await expect(terminal).not.toHaveAttribute(
+      "data-acorn-cursor-application-override",
+      "",
+    );
     await expect(activeCursor).toBeAttached();
+    await expect(activeCursor).toHaveClass(
+      focus ? /xterm-cursor-bar/ : /xterm-cursor-outline/,
+    );
     await expect
       .poll(async () =>
-        activeCursor.evaluate((el) => getComputedStyle(el).backgroundColor),
+        activeCursor.evaluate(
+          (el) => getComputedStyle(el, "::after").backgroundColor,
+        ),
       )
       .toBe("rgb(12, 34, 56)");
     await expect
       .poll(async () =>
-        activeCursor.evaluate((el) => getComputedStyle(el).borderRadius),
+        activeCursor.evaluate((el) => getComputedStyle(el, "::after").width),
+      )
+      .toBe("3px");
+    await expect
+      .poll(async () =>
+        activeCursor.evaluate(
+          (el) => getComputedStyle(el, "::after").borderRadius,
+        ),
       )
       .toBe("999px");
     await expect
       .poll(async () =>
         activeCursor.evaluate((el) => getComputedStyle(el, "::after").content),
       )
-      .toBe("none");
-    await expect
-      .poll(async () =>
-        activeCursor.evaluate((el) => getComputedStyle(el).outlineWidth),
-      )
-      .toBe("0px");
+      .toBe('""');
   };
+}
+
+async function expectOutlineCursor(page: Page): Promise<void> {
+  const terminal = page.locator("[data-pane-body] .acorn-terminal").first();
+  const textarea = terminal.locator(".xterm-helper-textarea");
+  const cursor = terminal.locator(".xterm-cursor").first();
+  await textarea.focus();
+  await expect(terminal).toHaveAttribute("data-acorn-cursor-style", "outline");
+  await expect(terminal).not.toHaveAttribute(
+    "data-acorn-cursor-application-override",
+    "",
+  );
+  await expect(cursor).toHaveClass(/xterm-cursor-block/);
+  await expect
+    .poll(() =>
+      cursor.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          backgroundColor: style.backgroundColor,
+          outlineStyle: style.outlineStyle,
+          outlineWidth: style.outlineWidth,
+        };
+      }),
+    )
+    .toEqual({
+      backgroundColor: "rgba(0, 0, 0, 0)",
+      outlineStyle: "solid",
+      outlineWidth: "1px",
+    });
 }
 
 test.describe("terminal: spawn", () => {
@@ -614,6 +669,449 @@ test.describe("terminal: spawn", () => {
     expect(first.cwd).toBe("/tmp/demo");
     expect(first.parentPane).not.toBeNull();
     expect(first.parentLimbo).toBeNull();
+  });
+
+  test("applies cursor changes live and keeps them across terminal switches", async ({
+    page,
+    tauri,
+  }) => {
+    await seedAlphaBetaTerminals(tauri);
+    await gotoWithAccent(page);
+
+    await page
+      .getByRole("button", { name: /^alpha main · Ready$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").first().waitFor({
+      state: "attached",
+    });
+
+    await pressHotkey(page, { mod: true, key: "," });
+    const modal = page.getByRole("dialog", { name: "Settings" });
+    await modal.getByRole("button", { name: "Terminal" }).click();
+    const cursorSelect = modal.getByRole("combobox", {
+      name: "Cursor style",
+    });
+    await expect(cursorSelect).toContainText("Block");
+    await cursorSelect.click();
+    await page.getByRole("option", { name: "Outline", exact: true }).click();
+    await expect(cursorSelect).toContainText("Outline");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).terminal?.cursorStyle : null;
+        }),
+      )
+      .toBe("outline");
+    await page.keyboard.press("Escape");
+    await expect(modal).toHaveCount(0);
+
+    const activeTerminal = page
+      .locator("[data-pane-body] .acorn-terminal")
+      .first();
+    const activeCursor = activeTerminal.locator(".xterm-cursor").first();
+    await activeTerminal.locator(".xterm-helper-textarea").focus();
+    await expect(activeTerminal).toHaveAttribute(
+      "data-acorn-cursor-style",
+      "outline",
+    );
+    await expect(activeCursor).toHaveClass(/xterm-cursor-block/);
+    await expect
+      .poll(() =>
+        activeCursor.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            backgroundColor: style.backgroundColor,
+            outlineStyle: style.outlineStyle,
+            outlineWidth: style.outlineWidth,
+          };
+        }),
+      )
+      .toEqual({
+        backgroundColor: "rgba(0, 0, 0, 0)",
+        outlineStyle: "solid",
+        outlineWidth: "1px",
+      });
+
+    await pressHotkey(page, { mod: true, key: "," });
+    await modal.getByRole("button", { name: "Terminal" }).click();
+    await expect(cursorSelect).toContainText("Outline");
+    await cursorSelect.click();
+    await page.getByRole("option", { name: "Pill", exact: true }).click();
+    await expect(cursorSelect).toContainText("Pill");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).terminal?.cursorStyle : null;
+        }),
+      )
+      .toBe("pill");
+    await page.keyboard.press("Escape");
+    await expect(modal).toHaveCount(0);
+
+    const expectPillCursor = makePillCursorAssertion(page);
+    await expectPillCursor();
+    const pillTextarea = activeTerminal.locator(".xterm-helper-textarea");
+    await pillTextarea.evaluate((element) => element.blur());
+    await expectPillCursor(false);
+    await expectPillCursor();
+
+    await page
+      .getByRole("button", { name: /^beta main · Ready$/ })
+      .click();
+    await expectPillCursor();
+
+    await page
+      .getByRole("button", { name: /^alpha main · Ready$/ })
+      .click();
+    await expectPillCursor();
+  });
+
+  for (const style of ["bar", "underline", "pill"] as const) {
+    test(`keeps the ${style} fallback recognizable through focus and blur`, async ({
+      page,
+      tauri,
+    }) => {
+      await seedTerminalCursorStyle(page, style);
+      await seedWritableTerminal(tauri);
+      await tauri.handle("pty_subscribe_output", (args) => {
+        const { channel } = args as { channel: { id: number } };
+        const w = window as unknown as { __cursorOutputChannelId?: number };
+        w.__cursorOutputChannelId = channel.id;
+        return 1;
+      });
+      await gotoWithAccent(page);
+      await page
+        .getByRole("button", { name: /^shell main · Ready$/ })
+        .click();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __cursorOutputChannelId?: number })
+                .__cursorOutputChannelId ?? null,
+          ),
+        )
+        .not.toBeNull();
+      await emitSubscribedPtyOutput(
+        page,
+        "__cursorOutputChannelId",
+        "prompt ",
+      );
+
+      const terminal = page.locator("[data-pane-body] .acorn-terminal").first();
+      const textarea = terminal.locator(".xterm-helper-textarea");
+      const cursor = terminal.locator(".xterm-cursor").first();
+      await textarea.focus();
+      await expect(cursor).toHaveClass(
+        style === "underline" ? /xterm-cursor-underline/ : /xterm-cursor-bar/,
+      );
+
+      await textarea.evaluate((element) => element.blur());
+      await expect(cursor).toHaveClass(/xterm-cursor-outline/);
+      if (style === "pill") {
+        await makePillCursorAssertion(page)(false);
+      } else {
+        await expect
+          .poll(() =>
+            cursor.evaluate((element) => {
+              const computed = getComputedStyle(element);
+              return {
+                boxShadow: computed.boxShadow,
+                outlineStyle: computed.outlineStyle,
+              };
+            }),
+          )
+          .toEqual(
+            expect.objectContaining({
+              boxShadow: expect.stringContaining(
+                style === "bar" ? "1px 0px 0px" : "0px -1px 0px",
+              ),
+              outlineStyle: "none",
+            }),
+          );
+      }
+
+      await textarea.focus();
+      await expect(cursor).toHaveClass(
+        style === "underline" ? /xterm-cursor-underline/ : /xterm-cursor-bar/,
+      );
+    });
+  }
+
+  test("preserves application cursor ownership across terminal switches", async ({
+    page,
+    tauri,
+  }) => {
+    await seedTerminalCursorStyle(page, "pill");
+    await seedAlphaBetaTerminals(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { sessionId, channel } = args as {
+        sessionId: string;
+        channel: { id: number };
+      };
+      const w = window as unknown as {
+        __alphaCursorOutputChannelId?: number;
+        __betaCursorOutputChannelId?: number;
+      };
+      if (sessionId === "s-alpha") {
+        w.__alphaCursorOutputChannelId = channel.id;
+        return 1;
+      }
+      w.__betaCursorOutputChannelId = channel.id;
+      return 2;
+    });
+    await gotoWithAccent(page);
+
+    await page
+      .getByRole("button", { name: /^alpha main · Ready$/ })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as {
+              __alphaCursorOutputChannelId?: number;
+            }).__alphaCursorOutputChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+    await emitSubscribedPtyOutput(
+      page,
+      "__alphaCursorOutputChannelId",
+      "alpha ",
+    );
+    await makePillCursorAssertion(page)();
+    await emitSubscribedPtyOutput(
+      page,
+      "__alphaCursorOutputChannelId",
+      "\x1b[2 q",
+      1,
+    );
+
+    let terminal = page.locator("[data-pane-body] .acorn-terminal").first();
+    let cursor = terminal.locator(".xterm-cursor").first();
+    await expect(terminal).toHaveAttribute(
+      "data-acorn-cursor-application-override",
+      "",
+    );
+    await expect(cursor).toHaveClass(/xterm-cursor-block/);
+
+    await page
+      .getByRole("button", { name: /^beta main · Ready$/ })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as {
+              __betaCursorOutputChannelId?: number;
+            }).__betaCursorOutputChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+    await emitSubscribedPtyOutput(
+      page,
+      "__betaCursorOutputChannelId",
+      "beta ",
+    );
+    await makePillCursorAssertion(page)();
+
+    await page
+      .getByRole("button", { name: /^alpha main · Ready$/ })
+      .click();
+    terminal = page.locator("[data-pane-body] .acorn-terminal").first();
+    cursor = terminal.locator(".xterm-cursor").first();
+    await terminal.locator(".xterm-helper-textarea").focus();
+    await expect(terminal).toHaveAttribute(
+      "data-acorn-cursor-application-override",
+      "",
+    );
+    await expect(cursor).toHaveClass(/xterm-cursor-block/);
+    await expect
+      .poll(() =>
+        cursor.evaluate((element) =>
+          getComputedStyle(element, "::after").content,
+        ),
+      )
+      .toBe("none");
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__alphaCursorOutputChannelId",
+      "\x1b[0 q",
+      2,
+    );
+    await makePillCursorAssertion(page)();
+  });
+
+  test("lets applications override a pill cursor until DECSCUSR reset", async ({
+    page,
+    tauri,
+  }) => {
+    await seedTerminalCursorStyle(page, "pill");
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __cursorOutputChannelId?: number };
+      w.__cursorOutputChannelId = channel.id;
+      return 1;
+    });
+    await gotoWithAccent(page);
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __cursorOutputChannelId?: number })
+              .__cursorOutputChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__cursorOutputChannelId",
+      "prompt ",
+    );
+    const terminal = page.locator("[data-pane-body] .acorn-terminal").first();
+    const cursor = terminal.locator(".xterm-cursor").first();
+    const expectPillCursor = makePillCursorAssertion(page);
+    await expectPillCursor();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__cursorOutputChannelId",
+      "\x1b[6 q",
+      1,
+    );
+    await expect(terminal).toHaveAttribute(
+      "data-acorn-cursor-application-override",
+      "",
+    );
+    await expect(cursor).toHaveClass(/xterm-cursor-bar/);
+    await expect
+      .poll(() =>
+        cursor.evaluate((element) =>
+          getComputedStyle(element, "::after").content,
+        ),
+      )
+      .toBe("none");
+    const textarea = terminal.locator(".xterm-helper-textarea");
+    await textarea.evaluate((element) => element.blur());
+    await expect(cursor).toHaveClass(/xterm-cursor-outline/);
+    await expect
+      .poll(() =>
+        cursor.evaluate((element) =>
+          getComputedStyle(element, "::after").content,
+        ),
+      )
+      .toBe("none");
+    await textarea.focus();
+    await expect(cursor).toHaveClass(/xterm-cursor-bar/);
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__cursorOutputChannelId",
+      "\x1b[2 q",
+      2,
+    );
+    await expect(terminal).toHaveAttribute(
+      "data-acorn-cursor-application-override",
+      "",
+    );
+    await expect(cursor).toHaveClass(/xterm-cursor-block/);
+    await expect
+      .poll(() =>
+        cursor.evaluate((element) =>
+          getComputedStyle(element, "::after").content,
+        ),
+      )
+      .toBe("none");
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__cursorOutputChannelId",
+      "\x1b[4 q",
+      3,
+    );
+    await expect(cursor).toHaveClass(/xterm-cursor-underline/);
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__cursorOutputChannelId",
+      "\x1b[0 q",
+      4,
+    );
+    await expectPillCursor();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__cursorOutputChannelId",
+      "\x1b[2 q",
+      5,
+    );
+    await expect(terminal).toHaveAttribute(
+      "data-acorn-cursor-application-override",
+      "",
+    );
+
+    await pressHotkey(page, { mod: true, key: "," });
+    const modal = page.getByRole("dialog", { name: "Settings" });
+    await modal.getByRole("button", { name: "Terminal" }).click();
+    const cursorSelect = modal.getByRole("combobox", {
+      name: "Cursor style",
+    });
+    await cursorSelect.click();
+    await page.getByRole("option", { name: "Outline", exact: true }).click();
+    await expect(terminal).toHaveAttribute("data-acorn-cursor-style", "outline");
+    await expect(terminal).toHaveAttribute(
+      "data-acorn-cursor-application-override",
+      "",
+    );
+    await page.keyboard.press("Escape");
+    await textarea.focus();
+    await expect(cursor).toHaveClass(/xterm-cursor-block/);
+    await expect
+      .poll(() =>
+        cursor.evaluate(
+          (element) => getComputedStyle(element).backgroundColor,
+        ),
+      )
+      .not.toBe("rgba(0, 0, 0, 0)");
+    await expect
+      .poll(() =>
+        cursor.evaluate((element) => getComputedStyle(element).outlineStyle),
+      )
+      .toBe("none");
+    await emitSubscribedPtyOutput(
+      page,
+      "__cursorOutputChannelId",
+      "\x1b[!p",
+      6,
+    );
+    await expectOutlineCursor(page);
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__cursorOutputChannelId",
+      "\x1b[6 q",
+      7,
+    );
+    await expect(terminal).toHaveAttribute(
+      "data-acorn-cursor-application-override",
+      "",
+    );
+    await emitSubscribedPtyOutput(
+      page,
+      "__cursorOutputChannelId",
+      "\x1bcafter reset ",
+      8,
+    );
+    await expectOutlineCursor(page);
   });
 
   test("applies terminal font smoothing setting to the terminal renderer", async ({

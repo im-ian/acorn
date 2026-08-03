@@ -698,6 +698,31 @@ describe("SettingsModal font controls", () => {
     expect(patchTerminal).toHaveBeenCalledWith({ fontSmoothing: "subpixel" });
   });
 
+  it("patches the terminal cursor style from the Terminal tab", async () => {
+    const patchTerminal = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchTerminal,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openTerminalTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const select = getComboboxByLabel("Cursor style");
+    expect(select.textContent).toContain("Block");
+
+    clickElement(select);
+    clickOption("Pill");
+
+    expect(patchTerminal).toHaveBeenCalledWith({ cursorStyle: "pill" });
+  });
+
   it("patches the inactive canvas terminal refresh rate from the Terminal tab", async () => {
     const patchTerminal = vi.fn();
     useSettings.setState({
