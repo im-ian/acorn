@@ -258,6 +258,15 @@ function terminalCellDims(term: XTerm): { width: number; height: number } | null
   return cell ? { width: cell.width, height: cell.height } : null;
 }
 
+function terminalLineTailFromCursor(term: XTerm): string {
+  const buffer = term.buffer.active;
+  return (
+    buffer
+      .getLine(buffer.baseY + buffer.cursorY)
+      ?.translateToString(true, buffer.cursorX) ?? ""
+  );
+}
+
 function suppressCurrentXtermLinkUnderline(term: XTerm): void {
   const link = (term as unknown as TerminalRenderInternals)._core?.linkifier
     ?.currentLink?.link;
@@ -1404,15 +1413,15 @@ export function Terminal({
       const cell = core?._renderService?.dimensions?.css?.cell;
       return cell ? { width: cell.width, height: cell.height } : null;
     };
-    const showComposing = (text: string) => {
+    const compositionTextView = document.createElement("span");
+    compositionTextView.className = "acorn-ime-composition-text";
+    const compositionTailView = document.createElement("span");
+    compositionTailView.className = "acorn-ime-line-tail";
+    let composingText = "";
+
+    const positionComposing = () => {
       if (!compositionView) return;
-      if (text.length === 0) {
-        compositionView.classList.remove("active");
-        compositionView.textContent = "";
-        return;
-      }
       const cell = getCellDims();
-      compositionView.textContent = text;
       if (cell) {
         const buf = term.buffer.active;
         // xterm's visible cursor row = `baseY + cursorY - viewportY`
@@ -1432,6 +1441,19 @@ export function Terminal({
         compositionView.style.minHeight = `${cell.height}px`;
         compositionView.style.lineHeight = `${cell.height}px`;
       }
+    };
+    const renderComposing = () => {
+      if (!compositionView || composingText.length === 0) return;
+      compositionTextView.textContent = composingText;
+      // Until the PTY receives a committed composition, its buffer still has
+      // the text under and after the cursor in the old position. Mirror that
+      // tail after the preview so mid-line composition reads as insertion.
+      compositionTailView.textContent = terminalLineTailFromCursor(term);
+      compositionView.replaceChildren(
+        compositionTextView,
+        compositionTailView,
+      );
+
       // Sync font with the current xterm options so the preview uses the
       // user's configured terminal font/size, not the default sans inherited
       // from the parent.
@@ -1451,12 +1473,31 @@ export function Terminal({
       if (typeof fontWeight === "number" || typeof fontWeight === "string") {
         compositionView.style.fontWeight = String(fontWeight);
       }
-      compositionView.classList.add("active");
+      const theme = term.options.theme;
+      if (theme?.foreground) {
+        compositionView.style.color = theme.foreground;
+      }
+      const background = theme?.cursorAccent ?? theme?.background;
+      if (background) {
+        compositionView.style.backgroundColor = background;
+      }
     };
     const hideComposing = () => {
+      composingText = "";
       if (!compositionView) return;
       compositionView.classList.remove("active");
-      compositionView.textContent = "";
+      compositionView.replaceChildren();
+    };
+    const showComposing = (text: string) => {
+      if (!compositionView) return;
+      if (text.length === 0) {
+        hideComposing();
+        return;
+      }
+      composingText = text;
+      renderComposing();
+      positionComposing();
+      compositionView.classList.add("active");
     };
 
     // WKWebView delivers a single Korean syllable across a mix of
@@ -2181,13 +2222,8 @@ export function Terminal({
       if (!compositionView || !compositionView.classList.contains("active")) {
         return;
       }
-      const cell = getCellDims();
-      if (!cell) return;
-      const buf = term.buffer.active;
-      // See `showComposing` for the full derivation of this formula.
-      const cursorViewportY = buf.baseY + buf.cursorY - buf.viewportY;
-      compositionView.style.left = `${buf.cursorX * cell.width}px`;
-      compositionView.style.top = `${cursorViewportY * cell.height}px`;
+      renderComposing();
+      positionComposing();
     };
     const renderDisposable = term.onRender(repositionComposing);
     // PTY output that arrives while the user is mid-composition can scroll

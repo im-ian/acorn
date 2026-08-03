@@ -63,6 +63,12 @@ async function seed(tauri: TauriMock): Promise<void> {
   ]);
   // Spawn is a no-op for these tests — we only care about pty_write.
   await tauri.handle("pty_spawn", () => null);
+  await tauri.handle("pty_subscribe_output", (args: unknown) => {
+    const { channel } = args as { channel: { id: number } };
+    const w = window as unknown as { __imeOutputChannelId?: number };
+    w.__imeOutputChannelId = channel.id;
+    return 1;
+  });
   // Record every pty_write call as a decoded UTF-8 string on `window`.
   // Handlers are serialized into page context — no closures over Node-side
   // helpers, so the base64 decode is inlined here.
@@ -146,7 +152,64 @@ async function getWrites(page: Page): Promise<string[]> {
   );
 }
 
+async function emitPtyOutput(page: Page, text: string): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __imeOutputChannelId?: number })
+            .__imeOutputChannelId ?? null,
+      ),
+    )
+    .not.toBeNull();
+  await page.evaluate((output) => {
+    const w = window as unknown as {
+      __imeOutputChannelId?: number;
+      [key: string]: unknown;
+    };
+    const id = w.__imeOutputChannelId;
+    if (typeof id !== "number") throw new Error("IME output channel missing");
+    const callback = w[`_${id}`] as
+      | ((payload: { index: number; message: number[] }) => void)
+      | undefined;
+    if (!callback) throw new Error("IME output callback missing");
+    callback({
+      index: 0,
+      message: Array.from(new TextEncoder().encode(output)),
+    });
+  }, text);
+}
+
 test.describe("terminal: IME (PR #104 regression)", () => {
+  test("mid-line Korean composition previews as insertion without hiding the following text", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Render "테스트" and place the terminal cursor immediately before "트".
+    await emitPtyOutput(page, "› 테스트\x1b[2D");
+    await expect(page.locator(".xterm-rows")).toContainText("› 테스트");
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+
+    const composition = page.locator(".composition-view.active");
+    await expect(composition.locator(".acorn-ime-composition-text")).toHaveText(
+      "한",
+    );
+    await expect(composition.locator(".acorn-ime-line-tail")).toHaveText("트");
+    await expect(composition).toHaveText("한트");
+  });
+
   test("Korean syllable + spacebar terminator emits the syllable exactly once", async ({
     page,
     tauri,
