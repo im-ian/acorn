@@ -2052,11 +2052,11 @@ fn parse_raw_claude_hook_request(
             Some(_) => return Ok(None),
         },
         "UserPromptSubmit" => (AgentHookEventKind::Start, "native"),
-        // Claude can emit Stop while background tasks or session crons are
-        // still able to wake the parent turn. Those sessions stay Working;
-        // only a Stop with no pending background work is actually awaiting
-        // the user's next prompt.
-        "Stop" if claude_stop_has_pending_background_work(&payload) => return Ok(None),
+        // Stop means the main agent loop reached the prompt, so the terminal
+        // is the user's again. Background tasks and session crons can still
+        // wake the turn later, but suppressing Stop for them left no event to
+        // recover from: a stalled background agent or a session-lifetime cron
+        // registration pinned the session at Working with nothing to clear it.
         "Stop" => (AgentHookEventKind::NeedsInput, "native"),
         "Notification" | "PermissionRequest" => (AgentHookEventKind::NeedsInput, "native"),
         "Error" => (AgentHookEventKind::Error, "native"),
@@ -2088,15 +2088,6 @@ fn parse_raw_claude_hook_request(
         native_hooks_enabled: None,
         ownership: AgentHookOwnership::Owner,
     }))
-}
-
-fn claude_stop_has_pending_background_work(payload: &Value) -> bool {
-    ["background_tasks", "session_crons"].iter().any(|key| {
-        payload
-            .get(*key)
-            .and_then(Value::as_array)
-            .is_some_and(|items| !items.is_empty())
-    })
 }
 
 fn parse_raw_codex_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentHookEvent>, String> {
@@ -2844,7 +2835,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_claude_stop_with_background_work_emits_no_transition() {
+    fn raw_claude_stop_waits_even_with_background_work() {
         let (tx, rx) = mpsc::channel();
         let hooks = AgentHookServer::start_with_handler(move |event| {
             tx.send(event).expect("send event");
@@ -2852,6 +2843,9 @@ mod tests {
         .expect("hook server starts");
         let session_id = Uuid::new_v4();
 
+        // Background agents can stall and a cron registration lives for the
+        // whole session, so neither may withhold the turn boundary: the main
+        // loop is at the prompt and the terminal is the user's again.
         for payload in [
             serde_json::json!({
                 "hook_event_name": "Stop",
@@ -2863,33 +2857,24 @@ mod tests {
                 "background_tasks": [],
                 "session_crons": [{"id": "cron-1", "schedule": "in 1m", "recurring": false}],
             }),
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "background_tasks": [],
+                "session_crons": [],
+            }),
         ] {
             let response = post_raw_claude_hook(&hooks, session_id, &payload.to_string());
             assert!(
-                response.starts_with("HTTP/1.1 202 Accepted"),
-                "a Stop with pending background work is a pause, got {response:?}"
+                response.starts_with("HTTP/1.1 204 No Content"),
+                "every Stop is a turn boundary, got {response:?}"
             );
-            assert!(
-                rx.try_recv().is_err(),
-                "a background pause must not reach the reducer"
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(1))
+                    .expect("Stop delivered")
+                    .event,
+                AgentHookEventKind::NeedsInput
             );
         }
-
-        // Decoy text inside a string field must not suppress the real wait.
-        let decoy = serde_json::json!({
-            "hook_event_name": "Stop",
-            "background_tasks": [],
-            "session_crons": [],
-            "last_assistant_message": "decoy: \"background_tasks\":[{\"status\":\"running\"}]",
-        });
-        let response = post_raw_claude_hook(&hooks, session_id, &decoy.to_string());
-        assert!(response.starts_with("HTTP/1.1 204 No Content"));
-        assert_eq!(
-            rx.recv_timeout(Duration::from_secs(1))
-                .expect("clean Stop delivered")
-                .event,
-            AgentHookEventKind::NeedsInput
-        );
     }
 
     #[test]
