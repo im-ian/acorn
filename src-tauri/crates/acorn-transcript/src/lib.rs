@@ -1,7 +1,7 @@
 //! On-demand process-inspection pairing for live agent processes.
 //!
 //! Each call walks every Acorn session's PTY descendant tree, picks
-//! the `claude` / `codex` / `antigravity` processes, and resolves each one
+//! the `claude` / `codex` / `antigravity` / `grok` processes, and resolves each one
 //! to the transcript file it is currently writing. The returned UUID is
 //! what `claude --resume <id>` / `codex fork <id>` expect, or the
 //! Antigravity brain id for Antigravity sessions.
@@ -20,6 +20,8 @@
 //!              (filename does not encode cwd, so read each candidate's
 //!              first line `payload.cwd` and match).
 //!      antigravity: scan `${ANTIGRAVITY_DIR:-~/.gemini}/antigravity*/brain/<uuid>/.system_generated/logs/transcript.jsonl`
+//!      grok: scan `${GROK_HOME:-~/.grok}/sessions/<cwd-bucket>/<uuid>/updates.jsonl`
+//!            and verify cwd/lineage in the sibling `summary.json`.
 //!   3. Sort processes by start-time DESC so newer fork chains claim
 //!      newer transcripts first; an `assigned` set keeps each
 //!      transcript pinned to one session per scan.
@@ -376,6 +378,12 @@ pub fn find_agent_run_transcript(
             recency_cutoff,
             process_start,
         ),
+        AgentKind::Grok => find_completed_grok_jsonl(
+            cwd,
+            grok_sessions_root().as_deref(),
+            recency_cutoff,
+            process_start,
+        ),
     }
 }
 
@@ -437,7 +445,7 @@ fn scan_live_mappings(
             });
         }
     }
-    let (claude_cwd_counts, codex_cwd_counts, antigravity_cwd_counts) =
+    let (claude_cwd_counts, codex_cwd_counts, antigravity_cwd_counts, grok_cwd_counts) =
         logical_agent_process_counts(&observations);
 
     // Tracks transcripts that have already been claimed by some session
@@ -463,6 +471,7 @@ fn scan_live_mappings(
     let codex_root = codex_sessions_root();
     let antigravity_storage_root = google_agent_storage_root();
     let antigravity_roots = antigravity_brain_roots();
+    let grok_root = grok_sessions_root();
 
     // Collect every (session, agent-process) candidate first so we can
     // sort by process-start-time before matching. Newest agent runs get
@@ -509,6 +518,7 @@ fn scan_live_mappings(
                         AgentKind::Claude => claude_resume_id_from_process(proc),
                         AgentKind::Codex => codex_resume_id_from_process(proc),
                         AgentKind::Antigravity => None,
+                        AgentKind::Grok => grok_transcript_id_from_process(proc),
                     };
                     let codex_resume_requested = process_match.kind == AgentKind::Codex
                         && codex_resume_requested_from_process(proc);
@@ -555,6 +565,7 @@ fn scan_live_mappings(
     let mut claude_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     let mut codex_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     let mut antigravity_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    let mut grok_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     for c in candidates {
         let mut reserved = assigned.clone();
         if c.role == AgentProcessRole::Emit {
@@ -650,6 +661,35 @@ fn scan_live_mappings(
                         owner_cursor_id.as_deref(),
                         &reserved,
                         &mut antigravity_budget,
+                    )
+                }
+                AgentKind::Grok => {
+                    let sole_grok_in_cwd = grok_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
+                    let allow_rotation = sole_grok_in_cwd
+                        && !owner_rotation_quarantined.contains(&owner_rotation_scope(
+                            c.session_id,
+                            c.kind,
+                            &c.cwd,
+                        ));
+                    if let Some(id) = c.explicit_transcript_id.as_deref() {
+                        if let Some(candidate) = find_grok_jsonl_for_uuid_budgeted(
+                            grok_root.as_deref(),
+                            id,
+                            &assigned,
+                            &mut grok_budget,
+                        )? {
+                            return Ok(Some(candidate));
+                        }
+                    }
+                    find_recent_grok_jsonl_budgeted(
+                        &c.cwd,
+                        grok_root.as_deref(),
+                        recency_cutoff,
+                        c.start_time,
+                        now,
+                        allow_rotation,
+                        &reserved,
+                        &mut grok_budget,
                     )
                 }
             }
@@ -832,7 +872,7 @@ fn owner_rotation_scope(session_id: uuid::Uuid, kind: AgentKind, cwd: &Path) -> 
         session_id,
         kind,
         cwd: match kind {
-            AgentKind::Claude | AgentKind::Codex => Some(cwd.to_path_buf()),
+            AgentKind::Claude | AgentKind::Codex | AgentKind::Grok => Some(cwd.to_path_buf()),
             AgentKind::Antigravity => None,
         },
     }
@@ -856,6 +896,8 @@ fn agent_kind_for_basename(value: &str) -> Option<AgentKind> {
         || basename_matches(value, "antigravity-cli")
     {
         Some(AgentKind::Antigravity)
+    } else if basename_matches(value, "grok") {
+        Some(AgentKind::Grok)
     } else {
         None
     }
@@ -915,11 +957,12 @@ fn agent_process_node_from_parts(
     process_cwd: Option<&Path>,
 ) -> Option<AgentProcessNode> {
     let identity = agent_process_identity_from_parts(exe, name, args)?;
-    let cwd = if identity.kind == AgentKind::Codex {
-        codex_effective_cwd_from_args(args, process_cwd)
-            .or_else(|| process_cwd.map(Path::to_path_buf))
-    } else {
-        process_cwd.map(Path::to_path_buf)
+    let cwd = match identity.kind {
+        AgentKind::Codex => codex_effective_cwd_from_args(args, process_cwd)
+            .or_else(|| process_cwd.map(Path::to_path_buf)),
+        AgentKind::Grok => grok_effective_cwd_from_args(args, process_cwd)
+            .or_else(|| process_cwd.map(Path::to_path_buf)),
+        AgentKind::Claude | AgentKind::Antigravity => process_cwd.map(Path::to_path_buf),
     };
     Some(AgentProcessNode { identity, cwd })
 }
@@ -998,6 +1041,39 @@ fn codex_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) ->
     })
 }
 
+fn grok_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) -> Option<PathBuf> {
+    let mut index = args.iter().position(|arg| basename_matches(arg, "grok"))? + 1;
+    let mut requested_cwd = None;
+    while let Some(arg) = args.get(index).map(String::as_str) {
+        if arg == "--" || matches!(arg, "-p" | "--single") || arg.starts_with("--single=") {
+            break;
+        }
+        if arg == "--cwd" {
+            requested_cwd = Some(PathBuf::from(args.get(index + 1)?));
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--cwd=") {
+            if value.is_empty() {
+                return None;
+            }
+            requested_cwd = Some(PathBuf::from(value));
+        }
+        index += 1;
+    }
+
+    requested_cwd.map(|cwd| {
+        let effective = if cwd.is_absolute() {
+            cwd
+        } else if let Some(process_cwd) = process_cwd {
+            process_cwd.join(cwd)
+        } else {
+            cwd
+        };
+        effective.canonicalize().unwrap_or(effective)
+    })
+}
+
 fn codex_exec_option_end(args: &[String], index: usize) -> Option<usize> {
     let arg = args.get(index)?.as_str();
     if matches!(
@@ -1035,13 +1111,16 @@ fn same_logical_agent_invocation(parent: &AgentProcessNode, child: &AgentProcess
 
     match child.identity.kind {
         AgentKind::Antigravity => true,
-        AgentKind::Claude | AgentKind::Codex => parent.cwd.is_some() && parent.cwd == child.cwd,
+        AgentKind::Claude | AgentKind::Codex | AgentKind::Grok => {
+            parent.cwd.is_some() && parent.cwd == child.cwd
+        }
     }
 }
 
 fn logical_agent_process_counts(
     processes: &[AgentProcessObservation],
 ) -> (
+    std::collections::HashMap<PathBuf, u32>,
     std::collections::HashMap<PathBuf, u32>,
     std::collections::HashMap<PathBuf, u32>,
     std::collections::HashMap<PathBuf, u32>,
@@ -1053,6 +1132,7 @@ fn logical_agent_process_counts(
     let mut claude_cwd_counts = std::collections::HashMap::new();
     let mut codex_cwd_counts = std::collections::HashMap::new();
     let mut antigravity_cwd_counts = std::collections::HashMap::new();
+    let mut grok_cwd_counts = std::collections::HashMap::new();
 
     for process in processes {
         let belongs_to_parent = process
@@ -1073,11 +1153,22 @@ fn logical_agent_process_counts(
             (AgentKind::Antigravity, Some(cwd)) => {
                 *antigravity_cwd_counts.entry(cwd.clone()).or_default() += 1;
             }
-            (AgentKind::Claude | AgentKind::Codex | AgentKind::Antigravity, None) => {}
+            (AgentKind::Grok, Some(cwd)) => {
+                *grok_cwd_counts.entry(cwd.clone()).or_default() += 1;
+            }
+            (
+                AgentKind::Claude | AgentKind::Codex | AgentKind::Antigravity | AgentKind::Grok,
+                None,
+            ) => {}
         }
     }
 
-    (claude_cwd_counts, codex_cwd_counts, antigravity_cwd_counts)
+    (
+        claude_cwd_counts,
+        codex_cwd_counts,
+        antigravity_cwd_counts,
+        grok_cwd_counts,
+    )
 }
 
 fn codex_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
@@ -1105,6 +1196,46 @@ fn claude_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     claude_resume_id_from_args(&args)
+}
+
+fn grok_transcript_id_from_process(proc: &sysinfo::Process) -> Option<String> {
+    let args = proc
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    grok_transcript_id_from_args(&args)
+}
+
+fn grok_transcript_id_from_args(args: &[String]) -> Option<String> {
+    let start = args.iter().position(|arg| basename_matches(arg, "grok"))? + 1;
+    let option_args = args[start..]
+        .iter()
+        .take_while(|arg| {
+            !matches!(arg.as_str(), "--" | "-p" | "--single") && !arg.starts_with("--single=")
+        })
+        .collect::<Vec<_>>();
+    if option_args
+        .iter()
+        .any(|arg| arg.as_str() == "--fork-session")
+    {
+        return None;
+    }
+
+    option_args.iter().enumerate().find_map(|(index, arg)| {
+        let arg = arg.as_str();
+        let candidate = if matches!(arg, "--resume" | "-r" | "--session-id" | "-s") {
+            option_args.get(index + 1).map(|value| value.as_str())
+        } else {
+            arg.strip_prefix("--resume=")
+                .or_else(|| arg.strip_prefix("--session-id="))
+                .or_else(|| arg.strip_prefix("-r").filter(|value| !value.is_empty()))
+                .or_else(|| arg.strip_prefix("-s").filter(|value| !value.is_empty()))
+        };
+        candidate
+            .filter(|id| is_uuid_v4_shape(id))
+            .map(str::to_string)
+    })
 }
 
 fn claude_resume_id_from_args(args: &[String]) -> Option<String> {
@@ -1312,6 +1443,13 @@ fn codex_sessions_root() -> Option<PathBuf> {
         .ok()
         .map(PathBuf::from)
         .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".codex")))
+        .map(|p| p.join("sessions"))
+}
+
+fn grok_sessions_root() -> Option<PathBuf> {
+    std::env::var_os("GROK_HOME")
+        .map(PathBuf::from)
+        .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".grok")))
         .map(|p| p.join("sessions"))
 }
 
@@ -2288,6 +2426,270 @@ fn find_completed_antigravity_jsonl_budgeted(
     } else {
         Ok(None)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrokSessionSummary {
+    pub id: String,
+    pub cwd: PathBuf,
+    pub generated_title: Option<String>,
+    pub session_summary: Option<String>,
+    pub hidden: bool,
+    pub is_subagent: bool,
+}
+
+pub fn locate_grok_transcript(uuid: &str) -> Option<PathBuf> {
+    let root = grok_sessions_root()?;
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    locate_grok_transcript_in_budgeted(&root, uuid, &mut budget)
+        .ok()
+        .flatten()
+}
+
+pub fn read_grok_session_summary(transcript: &Path) -> Option<GrokSessionSummary> {
+    if transcript.file_name().and_then(|name| name.to_str()) != Some("updates.jsonl")
+        || safe_regular_file_metadata(transcript).is_none()
+    {
+        return None;
+    }
+    let session_dir = transcript.parent()?;
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    read_grok_session_summary_budgeted(session_dir, &mut budget)
+        .ok()
+        .flatten()
+}
+
+fn locate_grok_transcript_in_budgeted(
+    sessions_root: &Path,
+    uuid: &str,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<PathBuf>> {
+    if !is_uuid_v4_shape(uuid) {
+        return Ok(None);
+    }
+    let Some(cwd_buckets) = safe_read_dir(sessions_root)? else {
+        return Ok(None);
+    };
+    for raw_bucket in cwd_buckets {
+        budget.charge_directory_entry()?;
+        let bucket = complete_io(raw_bucket)?;
+        let Some(bucket_dir) = safe_directory_entry_path(&bucket)? else {
+            continue;
+        };
+        let session_dir = bucket_dir.join(uuid);
+        if !safe_is_directory(&session_dir) {
+            continue;
+        }
+        let updates = session_dir.join("updates.jsonl");
+        budget.charge_candidate()?;
+        if safe_regular_file_metadata(&updates).is_none() {
+            continue;
+        }
+        let Some(summary) = read_grok_session_summary_budgeted(&session_dir, budget)? else {
+            continue;
+        };
+        if summary.id == uuid && !summary.hidden && !summary.is_subagent {
+            return Ok(Some(updates));
+        }
+    }
+    Ok(None)
+}
+
+fn find_grok_jsonl_for_uuid_budgeted(
+    sessions_root: Option<&Path>,
+    uuid: &str,
+    assigned: &HashSet<PathBuf>,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
+    let Some(root) = sessions_root else {
+        return Ok(None);
+    };
+    let Some(path) = locate_grok_transcript_in_budgeted(root, uuid, budget)? else {
+        return Ok(None);
+    };
+    if assigned.contains(&path) {
+        return Ok(None);
+    }
+    Ok(Some((path, uuid.to_string())))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_recent_grok_jsonl_budgeted(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
+    let Some(root) = sessions_root else {
+        return Ok(None);
+    };
+    let mut candidates = Vec::new();
+    let Some(cwd_buckets) = safe_read_dir(root)? else {
+        return Ok(None);
+    };
+    for raw_bucket in cwd_buckets {
+        budget.charge_directory_entry()?;
+        let bucket = complete_io(raw_bucket)?;
+        let Some(bucket_dir) = safe_directory_entry_path(&bucket)? else {
+            continue;
+        };
+        let Some(session_entries) = safe_read_dir(&bucket_dir)? else {
+            continue;
+        };
+        for raw_session in session_entries {
+            budget.charge_directory_entry()?;
+            let session = complete_io(raw_session)?;
+            let Some(session_dir) = safe_directory_entry_path(&session)? else {
+                continue;
+            };
+            let updates = session_dir.join("updates.jsonl");
+            if assigned.contains(&updates) {
+                continue;
+            }
+            budget.charge_candidate()?;
+            let Some(meta) = safe_regular_file_metadata(&updates) else {
+                continue;
+            };
+            let Ok(mtime) = meta.modified() else {
+                continue;
+            };
+            if mtime < recency_cutoff || mtime < process_start {
+                continue;
+            }
+            let Some(summary) = read_grok_session_summary_budgeted(&session_dir, budget)? else {
+                continue;
+            };
+            if summary.cwd != cwd || summary.hidden || summary.is_subagent {
+                continue;
+            }
+            candidates.push(TranscriptCandidate {
+                path: updates,
+                birth: meta.created().unwrap_or(mtime),
+                mtime,
+                uuid: summary.id,
+            });
+        }
+    }
+    Ok(pick_anchor_or_rotate(
+        candidates,
+        process_start,
+        now,
+        allow_rotation,
+    ))
+}
+
+fn find_completed_grok_jsonl(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+) -> Option<(PathBuf, String)> {
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    find_recent_grok_jsonl_budgeted(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        SystemTime::now(),
+        false,
+        &HashSet::new(),
+        &mut budget,
+    )
+    .ok()
+    .flatten()
+}
+
+fn read_grok_session_summary_budgeted(
+    session_dir: &Path,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<GrokSessionSummary>> {
+    if !safe_is_directory(session_dir) {
+        return Ok(None);
+    }
+    let summary_path = session_dir.join("summary.json");
+    let Some(value) = read_bounded_json_value(&summary_path, budget)? else {
+        return Ok(None);
+    };
+    let Some(id) = value
+        .pointer("/info/id")
+        .or_else(|| value.get("id"))
+        .and_then(|id| id.as_str())
+        .filter(|id| is_uuid_v4_shape(id))
+    else {
+        return Ok(None);
+    };
+    if session_dir.file_name().and_then(|name| name.to_str()) != Some(id) {
+        return Ok(None);
+    }
+    let Some(cwd) = value
+        .pointer("/info/cwd")
+        .or_else(|| value.get("cwd"))
+        .and_then(|cwd| cwd.as_str())
+        .filter(|cwd| !cwd.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let session_kind = value
+        .get("session_kind")
+        .or_else(|| value.get("sessionKind"));
+    let session_kind_name = session_kind
+        .and_then(|kind| {
+            kind.as_str()
+                .or_else(|| kind.get("kind").and_then(|v| v.as_str()))
+        })
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let is_subagent = session_kind_name.contains("subagent")
+        || session_kind_name.contains("sub_agent")
+        || session_kind_name.contains("sub-agent");
+
+    Ok(Some(GrokSessionSummary {
+        id: id.to_string(),
+        cwd: PathBuf::from(cwd),
+        generated_title: value
+            .get("generated_title")
+            .or_else(|| value.get("generatedTitle"))
+            .and_then(|title| title.as_str())
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(str::to_string),
+        session_summary: value
+            .get("session_summary")
+            .or_else(|| value.get("sessionSummary"))
+            .and_then(|summary| summary.as_str())
+            .map(str::trim)
+            .filter(|summary| !summary.is_empty())
+            .map(str::to_string),
+        hidden: value.get("hidden").and_then(|hidden| hidden.as_bool()) == Some(true),
+        is_subagent,
+    }))
+}
+
+fn read_bounded_json_value(
+    path: &Path,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<serde_json::Value>> {
+    use std::io::Read;
+
+    let Some(meta) = safe_regular_file_metadata(path) else {
+        return Ok(None);
+    };
+    let max_bytes = budget.limits.head_bytes;
+    if max_bytes == 0 || meta.len() > max_bytes as u64 {
+        return Err(ProviderScanError::LimitExceeded);
+    }
+    budget.charge_head_open()?;
+    let mut file = complete_io(std::fs::File::open(path))?;
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    complete_io(file.read_to_end(&mut bytes))?;
+    if bytes.len() > max_bytes {
+        return Err(ProviderScanError::LimitExceeded);
+    }
+    Ok(serde_json::from_slice(&bytes).ok())
 }
 
 fn safe_antigravity_transcript_path(session_dir: &Path, transcript: &Path) -> bool {
@@ -3475,6 +3877,36 @@ mod tests {
     }
 
     #[test]
+    fn grok_transcript_id_from_args_handles_new_resume_and_fork_modes() {
+        let id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        for args in [
+            vec!["grok".to_string(), "--resume".to_string(), id.to_string()],
+            vec!["grok".to_string(), "-r".to_string(), id.to_string()],
+            vec![
+                "grok".to_string(),
+                "--session-id".to_string(),
+                id.to_string(),
+            ],
+            vec!["grok".to_string(), "-s".to_string(), id.to_string()],
+            vec!["grok".to_string(), format!("--resume={id}")],
+        ] {
+            assert_eq!(grok_transcript_id_from_args(&args).as_deref(), Some(id));
+        }
+
+        let fork = ["grok", "--resume", id, "--fork-session"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(grok_transcript_id_from_args(&fork), None);
+
+        let prompt = ["grok", "-p", "explain --resume", id]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(grok_transcript_id_from_args(&prompt), None);
+    }
+
+    #[test]
     fn session_owner_scope_stops_at_first_agent_boundary() {
         let root = Pid::from_u32(1);
         let wrapper = Pid::from_u32(2);
@@ -3643,7 +4075,7 @@ mod tests {
             observation(12, Some(10), node_node),
             observation(13, Some(12), runtime_node),
         ];
-        let (_, codex, _) = logical_agent_process_counts(&observations);
+        let (_, codex, _, _) = logical_agent_process_counts(&observations);
         assert_eq!(codex.get(Path::new("/other")), Some(&1));
         assert_eq!(codex.get(Path::new("/repo")), None);
     }
@@ -3693,7 +4125,7 @@ mod tests {
             observation(21, Some(20), launcher_node),
             observation(22, Some(21), nested_node),
         ];
-        let (_, codex, _) = logical_agent_process_counts(&observations);
+        let (_, codex, _, _) = logical_agent_process_counts(&observations);
         assert_eq!(codex.get(Path::new("/repo")), Some(&1));
         assert_eq!(codex.get(Path::new("/other")), Some(&1));
     }
@@ -3735,6 +4167,25 @@ mod tests {
             "/repo",
         );
         assert_eq!(resumed_prompt.cwd.as_deref(), Some(Path::new("/other")));
+    }
+
+    #[test]
+    fn grok_cwd_override_is_used_without_parsing_prompt_text() {
+        let node = process_node(
+            "/opt/grok",
+            "grok",
+            &["grok", "--cwd", "/other", "--model", "grok-code-fast-1"],
+            "/repo",
+        );
+        assert_eq!(node.cwd.as_deref(), Some(Path::new("/other")));
+
+        let prompt = process_node(
+            "/opt/grok",
+            "grok",
+            &["grok", "-p", "explain --cwd /not-the-cwd"],
+            "/repo",
+        );
+        assert_eq!(prompt.cwd.as_deref(), Some(Path::new("/repo")));
     }
 
     #[test]
@@ -3800,6 +4251,15 @@ mod tests {
                 vec!["agy"],
                 AgentProcessIdentity {
                     kind: AgentKind::Antigravity,
+                    shape: AgentProcessShape::Runtime,
+                },
+            ),
+            (
+                "/opt/grok",
+                "grok",
+                vec!["grok"],
+                AgentProcessIdentity {
+                    kind: AgentKind::Grok,
                     shape: AgentProcessShape::Runtime,
                 },
             ),
@@ -3939,7 +4399,7 @@ mod tests {
             observation(32, Some(30), runtime(AgentKind::Antigravity)),
         ];
 
-        let (claude, codex, antigravity) = logical_agent_process_counts(&processes);
+        let (claude, codex, antigravity, _) = logical_agent_process_counts(&processes);
 
         assert_eq!(codex.get(&cwd), Some(&3));
         assert_eq!(claude.get(&cwd), Some(&1));
@@ -3964,7 +4424,7 @@ mod tests {
             observation(32, None, agy_in(&cwd)),
         ];
 
-        let (_, _, antigravity) = logical_agent_process_counts(&processes);
+        let (_, _, antigravity, _) = logical_agent_process_counts(&processes);
 
         assert_eq!(antigravity.get(&cwd), Some(&2));
         assert_eq!(antigravity.get(&other_cwd), Some(&1));
@@ -4257,6 +4717,59 @@ mod tests {
             Some(transcript)
         );
         assert!(locate_antigravity_transcript_in(&[], "not-a-uuid").is_none());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn locates_grok_transcript_and_rejects_hidden_or_mismatched_summaries() {
+        use std::fs::{self, File};
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-grok-locate-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let session_dir = sessions.join("encoded-cwd").join(id);
+        fs::create_dir_all(&session_dir).unwrap();
+        let transcript = session_dir.join("updates.jsonl");
+        File::create(&transcript).unwrap();
+        fs::write(
+            session_dir.join("summary.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "info": { "id": id, "cwd": "/repo" },
+                "generated_title": "Grok support",
+                "hidden": false,
+                "session_kind": "main"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        assert_eq!(
+            locate_grok_transcript_in_budgeted(&sessions, id, &mut budget)
+                .unwrap()
+                .as_deref(),
+            Some(transcript.as_path())
+        );
+
+        fs::write(
+            session_dir.join("summary.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "info": { "id": id, "cwd": "/repo" },
+                "hidden": true,
+                "session_kind": "main"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        assert_eq!(
+            locate_grok_transcript_in_budgeted(&sessions, id, &mut budget).unwrap(),
+            None
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

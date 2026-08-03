@@ -34,6 +34,7 @@ const FORK_KEYS = {
         claude: "pane.menu.forkClaudeSession",
         codex: "pane.menu.forkCodexSession",
         antigravity: "pane.menu.forkAntigravitySession",
+        grok: "pane.menu.forkGrokSession",
       },
     },
     worktree: {
@@ -42,6 +43,7 @@ const FORK_KEYS = {
         claude: "pane.menu.forkClaudeInNewWorktree",
         codex: "pane.menu.forkCodexInNewWorktree",
         antigravity: "pane.menu.forkAntigravityInNewWorktree",
+        grok: "pane.menu.forkGrokInNewWorktree",
       },
     },
   },
@@ -52,6 +54,7 @@ const FORK_KEYS = {
         claude: "sidebar.actions.forkClaudeSession",
         codex: "sidebar.actions.forkCodexSession",
         antigravity: "sidebar.actions.forkAntigravitySession",
+        grok: "sidebar.actions.forkGrokSession",
       },
     },
     worktree: {
@@ -60,6 +63,7 @@ const FORK_KEYS = {
         claude: "sidebar.actions.forkClaudeInNewWorktree",
         codex: "sidebar.actions.forkCodexInNewWorktree",
         antigravity: "sidebar.actions.forkAntigravityInNewWorktree",
+        grok: "sidebar.actions.forkGrokInNewWorktree",
       },
     },
   },
@@ -81,6 +85,7 @@ const ATTACH_KEYS = {
   claude: "fileExplorer.menu.attachToClaude",
   codex: "fileExplorer.menu.attachToCodex",
   antigravity: "fileExplorer.menu.attachToAntigravity",
+  grok: "fileExplorer.menu.attachToGrok",
 } as const satisfies Record<SessionAgentProvider, TranslationKey>;
 
 export function createEmptySessionAgentDetection(): SessionAgentDetection {

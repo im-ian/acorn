@@ -9,6 +9,7 @@ The SVG files in this directory are vendored from Lobe Icons.
   - `antigravity.svg` from `icons/antigravity.svg`
   - `claude.svg` from `icons/claude.svg`
   - `codex.svg` from `icons/codex.svg`
+  - `grok.svg` from `icons/grok.svg`
 
 The upstream project license is included in `LICENSE`. The logos may also be
 subject to trademark rights held by their respective owners.

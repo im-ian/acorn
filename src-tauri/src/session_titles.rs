@@ -67,7 +67,7 @@ fn auto_title_enabled(session: &Session) -> bool {
 
 fn name_implies_agent_session(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    ["claude", "codex", "antigravity", "agy"]
+    ["claude", "codex", "antigravity", "agy", "grok"]
         .iter()
         .any(|needle| {
             lower

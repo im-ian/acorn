@@ -46,7 +46,7 @@ unset _acorn_zd_save _acorn_user_zd _acorn_zd_real _acorn_user_zd_real
 # runs. Mere presence is not enough for the agent-wrapper shims: a user
 # rc that prepends its own entries (`~/.local/bin`, nvm, homebrew — the
 # usual `export PATH="…:$PATH"` patterns) leaves the shim dir in PATH
-# but buried behind a dir that also ships `claude`/`codex`/`agy`, so the
+# but buried behind a dir that also ships `claude`/`codex`/`agy`/`grok`, so the
 # real binary wins the lookup and hook injection silently never happens.
 # Front placement is what makes the shim intercept. Idempotent — an
 # already-first entry is left alone, buried duplicates are collapsed.

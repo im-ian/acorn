@@ -271,7 +271,12 @@ export const tauriMockSource = `
       return Promise.resolve(chatState(args?.sessionId, null, []));
     }
     if (cmd === 'detect_session_agent') {
-      return Promise.resolve({ claude: null, codex: null, antigravity: null });
+      return Promise.resolve({
+        claude: null,
+        codex: null,
+        antigravity: null,
+        grok: null,
+      });
     }
     if (cmd === 'prepare_claude_fork') return Promise.resolve(undefined);
     if (cmd === 'read_session_todos') return Promise.resolve([]);

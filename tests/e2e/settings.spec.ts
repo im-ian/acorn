@@ -77,6 +77,35 @@ test.describe("settings modal", () => {
       .toBe(true);
   });
 
+  test("offers Grok Build as an agent provider and persists the selection", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Agents|에이전트)$/ }).click();
+
+    const grok = modal.getByRole("radio", { name: /Grok Build/ });
+    await expect(grok).toBeVisible();
+    await expect(
+      modal.getByText(
+        "grok --no-auto-update --output-format plain -p <prompt>",
+      ),
+    ).toBeVisible();
+
+    await grok.check();
+    await expect(grok).toBeChecked();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).agents?.selected : null;
+        }),
+      )
+      .toBe("grok");
+  });
+
   test("downloads, selects, and removes a catalog theme", async ({
     page,
     tauri,

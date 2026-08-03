@@ -25,7 +25,7 @@ AI는 강력하고 똑똑하지만, 결정과 책임은 결국 사람의 몫이�
 
 ## 개요
 
-Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Ollama / llm 등) 세션을 한 창에서 병렬로 다루기 위한 데스크톱 앱입니다. 네이티브 PTY와 채팅, 분할 Pane·Kanban·Canvas, 세션별 격리된 git worktree, 작업 요약과 진행 상태 표시를 하나의 워크스페이스에서 제공합니다.
+Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok Build / Ollama / llm 등) 세션을 한 창에서 병렬로 다루기 위한 데스크톱 앱입니다. 네이티브 PTY와 채팅, 분할 Pane·Kanban·Canvas, 세션별 격리된 git worktree, 작업 요약과 진행 상태 표시를 하나의 워크스페이스에서 제공합니다.
 
 ---
 
@@ -87,20 +87,20 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Ollam
 - URL 클릭, 줄 높이, 마지막 사용자 프롬프트 고정 등 동작 옵션
 
 ### 🤖 AI 에이전트 세션
-- 세션은 항상 `$SHELL`로 시작 — 그 안에서 원하는 AI CLI(`claude` / `codex` / `agy` / `ollama` / `llm` 등) 직접 실행
-- Claude / Codex / Antigravity 세션을 현재 Pane이나 새 worktree로 fork
+- 세션은 항상 `$SHELL`로 시작 — 그 안에서 원하는 AI CLI(`claude` / `codex` / `agy` / `grok` / `ollama` / `llm` 등) 직접 실행
+- Claude / Codex / Antigravity / Grok 세션을 현재 Pane이나 새 worktree로 fork
 - **에이전트 탭 제목 자동 생성** — 대화 내용에 맞춰 탭 제목 갱신
-- 사이드바 라이브 상태 — 유휴 / 입력 대기 / 작업 중 (Claude/Codex/Antigravity transcript + hook 기반)
+- 사이드바 라이브 상태 — 유휴 / 입력 대기 / 작업 중 (provider transcript 기반, 지원되는 CLI는 hook 병행)
 - 우측 패널 todo 리스트는 **Claude Code 전용** — transcript의 `TodoWrite` 이벤트 파싱
 
 ### 💬 네이티브 AI 채팅
-- 터미널 명령 없이 Claude / Codex / Antigravity와 대화하는 chat 세션
+- 터미널 명령 없이 Claude / Codex / Antigravity / Grok과 대화하는 chat 세션
 - 응답 스트리밍·중지, provider 전환, 파일 첨부, 메시지 복사
 - 사용자 메시지 수정, 응답 재생성, 이후 대화 가지 삭제
 - 원하는 메시지 시점에서 같은 worktree 또는 새 격리 worktree로 대화 fork
 
 ### 💾 에이전트 대화 영속화
-- `claude` / `codex` / `agy` 대화 UUID를 세션별로 추적해 포커스 시 이전 대화 resume 제안
+- `claude` / `codex` / `agy` / `grok` 대화 UUID를 세션별로 추적해 포커스 시 이전 대화 resume 제안
 - 우측 패널 **History** 탭에서 프로젝트별 transcript 히스토리 확인, 더블 클릭으로 새 터미널에서 resume
 
 ### 🛏️ Background sessions
@@ -124,7 +124,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Ollam
 ### 🔍 File Explorer + Code / Diff / Media 뷰어
 - 파일명·내용 검색 (정규식, 대소문자, include/exclude) + dotfile·gitignored 파일 표시 전환
 - 파일·폴더 이름 변경, 휴지통 이동, 상대·절대 경로 복사, Finder/기본 프로그램/외부 에디터로 열기
-- 파일을 Claude / Codex / Antigravity 대화에 첨부하고 탭 영역으로 드래그해 열기
+- 파일을 Claude / Codex / Antigravity / Grok 대화에 첨부하고 탭 영역으로 드래그해 열기
 - 파일 탐색기 또는 터미널의 파일 참조 클릭으로 코드 뷰어 진입
 - 신택스 하이라이팅, in-file 검색, markdown source/preview 전환
 - Diff 통합 / 분할 모드, 외부 에디터로 열기
@@ -162,7 +162,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Ollam
 - 언어 / UI 배율 / theme / 배경 이미지 / 기본 Pane·Kanban 보기
 - 터미널 폰트 fallback·프리셋, 크기·굵기·자간·줄 높이·안티앨리어싱, 상주 터미널 수
 - 단축키 직접 녹화·충돌 감지·개별/전체 초기화
-- AI 공급자 선택 (`claude` / `codex` / `antigravity` / `ollama` / `llm` / 커스텀), 외부 에디터 명령
+- AI 공급자 선택 (`claude` / `codex` / `antigravity` / `grok` / `ollama` / `llm` / 커스텀), 외부 에디터 명령
 - Background sessions 제어, 작업 중 절전 방지, 종료 경고, orphan worktree·캐시 정리
 - macOS 보호 폴더 권한 점검·재설정
 - 프로젝트별 PR 생성 설정 (사이드바 프로젝트 → Settings)

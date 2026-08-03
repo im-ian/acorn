@@ -13,8 +13,71 @@ const CLAUDE_NOTIFY_NAME: &str = "acorn-claude-notify";
 const CLAUDE_SETTINGS_NAME: &str = "acorn-claude-settings.json";
 const ANTIGRAVITY_WRAPPER_NAME: &str = "agy";
 const ANTIGRAVITY_NOTIFY_NAME: &str = "acorn-antigravity-notify";
+const GROK_WRAPPER_NAME: &str = "grok";
 const HOOK_ENDPOINT_NAME: &str = "agent-hook-endpoint";
 const HOOK_SPOOL_DIR_NAME: &str = "agent-hook-spool";
+
+// Grok status comes from its durable transcript rather than Acorn lifecycle
+// hooks. The wrapper still establishes an invocation boundary so a Claude,
+// Codex, or Antigravity process launched beneath Grok cannot inherit and claim
+// the parent PTY's one-shot hook channel.
+const GROK_WRAPPER_BODY: &str = r#"#!/bin/sh
+_acorn_wrapper_dir="${ACORN_AGENT_WRAPPER_DIR-}"
+if [ -z "$_acorn_wrapper_dir" ]; then
+  case "$0" in
+    */*) _acorn_wrapper_dir=${0%/*} ;;
+  esac
+fi
+
+_acorn_find_real_binary() {
+  _acorn_name="$1"
+  _acorn_old_ifs=$IFS
+  IFS=:
+  for _acorn_dir in $PATH; do
+    [ -n "$_acorn_dir" ] || continue
+    _acorn_dir=${_acorn_dir%/}
+    case "$_acorn_dir" in
+      "$_acorn_wrapper_dir") continue ;;
+    esac
+    if [ -x "$_acorn_dir/$_acorn_name" ] && [ ! -d "$_acorn_dir/$_acorn_name" ]; then
+      IFS=$_acorn_old_ifs
+      printf '%s\n' "$_acorn_dir/$_acorn_name"
+      return 0
+    fi
+  done
+  IFS=$_acorn_old_ifs
+  return 1
+}
+
+REAL_BIN=$(_acorn_find_real_binary grok)
+if [ -z "$REAL_BIN" ]; then
+  echo "Acorn: grok not found in PATH. Install it and ensure it is available in your shell PATH." >&2
+  exit 127
+fi
+
+if [ "${ACORN_AGENT_INVOCATION_ROOT-}" = "1" ]; then
+  unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_INVOCATION_TOKEN ACORN_AGENT_INVOCATION_DEPTH
+  if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+    _acorn_invocation_ts="$(date +%s 2>/dev/null || echo 0)"
+    export ACORN_AGENT_INVOCATION_TOKEN="${ACORN_AGENT_HOOK_SESSION_ID}:$$:${_acorn_invocation_ts}"
+    export ACORN_AGENT_INVOCATION_DEPTH=1
+  fi
+elif [ -n "${ACORN_AGENT_INVOCATION_TOKEN-}" ]; then
+  _acorn_invocation_depth="${ACORN_AGENT_INVOCATION_DEPTH-1}"
+  case "$_acorn_invocation_depth" in
+    ''|*[!0-9]*) _acorn_invocation_depth=1 ;;
+  esac
+  export ACORN_AGENT_INVOCATION_DEPTH=$((_acorn_invocation_depth + 1))
+elif [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ]; then
+  unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_INVOCATION_TOKEN ACORN_AGENT_INVOCATION_DEPTH
+fi
+
+# Grok does not receive Acorn's provider hook configuration. Keep only the
+# invocation token/depth as a nesting guard for provider wrappers below it.
+unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID ACORN_AGENT_HOOK_URL ACORN_AGENT_HOOK_TOKEN ACORN_AGENT_HOOK_PROVIDER
+unset CODEX_TUI_RECORD_SESSION CODEX_TUI_SESSION_LOG_PATH ACORN_CODEX_NATIVE_HOOKS_ENABLED
+exec "$REAL_BIN" "$@"
+"#;
 
 const CODEX_WRAPPER_BODY: &str = r#"#!/bin/sh
 _acorn_wrapper_dir="${ACORN_AGENT_WRAPPER_DIR-}"
@@ -966,6 +1029,7 @@ fn ensure_agent_wrapper_dir_at(base: &Path) -> io::Result<PathBuf> {
         ANTIGRAVITY_WRAPPER_BODY,
     )?;
     write_executable(&dir.join(ANTIGRAVITY_NOTIFY_NAME), ANTIGRAVITY_NOTIFY_BODY)?;
+    write_executable(&dir.join(GROK_WRAPPER_NAME), GROK_WRAPPER_BODY)?;
     write_claude_settings(&dir)?;
     Ok(dir)
 }
@@ -2595,6 +2659,7 @@ done
             CODEX_WRAPPER_NAME,
             CLAUDE_WRAPPER_NAME,
             ANTIGRAVITY_WRAPPER_NAME,
+            GROK_WRAPPER_NAME,
         ] {
             let output = run_hooked_wrapper_for_invocation_ownership(
                 provider,
@@ -2637,6 +2702,7 @@ done
             CODEX_WRAPPER_NAME,
             CLAUDE_WRAPPER_NAME,
             ANTIGRAVITY_WRAPPER_NAME,
+            GROK_WRAPPER_NAME,
         ] {
             let output = run_hooked_wrapper_for_invocation_ownership(
                 provider,
@@ -2673,6 +2739,7 @@ done
             CODEX_WRAPPER_NAME,
             CLAUDE_WRAPPER_NAME,
             ANTIGRAVITY_WRAPPER_NAME,
+            GROK_WRAPPER_NAME,
         ] {
             let output = run_hooked_wrapper_for_invocation_ownership(
                 provider,
@@ -2684,10 +2751,14 @@ done
                 String::from_utf8_lossy(&output.stderr)
             );
             let stdout = String::from_utf8_lossy(&output.stdout);
-            assert!(
-                stdout.contains("hook_session=session-1\n"),
-                "{provider}: {stdout}"
-            );
+            if provider == GROK_WRAPPER_NAME {
+                assert!(stdout.contains("hook_session=\n"), "{provider}: {stdout}");
+            } else {
+                assert!(
+                    stdout.contains("hook_session=session-1\n"),
+                    "{provider}: {stdout}"
+                );
+            }
             assert!(
                 stdout.contains("invocation_depth=1\n"),
                 "{provider}: {stdout}"
@@ -2699,7 +2770,7 @@ done
             assert!(
                 stdout.contains("arg=--enable\n")
                     || stdout.contains("arg=--settings\n")
-                    || provider == ANTIGRAVITY_WRAPPER_NAME,
+                    || matches!(provider, ANTIGRAVITY_WRAPPER_NAME | GROK_WRAPPER_NAME),
                 "fresh {provider} root did not install its Acorn integration: {stdout}",
             );
         }
@@ -2712,6 +2783,7 @@ done
             CODEX_WRAPPER_NAME,
             CLAUDE_WRAPPER_NAME,
             ANTIGRAVITY_WRAPPER_NAME,
+            GROK_WRAPPER_NAME,
         ] {
             let output = run_hooked_wrapper_for_invocation_ownership(
                 provider,
@@ -2998,7 +3070,7 @@ printf '{}\n' >> "$CODEX_TUI_SESSION_LOG_PATH"
         let real_dir = base.path().join("real-bin");
         fs::create_dir_all(&real_dir).unwrap();
 
-        for name in ["claude", "codex", "agy"] {
+        for name in ["claude", "codex", "agy", "grok"] {
             write_executable(
                 &real_dir.join(name),
                 &format!("#!/bin/sh\nprintf 'real-{name}:%s\\n' \"$1\"\n"),
@@ -3027,7 +3099,7 @@ printf '{}\n' >> "$CODEX_TUI_SESSION_LOG_PATH"
         let real_dir = base.path().join("real-bin");
         fs::create_dir_all(&real_dir).unwrap();
 
-        for name in ["claude", "codex", "agy"] {
+        for name in ["claude", "codex", "agy", "grok"] {
             write_executable(
                 &real_dir.join(name),
                 &format!("#!/bin/sh\nprintf 'real-{name}:%s\\n' \"$1\"\n"),
@@ -3056,6 +3128,7 @@ printf '{}\n' >> "$CODEX_TUI_SESSION_LOG_PATH"
             "codex",
             "claude",
             "agy",
+            "grok",
             "acorn-codex-notify",
             "acorn-claude-notify",
             "acorn-antigravity-notify",
@@ -3114,6 +3187,21 @@ printf '{}\n' >> "$CODEX_TUI_SESSION_LOG_PATH"
             )),
             "settings missing absolute notify command: {settings}"
         );
+    }
+
+    #[test]
+    fn writes_grok_invocation_boundary_without_hook_injection() {
+        let base = ScratchDir::new("grok");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        let wrapper = fs::read_to_string(dir.join(GROK_WRAPPER_NAME)).unwrap();
+        assert!(wrapper.contains("_acorn_find_real_binary grok"));
+        assert!(wrapper.contains("ACORN_AGENT_INVOCATION_TOKEN"));
+        assert!(wrapper.contains("unset ACORN_AGENT_INVOCATION_ROOT ACORN_AGENT_HOOK_SESSION_ID"));
+        assert!(!wrapper.contains("acorn-claude-settings.json"));
+        assert!(!wrapper.contains("acorn-codex-notify"));
+        assert!(!wrapper.contains("acorn-antigravity-notify"));
+        assert!(wrapper.contains("exec \"$REAL_BIN\" \"$@\""));
     }
 
     #[test]

@@ -301,6 +301,7 @@ fn agent_kind_to_str(k: AgentKind) -> String {
         AgentKind::OpenInterpreter => "open-interpreter".into(),
         AgentKind::Codex => "codex".into(),
         AgentKind::Antigravity => "antigravity".into(),
+        AgentKind::Grok => "grok".into(),
         AgentKind::Unknown => "unknown".into(),
     }
 }

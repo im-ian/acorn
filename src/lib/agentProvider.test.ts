@@ -21,12 +21,18 @@ import {
 } from "./agentProvider";
 
 describe("agent provider registry", () => {
-  it("registers claude, codex, and antigravity in display order", () => {
-    expect(AGENT_PROVIDER_ORDER).toEqual(["claude", "codex", "antigravity"]);
+  it("registers first-class agents in display order", () => {
+    expect(AGENT_PROVIDER_ORDER).toEqual([
+      "claude",
+      "codex",
+      "antigravity",
+      "grok",
+    ]);
     expect(Object.keys(AGENT_PROVIDER_REGISTRY)).toEqual([
       "claude",
       "codex",
       "antigravity",
+      "grok",
     ]);
   });
 
@@ -77,6 +83,25 @@ describe("agent provider registry", () => {
       "status",
       "hooks",
     ]);
+
+    expect(getAgentProviderDefinition("grok")).toMatchObject({
+      id: "grok",
+      label: "Grok",
+      icon: { kind: "mask", alt: "Grok" },
+      hooks: { supportsHooks: false },
+      session: {
+        resumeCommandPrefix: "grok --resume",
+        forkCommandPrefix: "grok --resume",
+        forkCommandSuffix: "--fork-session",
+        markerFile: "grok.id",
+      },
+    });
+    expect(getAgentProviderDefinition("grok").capabilities).toEqual([
+      "history",
+      "resume",
+      "fork",
+      "status",
+    ]);
   });
 
   it("builds session commands from registry metadata", () => {
@@ -98,6 +123,12 @@ describe("agent provider registry", () => {
     expect(buildAgentForkCommand("antigravity", "session-6")).toBe(
       'agy --conversation session-6 --prompt-interactive "/fork"',
     );
+    expect(buildAgentResumeCommand("grok", "session-7")).toBe(
+      "grok --resume session-7",
+    );
+    expect(buildAgentForkCommand("grok", "session-8")).toBe(
+      "grok --resume session-8 --fork-session",
+    );
   });
 
   it("exposes capability and fork-prep decisions through registry helpers", () => {
@@ -110,6 +141,8 @@ describe("agent provider registry", () => {
     expect(providerRequiresForkTranscriptPrep("claude")).toBe(true);
     expect(providerRequiresForkTranscriptPrep("codex")).toBe(false);
     expect(providerRequiresForkTranscriptPrep("antigravity")).toBe(false);
+    expect(providerSupportsCapability("grok", "status")).toBe(true);
+    expect(providerRequiresForkTranscriptPrep("grok")).toBe(false);
   });
 
   it("exposes hook env support through registry metadata", () => {
@@ -119,6 +152,8 @@ describe("agent provider registry", () => {
     expect(getAgentHookProviderEnvValue("claude")).toBe("claude");
     expect(getAgentHookProviderEnvValue("codex")).toBe("codex");
     expect(getAgentHookProviderEnvValue("antigravity")).toBe("antigravity");
+    expect(providerSupportsHooks("grok")).toBe(false);
+    expect(getAgentHookProviderEnvValue("grok")).toBeNull();
   });
 
   it("centralizes per-provider behavior flags", () => {
@@ -148,14 +183,23 @@ describe("agent provider registry", () => {
       supportsWorktreeAdoption: false,
       brandToneClassName: "bg-[#19a974]/15 text-[#22b47e]",
     });
+    expect(getAgentProviderDefinition("grok")).toMatchObject({
+      agentOptionLabel: "Grok Build",
+      oneshotHint: "grok --no-auto-update --output-format plain -p <prompt>",
+      imagePasteFallback: false,
+      mentionPrefix: "@",
+      supportsWorktreeAdoption: false,
+    });
     expect(providerSupportsTokenUsage("claude")).toBe(true);
     expect(providerSupportsTokenUsage("codex")).toBe(true);
     expect(providerSupportsTokenUsage("antigravity")).toBe(false);
+    expect(providerSupportsTokenUsage("grok")).toBe(false);
     expect(AGENT_TOKEN_PROVIDER_ORDER).toEqual(["claude", "codex"]);
     expect(providerSupportsImagePasteFallback("claude")).toBe(true);
     expect(providerSupportsImagePasteFallback("antigravity")).toBe(false);
     expect(getAgentMentionPrefix("claude")).toBe("@");
     expect(getAgentMentionPrefix("codex")).toBe("");
+    expect(getAgentMentionPrefix("grok")).toBe("@");
     expect(providerSupportsWorktreeAdoption("claude")).toBe(true);
     expect(providerSupportsWorktreeAdoption("codex")).toBe(false);
   });
@@ -185,6 +229,7 @@ describe("agent provider helpers", () => {
     expect(inferAgentProvider("resume codex session")).toBe("codex");
     expect(inferAgentProvider("Antigravity task")).toBe("antigravity");
     expect(inferAgentProvider("agy task")).toBe("antigravity");
+    expect(inferAgentProvider("Grok Build task")).toBe("grok");
     expect(inferAgentProvider("plain shell")).toBeNull();
   });
 

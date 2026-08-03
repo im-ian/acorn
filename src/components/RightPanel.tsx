@@ -1578,6 +1578,7 @@ function AgentHistoryTab({
           <option value="antigravity">
             {rt(t, "rightPanel.history.antigravity")}
           </option>
+          <option value="grok">{rt(t, "rightPanel.history.grok")}</option>
         </Select>
         <RefreshButton
           onClick={() => void fetchHistory({ force: true })}

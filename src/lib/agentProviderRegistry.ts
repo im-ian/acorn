@@ -1,6 +1,7 @@
 import antigravityIconUrl from "../assets/vendor/lobe-icons/antigravity.svg";
 import claudeIconUrl from "../assets/vendor/lobe-icons/claude.svg";
 import codexIconUrl from "../assets/vendor/lobe-icons/codex.svg";
+import grokIconUrl from "../assets/vendor/lobe-icons/grok.svg";
 import type {
   AgentProviderDefinition,
   AgentTokenProvider,
@@ -100,6 +101,35 @@ export const AGENT_PROVIDER_REGISTRY = {
     supportsWorktreeAdoption: false,
     brandToneClassName: "bg-[#19a974]/15 text-[#22b47e]",
     inferNamePattern: /\b(antigravity|agy)\b/i,
+  },
+  grok: {
+    id: "grok",
+    label: "Grok",
+    agentOptionLabel: "Grok Build",
+    oneshotHint: "grok --no-auto-update --output-format plain -p <prompt>",
+    icon: {
+      kind: "mask",
+      url: grokIconUrl,
+      alt: "Grok",
+    },
+    capabilities: ["history", "resume", "fork", "status"],
+    hooks: {
+      supportsHooks: false,
+    },
+    session: {
+      supportsSessionResume: true,
+      markerFile: "grok.id",
+      acknowledgedMarkerFile: "grok.id.acknowledged",
+      resumeCommandPrefix: "grok --resume",
+      forkCommandPrefix: "grok --resume",
+      forkCommandSuffix: "--fork-session",
+      requiresForkTranscriptPrep: false,
+    },
+    imagePasteFallback: false,
+    mentionPrefix: "@",
+    supportsWorktreeAdoption: false,
+    brandToneClassName: "bg-white/10 text-zinc-300",
+    inferNamePattern: /\bgrok\b/i,
   },
 } as const satisfies AgentProviderRegistry;
 
