@@ -539,6 +539,7 @@ fn chat_provider_label(ai: &crate::ai::AiExecutionRequest) -> &'static str {
         crate::ai::AiProvider::Claude => "claude",
         crate::ai::AiProvider::Antigravity => "antigravity",
         crate::ai::AiProvider::Codex => "codex",
+        crate::ai::AiProvider::Grok => "grok",
         crate::ai::AiProvider::Ollama => "ollama",
         crate::ai::AiProvider::Llm => "llm",
         crate::ai::AiProvider::Custom => "custom",
@@ -599,7 +600,9 @@ fn backfill_missing_assistant_provider_metadata(chat_state: &mut persistence::Ch
 
 fn chat_model_label(ai: &crate::ai::AiExecutionRequest) -> Option<String> {
     match ai.provider {
-        crate::ai::AiProvider::Claude | crate::ai::AiProvider::Codex => ai.model.clone(),
+        crate::ai::AiProvider::Claude
+        | crate::ai::AiProvider::Codex
+        | crate::ai::AiProvider::Grok => ai.model.clone(),
         crate::ai::AiProvider::Ollama => ai.ollama_model.clone(),
         crate::ai::AiProvider::Llm => ai.llm_model.clone(),
         _ => None,
@@ -2237,6 +2240,7 @@ impl ChatProviderAdapter for CliChatProviderAdapter {
                 crate::ai::AiProvider::Claude
                     | crate::ai::AiProvider::Codex
                     | crate::ai::AiProvider::Antigravity
+                    | crate::ai::AiProvider::Grok
             ),
             streaming: true,
             attachments: false,
@@ -2445,6 +2449,40 @@ fn resolve_chat_cli_invocation(
                     output_mode: ChatCliOutputMode::Text,
                 })
             }
+        }
+        crate::ai::AiProvider::Grok => {
+            let mut args = vec![
+                "--no-auto-update".to_string(),
+                "--output-format".to_string(),
+                "plain".to_string(),
+            ];
+            crate::ai::append_native_model_and_effort_args(ai, &mut args)?;
+            let thread_id = match cursor {
+                Some(cursor) => {
+                    args.push("--resume".to_string());
+                    args.push(cursor.clone());
+                    cursor
+                }
+                None => {
+                    let thread_id = Uuid::new_v4().to_string();
+                    args.push("--session-id".to_string());
+                    args.push(thread_id.clone());
+                    thread_id
+                }
+            };
+            args.push("-p".to_string());
+            Ok(ChatCliInvocation {
+                cli: crate::ai::ResolvedAiCommand {
+                    command: "grok",
+                    args,
+                    prompt_transport: crate::ai::PromptTransport::Argument,
+                },
+                prompt,
+                native_thread_id: Some(thread_id.clone()),
+                resume_token: Some(thread_id),
+                transcript_discovery: None,
+                output_mode: ChatCliOutputMode::Text,
+            })
         }
         _ => {
             let resolved = ai.resolve()?;
@@ -4537,6 +4575,7 @@ fn goal_ai_provider(provider: SessionAgentProvider) -> crate::ai::AiProvider {
         SessionAgentProvider::Claude => crate::ai::AiProvider::Claude,
         SessionAgentProvider::Codex => crate::ai::AiProvider::Codex,
         SessionAgentProvider::Antigravity => crate::ai::AiProvider::Antigravity,
+        SessionAgentProvider::Grok => crate::ai::AiProvider::Grok,
     }
 }
 
@@ -6331,6 +6370,7 @@ fn empty_agent_detection() -> AgentDetection {
         (AgentKind::Claude, None),
         (AgentKind::Codex, None),
         (AgentKind::Antigravity, None),
+        (AgentKind::Grok, None),
     ]
     .into_iter()
     .collect()
@@ -7856,6 +7896,9 @@ fn poll_defers_to_hook(
     let Some(live_agent_kind) = live_agent_kind else {
         return false;
     };
+    if !live_agent_kind.supports_hooks() {
+        return false;
+    }
     hook_provider.map_or(true, |provider| provider == live_agent_kind)
 }
 
@@ -8187,7 +8230,7 @@ fn detect_session_statuses_blocking(
                     )
                 });
             // Resolve the live transcript via the persister's resume markers
-            // first (covers claude/codex/antigravity run inside a shell session — JSONL
+            // first (covers claude/codex/antigravity/grok run inside a shell session — JSONL
             // is named after the agent's own UUID, not Acorn's). When the PTY
             // tree already exposes a live provider, only trust that provider's
             // marker. A nested peer agent from another provider can update its
@@ -8742,6 +8785,8 @@ fn live_agent_in_descendants(
             || process_basename_matches(proc, "antigravity-cli")
         {
             AgentKind::Antigravity
+        } else if process_basename_matches(proc, "grok") {
+            AgentKind::Grok
         } else {
             return None;
         };
@@ -9672,6 +9717,7 @@ fn agent_running_basenames(kind: AgentKind) -> &'static [&'static str] {
         AgentKind::Claude => &["claude"],
         AgentKind::Codex => &["codex"],
         AgentKind::Antigravity => &["agy", "antigravity", "antigravity-cli"],
+        AgentKind::Grok => &["grok"],
     }
 }
 
@@ -10237,6 +10283,20 @@ mod tests {
             true,
             None,
             Some(super::AgentKind::Antigravity)
+        ));
+    }
+
+    #[test]
+    fn poll_does_not_defer_for_a_provider_without_hooks() {
+        assert!(!poll_defers_to_hook(
+            true,
+            None,
+            Some(super::AgentKind::Grok)
+        ));
+        assert!(!poll_defers_to_hook(
+            true,
+            Some(super::AgentKind::Grok),
+            Some(super::AgentKind::Grok)
         ));
     }
 
@@ -11709,6 +11769,7 @@ mod tests {
             crate::ai::AiProvider::Claude,
             crate::ai::AiProvider::Codex,
             crate::ai::AiProvider::Antigravity,
+            crate::ai::AiProvider::Grok,
         ] {
             let adapter = super::CliChatProviderAdapter {
                 ai: crate::ai::AiExecutionRequest {
@@ -12034,6 +12095,107 @@ mod tests {
             crate::ai::PromptTransport::Argument
         );
         assert_eq!(invocation.prompt, "continue antigravity");
+    }
+
+    #[test]
+    fn chat_cli_invocation_seeds_a_new_grok_session() {
+        let input = super::ChatProviderInput {
+            thread: None,
+            message: chat_message(
+                "current-user",
+                crate::persistence::ChatRole::User,
+                "run grok",
+            ),
+            context: None,
+            model: None,
+        };
+
+        let invocation = super::resolve_chat_cli_invocation(
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Grok,
+                model: None,
+                effort: None,
+                ollama_model: None,
+                llm_model: None,
+            },
+            &input,
+        )
+        .unwrap();
+
+        assert_eq!(invocation.cli.command, "grok");
+        assert_eq!(
+            invocation.cli.args[0..4],
+            [
+                "--no-auto-update",
+                "--output-format",
+                "plain",
+                "--session-id"
+            ]
+        );
+        let seeded_id = invocation.cli.args[4].as_str();
+        Uuid::parse_str(seeded_id).expect("seeded Grok id should be a UUID");
+        assert_eq!(invocation.cli.args[5], "-p");
+        assert_eq!(invocation.native_thread_id.as_deref(), Some(seeded_id));
+        assert_eq!(invocation.resume_token.as_deref(), Some(seeded_id));
+        assert_eq!(invocation.prompt, "run grok");
+        assert_eq!(
+            invocation.cli.prompt_transport,
+            crate::ai::PromptTransport::Argument
+        );
+        assert_eq!(invocation.output_mode, super::ChatCliOutputMode::Text);
+    }
+
+    #[test]
+    fn chat_cli_invocation_resumes_grok_with_prompt_argument_last() {
+        let id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let input = super::ChatProviderInput {
+            thread: Some(crate::persistence::ProviderThread {
+                session_id: Uuid::new_v4().to_string(),
+                provider: "grok".to_string(),
+                model: Some("grok-code-fast-1".to_string()),
+                native_thread_id: Some(id.to_string()),
+                resume_token: Some(id.to_string()),
+                last_response_id: None,
+                updated_at: chrono::Utc::now(),
+            }),
+            message: chat_message(
+                "current-user",
+                crate::persistence::ChatRole::User,
+                "continue grok",
+            ),
+            context: None,
+            model: Some("grok-code-fast-1".to_string()),
+        };
+
+        let invocation = super::resolve_chat_cli_invocation(
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Grok,
+                model: Some("grok-code-fast-1".to_string()),
+                effort: Some("high".to_string()),
+                ollama_model: None,
+                llm_model: None,
+            },
+            &input,
+        )
+        .unwrap();
+
+        assert_eq!(
+            invocation.cli.args,
+            vec![
+                "--no-auto-update",
+                "--output-format",
+                "plain",
+                "-m",
+                "grok-code-fast-1",
+                "--effort",
+                "high",
+                "--resume",
+                id,
+                "-p"
+            ]
+        );
+        assert_eq!(invocation.prompt, "continue grok");
+        assert_eq!(invocation.native_thread_id.as_deref(), Some(id));
     }
 
     #[test]

@@ -477,11 +477,11 @@ pub struct Session {
     pub hook_active: bool,
     /// Provider whose lifecycle hooks own the session status. Kept with
     /// `hook_active` so one provider's hook state does not mask a different
-    /// Claude/Codex/Antigravity run in the same terminal.
+    /// Claude/Codex/Antigravity/Grok run in the same terminal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook_provider: Option<SessionAgentProvider>,
     /// Derived from status polling. This reflects the currently live
-    /// Claude/Codex/Antigravity process under the session PTY and is not
+    /// Claude/Codex/Antigravity/Grok process under the session PTY and is not
     /// persisted in sessions.json.
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub agent_provider: Option<SessionAgentProvider>,
@@ -2366,6 +2366,7 @@ mod tests {
         assert!(SessionAgentProvider::Claude.supports_hooks());
         assert!(SessionAgentProvider::Codex.supports_hooks());
         assert!(SessionAgentProvider::Antigravity.supports_hooks());
+        assert!(!SessionAgentProvider::Grok.supports_hooks());
         assert_eq!(
             serde_json::to_string(&SessionAgentProvider::Claude).unwrap(),
             "\"claude\""
@@ -2377,6 +2378,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&SessionAgentProvider::Antigravity).unwrap(),
             "\"antigravity\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SessionAgentProvider::Grok).unwrap(),
+            "\"grok\""
         );
         assert_eq!(
             SessionAgentProvider::Claude.hook_provider_env_value(),

@@ -32,6 +32,7 @@ const STORAGE_KEY = "acorn:settings:v1";
 export type AgentProvider =
   | "claude"
   | "antigravity"
+  | "grok"
   | "ollama"
   | "llm"
   | "codex";

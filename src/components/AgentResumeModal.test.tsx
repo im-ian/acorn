@@ -127,6 +127,17 @@ describe("AgentResumeModal", () => {
     expect(mocks.acknowledgeAgentResume).not.toHaveBeenCalled();
   });
 
+  it("Resume on a Grok candidate dispatches `grok --resume <uuid>` to the PTY without ack", () => {
+    const onDismiss = render("grok", CANDIDATE);
+    clickButton("Resume");
+    expect(mocks.ptyWrite).toHaveBeenCalledWith(
+      SESSION_ID,
+      `grok --resume ${CANDIDATE.uuid}\r`,
+    );
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(mocks.acknowledgeAgentResume).not.toHaveBeenCalled();
+  });
+
   it("Copy ID writes the UUID to the clipboard and toasts", async () => {
     const onDismiss = render("claude", CANDIDATE);
     clickButton("Copy ID");

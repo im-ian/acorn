@@ -2444,6 +2444,64 @@ describe("ChatPane", () => {
     expect(container.textContent).toContain("hi from antigravity");
   });
 
+  it("can send a chat message through Grok", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
+    mocks.sendChatMessage.mockResolvedValueOnce(
+      chatState(
+        "s1",
+        [
+          {
+            id: "u1",
+            role: "user",
+            content: "hello grok",
+            created_at: "2026-01-01T00:00:00Z",
+            status: "complete",
+            metadata: null,
+          },
+          {
+            id: "a1",
+            role: "assistant",
+            content: "hi from grok",
+            created_at: "2026-01-01T00:00:01Z",
+            status: "complete",
+            metadata: { provider: "grok" },
+          },
+        ],
+        "grok",
+      ),
+    );
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Chat message"]',
+    );
+    const form = container.querySelector("form");
+
+    await chooseSelectOption("Chat provider", "Grok");
+    await act(async () => {
+      changeTextareaValue(textarea!, "hello grok");
+    });
+    await settle();
+
+    await act(async () => {
+      form!.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await settle();
+
+    expect(mocks.sendChatMessage).toHaveBeenCalledWith(
+      "s1",
+      expect.objectContaining({ provider: "grok" }),
+      "hello grok",
+    );
+    expect(container.textContent).toContain("hi from grok");
+  });
+
   it("shows normalized agent activity instead of the generic running label", async () => {
     const loaded = chatState(
       "s1",

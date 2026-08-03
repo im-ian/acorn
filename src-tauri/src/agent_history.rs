@@ -26,6 +26,7 @@ const CODEX_SCAN_MAX_DIR_DEPTH: usize = 3;
 const CODEX_MAX_ANCESTOR_DEPTH: usize = 16;
 const CLAUDE_SCAN_MAX_DIR_DEPTH: usize = 1;
 const ANTIGRAVITY_SCAN_MAX_DIR_DEPTH: usize = 3;
+const GROK_SCAN_MAX_DIR_DEPTH: usize = 2;
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
 const READ_HEAD_INITIAL_BYTES: u64 = 256 * 1024;
@@ -66,6 +67,7 @@ pub enum AgentHistoryProvider {
     Claude,
     Codex,
     Antigravity,
+    Grok,
 }
 
 impl From<AgentKind> for AgentHistoryProvider {
@@ -74,6 +76,7 @@ impl From<AgentKind> for AgentHistoryProvider {
             AgentKind::Claude => Self::Claude,
             AgentKind::Codex => Self::Codex,
             AgentKind::Antigravity => Self::Antigravity,
+            AgentKind::Grok => Self::Grok,
         }
     }
 }
@@ -84,6 +87,7 @@ impl AgentHistoryProvider {
             Self::Claude => AgentKind::Claude,
             Self::Codex => AgentKind::Codex,
             Self::Antigravity => AgentKind::Antigravity,
+            Self::Grok => AgentKind::Grok,
         }
     }
 }
@@ -180,6 +184,7 @@ pub fn list_agent_history(
     items.extend(scan_codex(scope, limit));
     items.extend(scan_claude(scope, limit));
     items.extend(scan_antigravity(scope, limit));
+    items.extend(scan_grok(scope, limit));
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items.truncate(limit);
     Ok(items)
@@ -214,6 +219,7 @@ pub fn agent_transcript_summary_at_path(
         AgentHistoryProvider::Codex => parse_codex_file(&path, scope),
         AgentHistoryProvider::Claude => parse_claude_file(&path, scope),
         AgentHistoryProvider::Antigravity => parse_antigravity_file(&path, scope),
+        AgentHistoryProvider::Grok => parse_grok_file(&path, scope),
     };
     Ok(item
         .filter(|item| item.id == id)
@@ -238,6 +244,7 @@ pub fn list_unscoped_agent_history(
     items.extend(scan_codex(scope, limit));
     items.extend(scan_claude(scope, limit));
     items.extend(scan_antigravity(scope, limit));
+    items.extend(scan_grok(scope, limit));
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items.truncate(limit);
     Ok(items)
@@ -250,7 +257,17 @@ pub fn trash_agent_history_transcript(
 ) -> AppResult<()> {
     let path = canonical_agent_transcript_path(transcript_path)?;
     validate_agent_transcript_identity(&provider, &id, &path)?;
-    move_to_trash(&path)?;
+    let trash_target = if provider == AgentHistoryProvider::Grok {
+        path.parent().ok_or_else(|| {
+            AppError::InvalidPath(format!(
+                "Grok session directory missing: {}",
+                path.display()
+            ))
+        })?
+    } else {
+        path.as_path()
+    };
+    move_to_trash(trash_target)?;
     Ok(())
 }
 
@@ -338,6 +355,25 @@ fn validate_agent_transcript_identity(
                     "transcript is outside Antigravity sessions: {}",
                     path.display()
                 )));
+            }
+        }
+        AgentHistoryProvider::Grok => {
+            let root = grok_sessions_root()
+                .and_then(|path| path.canonicalize().ok())
+                .ok_or_else(|| AppError::InvalidPath("Grok sessions root missing".to_string()))?;
+            if !is_grok_transcript_path(path, &root) {
+                return Err(AppError::InvalidPath(format!(
+                    "transcript is outside Grok sessions: {}",
+                    path.display()
+                )));
+            }
+            let summary = acorn_transcript::read_grok_session_summary(path).ok_or_else(|| {
+                AppError::InvalidPath("Grok session summary is missing or invalid".to_string())
+            })?;
+            if summary.id != id {
+                return Err(AppError::InvalidPath(
+                    "transcript id does not match selected Grok session".to_string(),
+                ));
             }
         }
     }
@@ -531,14 +567,34 @@ fn scan_antigravity(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryIt
     parse_recent_files(files, limit, |path| parse_antigravity_file(path, scope))
 }
 
+fn scan_grok(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
+    let Some(root) = grok_sessions_root() else {
+        return Vec::new();
+    };
+    let files = collect_files(&root, GROK_SCAN_MAX_DIR_DEPTH, |path| {
+        is_grok_transcript_path(path, &root)
+    });
+    parse_recent_files(files, limit, |path| parse_grok_file(path, scope))
+}
+
 fn find_agent_history_item_by_id(repo: &Path, transcript_id: &str) -> Option<AgentHistoryItem> {
     let scope = HistoryScope::Project(repo);
     find_codex_history_item_by_filename_id(scope, transcript_id)
         .or_else(|| find_claude_history_item_by_stem_id(scope, transcript_id))
         .or_else(|| find_antigravity_history_item_by_path_id(scope, transcript_id))
+        .or_else(|| find_grok_history_item_by_path_id(scope, transcript_id))
         .or_else(|| find_codex_history_item_by_parsed_id(scope, transcript_id))
         .or_else(|| find_claude_history_item_by_parsed_id(scope, transcript_id))
         .or_else(|| find_antigravity_history_item_by_parsed_id(scope, transcript_id))
+}
+
+fn find_grok_history_item_by_path_id(
+    scope: HistoryScope<'_>,
+    transcript_id: &str,
+) -> Option<AgentHistoryItem> {
+    let id = crate::agent_resume::normalize_provider_id(transcript_id).ok()?;
+    let path = acorn_transcript::locate_grok_transcript(&id)?;
+    parse_grok_file(&path, scope).filter(|item| item.id == id)
 }
 
 fn find_codex_history_item_by_filename_id(
@@ -926,6 +982,45 @@ fn build_antigravity_item(
     })
 }
 
+fn parse_grok_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
+    let summary = acorn_transcript::read_grok_session_summary(path)?;
+    if summary.hidden || summary.is_subagent {
+        return None;
+    }
+    let state = parse_agent_state(AgentKind::Grok, path)?;
+    if state.internal_title_generation {
+        return None;
+    }
+    let cwd = summary.cwd.display().to_string();
+    if !scope.accepts_cwd(&cwd) {
+        return None;
+    }
+    let worktree = scope.worktree_for_cwd(&cwd);
+    let title = summary
+        .generated_title
+        .or(state.title)
+        .or(summary.session_summary)
+        .or_else(|| state.preview.clone())
+        .unwrap_or_else(|| "Grok session".to_string());
+    Some(AgentHistoryItem {
+        provider: AgentHistoryProvider::Grok,
+        resume_command: Some(format!("grok --resume {}", summary.id)),
+        id: summary.id,
+        title: collapse_preview(&title, PREVIEW_CHARS)
+            .unwrap_or_else(|| "Grok session".to_string()),
+        preview: state
+            .preview
+            .and_then(|text| collapse_preview(&text, PREVIEW_CHARS)),
+        queued_message_count: 0,
+        subagent_transcript_count: 0,
+        subagent_transcript_count_truncated: false,
+        cwd: Some(cwd),
+        worktree,
+        transcript_path: path.display().to_string(),
+        updated_at: file_updated_at(path),
+    })
+}
+
 #[cfg(test)]
 pub fn transcript_first_user_message(
     provider: AgentHistoryProvider,
@@ -946,17 +1041,57 @@ pub fn transcript_title_context(
     let snapshot = open_transcript_snapshot(path, TRANSCRIPT_SCAN_LIMITS)?;
     let mut builder = TitleContextBuilder::new(max_chars);
     let kind = provider.kind();
+    let mut grok_pending_role = None;
+    let mut grok_pending_text = String::new();
     scan_transcript_json_lines(snapshot, TRANSCRIPT_SCAN_LIMITS, |line| {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             return;
         };
         let parsed = parse_transcript_value(kind, &value);
         let Some(entry) = title_context_entry(&parsed) else {
+            if kind == AgentKind::Grok
+                && parsed.turn_state == Some(acorn_transcript::TurnState::Ready)
+            {
+                flush_pending_title_context_entry(
+                    &mut grok_pending_role,
+                    &mut grok_pending_text,
+                    &mut builder,
+                );
+            }
             return;
         };
-        builder.push(entry);
+        if kind == AgentKind::Grok {
+            if grok_pending_role == Some(entry.role) {
+                grok_pending_text.push_str(&entry.text);
+            } else {
+                flush_pending_title_context_entry(
+                    &mut grok_pending_role,
+                    &mut grok_pending_text,
+                    &mut builder,
+                );
+                grok_pending_role = Some(entry.role);
+                grok_pending_text = entry.text;
+            }
+        } else {
+            builder.push(entry);
+        }
     })?;
+    flush_pending_title_context_entry(&mut grok_pending_role, &mut grok_pending_text, &mut builder);
     builder.finish()
+}
+
+fn flush_pending_title_context_entry(
+    pending_role: &mut Option<&'static str>,
+    pending_text: &mut String,
+    builder: &mut TitleContextBuilder,
+) {
+    let Some(role) = pending_role.take() else {
+        return;
+    };
+    builder.push(TitleContextEntry {
+        role,
+        text: std::mem::take(pending_text),
+    });
 }
 
 fn summarize_agent_history_item(item: &AgentHistoryItem) -> Option<AgentTranscriptSummary> {
@@ -990,6 +1125,9 @@ fn summarize_agent_transcript(
     let mut summed_usage = AgentTranscriptTokenUsage::default();
     let mut cumulative_usage = AgentTranscriptTokenUsage::default();
     let mut recent_messages = VecDeque::new();
+    let mut grok_pending_role = None;
+    let mut grok_pending_text = String::new();
+    let mut grok_completed_turns = 0_u64;
     let kind = provider.kind();
 
     scan_transcript_json_lines(snapshot, TRANSCRIPT_SCAN_LIMITS, |line| {
@@ -997,31 +1135,57 @@ fn summarize_agent_transcript(
             return;
         };
         let parsed = parse_transcript_value(kind, &value);
-        if let Some(entry) = title_context_entry(&parsed) {
+        if provider == AgentHistoryProvider::Grok {
+            if let Some(entry) = title_context_entry(&parsed) {
+                let role = match entry.role {
+                    "User" => Some("user"),
+                    "Assistant" => Some("assistant"),
+                    _ => None,
+                };
+                if let Some(role) = role {
+                    if grok_pending_role == Some(role) {
+                        grok_pending_text.push_str(&entry.text);
+                    } else {
+                        flush_pending_summary_message(
+                            &mut grok_pending_role,
+                            &mut grok_pending_text,
+                            &mut message_count,
+                            &mut user_messages,
+                            &mut assistant_messages,
+                            &mut recent_messages,
+                        );
+                        grok_pending_role = Some(role);
+                        grok_pending_text = entry.text;
+                    }
+                }
+            }
+            if parsed.turn_state == Some(acorn_transcript::TurnState::Ready) {
+                flush_pending_summary_message(
+                    &mut grok_pending_role,
+                    &mut grok_pending_text,
+                    &mut message_count,
+                    &mut user_messages,
+                    &mut assistant_messages,
+                    &mut recent_messages,
+                );
+                grok_completed_turns = grok_completed_turns.saturating_add(1);
+            }
+        } else if let Some(entry) = title_context_entry(&parsed) {
             let role = match entry.role {
-                "User" => {
-                    user_messages += 1;
-                    Some("user")
-                }
-                "Assistant" => {
-                    assistant_messages += 1;
-                    Some("assistant")
-                }
+                "User" => Some("user"),
+                "Assistant" => Some("assistant"),
                 _ => None,
             };
-            if let Some((role, text)) = role.and_then(|role| {
-                collapse_preview(&entry.text, SUMMARY_MESSAGE_PREVIEW_CHARS)
-                    .map(|text| (role, text))
-            }) {
-                if recent_messages.len() == RECENT_SUMMARY_MESSAGES {
-                    recent_messages.pop_front();
-                }
-                recent_messages.push_back(AgentTranscriptMessagePreview {
-                    role: role.to_string(),
-                    text,
-                });
+            if let Some(role) = role {
+                record_summary_message(
+                    role,
+                    &entry.text,
+                    &mut message_count,
+                    &mut user_messages,
+                    &mut assistant_messages,
+                    &mut recent_messages,
+                );
             }
-            message_count += 1;
         }
         if let Some(usage) = transcript_usage_from_value(&provider, &value) {
             if is_cumulative_usage_event(&provider, &value) {
@@ -1031,14 +1195,26 @@ fn summarize_agent_transcript(
             }
         }
     })?;
+    flush_pending_summary_message(
+        &mut grok_pending_role,
+        &mut grok_pending_text,
+        &mut message_count,
+        &mut user_messages,
+        &mut assistant_messages,
+        &mut recent_messages,
+    );
 
     let token_usage = if cumulative_usage.total_tokens > summed_usage.total_tokens {
         cumulative_usage
     } else {
         summed_usage
     };
-    let complete_turns = user_messages.min(assistant_messages);
-    let running_turns = user_messages.saturating_sub(assistant_messages);
+    let complete_turns = if provider == AgentHistoryProvider::Grok {
+        grok_completed_turns.min(user_messages)
+    } else {
+        user_messages.min(assistant_messages)
+    };
+    let running_turns = user_messages.saturating_sub(complete_turns);
     let summary = AgentTranscriptSummary {
         provider,
         id,
@@ -1055,6 +1231,54 @@ fn summarize_agent_transcript(
     };
     store_transcript_summary_cache(cache_key, len, modified, summary.clone());
     Some(summary)
+}
+
+fn flush_pending_summary_message(
+    pending_role: &mut Option<&'static str>,
+    pending_text: &mut String,
+    message_count: &mut u64,
+    user_messages: &mut u64,
+    assistant_messages: &mut u64,
+    recent_messages: &mut VecDeque<AgentTranscriptMessagePreview>,
+) {
+    let Some(role) = pending_role.take() else {
+        return;
+    };
+    let text = std::mem::take(pending_text);
+    record_summary_message(
+        role,
+        &text,
+        message_count,
+        user_messages,
+        assistant_messages,
+        recent_messages,
+    );
+}
+
+fn record_summary_message(
+    role: &'static str,
+    text: &str,
+    message_count: &mut u64,
+    user_messages: &mut u64,
+    assistant_messages: &mut u64,
+    recent_messages: &mut VecDeque<AgentTranscriptMessagePreview>,
+) {
+    match role {
+        "user" => *user_messages = user_messages.saturating_add(1),
+        "assistant" => *assistant_messages = assistant_messages.saturating_add(1),
+        _ => return,
+    }
+    *message_count = message_count.saturating_add(1);
+    let Some(text) = collapse_preview(text, SUMMARY_MESSAGE_PREVIEW_CHARS) else {
+        return;
+    };
+    if recent_messages.len() == RECENT_SUMMARY_MESSAGES {
+        recent_messages.pop_front();
+    }
+    recent_messages.push_back(AgentTranscriptMessagePreview {
+        role: role.to_string(),
+        text,
+    });
 }
 
 fn open_transcript_snapshot(
@@ -1191,7 +1415,20 @@ fn transcript_usage_from_value(
             .and_then(token_usage_from_object),
         AgentHistoryProvider::Codex => codex_usage_from_value(value),
         AgentHistoryProvider::Antigravity => generic_usage_from_value(value),
+        AgentHistoryProvider::Grok => grok_usage_from_value(value),
     }
+}
+
+fn grok_usage_from_value(value: &Value) -> Option<AgentTranscriptTokenUsage> {
+    let update = value.pointer("/params/update")?;
+    let update_type = update
+        .get("sessionUpdate")
+        .or_else(|| update.get("session_update"))
+        .and_then(Value::as_str)?;
+    if update_type != "turn_completed" {
+        return None;
+    }
+    update.get("usage").and_then(token_usage_from_object)
 }
 
 fn codex_usage_from_value(value: &Value) -> Option<AgentTranscriptTokenUsage> {
@@ -1239,6 +1476,7 @@ fn token_usage_from_object(value: &Value) -> Option<AgentTranscriptTokenUsage> {
             "cached_input_tokens",
             "cachedInputTokens",
             "cached_tokens",
+            "cachedReadTokens",
         ],
     );
     let cache_creation_tokens = first_u64(
@@ -1251,6 +1489,7 @@ fn token_usage_from_object(value: &Value) -> Option<AgentTranscriptTokenUsage> {
             "reasoning_output_tokens",
             "reasoningOutputTokens",
             "reasoning_tokens",
+            "reasoningTokens",
         ],
     );
     let explicit_total = first_u64(value, &["total_tokens", "totalTokens"]);
@@ -1336,6 +1575,8 @@ fn parse_agent_state_from_opened(
         },
         ..ParsedAgentFile::default()
     };
+    let mut grok_last_role = None;
+    let mut grok_title_open = true;
     for line in sample_lines_from_opened(file, len).ok()? {
         let value = if kind == AgentKind::Claude {
             serde_json::from_str::<Value>(&line).ok()
@@ -1356,23 +1597,56 @@ fn parse_agent_state_from_opened(
         }
         match parsed.state_role {
             TranscriptRole::User => {
-                state.conversation_message_count += 1;
+                let same_grok_message =
+                    kind == AgentKind::Grok && grok_last_role == Some(TranscriptRole::User);
+                if !same_grok_message {
+                    state.conversation_message_count += 1;
+                }
                 if let Some(user_text) = parsed.state_text {
                     if looks_like_acorn_title_generation_prompt(&user_text) {
                         state.internal_title_generation = true;
                     }
                     if state.title.is_none() {
                         state.title = Some(user_text);
+                    } else if same_grok_message && grok_title_open {
+                        if let Some(title) = state.title.as_mut() {
+                            title.push_str(&user_text);
+                        }
                     }
+                }
+                if kind == AgentKind::Grok {
+                    grok_last_role = Some(TranscriptRole::User);
                 }
             }
             TranscriptRole::Assistant => {
-                state.conversation_message_count += 1;
+                let same_grok_message =
+                    kind == AgentKind::Grok && grok_last_role == Some(TranscriptRole::Assistant);
+                if !same_grok_message {
+                    state.conversation_message_count += 1;
+                }
                 if let Some(text) = parsed.state_text {
-                    state.preview = Some(text);
+                    if same_grok_message {
+                        state
+                            .preview
+                            .get_or_insert_with(String::new)
+                            .push_str(&text);
+                    } else {
+                        state.preview = Some(text);
+                    }
+                }
+                if kind == AgentKind::Grok {
+                    grok_last_role = Some(TranscriptRole::Assistant);
+                    grok_title_open = false;
                 }
             }
-            TranscriptRole::Other => {}
+            TranscriptRole::Other => {
+                if kind == AgentKind::Grok
+                    && parsed.turn_state == Some(acorn_transcript::TurnState::Ready)
+                {
+                    grok_last_role = None;
+                    grok_title_open = false;
+                }
+            }
         }
         if kind == AgentKind::Codex && state.preview.is_none() {
             state.preview = parsed.response_text;
@@ -1380,6 +1654,14 @@ fn parse_agent_state_from_opened(
     }
     if kind == AgentKind::Claude && state.conversation_message_count == 0 {
         state.subagent_transcript_count = count_claude_subagent_transcripts(path)?;
+    }
+    if kind == AgentKind::Grok
+        && state
+            .title
+            .as_deref()
+            .is_some_and(looks_like_acorn_title_generation_prompt)
+    {
+        state.internal_title_generation = true;
     }
 
     Some(state)
@@ -1878,6 +2160,13 @@ fn claude_projects_root() -> Option<PathBuf> {
     home_dir().map(|home| home.join(".claude").join("projects"))
 }
 
+fn grok_sessions_root() -> Option<PathBuf> {
+    std::env::var_os("GROK_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join(".grok")))
+        .map(|root| root.join("sessions"))
+}
+
 fn google_agent_storage_root() -> Option<PathBuf> {
     std::env::var_os("ANTIGRAVITY_DIR")
         .map(PathBuf::from)
@@ -1934,6 +2223,30 @@ fn antigravity_id_from_path(path: &Path) -> Option<String> {
 
 fn antigravity_transcript_matches_id(path: &Path, id: &str) -> bool {
     antigravity_id_from_path(path).as_deref() == Some(id)
+}
+
+fn is_grok_transcript_path(path: &Path, sessions_root: &Path) -> bool {
+    if path.file_name().and_then(|name| name.to_str()) != Some("updates.jsonl") {
+        return false;
+    }
+    let Ok(relative) = path.strip_prefix(sessions_root) else {
+        return false;
+    };
+    let mut components = relative.components();
+    let Some(std::path::Component::Normal(_cwd_bucket)) = components.next() else {
+        return false;
+    };
+    let Some(std::path::Component::Normal(session_id)) = components.next() else {
+        return false;
+    };
+    let Some(std::path::Component::Normal(file)) = components.next() else {
+        return false;
+    };
+    components.next().is_none()
+        && file == std::ffi::OsStr::new("updates.jsonl")
+        && session_id
+            .to_str()
+            .is_some_and(|id| Uuid::parse_str(id).is_ok())
 }
 
 #[derive(Debug)]
@@ -2124,6 +2437,71 @@ mod tests {
         transcript
     }
 
+    fn write_grok_history_transcript(
+        grok_home: &Path,
+        id: &str,
+        cwd: &Path,
+        hidden: bool,
+    ) -> PathBuf {
+        let session_dir = grok_home.join("sessions/encoded-cwd").join(id);
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::write(
+            session_dir.join("summary.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "info": { "id": id, "cwd": cwd.display().to_string() },
+                "generated_title": "Ship Grok support",
+                "session_summary": "Adds Grok to Acorn",
+                "hidden": hidden,
+                "session_kind": "main"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let transcript = session_dir.join("updates.jsonl");
+        let mut file = fs::File::create(&transcript).unwrap();
+        for update in [
+            serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": { "type": "text", "text": "Add " }
+            }),
+            serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": { "type": "text", "text": "Grok support" }
+            }),
+            serde_json::json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": "Implemented " }
+            }),
+            serde_json::json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": "it." }
+            }),
+            serde_json::json!({
+                "sessionUpdate": "turn_completed",
+                "prompt_id": "prompt-1",
+                "usage": {
+                    "inputTokens": 30,
+                    "outputTokens": 12,
+                    "cachedReadTokens": 5,
+                    "reasoningTokens": 4,
+                    "totalTokens": 46
+                }
+            }),
+        ] {
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "timestamp": 1_723_456_789.0,
+                    "method": "session/update",
+                    "params": { "sessionId": id, "update": update }
+                })
+            )
+            .unwrap();
+        }
+        transcript
+    }
+
     #[test]
     fn codex_transcript_match_accepts_payload_id_when_filename_differs() {
         let dir = tempfile::tempdir().unwrap();
@@ -2217,6 +2595,71 @@ mod tests {
         let path = root.join("-Users-tester-demo/history.jsonl");
 
         assert!(!is_claude_transcript_path(&path, root));
+    }
+
+    #[test]
+    fn grok_transcript_path_requires_the_session_layout() {
+        let root = Path::new("/Users/tester/.grok/sessions");
+        let path = root.join("encoded-cwd/0198c151-f3ee-7991-9768-741923bb6b50/updates.jsonl");
+
+        assert!(is_grok_transcript_path(&path, root));
+        assert!(!is_grok_transcript_path(
+            &root.join("0198c151-f3ee-7991-9768-741923bb6b50/updates.jsonl"),
+            root,
+        ));
+    }
+
+    #[test]
+    fn grok_history_uses_summary_metadata_and_aggregates_stream_chunks() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let grok_home = dir.path().join("grok-home");
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let repo = normalize_path(&repo);
+        let _grok_home = EnvVarGuard::set("GROK_HOME", &grok_home);
+        let id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let transcript = write_grok_history_transcript(&grok_home, id, &repo, false);
+
+        acorn_transcript::read_grok_session_summary(&transcript)
+            .expect("fixture should expose valid Grok summary metadata");
+        parse_agent_state(AgentKind::Grok, &transcript)
+            .expect("fixture transcript should be parseable");
+        let item = parse_grok_file(&transcript, HistoryScope::Project(&repo)).unwrap();
+        assert_eq!(item.provider, AgentHistoryProvider::Grok);
+        assert_eq!(item.id, id);
+        assert_eq!(item.title, "Ship Grok support");
+        assert_eq!(item.preview.as_deref(), Some("Implemented it."));
+        assert_eq!(item.cwd.as_deref(), repo.to_str());
+        let resume_command = format!("grok --resume {id}");
+        assert_eq!(
+            item.resume_command.as_deref(),
+            Some(resume_command.as_str())
+        );
+        assert_eq!(
+            transcript_title_context(AgentHistoryProvider::Grok, &transcript, 1_000).as_deref(),
+            Some("User: Add Grok support\nAssistant: Implemented it.")
+        );
+
+        let transcript_summary =
+            summarize_agent_transcript(AgentHistoryProvider::Grok, id.to_string(), &transcript)
+                .unwrap();
+        assert_eq!(transcript_summary.message_count, 2);
+        assert_eq!(transcript_summary.user_messages, 1);
+        assert_eq!(transcript_summary.assistant_messages, 1);
+        assert_eq!(transcript_summary.complete_turns, 1);
+        assert_eq!(transcript_summary.running_turns, 0);
+        assert_eq!(transcript_summary.token_usage.input_tokens, 30);
+        assert_eq!(transcript_summary.token_usage.output_tokens, 12);
+        assert_eq!(transcript_summary.token_usage.cache_read_tokens, 5);
+        assert_eq!(transcript_summary.token_usage.reasoning_tokens, 4);
+        assert_eq!(transcript_summary.token_usage.total_tokens, 46);
+
+        let hidden_id = "0198c151-f3ee-7991-9768-741923bb6b51";
+        write_grok_history_transcript(&grok_home, hidden_id, &repo, true);
+        let history = scan_grok(HistoryScope::Project(&repo), 10);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, id);
     }
 
     #[test]

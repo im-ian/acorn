@@ -2,12 +2,12 @@
 //! per-session state files so the focus-time "이전 대화 이어하기" modal
 //! can decide what to surface.
 //!
-//! The transcript watcher maps a running `claude` / `codex` / `antigravity`
+//! The transcript watcher maps a running `claude` / `codex` / `antigravity` / `grok`
 //! process to its transcript via PTY descendant scan + cwd match + mtime
 //! window. The modal needs the user-facing session owner rather than every
 //! nested sub-agent: when the user focuses a session and the agent is *not*
 //! currently running, what was the last top-level transcript that session had
-//! been writing? This task keeps `<state_dir>/{claude,codex,antigravity}.id`
+//! been writing? This task keeps `<state_dir>/{claude,codex,antigravity,grok}.id`
 //! up to date so the modal lookup is a single file read.
 //!
 //! Why polling and not filesystem events: PTY-tree resolution is the
@@ -266,13 +266,14 @@ fn id_filename(kind: AgentKind) -> &'static str {
         AgentKind::Claude => "claude.id",
         AgentKind::Codex => "codex.id",
         AgentKind::Antigravity => "antigravity.id",
+        AgentKind::Grok => "grok.id",
     }
 }
 
 fn cwd_filename(kind: AgentKind) -> Option<&'static str> {
     match kind {
         AgentKind::Antigravity => Some("antigravity.cwd"),
-        AgentKind::Claude | AgentKind::Codex => None,
+        AgentKind::Claude | AgentKind::Codex | AgentKind::Grok => None,
     }
 }
 

@@ -37,6 +37,7 @@ pub enum AiProvider {
     Claude,
     Antigravity,
     Codex,
+    Grok,
     Ollama,
     Llm,
     Custom,
@@ -86,6 +87,20 @@ impl AiExecutionRequest {
                     prompt_transport: PromptTransport::Stdin,
                 })
             }
+            AiProvider::Grok => {
+                let mut args = vec![
+                    "--no-auto-update".into(),
+                    "--output-format".into(),
+                    "plain".into(),
+                ];
+                append_native_model_and_effort_args(self, &mut args)?;
+                args.push("-p".into());
+                Ok(ResolvedAiCommand {
+                    command: "grok",
+                    args,
+                    prompt_transport: PromptTransport::Argument,
+                })
+            }
             AiProvider::Ollama => {
                 let model = normalize_model_arg(self.ollama_model.as_deref(), "llama3")?;
                 Ok(ResolvedAiCommand {
@@ -124,7 +139,7 @@ pub(crate) fn append_native_model_and_effort_args(
                 args.push("--model".to_string());
                 args.push(model);
             }
-            AiProvider::Codex => {
+            AiProvider::Codex | AiProvider::Grok => {
                 args.push("-m".to_string());
                 args.push(model);
             }
@@ -140,6 +155,10 @@ pub(crate) fn append_native_model_and_effort_args(
             AiProvider::Codex => {
                 args.push("-c".to_string());
                 args.push(format!("model_reasoning_effort=\"{effort}\""));
+            }
+            AiProvider::Grok => {
+                args.push("--effort".to_string());
+                args.push(effort);
             }
             _ => {}
         }
@@ -1021,6 +1040,35 @@ mod tests {
             ResolvedAiCommand {
                 command: "agy",
                 args: vec!["-p".to_string()],
+                prompt_transport: PromptTransport::Argument,
+            }
+        );
+    }
+
+    #[test]
+    fn resolves_grok_headless_prompt_with_model_and_effort() {
+        let req = AiExecutionRequest {
+            provider: AiProvider::Grok,
+            model: Some("grok-code-fast-1".to_string()),
+            effort: Some("high".to_string()),
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        assert_eq!(
+            req.resolve().unwrap(),
+            ResolvedAiCommand {
+                command: "grok",
+                args: vec![
+                    "--no-auto-update".to_string(),
+                    "--output-format".to_string(),
+                    "plain".to_string(),
+                    "-m".to_string(),
+                    "grok-code-fast-1".to_string(),
+                    "--effort".to_string(),
+                    "high".to_string(),
+                    "-p".to_string(),
+                ],
                 prompt_transport: PromptTransport::Argument,
             }
         );

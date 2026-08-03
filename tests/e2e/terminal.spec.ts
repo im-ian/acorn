@@ -1337,6 +1337,7 @@ test.describe("terminal: spawn", () => {
         claude: w.__imagePasteAgentActive ? "claude-session" : null,
         codex: null,
         antigravity: null,
+        grok: null,
       };
     });
     await tauri.handle("clipboard_snapshot", () => ({

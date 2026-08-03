@@ -8,6 +8,7 @@ pub enum AgentKind {
     Claude,
     Codex,
     Antigravity,
+    Grok,
 }
 
 impl AgentKind {
@@ -16,6 +17,7 @@ impl AgentKind {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Antigravity => "antigravity",
+            Self::Grok => "grok",
         }
     }
 

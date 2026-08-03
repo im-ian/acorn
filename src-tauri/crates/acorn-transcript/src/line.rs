@@ -33,7 +33,8 @@ pub struct TurnObservation {
     pub state: TurnState,
     /// Provider-scoped turn identity when the transcript event carries one.
     /// Codex completion events use this to correlate a durable `task_complete`
-    /// with the native hook turn that currently owns session status.
+    /// with the native hook turn that currently owns session status. Grok
+    /// completion events expose the same field through `prompt_id`.
     pub provider_turn_id: Option<String>,
     /// Provider timestamp of the classified line. Attention recovery compares
     /// it against the moment the hook raised the attention request: a turn
@@ -105,6 +106,7 @@ pub fn parse_transcript_value(kind: AgentKind, value: &Value) -> ParsedTranscrip
         AgentKind::Claude => parse_claude_value(value),
         AgentKind::Codex => parse_codex_value(value),
         AgentKind::Antigravity => parse_antigravity_value(value),
+        AgentKind::Grok => parse_grok_value(value),
     }
 }
 
@@ -319,6 +321,77 @@ fn parse_antigravity_value(value: &Value) -> ParsedTranscriptLine {
             .or_else(|| string_at(Some(value), "project"))
             .or_else(|| first_workspace_path(value)),
         ..ParsedTranscriptLine::default()
+    }
+}
+
+fn parse_grok_value(value: &Value) -> ParsedTranscriptLine {
+    let method = value.get("method").and_then(Value::as_str).unwrap_or("");
+    if !matches!(method, "session/update" | "_x.ai/session/update") {
+        return ParsedTranscriptLine::default();
+    }
+
+    let Some(update) = value.pointer("/params/update") else {
+        return ParsedTranscriptLine::default();
+    };
+    let update_type = update
+        .get("sessionUpdate")
+        .or_else(|| update.get("session_update"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let role = match update_type {
+        "user_message_chunk" => TranscriptRole::User,
+        "agent_message_chunk" => TranscriptRole::Assistant,
+        _ => TranscriptRole::Other,
+    };
+    let text = match role {
+        TranscriptRole::User | TranscriptRole::Assistant => {
+            update.get("content").and_then(grok_content_text)
+        }
+        TranscriptRole::Other => None,
+    };
+    let turn_state = match update_type {
+        "turn_completed" => Some(TurnState::Ready),
+        "user_message_chunk"
+        | "agent_message_chunk"
+        | "agent_thought_chunk"
+        | "tool_call"
+        | "tool_call_update" => Some(TurnState::Working),
+        _ => None,
+    };
+
+    ParsedTranscriptLine {
+        timestamp: scalar_string_at(Some(value), "timestamp"),
+        role,
+        text: text.clone(),
+        state_text: text.clone(),
+        state_role: role,
+        preview_role: role,
+        preview_text: text,
+        turn_state,
+        provider_turn_id: string_at(Some(update), "prompt_id")
+            .or_else(|| string_at(Some(update), "promptId")),
+        session_id: string_at(value.get("params"), "sessionId")
+            .or_else(|| string_at(value.get("params"), "session_id")),
+        ..ParsedTranscriptLine::default()
+    }
+}
+
+fn grok_content_text(content: &Value) -> Option<String> {
+    if let Some(text) = content.as_str() {
+        return text.split_whitespace().next().map(|_| text.to_string());
+    }
+    if let Some(text) = content.get("text").and_then(Value::as_str) {
+        return text.split_whitespace().next().map(|_| text.to_string());
+    }
+    let items = content.as_array()?;
+    let text = items
+        .iter()
+        .filter_map(grok_content_text)
+        .collect::<String>();
+    if text.split_whitespace().next().is_some() {
+        Some(text)
+    } else {
+        None
     }
 }
 
@@ -669,6 +742,17 @@ fn string_at(value: Option<&Value>, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+fn scalar_string_at(value: Option<&Value>, key: &str) -> Option<String> {
+    let value = value?.get(key)?;
+    if let Some(text) = value.as_str() {
+        return nonempty_trimmed(text);
+    }
+    if value.is_number() {
+        return Some(value.to_string());
+    }
+    None
 }
 
 fn is_claude_meta_event(value: &Value) -> bool {
@@ -1124,6 +1208,7 @@ mod tests {
             Some(TurnObservation {
                 state: TurnState::Ready,
                 provider_turn_id: Some("t1".to_string()),
+                timestamp: Some("t".to_string()),
             }),
         );
     }
@@ -1152,6 +1237,61 @@ mod tests {
         assert_eq!(
             classify(AgentKind::Antigravity, tail, true),
             Some(TurnState::Working),
+        );
+    }
+
+    #[test]
+    fn grok_message_chunks_expose_content_and_session_metadata() {
+        let value = serde_json::json!({
+            "timestamp": 1_723_456_789.25,
+            "method": "session/update",
+            "params": {
+                "sessionId": "0198c151-f3ee-7991-9768-741923bb6b50",
+                "update": {
+                    "sessionUpdate": "user_message_chunk",
+                    "content": { "type": "text", "text": "Add Grok support" }
+                }
+            }
+        });
+        let parsed = parse_transcript_value(AgentKind::Grok, &value);
+
+        assert_eq!(parsed.role, TranscriptRole::User);
+        assert_eq!(parsed.text.as_deref(), Some("Add Grok support"));
+        assert_eq!(parsed.preview_role, TranscriptRole::User);
+        assert_eq!(parsed.turn_state, Some(TurnState::Working));
+        assert_eq!(
+            parsed.session_id.as_deref(),
+            Some("0198c151-f3ee-7991-9768-741923bb6b50")
+        );
+        assert_eq!(parsed.timestamp.as_deref(), Some("1723456789.25"));
+    }
+
+    #[test]
+    fn grok_turn_completed_maps_to_ready_over_trailing_metadata() {
+        let tail = concat!(
+            r#"{"method":"session/update","params":{"sessionId":"0198c151-f3ee-7991-9768-741923bb6b50","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Done"}}}}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"sessionId":"0198c151-f3ee-7991-9768-741923bb6b50","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7","stop_reason":"end_turn","usage":{"totalTokens":42}}}}"#,
+            "\n",
+            r#"{"method":"_x.ai/session/update","params":{"update":{"sessionUpdate":"hook_execution","hookName":"Stop"}}}"#,
+        );
+
+        assert_eq!(
+            latest_turn_observation(AgentKind::Grok, tail, true),
+            Some(TurnObservation {
+                state: TurnState::Ready,
+                provider_turn_id: Some("prompt-7".to_string()),
+                timestamp: None,
+            })
+        );
+    }
+
+    #[test]
+    fn grok_tool_updates_keep_the_turn_working() {
+        let tail = r#"{"method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"tool-1","status":"completed"}}}"#;
+        assert_eq!(
+            classify(AgentKind::Grok, tail, true),
+            Some(TurnState::Working)
         );
     }
 

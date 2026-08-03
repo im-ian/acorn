@@ -75,7 +75,14 @@ export interface PreventSleepStatus {
 }
 
 export interface AiExecutionRequest {
-  provider: "claude" | "antigravity" | "codex" | "ollama" | "llm" | "custom";
+  provider:
+    | "claude"
+    | "antigravity"
+    | "codex"
+    | "grok"
+    | "ollama"
+    | "llm"
+    | "custom";
   model?: string | null;
   effort?: string | null;
   ollamaModel?: string | null;

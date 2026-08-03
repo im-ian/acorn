@@ -1674,6 +1674,7 @@ export function ChatPane({
                 <option value="claude">Claude</option>
                 <option value="codex">Codex</option>
                 <option value="antigravity">Antigravity</option>
+                <option value="grok">Grok</option>
               </Select>
               {sending || hasRunningMessages ? (
                 <Tooltip label="Stop response" side="top">

@@ -90,7 +90,14 @@ const mocks = vi.hoisted(() => ({
   previewSessionTitle: vi.fn<
     (
       ai: {
-        provider: "claude" | "antigravity" | "codex" | "ollama" | "llm" | "custom";
+        provider:
+          | "claude"
+          | "antigravity"
+          | "codex"
+          | "grok"
+          | "ollama"
+          | "llm"
+          | "custom";
         ollamaModel?: string | null;
         llmModel?: string | null;
       },
@@ -456,11 +463,13 @@ describe("SettingsModal font controls", () => {
       "claude",
       "codex",
       "antigravity",
+      "grok",
       "custom",
     ]);
     expect(document.body.textContent).toContain("Claude Code");
     expect(document.body.textContent).toContain("Codex");
     expect(document.body.textContent).toContain("Antigravity");
+    expect(document.body.textContent).toContain("Grok Build");
     expect(document.body.textContent).toContain("Custom Command");
     expect(document.body.textContent).not.toContain("Ollama");
     expect(document.body.textContent).not.toContain("llm CLI");

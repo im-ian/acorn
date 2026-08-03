@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
     claude: null,
     codex: null,
     antigravity: null,
+    grok: null,
   })),
   loadChatSessionState: vi.fn(),
   agentTranscriptSummary: vi.fn(),

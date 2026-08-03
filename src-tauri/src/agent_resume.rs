@@ -1,7 +1,7 @@
 //! Per-session resume state for the focus-time "이전 대화 이어하기" modal.
 //!
 //! The `agent_resume_persister` background task mirrors the live transcript
-//! UUID of each running `claude` / `codex` / `antigravity` process into
+//! UUID of each running `claude` / `codex` / `antigravity` / `grok` process into
 //! per-session files under Acorn's data dir. This module owns the on-disk
 //! layout, the modal candidate reader for providers with verified resume
 //! commands, and the acknowledgement writer; the persister is the only
@@ -18,6 +18,8 @@
 //! antigravity.id           # bare session id / UUID
 //! antigravity.cwd          # Acorn worktree cwd fallback for cwd-less brain transcripts
 //! antigravity.id.acknowledged
+//! grok.id                  # bare session UUID
+//! grok.id.acknowledged
 //! ```
 //!
 //! Modal pop rule: surface a candidate when `*.id` exists, is non-empty,
@@ -45,6 +47,8 @@ const CODEX_ID_FILE: &str = "codex.id";
 const CODEX_ID_ACK_FILE: &str = "codex.id.acknowledged";
 const ANTIGRAVITY_ID_FILE: &str = "antigravity.id";
 const ANTIGRAVITY_ID_ACK_FILE: &str = "antigravity.id.acknowledged";
+const GROK_ID_FILE: &str = "grok.id";
+const GROK_ID_ACK_FILE: &str = "grok.id.acknowledged";
 
 pub(crate) const PROVIDER_MARKER_MAX_BYTES: usize = 128;
 pub(crate) const AGENT_CWD_MAX_BYTES: usize = 4 * 1024;
@@ -302,7 +306,7 @@ pub fn resume_candidate(
 }
 
 /// Identifier + live transcript path resolved through the persister's
-/// `<data_dir>/agent-state/<session-uuid>/{claude,codex,antigravity}.id`
+/// `<data_dir>/agent-state/<session-uuid>/{claude,codex,antigravity,grok}.id`
 /// marker. The status detector consumes this to read the actual JSONL the
 /// agent is writing instead of guessing from PTY descendant liveness.
 #[derive(Debug, Clone)]
@@ -343,6 +347,7 @@ fn live_transcript_at(base: &Path, session_id: uuid::Uuid) -> Option<LiveTranscr
         (AgentKind::Claude, CLAUDE_ID_FILE),
         (AgentKind::Codex, CODEX_ID_FILE),
         (AgentKind::Antigravity, ANTIGRAVITY_ID_FILE),
+        (AgentKind::Grok, GROK_ID_FILE),
     ]
     .into_iter()
     .filter_map(|(kind, file)| {
@@ -380,6 +385,7 @@ fn live_transcript_for_kind_in_dir_with_locator(
         AgentKind::Claude => CLAUDE_ID_FILE,
         AgentKind::Codex => CODEX_ID_FILE,
         AgentKind::Antigravity => ANTIGRAVITY_ID_FILE,
+        AgentKind::Grok => GROK_ID_FILE,
     };
     let marker = read_provider_marker(&dir.join(file)).ok().flatten()?;
     live_transcript_for_id_with_locator(kind, marker.text, locate)
@@ -474,6 +480,7 @@ fn resume_state_files(kind: AgentKind) -> (&'static str, &'static str) {
         AgentKind::Claude => (CLAUDE_ID_FILE, CLAUDE_ID_ACK_FILE),
         AgentKind::Codex => (CODEX_ID_FILE, CODEX_ID_ACK_FILE),
         AgentKind::Antigravity => (ANTIGRAVITY_ID_FILE, ANTIGRAVITY_ID_ACK_FILE),
+        AgentKind::Grok => (GROK_ID_FILE, GROK_ID_ACK_FILE),
     }
 }
 
@@ -499,6 +506,7 @@ pub(crate) fn locate_transcript(kind: AgentKind, uuid: &str) -> Option<PathBuf> 
         AgentKind::Claude => crate::todos::locate_transcript_for(&uuid).ok().flatten(),
         AgentKind::Codex => locate_codex_transcript(&uuid),
         AgentKind::Antigravity => locate_antigravity_transcript(&uuid),
+        AgentKind::Grok => acorn_transcript::locate_grok_transcript(&uuid),
     }
 }
 
@@ -1458,8 +1466,10 @@ mod tests {
         let sid = uuid::Uuid::new_v4();
         let claude_id = "11111111-1111-1111-1111-111111111111";
         let codex_id = "22222222-2222-2222-2222-222222222222";
+        let grok_id = "33333333-3333-3333-3333-333333333333";
         write_id(base.path(), sid, CLAUDE_ID_FILE, claude_id);
         write_id(base.path(), sid, CODEX_ID_FILE, codex_id);
+        write_id(base.path(), sid, GROK_ID_FILE, grok_id);
         let dir = base.path().join(AGENT_STATE_DIR_NAME).join(sid.to_string());
 
         let found =
@@ -1471,5 +1481,15 @@ mod tests {
         assert_eq!(found.kind, AgentKind::Codex);
         assert_eq!(found.id, codex_id);
         assert!(found.path.ends_with(format!("Codex-{codex_id}.jsonl")));
+
+        let found =
+            live_transcript_for_kind_in_dir_with_locator(&dir, AgentKind::Grok, &|kind, id| {
+                Some(base.path().join(format!("{kind:?}-{id}.jsonl")))
+            })
+            .expect("grok marker resolves");
+
+        assert_eq!(found.kind, AgentKind::Grok);
+        assert_eq!(found.id, grok_id);
+        assert!(found.path.ends_with(format!("Grok-{grok_id}.jsonl")));
     }
 }

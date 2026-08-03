@@ -175,6 +175,17 @@
         "label": "行の高さ",
         "hint": "セルの高さの乗数。 1.00 行をフラッシュしてパックします。垂直方向の呼吸スペースを増やすために上げます。範囲は 1.00 ～ 2.00。"
       },
+      "cursorStyle": {
+        "label": "カーソルスタイル",
+        "hint": "シェルや全画面アプリが独自のカーソルを指定しない場合に使用するデフォルトの形状です。",
+        "options": {
+          "block": "ブロック",
+          "bar": "バー",
+          "underline": "下線",
+          "outline": "アウトライン",
+          "pill": "ピル"
+        }
+      },
       "canvasInactiveRefreshRate": {
         "label": "非アクティブなキャンバスのリフレッシュ レート",
         "hint": "表示されているが選択されていないキャンバス端末が新しい出力をレンダリングする頻度。選択した端末は常にフルスピードのままです。",
@@ -1243,6 +1254,8 @@
       "forkCodexInNewWorktree": "新しいワークツリーのフォーク コーデックス",
       "forkAntigravitySession": "フォーク反重力セッション",
       "forkAntigravityInNewWorktree": "新しいワークツリーのフォーク反重力",
+      "forkGrokSession": "Grok セッションをフォーク",
+      "forkGrokInNewWorktree": "新しいワークツリーで Grok をフォーク",
       "equalizePaneSizes": "ペインのサイズを均等化する",
       "openWorktreeInEditor": "エディタでワークツリーを開く",
       "worktreePath": "ワークツリーのパス",
@@ -1377,6 +1390,8 @@
       "forkCodexInNewWorktree": "新しいワークツリーのフォーク コーデックス",
       "forkAntigravitySession": "フォーク反重力セッション",
       "forkAntigravityInNewWorktree": "新しいワークツリーのフォーク反重力",
+      "forkGrokSession": "Grok セッションをフォーク",
+      "forkGrokInNewWorktree": "新しいワークツリーで Grok をフォーク",
       "splitRight": "右に分割",
       "splitDown": "スプリットダウン",
       "equalizePaneSizes": "ペインのサイズを均等化する",
@@ -1537,7 +1552,8 @@
       "codex": "コーデックス",
       "claude": "クロード",
       "antigravity": "反重力",
-      "empty": "このプロジェクトのクロード、コーデックス、または反重力セッションが見つかりませんでした",
+      "grok": "Grok",
+      "empty": "このプロジェクトのクロード、コーデックス、反重力、または Grok セッションが見つかりませんでした",
       "emptyForFilter": "このフィルターに一致するセッションはありません。",
       "runSession": "新しいターミナルで実行する",
       "runInWorktree": "ワークツリーで実行",
@@ -1696,6 +1712,7 @@
       "attachToClaude": "クロードにくっつく",
       "attachToCodex": "コーデックスに添付する",
       "attachToAntigravity": "反重力に取り付ける",
+      "attachToGrok": "Grok に添付する",
       "copyAbsolutePath": "絶対パスをコピー",
       "copyAbsolutePaths": "絶対パスのコピー",
       "copyRelativePath": "相対パスをコピー",
@@ -2016,6 +2033,7 @@
       "bodyClaude": "このセッションで進行中のクロードの会話があります。中断したところから再開することも、このダイアログを閉じて最初から始めることもできます。",
       "bodyCodex": "このセッションではコーデックスに関する会話が進行中です。中断したところから再開することも、このダイアログを閉じて最初から始めることもできます。",
       "bodyAntigravity": "このセッションでは反重力に関する会話が進行中です。中断したところから再開することも、このダイアログを閉じて最初から始めることもできます。",
+      "bodyGrok": "このセッションでは Grok の会話が進行中です。中断したところから再開することも、このダイアログを閉じて最初から始めることもできます。",
       "sessionIdCopied": "セッションIDがコピーされました。",
       "copyFailed": "セッションIDのコピーに失敗しました。",
       "copyId": "IDをコピーする",

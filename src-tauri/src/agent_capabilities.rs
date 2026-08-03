@@ -99,7 +99,7 @@ pub fn discover(provider: SessionAgentProvider) -> GoalAgentCapabilities {
     match provider {
         SessionAgentProvider::Codex => discover_codex(),
         SessionAgentProvider::Claude => discover_claude(),
-        SessionAgentProvider::Antigravity => GoalAgentCapabilities {
+        SessionAgentProvider::Antigravity | SessionAgentProvider::Grok => GoalAgentCapabilities {
             provider,
             installed: false,
             version: None,

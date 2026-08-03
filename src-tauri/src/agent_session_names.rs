@@ -142,7 +142,7 @@ fn sync_title(target: &LiveTranscript, title: &str) -> Result<(), String> {
     match target.kind {
         AgentKind::Codex => sync_codex_title(&session_id, title),
         AgentKind::Claude => append_claude_title(&target.path, &session_id, title),
-        AgentKind::Antigravity => Ok(()),
+        AgentKind::Antigravity | AgentKind::Grok => Ok(()),
     }
 }
 

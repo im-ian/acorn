@@ -527,6 +527,19 @@ describe("RightPanel background tab loading", () => {
         updated_at: 1770000001,
         resume_command: "claude --resume claude-session",
       },
+      {
+        provider: "grok",
+        id: "grok-session",
+        title: "Grok implementation",
+        preview: null,
+        queued_message_count: 0,
+        subagent_transcript_count: 0,
+        cwd: REPO,
+        worktree: null,
+        transcript_path: "/tmp/grok-session/updates.jsonl",
+        updated_at: 1770000002,
+        resume_command: "grok --resume grok-session",
+      },
     ]);
 
     await act(async () => {
@@ -536,6 +549,7 @@ describe("RightPanel background tab loading", () => {
 
     expect(container.textContent).toContain("Codex patch");
     expect(container.textContent).toContain("Claude plan");
+    expect(container.textContent).toContain("Grok implementation");
 
     act(() => {
       comboboxWithAria(container, "Filter by agent").dispatchEvent(
@@ -546,6 +560,7 @@ describe("RightPanel background tab loading", () => {
 
     expect(container.textContent).toContain("Codex patch");
     expect(container.textContent).not.toContain("Claude plan");
+    expect(container.textContent).not.toContain("Grok implementation");
 
     act(() => {
       comboboxWithAria(container, "Filter by agent").dispatchEvent(
@@ -556,6 +571,18 @@ describe("RightPanel background tab loading", () => {
 
     expect(container.textContent).not.toContain("Codex patch");
     expect(container.textContent).toContain("Claude plan");
+    expect(container.textContent).not.toContain("Grok implementation");
+
+    act(() => {
+      comboboxWithAria(container, "Filter by agent").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    selectOption("Grok");
+
+    expect(container.textContent).not.toContain("Codex patch");
+    expect(container.textContent).not.toContain("Claude plan");
+    expect(container.textContent).toContain("Grok implementation");
   });
 
   it("shows queued recovery and subagent counts separately", async () => {
@@ -626,7 +653,9 @@ describe("RightPanel background tab loading", () => {
 
     expect(container.textContent).not.toContain("Exploring chat runtime");
     expect(container.textContent).not.toContain("Acorn chat");
-    expect(container.textContent).toContain("No Claude, Codex, or Antigravity sessions found");
+    expect(container.textContent).toContain(
+      "No Claude, Codex, Antigravity, or Grok sessions found",
+    );
   });
 
   it("reprobes GitHub visibility when git metadata changes", async () => {
