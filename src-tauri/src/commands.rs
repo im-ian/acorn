@@ -7898,6 +7898,15 @@ impl HookStatusReconciliation {
 /// written it without getting past the dialog. Requiring a Working
 /// classification keeps a finished turn on the `Stop` path, whose closing
 /// `UserPromptSubmit` is reliable.
+///
+/// ponytail: recency, not correlation. A tool the agent dispatched in the
+/// same batch and that finishes while a *different* tool's prompt is still
+/// open writes a line newer than the request, which clears the wait early.
+/// Elicitation dialogs block the loop outright, so the gap needs concurrent
+/// tool execution alongside a permission prompt to appear at all. Closing it
+/// needs what Codex has: the request's tool id (`provider_tool_id`) matched
+/// against the tool id on the transcript result, which `TurnObservation`
+/// would have to start carrying.
 fn claude_attention_resolution(
     hook_provider: Option<AgentKind>,
     detection: &session_status::StatusDetection,
