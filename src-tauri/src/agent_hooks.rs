@@ -1521,6 +1521,13 @@ fn event_can_switch_provider(event: &AgentHookEvent) -> bool {
     )
 }
 
+/// Whether this Claude event is a dialog that stays open until the user acts.
+/// `Stop` also reports `NeedsInput`, but its close is the next
+/// `UserPromptSubmit`, so only the dialog sources need transcript recovery.
+fn claude_event_opens_attention_dialog(event: &AgentHookEvent) -> bool {
+    event.event == AgentHookEventKind::NeedsInput && event.source.as_deref() == Some("native")
+}
+
 fn apply_validated_agent_hook_event(
     sessions: &SessionStore,
     event: AgentHookEvent,
@@ -1540,6 +1547,14 @@ fn apply_validated_agent_hook_event(
         }
         if effects.mark_tool_started {
             sessions.mark_hook_tool_started_at(&event.session_id, SystemTime::now());
+        }
+    }
+
+    if event.provider == SessionAgentProvider::Claude {
+        if claude_event_opens_attention_dialog(&event) {
+            sessions.mark_attention_at(&event.session_id, SystemTime::now());
+        } else {
+            sessions.clear_attention(&event.session_id);
         }
     }
 
@@ -2052,12 +2067,12 @@ fn parse_raw_claude_hook_request(
             Some(_) => return Ok(None),
         },
         "UserPromptSubmit" => (AgentHookEventKind::Start, "native"),
-        // Claude can emit Stop while background tasks or session crons are
-        // still able to wake the parent turn. Those sessions stay Working;
-        // only a Stop with no pending background work is actually awaiting
-        // the user's next prompt.
-        "Stop" if claude_stop_has_pending_background_work(&payload) => return Ok(None),
-        "Stop" => (AgentHookEventKind::NeedsInput, "native"),
+        // Stop means the main agent loop reached the prompt, so the terminal
+        // is the user's again. Background tasks and session crons can still
+        // wake the turn later, but suppressing Stop for them left no event to
+        // recover from: a stalled background agent or a session-lifetime cron
+        // registration pinned the session at Working with nothing to clear it.
+        "Stop" => (AgentHookEventKind::NeedsInput, "native_stop"),
         "Notification" | "PermissionRequest" => (AgentHookEventKind::NeedsInput, "native"),
         "Error" => (AgentHookEventKind::Error, "native"),
         // The settings file registers exactly the events above; anything
@@ -2088,15 +2103,6 @@ fn parse_raw_claude_hook_request(
         native_hooks_enabled: None,
         ownership: AgentHookOwnership::Owner,
     }))
-}
-
-fn claude_stop_has_pending_background_work(payload: &Value) -> bool {
-    ["background_tasks", "session_crons"].iter().any(|key| {
-        payload
-            .get(*key)
-            .and_then(Value::as_array)
-            .is_some_and(|items| !items.is_empty())
-    })
 }
 
 fn parse_raw_codex_hook_request(head: &str, body: &[u8]) -> Result<Option<AgentHookEvent>, String> {
@@ -2844,7 +2850,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_claude_stop_with_background_work_emits_no_transition() {
+    fn raw_claude_stop_waits_even_with_background_work() {
         let (tx, rx) = mpsc::channel();
         let hooks = AgentHookServer::start_with_handler(move |event| {
             tx.send(event).expect("send event");
@@ -2852,6 +2858,9 @@ mod tests {
         .expect("hook server starts");
         let session_id = Uuid::new_v4();
 
+        // Background agents can stall and a cron registration lives for the
+        // whole session, so neither may withhold the turn boundary: the main
+        // loop is at the prompt and the terminal is the user's again.
         for payload in [
             serde_json::json!({
                 "hook_event_name": "Stop",
@@ -2863,33 +2872,24 @@ mod tests {
                 "background_tasks": [],
                 "session_crons": [{"id": "cron-1", "schedule": "in 1m", "recurring": false}],
             }),
+            serde_json::json!({
+                "hook_event_name": "Stop",
+                "background_tasks": [],
+                "session_crons": [],
+            }),
         ] {
             let response = post_raw_claude_hook(&hooks, session_id, &payload.to_string());
             assert!(
-                response.starts_with("HTTP/1.1 202 Accepted"),
-                "a Stop with pending background work is a pause, got {response:?}"
+                response.starts_with("HTTP/1.1 204 No Content"),
+                "every Stop is a turn boundary, got {response:?}"
             );
-            assert!(
-                rx.try_recv().is_err(),
-                "a background pause must not reach the reducer"
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(1))
+                    .expect("Stop delivered")
+                    .event,
+                AgentHookEventKind::NeedsInput
             );
         }
-
-        // Decoy text inside a string field must not suppress the real wait.
-        let decoy = serde_json::json!({
-            "hook_event_name": "Stop",
-            "background_tasks": [],
-            "session_crons": [],
-            "last_assistant_message": "decoy: \"background_tasks\":[{\"status\":\"running\"}]",
-        });
-        let response = post_raw_claude_hook(&hooks, session_id, &decoy.to_string());
-        assert!(response.starts_with("HTTP/1.1 204 No Content"));
-        assert_eq!(
-            rx.recv_timeout(Duration::from_secs(1))
-                .expect("clean Stop delivered")
-                .event,
-            AgentHookEventKind::NeedsInput
-        );
     }
 
     #[test]
@@ -5394,6 +5394,174 @@ mod tests {
         )
         .starts_with("HTTP/1.1 400 Bad Request"));
         assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+    }
+
+    fn claude_reducer_fixture() -> (
+        Arc<acorn_session::SessionStore>,
+        Uuid,
+        Arc<AgentHookReducer>,
+    ) {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Claude".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Claude);
+        let session_id = session.id;
+        sessions.insert(session);
+        let reducer = Arc::new(AgentHookReducer::new(sessions.clone()));
+        (sessions, session_id, reducer)
+    }
+
+    fn claude_event(session_id: Uuid, event: AgentHookEventKind, source: &str) -> AgentHookEvent {
+        AgentHookEvent {
+            session_id,
+            provider: SessionAgentProvider::Claude,
+            event,
+            message: None,
+            source: Some(source.to_string()),
+            lifecycle_id: None,
+            provider_session_id: None,
+            provider_turn_id: None,
+            provider_tool_id: None,
+            provider_version: None,
+            native_hooks_enabled: None,
+            ownership: AgentHookOwnership::Owner,
+        }
+    }
+
+    #[test]
+    fn claude_dialog_marks_attention_and_turn_boundaries_clear_it() {
+        let (sessions, session_id, reducer) = claude_reducer_fixture();
+
+        // A permission prompt or elicitation dialog has no resolving hook, so
+        // the instant it opened is recorded for transcript recovery.
+        reducer
+            .apply(claude_event(
+                session_id,
+                AgentHookEventKind::NeedsInput,
+                "native",
+            ))
+            .expect("dialog applies");
+        assert!(sessions.attention_at(&session_id).is_some());
+
+        // Answering the dialog is invisible to hooks, but the next prompt is
+        // not: a turn boundary retires the request outright.
+        reducer
+            .apply(claude_event(
+                session_id,
+                AgentHookEventKind::Start,
+                "native",
+            ))
+            .expect("prompt applies");
+        assert_eq!(sessions.attention_at(&session_id), None);
+
+        // Stop reports NeedsInput too, yet its close (`UserPromptSubmit`) is
+        // reliable, so it must not leave a request behind for the poll.
+        reducer
+            .apply(claude_event(
+                session_id,
+                AgentHookEventKind::NeedsInput,
+                "native_stop",
+            ))
+            .expect("stop applies");
+        assert_eq!(sessions.attention_at(&session_id), None);
+    }
+
+    #[test]
+    fn claude_attention_resolves_only_from_a_later_turn_line() {
+        let (sessions, session_id, reducer) = claude_reducer_fixture();
+        reducer
+            .apply(claude_event(
+                session_id,
+                AgentHookEventKind::NeedsInput,
+                "native",
+            ))
+            .expect("dialog applies");
+        let attention_at = sessions
+            .attention_at(&session_id)
+            .expect("request recorded");
+        let (_, source, _, lifecycle_revision) =
+            sessions.lifecycle_snapshot(&session_id).expect("snapshot");
+
+        // The pending tool's own line predates the dialog it triggered.
+        assert_eq!(
+            sessions
+                .resolve_attention_if_current(
+                    &session_id,
+                    source,
+                    lifecycle_revision,
+                    attention_at - Duration::from_secs(1),
+                )
+                .expect("store reachable"),
+            None
+        );
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+
+        // A line written afterwards proves the agent got past the dialog.
+        assert!(sessions
+            .resolve_attention_if_current(
+                &session_id,
+                source,
+                lifecycle_revision,
+                attention_at + Duration::from_secs(1),
+            )
+            .expect("store reachable")
+            .is_some());
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+        assert_eq!(sessions.attention_at(&session_id), None);
+    }
+
+    #[test]
+    fn claude_attention_resolution_loses_to_a_newer_lifecycle_write() {
+        let (sessions, session_id, reducer) = claude_reducer_fixture();
+        reducer
+            .apply(claude_event(
+                session_id,
+                AgentHookEventKind::NeedsInput,
+                "native",
+            ))
+            .expect("dialog applies");
+        let attention_at = sessions
+            .attention_at(&session_id)
+            .expect("request recorded");
+        let (_, source, _, stale_revision) =
+            sessions.lifecycle_snapshot(&session_id).expect("snapshot");
+
+        // A second dialog opened while the poll was reading the transcript.
+        reducer
+            .apply(claude_event(
+                session_id,
+                AgentHookEventKind::NeedsInput,
+                "native",
+            ))
+            .expect("second dialog applies");
+
+        assert_eq!(
+            sessions
+                .resolve_attention_if_current(
+                    &session_id,
+                    source,
+                    stale_revision,
+                    attention_at + Duration::from_secs(1),
+                )
+                .expect("store reachable"),
+            None
+        );
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
     }
 
     fn codex_reducer_fixture() -> (
