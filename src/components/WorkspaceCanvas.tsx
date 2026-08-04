@@ -15,6 +15,7 @@ import {
   Sparkles,
   Terminal as TerminalIcon,
   Undo2,
+  Waypoints,
   X,
 } from "lucide-react";
 import {
@@ -34,6 +35,7 @@ import {
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
 import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
+import { requestNewGraphSession } from "../lib/graphSessionEvents";
 import { formatHotkey } from "../lib/hotkeys";
 import { basename } from "../lib/pathUtils";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -166,6 +168,8 @@ function canvasSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
   switch (id) {
     case "goal":
       return <Sparkles size={12} />;
+    case "graph":
+      return <Waypoints size={12} />;
     case "terminal":
       return <CirclePlus size={12} />;
     case "isolated":
@@ -180,6 +184,10 @@ function canvasSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
 function dispatchCanvasSessionCreate(action: ProjectSessionCreateAction) {
   if (action.flow === "goal") {
     requestNewAutonomousGoalSession();
+    return;
+  }
+  if (action.flow === "graph") {
+    requestNewGraphSession();
     return;
   }
   const eventName =
@@ -979,6 +987,7 @@ export function WorkspaceCanvas({
                 commitNode(session.id, purpose, snap, matches)
               }
               onExpand={() => openExpanded(session.id)}
+              onOpenInPanes={() => openInPanes(session.id)}
               onClose={() => requestRemoveSession(session.id)}
               t={t}
             />
@@ -1225,6 +1234,7 @@ interface WorkspaceCanvasSessionNodeProps {
     matches: WorkspaceCanvasAlignmentMatches,
   ) => void;
   onExpand: () => void;
+  onOpenInPanes: () => void;
   onClose: () => void;
   t: Translator;
 }
@@ -1241,6 +1251,7 @@ const WorkspaceCanvasSessionNode = memo(
     onGestureUpdate,
     onCommit,
     onExpand,
+    onOpenInPanes,
     onClose,
     t,
   }: WorkspaceCanvasSessionNodeProps) {
@@ -1469,7 +1480,9 @@ const WorkspaceCanvasSessionNode = memo(
                   size="sm"
                   pulse={session.status === "working"}
                 />
-                {session.mode === "chat" ? (
+                {session.graph ? (
+                  <Waypoints size={12} className="shrink-0 text-accent" />
+                ) : session.mode === "chat" ? (
                   <MessageSquareText
                     size={12}
                     className="shrink-0 text-fg-muted"
@@ -1531,7 +1544,24 @@ const WorkspaceCanvasSessionNode = memo(
             </IconButton>
           </Tooltip>
         </header>
-        {session.mode === "chat" ? (
+        {session.graph ? (
+          <div
+            ref={bodyRef}
+            className="grid min-h-0 flex-1 place-items-center bg-bg p-5 text-center"
+            data-canvas-session-body={session.id}
+          >
+            <div>
+              <Waypoints className="mx-auto text-accent" size={24} />
+              <div className="mt-2 text-xs font-semibold text-fg">{t("graphSession.label")}</div>
+              <div className="mt-1 line-clamp-3 text-[10px] leading-4 text-fg-muted">
+                {session.graph.objective}
+              </div>
+              <Button className="mt-3" size="xs" variant="accentSoft" onClick={onOpenInPanes}>
+                <Maximize2 size={11} /> {t("graphSession.openInPanes")}
+              </Button>
+            </div>
+          </div>
+        ) : session.mode === "chat" ? (
           <div
             ref={bodyRef}
             className="relative min-h-0 flex-1 overflow-hidden bg-bg"

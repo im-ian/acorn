@@ -1232,6 +1232,7 @@
       "newIsolatedSessionWorktree": "新建工作树会话",
       "newChatSession": "新聊天会话",
       "newAutonomousGoalSession": "新建 Loop 会话",
+      "newGraphSession": "新建 Graph 会话",
       "newControlSession": "新建控制会话",
       "newProjectFolder": "新建工作区",
       "newProjectFolderWithWorktree": "新建工作树工作区",
@@ -1292,6 +1293,7 @@
       "newSessionInProject": "此项目中的新会话",
       "newSessionInProjectFolder": "此工作区中的新会话",
       "newAutonomousGoalSession": "新建 Loop 会话",
+      "newGraphSession": "新建 Graph 会话",
       "newIsolatedSessionInProject": "此项目中的新工作树会话",
       "newChatSessionInProject": "此项目中的新聊天会话",
       "newControlSessionInProject": "此项目中的新控制会话",
@@ -1377,6 +1379,7 @@
         "human": "人工"
       },
       "nodeId": "稳定 ID",
+      "nodeKind": "类型",
       "nodeTitle": "标题",
       "instruction": "指令",
       "remove": "删除",
@@ -1396,6 +1399,45 @@
       "cancel": "取消",
       "apply": "应用图"
     }
+  },
+  "graphSession": {
+    "label": "Graph 会话",
+    "newTitle": "新建 Graph 会话",
+    "newSubtitle": "将节点连接到 GOAL，设计可持久化的执行图。",
+    "objective": "目标",
+    "objectivePlaceholder": "这个图应完成什么？",
+    "agent": "智能体",
+    "cancel": "取消",
+    "createAndRun": "创建并运行",
+    "creating": "正在创建…",
+    "requiredSink": "必需的执行终点",
+    "nodeInspector": "节点检查器",
+    "selectNodeHelp": "选择节点进行编辑。从右侧手柄拖到另一个节点的左侧手柄即可连接。",
+    "sourceHandle": "传出连接",
+    "targetHandle": "传入连接",
+    "connectionErrors": {
+      "missingEndpoint": "请选择源节点和目标节点。",
+      "unknownNode": "只能连接现有节点。",
+      "selfConnection": "节点不能连接到自身。",
+      "goalOutgoing": "GOAL 不能有传出连接。",
+      "duplicate": "该连接已存在。",
+      "cycle": "该连接会形成循环。"
+    },
+    "kind": "类型",
+    "instructionPlaceholder": "描述此节点必须完成的工作。",
+    "revision": "修订版",
+    "design": "设计",
+    "runLog": "运行日志",
+    "save": "保存",
+    "run": "运行",
+    "starting": "正在启动…",
+    "lockNotice": "运行中或等待输入时，无法编辑已保存的设计。",
+    "runFromDesign": "请从设计视图运行已保存的图。只有节点返回 WAITING: 时才会显示回复框。",
+    "openInPanes": "在窗格中打开",
+    "invalidRun": "请将每个执行节点连接到 GOAL 并填写目标。",
+    "createFailed": "无法创建 Graph 会话。",
+    "runFailed": "Graph 会话已创建，但无法开始运行",
+    "updateMissing": "更新后的 Graph 会话未返回图。"
   },
   "pane": {
     "empty": {
@@ -1457,6 +1499,7 @@
       "closeAll": "全部关闭",
       "newSessionInThisPane": "在此窗格中新建会话",
       "newGoalSessionInThisPane": "在此窗格中新建 Loop 会话",
+      "newGraphSessionInThisPane": "在此窗格中新建 Graph 会话",
       "closePane": "关闭窗格"
     }
   },
@@ -2351,6 +2394,7 @@
       "newControlSession": "新建控制会话",
       "newChatSession": "新聊天会话",
       "newAutonomousGoalSession": "新建 Loop 会话",
+      "newGraphSession": "新建 Graph 会话",
       "newProject": "新建项目",
       "addExistingProject": "添加现有项目",
       "refreshSessions": "刷新会话",

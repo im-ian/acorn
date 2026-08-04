@@ -1,4 +1,4 @@
-import type { GraphPromptPlan } from "./workGraph";
+import type { GraphPromptPlan, WorkGraph } from "./workGraph";
 
 export type SessionStatus =
   | "ready"
@@ -157,6 +157,38 @@ export interface SessionGoal {
   revision: number;
 }
 
+export interface SessionGraphAgent {
+  provider: SessionAgentProvider;
+  model?: string | null;
+  effort?: string | null;
+}
+
+export interface SessionGraphNodePosition {
+  x: number;
+  y: number;
+}
+
+export interface SessionGraphViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export interface SessionGraphCanvas {
+  version: 1;
+  node_positions: Record<string, SessionGraphNodePosition>;
+  viewport?: SessionGraphViewport | null;
+}
+
+export interface SessionGraph {
+  version: 1;
+  objective: string;
+  agent: SessionGraphAgent;
+  definition: WorkGraph;
+  canvas: SessionGraphCanvas;
+  revision: number;
+}
+
 export type SessionAgentDetection = Record<SessionAgentProvider, string | null>;
 
 export type SessionTitleGenerationStatus =
@@ -259,6 +291,7 @@ export interface Session {
   kind: SessionKind;
   mode?: SessionMode;
   goal?: SessionGoal | null;
+  graph?: SessionGraph | null;
   owner: SessionOwner;
   position: number | null;
   /** Derived backend-side from `worktree_path`'s `.git` being a file (linked

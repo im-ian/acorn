@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use serde::{Deserialize, Serialize};
-
-pub const GRAPH_PROMPT_PLAN_VERSION: u32 = 1;
-pub const GRAPH_PROMPT_CONTINUATION_VERSION: u32 = 1;
-pub const WORK_GRAPH_VERSION: u32 = 1;
-pub const WORK_GRAPH_GOAL_ID: &str = "goal";
+#[cfg(test)]
+pub use acorn_session::{GraphPromptContinuation, WorkGraphEdge, WorkGraphNode};
+pub use acorn_session::{
+    GraphPromptPlan, WorkGraph, WorkGraphNodeKind, GRAPH_PROMPT_CONTINUATION_VERSION,
+    GRAPH_PROMPT_PLAN_VERSION, WORK_GRAPH_GOAL_ID, WORK_GRAPH_VERSION,
+};
 const MAX_NODES: usize = 24;
 const MAX_EDGES: usize = 96;
 const MAX_ID_CHARS: usize = 64;
@@ -13,114 +13,6 @@ const MAX_TITLE_CHARS: usize = 120;
 const MAX_INSTRUCTION_CHARS: usize = 1_200;
 const MAX_TOTAL_INSTRUCTION_CHARS: usize = 8_000;
 const MAX_CONTINUATION_CHECKPOINT_CHARS: usize = 8_000;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GraphPromptContinuation {
-    pub version: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "mode", rename_all = "snake_case")]
-pub enum GraphPromptPlan {
-    Automatic {
-        version: u32,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        continuation: Option<GraphPromptContinuation>,
-    },
-    Manual {
-        version: u32,
-        graph: WorkGraph,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        continuation: Option<GraphPromptContinuation>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WorkGraph {
-    pub version: u32,
-    pub nodes: Vec<WorkGraphNode>,
-    pub edges: Vec<WorkGraphEdge>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WorkGraphNode {
-    pub id: String,
-    pub kind: WorkGraphNodeKind,
-    pub title: String,
-    pub instruction: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkGraphNodeKind {
-    Agent,
-    Validator,
-    Merge,
-    Human,
-    GoalSink,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WorkGraphEdge {
-    pub id: String,
-    pub from: String,
-    pub to: String,
-}
-
-impl GraphPromptPlan {
-    pub fn automatic() -> Self {
-        Self::Automatic {
-            version: GRAPH_PROMPT_PLAN_VERSION,
-            continuation: None,
-        }
-    }
-
-    fn version(&self) -> u32 {
-        match self {
-            Self::Automatic { version, .. } | Self::Manual { version, .. } => *version,
-        }
-    }
-
-    pub fn continuation(&self) -> Option<&GraphPromptContinuation> {
-        match self {
-            Self::Automatic { continuation, .. } | Self::Manual { continuation, .. } => {
-                continuation.as_ref()
-            }
-        }
-    }
-
-    pub fn without_continuation(&self) -> Self {
-        match self {
-            Self::Automatic { version, .. } => Self::Automatic {
-                version: *version,
-                continuation: None,
-            },
-            Self::Manual { version, graph, .. } => Self::Manual {
-                version: *version,
-                graph: graph.clone(),
-                continuation: None,
-            },
-        }
-    }
-
-    pub fn as_continuation(&self) -> Self {
-        match self.without_continuation() {
-            Self::Automatic { version, .. } => Self::Automatic {
-                version,
-                continuation: Some(GraphPromptContinuation {
-                    version: GRAPH_PROMPT_CONTINUATION_VERSION,
-                }),
-            },
-            Self::Manual { version, graph, .. } => Self::Manual {
-                version,
-                graph,
-                continuation: Some(GraphPromptContinuation {
-                    version: GRAPH_PROMPT_CONTINUATION_VERSION,
-                }),
-            },
-        }
-    }
-}
 
 fn valid_stable_id(id: &str) -> bool {
     let mut chars = id.chars();

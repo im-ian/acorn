@@ -30,7 +30,8 @@ use acorn_session::status::StatusReason as SessionStatusReason;
 use acorn_session::{
     AgentStatusSource, Project, Session, SessionAgentProvider, SessionGoal,
     SessionGoalModelSelection, SessionGoalProgress, SessionGoalRunState, SessionGoalStage,
-    SessionGoalStagePolicy, SessionKind, SessionMode, SessionOwner, SessionStatus,
+    SessionGoalStagePolicy, SessionGraph, SessionGraphNodePosition, SessionKind, SessionMode,
+    SessionOwner, SessionStatus, SESSION_GRAPH_CANVAS_VERSION, SESSION_GRAPH_VERSION,
 };
 use acorn_transcript::{assistant_message_text, collapse_preview};
 
@@ -543,6 +544,16 @@ fn authorize_chat_session(state: &AppState, session_id: &str) -> AppResult<Sessi
         )));
     }
     Ok(session)
+}
+
+fn reject_system_managed_graph_transcript_mutation(session: &Session) -> AppResult<()> {
+    if session.graph.is_some() {
+        return Err(AppError::Other(
+            "Graph run history is managed by the saved graph; edit the design or start a new run"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn chat_provider_label(ai: &crate::ai::AiExecutionRequest) -> &'static str {
@@ -4605,6 +4616,7 @@ pub async fn create_session(
     project_scoped: Option<bool>,
     mode: Option<SessionMode>,
     goal: Option<SessionGoal>,
+    graph: Option<SessionGraph>,
 ) -> AppResult<Session> {
     create_session_inner(
         state.inner(),
@@ -4617,6 +4629,7 @@ pub async fn create_session(
         project_scoped.unwrap_or(true),
         mode.unwrap_or_default(),
         goal,
+        graph,
         false,
     )
 }
@@ -4647,6 +4660,7 @@ pub async fn create_session_from_dialog<R: Runtime>(
         project_scoped.unwrap_or(true),
         mode.unwrap_or_default(),
         None,
+        None,
         true,
     )?))
 }
@@ -4662,6 +4676,7 @@ fn create_session_inner(
     project_scoped: bool,
     mode: SessionMode,
     goal: Option<SessionGoal>,
+    graph: Option<SessionGraph>,
     allow_project_registration: bool,
 ) -> AppResult<Session> {
     let goal = goal
@@ -4672,8 +4687,16 @@ fn create_session_inner(
             goal.progress = SessionGoalProgress::initial();
             goal
         });
-    validate_goal_session_creation(
+    let graph = graph
+        .map(normalize_session_graph)
+        .transpose()?
+        .map(|mut graph| {
+            graph.revision = 1;
+            graph
+        });
+    validate_special_session_creation(
         goal.as_ref(),
+        graph.as_ref(),
         isolated,
         kind,
         agent_provider,
@@ -4728,6 +4751,7 @@ fn create_session_inner(
     session.agent_provider = agent_provider;
     session.mode = mode;
     session.goal = goal;
+    session.graph = graph;
     let inserted = state.sessions.insert(session);
     if project_scoped {
         ensure_project_for_root(state, &repo);
@@ -4736,14 +4760,33 @@ fn create_session_inner(
     Ok(enrich_session(inserted))
 }
 
-fn validate_goal_session_creation(
+fn validate_special_session_creation(
     goal: Option<&SessionGoal>,
+    graph: Option<&SessionGraph>,
     isolated: bool,
     kind: SessionKind,
     agent_provider: Option<SessionAgentProvider>,
     project_scoped: bool,
     mode: SessionMode,
 ) -> AppResult<()> {
+    if goal.is_some() && graph.is_some() {
+        return Err(AppError::Other(
+            "a session cannot be both a Loop and Graph session".to_string(),
+        ));
+    }
+    if let Some(graph) = graph {
+        if !isolated || !project_scoped || kind != SessionKind::Regular || mode != SessionMode::Chat
+        {
+            return Err(AppError::Other(
+                "Graph sessions must be isolated regular project chat sessions".to_string(),
+            ));
+        }
+        if agent_provider != Some(graph.agent.provider) {
+            return Err(AppError::Other(
+                "Graph session provider must match the selected agent".to_string(),
+            ));
+        }
+    }
     let Some(goal) = goal else {
         return Ok(());
     };
@@ -4758,6 +4801,88 @@ fn validate_goal_session_creation(
         ));
     }
     Ok(())
+}
+
+fn normalize_session_graph(mut graph: SessionGraph) -> AppResult<SessionGraph> {
+    if graph.version != SESSION_GRAPH_VERSION {
+        return Err(AppError::Other(format!(
+            "unsupported Graph session version: {}",
+            graph.version
+        )));
+    }
+    graph.objective = graph.objective.trim().to_string();
+    if graph.objective.is_empty() {
+        return Err(AppError::Other(
+            "Graph objective must not be empty".to_string(),
+        ));
+    }
+    graph.agent.model = crate::ai::normalize_optional_model_arg(graph.agent.model.as_deref())?;
+    graph.agent.effort = crate::ai::normalize_effort_arg(graph.agent.effort.as_deref())?;
+    work_graph::validate_work_graph(&graph.definition).map_err(AppError::Other)?;
+    if graph.canvas.version != SESSION_GRAPH_CANVAS_VERSION {
+        return Err(AppError::Other(format!(
+            "unsupported Graph canvas version: {}",
+            graph.canvas.version
+        )));
+    }
+    let node_ids = graph
+        .definition
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<HashSet<_>>();
+    graph
+        .canvas
+        .node_positions
+        .retain(|node_id, _| node_ids.contains(node_id.as_str()));
+    for (index, node) in graph.definition.nodes.iter().enumerate() {
+        let position = graph
+            .canvas
+            .node_positions
+            .entry(node.id.clone())
+            .or_insert(SessionGraphNodePosition {
+                x: 80.0 + (index % 4) as f64 * 260.0,
+                y: 80.0 + (index / 4) as f64 * 180.0,
+            });
+        if !position.x.is_finite() || !position.y.is_finite() {
+            return Err(AppError::Other(format!(
+                "Graph node {} has a non-finite canvas position",
+                node.id
+            )));
+        }
+        position.x = position.x.clamp(-100_000.0, 100_000.0);
+        position.y = position.y.clamp(-100_000.0, 100_000.0);
+    }
+    if let Some(viewport) = graph.canvas.viewport.as_mut() {
+        if !viewport.x.is_finite() || !viewport.y.is_finite() || !viewport.zoom.is_finite() {
+            return Err(AppError::Other(
+                "Graph canvas viewport must contain finite values".to_string(),
+            ));
+        }
+        viewport.x = viewport.x.clamp(-100_000.0, 100_000.0);
+        viewport.y = viewport.y.clamp(-100_000.0, 100_000.0);
+        viewport.zoom = viewport.zoom.clamp(0.1, 4.0);
+    }
+    if graph.revision == 0 {
+        graph.revision = 1;
+    }
+    Ok(graph)
+}
+
+fn normalized_graph_for_session(session: &Session) -> AppResult<Option<SessionGraph>> {
+    let Some(graph) = session.graph.clone() else {
+        return Ok(None);
+    };
+    validate_special_session_creation(
+        session.goal.as_ref(),
+        Some(&graph),
+        session.isolated,
+        session.kind,
+        session.agent_provider,
+        session.project_scoped,
+        session.mode,
+    )?;
+    normalize_session_graph(graph).map(Some)
 }
 
 fn normalize_session_goal(mut goal: SessionGoal) -> AppResult<SessionGoal> {
@@ -4805,6 +4930,16 @@ fn goal_ai_provider(provider: SessionAgentProvider) -> crate::ai::AiProvider {
         SessionAgentProvider::Codex => crate::ai::AiProvider::Codex,
         SessionAgentProvider::Antigravity => crate::ai::AiProvider::Antigravity,
         SessionAgentProvider::Grok => crate::ai::AiProvider::Grok,
+    }
+}
+
+fn graph_ai_request(graph: &SessionGraph) -> crate::ai::AiExecutionRequest {
+    crate::ai::AiExecutionRequest {
+        provider: goal_ai_provider(graph.agent.provider),
+        model: graph.agent.model.clone(),
+        effort: graph.agent.effort.clone(),
+        ollama_model: None,
+        llm_model: None,
     }
 }
 
@@ -4880,6 +5015,7 @@ pub async fn save_chat_session_state(
     mut chat_state: persistence::ChatSessionState,
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &chat_state.session_id)?;
+    reject_system_managed_graph_transcript_mutation(&session)?;
     chat_state.session_id = session.id.to_string();
     apply_acorn_session_metadata(&mut chat_state, &session);
     run_blocking("save chat session state", move || {
@@ -4895,6 +5031,7 @@ pub async fn append_chat_message(
     message: persistence::ChatMessage,
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
+    reject_system_managed_graph_transcript_mutation(&session)?;
     let session_id = session.id.to_string();
     run_blocking("append chat message", move || {
         persistence::append_chat_message(&session_id, message)
@@ -4910,6 +5047,7 @@ pub async fn update_chat_message(
     patch: persistence::ChatMessagePatch,
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
+    reject_system_managed_graph_transcript_mutation(&session)?;
     let session_id = session.id.to_string();
     run_blocking("update chat message", move || {
         persistence::update_chat_message(&session_id, &message_id, patch)
@@ -5370,6 +5508,47 @@ pub async fn run_goal_session<R: Runtime>(
 }
 
 #[tauri::command]
+pub async fn run_graph_session<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<persistence::ChatSessionState> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    let Some(graph) = normalized_graph_for_session(&session)? else {
+        return Err(AppError::Other(
+            "session is not a Graph session".to_string(),
+        ));
+    };
+    let app_state = state.inner().clone();
+    run_blocking("run graph session", move || {
+        ensure_chat_session_has_no_active_run(&app_state, &session.id)?;
+        let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
+        if active_graph_waiting_turn(&chat_state)?.is_some() {
+            return Err(AppError::Other(
+                "Graph session is waiting for a reply; continue the current run before starting again"
+                    .to_string(),
+            ));
+        }
+        let plan = GraphPromptPlan::Manual {
+            version: work_graph::GRAPH_PROMPT_PLAN_VERSION,
+            graph: graph.definition.clone(),
+            continuation: None,
+        };
+        send_chat_message_from_state_inner(
+            &app,
+            &app_state,
+            session,
+            graph_ai_request(&graph),
+            graph.objective,
+            Some(plan),
+            false,
+            chat_state,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn send_chat_message<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
@@ -5378,9 +5557,20 @@ pub async fn send_chat_message<R: Runtime>(
     content: String,
     graph_prompt_plan: Option<GraphPromptPlan>,
 ) -> AppResult<persistence::ChatSessionState> {
-    let session = authorize_chat_session(state.inner(), &session_id)?;
+    let mut session = authorize_chat_session(state.inner(), &session_id)?;
+    if let Some(graph) = normalized_graph_for_session(&session)? {
+        session.graph = Some(graph);
+    }
     let app_state = state.inner().clone();
     run_blocking("send chat message", move || {
+        if session.graph.is_some() {
+            let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
+            if active_graph_waiting_turn(&chat_state)?.is_none() {
+                return Err(AppError::Other(
+                    "Graph sessions start from the saved graph; use Run".to_string(),
+                ));
+            }
+        }
         let goal_continuation = session.goal.as_ref().and_then(|goal| {
             matches!(
                 goal.progress.state,
@@ -5389,10 +5579,21 @@ pub async fn send_chat_message<R: Runtime>(
             .then_some((goal.revision, goal.progress.current_stage?))
         });
         let effective_ai = session
-            .goal
+            .graph
             .as_ref()
-            .map(|goal| goal_ai_request(goal, goal.progress.current_stage))
+            .map(graph_ai_request)
+            .or_else(|| {
+                session
+                    .goal
+                    .as_ref()
+                    .map(|goal| goal_ai_request(goal, goal.progress.current_stage))
+            })
             .unwrap_or(ai);
+        let graph_prompt_plan = if session.graph.is_some() {
+            None
+        } else {
+            graph_prompt_plan
+        };
         if let Some((revision, stage)) = goal_continuation {
             if !save_goal_progress_if_current(
                 &app_state,
@@ -5499,6 +5700,21 @@ fn compile_chat_provider_content(
     }
 }
 
+fn validate_graph_prompt_plan_for_session(
+    session: &Session,
+    graph_prompt_plan: Option<&GraphPromptPlan>,
+) -> AppResult<()> {
+    let Some(saved_graph) = session.graph.as_ref() else {
+        return Ok(());
+    };
+    match graph_prompt_plan {
+        Some(GraphPromptPlan::Manual { graph, .. }) if graph == &saved_graph.definition => Ok(()),
+        _ => Err(AppError::Other(
+            "Graph continuation does not match the saved session graph".to_string(),
+        )),
+    }
+}
+
 fn send_chat_message_from_state_inner<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
@@ -5515,6 +5731,7 @@ fn send_chat_message_from_state_inner<R: Runtime>(
         graph_prompt_plan,
         default_missing_graph_prompt_plan,
     )?;
+    validate_graph_prompt_plan_for_session(&session, graph_prompt_plan.as_ref())?;
     let raw_content = content.trim().to_string();
     let continuation_checkpoint = if graph_prompt_plan
         .as_ref()
@@ -5625,6 +5842,11 @@ pub async fn retry_chat_message<R: Runtime>(
     content: Option<String>,
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
+    if session.graph.is_some() {
+        return Err(AppError::Other(
+            "Graph responses cannot be regenerated; run the saved design again".to_string(),
+        ));
+    }
     let app_state = state.inner().clone();
     run_blocking("retry chat message", move || {
         let goal_retry = session.goal.as_ref().and_then(|goal| {
@@ -5641,9 +5863,15 @@ pub async fn retry_chat_message<R: Runtime>(
             ))
         });
         let effective_ai = session
-            .goal
+            .graph
             .as_ref()
-            .map(|goal| goal_ai_request(goal, goal.progress.current_stage))
+            .map(graph_ai_request)
+            .or_else(|| {
+                session
+                    .goal
+                    .as_ref()
+                    .map(|goal| goal_ai_request(goal, goal.progress.current_stage))
+            })
             .unwrap_or(ai);
         if let Some((revision, stage, approval_pending)) = goal_retry {
             if !save_goal_progress_if_current(
@@ -5725,6 +5953,7 @@ pub async fn delete_chat_message<R: Runtime>(
     message_id: String,
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
+    reject_system_managed_graph_transcript_mutation(&session)?;
     let app_state = state.inner().clone();
     run_blocking("delete chat message", move || {
         delete_chat_message_inner(&app, &app_state, session, message_id)
@@ -6633,6 +6862,54 @@ pub fn update_session_goal(
     let Some(updated) = state.sessions.update_goal(&id, expected_revision, goal)? else {
         return Err(AppError::Other(
             "Loop objective changed since this editor was opened".to_string(),
+        ));
+    };
+    persist(&state);
+    Ok(enrich_session(updated))
+}
+
+#[tauri::command]
+pub fn update_session_graph(
+    state: State<'_, AppState>,
+    id: String,
+    expected_revision: u32,
+    graph: SessionGraph,
+) -> AppResult<Session> {
+    let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
+    let current = state.sessions.get(&id)?;
+    let Some(saved_graph) = normalized_graph_for_session(&current)? else {
+        return Err(AppError::Other(
+            "session is not a project Graph session".to_string(),
+        ));
+    };
+    if matches!(
+        current.status,
+        SessionStatus::Working | SessionStatus::WaitingForInput
+    ) {
+        return Err(AppError::Other(
+            "Graph design cannot be edited while its run is active or waiting".to_string(),
+        ));
+    }
+    ensure_chat_session_has_no_active_run(state.inner(), &id)?;
+    let chat_state = persistence::load_chat_session_state(&id.to_string())?;
+    if active_graph_waiting_turn(&chat_state)?.is_some() {
+        return Err(AppError::Other(
+            "Graph design cannot be edited while a run is waiting for input".to_string(),
+        ));
+    }
+    let next_revision = expected_revision
+        .checked_add(1)
+        .ok_or_else(|| AppError::Other("Graph revision overflow".to_string()))?;
+    let mut graph = normalize_session_graph(graph)?;
+    if saved_graph.agent.provider != graph.agent.provider {
+        return Err(AppError::Other(
+            "Graph session provider cannot be changed after creation".to_string(),
+        ));
+    }
+    graph.revision = next_revision;
+    let Some(updated) = state.sessions.update_graph(&id, expected_revision, graph)? else {
+        return Err(AppError::Other(
+            "Graph design changed since this editor was opened".to_string(),
         ));
     };
     persist(&state);
@@ -10475,10 +10752,10 @@ mod tests {
         configured_git_identity, create_unique_worktree, daemon_spawn_name_for_session,
         detach_requested_by_stale_renderer, font_name_from_path,
         infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
-        normalize_session_goal, poll_defers_to_hook, remove_linked_worktree_at_path,
-        restore_pending_session_removal, seed_initial_commit, should_remove_local_project_mirror,
-        validate_editor_command, validate_new_project_name, ChatProviderAdapter,
-        ProcessMemorySnapshot,
+        normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
+        remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
+        should_remove_local_project_mirror, validate_editor_command, validate_new_project_name,
+        ChatProviderAdapter, ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingSessionRemoval};
@@ -10486,7 +10763,8 @@ mod tests {
     use acorn_session::{AgentStatusSource, SessionStatus};
     use acorn_session::{
         Session, SessionAgentProvider, SessionGoal, SessionGoalModelConfig, SessionGoalPolicies,
-        SessionGoalPreset, SessionGoalProgress, SessionGoalStagePolicy, SessionKind, SessionMode,
+        SessionGoalPreset, SessionGoalProgress, SessionGoalStagePolicy, SessionGraph,
+        SessionGraphAgent, SessionGraphCanvas, SessionGraphNodePosition, SessionKind, SessionMode,
     };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -10549,6 +10827,38 @@ mod tests {
         }
     }
 
+    fn graph_spec(provider: SessionAgentProvider) -> SessionGraph {
+        let definition = match single_node_manual_graph_plan("Implement the graph session.") {
+            crate::work_graph::GraphPromptPlan::Manual { graph, .. } => graph,
+            _ => unreachable!("manual graph helper"),
+        };
+        SessionGraph {
+            version: 1,
+            objective: "  Persist the graph  ".to_string(),
+            agent: SessionGraphAgent {
+                provider,
+                model: Some("  model-test  ".to_string()),
+                effort: Some(" high ".to_string()),
+            },
+            definition,
+            canvas: SessionGraphCanvas {
+                version: 1,
+                node_positions: std::collections::BTreeMap::from([
+                    (
+                        "build".to_string(),
+                        SessionGraphNodePosition { x: 12.0, y: 24.0 },
+                    ),
+                    (
+                        "unknown".to_string(),
+                        SessionGraphNodePosition { x: 1.0, y: 2.0 },
+                    ),
+                ]),
+                viewport: None,
+            },
+            revision: 9,
+        }
+    }
+
     #[test]
     fn goal_spec_normalization_preserves_a_durable_snapshot() {
         let normalized = normalize_session_goal(goal_spec(SessionAgentProvider::Codex))
@@ -10576,8 +10886,9 @@ mod tests {
     fn goal_creation_requires_an_isolated_project_chat_session() {
         let goal = goal_spec(SessionAgentProvider::Codex);
 
-        assert!(super::validate_goal_session_creation(
+        assert!(super::validate_special_session_creation(
             Some(&goal),
+            None,
             true,
             SessionKind::Regular,
             Some(SessionAgentProvider::Codex),
@@ -10585,8 +10896,9 @@ mod tests {
             SessionMode::Chat,
         )
         .is_ok());
-        assert!(super::validate_goal_session_creation(
+        assert!(super::validate_special_session_creation(
             Some(&goal),
+            None,
             false,
             SessionKind::Regular,
             Some(SessionAgentProvider::Codex),
@@ -10594,8 +10906,9 @@ mod tests {
             SessionMode::Chat,
         )
         .is_err());
-        assert!(super::validate_goal_session_creation(
+        assert!(super::validate_special_session_creation(
             Some(&goal),
+            None,
             true,
             SessionKind::Regular,
             Some(SessionAgentProvider::Claude),
@@ -10603,6 +10916,110 @@ mod tests {
             SessionMode::Chat,
         )
         .is_err());
+    }
+
+    #[test]
+    fn graph_normalization_validates_definition_and_canvas_contract() {
+        let normalized = normalize_session_graph(graph_spec(SessionAgentProvider::Codex))
+            .expect("valid graph normalizes");
+
+        assert_eq!(normalized.objective, "Persist the graph");
+        assert_eq!(normalized.agent.model.as_deref(), Some("model-test"));
+        assert!(!normalized.canvas.node_positions.contains_key("unknown"));
+        assert!(normalized.canvas.node_positions.contains_key("goal"));
+
+        let mut invalid = graph_spec(SessionAgentProvider::Codex);
+        invalid.definition.edges.clear();
+        assert!(normalize_session_graph(invalid).is_err());
+    }
+
+    #[test]
+    fn graph_creation_requires_an_isolated_project_chat_session_and_matching_provider() {
+        let graph = graph_spec(SessionAgentProvider::Codex);
+
+        assert!(super::validate_special_session_creation(
+            None,
+            Some(&graph),
+            true,
+            SessionKind::Regular,
+            Some(SessionAgentProvider::Codex),
+            true,
+            SessionMode::Chat,
+        )
+        .is_ok());
+        assert!(super::validate_special_session_creation(
+            None,
+            Some(&graph),
+            false,
+            SessionKind::Regular,
+            Some(SessionAgentProvider::Codex),
+            true,
+            SessionMode::Chat,
+        )
+        .is_err());
+        assert!(super::validate_special_session_creation(
+            None,
+            Some(&graph),
+            true,
+            SessionKind::Regular,
+            Some(SessionAgentProvider::Claude),
+            true,
+            SessionMode::Chat,
+        )
+        .is_err());
+        assert!(super::validate_special_session_creation(
+            Some(&goal_spec(SessionAgentProvider::Codex)),
+            Some(&graph),
+            true,
+            SessionKind::Regular,
+            Some(SessionAgentProvider::Codex),
+            true,
+            SessionMode::Chat,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn persisted_graph_contract_is_rechecked_before_execution_or_mutation() {
+        let mut session = scoped_session("graph", "/tmp/acorn", true);
+        session.isolated = true;
+        session.mode = SessionMode::Chat;
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.graph = Some(graph_spec(SessionAgentProvider::Codex));
+
+        assert!(super::normalized_graph_for_session(&session)
+            .expect("valid graph session normalizes")
+            .is_some());
+        assert!(super::reject_system_managed_graph_transcript_mutation(&session).is_err());
+
+        session.goal = Some(goal_spec(SessionAgentProvider::Codex));
+        assert!(super::normalized_graph_for_session(&session).is_err());
+        session.goal = None;
+        session.isolated = false;
+        assert!(super::normalized_graph_for_session(&session).is_err());
+    }
+
+    #[test]
+    fn graph_session_accepts_only_its_saved_manual_prompt_plan() {
+        let graph = graph_spec(SessionAgentProvider::Codex);
+        let mut session = scoped_session("graph", "/tmp/acorn", true);
+        session.isolated = true;
+        session.mode = SessionMode::Chat;
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.graph = Some(graph.clone());
+        let matching = crate::work_graph::GraphPromptPlan::Manual {
+            version: crate::work_graph::GRAPH_PROMPT_PLAN_VERSION,
+            graph: graph.definition.clone(),
+            continuation: None,
+        };
+
+        assert!(super::validate_graph_prompt_plan_for_session(&session, Some(&matching),).is_ok());
+        assert!(super::validate_graph_prompt_plan_for_session(
+            &session,
+            Some(&crate::work_graph::GraphPromptPlan::automatic()),
+        )
+        .is_err());
+        assert!(super::validate_graph_prompt_plan_for_session(&session, None).is_err());
     }
 
     #[test]

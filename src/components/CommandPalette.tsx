@@ -22,11 +22,13 @@ import {
   Terminal,
   Trash2,
   Trees,
+  Waypoints,
 } from "lucide-react";
 import { RESET_PANEL_SIZES_EVENT } from "../lib/layoutEvents";
 import { useAppStore, type WorkspaceViewMode } from "../store";
 import { api } from "../lib/api";
 import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
+import { requestNewGraphSession } from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
@@ -132,6 +134,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   function handleNewAutonomousGoalSession() {
     requestNewAutonomousGoalSession();
+    close();
+  }
+
+  function handleNewGraphSession() {
+    requestNewGraphSession();
     close();
   }
 
@@ -391,6 +398,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             <span>
               {cpt(t, "commandPalette.commands.newAutonomousGoalSession")}
             </span>
+          </Command.Item>
+          <Command.Item
+            value="new-graph-session"
+            onSelect={handleNewGraphSession}
+            keywords={["graph", "dag", "nodes", "workflow", "mermaid"]}
+          >
+            <Waypoints size={14} className="text-accent" />
+            <span>{cpt(t, "commandPalette.commands.newGraphSession")}</span>
           </Command.Item>
           <Command.Item
             value="new-project"

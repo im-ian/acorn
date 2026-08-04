@@ -1232,6 +1232,7 @@
       "newIsolatedSessionWorktree": "新しいワークツリーセッション",
       "newChatSession": "新しいチャットセッション",
       "newAutonomousGoalSession": "新しい Loop セッション",
+      "newGraphSession": "新しい Graph セッション",
       "newControlSession": "新しいコントロールセッション",
       "newProjectFolder": "新しいワークスペース",
       "newProjectFolderWithWorktree": "新しいワークツリーワークスペース",
@@ -1292,6 +1293,7 @@
       "newSessionInProject": "このプロジェクトの新しいセッション",
       "newSessionInProjectFolder": "このワークスペースの新しいセッション",
       "newAutonomousGoalSession": "新しい Loop セッション",
+      "newGraphSession": "新しい Graph セッション",
       "newIsolatedSessionInProject": "このプロジェクトの新しいワークツリー セッション",
       "newChatSessionInProject": "このプロジェクトの新しいチャット セッション",
       "newControlSessionInProject": "このプロジェクトの新しいコントロール セッション",
@@ -1377,6 +1379,7 @@
         "human": "人間"
       },
       "nodeId": "固定 ID",
+      "nodeKind": "種類",
       "nodeTitle": "タイトル",
       "instruction": "指示",
       "remove": "削除",
@@ -1396,6 +1399,45 @@
       "cancel": "キャンセル",
       "apply": "グラフを適用"
     }
+  },
+  "graphSession": {
+    "label": "Graph セッション",
+    "newTitle": "新しい Graph セッション",
+    "newSubtitle": "ノードを GOAL に接続して、永続的な実行グラフを設計します。",
+    "objective": "目標",
+    "objectivePlaceholder": "このグラフで何を達成しますか？",
+    "agent": "エージェント",
+    "cancel": "キャンセル",
+    "createAndRun": "作成して実行",
+    "creating": "作成中…",
+    "requiredSink": "必須の実行終端",
+    "nodeInspector": "ノードインスペクター",
+    "selectNodeHelp": "編集するノードを選択します。右のハンドルから別のノードの左のハンドルへドラッグして接続します。",
+    "sourceHandle": "出力接続",
+    "targetHandle": "入力接続",
+    "connectionErrors": {
+      "missingEndpoint": "接続元と接続先のノードを選択してください。",
+      "unknownNode": "既存のノード間のみ接続できます。",
+      "selfConnection": "ノードを自身に接続することはできません。",
+      "goalOutgoing": "GOAL から外向きの接続は作成できません。",
+      "duplicate": "その接続はすでに存在します。",
+      "cycle": "その接続は循環を作成します。"
+    },
+    "kind": "種類",
+    "instructionPlaceholder": "このノードが完了する作業を説明してください。",
+    "revision": "リビジョン",
+    "design": "設計",
+    "runLog": "実行ログ",
+    "save": "保存",
+    "run": "実行",
+    "starting": "開始中…",
+    "lockNotice": "実行中または入力待ちの間、保存済みの設計は編集できません。",
+    "runFromDesign": "設計画面から保存済みグラフを実行します。ノードが WAITING: を返した場合のみ返信欄が表示されます。",
+    "openInPanes": "ペインで開く",
+    "invalidRun": "すべての実行ノードを GOAL に接続し、目標を入力してください。",
+    "createFailed": "Graph セッションを作成できませんでした。",
+    "runFailed": "Graph セッションは作成されましたが、実行を開始できませんでした",
+    "updateMissing": "更新された Graph セッションにグラフがありません。"
   },
   "pane": {
     "empty": {
@@ -1457,6 +1499,7 @@
       "closeAll": "すべて閉じる",
       "newSessionInThisPane": "このペインの新しいセッション",
       "newGoalSessionInThisPane": "このペインの新しい Loop セッション",
+      "newGraphSessionInThisPane": "このペインの新しい Graph セッション",
       "closePane": "ペインを閉じる"
     }
   },
@@ -2351,6 +2394,7 @@
       "newControlSession": "新しいコントロールセッション",
       "newChatSession": "新しいチャットセッション",
       "newAutonomousGoalSession": "新しい Loop セッション",
+      "newGraphSession": "新しい Graph セッション",
       "newProject": "新しいプロジェクト",
       "addExistingProject": "既存のプロジェクトを追加する",
       "refreshSessions": "セッションを更新する",

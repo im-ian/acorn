@@ -419,56 +419,56 @@ describe("ChatPane", () => {
   });
 
   it("marks a chat session as waiting when the assistant emits the waiting marker", async () => {
+    const initialRun: ChatMessage[] = [
+      {
+        id: "u1",
+        role: "user",
+        content: "prepare a plan",
+        graph_prompt_plan: { version: 1, mode: "automatic" },
+        created_at: "2026-01-01T00:00:00Z",
+        status: "complete",
+        metadata: null,
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Here is the plan.\n\nWAITING: Confirm it to continue.",
+        created_at: "2026-01-01T00:00:01Z",
+        status: "complete",
+        metadata: null,
+      },
+    ];
+    const missingMarkerRun: ChatMessage[] = [
+      ...initialRun,
+      {
+        id: "u2",
+        role: "user",
+        content: "approved",
+        graph_prompt_plan: {
+          version: 1,
+          mode: "automatic",
+          continuation: { version: 1 },
+        },
+        created_at: "2026-01-01T00:00:02Z",
+        status: "complete",
+        metadata: null,
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "Progress was made, but the protocol marker was omitted.",
+        created_at: "2026-01-01T00:00:03Z",
+        status: "complete",
+        metadata: null,
+      },
+    ];
     mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
     mocks.sendChatMessage
+      .mockResolvedValueOnce(chatState("s1", initialRun))
+      .mockResolvedValueOnce(chatState("s1", missingMarkerRun))
       .mockResolvedValueOnce(
         chatState("s1", [
-          {
-            id: "u1",
-            role: "user",
-            content: "prepare a plan",
-            graph_prompt_plan: { version: 1, mode: "automatic" },
-            created_at: "2026-01-01T00:00:00Z",
-            status: "complete",
-            metadata: null,
-          },
-          {
-            id: "a1",
-            role: "assistant",
-            content: "Here is the plan.\n\nWAITING: Confirm it to continue.",
-            created_at: "2026-01-01T00:00:01Z",
-            status: "complete",
-            metadata: null,
-          },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        chatState("s1", [
-          {
-            id: "u2",
-            role: "user",
-            content: "approved",
-            graph_prompt_plan: {
-              version: 1,
-              mode: "automatic",
-              continuation: { version: 1 },
-            },
-            created_at: "2026-01-01T00:00:02Z",
-            status: "complete",
-            metadata: null,
-          },
-          {
-            id: "a2",
-            role: "assistant",
-            content: "Progress was made, but the protocol marker was omitted.",
-            created_at: "2026-01-01T00:00:03Z",
-            status: "complete",
-            metadata: null,
-          },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        chatState("s1", [
+          ...missingMarkerRun,
           {
             id: "u3",
             role: "user",
@@ -531,16 +531,11 @@ describe("ChatPane", () => {
       "s1",
       expect.objectContaining({ provider: "claude" }),
       "approved",
-      {
-        version: 1,
-        mode: "automatic",
-        continuation: { version: 1 },
-      },
+      undefined,
     );
-    const continuationControl = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Graph Engineering: Graph · Auto"]',
-    );
-    expect(continuationControl?.disabled).toBe(true);
+    expect(
+      container.querySelector('button[aria-label^="Graph Engineering:"]'),
+    ).toBeNull();
     expect(container.textContent).toContain(
       "The graph continuation returned neither WAITING: nor FINAL:",
     );
@@ -558,17 +553,11 @@ describe("ChatPane", () => {
       "s1",
       expect.objectContaining({ provider: "claude" }),
       "continue with the protocol",
-      {
-        version: 1,
-        mode: "automatic",
-        continuation: { version: 1 },
-      },
+      undefined,
     );
     expect(
-      container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Graph Engineering: Graph · Auto"]',
-      )?.disabled,
-    ).toBe(false);
+      container.querySelector('button[aria-label^="Graph Engineering:"]'),
+    ).toBeNull();
     expect(container.textContent).not.toContain(
       "The graph continuation returned neither WAITING: nor FINAL:",
     );
@@ -975,7 +964,7 @@ describe("ChatPane", () => {
     expect(useAppStore.getState().sessions[0]?.status).toBe("errored");
   });
 
-  it("keeps an active graph continuation locked when its provider call fails", async () => {
+  it("keeps an automatic graph continuation active when its provider call fails", async () => {
     mocks.loadChatSessionState.mockResolvedValueOnce(
       chatState("s1", [
         {
@@ -1011,10 +1000,8 @@ describe("ChatPane", () => {
     );
     const form = container.querySelector("form");
     expect(
-      container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Graph Engineering: Graph · Auto"]',
-      )?.disabled,
-    ).toBe(true);
+      container.querySelector('button[aria-label^="Graph Engineering:"]'),
+    ).toBeNull();
 
     await act(async () => {
       changeTextareaValue(textarea!, "approved");
@@ -1028,18 +1015,103 @@ describe("ChatPane", () => {
       "s1",
       expect.objectContaining({ provider: "claude" }),
       "approved",
-      {
-        version: 1,
-        mode: "automatic",
-        continuation: { version: 1 },
-      },
+      undefined,
     );
     expect(container.textContent).toContain("continuation provider failed");
     expect(
-      container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Graph Engineering: Graph · Auto"]',
-      )?.disabled,
-    ).toBe(true);
+      container.querySelector('button[aria-label^="Graph Engineering:"]'),
+    ).toBeNull();
+  });
+
+  it("lets the backend restore a legacy manual plan for an active WAITING turn", async () => {
+    const waitingMessages: ChatMessage[] = [
+      {
+        id: "u1",
+        role: "user",
+        content: "run the saved manual graph",
+        graph_prompt_plan: {
+          version: 1,
+          mode: "manual",
+          graph: {
+            version: 1,
+            nodes: [
+              {
+                id: "build",
+                kind: "agent",
+                title: "Build",
+                instruction: "Implement the requested change.",
+              },
+              {
+                id: "goal",
+                kind: "goal_sink",
+                title: "GOAL",
+                instruction: "",
+              },
+            ],
+            edges: [{ id: "build-goal", from: "build", to: "goal" }],
+          },
+        },
+        created_at: "2026-01-01T00:00:00Z",
+        status: "complete",
+        metadata: null,
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "RUN: build attempt=1 → ok\nWAITING: Confirm the result.",
+        created_at: "2026-01-01T00:00:01Z",
+        status: "complete",
+        metadata: null,
+      },
+    ];
+    mocks.loadChatSessionState.mockResolvedValueOnce(
+      chatState("s1", waitingMessages),
+    );
+    mocks.sendChatMessage.mockResolvedValueOnce(
+      chatState("s1", [
+        ...waitingMessages,
+        {
+          id: "u2",
+          role: "user",
+          content: "approved",
+          created_at: "2026-01-01T00:00:02Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "FINAL: Done.",
+          created_at: "2026-01-01T00:00:03Z",
+          status: "complete",
+          metadata: null,
+        },
+      ]),
+    );
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Chat message"]',
+    );
+    const form = container.querySelector("form");
+    await act(async () => {
+      changeTextareaValue(textarea!, "approved");
+      form!.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await settle();
+
+    expect(mocks.sendChatMessage).toHaveBeenCalledWith(
+      "s1",
+      expect.objectContaining({ provider: "claude" }),
+      "approved",
+      undefined,
+    );
   });
 
   it("keeps newer backend chat state when a send rejects after an event", async () => {

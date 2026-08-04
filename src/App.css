@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
 
 @theme {
   --color-bg: #1f2326;
@@ -67,6 +68,21 @@
 
 .acorn-canvas {
   background-color: var(--acorn-canvas);
+}
+
+.react-flow {
+  --xy-background-color: var(--color-bg);
+  --xy-node-border: 1px solid var(--color-border);
+  --xy-node-color: var(--color-fg);
+  --xy-edge-stroke: var(--color-accent);
+  --xy-controls-button-background-color: var(--color-bg-elevated);
+  --xy-controls-button-color: var(--color-fg);
+  --xy-controls-button-border-color: var(--color-border);
+  --xy-minimap-background-color: var(--color-bg-elevated);
+}
+
+.react-flow__controls-button:hover {
+  background: var(--color-fill-hover);
 }
 
 /* Custom checkbox / radio: native appearance off, themed box with an

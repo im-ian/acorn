@@ -1232,6 +1232,7 @@
       "newIsolatedSessionWorktree": "New worktree session",
       "newChatSession": "New chat session",
       "newAutonomousGoalSession": "New Loop session",
+      "newGraphSession": "New Graph session",
       "newControlSession": "New control session",
       "newProjectFolder": "New workspace",
       "newProjectFolderWithWorktree": "New worktree workspace",
@@ -1292,6 +1293,7 @@
       "newSessionInProject": "New session in this project",
       "newSessionInProjectFolder": "New session in this workspace",
       "newAutonomousGoalSession": "New Loop session",
+      "newGraphSession": "New Graph session",
       "newIsolatedSessionInProject": "New worktree session in this project",
       "newChatSessionInProject": "New chat session in this project",
       "newControlSessionInProject": "New control session in this project",
@@ -1377,6 +1379,7 @@
         "human": "Human"
       },
       "nodeId": "Stable ID",
+      "nodeKind": "Kind",
       "nodeTitle": "Title",
       "instruction": "Instruction",
       "remove": "Remove",
@@ -1396,6 +1399,45 @@
       "cancel": "Cancel",
       "apply": "Apply graph"
     }
+  },
+  "graphSession": {
+    "label": "Graph session",
+    "newTitle": "New Graph session",
+    "newSubtitle": "Design a durable execution graph by connecting nodes to GOAL.",
+    "objective": "Objective",
+    "objectivePlaceholder": "What should this graph accomplish?",
+    "agent": "Agent",
+    "cancel": "Cancel",
+    "createAndRun": "Create & Run",
+    "creating": "Creating…",
+    "requiredSink": "Required execution sink",
+    "nodeInspector": "Node inspector",
+    "selectNodeHelp": "Select a node to edit it. Drag from the right handle to another node's left handle.",
+    "sourceHandle": "Outgoing connection",
+    "targetHandle": "Incoming connection",
+    "connectionErrors": {
+      "missingEndpoint": "Choose a source and target node.",
+      "unknownNode": "Connections must use existing nodes.",
+      "selfConnection": "A node cannot connect to itself.",
+      "goalOutgoing": "GOAL cannot have outgoing connections.",
+      "duplicate": "That connection already exists.",
+      "cycle": "That connection would create a cycle."
+    },
+    "kind": "Kind",
+    "instructionPlaceholder": "Describe the work this node must complete.",
+    "revision": "Revision",
+    "design": "Design",
+    "runLog": "Run log",
+    "save": "Save",
+    "run": "Run",
+    "starting": "Starting…",
+    "lockNotice": "The saved design is locked while this run is active or waiting for input.",
+    "runFromDesign": "Run the saved graph from Design. The reply box appears only when a node returns WAITING:.",
+    "openInPanes": "Open in panes",
+    "invalidRun": "Connect every executable node to GOAL and complete the objective.",
+    "createFailed": "Graph session could not be created.",
+    "runFailed": "Graph session was created, but its run could not start",
+    "updateMissing": "Updated Graph session returned no graph."
   },
   "pane": {
     "empty": {
@@ -1457,6 +1499,7 @@
       "closeAll": "Close All",
       "newSessionInThisPane": "New Session in This Pane",
       "newGoalSessionInThisPane": "New Loop Session in This Pane",
+      "newGraphSessionInThisPane": "New Graph Session in This Pane",
       "closePane": "Close Pane"
     }
   },
@@ -2351,6 +2394,7 @@
       "newControlSession": "New control session",
       "newChatSession": "New chat session",
       "newAutonomousGoalSession": "New Loop session",
+      "newGraphSession": "New Graph session",
       "newProject": "New project",
       "addExistingProject": "Add existing project",
       "refreshSessions": "Refresh sessions",

@@ -34,6 +34,7 @@ import type {
   SessionAgentDetection,
   SessionAgentProvider,
   SessionGoal,
+  SessionGraph,
   SessionKind,
   SessionMode,
   SessionProcessSummary,
@@ -147,6 +148,7 @@ export const api = {
     mode: SessionMode = "terminal",
     cwdPath?: string,
     goal?: SessionGoal,
+    graph?: SessionGraph,
   ): Promise<Session> {
     const args: {
       name: string;
@@ -158,6 +160,7 @@ export const api = {
       mode: SessionMode;
       cwdPath?: string;
       goal?: SessionGoal;
+      graph?: SessionGraph;
     } = {
       name,
       repoPath,
@@ -169,6 +172,7 @@ export const api = {
     if (projectScoped !== undefined) args.projectScoped = projectScoped;
     if (cwdPath !== undefined) args.cwdPath = cwdPath;
     if (goal !== undefined) args.goal = goal;
+    if (graph !== undefined) args.graph = graph;
     return invoke<Session>("create_session", args);
   },
   createSessionFromDialog(
@@ -208,6 +212,17 @@ export const api = {
       id,
       expectedRevision,
       goal,
+    });
+  },
+  updateSessionGraph(
+    id: string,
+    expectedRevision: number,
+    graph: SessionGraph,
+  ): Promise<Session> {
+    return invoke<Session>("update_session_graph", {
+      id,
+      expectedRevision,
+      graph,
     });
   },
   renameSession(
@@ -293,6 +308,9 @@ export const api = {
   },
   runGoalSession(sessionId: string): Promise<ChatSessionState> {
     return invoke<ChatSessionState>("run_goal_session", { sessionId });
+  },
+  runGraphSession(sessionId: string): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("run_graph_session", { sessionId });
   },
   sendChatMessage(
     sessionId: string,

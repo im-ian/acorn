@@ -148,6 +148,15 @@ export const tauriMockSource = `
         },
       });
     }
+    if (cmd === 'update_session_graph') {
+      return Promise.resolve({
+        id: args?.id || '',
+        graph: {
+          ...(args?.graph || {}),
+          revision: Number(args?.expectedRevision || 0) + 1,
+        },
+      });
+    }
     if (cmd === 'get_goal_agent_capabilities') {
       const provider = args?.provider === 'claude' ? 'claude' : 'codex';
       if (provider === 'claude') {
@@ -279,6 +288,31 @@ export const tauriMockSource = `
             metadata: { provider, turn_id: 'mock-turn', context_mode: 'compiled_context' },
           },
         ]));
+    }
+    if (cmd === 'run_graph_session') {
+      const now = '2026-01-01T00:00:00Z';
+      return Promise.resolve(chatState(args?.sessionId, 'claude', [
+        {
+          id: 'mock-graph-user-message',
+          session_id: args?.sessionId || '',
+          turn_id: 'mock-graph-turn',
+          role: 'user',
+          content: 'Graph objective',
+          created_at: now,
+          status: 'complete',
+          metadata: null,
+        },
+        {
+          id: 'mock-graph-assistant-message',
+          session_id: args?.sessionId || '',
+          turn_id: 'mock-graph-turn',
+          role: 'assistant',
+          content: 'FINAL: Mock graph response',
+          created_at: now,
+          status: 'complete',
+          metadata: { provider: 'claude' },
+        },
+      ]));
     }
     if (cmd === 'cancel_chat_message') {
       return Promise.resolve(chatState(args?.sessionId, null, []));

@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 use uuid::Uuid;
 
+use crate::SessionGraph;
+
 fn default_true() -> bool {
     true
 }
@@ -475,6 +477,8 @@ pub struct Session {
     pub mode: SessionMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<SessionGoal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<SessionGraph>,
     #[serde(default)]
     pub owner: SessionOwner,
     /// User-defined display order within the project group. `None` means the
@@ -564,6 +568,7 @@ impl Session {
             kind,
             mode: SessionMode::Terminal,
             goal: None,
+            graph: None,
             owner: SessionOwner::User,
             position: None,
             daemon_session_id: None,
@@ -1325,6 +1330,25 @@ impl SessionStore {
         Ok(Some(entry.clone()))
     }
 
+    pub fn update_graph(
+        &self,
+        id: &Uuid,
+        expected_revision: u32,
+        graph: SessionGraph,
+    ) -> SessionResult<Option<Session>> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        if entry.graph.as_ref().map(|current| current.revision) != Some(expected_revision) {
+            return Ok(None);
+        }
+        entry.agent_provider = Some(graph.agent.provider);
+        entry.graph = Some(graph);
+        entry.updated_at = Utc::now();
+        Ok(Some(entry.clone()))
+    }
+
     pub fn update_goal_progress_if_revision(
         &self,
         id: &Uuid,
@@ -1499,6 +1523,60 @@ mod tests {
             },
             model_config: SessionGoalModelConfig::default(),
             progress: SessionGoalProgress::initial(),
+            revision,
+        }
+    }
+
+    fn fake_graph(revision: u32) -> SessionGraph {
+        use crate::{
+            SessionGraphAgent, SessionGraphCanvas, SessionGraphNodePosition, WorkGraph,
+            WorkGraphEdge, WorkGraphNode, WorkGraphNodeKind,
+        };
+
+        SessionGraph {
+            version: 1,
+            objective: "Ship the graph session".to_string(),
+            agent: SessionGraphAgent {
+                provider: SessionAgentProvider::Codex,
+                model: Some("gpt-test".to_string()),
+                effort: Some("high".to_string()),
+            },
+            definition: WorkGraph {
+                version: 1,
+                nodes: vec![
+                    WorkGraphNode {
+                        id: "build".to_string(),
+                        kind: WorkGraphNodeKind::Agent,
+                        title: "Build".to_string(),
+                        instruction: "Implement the feature.".to_string(),
+                    },
+                    WorkGraphNode {
+                        id: "goal".to_string(),
+                        kind: WorkGraphNodeKind::GoalSink,
+                        title: "GOAL".to_string(),
+                        instruction: String::new(),
+                    },
+                ],
+                edges: vec![WorkGraphEdge {
+                    id: "build-goal".to_string(),
+                    from: "build".to_string(),
+                    to: "goal".to_string(),
+                }],
+            },
+            canvas: SessionGraphCanvas {
+                version: 1,
+                node_positions: std::collections::BTreeMap::from([
+                    (
+                        "build".to_string(),
+                        SessionGraphNodePosition { x: 20.0, y: 40.0 },
+                    ),
+                    (
+                        "goal".to_string(),
+                        SessionGraphNodePosition { x: 420.0, y: 40.0 },
+                    ),
+                ]),
+                viewport: None,
+            },
             revision,
         }
     }
@@ -2118,6 +2196,33 @@ mod tests {
     }
 
     #[test]
+    fn persisted_sessions_without_graph_load_as_non_graph_sessions() {
+        let mut json =
+            serde_json::to_value(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false))
+                .expect("session serializes");
+        json.as_object_mut()
+            .expect("session json is an object")
+            .remove("graph");
+
+        let restored: Session = serde_json::from_value(json).expect("session deserializes");
+
+        assert_eq!(restored.graph, None);
+    }
+
+    #[test]
+    fn graph_metadata_and_canvas_round_trip_with_the_session() {
+        let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", true);
+        session.mode = SessionMode::Chat;
+        session.graph = Some(fake_graph(3));
+
+        let json = serde_json::to_value(&session).expect("graph session serializes");
+        let restored: Session = serde_json::from_value(json).expect("graph session deserializes");
+
+        assert_eq!(restored.graph, session.graph);
+        assert_eq!(restored.goal, None);
+    }
+
+    #[test]
     fn goal_metadata_round_trips_with_the_session() {
         let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
         session.mode = SessionMode::Chat;
@@ -2234,6 +2339,27 @@ mod tests {
             .expect("revision matches");
 
         assert_eq!(updated.goal.as_ref().map(|goal| goal.revision), Some(2));
+        assert_eq!(updated.agent_provider, Some(SessionAgentProvider::Codex));
+    }
+
+    #[test]
+    fn graph_updates_require_the_current_revision() {
+        let store = SessionStore::new();
+        let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", true);
+        session.mode = SessionMode::Chat;
+        session.graph = Some(fake_graph(1));
+        let session = store.insert(session);
+
+        assert!(store
+            .update_graph(&session.id, 0, fake_graph(2))
+            .expect("session exists")
+            .is_none());
+        let updated = store
+            .update_graph(&session.id, 1, fake_graph(2))
+            .expect("session exists")
+            .expect("revision matches");
+
+        assert_eq!(updated.graph.as_ref().map(|graph| graph.revision), Some(2));
         assert_eq!(updated.agent_provider, Some(SessionAgentProvider::Codex));
     }
 
