@@ -4404,4 +4404,78 @@ test.describe("sidebar: project lifecycle", () => {
       ),
     ).toContainText("demo-api");
   });
+
+  test("a source folder creates worktree workspaces in its own repo", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api"],
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      return w.__sessions ?? [];
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __createCalls?: unknown[];
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__createCalls = w.__createCalls ?? [];
+      w.__createCalls.push(args);
+      const { repoPath, name } = args as { repoPath: string; name: string };
+      const created = {
+        id: `created-${(w.__createCalls ?? []).length}`,
+        name,
+        repo_path: repoPath,
+        worktree_path: `${repoPath}/.acorn/worktrees/${name}`,
+        branch: "wt",
+        isolated: true,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: true,
+      };
+      w.__sessions = [...(w.__sessions ?? []), created];
+      return created;
+    });
+
+    await page.goto("/");
+
+    await page
+      .locator('aside [data-sidebar-workspace-id="/tmp/demo-api"]')
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "New worktree workspace" })
+      .click();
+
+    // The project header's workspace actions target the primary root, so the
+    // source folder's own entry point must not leak into it.
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __createCalls?: Array<{ repoPath: string }>;
+              }
+            ).__createCalls?.map((call) => call.repoPath) ?? [],
+        ),
+      )
+      .toEqual(["/tmp/demo-api"]);
+  });
 });

@@ -1449,6 +1449,12 @@ export function Sidebar() {
                         onAddSourceFolder={() =>
                           void onAddProjectSource(project.repoPath)
                         }
+                        onAddFolderInRoot={(repoPath) =>
+                          void onAddProjectFolder(repoPath)
+                        }
+                        onAddWorktreeFolderInRoot={(repoPath) =>
+                          void onAddProjectFolderWorktree(repoPath)
+                        }
                         onRenameFolder={renameProjectFolder}
                         onRemoveFolder={requestRemoveProjectFolder}
                         onMoveSessionToFolder={moveSessionToProjectFolder}
@@ -2023,6 +2029,8 @@ interface ProjectGroupViewProps {
   onAddFolder: () => void;
   onAddWorktreeFolder: () => void;
   onAddSourceFolder: () => void;
+  onAddFolderInRoot: (repoPath: string) => void;
+  onAddWorktreeFolderInRoot: (repoPath: string) => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onRemoveFolder: (folderId: string) => void;
   onMoveSessionToFolder: (sessionId: string, folderId: string | null) => void;
@@ -2052,6 +2060,8 @@ function ProjectGroupView({
   onAddFolder,
   onAddWorktreeFolder,
   onAddSourceFolder,
+  onAddFolderInRoot,
+  onAddWorktreeFolderInRoot,
   onRenameFolder,
   onRemoveFolder,
   onMoveSessionToFolder,
@@ -2471,6 +2481,12 @@ function ProjectGroupView({
                         ? basename(item.folderGroup.folder.repoPath)
                         : null
                     }
+                    onAddFolderInRoot={() =>
+                      onAddFolderInRoot(item.folderGroup.folder.repoPath)
+                    }
+                    onAddWorktreeFolderInRoot={() =>
+                      onAddWorktreeFolderInRoot(item.folderGroup.folder.repoPath)
+                    }
                     activeSessionId={activeSessionId}
                     active={
                       workspaceViewMode === "panes" &&
@@ -2534,6 +2550,9 @@ interface ProjectFolderViewProps {
    * the workspace reads as belonging to the project root.
    */
   sourceRootLabel: string | null;
+  /** Create a workspace in this row's own root. Source folders only. */
+  onAddFolderInRoot: () => void;
+  onAddWorktreeFolderInRoot: () => void;
   activeSessionId: string | null;
   active: boolean;
   collapsed: boolean;
@@ -2558,6 +2577,8 @@ function ProjectFolderView({
   projectFolders,
   isSourceFolder,
   sourceRootLabel,
+  onAddFolderInRoot,
+  onAddWorktreeFolderInRoot,
   activeSessionId,
   active,
   collapsed,
@@ -2891,6 +2912,25 @@ function ProjectFolderView({
         items={[
           ...folderCreateMenuItems,
           contextMenuGroupTitle(t, "workspace"),
+          // The project header's workspace actions target the primary root, so
+          // a source folder needs its own way to create workspaces in itself.
+          ...(isSourceFolder
+            ? [
+                {
+                  label: sidebarText(t, "sidebar.actions.newProjectFolder"),
+                  icon: <FolderPlus size={12} />,
+                  onClick: onAddFolderInRoot,
+                } satisfies ContextMenuItem,
+                {
+                  label: sidebarText(
+                    t,
+                    "sidebar.actions.newProjectFolderWithWorktree",
+                  ),
+                  icon: <GitBranch size={12} />,
+                  onClick: onAddWorktreeFolderInRoot,
+                } satisfies ContextMenuItem,
+              ]
+            : []),
           {
             label: sidebarText(t, "sidebar.actions.renameProjectFolder"),
             icon: <Pencil size={12} />,
