@@ -2754,13 +2754,14 @@ test.describe("sidebar: project lifecycle", () => {
     const menuLabels = await page.getByRole("menuitem").evaluateAll((items) =>
       items.map((item) => item.textContent?.replace(/\s+/g, " ").trim()),
     );
-    expect(menuLabels.slice(0, 4)).toEqual([
+    expect(menuLabels.slice(0, 5)).toEqual([
       "New workspace",
       "New worktree workspace",
+      "Add source folder",
       "New goal session",
       "New chat session",
     ]);
-    expect(menuLabels[4]).toMatch(
+    expect(menuLabels[5]).toMatch(
       /^New control session(?:⌥⇧⌘T|Ctrl\+Alt\+Shift\+T)$/,
     );
     await expect(
@@ -3630,8 +3631,16 @@ test.describe("sidebar: project lifecycle", () => {
     await page.getByRole("button", { name: "Add existing project" }).click();
 
     await expect(
-      page.getByRole("listitem").filter({ hasText: "picked" }),
+      page.locator("aside").getByRole("listitem").filter({ hasText: "picked" }),
     ).toBeVisible();
+
+    // The header button opens a project the same way the empty state does, so
+    // its source folders are set up in the same pass.
+    const modal = page.getByRole("dialog", { name: "Project Settings" });
+    await expect(modal).toBeVisible();
+    await expect(
+      modal.getByRole("listitem").filter({ hasText: "/tmp/picked" }),
+    ).toContainText("Primary");
 
     const calls = (await page.evaluate(
       () =>
@@ -3683,7 +3692,20 @@ test.describe("sidebar: project lifecycle", () => {
       .click();
 
     await expect(
-      page.getByRole("listitem").filter({ hasText: "empty-picked" }),
+      page.locator("aside").getByRole("listitem").filter({
+        hasText: "empty-picked",
+      }),
+    ).toBeVisible();
+
+    // Opening a project lands on its source folders so extra repositories can
+    // be attached right away instead of through a separate settings trip.
+    const modal = page.getByRole("dialog", { name: "Project Settings" });
+    await expect(modal).toBeVisible();
+    await expect(
+      modal.getByRole("listitem").filter({ hasText: "/tmp/empty-picked" }),
+    ).toContainText("Primary");
+    await expect(
+      modal.getByRole("button", { name: "Add folder" }),
     ).toBeVisible();
 
     const calls = (await page.evaluate(
@@ -4300,5 +4322,181 @@ test.describe("sidebar: project lifecycle", () => {
           : "different";
       })
       .toBe("manual-order");
+  });
+
+  test("a source folder renders as a workspace under its project", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api"],
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "primary-session",
+        name: "primary",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "api-session",
+        name: "api",
+        repo_path: "/tmp/demo-api",
+        worktree_path: "/tmp/demo-api",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ]);
+    // A workspace of the source root renders as a sibling of every other
+    // workspace row, so it has to name the root it belongs to.
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn-workspaces",
+        JSON.stringify({
+          state: {
+            projectFolders: {
+              "/tmp/demo-api": [
+                {
+                  id: "/tmp/demo-api",
+                  repoPath: "/tmp/demo-api",
+                  name: "Default",
+                  cwdPath: "/tmp/demo-api",
+                  position: 0,
+                },
+                {
+                  id: "project-folder:/tmp/demo-api:scratch",
+                  repoPath: "/tmp/demo-api",
+                  name: "scratch",
+                  cwdPath: "/tmp/demo-api",
+                  position: 1,
+                },
+              ],
+            },
+          },
+          version: 0,
+        }),
+      );
+    });
+
+    await page.goto("/");
+
+    // One project row, not two, even though the sessions live in two repos.
+    await expect(page.getByRole("button", { name: /^Project / })).toHaveCount(1);
+    const sourceWorkspace = page.locator(
+      'aside [data-sidebar-workspace-id="/tmp/demo-api"]',
+    );
+    await expect(sourceWorkspace).toContainText("demo-api");
+    // The source folder's session sits inside its workspace; the primary
+    // root's session stays flat under the project header.
+    await expect(sourceWorkspace).toContainText("api");
+    await expect(sourceWorkspace).not.toContainText("primary");
+    // Its own workspaces sit at the same depth, tagged with the owning root.
+    await expect(
+      page.locator(
+        'aside [data-sidebar-workspace-id="project-folder:/tmp/demo-api:scratch"]',
+      ),
+    ).toContainText("demo-api");
+  });
+
+  test("a source folder creates worktree workspaces in its own repo", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api"],
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      return w.__sessions ?? [];
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __createCalls?: unknown[];
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__createCalls = w.__createCalls ?? [];
+      w.__createCalls.push(args);
+      const { repoPath, name } = args as { repoPath: string; name: string };
+      const created = {
+        id: `created-${(w.__createCalls ?? []).length}`,
+        name,
+        repo_path: repoPath,
+        worktree_path: `${repoPath}/.acorn/worktrees/${name}`,
+        branch: "wt",
+        isolated: true,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: true,
+      };
+      w.__sessions = [...(w.__sessions ?? []), created];
+      return created;
+    });
+
+    await page.goto("/");
+
+    await page
+      .locator('aside [data-sidebar-workspace-id="/tmp/demo-api"]')
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "New worktree workspace" })
+      .click();
+
+    // The project header's workspace actions target the primary root, so the
+    // source folder's own entry point must not leak into it.
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __createCalls?: Array<{ repoPath: string }>;
+              }
+            ).__createCalls?.map((call) => call.repoPath) ?? [],
+        ),
+      )
+      .toEqual(["/tmp/demo-api"]);
   });
 });

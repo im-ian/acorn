@@ -33,6 +33,12 @@ pub struct Project {
     /// load cleanly and are placed at the front, then re-normalized lazily.
     #[serde(default)]
     pub position: i64,
+    /// Additional repository roots this project spans, beyond `repo_path`.
+    /// A session still records exactly one of the project's roots as its
+    /// `repo_path`, so every git operation stays anchored to a real repo;
+    /// the project is only the grouping the sidebar draws around them.
+    #[serde(default)]
+    pub source_paths: Vec<PathBuf>,
 }
 
 impl Project {
@@ -42,7 +48,19 @@ impl Project {
             name,
             created_at: Utc::now(),
             position,
+            source_paths: Vec::new(),
         }
+    }
+
+    /// Every repository root the project spans, primary first.
+    pub fn roots(&self) -> Vec<PathBuf> {
+        let mut roots = vec![self.repo_path.clone()];
+        roots.extend(self.source_paths.iter().cloned());
+        roots
+    }
+
+    pub fn owns_root(&self, path: &std::path::Path) -> bool {
+        self.repo_path == path || self.source_paths.iter().any(|root| root == path)
     }
 }
 
@@ -90,6 +108,26 @@ impl ProjectStore {
 
     pub fn remove(&self, repo_path: &std::path::Path) -> Option<Project> {
         self.inner.remove(repo_path).map(|(_, v)| v)
+    }
+
+    /// The project that claims `path` as one of its roots, primary or extra.
+    pub fn owner_of_root(&self, path: &std::path::Path) -> Option<Project> {
+        self.inner
+            .iter()
+            .find(|r| r.value().owns_root(path))
+            .map(|r| r.value().clone())
+    }
+
+    /// Replace a project's extra source roots. Returns `None` when the
+    /// project is not registered.
+    pub fn set_source_paths(
+        &self,
+        repo_path: &std::path::Path,
+        source_paths: Vec<PathBuf>,
+    ) -> Option<Project> {
+        let mut entry = self.inner.get_mut(repo_path)?;
+        entry.source_paths = source_paths;
+        Some(entry.clone())
     }
 
     /// Reassign positions according to the given ordered list of repo paths.

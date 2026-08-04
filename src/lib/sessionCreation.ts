@@ -1,3 +1,4 @@
+import { projectRootPaths } from "./projectFolders";
 import { suggestLocalSessionName, suggestSessionName } from "./sessionName";
 import type {
   Project,
@@ -139,8 +140,12 @@ export function resolveActiveProjectSessionScope(
 ): SessionCreateScope | null {
   const activeScope = resolveActiveSessionScope(context);
   const repoPath = context.activeWorkspaceRepoPath;
+  // Source folders are part of their project, so a workspace rooted in one is
+  // just as valid a target as the primary root.
   const isRegisteredProject = (candidate: string) =>
-    context.projects.some((project) => project.repo_path === candidate);
+    context.projects.some((project) =>
+      projectRootPaths(project).includes(candidate),
+    );
 
   if (!repoPath) {
     return activeScope?.placement.projectScoped &&
