@@ -73,6 +73,7 @@ import {
   ensureProjectFolders,
   isDefaultProjectFolder,
   isPathInsideOrEqual,
+  makeDefaultProjectFolder,
   makeProjectFolderId,
   pruneSessionFolderAssignments,
   resolveProjectFolderIdForSession,
@@ -479,6 +480,16 @@ interface AppStateModel {
   ) => ProjectFolder | null;
   renameProjectFolder: (folderId: string, name: string) => void;
   removeProjectFolder: (folderId: string) => void;
+  /** Promote a workspace folder to a standalone project. Only works when the
+   *  folder's directory is a repository root of its own (a linked worktree, a
+   *  nested repo) — the backend rejects plain subdirectories. */
+  promoteProjectFolderToProject: (folderId: string) => Promise<boolean>;
+  /** Fold a project back in as a workspace of `targetRepoPath`. Requires the
+   *  project to live inside the target project's tree. */
+  foldProjectIntoProject: (
+    repoPath: string,
+    targetRepoPath: string,
+  ) => Promise<boolean>;
   moveSessionToProjectFolder: (
     sessionId: string,
     folderId: string | null,
@@ -2510,6 +2521,107 @@ export const useAppStore = create<AppStateModel>()(
         ),
       };
     });
+  },
+
+  async promoteProjectFolderToProject(folderId) {
+    const state = get();
+    const folder = findProjectFolder(state, folderId);
+    if (!folder || isDefaultProjectFolder(folder)) return false;
+    // A workspace that shares the project's directory has nothing to promote:
+    // it would resolve straight back to the project it already lives in.
+    if (folder.cwdPath === folder.repoPath) return false;
+    const folders = state.projectFolders[folder.repoPath] ?? [];
+    const sessionIds = state.sessions
+      .filter(
+        (session) =>
+          session.repo_path === folder.repoPath &&
+          session.project_scoped !== false &&
+          resolveProjectFolderIdForSession(
+            folders,
+            session,
+            state.sessionFolderIds,
+          ) === folder.id,
+      )
+      .map((session) => session.id);
+    try {
+      const project = await api.openProjectAtPath(folder.cwdPath);
+      if (sessionIds.length > 0) {
+        await api.moveSessionsToProject(sessionIds, project.repo_path);
+      }
+      await get().refreshAll();
+      get().removeProjectFolder(folder.id);
+      get().setActiveProject(project.repo_path);
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  async foldProjectIntoProject(repoPath, targetRepoPath) {
+    if (repoPath === targetRepoPath) return false;
+    const state = get();
+    const hasTarget = state.projects.some(
+      (project) => project.repo_path === targetRepoPath,
+    );
+    if (!hasTarget) return false;
+    const sourceName =
+      state.projects.find((project) => project.repo_path === repoPath)?.name ??
+      basenamePath(repoPath);
+    const sourceFolders = sortProjectFolders(
+      state.projectFolders[repoPath]?.length
+        ? state.projectFolders[repoPath]
+        : [makeDefaultProjectFolder(repoPath)],
+    );
+    const sessionIds = state.sessions
+      .filter(
+        (session) =>
+          session.repo_path === repoPath && session.project_scoped !== false,
+      )
+      .map((session) => session.id);
+    try {
+      if (sessionIds.length > 0) {
+        await api.moveSessionsToProject(sessionIds, targetRepoPath);
+      }
+      await api.removeProject(repoPath, false);
+      await get().refreshAll();
+    } catch (e) {
+      // The session move may already have landed before the project removal
+      // failed — resync so the sidebar shows what the backend actually holds.
+      await get().refreshAll();
+      set({ error: errorMessage(e) });
+      return false;
+    }
+    // One workspace per distinct directory: the project root itself plus any
+    // worktree workspaces it owned. Extra named workspaces that shared the
+    // root directory collapse into it — sessions are matched back by cwd, and
+    // two workspaces on one directory would be indistinguishable anyway.
+    const seenCwdPaths = new Set<string>();
+    for (const folder of sourceFolders) {
+      if (seenCwdPaths.has(folder.cwdPath)) continue;
+      seenCwdPaths.add(folder.cwdPath);
+      get().createProjectFolder(
+        targetRepoPath,
+        isDefaultProjectFolder(folder) ? sourceName : folder.name,
+        folder.cwdPath,
+      );
+    }
+    set((s) => {
+      const staleFolderIds = new Set(
+        (s.projectFolders[repoPath] ?? []).map((folder) => folder.id),
+      );
+      const { [repoPath]: _dropped, ...projectFolders } = s.projectFolders;
+      const workspaces = Object.fromEntries(
+        Object.entries(s.workspaces).filter(
+          ([workspaceId]) => !staleFolderIds.has(workspaceId),
+        ),
+      );
+      return { projectFolders, workspaces };
+    });
+    get().setActiveProject(targetRepoPath);
+    set({ error: null });
+    return true;
   },
 
   moveSessionToProjectFolder(sessionId, folderId) {

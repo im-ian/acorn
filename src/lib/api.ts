@@ -327,6 +327,18 @@ export const api = {
   addProject(title?: string): Promise<Project | null> {
     return invoke<Project | null>("add_project", { title });
   },
+  openProjectAtPath(path: string): Promise<Project> {
+    return invoke<Project>("open_project_at_path", { path });
+  },
+  moveSessionsToProject(
+    sessionIds: string[],
+    repoPath: string,
+  ): Promise<Session[]> {
+    return invoke<Session[]>("move_sessions_to_project", {
+      sessionIds,
+      repoPath,
+    });
+  },
   selectProjectParentFolder(title?: string): Promise<string | null> {
     return invoke<string | null>("select_project_parent_folder", { title });
   },

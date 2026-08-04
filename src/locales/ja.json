@@ -28,6 +28,8 @@
       "pauseFailed": "目標セッションを一時停止できませんでした:"
     },
     "project": {
+      "promoteWorkspaceFailed": "ワークスペースをプロジェクトに変換できませんでした:",
+      "foldIntoProjectFailed": "プロジェクトをワークスペースに変換できませんでした:",
       "addFailed": "プロジェクトの追加に失敗しました:",
       "createFailed": "プロジェクトの作成に失敗しました:",
       "removeFailed": "プロジェクトの削除に失敗しました:",
@@ -1233,6 +1235,8 @@
       "newProjectFolder": "新しいワークスペース",
       "newProjectFolderWithWorktree": "新しいワークツリーワークスペース",
       "createWorkspaceFromWorktree": "ワークツリーからワークスペースを作成する",
+      "promoteProjectFolderToProject": "プロジェクトに変換",
+      "foldProjectIntoProject": "ワークスペースに変換",
       "renameProjectFolder": "ワークスペースの名前を変更する",
       "removeProjectFolder": "ワークスペースを削除する",
       "moveToProjectFolder": "に移動します",

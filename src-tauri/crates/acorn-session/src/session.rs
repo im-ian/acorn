@@ -1351,6 +1351,29 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
+    /// Re-home a session under a different registered project. Used when a
+    /// workspace folder is promoted to a standalone project (and the reverse:
+    /// a project folded back in as a workspace of another project). Only the
+    /// project association moves — the on-disk `worktree_path` is untouched,
+    /// so the live PTY keeps its cwd. `isolated` is cleared when the session's
+    /// worktree becomes the new project root: it is no longer a throwaway
+    /// worktree *inside* a project, and worktree-deletion prompts must not
+    /// offer to delete the project root itself.
+    pub fn update_repo_path(
+        &self,
+        id: &Uuid,
+        repo_path: std::path::PathBuf,
+    ) -> SessionResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        entry.isolated = entry.isolated && entry.worktree_path != repo_path;
+        entry.repo_path = repo_path;
+        entry.updated_at = Utc::now();
+        Ok(entry.clone())
+    }
+
     /// Re-point a session at its main repo and clear `isolated` when the
     /// linked worktree has disappeared from disk (typically: agent exit
     /// pruned the worktree but the session row still references it). Keeps
@@ -1456,6 +1479,46 @@ mod tests {
             progress: SessionGoalProgress::initial(),
             revision,
         }
+    }
+
+    #[test]
+    fn update_repo_path_clears_isolated_only_when_the_worktree_becomes_the_root() {
+        let store = SessionStore::new();
+        let promoted = store.insert(fake_session(
+            "/tmp/acorn-repo",
+            "/tmp/acorn-repo/.acorn/worktrees/wt",
+            true,
+        ));
+        let folded = store.insert(fake_session(
+            "/tmp/acorn-repo/nested",
+            "/tmp/acorn-repo/nested",
+            false,
+        ));
+
+        // Workspace promoted to a project: its worktree is now the repo root.
+        let promoted = store
+            .update_repo_path(
+                &promoted.id,
+                PathBuf::from("/tmp/acorn-repo/.acorn/worktrees/wt"),
+            )
+            .expect("promote");
+        assert_eq!(
+            promoted.repo_path,
+            PathBuf::from("/tmp/acorn-repo/.acorn/worktrees/wt")
+        );
+        assert!(!promoted.isolated);
+
+        // Project folded into a host project: the worktree stays put and the
+        // session must not be mistaken for a throwaway worktree session.
+        let folded = store
+            .update_repo_path(&folded.id, PathBuf::from("/tmp/acorn-repo"))
+            .expect("fold");
+        assert_eq!(folded.repo_path, PathBuf::from("/tmp/acorn-repo"));
+        assert_eq!(
+            folded.worktree_path,
+            PathBuf::from("/tmp/acorn-repo/nested")
+        );
+        assert!(!folded.isolated);
     }
 
     #[test]

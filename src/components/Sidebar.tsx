@@ -9,8 +9,10 @@ import {
   Copy,
   ExternalLink,
   Folder,
+  FolderInput,
   FolderOpen,
   FolderPlus,
+  FolderSymlink,
   GitBranch,
   GitPullRequest,
   Home,
@@ -118,6 +120,7 @@ import {
   findProjectFolderById,
   findWorktreeWorkspaceForPath,
   isDefaultProjectFolder,
+  isPathInsideOrEqual,
   resolveProjectFolderIdForSession,
   type ProjectFolder,
   type ProjectFolderGroup,
@@ -2002,11 +2005,27 @@ function ProjectGroupView({
 }: ProjectGroupViewProps) {
   const t = useTranslation();
   const shortcuts = useSettings((s) => s.settings.shortcuts);
+  const showToast = useToasts((s) => s.show);
+  const projects = useAppStore((s) => s.projects);
+  const foldProjectIntoProject = useAppStore((s) => s.foldProjectIntoProject);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [createMenu, setCreateMenu] = useState<{
     x: number;
     y: number;
   } | null>(null);
+  // Only a project that physically lives inside another one can become its
+  // workspace — sessions have to keep resolving under the host repo.
+  // ponytail: prefix check only; add a git-worktree lookup if someone keeps
+  // worktrees outside the repo tree.
+  const foldTargets = useMemo(
+    () =>
+      projects.filter(
+        (candidate) =>
+          candidate.repo_path !== project.repoPath &&
+          isPathInsideOrEqual(project.repoPath, candidate.repo_path),
+      ),
+    [projects, project.repoPath],
+  );
   const {
     attributes,
     listeners,
@@ -2054,6 +2073,18 @@ function ProjectGroupView({
     },
     [onAddAutonomousGoal, onAddSession, projectSessionCreationFolder],
   );
+
+  async function foldIntoProject(targetRepoPath: string) {
+    const folded = await foldProjectIntoProject(
+      project.repoPath,
+      targetRepoPath,
+    );
+    if (folded) return;
+    const error = useAppStore.getState().consumeError();
+    showToast(
+      `${t("toasts.project.foldIntoProjectFailed")} ${error ?? ""}`.trim(),
+    );
+  }
 
   const createMenuItems = useMemo<ContextMenuItem[]>(
     () => {
@@ -2305,6 +2336,25 @@ function ProjectGroupView({
             onClick: onAddWorktreeFolder,
           },
           contextMenuGroupTitle(t, "project"),
+          ...(foldTargets.length > 0
+            ? [
+                {
+                  type: "submenu" as const,
+                  label: sidebarText(
+                    t,
+                    "sidebar.actions.foldProjectIntoProject",
+                  ),
+                  icon: <FolderInput size={12} />,
+                  children: foldTargets.map((target) => ({
+                    label: target.name,
+                    icon: <Folder size={12} />,
+                    onClick: () => {
+                      void foldIntoProject(target.repo_path);
+                    },
+                  })),
+                },
+              ]
+            : []),
           {
             label: sidebarText(t, "sidebar.actions.projectSettings"),
             icon: <SettingsIcon size={12} />,
@@ -2477,6 +2527,10 @@ function ProjectFolderView({
 }: ProjectFolderViewProps) {
   const t = useTranslation();
   const shortcuts = useSettings((s) => s.settings.shortcuts);
+  const showToast = useToasts((s) => s.show);
+  const promoteProjectFolderToProject = useAppStore(
+    (s) => s.promoteProjectFolderToProject,
+  );
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [createMenu, setCreateMenu] = useState<{
@@ -2577,6 +2631,15 @@ function ProjectFolderView({
   function submitRename(next: string) {
     setEditing(false);
     onRenameFolder(folder.id, next);
+  }
+
+  async function promoteToProject() {
+    const promoted = await promoteProjectFolderToProject(folder.id);
+    if (promoted) return;
+    const error = useAppStore.getState().consumeError();
+    showToast(
+      `${t("toasts.project.promoteWorkspaceFailed")} ${error ?? ""}`.trim(),
+    );
   }
 
   const workspaceLabel = workspacePathLabel(folder);
@@ -2790,6 +2853,20 @@ function ProjectFolderView({
             icon: <Pencil size={12} />,
             onClick: () => setEditing(true),
           },
+          ...(removable && isWorktreeWorkspace(folder)
+            ? [
+                {
+                  label: sidebarText(
+                    t,
+                    "sidebar.actions.promoteProjectFolderToProject",
+                  ),
+                  icon: <FolderSymlink size={12} />,
+                  onClick: () => {
+                    void promoteToProject();
+                  },
+                } satisfies ContextMenuItem,
+              ]
+            : []),
           {
             label: sidebarText(t, "sidebar.actions.revealInFinder"),
             icon: <FolderOpen size={12} />,

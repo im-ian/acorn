@@ -714,6 +714,8 @@ pub fn run() {
             commands::cancel_chat_message,
             commands::list_projects,
             commands::add_project,
+            commands::open_project_at_path,
+            commands::move_sessions_to_project,
             commands::select_project_parent_folder,
             commands::get_last_project_parent_folder,
             commands::has_git_identity,

@@ -28,6 +28,8 @@
       "pauseFailed": "目标会话无法暂停："
     },
     "project": {
+      "promoteWorkspaceFailed": "无法将工作区转换为项目：",
+      "foldIntoProjectFailed": "无法将项目转换为工作区：",
       "addFailed": "无法添加项目：",
       "createFailed": "无法创建项目：",
       "removeFailed": "无法删除项目：",
@@ -1233,6 +1235,8 @@
       "newProjectFolder": "新建工作区",
       "newProjectFolderWithWorktree": "新建工作树工作区",
       "createWorkspaceFromWorktree": "从工作树创建工作区",
+      "promoteProjectFolderToProject": "转换为项目",
+      "foldProjectIntoProject": "转换为工作区",
       "renameProjectFolder": "重命名工作区",
       "removeProjectFolder": "删除工作区",
       "moveToProjectFolder": "移至",

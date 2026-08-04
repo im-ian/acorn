@@ -42,6 +42,8 @@ vi.mock("./lib/api", () => {
       agentTranscriptSummary: vi.fn(async () => null),
       agentTranscriptSummaryAtPath: vi.fn(async () => null),
       addProject: vi.fn(async () => ({}) as Project),
+      openProjectAtPath: vi.fn(async () => ({}) as Project),
+      moveSessionsToProject: vi.fn(async () => [] as Session[]),
       createNewProject: vi.fn(async () => ({}) as Project),
       removeProject: vi.fn(async () => []),
       reorderProjects: vi.fn(async (paths: string[]) =>
@@ -246,6 +248,7 @@ beforeEach(() => {
   mockApi.removeSession.mockResolvedValue(null);
   mockApi.removeWorktree.mockResolvedValue(null);
   mockApi.removeProject.mockResolvedValue([]);
+  mockApi.moveSessionsToProject.mockResolvedValue([]);
   mockApi.loadChatSessionState.mockResolvedValue({
     messages: [],
     turns: [],
@@ -4070,5 +4073,122 @@ describe("auto initial session on first project add", () => {
     await useAppStore.getState().addProject("Select project");
 
     expect(mockApi.createSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("workspace <-> project conversion", () => {
+  const WORKTREE_A = `${REPO_A}/.acorn/worktrees/wt`;
+  const NESTED_A = `${REPO_A}/packages/web`;
+
+  it("promotes a workspace into its own project and moves its sessions there", async () => {
+    const promoted = project(WORKTREE_A, 1);
+    mockApi.openProjectAtPath.mockResolvedValueOnce(promoted);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0), promoted]);
+    mockApi.listSessions.mockResolvedValue([
+      session("s1", WORKTREE_A, { worktree_path: WORKTREE_A }),
+    ]);
+    useAppStore.setState({
+      projects: [project(REPO_A, 0)],
+      sessions: [
+        session("s1", REPO_A, { worktree_path: WORKTREE_A, isolated: true }),
+      ],
+      projectFolders: {
+        [REPO_A]: [
+          {
+            id: REPO_A,
+            repoPath: REPO_A,
+            name: "Default",
+            cwdPath: REPO_A,
+            position: 0,
+          },
+          {
+            id: "wt-folder",
+            repoPath: REPO_A,
+            name: "wt",
+            cwdPath: WORKTREE_A,
+            position: 1,
+          },
+        ],
+      },
+    });
+
+    await expect(
+      useAppStore.getState().promoteProjectFolderToProject("wt-folder"),
+    ).resolves.toBe(true);
+
+    expect(mockApi.openProjectAtPath).toHaveBeenCalledWith(WORKTREE_A);
+    expect(mockApi.moveSessionsToProject).toHaveBeenCalledWith(
+      ["s1"],
+      WORKTREE_A,
+    );
+    const state = useAppStore.getState();
+    expect(state.projectFolders[REPO_A]?.map((folder) => folder.id)).toEqual([
+      REPO_A,
+    ]);
+    expect(state.activeProject).toBe(WORKTREE_A);
+  });
+
+  it("refuses to promote a workspace that shares the project directory", async () => {
+    useAppStore.setState({
+      projects: [project(REPO_A, 0)],
+      projectFolders: {
+        [REPO_A]: [
+          {
+            id: "plain",
+            repoPath: REPO_A,
+            name: "Plain",
+            cwdPath: REPO_A,
+            position: 1,
+          },
+        ],
+      },
+    });
+
+    await expect(
+      useAppStore.getState().promoteProjectFolderToProject("plain"),
+    ).resolves.toBe(false);
+    expect(mockApi.openProjectAtPath).not.toHaveBeenCalled();
+  });
+
+  it("refuses to promote the default workspace", async () => {
+    useAppStore.setState({ projects: [project(REPO_A, 0)] });
+
+    await expect(
+      useAppStore.getState().promoteProjectFolderToProject(REPO_A),
+    ).resolves.toBe(false);
+    expect(mockApi.openProjectAtPath).not.toHaveBeenCalled();
+  });
+
+  it("folds a nested project back in as a workspace of its host", async () => {
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+    mockApi.listSessions.mockResolvedValue([
+      session("s1", REPO_A, { worktree_path: NESTED_A }),
+    ]);
+    useAppStore.setState({
+      projects: [project(REPO_A, 0), project(NESTED_A, 1)],
+      sessions: [session("s1", NESTED_A, { worktree_path: NESTED_A })],
+    });
+
+    await expect(
+      useAppStore.getState().foldProjectIntoProject(NESTED_A, REPO_A),
+    ).resolves.toBe(true);
+
+    expect(mockApi.moveSessionsToProject).toHaveBeenCalledWith(["s1"], REPO_A);
+    expect(mockApi.removeProject).toHaveBeenCalledWith(NESTED_A, false);
+    const state = useAppStore.getState();
+    expect(state.projectFolders[NESTED_A]).toBeUndefined();
+    expect(
+      state.projectFolders[REPO_A]?.map((folder) => folder.cwdPath),
+    ).toEqual([REPO_A, NESTED_A]);
+    expect(state.activeProject).toBe(REPO_A);
+  });
+
+  it("refuses to fold a project into one that is not registered", async () => {
+    useAppStore.setState({ projects: [project(NESTED_A, 0)] });
+
+    await expect(
+      useAppStore.getState().foldProjectIntoProject(NESTED_A, REPO_A),
+    ).resolves.toBe(false);
+    expect(mockApi.removeProject).not.toHaveBeenCalled();
   });
 });

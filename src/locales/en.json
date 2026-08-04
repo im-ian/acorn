@@ -28,6 +28,8 @@
       "pauseFailed": "Goal session could not be paused:"
     },
     "project": {
+      "promoteWorkspaceFailed": "Failed to convert workspace to project:",
+      "foldIntoProjectFailed": "Failed to convert project to workspace:",
       "addFailed": "Failed to add project:",
       "createFailed": "Failed to create project:",
       "removeFailed": "Failed to remove project:",
@@ -1233,6 +1235,8 @@
       "newProjectFolder": "New workspace",
       "newProjectFolderWithWorktree": "New worktree workspace",
       "createWorkspaceFromWorktree": "Create Workspace from Worktree",
+      "promoteProjectFolderToProject": "Convert to project",
+      "foldProjectIntoProject": "Convert to workspace of…",
       "renameProjectFolder": "Rename workspace",
       "removeProjectFolder": "Remove workspace",
       "moveToProjectFolder": "Move to",

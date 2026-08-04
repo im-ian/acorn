@@ -5523,6 +5523,72 @@ pub async fn add_project<R: Runtime>(
     Ok(Some(project))
 }
 
+/// Register a directory that already belongs to a registered project (a linked
+/// worktree, or a nested repository) as a project of its own. Unlike
+/// `add_project` there is no folder picker, so no new trust root is created:
+/// the path must already be reachable from a project Acorn knows about, and it
+/// must be a repository root — a plain subdirectory resolves back to its own
+/// repo and could never hold sessions of its own.
+#[tauri::command]
+pub fn open_project_at_path(state: State<'_, AppState>, path: String) -> AppResult<Project> {
+    let path = canonical_existing_path(Path::new(&path))?;
+    if !registered_project_roots(state.inner())
+        .iter()
+        .any(|root| authorize_project_session_cwd(root, &path).is_ok())
+    {
+        return Err(AppError::InvalidPath(format!(
+            "path is not inside a registered project: {}",
+            path.display()
+        )));
+    }
+    let root = worktree::project_root_for_path(&path)?;
+    if root != path {
+        return Err(AppError::InvalidPath(format!(
+            "not a repository root, it belongs to {}",
+            root.display()
+        )));
+    }
+    let project = state.projects.ensure(root.clone(), project_basename(&root));
+    persist(&state);
+    Ok(project)
+}
+
+/// Re-home sessions under a different registered project. Every session is
+/// validated before any of them moves, so a rejected session leaves the whole
+/// group untouched. The rule is the one `create_session` applies to a new
+/// session's cwd: the session's worktree must live inside the target project's
+/// repo subtree or one of its linked worktrees.
+#[tauri::command]
+pub fn move_sessions_to_project(
+    state: State<'_, AppState>,
+    session_ids: Vec<String>,
+    repo_path: String,
+) -> AppResult<Vec<Session>> {
+    let repo = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    let mut ids = Vec::with_capacity(session_ids.len());
+    for id in &session_ids {
+        let id = Uuid::parse_str(id).map_err(|e| AppError::Other(e.to_string()))?;
+        let session = state.sessions.get(&id)?;
+        if !session.project_scoped {
+            return Err(AppError::InvalidPath(
+                "local sessions do not belong to a project".into(),
+            ));
+        }
+        let cwd = session
+            .worktree_path
+            .canonicalize()
+            .unwrap_or_else(|_| session.worktree_path.clone());
+        authorize_project_session_cwd(&repo, &cwd)?;
+        ids.push(id);
+    }
+    let mut moved = Vec::with_capacity(ids.len());
+    for id in ids {
+        moved.push(state.sessions.update_repo_path(&id, repo.clone())?);
+    }
+    persist(&state);
+    Ok(moved)
+}
+
 #[tauri::command]
 pub async fn select_project_parent_folder<R: Runtime>(
     app: AppHandle<R>,
