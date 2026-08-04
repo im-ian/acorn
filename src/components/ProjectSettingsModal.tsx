@@ -379,12 +379,7 @@ export function ProjectSettingsModal({
             title={dt(t, "dialogs.projectSettings.title")}
             titleId="project-settings-title"
             subtitle={project.name}
-            icon={
-              <Settings
-                size={16}
-                className="mt-0.5 self-start text-fg-muted"
-              />
-            }
+            icon={<Settings size={16} className="text-fg-muted" />}
             variant="dialog"
             onClose={onClose}
           />
