@@ -36,7 +36,7 @@ import {
 const PROMPT_MAX_CHARS = 2_000;
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
-type ProjectSettingsTab =
+export type ProjectSettingsTab =
   | "general"
   | "sources"
   | "pullRequests"

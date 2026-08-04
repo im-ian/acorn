@@ -3631,7 +3631,7 @@ test.describe("sidebar: project lifecycle", () => {
     await page.getByRole("button", { name: "Add existing project" }).click();
 
     await expect(
-      page.getByRole("listitem").filter({ hasText: "picked" }),
+      page.locator("aside").getByRole("listitem").filter({ hasText: "picked" }),
     ).toBeVisible();
 
     const calls = (await page.evaluate(
@@ -3684,7 +3684,20 @@ test.describe("sidebar: project lifecycle", () => {
       .click();
 
     await expect(
-      page.getByRole("listitem").filter({ hasText: "empty-picked" }),
+      page.locator("aside").getByRole("listitem").filter({
+        hasText: "empty-picked",
+      }),
+    ).toBeVisible();
+
+    // Opening a project lands on its source folders so extra repositories can
+    // be attached right away instead of through a separate settings trip.
+    const modal = page.getByRole("dialog", { name: "Project Settings" });
+    await expect(modal).toBeVisible();
+    await expect(
+      modal.getByRole("listitem").filter({ hasText: "/tmp/empty-picked" }),
+    ).toContainText("Primary");
+    await expect(
+      modal.getByRole("button", { name: "Add folder" }),
     ).toBeVisible();
 
     const calls = (await page.evaluate(

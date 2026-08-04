@@ -174,7 +174,10 @@ import type {
 import { AutonomousGoalDialog } from "./AutonomousGoalDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
-import { ProjectSettingsModal } from "./ProjectSettingsModal";
+import {
+  ProjectSettingsModal,
+  type ProjectSettingsTab,
+} from "./ProjectSettingsModal";
 import { RemoveProjectFolderDialog } from "./RemoveProjectFolderDialog";
 import { ResizeHandle } from "./ResizeHandle";
 import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
@@ -349,8 +352,11 @@ export function Sidebar() {
     useState<SessionCreateScope | null>(null);
   const [autonomousGoalSession, setAutonomousGoalSession] =
     useState<Session | null>(null);
-  const [settingsProject, setSettingsProject] =
-    useState<ProjectFolderProjectGroup | null>(null);
+  const [settingsProject, setSettingsProject] = useState<{
+    name: string;
+    repoPath: string;
+    tab: ProjectSettingsTab;
+  } | null>(null);
   const [pendingRemoveProjectFolderId, setPendingRemoveProjectFolderId] =
     useState<string | null>(null);
 
@@ -472,9 +478,23 @@ export function Sidebar() {
 
   async function onAddExistingProject() {
     try {
-      await addProject(sidebarText(t, "sidebar.dialog.selectExistingProject"));
+      const project = await addProject(
+        sidebarText(t, "sidebar.dialog.selectExistingProject"),
+      );
       const error = useAppStore.getState().consumeError();
-      if (error) showToast(`${t("toasts.project.addFailed")} ${error}`);
+      if (error) {
+        showToast(`${t("toasts.project.addFailed")} ${error}`);
+        return;
+      }
+      // Land on the source folders tab so extra repositories can be attached
+      // as part of opening the project, not as a separate trip into settings.
+      if (project) {
+        setSettingsProject({
+          name: project.name,
+          repoPath: project.repo_path,
+          tab: "sources",
+        });
+      }
     } catch (e) {
       console.error("add project failed", e);
       showToast(`${t("toasts.project.addFailed")} ${String(e)}`);
@@ -1461,7 +1481,13 @@ export function Sidebar() {
                         onRemoveProject={() =>
                           requestRemoveProject(project.repoPath)
                         }
-                        onOpenSettings={() => setSettingsProject(project)}
+                        onOpenSettings={() =>
+                          setSettingsProject({
+                            name: project.name,
+                            repoPath: project.repoPath,
+                            tab: "general",
+                          })
+                        }
                         collapsedFolderIds={collapsedFolders}
                         onToggleFolder={toggleProjectFolder}
                       />
@@ -1539,6 +1565,7 @@ export function Sidebar() {
               }
             : null
         }
+        initialTab={settingsProject?.tab ?? "general"}
         onClose={() => setSettingsProject(null)}
       />
       <RemoveProjectFolderDialog

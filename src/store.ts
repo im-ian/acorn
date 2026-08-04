@@ -531,7 +531,7 @@ interface AppStateModel {
   cycleTab: (direction: 1 | -1) => void;
   selectLatestNeedsInputSession: () => boolean;
   cycleProject: (direction: 1 | -1) => void;
-  addProject: (title?: string) => Promise<void>;
+  addProject: (title?: string) => Promise<Project | null>;
   createNewProject: (
     parentPath: string,
     name: string,
@@ -3305,8 +3305,10 @@ export const useAppStore = create<AppStateModel>()(
         await createInitialProjectSession(get, project.repo_path);
       }
       set({ error: null });
+      return project;
     } catch (e) {
       set({ error: errorMessage(e) });
+      return null;
     }
   },
 
