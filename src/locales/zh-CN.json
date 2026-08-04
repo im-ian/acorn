@@ -2021,6 +2021,14 @@
       "saving": "正在保存...",
       "save": "保存"
     },
+    "mergeProjectSource": {
+      "title": "合并源文件夹",
+      "messageProject": "“{source}”是独立项目。合并会把它包含的所有文件夹移入“{target}”，并将其从侧边栏移除。",
+      "messageFolder": "该文件夹属于“{source}”。合并会将其移入“{target}”。",
+      "folderLabel": "文件夹",
+      "sessionsKept": "会话保持不变，只有分组位置会改变。",
+      "confirm": "合并"
+    },
     "newProject": {
       "title": "新建项目",
       "subtitle": "创建 Git 仓库并将其添加到 Acorn",

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AcornIpcStatus,
+  AddProjectSourceResult,
   AgentStatusSource,
   AgentTokenUsageSnapshot,
   AgentHistoryItem,
@@ -327,8 +328,17 @@ export const api = {
   addProject(title?: string): Promise<Project | null> {
     return invoke<Project | null>("add_project", { title });
   },
-  addProjectSource(repoPath: string, title?: string): Promise<Project | null> {
-    return invoke<Project | null>("add_project_source", { repoPath, title });
+  addProjectSource(
+    repoPath: string,
+    title?: string,
+  ): Promise<AddProjectSourceResult> {
+    return invoke<AddProjectSourceResult>("add_project_source", {
+      repoPath,
+      title,
+    });
+  },
+  mergeProjectSource(repoPath: string, sourcePath: string): Promise<Project> {
+    return invoke<Project>("merge_project_source", { repoPath, sourcePath });
   },
   removeProjectSource(repoPath: string, sourcePath: string): Promise<Project> {
     return invoke<Project>("remove_project_source", { repoPath, sourcePath });

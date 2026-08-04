@@ -2021,6 +2021,14 @@
       "saving": "저장 중...",
       "save": "저장"
     },
+    "mergeProjectSource": {
+      "title": "소스 폴더 병합",
+      "messageProject": "\"{source}\"은(는) 별도 프로젝트입니다. 병합하면 이 프로젝트가 포함하는 모든 폴더가 \"{target}\"으로 옮겨지고 사이드바에서 사라집니다.",
+      "messageFolder": "이 폴더는 \"{source}\"에 속해 있습니다. 병합하면 \"{target}\"으로 옮겨집니다.",
+      "folderLabel": "폴더",
+      "sessionsKept": "세션은 그대로 유지되고 묶이는 위치만 바뀝니다.",
+      "confirm": "병합"
+    },
     "newProject": {
       "title": "새 프로젝트",
       "subtitle": "Git 저장소를 만들고 Acorn에 추가합니다",

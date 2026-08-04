@@ -2021,6 +2021,14 @@
       "saving": "保存中...",
       "save": "保存"
     },
+    "mergeProjectSource": {
+      "title": "ソースフォルダを統合",
+      "messageProject": "「{source}」は独立したプロジェクトです。統合すると、そのプロジェクトが含むすべてのフォルダが「{target}」に移り、サイドバーから消えます。",
+      "messageFolder": "このフォルダは「{source}」に属しています。統合すると「{target}」に移ります。",
+      "folderLabel": "フォルダ",
+      "sessionsKept": "セッションはそのまま残り、グループの位置だけが変わります。",
+      "confirm": "統合"
+    },
     "newProject": {
       "title": "新しいプロジェクト",
       "subtitle": "git リポジトリを作成して Acorn に追加します",

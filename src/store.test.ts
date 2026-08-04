@@ -42,6 +42,8 @@ vi.mock("./lib/api", () => {
       agentTranscriptSummary: vi.fn(async () => null),
       agentTranscriptSummaryAtPath: vi.fn(async () => null),
       addProject: vi.fn(async () => ({}) as Project),
+      addProjectSource: vi.fn(async () => ({ project: null, merge: null })),
+      mergeProjectSource: vi.fn(async () => ({}) as Project),
       createNewProject: vi.fn(async () => ({}) as Project),
       removeProject: vi.fn(async () => []),
       reorderProjects: vi.fn(async (paths: string[]) =>
@@ -4070,5 +4072,30 @@ describe("auto initial session on first project add", () => {
     await useAppStore.getState().addProject("Select project");
 
     expect(mockApi.createSession).not.toHaveBeenCalled();
+  });
+
+  it("holds a source folder another project owns until the merge is confirmed", async () => {
+    await seed([project(REPO_A, 0), project(REPO_B, 1)], []);
+    mockApi.addProjectSource.mockResolvedValueOnce({
+      project: null,
+      merge: {
+        sourcePath: REPO_B,
+        ownerName: "repo-b",
+        wholeProject: true,
+      },
+    });
+
+    await useAppStore.getState().addProjectSource(REPO_A, "Select folder");
+
+    expect(mockApi.mergeProjectSource).not.toHaveBeenCalled();
+    expect(useAppStore.getState().pendingSourceMerge).toEqual({
+      repoPath: REPO_A,
+      merge: { sourcePath: REPO_B, ownerName: "repo-b", wholeProject: true },
+    });
+
+    await useAppStore.getState().confirmSourceMerge();
+
+    expect(mockApi.mergeProjectSource).toHaveBeenCalledWith(REPO_A, REPO_B);
+    expect(useAppStore.getState().pendingSourceMerge).toBeNull();
   });
 });

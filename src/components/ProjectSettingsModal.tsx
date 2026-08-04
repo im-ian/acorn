@@ -150,6 +150,8 @@ export function ProjectSettingsModal({
   const t = useTranslation();
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
+  // The merge confirmation renders above this modal, so hand it the keyboard.
+  const pendingSourceMerge = useAppStore((s) => s.pendingSourceMerge);
   const removeProjectWorktree = useAppStore((s) => s.removeProjectWorktree);
   const projects = useAppStore((s) => s.projects);
   const projectEntry = project
@@ -199,10 +201,13 @@ export function ProjectSettingsModal({
   const canShowConfirmRemove =
     confirmRemove !== null && confirmRemoveOtherSessions.length === 0;
 
-  useDialogShortcuts(project !== null && confirmRemove === null, {
-    onCancel: onClose,
-    onConfirm: () => {},
-  });
+  useDialogShortcuts(
+    project !== null && confirmRemove === null && pendingSourceMerge === null,
+    {
+      onCancel: onClose,
+      onConfirm: () => {},
+    },
+  );
 
   useDialogShortcuts(canShowConfirmRemove, {
     onCancel: () => setConfirmRemove(null),

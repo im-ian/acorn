@@ -2021,6 +2021,14 @@
       "saving": "Saving...",
       "save": "Save"
     },
+    "mergeProjectSource": {
+      "title": "Merge source folder",
+      "messageProject": "\"{source}\" is its own project. Merging moves every folder it spans into \"{target}\" and removes it from the sidebar.",
+      "messageFolder": "This folder belongs to \"{source}\". Merging moves it into \"{target}\".",
+      "folderLabel": "Folder",
+      "sessionsKept": "Sessions stay where they are — only the grouping changes.",
+      "confirm": "Merge"
+    },
     "newProject": {
       "title": "New project",
       "subtitle": "Create a git repository and add it to Acorn",
