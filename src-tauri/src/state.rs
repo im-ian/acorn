@@ -84,9 +84,9 @@ pub struct AppState {
     /// during this app run. The readonly viewer may read these exact files even
     /// when they live outside registered project roots.
     pub external_file_grants: Arc<Mutex<Vec<PathBuf>>>,
-    /// Running native chat provider processes, keyed by Acorn session id.
-    /// The cancel command uses this to kill the one-shot provider child and
-    /// let the running turn settle as cancelled.
+    /// Running native AI work, keyed by Acorn session id. Chat turns own one
+    /// provider child; Graph runs own a bounded set of independently
+    /// cancellable node children under the same atomic session claim.
     pub chat_runs: Arc<crate::chat_runs::ChatRunRegistry>,
     /// macOS idle-sleep assertion owned while Settings keeps Acorn awake.
     /// Dropping the inner assertion releases the OS power-management hold.

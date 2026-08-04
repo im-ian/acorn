@@ -1,6 +1,6 @@
 import { expect, test } from "./support";
 
-test("creates and revises a durable goal session inside a project", async ({
+test("creates and revises a durable Loop session inside a project", async ({
   page,
   tauri,
 }) => {
@@ -28,7 +28,7 @@ test("creates and revises a durable goal session inside a project", async ({
     state.__goalCreateCalls.push(args);
     const created = {
       id: "goal-1",
-      name: input.name ?? "Goal session",
+      name: input.name ?? "Loop session",
       repo_path: input.repoPath ?? "/tmp/demo",
       worktree_path: "/tmp/demo/.acorn/worktrees/goal-1",
       branch: "goal-1",
@@ -85,16 +85,16 @@ test("creates and revises a durable goal session inside a project", async ({
     .getByRole("button", { name: "Project demo" })
     .click({ button: "right" });
   await page
-    .getByRole("menuitem", { name: "New goal session", exact: true })
+    .getByRole("menuitem", { name: "New Loop session", exact: true })
     .click();
 
-  const createDialog = page.getByRole("dialog", { name: "New goal session" });
+  const createDialog = page.getByRole("dialog", { name: "New Loop session" });
   await expect(createDialog).toBeVisible();
   await createDialog
     .getByPlaceholder(
       "For example: Add keyboard navigation to the command palette and verify it with tests.",
     )
-    .fill("Add project-owned goal sessions");
+    .fill("Add project-owned Loop sessions");
   await createDialog
     .getByRole("button", { name: "Agent & Model", exact: true })
     .click();
@@ -113,17 +113,17 @@ test("creates and revises a durable goal session inside a project", async ({
     .getByRole("combobox", { name: "All stages Effort" })
     .click();
   await page.getByRole("option", { name: /^ultra/ }).click();
-  await createDialog.getByRole("button", { name: "Start goal" }).click();
+  await createDialog.getByRole("button", { name: "Start Loop" }).click();
 
   await expect(page.locator("[data-goal-session-header]")).toContainText(
-    "Add project-owned goal sessions",
+    "Add project-owned Loop sessions",
   );
   await expect(page.locator("[data-goal-session-header]")).toContainText(
     "Revision 1",
   );
   await expect(
     page.locator("aside > header").getByRole("button", {
-      name: "New goal session",
+      name: "New Loop session",
     }),
   ).toHaveCount(0);
 
@@ -140,7 +140,7 @@ test("creates and revises a durable goal session inside a project", async ({
     mode: "chat",
     agentProvider: "codex",
     goal: {
-      objective: "Add project-owned goal sessions",
+      objective: "Add project-owned Loop sessions",
       provider: "codex",
       model_config: {
         single_model: true,
@@ -153,18 +153,18 @@ test("creates and revises a durable goal session inside a project", async ({
     },
   });
 
-  await page.getByRole("button", { name: "Edit goal" }).click();
-  const editDialog = page.getByRole("dialog", { name: "Edit project goal" });
+  await page.getByRole("button", { name: "Edit objective" }).click();
+  const editDialog = page.getByRole("dialog", { name: "Edit Loop objective" });
   await expect(editDialog).toBeVisible();
   await editDialog
     .getByPlaceholder(
       "For example: Add keyboard navigation to the command palette and verify it with tests.",
     )
-    .fill("Add durable project-owned goal sessions");
+    .fill("Add durable project-owned Loop sessions");
   await editDialog.getByRole("button", { name: "Save & continue" }).click();
 
   await expect(page.locator("[data-goal-session-header]")).toContainText(
-    "Add durable project-owned goal sessions",
+    "Add durable project-owned Loop sessions",
   );
   await expect(page.locator("[data-goal-session-header]")).toContainText(
     "Revision 2",
@@ -180,7 +180,7 @@ test("creates and revises a durable goal session inside a project", async ({
     id: "goal-1",
     expectedRevision: 1,
     goal: {
-      objective: "Add durable project-owned goal sessions",
+      objective: "Add durable project-owned Loop sessions",
     },
   });
 });

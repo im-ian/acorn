@@ -268,6 +268,7 @@ pub fn daemon_adopt_session(
         kind,
         mode: acorn_session::SessionMode::Terminal,
         goal: None,
+        graph: None,
         owner: acorn_session::SessionOwner::User,
         position: None,
         daemon_session_id: Some(id),

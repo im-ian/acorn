@@ -16,6 +16,7 @@ mod daemon_stream;
 mod error;
 mod fs_explorer;
 mod git_ops;
+mod graph_runs;
 mod ipc;
 mod persistence;
 mod power_assertion;
@@ -33,6 +34,7 @@ mod state;
 mod todos;
 mod token_usage;
 mod unified_diff;
+mod work_graph;
 mod worktree;
 
 use std::io::Write;
@@ -692,6 +694,7 @@ pub fn run() {
             commands::remove_session,
             commands::set_session_status,
             commands::update_session_goal,
+            commands::update_session_graph,
             commands::rename_session,
             commands::session_title_readiness,
             commands::generate_session_title,
@@ -702,6 +705,10 @@ pub fn run() {
             commands::update_chat_message,
             commands::get_goal_agent_capabilities,
             commands::run_goal_session,
+            commands::load_graph_run_state,
+            commands::run_graph_session,
+            commands::submit_graph_node_input,
+            commands::cancel_graph_run,
             commands::send_chat_message,
             commands::retry_chat_message,
             commands::delete_chat_message,

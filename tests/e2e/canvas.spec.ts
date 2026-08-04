@@ -123,7 +123,7 @@ test.describe("workspace canvas mode", () => {
     });
     await expect(
       page.getByRole("menuitem", {
-        name: "New goal session",
+        name: "New Loop session",
         exact: true,
       }),
     ).toBeVisible();
@@ -152,10 +152,10 @@ test.describe("workspace canvas mode", () => {
       .getByRole("button", { name: "Create session" });
     await createButton.click();
     await page
-      .getByRole("menuitem", { name: "New goal session", exact: true })
+      .getByRole("menuitem", { name: "New Loop session", exact: true })
       .click();
     const goalDialog = page.getByRole("dialog", {
-      name: "New goal session",
+      name: "New Loop session",
     });
     await expect(goalDialog).toBeVisible();
     await goalDialog.getByRole("button", { name: "Cancel" }).click();

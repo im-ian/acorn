@@ -2754,14 +2754,15 @@ test.describe("sidebar: project lifecycle", () => {
     const menuLabels = await page.getByRole("menuitem").evaluateAll((items) =>
       items.map((item) => item.textContent?.replace(/\s+/g, " ").trim()),
     );
-    expect(menuLabels.slice(0, 5)).toEqual([
+    expect(menuLabels.slice(0, 6)).toEqual([
       "New workspace",
       "New worktree workspace",
       "Add source folder",
-      "New goal session",
+      "New Loop session",
+      "New Graph session",
       "New chat session",
     ]);
-    expect(menuLabels[5]).toMatch(
+    expect(menuLabels[6]).toMatch(
       /^New control session(?:⌥⇧⌘T|Ctrl\+Alt\+Shift\+T)$/,
     );
     await expect(
@@ -2771,7 +2772,10 @@ test.describe("sidebar: project lifecycle", () => {
       page.getByRole("menuitem", { name: /New worktree session/i }),
     ).toHaveCount(0);
     await expect(
-      page.getByRole("menuitem", { name: "New goal session" }),
+      page.getByRole("menuitem", { name: "New Loop session" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "New Graph session" }),
     ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "New chat session" }),

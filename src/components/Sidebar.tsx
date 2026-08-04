@@ -23,6 +23,7 @@ import {
   Plus,
   Settings as SettingsIcon,
   Sparkles,
+  Waypoints,
   Tag,
   Trash2,
   X,
@@ -78,6 +79,11 @@ import {
   NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
   type NewAutonomousGoalSessionEventDetail,
 } from "../lib/autonomousGoal";
+import {
+  NEW_GRAPH_SESSION_EVENT,
+  requestNewGraphSession,
+  type NewGraphSessionEventDetail,
+} from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
@@ -172,6 +178,7 @@ import type {
   SessionStatusReason,
 } from "../lib/types";
 import { AutonomousGoalDialog } from "./AutonomousGoalDialog";
+import { GraphSessionDialog } from "./GraphSessionDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { AddExistingProjectDialog } from "./AddExistingProjectDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
@@ -357,6 +364,9 @@ export function Sidebar() {
     repoPath: string;
     tab: ProjectSettingsTab;
   } | null>(null);
+  const [graphSessionOpen, setGraphSessionOpen] = useState(false);
+  const [graphSessionScope, setGraphSessionScope] =
+    useState<SessionCreateScope | null>(null);
   const [pendingRemoveProjectFolderId, setPendingRemoveProjectFolderId] =
     useState<string | null>(null);
 
@@ -740,6 +750,31 @@ export function Sidebar() {
       setAutonomousGoalScope(scope);
       setAutonomousGoalOpen(true);
     };
+    const newGraphSession = (event: Event) => {
+      const requestedScope = (event as CustomEvent<NewGraphSessionEventDetail>)
+        .detail?.scope;
+      const state = useAppStore.getState();
+      const scope =
+        requestedScope ??
+        resolveActiveProjectSessionScope({
+          sessions: state.sessions,
+          projects: state.projects,
+          activeSessionId: state.activeSessionId,
+          activeWorkspaceRepoPath: state.activeProject,
+          activeWorkspaceCwdPath:
+            findProjectFolderById(
+              state.projectFolders,
+              state.activeProjectFolderId,
+            )?.cwdPath ?? null,
+          activeProjectFolderId: state.activeProjectFolderId,
+        });
+      if (!scope?.placement.projectScoped) {
+        useToasts.getState().show(t("graphSession.projectScopeRequired"));
+        return;
+      }
+      setGraphSessionScope(scope);
+      setGraphSessionOpen(true);
+    };
     const editAutonomousGoal = (event: Event) => {
       const sessionId = (event as CustomEvent<{ sessionId?: string }>).detail
         ?.sessionId;
@@ -760,7 +795,7 @@ export function Sidebar() {
           setAutonomousGoalSession(current);
           setAutonomousGoalOpen(true);
         } catch (error) {
-          console.error("pause goal session before editing failed", error);
+          console.error("pause Loop session before editing failed", error);
           useToasts
             .getState()
             .show(`${t("toasts.autonomousGoal.pauseFailed")} ${String(error)}`);
@@ -781,6 +816,7 @@ export function Sidebar() {
       NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
       newAutonomousGoal,
     );
+    window.addEventListener(NEW_GRAPH_SESSION_EVENT, newGraphSession);
     window.addEventListener(
       EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
       editAutonomousGoal,
@@ -796,6 +832,7 @@ export function Sidebar() {
         NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
         newAutonomousGoal,
       );
+      window.removeEventListener(NEW_GRAPH_SESSION_EVENT, newGraphSession);
       window.removeEventListener(
         EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
         editAutonomousGoal,
@@ -911,6 +948,17 @@ export function Sidebar() {
       launch: { kind: "workspaceCwd", cwdPath: folder.cwdPath },
     });
     setAutonomousGoalOpen(true);
+  }
+
+  function openGraphForFolder(folder: ProjectFolder) {
+    requestNewGraphSession({
+      placement: {
+        repoPath: folder.repoPath,
+        projectScoped: true,
+        projectFolderId: folder.id,
+      },
+      launch: { kind: "workspaceCwd", cwdPath: folder.cwdPath },
+    });
   }
 
   const projectIds = useMemo(
@@ -1437,6 +1485,7 @@ export function Sidebar() {
                           )
                         }
                         onAddAutonomousGoal={openAutonomousGoalForFolder}
+                        onAddGraph={openGraphForFolder}
                         onAddFolder={() => onAddProjectFolder(project.repoPath)}
                         onAddWorktreeFolder={() =>
                           void onAddProjectFolderWorktree(project.repoPath)
@@ -1522,6 +1571,14 @@ export function Sidebar() {
       <AddExistingProjectDialog
         open={addProjectOpen}
         onClose={() => setAddProjectOpen(false)}
+      />
+      <GraphSessionDialog
+        open={graphSessionOpen}
+        scope={graphSessionScope}
+        onClose={() => {
+          setGraphSessionOpen(false);
+          setGraphSessionScope(null);
+        }}
       />
       <NewProjectDialog
         open={newProjectOpen}
@@ -1978,6 +2035,8 @@ function projectSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
   switch (id) {
     case "goal":
       return <Sparkles size={12} />;
+    case "graph":
+      return <Waypoints size={12} />;
     case "terminal":
       return <Plus size={12} />;
     case "isolated":
@@ -2032,6 +2091,7 @@ interface ProjectGroupViewProps {
     mode?: SessionMode,
   ) => void;
   onAddAutonomousGoal: (folder: ProjectFolder) => void;
+  onAddGraph: (folder: ProjectFolder) => void;
   onAddFolder: () => void;
   onAddWorktreeFolder: () => void;
   onAddSourceFolder: () => void;
@@ -2063,6 +2123,7 @@ function ProjectGroupView({
   onRemoveSession,
   onAddSession,
   onAddAutonomousGoal,
+  onAddGraph,
   onAddFolder,
   onAddWorktreeFolder,
   onAddSourceFolder,
@@ -2133,6 +2194,10 @@ function ProjectGroupView({
         onAddAutonomousGoal(projectSessionCreationFolder);
         return;
       }
+      if (action.flow === "graph") {
+        onAddGraph(projectSessionCreationFolder);
+        return;
+      }
       onAddSession(
         projectSessionCreationFolder,
         action.isolated,
@@ -2140,7 +2205,7 @@ function ProjectGroupView({
         action.mode,
       );
     },
-    [onAddAutonomousGoal, onAddSession, projectSessionCreationFolder],
+    [onAddAutonomousGoal, onAddGraph, onAddSession, projectSessionCreationFolder],
   );
 
   const createMenuItems = useMemo<ContextMenuItem[]>(
@@ -2542,6 +2607,7 @@ function ProjectGroupView({
                     onAddAutonomousGoal={() =>
                       onAddAutonomousGoal(item.folderGroup.folder)
                     }
+                    onAddGraph={() => onAddGraph(item.folderGroup.folder)}
                     onMoveSessionToFolder={onMoveSessionToFolder}
                   />
                 ),
@@ -2595,6 +2661,7 @@ interface ProjectFolderViewProps {
     mode: SessionMode,
   ) => void;
   onAddAutonomousGoal: () => void;
+  onAddGraph: () => void;
   onMoveSessionToFolder: (sessionId: string, folderId: string | null) => void;
 }
 
@@ -2617,6 +2684,7 @@ function ProjectFolderView({
   onRemoveFolder,
   onAddSession,
   onAddAutonomousGoal,
+  onAddGraph,
   onMoveSessionToFolder,
 }: ProjectFolderViewProps) {
   const t = useTranslation();
@@ -2677,9 +2745,13 @@ function ProjectFolderView({
         onAddAutonomousGoal();
         return;
       }
+      if (action.flow === "graph") {
+        onAddGraph();
+        return;
+      }
       onAddSession(action.isolated, action.kind, action.mode);
     },
-    [onAddAutonomousGoal, onAddSession],
+    [onAddAutonomousGoal, onAddGraph, onAddSession],
   );
 
   const folderCreateMenuItems = useMemo<ContextMenuItem[]>(

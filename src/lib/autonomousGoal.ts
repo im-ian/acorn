@@ -594,7 +594,7 @@ export function saveAutonomousGoalPreferences(
     );
   } catch {
     // Presets are a convenience setting; a blocked or full storage area must
-    // not prevent the user from starting a goal session.
+    // not prevent the user from starting a Loop session.
   }
 }
 
@@ -816,14 +816,14 @@ export function deriveAutonomousGoalSessionName(goal: string): string {
     goal
       .split(/\r?\n/u)
       .map((line) => line.trim())
-      .find(Boolean) ?? "Autonomous goal";
+      .find(Boolean) ?? "Loop objective";
   const compact =
     firstMeaningfulLine.replace(/^#+\s*/u, "").replace(/\s+/gu, " ") ||
-    "Autonomous goal";
+    "Loop objective";
   const maxGoalLength = 48;
   const summary =
     compact.length > maxGoalLength
       ? `${compact.slice(0, maxGoalLength - 1).trimEnd()}…`
       : compact;
-  return `Goal · ${summary}`;
+  return `Loop · ${summary}`;
 }

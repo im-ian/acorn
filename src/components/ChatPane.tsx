@@ -45,6 +45,9 @@ import { EDIT_AUTONOMOUS_GOAL_SESSION_EVENT } from "../lib/autonomousGoal";
 import { useDialogShortcuts } from "../lib/dialog";
 import { useAppStore } from "../store";
 import { useTranslation } from "../lib/useTranslation";
+import {
+  AUTOMATIC_GRAPH_PROMPT_PLAN,
+} from "../lib/workGraph";
 import type {
   ChatMessage,
   Session,
@@ -141,16 +144,55 @@ function sessionStatusFromChatState(state: ChatSessionState): SessionStatus {
   if (lastMessage?.status === "error" || lastTurn?.status === "error") {
     return "errored";
   }
-  if (
-    lastMessage?.role === "assistant" &&
-    lastMessage.status !== "cancelled" &&
-    lastMessage.content
-      .split(/\r?\n/u)
-      .some((line) => line.trimStart().startsWith("WAITING:"))
-  ) {
+  if (assistantMessageRequestsInput(lastMessage)) {
     return "waiting_for_input";
   }
   return "ready";
+}
+
+function assistantMessageHasProtocolLine(
+  message: ChatMessage | undefined,
+  prefix: "WAITING:" | "FINAL:",
+): boolean {
+  return Boolean(
+    message?.role === "assistant" &&
+      message.status !== "pending" &&
+      message.status !== "streaming" &&
+      message.status !== "error" &&
+      message.status !== "cancelled" &&
+      message.content
+        .split(/\r?\n/u)
+        .some((line) => line.trimStart().startsWith(prefix)),
+  );
+}
+
+function assistantMessageRequestsInput(message: ChatMessage | undefined): boolean {
+  return assistantMessageHasProtocolLine(message, "WAITING:");
+}
+
+function assistantMessageReachesFinal(message: ChatMessage | undefined): boolean {
+  return assistantMessageHasProtocolLine(message, "FINAL:");
+}
+
+function activeWaitingAssistantIndex(state: ChatSessionState): number | null {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const message = state.messages[index];
+    if (assistantMessageReachesFinal(message)) return null;
+    if (assistantMessageRequestsInput(message)) return index;
+  }
+  return null;
+}
+
+function graphContinuationProtocolViolated(state: ChatSessionState): boolean {
+  const waitingIndex = activeWaitingAssistantIndex(state);
+  if (waitingIndex === null || chatStateIsRunning(state)) return false;
+  const latestIndex = state.messages.length - 1;
+  if (latestIndex <= waitingIndex) return false;
+  const latest = state.messages[latestIndex];
+  return (
+    !assistantMessageRequestsInput(latest) &&
+    !assistantMessageReachesFinal(latest)
+  );
 }
 
 function isChatScrolledBack(element: HTMLElement): boolean {
@@ -632,6 +674,7 @@ export function ChatPane({
   repoPath,
   session,
 }: ChatPaneProps) {
+  const t = useTranslation();
   const [state, setState] = useState<ChatSessionState | null>(null);
   const latestChatStateRef = useRef<ChatSessionState | null>(null);
   const [loading, setLoading] = useState(true);
@@ -660,10 +703,15 @@ export function ChatPane({
   const isScrolledBackRef = useRef(false);
   const [isScrolledBack, setIsScrolledBack] = useState(false);
   const settings = useSettings((s) => s.settings);
-  const goalProviderRef = useRef(session?.goal?.provider);
-  goalProviderRef.current = session?.goal?.provider;
+  const fixedProviderRef = useRef(
+    session?.goal?.provider ?? session?.graph?.agent.provider,
+  );
+  fixedProviderRef.current =
+    session?.goal?.provider ?? session?.graph?.agent.provider;
   const [provider, setProvider] = useState<ChatProvider>(() =>
-    session?.goal?.provider ?? defaultProvider(useSettings.getState().settings),
+    session?.goal?.provider ??
+      session?.graph?.agent.provider ??
+      defaultProvider(useSettings.getState().settings),
   );
   const messages = state?.messages ?? [];
   const stateProvider = state?.provider ?? null;
@@ -682,6 +730,9 @@ export function ChatPane({
     composerIsCentered &&
     canUseNewWorktree &&
     !(session?.isolated || session?.in_worktree);
+  const hasActiveGraphWaitingTurn =
+    state !== null && activeWaitingAssistantIndex(state) !== null;
+  const graphReplyAllowed = !session?.graph || hasActiveGraphWaitingTurn;
 
   function syncScrollState() {
     const element = scrollRef.current;
@@ -709,11 +760,14 @@ export function ChatPane({
     latestChatStateRef.current = loaded;
     setState(loaded);
     setProvider(
-      goalProviderRef.current ??
+      fixedProviderRef.current ??
         providerFromString(loaded.provider) ??
         defaultProvider(useSettings.getState().settings),
     );
     setSending(chatStateIsRunning(loaded));
+    if (!session?.goal && graphContinuationProtocolViolated(loaded)) {
+      setError(t("chat.graphEditor.continuationProtocolError"));
+    }
     return true;
   }
 
@@ -870,7 +924,11 @@ export function ChatPane({
       submittedAttachments,
       repoPath,
     );
-    if (!content) return;
+    if (!content || !graphReplyAllowed) return;
+    const submittedGraphPromptPlan =
+      session?.goal || session?.graph || hasActiveGraphWaitingTurn
+        ? undefined
+        : AUTOMATIC_GRAPH_PROMPT_PLAN;
 
     const previousState =
       latestChatStateRef.current?.session_id === sessionId
@@ -900,6 +958,7 @@ export function ChatPane({
             turn_id: `local-turn-${now}`,
             role: "user",
             content,
+            graph_prompt_plan: submittedGraphPromptPlan,
             created_at: now,
             status: "complete",
             metadata: null,
@@ -924,6 +983,7 @@ export function ChatPane({
         sessionId,
         chatAiRequest(provider, settings),
         content,
+        submittedGraphPromptPlan,
       );
       applyChatState(saved);
       setLocalChatSessionStatus(sessionId, sessionStatusFromChatState(saved));
@@ -1195,6 +1255,7 @@ export function ChatPane({
                 activities.some((activity) => activity.status === "running");
               const isCancelled = message.status === "cancelled";
               const canForkBeforeMessage =
+                !session?.graph &&
                 !isRunningMessage &&
                 !isUser &&
                 index > 0 &&
@@ -1225,13 +1286,14 @@ export function ChatPane({
                 hasRunningMessages ||
                 messageActionBusyId !== null;
               const canEditMessage =
-                isUser && !isRunningMessage && isLastMessage;
+                !session?.graph && isUser && !isRunningMessage && isLastMessage;
               const canRegenerateMessage =
+                !session?.graph &&
                 message.role === "assistant" &&
                 !isRunningMessage &&
                 isLastMessage;
               const canDeleteMessage =
-                !isSystem && !isRunningMessage && isLastMessage;
+                !session?.graph && !isSystem && !isRunningMessage && isLastMessage;
               const showMessageMeta =
                 !isSystem &&
                 ((isRunningMessage && Boolean(durationLabel)) ||
@@ -1551,6 +1613,8 @@ export function ChatPane({
       <form
         data-chat-composer={composerIsCentered ? "centered" : "bottom"}
         className={`relative bg-bg px-2 py-2 transition-opacity duration-200 ease-out will-change-opacity ${
+          session?.graph && !graphReplyAllowed ? "hidden" : ""
+        } ${
           composerIsCentered
             ? "-translate-y-[max(0px,calc(50vh-120px))]"
             : "translate-y-0"
@@ -1583,7 +1647,7 @@ export function ChatPane({
                 ? "min-h-[5.5rem] text-base"
                 : "min-h-16 text-sm"
             }`}
-            disabled={sending}
+            disabled={sending || !graphReplyAllowed}
             placeholder={providerPlaceholder(provider)}
             rows={3}
             value={draft}
@@ -1611,7 +1675,7 @@ export function ChatPane({
                   className={`inline-flex shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50 ${
                     composerIsCentered ? "h-9 w-9" : "h-8 w-8"
                   }`}
-                  disabled={sending}
+                  disabled={sending || !graphReplyAllowed}
                   type="button"
                   onClick={() => void handlePickAttachments()}
                 >
@@ -1665,7 +1729,7 @@ export function ChatPane({
               <Select
                 aria-label="Chat provider"
                 className="w-32 shrink-0"
-                disabled={sending || Boolean(session?.goal)}
+                disabled={sending || Boolean(session?.goal || session?.graph)}
                 value={provider}
                 onChange={(event) =>
                   setProvider(event.target.value as ChatProvider)
@@ -1700,7 +1764,10 @@ export function ChatPane({
                   className={`inline-flex shrink-0 items-center justify-center rounded bg-accent/20 text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-50 ${
                     composerIsCentered ? "h-9 w-9" : "h-8 w-8"
                   }`}
-                  disabled={draft.trim().length === 0 && attachments.length === 0}
+                  disabled={
+                    (draft.trim().length === 0 && attachments.length === 0) ||
+                    !graphReplyAllowed
+                  }
                   type="submit"
                 >
                   <Send size={composerIsCentered ? 18 : 16} />
@@ -1710,6 +1777,11 @@ export function ChatPane({
           </div>
         </div>
       </form>
+      {session?.graph && !graphReplyAllowed ? (
+        <div className="shrink-0 border-t border-border bg-bg px-4 py-3 text-center text-[11px] text-fg-muted">
+          {t("graphSession.runFromDesign")}
+        </div>
+      ) : null}
       <ForkWorktreeDialog
         open={forkTargetIndex !== null}
         busy={forkBusy}
