@@ -1239,6 +1239,7 @@
       "createWorkspaceFromWorktree": "从工作树创建工作区",
       "renameProjectFolder": "重命名工作区",
       "removeProjectFolder": "删除工作区",
+      "removeProjectSourceFolder": "移除源文件夹",
       "moveToProjectFolder": "移至",
       "moveToProjectRoot": "项目根目录",
       "projectSettings": "项目设置",

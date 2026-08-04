@@ -71,6 +71,26 @@ function dtf(
   );
 }
 
+/**
+ * A worktree plus the project root it is linked to. A project can span several
+ * repositories, and every worktree command is scoped to one of them.
+ */
+type RootedWorktree = ProjectWorktree & { rootPath: string };
+
+async function listWorktreesForRoots(
+  roots: readonly string[],
+): Promise<RootedWorktree[]> {
+  const perRoot = await Promise.all(
+    roots.map(async (rootPath) =>
+      (await api.listProjectWorktrees(rootPath)).map((worktree) => ({
+        ...worktree,
+        rootPath,
+      })),
+    ),
+  );
+  return perRoot.flat();
+}
+
 function defaultProjectSettings(): ProjectSettings {
   return {
     remember_after_close: true,
@@ -131,41 +151,51 @@ export function ProjectSettingsModal({
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const removeProjectWorktree = useAppStore((s) => s.removeProjectWorktree);
+  const projects = useAppStore((s) => s.projects);
+  const projectEntry = project
+    ? projects.find((entry) => entry.repo_path === project.repoPath)
+    : undefined;
+  // Worktrees belong to a repository, so a multi-root project has to list and
+  // remove them per root rather than through its primary one.
+  const projectRoots = projectEntry
+    ? projectRootPaths(projectEntry)
+    : project
+      ? [project.repoPath]
+      : [];
+  const projectRootsKey = projectRoots.join("\u0000");
   const [tab, setTab] = useState<ProjectSettingsTab>(initialTab);
   const [settings, setSettings] = useState<ProjectSettings>(() =>
     defaultProjectSettings(),
   );
   const [identity, setIdentity] = useState<string | null>(null);
-  const [worktrees, setWorktrees] = useState<ProjectWorktree[]>([]);
+  const [worktrees, setWorktrees] = useState<RootedWorktree[]>([]);
   const [loading, setLoading] = useState(false);
   const [worktreesLoading, setWorktreesLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [removingPath, setRemovingPath] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] =
-    useState<ProjectWorktree | null>(null);
+    useState<RootedWorktree | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [worktreeError, setWorktreeError] = useState<{
     kind: "load" | "remove";
     message: string;
   } | null>(null);
 
-  const confirmRemoveSessions =
-    project && confirmRemove
-      ? sessionsUsingProjectWorktree(
-          sessions,
-          project.repoPath,
-          confirmRemove.path,
-        )
-      : [];
-  const confirmRemoveOtherSessions =
-    project && confirmRemove
-      ? blockingSessionsForProjectWorktree(
-          sessions,
-          project.repoPath,
-          confirmRemove.path,
-          activeSessionId,
-        )
-      : [];
+  const confirmRemoveSessions = confirmRemove
+    ? sessionsUsingProjectWorktree(
+        sessions,
+        confirmRemove.rootPath,
+        confirmRemove.path,
+      )
+    : [];
+  const confirmRemoveOtherSessions = confirmRemove
+    ? blockingSessionsForProjectWorktree(
+        sessions,
+        confirmRemove.rootPath,
+        confirmRemove.path,
+        activeSessionId,
+      )
+    : [];
   const canShowConfirmRemove =
     confirmRemove !== null && confirmRemoveOtherSessions.length === 0;
 
@@ -229,8 +259,7 @@ export function ProjectSettingsModal({
         if (!cancelled) setLoading(false);
       });
 
-    api
-      .listProjectWorktrees(project.repoPath)
+    listWorktreesForRoots(projectRoots)
       .then((items) => {
         if (cancelled) return;
         setWorktrees(items);
@@ -247,7 +276,8 @@ export function ProjectSettingsModal({
     return () => {
       cancelled = true;
     };
-  }, [project]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, projectRootsKey]);
 
   const prompt = settings.pull_requests.generation_prompt ?? "";
 
@@ -293,12 +323,12 @@ export function ProjectSettingsModal({
     const target = confirmRemove;
     const targetSessions = sessionsUsingProjectWorktree(
       sessions,
-      project.repoPath,
+      target.rootPath,
       target.path,
     );
     const blockingSessions = blockingSessionsForProjectWorktree(
       sessions,
-      project.repoPath,
+      target.rootPath,
       target.path,
       activeSessionId,
     );
@@ -310,12 +340,12 @@ export function ProjectSettingsModal({
     setWorktreeError(null);
     try {
       await removeProjectWorktree(
-        project.repoPath,
+        target.rootPath,
         target.path,
         targetSessions.length > 0,
       );
       setConfirmRemove(null);
-      setWorktrees(await api.listProjectWorktrees(project.repoPath));
+      setWorktrees(await listWorktreesForRoots(projectRoots));
     } catch (e) {
       setWorktreeError({ kind: "remove", message: String(e) });
     } finally {
@@ -323,11 +353,11 @@ export function ProjectSettingsModal({
     }
   }
 
-  function requestRemoveWorktree(worktree: ProjectWorktree) {
+  function requestRemoveWorktree(worktree: RootedWorktree) {
     if (!project) return;
     const blockingSessions = blockingSessionsForProjectWorktree(
       sessions,
-      project.repoPath,
+      worktree.rootPath,
       worktree.path,
       activeSessionId,
     );
@@ -449,7 +479,7 @@ export function ProjectSettingsModal({
                   description={dt(t, "dialogs.projectSettings.worktreesHint")}
                 >
                   <ProjectWorktreeList
-                    repoPath={project.repoPath}
+                    showRoot={projectRoots.length > 1}
                     worktrees={worktrees}
                     sessions={sessions}
                     activeSessionId={activeSessionId}
@@ -655,7 +685,7 @@ function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
 }
 
 function ProjectWorktreeList({
-  repoPath,
+  showRoot,
   worktrees,
   sessions,
   activeSessionId,
@@ -665,14 +695,14 @@ function ProjectWorktreeList({
   onRequestRemove,
   t,
 }: {
-  repoPath: string;
-  worktrees: ProjectWorktree[];
+  showRoot: boolean;
+  worktrees: RootedWorktree[];
   sessions: Session[];
   activeSessionId: string | null;
   loading: boolean;
   removingPath: string | null;
   error: { kind: "load" | "remove"; message: string } | null;
-  onRequestRemove: (worktree: ProjectWorktree) => void;
+  onRequestRemove: (worktree: RootedWorktree) => void;
   t: Translator;
 }) {
   if (loading) {
@@ -703,12 +733,12 @@ function ProjectWorktreeList({
             const removeBlockedByOtherSessions =
               blockingSessionsForProjectWorktree(
                 sessions,
-                repoPath,
+                worktree.rootPath,
                 worktree.path,
                 activeSessionId,
               ).length > 0;
             return (
-              <li key={worktree.path} className="px-3 py-2">
+              <li key={`${worktree.rootPath}:${worktree.path}`} className="px-3 py-2">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 space-y-1">
                     <div className="flex min-w-0 items-center gap-1.5">
@@ -719,6 +749,11 @@ function ProjectWorktreeList({
                       <span className="truncate text-xs font-medium text-fg">
                         {worktree.name}
                       </span>
+                      {showRoot ? (
+                        <span className="shrink-0 rounded border border-border px-1 py-0.5 text-[10px] text-fg-muted">
+                          {basenamePath(worktree.rootPath)}
+                        </span>
+                      ) : null}
                     </div>
                     <p className="break-all font-mono text-[10px] leading-relaxed text-fg-muted">
                       {worktree.path}
@@ -808,7 +843,7 @@ function RemoveWorktreeConfirmDialog({
   onConfirm,
   t,
 }: {
-  worktree: ProjectWorktree | null;
+  worktree: RootedWorktree | null;
   sessions: Session[];
   removing: boolean;
   onCancel: () => void;

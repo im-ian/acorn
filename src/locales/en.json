@@ -1239,6 +1239,7 @@
       "createWorkspaceFromWorktree": "Create Workspace from Worktree",
       "renameProjectFolder": "Rename workspace",
       "removeProjectFolder": "Remove workspace",
+      "removeProjectSourceFolder": "Remove source folder",
       "moveToProjectFolder": "Move to",
       "moveToProjectRoot": "Project root",
       "projectSettings": "Project Settings",

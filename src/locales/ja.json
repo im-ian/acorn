@@ -1239,6 +1239,7 @@
       "createWorkspaceFromWorktree": "ワークツリーからワークスペースを作成する",
       "renameProjectFolder": "ワークスペースの名前を変更する",
       "removeProjectFolder": "ワークスペースを削除する",
+      "removeProjectSourceFolder": "ソースフォルダーを削除",
       "moveToProjectFolder": "に移動します",
       "moveToProjectRoot": "プロジェクトルート",
       "projectSettings": "プロジェクト設定",

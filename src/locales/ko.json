@@ -1239,6 +1239,7 @@
       "createWorkspaceFromWorktree": "이 워크트리로 작업공간 만들기",
       "renameProjectFolder": "작업공간 이름 변경",
       "removeProjectFolder": "작업공간 제거",
+      "removeProjectSourceFolder": "소스 폴더 제거",
       "moveToProjectFolder": "이동",
       "moveToProjectRoot": "프로젝트 루트",
       "projectSettings": "프로젝트 설정",

@@ -2461,6 +2461,10 @@ function ProjectGroupView({
                     key={item.id}
                     folderGroup={item.folderGroup}
                     projectFolders={projectFoldersForRows}
+                    isSourceFolder={
+                      isDefaultProjectFolder(item.folderGroup.folder) &&
+                      item.folderGroup.folder.repoPath !== project.repoPath
+                    }
                     activeSessionId={activeSessionId}
                     active={
                       workspaceViewMode === "panes" &&
@@ -2516,6 +2520,8 @@ function ProjectGroupView({
 interface ProjectFolderViewProps {
   folderGroup: ProjectFolderGroup;
   projectFolders: ProjectFolder[];
+  /** This workspace is a source folder's root, not a workspace inside one. */
+  isSourceFolder: boolean;
   activeSessionId: string | null;
   active: boolean;
   collapsed: boolean;
@@ -2538,6 +2544,7 @@ interface ProjectFolderViewProps {
 function ProjectFolderView({
   folderGroup,
   projectFolders,
+  isSourceFolder,
   activeSessionId,
   active,
   collapsed,
@@ -2561,7 +2568,15 @@ function ProjectFolderView({
     y: number;
   } | null>(null);
   const folder = folderGroup.folder;
-  const removable = !isDefaultProjectFolder(folder);
+  // A source folder's root workspace has no default-folder immunity: removing
+  // it detaches the source folder from the project.
+  const removable = isSourceFolder || !isDefaultProjectFolder(folder);
+  const removeLabel = sidebarText(
+    t,
+    isSourceFolder
+      ? "sidebar.actions.removeProjectSourceFolder"
+      : "sidebar.actions.removeProjectFolder",
+  );
   const {
     attributes,
     listeners,
@@ -2822,16 +2837,10 @@ function ProjectFolderView({
               </button>
             </Tooltip>
             {removable ? (
-              <Tooltip
-                label={sidebarText(t, "sidebar.actions.removeProjectFolder")}
-                side="bottom"
-              >
+              <Tooltip label={removeLabel} side="bottom">
                 <button
                   type="button"
-                  aria-label={sidebarText(
-                    t,
-                    "sidebar.actions.removeProjectFolder",
-                  )}
+                  aria-label={removeLabel}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -2883,7 +2892,7 @@ function ProjectFolderView({
           },
           contextMenuGroupTitle(t, "danger"),
           {
-            label: sidebarText(t, "sidebar.actions.removeProjectFolder"),
+            label: removeLabel,
             icon: <Trash2 size={12} />,
             onClick: () => onRemoveFolder(folder.id),
             disabled: !removable,
@@ -2969,7 +2978,12 @@ function SessionRow({
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
-  const namedProjectFolders = projectFolders.filter(
+  // A project group spans every source root it holds, but a session can only
+  // move between workspaces of its own repository.
+  const sessionProjectFolders = projectFolders.filter(
+    (folder) => folder.repoPath === session.repo_path,
+  );
+  const namedProjectFolders = sessionProjectFolders.filter(
     (folder) => !isDefaultProjectFolder(folder),
   );
   const currentProjectFolder = projectFolders.find(
@@ -2977,7 +2991,7 @@ function SessionRow({
   );
   const canCreateWorktreeWorkspace = canCreateWorkspaceFromSessionWorktree(
     session,
-    projectFolders,
+    sessionProjectFolders,
     currentProjectFolderId,
   );
   const currentWorkspaceCwd = currentProjectFolder?.cwdPath ?? null;
@@ -3133,7 +3147,9 @@ function SessionRow({
   const folderMoveMenuItems: ContextMenuItem[] = [];
   const targetFolderMenuItems: ContextMenuItem[] = [];
   if (onMoveToProjectFolder) {
-    const defaultProjectFolder = projectFolders.find(isDefaultProjectFolder);
+    const defaultProjectFolder = sessionProjectFolders.find(
+      isDefaultProjectFolder,
+    );
     const rootMoveMenuItems: ContextMenuItem[] = [];
     if (
       currentProjectFolder &&
