@@ -3634,6 +3634,14 @@ test.describe("sidebar: project lifecycle", () => {
       page.locator("aside").getByRole("listitem").filter({ hasText: "picked" }),
     ).toBeVisible();
 
+    // The header button opens a project the same way the empty state does, so
+    // its source folders are set up in the same pass.
+    const modal = page.getByRole("dialog", { name: "Project Settings" });
+    await expect(modal).toBeVisible();
+    await expect(
+      modal.getByRole("listitem").filter({ hasText: "/tmp/picked" }),
+    ).toContainText("Primary");
+
     const calls = (await page.evaluate(
       () =>
         (window as unknown as { __addProjectCalls?: unknown[] })
