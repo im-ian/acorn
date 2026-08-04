@@ -1404,6 +1404,7 @@
     "label": "Graph session",
     "newTitle": "New Graph session",
     "newSubtitle": "Design a durable execution graph by connecting nodes to GOAL.",
+    "projectScopeRequired": "Graph sessions must be created inside a project.",
     "objective": "Objective",
     "objectivePlaceholder": "What should this graph accomplish?",
     "agent": "Agent",

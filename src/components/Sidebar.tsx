@@ -769,7 +769,7 @@ export function Sidebar() {
           activeProjectFolderId: state.activeProjectFolderId,
         });
       if (!scope?.placement.projectScoped) {
-        useToasts.getState().show(t("dialogs.autonomousGoal.projectScopeRequired"));
+        useToasts.getState().show(t("graphSession.projectScopeRequired"));
         return;
       }
       setGraphSessionScope(scope);

@@ -1404,6 +1404,7 @@
     "label": "Graph 세션",
     "newTitle": "새 Graph 세션",
     "newSubtitle": "노드를 GOAL에 연결해 지속되는 실행 그래프를 설계하세요.",
+    "projectScopeRequired": "Graph 세션은 프로젝트 안에서만 만들 수 있습니다.",
     "objective": "목표",
     "objectivePlaceholder": "이 그래프로 무엇을 달성할까요?",
     "agent": "에이전트",

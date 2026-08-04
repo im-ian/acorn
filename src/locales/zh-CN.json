@@ -1404,6 +1404,7 @@
     "label": "Graph 会话",
     "newTitle": "新建 Graph 会话",
     "newSubtitle": "将节点连接到 GOAL，设计可持久化的执行图。",
+    "projectScopeRequired": "Graph 会话必须在项目内创建。",
     "objective": "目标",
     "objectivePlaceholder": "这个图应完成什么？",
     "agent": "智能体",

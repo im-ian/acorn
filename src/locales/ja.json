@@ -1404,6 +1404,7 @@
     "label": "Graph セッション",
     "newTitle": "新しい Graph セッション",
     "newSubtitle": "ノードを GOAL に接続して、永続的な実行グラフを設計します。",
+    "projectScopeRequired": "Graph セッションはプロジェクト内に作成する必要があります。",
     "objective": "目標",
     "objectivePlaceholder": "このグラフで何を達成しますか？",
     "agent": "エージェント",

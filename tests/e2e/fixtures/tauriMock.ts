@@ -335,7 +335,7 @@ export const tauriMockSource = `
         status: 'completed',
         definition: {
           version: 2,
-          execution_mode: 'parallel',
+          execution_mode: 'sequential',
           nodes: [
             { id: 'agent-1', kind: 'agent', title: 'Agent', instruction: 'Complete the task.' },
             { id: 'goal', kind: 'goal_sink', title: 'GOAL', instruction: '' },
