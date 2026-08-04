@@ -1138,10 +1138,15 @@ export function Sidebar() {
         ) {
           return;
         }
-        const repoPath =
-          dropRepoPath === LOCAL_SESSION_ROOT_DROP_ID
-            ? activeSession.repo_path
-            : dropRepoPath;
+        // The drop zone is keyed by the project's primary root, but a session
+        // started in a source folder belongs to that same project top level.
+        const dropOwnsSession =
+          dropRepoPath === LOCAL_SESSION_ROOT_DROP_ID ||
+          resolveProjectRootPath(projectRootIndex, activeSession.repo_path) ===
+            dropRepoPath;
+        const repoPath = dropOwnsSession
+          ? activeSession.repo_path
+          : dropRepoPath;
         const targetFolderId = defaultProjectFolderId(repoPath);
         const targetFolder = projectFolderById(
           currentAllWorkspaceGroups,
