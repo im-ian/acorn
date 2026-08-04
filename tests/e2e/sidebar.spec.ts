@@ -4354,6 +4354,36 @@ test.describe("sidebar: project lifecycle", () => {
         in_worktree: false,
       },
     ]);
+    // A workspace of the source root renders as a sibling of every other
+    // workspace row, so it has to name the root it belongs to.
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn-workspaces",
+        JSON.stringify({
+          state: {
+            projectFolders: {
+              "/tmp/demo-api": [
+                {
+                  id: "/tmp/demo-api",
+                  repoPath: "/tmp/demo-api",
+                  name: "Default",
+                  cwdPath: "/tmp/demo-api",
+                  position: 0,
+                },
+                {
+                  id: "project-folder:/tmp/demo-api:scratch",
+                  repoPath: "/tmp/demo-api",
+                  name: "scratch",
+                  cwdPath: "/tmp/demo-api",
+                  position: 1,
+                },
+              ],
+            },
+          },
+          version: 0,
+        }),
+      );
+    });
 
     await page.goto("/");
 
@@ -4367,5 +4397,11 @@ test.describe("sidebar: project lifecycle", () => {
     // root's session stays flat under the project header.
     await expect(sourceWorkspace).toContainText("api");
     await expect(sourceWorkspace).not.toContainText("primary");
+    // Its own workspaces sit at the same depth, tagged with the owning root.
+    await expect(
+      page.locator(
+        'aside [data-sidebar-workspace-id="project-folder:/tmp/demo-api:scratch"]',
+      ),
+    ).toContainText("demo-api");
   });
 });

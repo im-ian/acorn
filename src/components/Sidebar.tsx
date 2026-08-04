@@ -2465,6 +2465,12 @@ function ProjectGroupView({
                       isDefaultProjectFolder(item.folderGroup.folder) &&
                       item.folderGroup.folder.repoPath !== project.repoPath
                     }
+                    sourceRootLabel={
+                      !isDefaultProjectFolder(item.folderGroup.folder) &&
+                      item.folderGroup.folder.repoPath !== project.repoPath
+                        ? basename(item.folderGroup.folder.repoPath)
+                        : null
+                    }
                     activeSessionId={activeSessionId}
                     active={
                       workspaceViewMode === "panes" &&
@@ -2522,6 +2528,12 @@ interface ProjectFolderViewProps {
   projectFolders: ProjectFolder[];
   /** This workspace is a source folder's root, not a workspace inside one. */
   isSourceFolder: boolean;
+  /**
+   * Name of the source folder this workspace lives in, when it is not the
+   * project's primary root. Sibling rows carry no indentation, so without it
+   * the workspace reads as belonging to the project root.
+   */
+  sourceRootLabel: string | null;
   activeSessionId: string | null;
   active: boolean;
   collapsed: boolean;
@@ -2545,6 +2557,7 @@ function ProjectFolderView({
   folderGroup,
   projectFolders,
   isSourceFolder,
+  sourceRootLabel,
   activeSessionId,
   active,
   collapsed,
@@ -2762,8 +2775,15 @@ function ProjectFolderView({
             />
           ) : (
             <span className="flex min-w-0 flex-col leading-none">
-              <span className="block truncate text-[12px] font-medium leading-4 text-fg">
-                {projectFolderDisplayName(folder)}
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="min-w-0 truncate text-[12px] font-medium leading-4 text-fg">
+                  {projectFolderDisplayName(folder)}
+                </span>
+                {sourceRootLabel ? (
+                  <span className="shrink-0 rounded border border-border px-1 text-[9px] leading-4 text-fg-muted">
+                    {sourceRootLabel}
+                  </span>
+                ) : null}
               </span>
               {workspaceLabel ? (
                 <Tooltip
