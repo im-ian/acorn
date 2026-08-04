@@ -163,11 +163,6 @@
   background-color: transparent !important;
 }
 
-.acorn-terminal .composition-view .acorn-ime-composition-text {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
 /* The native cursor stays at the pre-composition buffer position, underneath
    the IME overlay. Replace it with a marker immediately after the live
    composition text so the caret tracks what the user is currently building. */

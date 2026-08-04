@@ -329,6 +329,9 @@ test.describe("terminal: IME (PR #104 regression)", () => {
       "data-acorn-ime-cursor-style",
       "underline",
     );
+    await expect(
+      page.locator(".composition-view.active .acorn-ime-composition-text"),
+    ).toHaveCSS("text-decoration-line", "none");
     const marker = await imeCursor.evaluate((element) => {
       const computed = getComputedStyle(element, "::after");
       return {
