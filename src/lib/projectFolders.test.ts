@@ -375,7 +375,7 @@ describe("project source folders", () => {
     ]);
   });
 
-  it("flattens only the primary root's folder under the project header", () => {
+  it("flattens every root's default folder under the project header", () => {
     const groups = buildProjectFolderGroups(
       [multiRoot],
       [],
@@ -383,10 +383,11 @@ describe("project source folders", () => {
     );
 
     const flattened = groups[0].folders.filter((group) =>
-      isGroupDefaultFolder(groups[0].repoPath, group.folder),
+      isGroupDefaultFolder(group.folder),
     );
     expect(flattened.map((group) => group.folder.repoPath)).toEqual([
       "/repo/app",
+      "/repo/api",
     ]);
   });
 

@@ -2142,7 +2142,7 @@ function ProjectGroupView({
 
   const defaultFolderGroup =
     project.folders.find((folderGroup) =>
-      isGroupDefaultFolder(project.repoPath, folderGroup.folder),
+      isGroupDefaultFolder(folderGroup.folder),
     ) ?? project.folders[0] ?? null;
   const projectSessionCreationFolder = defaultFolderGroup?.folder ?? null;
 
@@ -2248,7 +2248,7 @@ function ProjectGroupView({
   }
 
   const namedFolderGroups = project.folders.filter(
-    (folderGroup) => !isGroupDefaultFolder(project.repoPath, folderGroup.folder),
+    (folderGroup) => !isGroupDefaultFolder(folderGroup.folder),
   );
   const projectFoldersForRows = project.folders.map(
     (folderGroup) => folderGroup.folder,
