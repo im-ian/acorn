@@ -1,6 +1,6 @@
 import {
   defaultProjectFolderId,
-  isDefaultProjectFolder,
+  isGroupDefaultFolder,
   type ProjectFolderGroup,
   type ProjectFolderProjectGroup,
 } from "./projectFolders";
@@ -30,7 +30,7 @@ export function buildProjectTopLevelItems(
 ): ProjectTopLevelItem[] {
   const defaultFolderGroup =
     project.folders.find((folderGroup) =>
-      isDefaultProjectFolder(folderGroup.folder),
+      isGroupDefaultFolder(project.repoPath, folderGroup.folder),
     ) ?? project.folders[0] ?? null;
   const directSessions: ProjectTopLevelItem[] = (
     defaultFolderGroup?.sessions ?? []
@@ -42,7 +42,10 @@ export function buildProjectTopLevelItems(
       defaultFolderGroup?.folder.id ?? defaultProjectFolderId(project.repoPath),
   }));
   const folders: ProjectTopLevelItem[] = project.folders
-    .filter((folderGroup) => !isDefaultProjectFolder(folderGroup.folder))
+    .filter(
+      (folderGroup) =>
+        !isGroupDefaultFolder(project.repoPath, folderGroup.folder),
+    )
     .map((folderGroup) => ({
       id: sidebarFolderItemId(folderGroup.folder.id),
       type: "folder",
@@ -138,7 +141,10 @@ export function buildDragPriorityIndex(
   for (const group of groups) {
     const topLevelContainerId = `project:${group.repoPath}`;
     for (const folderGroup of group.folders) {
-      const isDefaultFolder = isDefaultProjectFolder(folderGroup.folder);
+      const isDefaultFolder = isGroupDefaultFolder(
+        group.repoPath,
+        folderGroup.folder,
+      );
       // The default folder is flattened into top-level session rows and never
       // drawn as a folder row, so it has no drag id to index.
       if (!isDefaultFolder) {

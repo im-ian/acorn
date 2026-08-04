@@ -406,13 +406,7 @@ pub fn run() {
                 if !session.project_scoped {
                     continue;
                 }
-                let name = session
-                    .repo_path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("project")
-                    .to_string();
-                state.projects.ensure(session.repo_path.clone(), name);
+                commands::ensure_project_for_root(&state, &session.repo_path);
             }
             if remove_empty_home_project_mirror(&state) {
                 projects_dirty = true;
@@ -714,6 +708,8 @@ pub fn run() {
             commands::cancel_chat_message,
             commands::list_projects,
             commands::add_project,
+            commands::add_project_source,
+            commands::remove_project_source,
             commands::select_project_parent_folder,
             commands::get_last_project_parent_folder,
             commands::has_git_identity,

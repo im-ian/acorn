@@ -763,12 +763,7 @@ fn handle_new_session<R: Runtime>(
         NewSessionOwner::User => SessionOwner::User,
     };
     let inserted = state.sessions.insert(session);
-    let basename = repo
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("project")
-        .to_string();
-    state.projects.ensure(repo, basename);
+    crate::commands::ensure_project_for_root(state, &repo);
     if let Err(err) = persistence::save_sessions(&state.sessions) {
         tracing::warn!(error = %err, "ipc: persist sessions after new-session failed");
     }

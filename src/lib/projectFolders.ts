@@ -29,6 +29,60 @@ export function defaultProjectFolderId(repoPath: string): string {
   return repoPath;
 }
 
+/**
+ * Every repository root a project spans, primary first. Sessions still record
+ * exactly one of these as their `repo_path`, so git operations stay anchored to
+ * a real repo — the project is only the grouping drawn around them.
+ */
+export function projectRootPaths(project: Project): string[] {
+  return [project.repo_path, ...(project.source_paths ?? [])];
+}
+
+/**
+ * Map every project root — primary and extra source folders alike — to the
+ * primary repo path of the project that owns it. Sidebar grouping and every
+ * "is this a registered project?" check route through this so a session in a
+ * source folder lands under its project instead of spawning a second one.
+ */
+export function buildProjectRootIndex(
+  projects: readonly Project[],
+): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const project of projects) {
+    for (const root of projectRootPaths(project)) {
+      index.set(root, project.repo_path);
+    }
+  }
+  return index;
+}
+
+export function resolveProjectRootPath(
+  index: ReadonlyMap<string, string>,
+  repoPath: string,
+): string {
+  return index.get(repoPath) ?? repoPath;
+}
+
+/**
+ * The folder whose sessions render flat under the project header. Only the
+ * primary root has one: a source folder's own default folder is drawn as a
+ * workspace row so the two roots never blur together.
+ */
+export function isGroupDefaultFolder(
+  groupRepoPath: string,
+  folder: ProjectFolder,
+): boolean {
+  return folder.id === defaultProjectFolderId(groupRepoPath);
+}
+
+/** Display name for a source folder's root workspace row. */
+export function projectFolderDisplayName(folder: ProjectFolder): string {
+  if (isDefaultProjectFolder(folder) && folder.name === DEFAULT_PROJECT_FOLDER_NAME) {
+    return basenamePath(folder.repoPath);
+  }
+  return folder.name;
+}
+
 export function makeDefaultProjectFolder(
   repoPath: string,
 ): ProjectFolder {
@@ -126,6 +180,7 @@ export function buildProjectFolderGroups(
   assignments: SessionFolderAssignments = {},
 ): ProjectFolderProjectGroup[] {
   const map = new Map<string, ProjectFolderProjectGroup>();
+  const rootIndex = buildProjectRootIndex(projects);
   const projectSessions = sessions.filter(isProjectSession);
   const projectSessionPaths = new Set(
     projectSessions.map((session) => session.repo_path),
@@ -135,30 +190,32 @@ export function buildProjectFolderGroups(
   );
 
   for (const project of projects) {
+    const roots = projectRootPaths(project);
     if (
-      !projectSessionPaths.has(project.repo_path) &&
-      localSessionPaths.has(project.repo_path)
+      !roots.some((root) => projectSessionPaths.has(root)) &&
+      roots.some((root) => localSessionPaths.has(root))
     ) {
       continue;
     }
     map.set(project.repo_path, {
       repoPath: project.repo_path,
       name: project.name,
-      folders: folderGroupsForRepo(foldersByRepo[project.repo_path] ?? []),
+      folders: folderGroupsForRoots(roots, foldersByRepo),
       sessions: [],
     });
   }
 
   for (const session of projectSessions) {
-    let group = map.get(session.repo_path);
+    const groupRepoPath = resolveProjectRootPath(rootIndex, session.repo_path);
+    let group = map.get(groupRepoPath);
     if (!group) {
       group = {
-        repoPath: session.repo_path,
-        name: basenamePath(session.repo_path),
-        folders: folderGroupsForRepo(foldersByRepo[session.repo_path] ?? []),
+        repoPath: groupRepoPath,
+        name: basenamePath(groupRepoPath),
+        folders: folderGroupsForRoots([groupRepoPath], foldersByRepo),
         sessions: [],
       };
-      map.set(session.repo_path, group);
+      map.set(groupRepoPath, group);
     }
     if (group.folders.length === 0) {
       group.folders = folderGroupsForRepo([
@@ -166,7 +223,9 @@ export function buildProjectFolderGroups(
       ]);
     }
     const folderId = resolveProjectFolderIdForSession(
-      group.folders.map((folderGroup) => folderGroup.folder),
+      group.folders
+        .map((folderGroup) => folderGroup.folder)
+        .filter((folder) => folder.repoPath === session.repo_path),
       session,
       assignments,
     );
@@ -195,7 +254,7 @@ export function buildLocalSessionFolderGroups(
   foldersByRepo: ProjectFoldersByRepo,
   assignments: SessionFolderAssignments = {},
 ): ProjectFolderProjectGroup[] {
-  const projectRepoPaths = new Set(projects.map((project) => project.repo_path));
+  const projectRepoPaths = new Set(projects.flatMap(projectRootPaths));
   for (const session of sessions) {
     if (isProjectSession(session)) projectRepoPaths.add(session.repo_path);
   }
@@ -369,6 +428,22 @@ function folderGroupsForRepo(
   }));
 }
 
+/**
+ * Flatten a project's roots into one workspace list: the primary root's
+ * folders first (its default one is what renders flat under the header), then
+ * each source folder's own workspaces in the order the roots were added.
+ */
+function folderGroupsForRoots(
+  roots: readonly string[],
+  foldersByRepo: ProjectFoldersByRepo,
+): ProjectFolderGroup[] {
+  return roots.flatMap((root) =>
+    folderGroupsForRepo(
+      foldersByRepo[root] ?? (roots.length > 1 ? [makeDefaultProjectFolder(root)] : []),
+    ),
+  );
+}
+
 function knownWorkspaceRepos(
   projects: Project[],
   sessions: Session[],
@@ -376,7 +451,11 @@ function knownWorkspaceRepos(
 ): string[] {
   const repos = new Map<string, number>();
   for (const project of projects) {
-    repos.set(project.repo_path, project.position ?? Number.MAX_SAFE_INTEGER);
+    // Source folders get a workspace entry of their own so they show up in the
+    // sidebar before anything has been opened inside them.
+    for (const root of projectRootPaths(project)) {
+      repos.set(root, project.position ?? Number.MAX_SAFE_INTEGER);
+    }
   }
   for (const session of sessions) {
     if (!repos.has(session.repo_path)) {

@@ -64,6 +64,84 @@ async function dblclickRowRightSide(page: Page, row: Locator): Promise<void> {
   await page.mouse.dblclick(box!.x + box!.width - 12, box!.y + box!.height / 2);
 }
 
+test.describe("right panel: source folders", () => {
+  test("re-scopes to the source root of the active session", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/multi-app",
+        name: "multi-app",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/multi-api"],
+      },
+    ]);
+    await tauri.handle("list_sessions", () =>
+      [
+        ["s-app", "app-session", "/tmp/multi-app", 0],
+        ["s-api", "api-session", "/tmp/multi-api", 1],
+      ].map(([id, name, repoPath, position]) => ({
+        id,
+        name,
+        repo_path: repoPath,
+        worktree_path: repoPath,
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position,
+        in_worktree: false,
+      })),
+    );
+    await tauri.handle("list_commits", (args) => {
+      const repoPath = (args as { repoPath?: string }).repoPath;
+      const summary =
+        repoPath === "/tmp/multi-api"
+          ? "feat(api): graphql schema"
+          : "feat(app): sidebar polish";
+      return [
+        {
+          sha: `${repoPath}-sha`,
+          short_sha: "abc1234",
+          author: "tester",
+          author_email: "tester@example.com",
+          timestamp: 1780000000,
+          summary,
+          body: "",
+          pushed: true,
+        },
+      ];
+    });
+
+    await page.goto("/");
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /app-session/ })
+      .first()
+      .click();
+    await expect(page.getByText("feat(app): sidebar polish")).toBeVisible();
+
+    // Selecting the source folder's session must re-point the panel at that
+    // repository, not stay on the project's primary root.
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /api-session/ })
+      .first()
+      .click();
+    await expect(page.getByText("feat(api): graphql schema")).toBeVisible();
+    await expect(page.getByText("feat(app): sidebar polish")).toHaveCount(0);
+  });
+});
+
 test.describe("right panel: tab switching", () => {
   test("each tab shows its own empty placeholder when seeded with a project", async ({
     page,

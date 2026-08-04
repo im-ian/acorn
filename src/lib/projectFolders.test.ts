@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   buildLocalSessionFolderGroups,
   buildProjectFolderGroups,
+  buildProjectRootIndex,
   defaultProjectFolderId,
   ensureProjectFolders,
+  isGroupDefaultFolder,
   makeDefaultProjectFolder,
+  projectFolderDisplayName,
   pruneSessionFolderAssignments,
   resolveProjectFolderIdForSession,
+  resolveProjectRootPath,
   type ProjectFolder,
 } from "./projectFolders";
 import type { Project, Session } from "./types";
@@ -334,5 +338,85 @@ describe("project folders", () => {
       "newer-created",
       "older-created",
     ]);
+  });
+});
+
+describe("project source folders", () => {
+  const multiRoot: Project = {
+    ...project("/repo/app"),
+    source_paths: ["/repo/api"],
+  };
+
+  it("gives every source root its own workspace", () => {
+    const folders = ensureProjectFolders([multiRoot], [], {});
+
+    expect(Object.keys(folders).sort()).toEqual(["/repo/api", "/repo/app"]);
+    expect(folders["/repo/api"][0].repoPath).toBe("/repo/api");
+  });
+
+  it("draws one project group spanning every source root", () => {
+    const groups = buildProjectFolderGroups(
+      [multiRoot],
+      [session("a", "/repo/app"), session("b", "/repo/api")],
+      ensureProjectFolders([multiRoot], [], {}),
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].repoPath).toBe("/repo/app");
+    expect(groups[0].sessions.map((s) => s.id).sort()).toEqual(["a", "b"]);
+    expect(
+      groups[0].folders.map((group) => [
+        group.folder.repoPath,
+        group.sessions.map((s) => s.id),
+      ]),
+    ).toEqual([
+      ["/repo/app", ["a"]],
+      ["/repo/api", ["b"]],
+    ]);
+  });
+
+  it("flattens only the primary root's folder under the project header", () => {
+    const groups = buildProjectFolderGroups(
+      [multiRoot],
+      [],
+      ensureProjectFolders([multiRoot], [], {}),
+    );
+
+    const flattened = groups[0].folders.filter((group) =>
+      isGroupDefaultFolder(groups[0].repoPath, group.folder),
+    );
+    expect(flattened.map((group) => group.folder.repoPath)).toEqual([
+      "/repo/app",
+    ]);
+  });
+
+  it("names a source root's workspace after its folder", () => {
+    const groups = buildProjectFolderGroups(
+      [multiRoot],
+      [],
+      ensureProjectFolders([multiRoot], [], {}),
+    );
+    const sourceFolder = groups[0].folders[1].folder;
+
+    expect(projectFolderDisplayName(sourceFolder)).toBe("api");
+  });
+
+  it("keeps a source root's workspaces out of the local terminal area", () => {
+    const groups = buildLocalSessionFolderGroups([multiRoot], [], {
+      ...ensureProjectFolders([multiRoot], [], {}),
+      "/repo/api": [
+        makeDefaultProjectFolder("/repo/api"),
+        folder("api-ws", "/repo/api", "/repo/api/sub"),
+      ],
+    });
+
+    expect(groups.map((group) => group.repoPath)).toEqual([]);
+  });
+
+  it("maps every root back to the project that owns it", () => {
+    const index = buildProjectRootIndex([multiRoot]);
+
+    expect(resolveProjectRootPath(index, "/repo/api")).toBe("/repo/app");
+    expect(resolveProjectRootPath(index, "/repo/other")).toBe("/repo/other");
   });
 });

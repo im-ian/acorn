@@ -418,6 +418,8 @@ export interface Project {
   name: string;
   created_at: string;
   position: number;
+  /** Extra repository roots this project spans, beyond `repo_path`. */
+  source_paths?: string[];
 }
 
 export interface ProjectWorktree {

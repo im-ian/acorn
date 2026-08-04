@@ -114,6 +114,7 @@ import {
   pruneSessionIdSet,
   retainSessionMapEntries,
 } from "./lib/sessionTracking";
+import { projectRootPaths } from "./lib/projectFolders";
 import { useAppStore } from "./store";
 import type { TranslationKey, Translator } from "./lib/i18n";
 import type { Session } from "./lib/types";
@@ -341,8 +342,12 @@ function App() {
   const pendingRemove = sessions.find((s) => s.id === pendingRemoveId) ?? null;
   const pendingProject =
     projects.find((p) => p.repo_path === pendingRemoveProject) ?? null;
+  // Closing a project closes every root it spans, so the confirmation has to
+  // count the sessions living in its source folders too.
   const pendingProjectSessions = pendingProject
-    ? sessions.filter((s) => s.repo_path === pendingProject.repo_path)
+    ? sessions.filter((s) =>
+        projectRootPaths(pendingProject).includes(s.repo_path),
+      )
     : [];
   const pendingRemoveRecordedWorktree =
     pendingRemove !== null && hasRecordedWorktree(pendingRemove);

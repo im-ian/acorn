@@ -223,10 +223,7 @@ fn restore_pending_session_removal(
         session.agent_provider = None;
         session.agent_transcript_id = None;
         if session.project_scoped {
-            state.projects.ensure(
-                session.repo_path.clone(),
-                project_basename(&session.repo_path),
-            );
+            ensure_project_for_root(state, &session.repo_path);
         }
         state.sessions.insert(session);
     }
@@ -278,11 +275,24 @@ fn registered_project_roots(state: &AppState) -> Vec<PathBuf> {
         .projects
         .list()
         .into_iter()
-        .filter_map(|project| project.repo_path.canonicalize().ok())
+        .flat_map(|project| project.roots())
+        .filter_map(|root| root.canonicalize().ok())
         .collect();
     roots.sort();
     roots.dedup();
     roots
+}
+
+/// Register `repo` as a project unless an existing project already spans it as
+/// an extra source root. Without this guard every session created under a
+/// source root would mint a second, duplicate top-level project.
+pub(crate) fn ensure_project_for_root(state: &AppState, repo: &Path) {
+    if state.projects.owner_of_root(repo).is_some() {
+        return;
+    }
+    state
+        .projects
+        .ensure(repo.to_path_buf(), project_basename(repo));
 }
 
 fn authorize_registered_project_root(state: &AppState, repo: &Path) -> AppResult<PathBuf> {
@@ -4458,7 +4468,7 @@ fn create_session_inner(
     let repo = if project_scoped || isolated {
         let repo = worktree::project_root_for_path(&selected_path)?;
         if allow_project_registration {
-            state.projects.ensure(repo.clone(), project_basename(&repo));
+            ensure_project_for_root(state, &repo);
         } else {
             authorize_registered_project_root(state, &repo)?;
         }
@@ -4501,7 +4511,7 @@ fn create_session_inner(
     session.goal = goal;
     let inserted = state.sessions.insert(session);
     if project_scoped {
-        state.projects.ensure(repo.clone(), project_basename(&repo));
+        ensure_project_for_root(state, &repo);
     }
     persist(state);
     Ok(enrich_session(inserted))
@@ -5518,9 +5528,98 @@ pub async fn add_project<R: Runtime>(
         return Ok(None);
     };
     let path = worktree::project_root_for_path(&path)?;
+    // A folder already spanned by a project as an extra source root must not
+    // also become a standalone project — the sidebar would draw it twice.
+    if let Some(owner) = state.projects.owner_of_root(&path) {
+        return Ok(Some(owner));
+    }
     let project = state.projects.ensure(path.clone(), project_basename(&path));
     persist(&state);
     Ok(Some(project))
+}
+
+/// Add another repository root to an existing project. The picked folder is
+/// resolved to its git root, so a project spans whole repositories rather than
+/// arbitrary subdirectories.
+#[tauri::command]
+pub async fn add_project_source<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    repo_path: String,
+    title: Option<String>,
+) -> AppResult<Option<Project>> {
+    let project_path = PathBuf::from(&repo_path);
+    let project = state
+        .projects
+        .owner_of_root(&project_path)
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    let Some(picked) = pick_folder_path(&app, title).await? else {
+        return Ok(None);
+    };
+    let source = worktree::project_root_for_path(&picked)?;
+    if let Some(owner) = state.projects.owner_of_root(&source) {
+        if owner.repo_path == project.repo_path {
+            return Ok(Some(project));
+        }
+        return Err(AppError::InvalidPath(format!(
+            "folder already belongs to project {}: {}",
+            owner.name,
+            source.display()
+        )));
+    }
+    let mut source_paths = project.source_paths.clone();
+    source_paths.push(source);
+    let updated = state
+        .projects
+        .set_source_paths(&project.repo_path, source_paths)
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    persist(&state);
+    Ok(Some(updated))
+}
+
+/// Drop an extra source root from a project. Refused while sessions still live
+/// in that root: removing it would strip the root's authorization and leave
+/// those sessions unable to spawn or read files.
+#[tauri::command]
+pub fn remove_project_source(
+    state: State<'_, AppState>,
+    repo_path: String,
+    source_path: String,
+) -> AppResult<Project> {
+    let project_path = PathBuf::from(&repo_path);
+    let source = PathBuf::from(&source_path);
+    let project = state
+        .projects
+        .owner_of_root(&project_path)
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    if !project.source_paths.iter().any(|root| root == &source) {
+        return Err(AppError::InvalidPath(format!(
+            "not a source folder of this project: {source_path}"
+        )));
+    }
+    let session_count = state
+        .sessions
+        .list()
+        .into_iter()
+        .filter(|session| worktree::same_path(&session.repo_path, &source))
+        .count();
+    if session_count > 0 {
+        return Err(AppError::Other(format!(
+            "{session_count} session(s) still open in this source folder"
+        )));
+    }
+    let source_paths = project
+        .source_paths
+        .iter()
+        .filter(|root| *root != &source)
+        .cloned()
+        .collect();
+    let updated = state
+        .projects
+        .set_source_paths(&project.repo_path, source_paths)
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    persist(&state);
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -5862,9 +5961,18 @@ fn worktree_path_used_outside_project(
     repo_path: &Path,
     worktree_path: &Path,
 ) -> bool {
+    let roots = state
+        .projects
+        .owner_of_root(repo_path)
+        .map(|project| project.roots())
+        .unwrap_or_else(|| vec![repo_path.to_path_buf()]);
     sessions_using_worktree_path(state, worktree_path)
         .into_iter()
-        .any(|session| !worktree::same_path(&session.repo_path, repo_path))
+        .any(|session| {
+            !roots
+                .iter()
+                .any(|root| worktree::same_path(&session.repo_path, root))
+        })
 }
 
 #[tauri::command]
@@ -5881,12 +5989,18 @@ pub async fn remove_project(
     let drop_worktrees = remove_worktrees.unwrap_or(false);
     let mut removed_worktrees = Vec::new();
     let mut staged_worktree_paths = HashSet::new();
+    // Closing a project closes every root it spans, not just the primary one.
+    let roots = app_state
+        .projects
+        .owner_of_root(&path)
+        .map(|project| project.roots())
+        .unwrap_or_else(|| vec![path.clone()]);
     if cascade {
         let session_ids: Vec<_> = app_state
             .sessions
             .list()
             .into_iter()
-            .filter(|s| s.repo_path == path)
+            .filter(|s| roots.iter().any(|root| &s.repo_path == root))
             .collect();
         for session in session_ids {
             terminate_session_pty(&app_state, &session.id);
@@ -5921,7 +6035,7 @@ pub async fn remove_project(
             app_state.sessions.remove(&session.id).ok();
         }
     }
-    app_state.projects.remove(&path);
+    app_state.projects.remove(roots.first().unwrap_or(&path));
     let drop_settings = remove_settings.unwrap_or(false)
         || project_settings::should_remove_on_project_close(&path).unwrap_or(false);
     if drop_settings {
@@ -13330,6 +13444,32 @@ mod tests {
 
         assert_eq!(err.to_string(), super::WORKTREE_IN_USE_BY_OTHER_SESSIONS);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn source_roots_authorize_without_minting_a_second_project() {
+        let state = crate::state::AppState::default();
+        let primary = PathBuf::from("/tmp/acorn-multi-root-primary");
+        let source = PathBuf::from("/tmp/acorn-multi-root-source");
+        state
+            .projects
+            .ensure(primary.clone(), "primary".to_string());
+        state
+            .projects
+            .set_source_paths(&primary, vec![source.clone()])
+            .expect("project is registered");
+
+        // A session started under the source root must not register it as a
+        // project of its own.
+        super::ensure_project_for_root(&state, &source);
+        assert_eq!(state.projects.list().len(), 1);
+        assert_eq!(
+            state
+                .projects
+                .owner_of_root(&source)
+                .map(|project| project.repo_path),
+            Some(primary),
+        );
     }
 
     #[test]
