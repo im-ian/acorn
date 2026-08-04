@@ -1,4 +1,11 @@
-import { test, expect, pressHotkey } from "./support";
+import {
+  test,
+  expect,
+  pressHotkey,
+  COMPACT_VIEWPORTS,
+  expectFullyInViewport,
+  modalShell,
+} from "./support";
 import type { Locator, Page } from "@playwright/test";
 
 // Right panel needs an active project + session for the tabs to actually
@@ -2569,4 +2576,83 @@ test.describe("right panel: groups", () => {
       )
       .toBe("/tmp/codex-copy-path.jsonl");
   });
+});
+
+test.describe("right panel: workflow run details at compact height", () => {
+  for (const viewport of COMPACT_VIEWPORTS) {
+    test(`keeps the last job reachable at ${viewport.width}x${viewport.height}`, async ({
+      page,
+      tauri,
+    }) => {
+      await page.setViewportSize({ ...viewport });
+      await seedActiveSession(tauri);
+      await tauri.handle("list_workflow_runs", () => ({
+        kind: "ok",
+        account: "test-account",
+        items: [
+          {
+            id: 42,
+            display_title: "Compact dialog run",
+            workflow_name: "CI",
+            status: "completed",
+            conclusion: "success",
+            event: "push",
+            head_branch: "main",
+            head_sha: "abc1234def5678",
+            url: "https://github.com/demo/demo/actions/runs/42",
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:05:00Z",
+            started_at: "2026-01-01T00:00:10Z",
+            attempt: 1,
+          },
+        ],
+      }));
+      // 14 jobs overflow the detail body, so the last row is only reachable
+      // when the shell itself fits inside the webview.
+      await tauri.handle("get_workflow_run_detail", () => ({
+        kind: "ok",
+        account: "test-account",
+        detail: {
+          id: 42,
+          display_title: "Compact dialog run",
+          workflow_name: "CI",
+          status: "completed",
+          conclusion: "success",
+          event: "push",
+          head_branch: "main",
+          head_sha: "abc1234def5678",
+          url: "https://github.com/demo/demo/actions/runs/42",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:05:00Z",
+          started_at: "2026-01-01T00:00:10Z",
+          attempt: 1,
+          jobs: Array.from({ length: 14 }, (_, i) => ({
+            id: i + 1,
+            name: `job-${i + 1}`,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-01-01T00:00:10Z",
+            completed_at: "2026-01-01T00:01:00Z",
+            url: "",
+            steps: [],
+          })),
+        },
+      }));
+
+      await page.goto("/");
+      await page.getByRole("button", { name: "GitHub" }).click();
+      await page.getByRole("button", { name: "Actions" }).click();
+      await page
+        .getByRole("button", { name: /Compact dialog run/ })
+        .dblclick();
+
+      const modal = page.getByRole("dialog");
+      await expect(modal.getByText("Jobs (14)")).toBeVisible();
+      await expectFullyInViewport(page, modalShell(modal));
+
+      const lastJob = modal.getByRole("button", { name: /job-14/ });
+      await lastJob.scrollIntoViewIfNeeded();
+      await expectFullyInViewport(page, lastJob);
+    });
+  }
 });

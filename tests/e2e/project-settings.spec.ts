@@ -1,4 +1,10 @@
-import { test, expect } from "./support";
+import {
+  test,
+  expect,
+  COMPACT_VIEWPORTS,
+  expectFullyInViewport,
+  modalShell,
+} from "./support";
 
 test.describe("project settings", () => {
   test("manages project worktrees from the Worktrees settings tab", async ({
@@ -324,4 +330,41 @@ test.describe("project settings", () => {
     )) as unknown[];
     expect(calls).toEqual([]);
   });
+});
+
+test.describe("project settings: compact height", () => {
+  for (const viewport of COMPACT_VIEWPORTS) {
+    test(`keeps the shell and the footer actions on screen at ${viewport.width}x${viewport.height}`, async ({
+      page,
+      tauri,
+    }) => {
+      await page.setViewportSize({ ...viewport });
+      await tauri.respond("list_projects", [
+        {
+          repo_path: "/tmp/acorn",
+          name: "acorn",
+          created_at: "2026-01-01T00:00:00Z",
+          position: 0,
+        },
+      ]);
+
+      await page.goto("/");
+      await page
+        .getByRole("button", { name: "Project acorn" })
+        .click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Project Settings" }).click();
+
+      const modal = page.getByRole("dialog", { name: "Project Settings" });
+      await expect(modal).toBeVisible();
+      await expectFullyInViewport(page, modalShell(modal));
+      await expectFullyInViewport(
+        page,
+        modal.getByRole("button", { name: "Save" }),
+      );
+      await expectFullyInViewport(
+        page,
+        modal.getByRole("button", { name: "Cancel" }),
+      );
+    });
+  }
 });

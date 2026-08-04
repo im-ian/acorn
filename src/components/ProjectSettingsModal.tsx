@@ -333,6 +333,7 @@ export function ProjectSettingsModal({
       variant="dialog"
       size="2xl"
       ariaLabelledBy="project-settings-title"
+      className="flex flex-col overflow-hidden"
     >
       {project ? (
         <>
@@ -349,7 +350,7 @@ export function ProjectSettingsModal({
             variant="dialog"
             onClose={onClose}
           />
-          <div className="flex h-[28rem]">
+          <div className="flex h-[28rem] min-h-0">
             <SegmentedControl
               activeId={tab}
               items={PROJECT_SETTINGS_TABS.map((tabMeta) => ({

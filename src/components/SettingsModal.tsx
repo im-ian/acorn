@@ -470,6 +470,7 @@ export function SettingsModal() {
       variant="dialog"
       size="2xl"
       ariaLabelledBy="acorn-settings-title"
+      className="flex flex-col overflow-hidden"
     >
       <ModalHeader
         title={t("settings.title")}
@@ -478,8 +479,10 @@ export function SettingsModal() {
         variant="dialog"
         onClose={() => setOpen(false)}
       />
-      <div className="flex h-[28rem]">
-        <nav className="flex w-40 shrink-0 flex-col gap-0.5 border-r border-border bg-bg-sidebar/40 px-1.5 py-2">
+      {/* h-[28rem] keeps the body a stable height across tabs (#31); min-h-0
+          lets it shrink instead when the window is too short for 28 rem. */}
+      <div className="flex h-[28rem] min-h-0">
+        <nav className="flex w-40 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-bg-sidebar/40 px-1.5 py-2">
           {TABS.map((tabMeta) => (
             <button
               key={tabMeta.id}
