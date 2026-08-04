@@ -23,8 +23,13 @@ pub use session::{
     SessionResult, SessionStatus, SessionStore, SessionTitleSource,
 };
 pub use work_graph::{
-    GraphPromptContinuation, GraphPromptPlan, SessionGraph, SessionGraphAgent, SessionGraphCanvas,
-    SessionGraphNodePosition, SessionGraphViewport, WorkGraph, WorkGraphEdge, WorkGraphNode,
-    WorkGraphNodeKind, GRAPH_PROMPT_CONTINUATION_VERSION, GRAPH_PROMPT_PLAN_VERSION,
-    SESSION_GRAPH_CANVAS_VERSION, SESSION_GRAPH_VERSION, WORK_GRAPH_GOAL_ID, WORK_GRAPH_VERSION,
+    GraphEdgeRunState, GraphNodeRunAttempt, GraphNodeRunState, GraphNodeRunStatus,
+    GraphNodeVerdict, GraphPromptContinuation, GraphPromptPlan, GraphRunState, GraphRunStatus,
+    SessionGraph, SessionGraphAgent, SessionGraphCanvas, SessionGraphNodePosition,
+    SessionGraphViewport, WorkGraph, WorkGraphEdge, WorkGraphEdgeCondition, WorkGraphEdgeKind,
+    WorkGraphExecutionMode, WorkGraphGroup, WorkGraphGroupDirection, WorkGraphGroupGeneration,
+    WorkGraphGroupGenerationMode, WorkGraphNode, WorkGraphNodeKind,
+    GRAPH_PROMPT_CONTINUATION_VERSION, GRAPH_PROMPT_PLAN_VERSION, GRAPH_RUN_SCHEMA_VERSION,
+    LEGACY_WORK_GRAPH_VERSION, SESSION_GRAPH_CANVAS_VERSION, SESSION_GRAPH_VERSION,
+    WORK_GRAPH_GOAL_ID, WORK_GRAPH_VERSION,
 };

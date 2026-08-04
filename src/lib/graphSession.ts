@@ -6,12 +6,16 @@ import type {
 import {
   WORK_GRAPH_GOAL_ID,
   createEmptyWorkGraph,
+  expandWorkGraphEdges,
+  workGraphEdgeKind,
   type WorkGraph,
+  type WorkGraphEdge,
+  type WorkGraphGroup,
   type WorkGraphNodeKind,
 } from "./workGraph";
 
 export const SESSION_GRAPH_VERSION = 1 as const;
-export const SESSION_GRAPH_CANVAS_VERSION = 1 as const;
+export const SESSION_GRAPH_CANVAS_VERSION = 2 as const;
 
 export function createGraphSessionDraft(
   provider: SessionAgentProvider = "claude",
@@ -24,6 +28,7 @@ export function createGraphSessionDraft(
     canvas: {
       version: SESSION_GRAPH_CANVAS_VERSION,
       node_positions: { [WORK_GRAPH_GOAL_ID]: { x: 560, y: 220 } },
+      group_positions: {},
       viewport: { x: 0, y: 0, zoom: 1 },
     },
     revision: 1,
@@ -38,6 +43,10 @@ export function cloneSessionGraph(graph: SessionGraph): SessionGraph {
       ...graph.definition,
       nodes: graph.definition.nodes.map((node) => ({ ...node })),
       edges: graph.definition.edges.map((edge) => ({ ...edge })),
+      groups: graph.definition.groups?.map((group) => ({
+        ...group,
+        generation: { ...group.generation },
+      })),
     },
     canvas: {
       ...graph.canvas,
@@ -46,6 +55,11 @@ export function cloneSessionGraph(graph: SessionGraph): SessionGraph {
           id,
           { ...position },
         ]),
+      ),
+      group_positions: Object.fromEntries(
+        Object.entries(graph.canvas.group_positions ?? {}).map(
+          ([id, position]) => [id, { ...position }],
+        ),
       ),
       viewport: graph.canvas.viewport ? { ...graph.canvas.viewport } : null,
     },
@@ -77,6 +91,7 @@ export function addGraphNode(
           kind,
           title: kind[0].toUpperCase() + kind.slice(1),
           instruction: "",
+          execution_mode: null,
         },
         graph.nodes.find((node) => node.kind === "goal_sink")!,
       ],
@@ -95,18 +110,295 @@ export function addGraphNode(
   };
 }
 
-function pathExists(graph: WorkGraph, from: string, to: string): boolean {
+export interface AddGraphGroupOptions {
+  title?: string;
+  count?: number;
+  generationMode?: "fixed" | "prompt";
+  prompt?: string;
+}
+
+export function addGraphGroup(
+  graph: WorkGraph,
+  canvas: SessionGraphCanvas,
+  options: AddGraphGroupOptions = {},
+): {
+  graph: WorkGraph;
+  canvas: SessionGraphCanvas;
+  groupId: string;
+  nodeIds: string[];
+} {
+  const taken = new Set([
+    ...graph.nodes.map((node) => node.id),
+    ...(graph.groups ?? []).map((group) => group.id),
+  ]);
+  const groupId = nextStableId("group", taken);
+  const count = Math.max(1, Math.min(12, Math.floor(options.count ?? 3)));
+  const promptGenerated = options.generationMode === "prompt";
+  const slotCount = promptGenerated ? 1 : count;
+  const prompt = options.prompt?.trim() ?? "";
+  const nodeIds: string[] = [];
+  const nodes = [...graph.nodes.filter((node) => node.kind !== "goal_sink")];
+  for (let index = 0; index < slotCount; index += 1) {
+    const nodeId = nextStableId("agent", new Set([...taken, ...nodeIds]));
+    nodeIds.push(nodeId);
+    nodes.push({
+      id: nodeId,
+      kind: "agent",
+      title: `Session ${index + 1}`,
+      instruction:
+        prompt ||
+        (promptGenerated
+          ? "Generate this task from the dynamic group prompt."
+          : ""),
+      group_id: groupId,
+      execution_mode: "parallel",
+    });
+  }
+  const group: WorkGraphGroup = {
+    id: groupId,
+    title: options.title?.trim() || "Dynamic group",
+    direction: "LR",
+    execution_mode: "parallel",
+    generation: {
+      mode: options.generationMode ?? "fixed",
+      count: promptGenerated ? null : count,
+      prompt: prompt || null,
+      max_nodes: 12,
+    },
+  };
+  const node_positions = { ...canvas.node_positions };
+  for (const [index, nodeId] of nodeIds.entries()) {
+    node_positions[nodeId] = { x: 48 + index * 248, y: 72 };
+  }
+  const groupCount = graph.groups?.length ?? 0;
+  return {
+    graph: {
+      ...graph,
+      version: 2,
+      execution_mode: graph.execution_mode ?? "parallel",
+      nodes: [
+        ...nodes,
+        graph.nodes.find((node) => node.kind === "goal_sink")!,
+      ],
+      groups: [...(graph.groups ?? []), group],
+    },
+    canvas: {
+      ...canvas,
+      version: 2,
+      node_positions,
+      group_positions: {
+        ...(canvas.group_positions ?? {}),
+        [groupId]: { x: 80, y: 80 + groupCount * 240 },
+      },
+    },
+    groupId,
+    nodeIds,
+  };
+}
+
+export interface GraphGroupTask {
+  title: string;
+  instruction: string;
+}
+
+export function materializeGraphGroup(
+  graph: WorkGraph,
+  canvas: SessionGraphCanvas,
+  groupId: string,
+  tasks: readonly GraphGroupTask[],
+): { graph: WorkGraph; canvas: SessionGraphCanvas; nodeIds: string[] } | null {
+  const group = graph.groups?.find((candidate) => candidate.id === groupId);
+  if (!group || tasks.length === 0 || tasks.length > 12) return null;
+  const removed = new Set(
+    graph.nodes
+      .filter((node) => node.group_id === groupId)
+      .map((node) => node.id),
+  );
+  const retainedNodes = graph.nodes.filter(
+    (node) => !removed.has(node.id) && node.kind !== "goal_sink",
+  );
+  const taken = new Set([
+    ...retainedNodes.map((node) => node.id),
+    ...(graph.groups ?? []).map((candidate) => candidate.id),
+  ]);
+  const nodeIds: string[] = [];
+  const nextNodes = tasks.map((task, index) => {
+    const id = nextStableId("agent", new Set([...taken, ...nodeIds]));
+    nodeIds.push(id);
+    return {
+      id,
+      kind: "agent" as const,
+      title: task.title.trim() || `Session ${index + 1}`,
+      instruction: task.instruction.trim(),
+      group_id: groupId,
+      execution_mode: "parallel" as const,
+    };
+  });
+  const node_positions = { ...canvas.node_positions };
+  for (const id of removed) delete node_positions[id];
+  for (const [index, id] of nodeIds.entries()) {
+    node_positions[id] = { x: 48 + index * 248, y: 72 };
+  }
+  return {
+    graph: {
+      ...graph,
+      version: 2,
+      nodes: [
+        ...retainedNodes,
+        ...nextNodes,
+        graph.nodes.find((node) => node.kind === "goal_sink")!,
+      ],
+      edges: graph.edges.filter(
+        (edge) => !removed.has(edge.from) && !removed.has(edge.to),
+      ),
+      groups: graph.groups?.map((candidate) =>
+        candidate.id === groupId
+          ? {
+              ...candidate,
+              generation: { ...candidate.generation, count: tasks.length },
+            }
+          : candidate,
+      ),
+    },
+    canvas: { ...canvas, version: 2, node_positions },
+    nodeIds,
+  };
+}
+
+export function removeGraphGroup(
+  graph: WorkGraph,
+  canvas: SessionGraphCanvas,
+  groupId: string,
+): { graph: WorkGraph; canvas: SessionGraphCanvas } {
+  const removed = new Set(
+    graph.nodes
+      .filter((node) => node.group_id === groupId)
+      .map((node) => node.id),
+  );
+  const node_positions = { ...canvas.node_positions };
+  for (const id of removed) delete node_positions[id];
+  const group_positions = { ...(canvas.group_positions ?? {}) };
+  delete group_positions[groupId];
+  return {
+    graph: {
+      ...graph,
+      nodes: graph.nodes.filter((node) => !removed.has(node.id)),
+      edges: graph.edges.filter(
+        (edge) =>
+          edge.from !== groupId &&
+          edge.to !== groupId &&
+          !removed.has(edge.from) &&
+          !removed.has(edge.to),
+      ),
+      groups: graph.groups?.filter((group) => group.id !== groupId),
+    },
+    canvas: { ...canvas, node_positions, group_positions },
+  };
+}
+
+export function updateGraphGroup(
+  graph: WorkGraph,
+  groupId: string,
+  patch: Partial<Omit<WorkGraphGroup, "id" | "generation">> & {
+    generation?: Partial<WorkGraphGroup["generation"]>;
+  },
+): WorkGraph {
+  const groups = graph.groups?.map((group) =>
+    group.id === groupId
+      ? {
+          ...group,
+          ...patch,
+          generation: {
+            ...group.generation,
+            ...(patch.generation ?? {}),
+          },
+        }
+      : group,
+  );
+  const updatedGroup = groups?.find((group) => group.id === groupId);
+  const generationPrompt = updatedGroup?.generation.mode === "prompt"
+    ? updatedGroup.generation.prompt?.trim()
+    : null;
+  return {
+    ...graph,
+    nodes: generationPrompt
+      ? graph.nodes.map((node) =>
+          node.group_id === groupId
+            ? { ...node, instruction: generationPrompt }
+            : node,
+        )
+      : graph.nodes,
+    groups,
+  };
+}
+
+export function resizeFixedGraphGroup(
+  graph: WorkGraph,
+  canvas: SessionGraphCanvas,
+  groupId: string,
+  count: number,
+): { graph: WorkGraph; canvas: SessionGraphCanvas; nodeIds: string[] } | null {
+  const group = graph.groups?.find((candidate) => candidate.id === groupId);
+  if (!group || !Number.isInteger(count) || count < 1 || count > 12) return null;
+  const current = graph.nodes.filter((node) => node.group_id === groupId);
+  const fallbackInstruction =
+    group.generation.prompt?.trim() ||
+    current.find((node) => node.instruction.trim())?.instruction ||
+    "Complete this branch of the group and return a concise artifact.";
+  const tasks = Array.from({ length: count }, (_, index) => ({
+    title: current[index]?.title || `Session ${index + 1}`,
+    instruction: current[index]?.instruction || fallbackInstruction,
+  }));
+  const materialized = materializeGraphGroup(graph, canvas, groupId, tasks);
+  if (!materialized) return null;
+  return {
+    ...materialized,
+    graph: updateGraphGroup(materialized.graph, groupId, {
+      generation: { mode: "fixed", count },
+    }),
+  };
+}
+
+export function alignGraphNodePositions(
+  canvas: SessionGraphCanvas,
+  nodeIds: readonly string[],
+  axis: "x" | "y",
+  anchorId: string,
+): SessionGraphCanvas {
+  const anchor = canvas.node_positions[anchorId];
+  if (!anchor || nodeIds.length < 2) return canvas;
+  const node_positions = { ...canvas.node_positions };
+  for (const nodeId of nodeIds) {
+    const position = node_positions[nodeId];
+    if (!position) continue;
+    node_positions[nodeId] = { ...position, [axis]: anchor[axis] };
+  }
+  return { ...canvas, node_positions };
+}
+
+function dependencyGraphHasCycle(graph: WorkGraph): boolean {
   const outgoing = new Map<string, string[]>();
   for (const node of graph.nodes) outgoing.set(node.id, []);
-  for (const edge of graph.edges) outgoing.get(edge.from)?.push(edge.to);
-  const seen = new Set<string>();
-  const stack = [from];
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    if (current === to) return true;
-    if (seen.has(current)) continue;
-    seen.add(current);
-    stack.push(...(outgoing.get(current) ?? []));
+  for (const edge of expandWorkGraphEdges(graph)) {
+    if (workGraphEdgeKind(edge) === "dependency") {
+      outgoing.get(edge.from)?.push(edge.to);
+    }
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    for (const target of outgoing.get(id) ?? []) {
+      if (visit(target)) return true;
+    }
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  };
+  for (const node of graph.nodes) {
+    if (visit(node.id)) return true;
   }
   return false;
 }
@@ -116,6 +408,7 @@ export type GraphConnectionError =
   | "unknownNode"
   | "selfConnection"
   | "goalOutgoing"
+  | "dynamicGroupBoundary"
   | "duplicate"
   | "cycle";
 
@@ -125,16 +418,39 @@ export function validateProspectiveGraphEdge(
   target: string | null | undefined,
 ): GraphConnectionError | null {
   if (!source || !target) return "missingEndpoint";
-  const nodeIds = new Set(graph.nodes.map((node) => node.id));
-  if (!nodeIds.has(source) || !nodeIds.has(target)) {
+  const endpointIds = new Set([
+    ...graph.nodes.map((node) => node.id),
+    ...(graph.groups ?? []).map((group) => group.id),
+  ]);
+  if (!endpointIds.has(source) || !endpointIds.has(target)) {
     return "unknownNode";
   }
   if (source === target) return "selfConnection";
   if (source === WORK_GRAPH_GOAL_ID) return "goalOutgoing";
+  const promptMemberIds = new Set(
+    graph.nodes
+      .filter((node) =>
+        graph.groups?.some(
+          (group) =>
+            group.id === node.group_id && group.generation.mode === "prompt",
+        ),
+      )
+      .map((node) => node.id),
+  );
+  if (promptMemberIds.has(source) || promptMemberIds.has(target)) {
+    return "dynamicGroupBoundary";
+  }
   if (graph.edges.some((edge) => edge.from === source && edge.to === target)) {
     return "duplicate";
   }
-  if (pathExists(graph, target, source)) return "cycle";
+  const probe: WorkGraph = {
+    ...graph,
+    edges: [
+      ...graph.edges,
+      { id: "probe-edge", from: source, to: target, kind: "dependency" },
+    ],
+  };
+  if (dependencyGraphHasCycle(probe)) return "cycle";
   return null;
 }
 
@@ -142,8 +458,71 @@ export function connectGraphNodes(
   graph: WorkGraph,
   source: string | null | undefined,
   target: string | null | undefined,
+  options: Partial<
+    Pick<WorkGraphEdge, "label" | "condition" | "kind" | "retry_limit">
+  > = {},
 ): WorkGraph | null {
-  if (validateProspectiveGraphEdge(graph, source, target)) return null;
+  if (
+    options.kind !== "retry" &&
+    validateProspectiveGraphEdge(graph, source, target)
+  ) {
+    return null;
+  }
+  if (options.kind === "retry") {
+    const sourceNode = graph.nodes.find((node) => node.id === source);
+    const targetNode = graph.nodes.find((node) => node.id === target);
+    const expectedCondition =
+      sourceNode?.kind === "human"
+        ? "rejected"
+        : sourceNode?.kind === "validator"
+          ? "fail"
+          : null;
+    if (
+      !source ||
+      !target ||
+      !sourceNode ||
+      !targetNode ||
+      !expectedCondition ||
+      (options.condition !== undefined &&
+        options.condition !== expectedCondition) ||
+      graph.groups?.some(
+        (group) =>
+          group.generation.mode === "prompt" &&
+          (group.id === sourceNode.group_id || group.id === targetNode.group_id),
+      ) ||
+      source === target ||
+      source === WORK_GRAPH_GOAL_ID ||
+      (sourceNode.kind !== "validator" && sourceNode.kind !== "human") ||
+      (targetNode.kind !== "agent" && targetNode.kind !== "merge") ||
+      graph.edges.some(
+        (edge) =>
+          workGraphEdgeKind(edge) === "retry" &&
+          edge.from === source,
+      )
+    ) {
+      return null;
+    }
+    const outgoing = new Map(graph.nodes.map((node) => [node.id, [] as string[]]));
+    for (const edge of expandWorkGraphEdges(graph)) {
+      if (workGraphEdgeKind(edge) === "dependency") {
+        outgoing.get(edge.from)?.push(edge.to);
+      }
+    }
+    const visited = new Set<string>();
+    const pending = [target];
+    let reachesSource = false;
+    while (pending.length > 0) {
+      const nodeId = pending.pop()!;
+      if (visited.has(nodeId)) continue;
+      visited.add(nodeId);
+      if (nodeId === source) {
+        reachesSource = true;
+        break;
+      }
+      pending.push(...(outgoing.get(nodeId) ?? []));
+    }
+    if (!reachesSource) return null;
+  }
   const taken = new Set(graph.edges.map((edge) => edge.id));
   return {
     ...graph,
@@ -153,6 +532,13 @@ export function connectGraphNodes(
         id: nextStableId("edge", taken),
         from: source!,
         to: target!,
+        ...options,
+        condition:
+          options.kind === "retry"
+            ? graph.nodes.find((node) => node.id === source)?.kind === "human"
+              ? "rejected"
+              : "fail"
+            : options.condition,
       },
     ],
   };

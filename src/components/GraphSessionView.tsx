@@ -1,14 +1,29 @@
-import { ListTree, Play, Save, Waypoints } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { CircleStop, Play, Save, Waypoints } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { cloneSessionGraph } from "../lib/graphSession";
-import { runSavedGraphSession } from "../lib/graphSessionRun";
-import type { Session, SessionGraph } from "../lib/types";
+import {
+  GRAPH_RUN_STATE_CHANGED_EVENT,
+  applyGraphRunState,
+  cancelSavedGraphRun,
+  runSavedGraphSession,
+  selectLatestGraphRunState,
+  subscribeGraphRunState,
+  submitSavedGraphNodeInput,
+  type GraphRunStateChangedPayload,
+} from "../lib/graphSessionRun";
+import type {
+  GraphNodeVerdict,
+  GraphRunState,
+  Session,
+  SessionGraph,
+} from "../lib/types";
 import { validateWorkGraph } from "../lib/workGraph";
 import { useAppStore } from "../store";
 import { useTranslation } from "../lib/useTranslation";
-import { ChatPane } from "./ChatPane";
 import { GraphCanvasEditor, type GraphCanvasValue } from "./GraphCanvasEditor";
+import { GraphPresetToolbar } from "./GraphPresetToolbar";
 import { Button } from "./ui";
 
 interface GraphSessionViewProps {
@@ -16,25 +31,76 @@ interface GraphSessionViewProps {
   isActive: boolean;
 }
 
+function graphRunIsActive(state: GraphRunState | null): boolean {
+  return state?.status === "running" || state?.status === "waiting";
+}
+
 export function GraphSessionView({ session, isActive }: GraphSessionViewProps) {
   const t = useTranslation();
   const graph = session.graph;
-  const [tab, setTab] = useState<"design" | "log">("design");
+  const [view, setView] = useState<"design" | "run">("design");
   const [draft, setDraft] = useState<SessionGraph | null>(() =>
     graph ? cloneSessionGraph(graph) : null,
   );
+  const [runState, setRunState] = useState<GraphRunState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const latestRunStateRef = useRef<GraphRunState | null>(null);
 
   useEffect(() => {
     if (graph) setDraft(cloneSessionGraph(graph));
   }, [session.id, graph?.revision]);
 
   useEffect(() => {
-    if (session.status === "working" || session.status === "waiting_for_input") {
-      setTab("log");
-    }
-  }, [session.status]);
+    if (!isActive) return;
+    let disposed = false;
+    let unlisten: UnlistenFn | null = null;
+    latestRunStateRef.current = null;
+    setRunState(null);
+
+    const receive = (state: GraphRunState) => {
+      if (disposed || state.session_id !== session.id) return;
+      const latest = selectLatestGraphRunState(latestRunStateRef.current, state);
+      if (latest !== state) return;
+      latestRunStateRef.current = state;
+      setRunState(state);
+      setView("run");
+      if (state.status === "running" || state.status === "waiting") {
+        setBusy(false);
+      }
+    };
+    const unsubscribeState = subscribeGraphRunState(session.id, receive);
+
+    void (async () => {
+      try {
+        const cancel = await listen<GraphRunStateChangedPayload>(
+          GRAPH_RUN_STATE_CHANGED_EVENT,
+          (event) => applyGraphRunState(event.payload.state),
+        );
+        if (disposed) {
+          cancel();
+          return;
+        }
+        unlisten = cancel;
+      } catch (listenError) {
+        if (!disposed) setError(String(listenError));
+      }
+      if (disposed) return;
+      try {
+        const loaded = await api.loadGraphRunState(session.id);
+        if (loaded) applyGraphRunState(loaded);
+      } catch (loadError) {
+        if (!disposed) setError(String(loadError));
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      unsubscribeState();
+      unlisten?.();
+    };
+  }, [isActive, session.id]);
 
   const validation = useMemo(
     () => (draft ? validateWorkGraph(draft.definition) : { valid: false, errors: [] }),
@@ -43,10 +109,10 @@ export function GraphSessionView({ session, isActive }: GraphSessionViewProps) {
   if (!graph || !draft) return null;
   const savedGraph = graph;
   const currentDraft = draft;
-
-  const activeRun =
-    session.status === "working" || session.status === "waiting_for_input";
-  const editable = !activeRun && !busy;
+  const activeRun = runState
+    ? graphRunIsActive(runState)
+    : session.status === "working" || session.status === "waiting_for_input";
+  const editable = view === "design" && !activeRun && !busy;
   const dirty = JSON.stringify(currentDraft) !== JSON.stringify(savedGraph);
 
   function updateCanvas(value: GraphCanvasValue) {
@@ -90,16 +156,54 @@ export function GraphSessionView({ session, isActive }: GraphSessionViewProps) {
     setError(null);
     try {
       await save();
-      setTab("log");
-      void runSavedGraphSession(session.id)
-        .catch((runError) => {
-          console.error("run Graph session failed", runError);
-          setError(String(runError));
-        })
-        .finally(() => setBusy(false));
+      setView("run");
+      await runSavedGraphSession(session.id);
     } catch (runError) {
       setError(String(runError));
+    } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleCancel() {
+    if (!runState || !graphRunIsActive(runState)) return;
+    setCancelling(true);
+    setError(null);
+    try {
+      await cancelSavedGraphRun(runState);
+    } catch (cancelError) {
+      setError(String(cancelError));
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function handleHumanInput(
+    nodeId: string,
+    input: string,
+    verdict?: GraphNodeVerdict,
+  ) {
+    if (!runState || runState.status !== "waiting") return;
+    const waitingState = runState;
+    setError(null);
+    setRunState({
+      ...waitingState,
+      status: "running",
+      nodes: {
+        ...waitingState.nodes,
+        [nodeId]: {
+          ...waitingState.nodes[nodeId],
+          status: "working",
+          question: null,
+        },
+      },
+    });
+    try {
+      await submitSavedGraphNodeInput(waitingState, nodeId, input, verdict);
+    } catch (inputError) {
+      setRunState(waitingState);
+      setError(String(inputError));
+      throw inputError;
     }
   }
 
@@ -115,10 +219,12 @@ export function GraphSessionView({ session, isActive }: GraphSessionViewProps) {
               <span>{t("graphSession.label")}</span>
               <span>{t("graphSession.revision")} {savedGraph.revision}</span>
               <span className="rounded bg-fill px-1.5 py-0.5 normal-case">
-                {t(`sidebar.status.${session.status}`)}
+                {runState
+                  ? t(`graphSession.runStatuses.${runState.status}`)
+                  : t(`sidebar.status.${session.status}`)}
               </span>
             </div>
-            {tab === "design" && editable ? (
+            {view === "design" && editable ? (
               <input
                 aria-label={t("graphSession.objective")}
                 value={currentDraft.objective}
@@ -138,20 +244,30 @@ export function GraphSessionView({ session, isActive }: GraphSessionViewProps) {
           <div className="flex items-center gap-1 rounded-lg border border-border bg-bg p-1">
             <Button
               size="xs"
-              variant={tab === "design" ? "accentSoft" : "ghost"}
-              onClick={() => setTab("design")}
+              variant={view === "design" ? "accentSoft" : "ghost"}
+              onClick={() => setView("design")}
             >
               <Waypoints size={12} /> {t("graphSession.design")}
             </Button>
             <Button
               size="xs"
-              variant={tab === "log" ? "accentSoft" : "ghost"}
-              onClick={() => setTab("log")}
+              variant={view === "run" ? "accentSoft" : "ghost"}
+              onClick={() => setView("run")}
             >
-              <ListTree size={12} /> {t("graphSession.runLog")}
+              <Play size={12} /> {t("graphSession.liveRun")}
             </Button>
           </div>
           <span className="text-[11px] text-fg-muted">{savedGraph.agent.provider}</span>
+          {activeRun && runState ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={cancelling}
+              onClick={() => void handleCancel()}
+            >
+              <CircleStop size={12} /> {t("graphSession.cancelRun")}
+            </Button>
+          ) : null}
           <Button
             size="xs"
             variant="outline"
@@ -163,7 +279,7 @@ export function GraphSessionView({ session, isActive }: GraphSessionViewProps) {
           <Button
             size="xs"
             variant="primary"
-            disabled={!editable || !validation.valid || !currentDraft.objective.trim()}
+            disabled={activeRun || busy || !validation.valid || !currentDraft.objective.trim()}
             onClick={() => void handleRun()}
           >
             <Play size={12} /> {busy ? t("graphSession.starting") : t("graphSession.run")}
@@ -178,22 +294,53 @@ export function GraphSessionView({ session, isActive }: GraphSessionViewProps) {
           <div role="alert" className="mt-2 text-[11px] text-danger">{error}</div>
         ) : null}
       </header>
-      {tab === "design" ? (
+      <div className="flex min-h-0 flex-1 flex-col">
+        {view === "design" ? (
+          <GraphPresetToolbar
+            graph={currentDraft}
+            disabled={!editable}
+            onApply={(next) => setDraft(cloneSessionGraph(next))}
+          />
+        ) : (
+          <div
+            className="flex min-h-8 shrink-0 items-center gap-2 border-b border-border bg-bg-sidebar/45 px-3 text-[10px] text-fg-muted"
+            data-graph-run-summary
+          >
+            {runState ? (
+              <>
+                <span className="font-semibold text-fg">
+                  {t(`graphSession.runStatuses.${runState.status}`)}
+                </span>
+                <span>{runState.run_id}</span>
+                {runState.error ? <span className="text-danger">{runState.error}</span> : null}
+                {runState.final_output ? (
+                  <span className="min-w-0 flex-1 truncate text-right" title={runState.final_output}>
+                    {runState.final_output}
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              <span>{t("graphSession.noRun")}</span>
+            )}
+          </div>
+        )}
         <GraphCanvasEditor
           key={session.id}
           className="flex-1"
-          value={{ definition: currentDraft.definition, canvas: currentDraft.canvas }}
+          value={{
+            definition:
+              view === "run" && runState
+                ? runState.definition
+                : currentDraft.definition,
+            canvas: currentDraft.canvas,
+          }}
           onChange={updateCanvas}
-          disabled={!editable}
+          disabled={view !== "design" || !editable}
+          mode={view === "run" ? "run" : "edit"}
+          runState={view === "run" ? runState : null}
+          onHumanInput={handleHumanInput}
         />
-      ) : (
-        <ChatPane
-          sessionId={session.id}
-          isActive={isActive}
-          repoPath={session.worktree_path}
-          session={session}
-        />
-      )}
+      </div>
     </div>
   );
 }

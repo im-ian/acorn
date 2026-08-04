@@ -28,10 +28,10 @@ use acorn_session::scrollback;
 use acorn_session::status as session_status;
 use acorn_session::status::StatusReason as SessionStatusReason;
 use acorn_session::{
-    AgentStatusSource, Project, Session, SessionAgentProvider, SessionGoal,
-    SessionGoalModelSelection, SessionGoalProgress, SessionGoalRunState, SessionGoalStage,
-    SessionGoalStagePolicy, SessionGraph, SessionGraphNodePosition, SessionKind, SessionMode,
-    SessionOwner, SessionStatus, SESSION_GRAPH_CANVAS_VERSION, SESSION_GRAPH_VERSION,
+    AgentStatusSource, GraphNodeVerdict, GraphRunState, Project, Session, SessionAgentProvider,
+    SessionGoal, SessionGoalModelSelection, SessionGoalProgress, SessionGoalRunState,
+    SessionGoalStage, SessionGoalStagePolicy, SessionGraph, SessionGraphNodePosition, SessionKind,
+    SessionMode, SessionOwner, SessionStatus, SESSION_GRAPH_CANVAS_VERSION, SESSION_GRAPH_VERSION,
 };
 use acorn_transcript::{assistant_message_text, collapse_preview};
 
@@ -2252,6 +2252,49 @@ struct CliChatProviderAdapter {
     ai: crate::ai::AiExecutionRequest,
     cwd: PathBuf,
     cancellation: Option<crate::chat_runs::ChatCancellation>,
+}
+
+#[derive(Clone)]
+struct CliGraphNodeExecutor {
+    ai: crate::ai::AiExecutionRequest,
+    cwd: PathBuf,
+}
+
+impl crate::graph_runs::GraphNodeExecutor for CliGraphNodeExecutor {
+    fn execute(
+        &self,
+        execution: crate::graph_runs::GraphNodeExecution,
+        cancellation: crate::chat_runs::ChatCancellation,
+    ) -> AppResult<String> {
+        // Every graph node is deliberately a fresh provider invocation. In
+        // particular, no ProviderThread or compiled chat history is supplied:
+        // direct incoming artifacts are already sealed into the node prompt.
+        let adapter = CliChatProviderAdapter {
+            ai: self.ai.clone(),
+            cwd: self.cwd.clone(),
+            cancellation: Some(cancellation),
+        };
+        let response = adapter.send_message(ChatProviderInput {
+            thread: None,
+            message: persistence::ChatMessage {
+                id: format!(
+                    "graph:{}:{}:{}",
+                    execution.run_id, execution.node_id, execution.attempt
+                ),
+                session_id: None,
+                turn_id: None,
+                role: persistence::ChatRole::User,
+                content: execution.prompt,
+                graph_prompt_plan: None,
+                created_at: chrono::Utc::now(),
+                status: Some(persistence::ChatMessageStatus::Complete),
+                metadata: None,
+            },
+            context: None,
+            model: self.ai.model.clone(),
+        })?;
+        Ok(response.content)
+    }
 }
 
 impl ChatProviderAdapter for CliChatProviderAdapter {
@@ -4819,7 +4862,7 @@ fn normalize_session_graph(mut graph: SessionGraph) -> AppResult<SessionGraph> {
     graph.agent.model = crate::ai::normalize_optional_model_arg(graph.agent.model.as_deref())?;
     graph.agent.effort = crate::ai::normalize_effort_arg(graph.agent.effort.as_deref())?;
     work_graph::validate_work_graph(&graph.definition).map_err(AppError::Other)?;
-    if graph.canvas.version != SESSION_GRAPH_CANVAS_VERSION {
+    if !matches!(graph.canvas.version, 1 | SESSION_GRAPH_CANVAS_VERSION) {
         return Err(AppError::Other(format!(
             "unsupported Graph canvas version: {}",
             graph.canvas.version
@@ -4848,6 +4891,34 @@ fn normalize_session_graph(mut graph: SessionGraph) -> AppResult<SessionGraph> {
             return Err(AppError::Other(format!(
                 "Graph node {} has a non-finite canvas position",
                 node.id
+            )));
+        }
+        position.x = position.x.clamp(-100_000.0, 100_000.0);
+        position.y = position.y.clamp(-100_000.0, 100_000.0);
+    }
+    let group_ids = graph
+        .definition
+        .groups
+        .iter()
+        .map(|group| group.id.as_str())
+        .collect::<HashSet<_>>();
+    graph
+        .canvas
+        .group_positions
+        .retain(|group_id, _| group_ids.contains(group_id.as_str()));
+    for (index, group) in graph.definition.groups.iter().enumerate() {
+        let position = graph
+            .canvas
+            .group_positions
+            .entry(group.id.clone())
+            .or_insert(SessionGraphNodePosition {
+                x: 80.0,
+                y: 80.0 + index as f64 * 240.0,
+            });
+        if !position.x.is_finite() || !position.y.is_finite() {
+            return Err(AppError::Other(format!(
+                "Graph group {} has a non-finite canvas position",
+                group.id
             )));
         }
         position.x = position.x.clamp(-100_000.0, 100_000.0);
@@ -5508,11 +5579,25 @@ pub async fn run_goal_session<R: Runtime>(
 }
 
 #[tauri::command]
+pub fn load_graph_run_state(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Option<GraphRunState>> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    if normalized_graph_for_session(&session)?.is_none() {
+        return Err(AppError::Other(
+            "session is not a Graph session".to_string(),
+        ));
+    }
+    crate::graph_runs::load_graph_run_state(state.inner(), &session)
+}
+
+#[tauri::command]
 pub async fn run_graph_session<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     session_id: String,
-) -> AppResult<persistence::ChatSessionState> {
+) -> AppResult<GraphRunState> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
     let Some(graph) = normalized_graph_for_session(&session)? else {
         return Err(AppError::Other(
@@ -5520,30 +5605,71 @@ pub async fn run_graph_session<R: Runtime>(
         ));
     };
     let app_state = state.inner().clone();
+    let executor: Arc<dyn crate::graph_runs::GraphNodeExecutor> = Arc::new(CliGraphNodeExecutor {
+        ai: graph_ai_request(&graph),
+        cwd: session.worktree_path.clone(),
+    });
     run_blocking("run graph session", move || {
-        ensure_chat_session_has_no_active_run(&app_state, &session.id)?;
-        let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
-        if active_graph_waiting_turn(&chat_state)?.is_some() {
-            return Err(AppError::Other(
-                "Graph session is waiting for a reply; continue the current run before starting again"
-                    .to_string(),
-            ));
-        }
-        let plan = GraphPromptPlan::Manual {
-            version: work_graph::GRAPH_PROMPT_PLAN_VERSION,
-            graph: graph.definition.clone(),
-            continuation: None,
-        };
-        send_chat_message_from_state_inner(
+        crate::graph_runs::start_graph_run(&app, &app_state, session, graph, executor)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn submit_graph_node_input<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+    run_id: String,
+    node_id: String,
+    input: String,
+    verdict: Option<GraphNodeVerdict>,
+    expected_revision: u64,
+) -> AppResult<GraphRunState> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    let Some(graph) = normalized_graph_for_session(&session)? else {
+        return Err(AppError::Other(
+            "session is not a Graph session".to_string(),
+        ));
+    };
+    let app_state = state.inner().clone();
+    let executor: Arc<dyn crate::graph_runs::GraphNodeExecutor> = Arc::new(CliGraphNodeExecutor {
+        ai: graph_ai_request(&graph),
+        cwd: session.worktree_path.clone(),
+    });
+    run_blocking("submit Graph node input", move || {
+        crate::graph_runs::submit_graph_node_input(
             &app,
             &app_state,
             session,
-            graph_ai_request(&graph),
-            graph.objective,
-            Some(plan),
-            false,
-            chat_state,
+            run_id,
+            node_id,
+            input,
+            verdict,
+            expected_revision,
+            executor,
         )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn cancel_graph_run<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+    run_id: String,
+    expected_revision: u64,
+) -> AppResult<GraphRunState> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    if normalized_graph_for_session(&session)?.is_none() {
+        return Err(AppError::Other(
+            "session is not a Graph session".to_string(),
+        ));
+    }
+    let app_state = state.inner().clone();
+    run_blocking("cancel Graph run", move || {
+        crate::graph_runs::cancel_graph_run(&app, &app_state, session, run_id, expected_revision)
     })
     .await
 }
@@ -5564,12 +5690,9 @@ pub async fn send_chat_message<R: Runtime>(
     let app_state = state.inner().clone();
     run_blocking("send chat message", move || {
         if session.graph.is_some() {
-            let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
-            if active_graph_waiting_turn(&chat_state)?.is_none() {
-                return Err(AppError::Other(
-                    "Graph sessions start from the saved graph; use Run".to_string(),
-                ));
-            }
+            return Err(AppError::Other(
+                "Graph sessions use node input; submit the waiting Human node instead".to_string(),
+            ));
         }
         let goal_continuation = session.goal.as_ref().and_then(|goal| {
             matches!(
@@ -6891,6 +7014,16 @@ pub fn update_session_graph(
         ));
     }
     ensure_chat_session_has_no_active_run(state.inner(), &id)?;
+    if persistence::load_graph_run_state(&id.to_string())?.is_some_and(|run| {
+        matches!(
+            run.status,
+            acorn_session::GraphRunStatus::Running | acorn_session::GraphRunStatus::Waiting
+        )
+    }) {
+        return Err(AppError::Other(
+            "Graph design cannot be edited while a run is active or waiting".to_string(),
+        ));
+    }
     let chat_state = persistence::load_chat_session_state(&id.to_string())?;
     if active_graph_waiting_turn(&chat_state)?.is_some() {
         return Err(AppError::Other(
@@ -10853,6 +10986,7 @@ mod tests {
                         SessionGraphNodePosition { x: 1.0, y: 2.0 },
                     ),
                 ]),
+                group_positions: std::collections::BTreeMap::new(),
                 viewport: None,
             },
             revision: 9,
@@ -11247,25 +11381,35 @@ mod tests {
             version: 1,
             graph: crate::work_graph::WorkGraph {
                 version: 1,
+                execution_mode: crate::work_graph::WorkGraphExecutionMode::Parallel,
                 nodes: vec![
                     crate::work_graph::WorkGraphNode {
                         id: "build".to_string(),
                         kind: crate::work_graph::WorkGraphNodeKind::Agent,
                         title: "Build".to_string(),
                         instruction: instruction.to_string(),
+                        group_id: None,
+                        execution_mode: None,
                     },
                     crate::work_graph::WorkGraphNode {
                         id: "goal".to_string(),
                         kind: crate::work_graph::WorkGraphNodeKind::GoalSink,
                         title: "GOAL".to_string(),
                         instruction: String::new(),
+                        group_id: None,
+                        execution_mode: None,
                     },
                 ],
                 edges: vec![crate::work_graph::WorkGraphEdge {
                     id: "build-goal".to_string(),
                     from: "build".to_string(),
                     to: "goal".to_string(),
+                    label: None,
+                    condition: crate::work_graph::WorkGraphEdgeCondition::Always,
+                    kind: crate::work_graph::WorkGraphEdgeKind::Dependency,
+                    retry_limit: None,
                 }],
+                groups: Vec::new(),
             },
             continuation: None,
         }
@@ -12816,6 +12960,8 @@ mod tests {
             kind: crate::work_graph::WorkGraphNodeKind::GoalSink,
             title: "GOAL".to_string(),
             instruction: String::new(),
+            group_id: None,
+            execution_mode: None,
         }];
         let mut edges = Vec::new();
         for index in 0..23 {
@@ -12825,19 +12971,27 @@ mod tests {
                 kind: crate::work_graph::WorkGraphNodeKind::Agent,
                 title: "T".repeat(120),
                 instruction: "I".repeat(347),
+                group_id: None,
+                execution_mode: None,
             });
             edges.push(crate::work_graph::WorkGraphEdge {
                 id: format!("edge-{index}"),
                 from: id,
                 to: "goal".to_string(),
+                label: None,
+                condition: crate::work_graph::WorkGraphEdgeCondition::Always,
+                kind: crate::work_graph::WorkGraphEdgeKind::Dependency,
+                retry_limit: None,
             });
         }
         let plan = crate::work_graph::GraphPromptPlan::Manual {
             version: 1,
             graph: crate::work_graph::WorkGraph {
                 version: 1,
+                execution_mode: crate::work_graph::WorkGraphExecutionMode::Parallel,
                 nodes,
                 edges,
+                groups: Vec::new(),
             },
             continuation: None,
         };

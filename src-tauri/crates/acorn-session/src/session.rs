@@ -1543,25 +1543,35 @@ mod tests {
             },
             definition: WorkGraph {
                 version: 1,
+                execution_mode: crate::WorkGraphExecutionMode::Parallel,
                 nodes: vec![
                     WorkGraphNode {
                         id: "build".to_string(),
                         kind: WorkGraphNodeKind::Agent,
                         title: "Build".to_string(),
                         instruction: "Implement the feature.".to_string(),
+                        group_id: None,
+                        execution_mode: None,
                     },
                     WorkGraphNode {
                         id: "goal".to_string(),
                         kind: WorkGraphNodeKind::GoalSink,
                         title: "GOAL".to_string(),
                         instruction: String::new(),
+                        group_id: None,
+                        execution_mode: None,
                     },
                 ],
                 edges: vec![WorkGraphEdge {
                     id: "build-goal".to_string(),
                     from: "build".to_string(),
                     to: "goal".to_string(),
+                    label: None,
+                    condition: crate::WorkGraphEdgeCondition::Always,
+                    kind: crate::WorkGraphEdgeKind::Dependency,
+                    retry_limit: None,
                 }],
+                groups: Vec::new(),
             },
             canvas: SessionGraphCanvas {
                 version: 1,
@@ -1575,6 +1585,7 @@ mod tests {
                         SessionGraphNodePosition { x: 420.0, y: 40.0 },
                     ),
                 ]),
+                group_positions: std::collections::BTreeMap::new(),
                 viewport: None,
             },
             revision,

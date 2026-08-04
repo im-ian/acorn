@@ -18,6 +18,7 @@ import { useToasts } from "../lib/toasts";
 import { useAppStore } from "../store";
 import { useTranslation } from "../lib/useTranslation";
 import { GraphCanvasEditor, type GraphCanvasValue } from "./GraphCanvasEditor";
+import { GraphPresetToolbar } from "./GraphPresetToolbar";
 import {
   Button,
   Field,
@@ -179,6 +180,11 @@ export function GraphSessionDialog({
             />
           </Field>
         </div>
+        <GraphPresetToolbar
+          graph={draft}
+          disabled={submitting}
+          onApply={(graph) => setDraft(cloneSessionGraph(graph))}
+        />
         <GraphCanvasEditor
           className="min-h-[32rem] flex-1"
           value={{ definition: draft.definition, canvas: draft.canvas }}

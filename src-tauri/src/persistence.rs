@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::{AppError, AppResult};
-use acorn_session::{Project, Session, SessionStore};
+use acorn_session::{GraphRunState, Project, Session, SessionStore, GRAPH_RUN_SCHEMA_VERSION};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,11 +17,19 @@ const PROJECTS_TMP_FILE: &str = "projects.json.tmp";
 const LAST_PROJECT_PARENT_FOLDER_FILE: &str = "last-project-parent-folder.json";
 const LAST_PROJECT_PARENT_FOLDER_TMP_FILE: &str = "last-project-parent-folder.json.tmp";
 const CHAT_SESSIONS_DIR: &str = "chat-sessions";
+const GRAPH_RUNS_DIR: &str = "graph-runs";
 pub const CHAT_SESSION_SCHEMA_VERSION: u32 = 1;
 static SESSION_SAVE_LOCK: Mutex<()> = Mutex::new(());
+static GRAPH_RUN_SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_session_save() -> MutexGuard<'static, ()> {
     SESSION_SAVE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn lock_graph_run_save() -> MutexGuard<'static, ()> {
+    GRAPH_RUN_SAVE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -859,6 +867,204 @@ fn update_chat_message_in_dir(
     save_chat_session_state_to_dir(base_dir, state)
 }
 
+fn graph_runs_dir_for_data_dir(base_dir: &Path) -> PathBuf {
+    base_dir.join(GRAPH_RUNS_DIR)
+}
+
+fn graph_run_path_for_data_dir(base_dir: &Path, session_id: &Uuid) -> PathBuf {
+    graph_runs_dir_for_data_dir(base_dir).join(format!("{session_id}.json"))
+}
+
+fn validate_graph_run_state(mut state: GraphRunState) -> AppResult<(Uuid, GraphRunState)> {
+    if state.schema_version != GRAPH_RUN_SCHEMA_VERSION {
+        return Err(AppError::Other(format!(
+            "unsupported Graph run schema version: {}",
+            state.schema_version
+        )));
+    }
+    let session_id = Uuid::parse_str(state.session_id.trim())
+        .map_err(|_| AppError::Other("invalid Graph run session id".to_string()))?;
+    let run_id = Uuid::parse_str(state.run_id.trim())
+        .map_err(|_| AppError::Other("invalid Graph run id".to_string()))?;
+    state.session_id = session_id.to_string();
+    state.run_id = run_id.to_string();
+    if state.revision == 0 {
+        return Err(AppError::Other(
+            "Graph run revision must be greater than zero".to_string(),
+        ));
+    }
+    state.objective = state.objective.trim().to_string();
+    if state.objective.is_empty() {
+        return Err(AppError::Other(
+            "Graph run objective must not be empty".to_string(),
+        ));
+    }
+    crate::work_graph::validate_work_graph(&state.definition).map_err(AppError::Other)?;
+    let expected_nodes = state
+        .definition
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let stored_nodes = state
+        .nodes
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    if expected_nodes != stored_nodes {
+        return Err(AppError::Other(
+            "Graph run node state does not match its definition".to_string(),
+        ));
+    }
+    for (node_id, node) in &state.nodes {
+        if node.node_id != *node_id {
+            return Err(AppError::Other(format!(
+                "Graph run node key mismatch: expected {node_id}, got {}",
+                node.node_id
+            )));
+        }
+        if node.attempts.iter().any(|attempt| attempt.attempt == 0) {
+            return Err(AppError::Other(format!(
+                "Graph run node {node_id} has an invalid attempt number"
+            )));
+        }
+        if node.attempt
+            < node
+                .attempts
+                .last()
+                .map(|attempt| attempt.attempt)
+                .unwrap_or(0)
+        {
+            return Err(AppError::Other(format!(
+                "Graph run node {node_id} attempt counter is stale"
+            )));
+        }
+    }
+    let expected_edges = state
+        .definition
+        .edges
+        .iter()
+        .map(|edge| edge.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let stored_edges = state
+        .edges
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    if expected_edges != stored_edges {
+        return Err(AppError::Other(
+            "Graph run edge state does not match its definition".to_string(),
+        ));
+    }
+    for (edge_id, edge) in &state.edges {
+        if edge.edge_id != *edge_id {
+            return Err(AppError::Other(format!(
+                "Graph run edge key mismatch: expected {edge_id}, got {}",
+                edge.edge_id
+            )));
+        }
+    }
+    Ok((session_id, state))
+}
+
+fn load_graph_run_state_from_dir(
+    base_dir: &Path,
+    session_id: &str,
+) -> AppResult<Option<GraphRunState>> {
+    let session_id = parse_chat_session_id(session_id)?;
+    let path = graph_run_path_for_data_dir(base_dir, &session_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path)?;
+    let state = serde_json::from_slice::<GraphRunState>(&bytes).map_err(|err| {
+        backup_corrupt_file(&path);
+        AppError::Other(format!("failed to parse Graph run state: {err}"))
+    })?;
+    let (stored_session_id, state) = validate_graph_run_state(state)?;
+    if stored_session_id != session_id {
+        return Err(AppError::Other(format!(
+            "Graph run session id mismatch: expected {session_id}, got {stored_session_id}"
+        )));
+    }
+    Ok(Some(state))
+}
+
+fn save_graph_run_state_to_dir(base_dir: &Path, state: GraphRunState) -> AppResult<GraphRunState> {
+    let (session_id, state) = validate_graph_run_state(state)?;
+    let dir = graph_runs_dir_for_data_dir(base_dir);
+    fs::create_dir_all(&dir)?;
+    let final_path = graph_run_path_for_data_dir(base_dir, &session_id);
+    let tmp_path = final_path.with_extension("json.tmp");
+    let payload = serde_json::to_vec_pretty(&state)
+        .map_err(|err| AppError::Other(format!("failed to serialize Graph run: {err}")))?;
+    fs::write(&tmp_path, payload)?;
+    fs::rename(&tmp_path, &final_path)?;
+    tracing::info!(
+        session_id = %session_id,
+        run_id = %state.run_id,
+        revision = state.revision,
+        path = %final_path.display(),
+        "saved Graph run state"
+    );
+    Ok(state)
+}
+
+pub fn load_graph_run_state(session_id: &str) -> AppResult<Option<GraphRunState>> {
+    load_graph_run_state_from_dir(&data_dir()?, session_id)
+}
+
+pub fn save_graph_run_state(state: GraphRunState) -> AppResult<GraphRunState> {
+    let _save_guard = lock_graph_run_save();
+    save_graph_run_state_to_dir(&data_dir()?, state)
+}
+
+pub fn update_graph_run_state<F>(
+    session_id: &str,
+    run_id: &str,
+    expected_revision: u64,
+    update: F,
+) -> AppResult<GraphRunState>
+where
+    F: FnOnce(&mut GraphRunState) -> AppResult<()>,
+{
+    let _save_guard = lock_graph_run_save();
+    let base_dir = data_dir()?;
+    update_graph_run_state_in_dir(&base_dir, session_id, run_id, expected_revision, update)
+}
+
+fn update_graph_run_state_in_dir<F>(
+    base_dir: &Path,
+    session_id: &str,
+    run_id: &str,
+    expected_revision: u64,
+    update: F,
+) -> AppResult<GraphRunState>
+where
+    F: FnOnce(&mut GraphRunState) -> AppResult<()>,
+{
+    let mut state = load_graph_run_state_from_dir(&base_dir, session_id)?
+        .ok_or_else(|| AppError::Other("Graph run state not found".to_string()))?;
+    if state.run_id != run_id {
+        return Err(AppError::Other(
+            "Graph run changed since this request was created".to_string(),
+        ));
+    }
+    if state.revision != expected_revision {
+        return Err(AppError::Other(format!(
+            "Graph run changed since this request was created (expected revision {expected_revision}, current {})",
+            state.revision
+        )));
+    }
+    update(&mut state)?;
+    state.revision = state
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| AppError::Other("Graph run revision overflow".to_string()))?;
+    state.updated_at = Utc::now();
+    save_graph_run_state_to_dir(&base_dir, state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -875,6 +1081,148 @@ mod tests {
             false,
             acorn_session::SessionKind::Regular,
         )
+    }
+
+    fn persistence_test_graph_run(session_id: Uuid) -> GraphRunState {
+        use acorn_session::{
+            GraphEdgeRunState, GraphNodeRunState, GraphNodeRunStatus, GraphRunStatus,
+            SessionAgentProvider, SessionGraphAgent, WorkGraph, WorkGraphEdge,
+            WorkGraphEdgeCondition, WorkGraphEdgeKind, WorkGraphExecutionMode, WorkGraphNode,
+            WorkGraphNodeKind,
+        };
+
+        let now = Utc::now();
+        GraphRunState {
+            schema_version: GRAPH_RUN_SCHEMA_VERSION,
+            session_id: session_id.to_string(),
+            run_id: Uuid::new_v4().to_string(),
+            revision: 1,
+            graph_revision: 3,
+            objective: "Persist the graph".to_string(),
+            agent: SessionGraphAgent {
+                provider: SessionAgentProvider::Codex,
+                model: None,
+                effort: None,
+            },
+            status: GraphRunStatus::Running,
+            definition: WorkGraph {
+                version: 1,
+                execution_mode: WorkGraphExecutionMode::Parallel,
+                nodes: vec![
+                    WorkGraphNode {
+                        id: "build".to_string(),
+                        kind: WorkGraphNodeKind::Agent,
+                        title: "Build".to_string(),
+                        instruction: "Build it".to_string(),
+                        group_id: None,
+                        execution_mode: None,
+                    },
+                    WorkGraphNode {
+                        id: "goal".to_string(),
+                        kind: WorkGraphNodeKind::GoalSink,
+                        title: "GOAL".to_string(),
+                        instruction: String::new(),
+                        group_id: None,
+                        execution_mode: None,
+                    },
+                ],
+                edges: vec![WorkGraphEdge {
+                    id: "done".to_string(),
+                    from: "build".to_string(),
+                    to: "goal".to_string(),
+                    label: None,
+                    condition: WorkGraphEdgeCondition::Always,
+                    kind: WorkGraphEdgeKind::Dependency,
+                    retry_limit: None,
+                }],
+                groups: Vec::new(),
+            },
+            nodes: std::collections::BTreeMap::from([
+                (
+                    "build".to_string(),
+                    GraphNodeRunState {
+                        node_id: "build".to_string(),
+                        status: GraphNodeRunStatus::Queued,
+                        attempt: 0,
+                        attempts: Vec::new(),
+                        output: None,
+                        error: None,
+                        question: None,
+                        verdict: None,
+                        started_at: None,
+                        completed_at: None,
+                    },
+                ),
+                (
+                    "goal".to_string(),
+                    GraphNodeRunState {
+                        node_id: "goal".to_string(),
+                        status: GraphNodeRunStatus::Queued,
+                        attempt: 0,
+                        attempts: Vec::new(),
+                        output: None,
+                        error: None,
+                        question: None,
+                        verdict: None,
+                        started_at: None,
+                        completed_at: None,
+                    },
+                ),
+            ]),
+            edges: std::collections::BTreeMap::from([(
+                "done".to_string(),
+                GraphEdgeRunState {
+                    edge_id: "done".to_string(),
+                    active: false,
+                    traversed: false,
+                    retry_count: 0,
+                },
+            )]),
+            started_at: now,
+            updated_at: now,
+            completed_at: None,
+            error: None,
+            final_output: None,
+        }
+    }
+
+    #[test]
+    fn graph_run_state_round_trips_atomically() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let session_id = Uuid::new_v4();
+        let run = persistence_test_graph_run(session_id);
+
+        let saved = save_graph_run_state_to_dir(dir.path(), run.clone()).expect("save graph run");
+        let loaded = load_graph_run_state_from_dir(dir.path(), &session_id.to_string())
+            .expect("load graph run")
+            .expect("graph run exists");
+
+        assert_eq!(saved, run);
+        assert_eq!(loaded, run);
+        assert!(!graph_run_path_for_data_dir(dir.path(), &session_id)
+            .with_extension("json.tmp")
+            .exists());
+    }
+
+    #[test]
+    fn graph_run_update_rejects_a_stale_human_revision() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let session_id = Uuid::new_v4();
+        let run = persistence_test_graph_run(session_id);
+        let run_id = run.run_id.clone();
+        save_graph_run_state_to_dir(dir.path(), run).expect("save graph run");
+
+        let error =
+            update_graph_run_state_in_dir(dir.path(), &session_id.to_string(), &run_id, 0, |_| {
+                Ok(())
+            })
+            .expect_err("stale revision is rejected");
+
+        assert!(error.to_string().contains("expected revision 0"));
+        let loaded = load_graph_run_state_from_dir(dir.path(), &session_id.to_string())
+            .expect("load graph run")
+            .expect("graph run exists");
+        assert_eq!(loaded.revision, 1);
     }
 
     #[test]

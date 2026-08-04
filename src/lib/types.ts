@@ -175,8 +175,9 @@ export interface SessionGraphViewport {
 }
 
 export interface SessionGraphCanvas {
-  version: 1;
+  version: 1 | 2;
   node_positions: Record<string, SessionGraphNodePosition>;
+  group_positions?: Record<string, SessionGraphNodePosition>;
   viewport?: SessionGraphViewport | null;
 }
 
@@ -187,6 +188,78 @@ export interface SessionGraph {
   definition: WorkGraph;
   canvas: SessionGraphCanvas;
   revision: number;
+}
+
+export type GraphRunStatus =
+  | "running"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type GraphNodeRunStatus =
+  | "queued"
+  | "working"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+
+export type GraphNodeVerdict =
+  | "pass"
+  | "fail"
+  | "approved"
+  | "rejected";
+
+export interface GraphNodeRunAttempt {
+  attempt: number;
+  status: GraphNodeRunStatus;
+  output?: string | null;
+  error?: string | null;
+  critique?: string | null;
+  verdict?: GraphNodeVerdict | null;
+  started_at: string;
+  completed_at?: string | null;
+}
+
+export interface GraphNodeRunState {
+  node_id: string;
+  status: GraphNodeRunStatus;
+  attempt: number;
+  attempts?: GraphNodeRunAttempt[];
+  output?: string | null;
+  error?: string | null;
+  question?: string | null;
+  verdict?: GraphNodeVerdict | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface GraphEdgeRunState {
+  edge_id: string;
+  active: boolean;
+  traversed: boolean;
+  retry_count: number;
+}
+
+export interface GraphRunState {
+  schema_version: 1;
+  session_id: string;
+  run_id: string;
+  revision: number;
+  graph_revision: number;
+  objective: string;
+  agent: SessionGraphAgent;
+  status: GraphRunStatus;
+  definition: WorkGraph;
+  nodes: Record<string, GraphNodeRunState>;
+  edges: Record<string, GraphEdgeRunState>;
+  started_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+  error?: string | null;
+  final_output?: string | null;
 }
 
 export type SessionAgentDetection = Record<SessionAgentProvider, string | null>;

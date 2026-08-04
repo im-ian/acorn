@@ -17,6 +17,8 @@ import type {
   GenerateSessionTitleResult,
   GeneratedCommitMessage,
   GoalAgentCapabilities,
+  GraphNodeVerdict,
+  GraphRunState,
   IssueDetailListing,
   IssueListing,
   IssueStateFilter,
@@ -309,8 +311,39 @@ export const api = {
   runGoalSession(sessionId: string): Promise<ChatSessionState> {
     return invoke<ChatSessionState>("run_goal_session", { sessionId });
   },
-  runGraphSession(sessionId: string): Promise<ChatSessionState> {
-    return invoke<ChatSessionState>("run_graph_session", { sessionId });
+  loadGraphRunState(sessionId: string): Promise<GraphRunState | null> {
+    return invoke<GraphRunState | null>("load_graph_run_state", { sessionId });
+  },
+  runGraphSession(sessionId: string): Promise<GraphRunState> {
+    return invoke<GraphRunState>("run_graph_session", { sessionId });
+  },
+  submitGraphNodeInput(
+    sessionId: string,
+    runId: string,
+    nodeId: string,
+    input: string,
+    verdict: GraphNodeVerdict | undefined,
+    expectedRevision: number,
+  ): Promise<GraphRunState> {
+    return invoke<GraphRunState>("submit_graph_node_input", {
+      sessionId,
+      runId,
+      nodeId,
+      input,
+      verdict,
+      expectedRevision,
+    });
+  },
+  cancelGraphRun(
+    sessionId: string,
+    runId: string,
+    expectedRevision: number,
+  ): Promise<GraphRunState> {
+    return invoke<GraphRunState>("cancel_graph_run", {
+      sessionId,
+      runId,
+      expectedRevision,
+    });
   },
   sendChatMessage(
     sessionId: string,
