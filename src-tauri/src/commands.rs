@@ -3804,11 +3804,14 @@ pub async fn list_unscoped_agent_history(
     state: State<'_, AppState>,
     limit: Option<usize>,
 ) -> AppResult<Vec<AgentHistoryItem>> {
+    // Unscoped history is everything *outside* the known projects, so the list
+    // has to name every root a project spans. Miss a source folder and its
+    // transcripts show up here as if they belonged to no project at all.
     let project_paths = state
         .projects
         .list()
         .into_iter()
-        .map(|project| PathBuf::from(project.repo_path))
+        .flat_map(|project| project.roots())
         .collect();
     run_blocking("list_unscoped_agent_history", move || {
         agent_history::list_unscoped_agent_history(project_paths, limit)
@@ -6229,11 +6232,17 @@ pub async fn remove_project(
         }
     }
     app_state.projects.remove(roots.first().unwrap_or(&path));
-    let drop_settings = remove_settings.unwrap_or(false)
-        || project_settings::should_remove_on_project_close(&path).unwrap_or(false);
-    if drop_settings {
-        if let Err(err) = project_settings::remove(&path) {
-            tracing::warn!(error = %err, path = %path.display(), "failed to remove project settings");
+    // Settings are keyed per repository, so a multi-root project has one record
+    // per root. Closing it has to clear all of them or the source folders keep
+    // a record nothing points at any more.
+    for root in &roots {
+        let drop_settings = remove_settings.unwrap_or(false)
+            || project_settings::should_remove_on_project_close(root).unwrap_or(false);
+        if !drop_settings {
+            continue;
+        }
+        if let Err(err) = project_settings::remove(root) {
+            tracing::warn!(error = %err, path = %root.display(), "failed to remove project settings");
         }
     }
     persist(&app_state);
