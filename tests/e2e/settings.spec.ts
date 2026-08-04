@@ -1,4 +1,11 @@
-import { test, expect, pressHotkey } from "./support";
+import {
+  test,
+  expect,
+  pressHotkey,
+  COMPACT_VIEWPORTS,
+  expectFullyInViewport,
+  modalShell,
+} from "./support";
 
 const SETTINGS_DIALOG_NAME = /^(Settings|설정)$/;
 
@@ -781,4 +788,36 @@ test.describe("settings modal", () => {
       )
       .toBe(1);
   });
+});
+
+test.describe("settings modal: compact height", () => {
+  for (const viewport of COMPACT_VIEWPORTS) {
+    test(`keeps the shell and the reset action on screen at ${viewport.width}x${viewport.height}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ ...viewport });
+      await page.goto("/");
+      await pressHotkey(page, { mod: true, key: "," });
+
+      const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+      await expect(modal).toBeVisible();
+      await expectFullyInViewport(page, modalShell(modal));
+      await expectFullyInViewport(
+        page,
+        modal.getByRole("button", {
+          name: /^(Reset to defaults|기본값으로 재설정)$/,
+        }),
+      );
+
+      // #31: the body must not resize as tabs change, even once compact-height
+      // bounding is in play.
+      const shellHeight = async () =>
+        (await modalShell(modal).boundingBox())?.height ?? 0;
+      const before = await shellHeight();
+      await modal
+        .getByRole("button", { name: /^(Terminal|터미널)$/ })
+        .click();
+      expect(await shellHeight()).toBe(before);
+    });
+  }
 });

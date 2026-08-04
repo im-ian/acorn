@@ -31,11 +31,18 @@ const SIZE_CLASS: Record<ModalSize, string> = {
   "5xl": "max-w-5xl",
 };
 
-const BACKDROP_DIALOG = "flex items-start justify-center px-4 pt-24";
+// Dialogs hang from a 96 px top offset on roomy windows. A short webview
+// (~600 px tall) has no room for that plus a fixed-height shell, so below
+// 720 px the offset collapses. `max-h-full` then bounds every dialog to the
+// visible viewport — call sites that lay themselves out as a flex column keep
+// their header/footer fixed and scroll only their body, and the rest fall back
+// to scrolling the shell instead of hanging off the bottom of the webview.
+const BACKDROP_DIALOG =
+  "flex items-start justify-center px-4 pb-6 pt-24 [@media(max-height:720px)]:pt-6";
 const BACKDROP_PANEL = "flex flex-col px-4 py-6";
 
 const CONTENT_DIALOG =
-  "w-full overflow-hidden rounded-2xl border border-border bg-bg-elevated shadow-2xl";
+  "max-h-full w-full overflow-auto rounded-2xl border border-border bg-bg-elevated shadow-2xl";
 const CONTENT_PANEL =
   "mx-auto flex h-full w-full flex-col overflow-hidden rounded-lg border border-border bg-bg shadow-2xl";
 

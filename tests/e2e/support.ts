@@ -1,4 +1,9 @@
-import { test as base, expect, type Page } from "@playwright/test";
+import {
+  test as base,
+  expect,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import { tauriMockSource } from "./fixtures/tauriMock";
 
 type InvokeHandler = (args: unknown) => unknown | Promise<unknown>;
@@ -236,5 +241,38 @@ export async function seedSettingsLanguage(
   );
 }
 
+/** Viewports short enough to expose dialog shells that ignore the window height. */
+export const COMPACT_VIEWPORTS = [
+  { width: 1024, height: 600 },
+  { width: 800, height: 600 },
+] as const;
+
+/**
+ * The `role="dialog"` node is the full-viewport backdrop, so measuring it says
+ * nothing about the dialog itself. This returns the shell inside it.
+ */
+export function modalShell(dialog: Locator): Locator {
+  return dialog.locator("> div").first();
+}
+
+/**
+ * Assert an element is fully painted inside the webview. Compact-height
+ * windows used to push dialog shells (and their footers) below the bottom
+ * edge, where nothing could scroll them back into reach.
+ */
+export async function expectFullyInViewport(
+  page: Page,
+  locator: Locator,
+): Promise<void> {
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("Test needs an explicit viewport size");
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("Element must be visible to be measured");
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+}
+
 export { expect };
-export type { Page };
+export type { Locator, Page };

@@ -4109,7 +4109,7 @@ function WorkflowRunDetailModal({
       onClose={onClose}
       variant="dialog"
       size="2xl"
-      className="flex h-[36rem] flex-col"
+      className="flex h-[36rem] flex-col overflow-hidden"
     >
       {showSkeleton ? (
         <WorkflowRunDetailSkeleton onClose={onClose} />
