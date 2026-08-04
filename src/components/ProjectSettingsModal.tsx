@@ -34,6 +34,7 @@ import {
 } from "./ui";
 
 const PROMPT_MAX_CHARS = 2_000;
+const NAME_MAX_CHARS = 120;
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 export type ProjectSettingsTab =
@@ -165,6 +166,9 @@ export function ProjectSettingsModal({
       ? [project.repoPath]
       : [];
   const projectRootsKey = projectRoots.join("\u0000");
+  const projectName = projectEntry?.name ?? project?.name ?? "";
+  const renameProject = useAppStore((s) => s.renameProject);
+  const [name, setName] = useState(projectName);
   const [tab, setTab] = useState<ProjectSettingsTab>(initialTab);
   const [settings, setSettings] = useState<ProjectSettings>(() =>
     defaultProjectSettings(),
@@ -223,6 +227,10 @@ export function ProjectSettingsModal({
   useEffect(() => {
     setTab(initialTab);
   }, [initialTab, project?.repoPath]);
+
+  useEffect(() => {
+    setName(projectName);
+  }, [project?.repoPath, projectName]);
 
   useEffect(() => {
     if (!project) {
@@ -309,6 +317,17 @@ export function ProjectSettingsModal({
     setSaving(true);
     setError(null);
     try {
+      const trimmed = name.trim();
+      if (trimmed && trimmed !== projectName) {
+        const renamed = await renameProject(project.repoPath, trimmed);
+        if (!renamed) {
+          const message = useAppStore.getState().consumeError();
+          setError(
+            `${dt(t, "dialogs.projectSettings.renameFailed")} ${message ?? ""}`.trim(),
+          );
+          return;
+        }
+      }
       const record = await api.updateProjectSettings(
         project.repoPath,
         settings,
@@ -408,6 +427,16 @@ export function ProjectSettingsModal({
                   title={dt(t, "dialogs.projectSettings.general")}
                   description={dt(t, "dialogs.projectSettings.generalHint")}
                 >
+                  <Field label={dt(t, "dialogs.projectSettings.name")}>
+                    <input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      disabled={loading || saving}
+                      maxLength={NAME_MAX_CHARS}
+                      placeholder={projectName}
+                      className="w-full rounded-md border border-input-border bg-input px-2 py-1.5 text-xs text-fg outline-none transition focus:border-accent focus:bg-input-hover disabled:opacity-60"
+                    />
+                  </Field>
                   <div className="space-y-1 rounded-md border border-border bg-bg px-3 py-2">
                     <p className="break-all font-mono text-[11px] text-fg-muted">
                       {project.repoPath}

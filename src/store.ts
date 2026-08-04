@@ -549,6 +549,7 @@ interface AppStateModel {
     removeWorktrees?: boolean,
     removeSettings?: boolean,
   ) => Promise<WorktreeRemoval[]>;
+  renameProject: (repoPath: string, name: string) => Promise<boolean>;
   addProjectSource: (repoPath: string, title?: string) => Promise<boolean>;
   /** Apply the pending merge: move the folder into the project that asked. */
   confirmSourceMerge: () => Promise<boolean>;
@@ -3319,6 +3320,18 @@ export const useAppStore = create<AppStateModel>()(
     } catch (e) {
       set({ error: errorMessage(e) });
       return null;
+    }
+  },
+
+  async renameProject(repoPath, name) {
+    try {
+      await api.renameProject(repoPath, name);
+      await get().refreshProjects();
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
     }
   },
 

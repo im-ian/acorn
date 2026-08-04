@@ -1977,6 +1977,8 @@
       },
       "general": "General",
       "generalHint": "Project identity and persistence behavior.",
+      "name": "Project name",
+      "renameFailed": "Failed to rename project:",
       "sources": "Source folders",
       "sourcesHint": "Repositories this project spans. Each session stays anchored to the folder it starts in.",
       "primarySource": "Primary",

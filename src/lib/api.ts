@@ -328,6 +328,9 @@ export const api = {
   addProject(title?: string): Promise<Project | null> {
     return invoke<Project | null>("add_project", { title });
   },
+  renameProject(repoPath: string, name: string): Promise<Project> {
+    return invoke<Project>("rename_project", { repoPath, name });
+  },
   addProjectSource(
     repoPath: string,
     title?: string,

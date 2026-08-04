@@ -1977,6 +1977,8 @@
       },
       "general": "常规",
       "generalHint": "项目身份和持久性行为。",
+      "name": "项目名称",
+      "renameFailed": "重命名项目失败：",
       "sources": "源文件夹",
       "sourcesHint": "该项目涵盖的仓库。每个会话都固定在其启动的文件夹中。",
       "primarySource": "默认",

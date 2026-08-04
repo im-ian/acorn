@@ -5561,6 +5561,44 @@ pub struct AddProjectSourceResult {
     pub merge: Option<ProjectSourceMerge>,
 }
 
+/// Colon-joined roots of `repo_path`'s project other than `repo_path` itself,
+/// or `None` when the project spans a single root. Paths containing a colon
+/// are dropped rather than shipped as two broken directories.
+fn sibling_project_roots_env(state: &AppState, repo_path: &Path) -> Option<String> {
+    let roots = state.projects.owner_of_root(repo_path)?.roots();
+    let dirs = roots
+        .into_iter()
+        .filter(|root| root != repo_path)
+        .map(|root| root.display().to_string())
+        .filter(|root| !root.contains(':'))
+        .collect::<Vec<_>>();
+    (!dirs.is_empty()).then(|| dirs.join(":"))
+}
+
+/// Rename a project. Only the sidebar label changes — the repository roots the
+/// project spans, and every session anchored to them, stay put.
+#[tauri::command]
+pub fn rename_project(
+    state: State<'_, AppState>,
+    repo_path: String,
+    name: String,
+) -> AppResult<Project> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::InvalidPath("project name is empty".to_string()));
+    }
+    let project = state
+        .projects
+        .owner_of_root(&PathBuf::from(&repo_path))
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    let updated = state
+        .projects
+        .rename(&project.repo_path, name)
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    persist(&state);
+    Ok(updated)
+}
+
 /// Add another repository root to an existing project. The picked folder is
 /// resolved to its git root, so a project spans whole repositories rather than
 /// arbitrary subdirectories.
@@ -7239,6 +7277,15 @@ fn pty_spawn_blocking<R: Runtime>(
             .or_insert_with(|| wrapper_dir.display().to_string());
     } else {
         tracing::warn!(%id, "agent wrapper dir setup failed; agent hook runtime injection will be inactive");
+    }
+
+    // The other repository roots this session's project spans. The agent
+    // wrappers turn them into `--add-dir` flags so a multi-root project is
+    // one workspace to the agent, not just to the sidebar.
+    if let Some(dirs) = sibling_project_roots_env(&state, &session.repo_path) {
+        effective_env
+            .entry("ACORN_PROJECT_SOURCE_DIRS".to_string())
+            .or_insert(dirs);
     }
 
     // OSC 7 emitter — only zsh needs file-side help (bash/fish self-serve).
@@ -13562,6 +13609,33 @@ mod tests {
                 .owner_of_root(&source)
                 .map(|project| project.repo_path),
             Some(primary),
+        );
+    }
+
+    #[test]
+    fn source_dirs_env_lists_only_the_session_root_siblings() {
+        let state = crate::state::AppState::default();
+        let primary = PathBuf::from("/tmp/acorn-source-env-primary");
+        let source = PathBuf::from("/tmp/acorn-source-env-design");
+        state
+            .projects
+            .ensure(primary.clone(), "primary".to_string());
+
+        assert_eq!(super::sibling_project_roots_env(&state, &primary), None);
+
+        state
+            .projects
+            .set_source_paths(&primary, vec![source.clone()])
+            .expect("project is registered");
+
+        assert_eq!(
+            super::sibling_project_roots_env(&state, &primary),
+            Some(source.display().to_string()),
+        );
+        // A session anchored in the source root sees the primary root instead.
+        assert_eq!(
+            super::sibling_project_roots_env(&state, &source),
+            Some(primary.display().to_string()),
         );
     }
 

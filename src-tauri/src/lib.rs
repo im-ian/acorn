@@ -708,6 +708,7 @@ pub fn run() {
             commands::cancel_chat_message,
             commands::list_projects,
             commands::add_project,
+            commands::rename_project,
             commands::add_project_source,
             commands::merge_project_source,
             commands::remove_project_source,

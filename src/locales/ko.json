@@ -1977,6 +1977,8 @@
       },
       "general": "일반",
       "generalHint": "프로젝트 식별 정보와 설정 유지 동작입니다.",
+      "name": "프로젝트 이름",
+      "renameFailed": "프로젝트 이름 변경 실패:",
       "sources": "소스 폴더",
       "sourcesHint": "이 프로젝트가 다루는 저장소입니다. 각 세션은 시작한 폴더에 고정됩니다.",
       "primarySource": "기본",
