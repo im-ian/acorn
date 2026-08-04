@@ -565,4 +565,57 @@ describe("ProjectSettingsModal", () => {
     );
     expect(mockApi.removeWorktree).not.toHaveBeenCalled();
   });
+
+  it("resolves a source folder path to the project that owns it", async () => {
+    mockApi.getProjectSettings.mockResolvedValue({
+      key: "github:im-ian/acorn",
+      settings: {
+        remember_after_close: false,
+        pull_requests: { generation_prompt: null },
+      },
+    });
+    useAppStore.setState({
+      projects: [
+        {
+          repo_path: "/repo/acorn",
+          name: "Acorn",
+          created_at: "2026-01-01T00:00:00Z",
+          position: 0,
+          source_paths: ["/repo/backoffice"],
+        },
+      ],
+    });
+
+    // The merge dialog opens the modal with a session's own repo path, which
+    // for a session in a source folder is not the project's primary root.
+    await act(async () => {
+      root.render(
+        <ProjectSettingsModal
+          project={{ name: "backoffice", repoPath: "/repo/backoffice" }}
+          onClose={vi.fn()}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const sourcesTab = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Source folders");
+    expect(sourcesTab).toBeDefined();
+    await act(async () => {
+      sourcesTab!.click();
+    });
+
+    // Both roots are listed, with the project's own root marked primary —
+    // not the source folder the modal was opened from.
+    expect(document.body.textContent).toContain("/repo/acorn");
+    expect(document.body.textContent).toContain("/repo/backoffice");
+    const removeSource = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find(
+      (button) =>
+        button.getAttribute("aria-label") === "Remove source folder backoffice",
+    );
+    expect(removeSource).toBeDefined();
+  });
 });
