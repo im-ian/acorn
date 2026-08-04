@@ -262,8 +262,13 @@ impl FsScope {
         let mut roots = Vec::new();
         let mut project_roots = Vec::new();
         for project in state.projects.list() {
-            if let Some(root) = Self::push_root(&mut roots, project.repo_path) {
-                project_roots.push(root);
+            // Every root the project spans, not just the primary one: a source
+            // folder is a real repository root, and its files stay unreadable
+            // without it in scope.
+            for path in project.roots() {
+                if let Some(root) = Self::push_root(&mut roots, path) {
+                    project_roots.push(root);
+                }
             }
         }
         project_roots.sort();
@@ -2052,6 +2057,30 @@ mod tests {
         let roots = scope.roots;
 
         assert!(roots.contains(&repo.path().canonicalize().unwrap()));
+        assert!(roots.contains(&worktree.path().canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn scope_from_state_includes_project_source_roots_and_their_sessions() {
+        let state = AppState::new();
+        let repo = tmpdir();
+        let source = tmpdir();
+        let worktree = tmpdir();
+        state
+            .projects
+            .ensure(repo.path().to_path_buf(), "repo".to_string());
+        state
+            .projects
+            .set_source_paths(repo.path(), vec![source.path().to_path_buf()])
+            .unwrap();
+        state
+            .sessions
+            .insert(test_session(source.path(), worktree.path(), true));
+
+        let scope = FsScope::from_state(&state);
+        let roots = scope.roots;
+
+        assert!(roots.contains(&source.path().canonicalize().unwrap()));
         assert!(roots.contains(&worktree.path().canonicalize().unwrap()));
     }
 
