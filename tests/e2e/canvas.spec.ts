@@ -171,6 +171,8 @@ test.describe("workspace canvas mode", () => {
     await expect(node).toBeVisible();
     await expect(node).toHaveAttribute("data-canvas-node-x", "0");
     await expect(node).toHaveAttribute("data-canvas-node-y", "0");
+    await expect(node).toHaveAttribute("data-canvas-node-width", "620");
+    await expect(node).toHaveAttribute("data-canvas-node-height", "440");
     const calls = await page.evaluate(
       () =>
         (
@@ -202,6 +204,14 @@ test.describe("workspace canvas mode", () => {
       node.locator('[data-acorn-terminal-slot="canvas-created"]'),
     ).toBeAttached();
 
+    const resizeNode = node.getByTestId(
+      "workspace-canvas-node-resize-handle",
+    );
+    await resizeNode.press("Shift+ArrowRight");
+    await resizeNode.press("Shift+ArrowDown");
+    await expect(node).toHaveAttribute("data-canvas-node-width", "660");
+    await expect(node).toHaveAttribute("data-canvas-node-height", "480");
+
     await createButton.click();
     await page
       .getByRole("menuitem", { name: "New chat session", exact: true })
@@ -209,8 +219,10 @@ test.describe("workspace canvas mode", () => {
 
     const chatNode = canvas.locator('[data-canvas-session-id="canvas-chat"]');
     await expect(chatNode).toBeVisible();
-    await expect(chatNode).toHaveAttribute("data-canvas-node-x", "680");
+    await expect(chatNode).toHaveAttribute("data-canvas-node-x", "720");
     await expect(chatNode).toHaveAttribute("data-canvas-node-y", "0");
+    await expect(chatNode).toHaveAttribute("data-canvas-node-width", "660");
+    await expect(chatNode).toHaveAttribute("data-canvas-node-height", "480");
     await expect(
       chatNode.getByRole("textbox", { name: "Chat message" }),
     ).toBeVisible();
@@ -528,6 +540,60 @@ test.describe("workspace canvas mode", () => {
       ]);
   });
 
+  test("matches other session sizes from a canvas node context menu", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [session("alpha"), session("beta")]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Canvas" }).click();
+
+    const canvas = page.getByTestId("workspace-canvas");
+    const alpha = canvas.locator('[data-canvas-session-id="alpha"]');
+    const beta = canvas.locator('[data-canvas-session-id="beta"]');
+    const betaPosition = {
+      x: await beta.getAttribute("data-canvas-node-x"),
+      y: await beta.getAttribute("data-canvas-node-y"),
+    };
+
+    const resizeAlpha = alpha.getByTestId(
+      "workspace-canvas-node-resize-handle",
+    );
+    await resizeAlpha.press("Shift+ArrowRight");
+    await resizeAlpha.press("Shift+ArrowDown");
+    await expect(alpha).toHaveAttribute("data-canvas-node-width", "660");
+    await expect(alpha).toHaveAttribute("data-canvas-node-height", "480");
+
+    await alpha
+      .getByTestId("workspace-canvas-node-drag-handle")
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", {
+        name: "Match other sessions to this size",
+        exact: true,
+      })
+      .click();
+
+    await expect(beta).toHaveAttribute("data-canvas-node-width", "660");
+    await expect(beta).toHaveAttribute("data-canvas-node-height", "480");
+    await expect(beta).toHaveAttribute("data-canvas-node-x", betaPosition.x!);
+    await expect(beta).toHaveAttribute("data-canvas-node-y", betaPosition.y!);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = localStorage.getItem("acorn-workspaces");
+          if (!raw) return null;
+          const beta = JSON.parse(raw).state.workspaces?.["/tmp/demo"]?.canvas
+            ?.nodes?.beta;
+          return beta ? { width: beta.width, height: beta.height } : null;
+        }),
+      )
+      .toEqual({ width: 660, height: 480 });
+  });
+
   test("moves, resizes, zooms, and restores live terminal nodes", async ({
     page,
     tauri,
@@ -738,7 +804,7 @@ test.describe("workspace canvas mode", () => {
     );
 
     await expect(alpha).toHaveAttribute("data-canvas-node-width", "620");
-    await expect(alpha).toHaveAttribute("data-canvas-node-height", "400");
+    await expect(alpha).toHaveAttribute("data-canvas-node-height", "440");
     await expect(alpha).toHaveCSS("z-index", "3");
     await expect(canvas.getByTestId("workspace-canvas-size-hint"))
       .toHaveAttribute("data-canvas-match-width", "true");
@@ -762,7 +828,7 @@ test.describe("workspace canvas mode", () => {
       wholePixelResizeBox.y + wholePixelResizeBox.height / 2 + 20,
     );
     await expect(alpha).toHaveAttribute("data-canvas-node-width", "640");
-    await expect(alpha).toHaveAttribute("data-canvas-node-height", "420");
+    await expect(alpha).toHaveAttribute("data-canvas-node-height", "460");
     await expect(canvas.getByTestId("workspace-canvas-size-hint")).toHaveCount(0);
     await page.mouse.up();
 

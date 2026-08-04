@@ -1028,6 +1028,7 @@
       "contextLayout": "Layout",
       "moveSession": "Move {name}",
       "resizeSession": "Resize {name}",
+      "matchOtherSessionSizes": "Match other sessions to this size",
       "expandSession": "Expand {name}",
       "openInPanes": "Open {name} in panes",
       "closeSession": "Close session",

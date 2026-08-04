@@ -1028,6 +1028,7 @@
       "contextLayout": "레이아웃",
       "moveSession": "{name} 이동",
       "resizeSession": "{name} 크기 조절",
+      "matchOtherSessionSizes": "다른 세션을 이 크기로 맞추기",
       "expandSession": "{name} 크게 보기",
       "openInPanes": "패널에서 {name} 열기",
       "closeSession": "세션 닫기",
