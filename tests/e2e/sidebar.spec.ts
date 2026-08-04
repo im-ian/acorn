@@ -4302,4 +4302,70 @@ test.describe("sidebar: project lifecycle", () => {
       })
       .toBe("manual-order");
   });
+
+  test("a source folder renders as a workspace under its project", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api"],
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "primary-session",
+        name: "primary",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "api-session",
+        name: "api",
+        repo_path: "/tmp/demo-api",
+        worktree_path: "/tmp/demo-api",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+
+    // One project row, not two, even though the sessions live in two repos.
+    await expect(page.getByRole("button", { name: /^Project / })).toHaveCount(1);
+    const sourceWorkspace = page.locator(
+      'aside [data-sidebar-workspace-id="/tmp/demo-api"]',
+    );
+    await expect(sourceWorkspace).toContainText("demo-api");
+    // The source folder's session sits inside its workspace; the primary
+    // root's session stays flat under the project header.
+    await expect(sourceWorkspace).toContainText("api");
+    await expect(sourceWorkspace).not.toContainText("primary");
+  });
 });

@@ -324,4 +324,97 @@ test.describe("project settings", () => {
     )) as unknown[];
     expect(calls).toEqual([]);
   });
+
+  test("lists and removes a project's source folders", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => {
+      const w = window as unknown as {
+        __projects?: Array<Record<string, unknown>>;
+      };
+      w.__projects = w.__projects ?? [
+        {
+          repo_path: "/tmp/acorn",
+          name: "acorn",
+          created_at: "2026-01-01T00:00:00Z",
+          position: 0,
+          source_paths: ["/tmp/acorn-api", "/tmp/acorn-docs"],
+        },
+      ];
+      return w.__projects;
+    });
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-api",
+        name: "api terminal",
+        repo_path: "/tmp/acorn-api",
+        worktree_path: "/tmp/acorn-api",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        title_source: "default",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.handle("remove_project_source", (args) => {
+      const w = window as unknown as {
+        __removeSourceCalls?: unknown[];
+        __projects?: Array<Record<string, unknown>>;
+      };
+      w.__removeSourceCalls = w.__removeSourceCalls ?? [];
+      w.__removeSourceCalls.push(args);
+      const sourcePath = (args as { sourcePath?: string }).sourcePath;
+      w.__projects = (w.__projects ?? []).map((project) => ({
+        ...project,
+        source_paths: ((project.source_paths as string[]) ?? []).filter(
+          (path) => path !== sourcePath,
+        ),
+      }));
+      return w.__projects?.[0];
+    });
+
+    await page.goto("/");
+
+    await page
+      .getByRole("button", { name: "Project acorn" })
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Project Settings" }).click();
+
+    const modal = page.getByRole("dialog", { name: "Project Settings" });
+    await modal.getByRole("button", { name: "Source folders" }).click();
+
+    await expect(
+      modal.getByRole("listitem").filter({ hasText: "/tmp/acorn-api" }),
+    ).toContainText("Used by 1 session");
+    await expect(modal.getByRole("listitem").first()).toContainText("Primary");
+    // The primary root has no remove control; a source folder in use is
+    // blocked, and an unused one can be detached.
+    await expect(
+      modal.getByRole("button", { name: "Remove source folder acorn-api" }),
+    ).toBeDisabled();
+
+    await modal
+      .getByRole("button", { name: "Remove source folder acorn-docs" })
+      .click();
+
+    await expect(
+      modal.getByRole("listitem").filter({ hasText: "/tmp/acorn-docs" }),
+    ).toHaveCount(0);
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __removeSourceCalls?: unknown[] })
+          .__removeSourceCalls,
+    )) as Array<{ repoPath: string; sourcePath: string }>;
+    expect(calls).toEqual([
+      { repoPath: "/tmp/acorn", sourcePath: "/tmp/acorn-docs" },
+    ]);
+  });
 });
