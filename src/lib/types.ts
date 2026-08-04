@@ -1,3 +1,9 @@
+import type {
+  GraphPromptPlan,
+  WorkGraph,
+  WorkGraphGroupDirection,
+} from "./workGraph";
+
 export type SessionStatus =
   | "ready"
   | "working"
@@ -155,6 +161,113 @@ export interface SessionGoal {
   revision: number;
 }
 
+export interface SessionGraphAgent {
+  provider: SessionAgentProvider;
+  model?: string | null;
+  effort?: string | null;
+}
+
+export interface SessionGraphNodePosition {
+  x: number;
+  y: number;
+}
+
+export interface SessionGraphViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export interface SessionGraphCanvas {
+  version: 1 | 2;
+  direction?: WorkGraphGroupDirection;
+  node_positions: Record<string, SessionGraphNodePosition>;
+  locked_node_ids?: string[];
+  group_positions?: Record<string, SessionGraphNodePosition>;
+  viewport?: SessionGraphViewport | null;
+}
+
+export interface SessionGraph {
+  version: 1;
+  objective: string;
+  agent: SessionGraphAgent;
+  definition: WorkGraph;
+  canvas: SessionGraphCanvas;
+  revision: number;
+}
+
+export type GraphRunStatus =
+  | "running"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type GraphNodeRunStatus =
+  | "queued"
+  | "working"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+
+export type GraphNodeVerdict =
+  | "pass"
+  | "fail"
+  | "approved"
+  | "rejected";
+
+export interface GraphNodeRunAttempt {
+  attempt: number;
+  status: GraphNodeRunStatus;
+  output?: string | null;
+  error?: string | null;
+  critique?: string | null;
+  verdict?: GraphNodeVerdict | null;
+  started_at: string;
+  completed_at?: string | null;
+}
+
+export interface GraphNodeRunState {
+  node_id: string;
+  status: GraphNodeRunStatus;
+  attempt: number;
+  attempts?: GraphNodeRunAttempt[];
+  output?: string | null;
+  error?: string | null;
+  question?: string | null;
+  verdict?: GraphNodeVerdict | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface GraphEdgeRunState {
+  edge_id: string;
+  active: boolean;
+  traversed: boolean;
+  retry_count: number;
+}
+
+export interface GraphRunState {
+  schema_version: 1;
+  session_id: string;
+  run_id: string;
+  revision: number;
+  graph_revision: number;
+  objective: string;
+  agent: SessionGraphAgent;
+  status: GraphRunStatus;
+  definition: WorkGraph;
+  nodes: Record<string, GraphNodeRunState>;
+  edges: Record<string, GraphEdgeRunState>;
+  started_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+  error?: string | null;
+  final_output?: string | null;
+}
+
 export type SessionAgentDetection = Record<SessionAgentProvider, string | null>;
 
 export type SessionTitleGenerationStatus =
@@ -257,6 +370,7 @@ export interface Session {
   kind: SessionKind;
   mode?: SessionMode;
   goal?: SessionGoal | null;
+  graph?: SessionGraph | null;
   owner: SessionOwner;
   position: number | null;
   /** Derived backend-side from `worktree_path`'s `.git` being a file (linked
@@ -300,6 +414,7 @@ export interface ChatMessage {
   turn_id?: string | null;
   role: ChatRole;
   content: string;
+  graph_prompt_plan?: GraphPromptPlan | null;
   created_at: string;
   status?: ChatMessageStatus | null;
   metadata?: unknown;

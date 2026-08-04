@@ -727,18 +727,18 @@ export function AutonomousGoalDialog({
             .refreshSessions()
             .catch((refreshError: unknown) => {
               console.error(
-                "failed to refresh completed goal session",
+                "failed to refresh completed Loop session",
                 refreshError,
               );
             });
         },
         async (sendError: unknown) => {
-          console.error("goal session run failed", sendError);
+          console.error("Loop session run failed", sendError);
           try {
             await api.setSessionStatus(sessionId, "errored");
             await useAppStore.getState().refreshSessions();
           } catch (statusError) {
-            console.error("failed to mark goal session as errored", statusError);
+            console.error("failed to mark Loop session as errored", statusError);
           }
           showToast(
             `${t("toasts.autonomousGoal.startFailed")} ${String(sendError)}`,
@@ -848,7 +848,7 @@ export function AutonomousGoalDialog({
           goalSpec,
         );
         if (!updated.goal) {
-          throw new Error("updated goal session did not return its goal");
+          throw new Error("updated Loop session did not return its objective");
         }
         await useAppStore.getState().refreshSessions();
         onClose();
@@ -890,7 +890,7 @@ export function AutonomousGoalDialog({
       showToast(formatToast(t("toasts.autonomousGoal.started"), sessionName));
       runGoalSession(created.id);
     } catch (submitError) {
-      console.error("save goal session failed", submitError);
+      console.error("save Loop session failed", submitError);
       setError(String(submitError));
       setSubmitting(false);
     }

@@ -21,15 +21,18 @@ use crate::pull_requests::{
 };
 use crate::state::{AppState, PendingSessionRemoval};
 use crate::todos::{self, TodoItem};
+use crate::work_graph::{self, GraphPromptPlan};
 use crate::worktree;
 use acorn_agent::AgentKind;
 use acorn_session::scrollback;
 use acorn_session::status as session_status;
 use acorn_session::status::StatusReason as SessionStatusReason;
 use acorn_session::{
-    AgentStatusSource, Project, Session, SessionAgentProvider, SessionGoal,
-    SessionGoalModelSelection, SessionGoalProgress, SessionGoalRunState, SessionGoalStage,
-    SessionGoalStagePolicy, SessionKind, SessionMode, SessionOwner, SessionStatus,
+    AgentStatusSource, GraphNodeVerdict, GraphRunState, Project, Session, SessionAgentProvider,
+    SessionGoal, SessionGoalModelSelection, SessionGoalProgress, SessionGoalRunState,
+    SessionGoalStage, SessionGoalStagePolicy, SessionGraph, SessionGraphNodePosition, SessionKind,
+    SessionMode, SessionOwner, SessionStatus, WorkGraphExecutionMode, WorkGraphGroupDirection,
+    WorkGraphNodeKind, SESSION_GRAPH_CANVAS_VERSION, SESSION_GRAPH_VERSION,
 };
 use acorn_transcript::{assistant_message_text, collapse_preview};
 
@@ -542,6 +545,16 @@ fn authorize_chat_session(state: &AppState, session_id: &str) -> AppResult<Sessi
         )));
     }
     Ok(session)
+}
+
+fn reject_system_managed_graph_transcript_mutation(session: &Session) -> AppResult<()> {
+    if session.graph.is_some() {
+        return Err(AppError::Other(
+            "Graph run history is managed by the saved graph; edit the design or start a new run"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn chat_provider_label(ai: &crate::ai::AiExecutionRequest) -> &'static str {
@@ -2242,6 +2255,49 @@ struct CliChatProviderAdapter {
     cancellation: Option<crate::chat_runs::ChatCancellation>,
 }
 
+#[derive(Clone)]
+struct CliGraphNodeExecutor {
+    ai: crate::ai::AiExecutionRequest,
+    cwd: PathBuf,
+}
+
+impl crate::graph_runs::GraphNodeExecutor for CliGraphNodeExecutor {
+    fn execute(
+        &self,
+        execution: crate::graph_runs::GraphNodeExecution,
+        cancellation: crate::chat_runs::ChatCancellation,
+    ) -> AppResult<String> {
+        // Every graph node is deliberately a fresh provider invocation. In
+        // particular, no ProviderThread or compiled chat history is supplied:
+        // direct incoming artifacts are already sealed into the node prompt.
+        let adapter = CliChatProviderAdapter {
+            ai: self.ai.clone(),
+            cwd: self.cwd.clone(),
+            cancellation: Some(cancellation),
+        };
+        let response = adapter.send_message(ChatProviderInput {
+            thread: None,
+            message: persistence::ChatMessage {
+                id: format!(
+                    "graph:{}:{}:{}",
+                    execution.run_id, execution.node_id, execution.attempt
+                ),
+                session_id: None,
+                turn_id: None,
+                role: persistence::ChatRole::User,
+                content: execution.prompt,
+                graph_prompt_plan: None,
+                created_at: chrono::Utc::now(),
+                status: Some(persistence::ChatMessageStatus::Complete),
+                metadata: None,
+            },
+            context: None,
+            model: self.ai.model.clone(),
+        })?;
+        Ok(response.content)
+    }
+}
+
 impl ChatProviderAdapter for CliChatProviderAdapter {
     fn capabilities(&self) -> ChatProviderCapabilities {
         ChatProviderCapabilities {
@@ -2539,20 +2595,38 @@ pub(crate) fn build_chat_execution_context(
     current_user_message_id: &str,
     options: ChatContextOptions,
 ) -> AppResult<CompiledContext> {
-    if !state
+    build_chat_execution_context_with_current_content(state, current_user_message_id, None, options)
+}
+
+fn build_chat_execution_context_with_current_content(
+    state: &persistence::ChatSessionState,
+    current_user_message_id: &str,
+    current_execution_content: Option<&str>,
+    options: ChatContextOptions,
+) -> AppResult<CompiledContext> {
+    let current_index = state
         .messages
         .iter()
-        .any(|message| message.id == current_user_message_id)
-    {
-        return Err(AppError::Other(format!(
-            "current user message not found: {current_user_message_id}"
-        )));
-    }
+        .position(|message| message.id == current_user_message_id)
+        .ok_or_else(|| {
+            AppError::Other(format!(
+                "current user message not found: {current_user_message_id}"
+            ))
+        })?;
 
     let total_message_chars: usize = state
         .messages
         .iter()
-        .map(|message| message.content.chars().count())
+        .map(|message| {
+            if message.id == current_user_message_id {
+                current_execution_content
+                    .unwrap_or(&message.content)
+                    .chars()
+                    .count()
+            } else {
+                message.content.chars().count()
+            }
+        })
         .sum();
     let recent_limit = if total_message_chars <= options.summary_threshold_chars {
         state.messages.len().max(1)
@@ -2560,88 +2634,99 @@ pub(crate) fn build_chat_execution_context(
         options.recent_message_limit.max(1)
     };
 
-    let mut selected = Vec::new();
-    let mut selected_chars = 0usize;
-    for message in state.messages.iter().rev() {
-        let message_chars = message.content.chars().count();
-        let must_include = message.id == current_user_message_id;
-        let would_exceed_limit = selected.len() >= recent_limit
-            || (selected_chars + message_chars > options.max_context_chars && !selected.is_empty());
-        if !must_include && would_exceed_limit {
-            continue;
+    let current_message = &state.messages[current_index];
+    let current_content = current_execution_content.unwrap_or(&current_message.content);
+    // The current provider instruction is an atomic unit. In particular, a valid
+    // manual graph duplicates its bounded structured contract as JSON and Mermaid,
+    // so it can legitimately exceed the ordinary transcript context budget.
+    let mut remaining_context_chars = options
+        .max_context_chars
+        .saturating_sub(current_content.chars().count());
+
+    let mut memory_sections = Vec::new();
+    if let Some(summary) = state
+        .memory
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        memory_sections.push(format!("Session summary:\n{summary}\n\n"));
+    }
+    if !state.memory.important_decisions.is_empty() {
+        let mut section = String::from("Important decisions:\n");
+        for decision in &state.memory.important_decisions {
+            section.push_str("- ");
+            section.push_str(decision);
+            section.push('\n');
         }
-        selected.push(message);
-        selected_chars += message_chars;
-        if selected.len() >= recent_limit
-            && selected.iter().any(|m| m.id == current_user_message_id)
-        {
-            break;
+        section.push('\n');
+        memory_sections.push(section);
+    }
+    if !state.memory.facts.is_empty() {
+        let mut section = String::from("Facts:\n");
+        for fact in &state.memory.facts {
+            section.push_str("- ");
+            section.push_str(fact);
+            section.push('\n');
+        }
+        section.push('\n');
+        memory_sections.push(section);
+    }
+
+    let mut included_memory_sections = Vec::new();
+    for section in memory_sections {
+        let section_chars = section.chars().count();
+        if section_chars <= remaining_context_chars {
+            remaining_context_chars -= section_chars;
+            included_memory_sections.push(section);
         }
     }
-    selected.reverse();
+
+    let mut selected_indices = vec![current_index];
+    for (index, message) in state.messages.iter().enumerate().rev() {
+        if index == current_index || selected_indices.len() >= recent_limit {
+            continue;
+        }
+        let message_chars = message.content.chars().count();
+        if message_chars > remaining_context_chars {
+            continue;
+        }
+        remaining_context_chars -= message_chars;
+        selected_indices.push(index);
+    }
+    selected_indices.sort_unstable();
 
     let mut prompt = String::from(
         "You are responding inside Acorn native chat mode.\n\
 Use the compact execution context below. Acorn owns the visible transcript; \
 provider-native hidden state is only available when a provider thread is supplied.\n\n",
     );
-    if let Some(summary) = state
-        .memory
-        .summary
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        prompt.push_str("Session summary:\n");
-        prompt.push_str(summary);
-        prompt.push_str("\n\n");
-    }
-    if !state.memory.important_decisions.is_empty() {
-        prompt.push_str("Important decisions:\n");
-        for decision in &state.memory.important_decisions {
-            prompt.push_str("- ");
-            prompt.push_str(decision);
-            prompt.push('\n');
-        }
-        prompt.push('\n');
-    }
-    if !state.memory.facts.is_empty() {
-        prompt.push_str("Facts:\n");
-        for fact in &state.memory.facts {
-            prompt.push_str("- ");
-            prompt.push_str(fact);
-            prompt.push('\n');
-        }
-        prompt.push('\n');
+    for section in &included_memory_sections {
+        prompt.push_str(section);
     }
     prompt.push_str("Recent messages:\n");
     let mut included_message_ids = Vec::new();
-    for message in selected {
+    for index in selected_indices {
+        let message = &state.messages[index];
         included_message_ids.push(message.id.clone());
         prompt.push_str(chat_role_label(message.role));
         prompt.push_str(" [");
         prompt.push_str(&message.id);
         prompt.push_str("]:\n");
-        prompt.push_str(&message.content);
+        if message.id == current_user_message_id {
+            prompt.push_str(current_execution_content.unwrap_or(&message.content));
+        } else {
+            prompt.push_str(&message.content);
+        }
         prompt.push_str("\n\n");
-    }
-
-    if prompt.chars().count() > options.max_context_chars {
-        let keep_from = prompt
-            .char_indices()
-            .nth(prompt.chars().count() - options.max_context_chars)
-            .map(|(idx, _)| idx)
-            .unwrap_or(0);
-        prompt = format!(
-            "You are responding inside Acorn native chat mode.\n\
-The compact context was truncated to fit the execution budget.\n\n{}",
-            &prompt[keep_from..]
-        );
     }
 
     Ok(CompiledContext {
         included_message_ids,
-        summary_id: state.memory.through_message_id.clone(),
+        summary_id: (!included_memory_sections.is_empty())
+            .then(|| state.memory.through_message_id.clone())
+            .flatten(),
         prompt,
     })
 }
@@ -2731,6 +2816,7 @@ enum ChatTurnFinish {
 struct ChatRetryBranch {
     state: persistence::ChatSessionState,
     content: String,
+    graph_prompt_plan: Option<GraphPromptPlan>,
 }
 
 fn start_chat_turn(
@@ -2738,6 +2824,8 @@ fn start_chat_turn(
     session: Option<&Session>,
     ai: &crate::ai::AiExecutionRequest,
     content: String,
+    provider_content: String,
+    graph_prompt_plan: Option<GraphPromptPlan>,
     capabilities: ChatProviderCapabilities,
     options: ChatContextOptions,
 ) -> AppResult<StartedChatTurn> {
@@ -2745,6 +2833,12 @@ fn start_chat_turn(
     if content.is_empty() {
         return Err(AppError::Other(
             "chat message must not be empty".to_string(),
+        ));
+    }
+    let provider_content = provider_content.trim().to_string();
+    if provider_content.is_empty() {
+        return Err(AppError::Other(
+            "provider chat message must not be empty".to_string(),
         ));
     }
 
@@ -2772,11 +2866,14 @@ fn start_chat_turn(
         turn_id: Some(turn_id.clone()),
         role: persistence::ChatRole::User,
         content,
+        graph_prompt_plan,
         created_at: now,
         status: Some(persistence::ChatMessageStatus::Complete),
         metadata: Some(chat_provider_metadata(&provider)),
     };
     chat_state.messages.push(user_message.clone());
+    let mut execution_user_message = user_message.clone();
+    execution_user_message.content = provider_content.clone();
 
     let thread_index = provider_thread_index(&mut chat_state, &provider, model.as_deref(), now);
     let thread = chat_state.provider_threads[thread_index].clone();
@@ -2786,12 +2883,17 @@ fn start_chat_turn(
         (
             persistence::ContextSnapshotMode::NativeThread,
             None,
-            native_thread_payload(&thread, &user_message),
+            native_thread_payload(&thread, &execution_user_message),
             vec![user_message_id.clone()],
             None,
         )
     } else {
-        let context = build_chat_execution_context(&chat_state, &user_message_id, options)?;
+        let context = build_chat_execution_context_with_current_content(
+            &chat_state,
+            &user_message_id,
+            Some(&provider_content),
+            options,
+        )?;
         let prompt = context.prompt.clone();
         let included = context.included_message_ids.clone();
         let summary_id = context.summary_id.clone();
@@ -2835,6 +2937,7 @@ fn start_chat_turn(
         turn_id: Some(turn_id.clone()),
         role: persistence::ChatRole::Assistant,
         content: String::new(),
+        graph_prompt_plan: None,
         created_at: now,
         status: Some(persistence::ChatMessageStatus::Pending),
         metadata: Some(chat_message_metadata(&provider, &turn_id, mode)),
@@ -2845,7 +2948,7 @@ fn start_chat_turn(
         state: chat_state,
         input: ChatProviderInput {
             thread: Some(thread),
-            message: user_message,
+            message: execution_user_message,
             context,
             model: model.clone(),
         },
@@ -3289,9 +3392,11 @@ fn prepare_chat_retry_branch(
             "chat message must not be empty".to_string(),
         ));
     }
+    let graph_prompt_plan = chat_state.messages[anchor_index].graph_prompt_plan.clone();
     Ok(ChatRetryBranch {
         state: truncate_chat_state_before_message_index(chat_state, anchor_index),
         content,
+        graph_prompt_plan,
     })
 }
 
@@ -3308,22 +3413,189 @@ fn chat_session_status_for_message_status(status: persistence::ChatMessageStatus
 }
 
 fn chat_state_requests_user_input(chat_state: &persistence::ChatSessionState) -> bool {
-    chat_state.messages.last().is_some_and(|message| {
-        message.role == persistence::ChatRole::Assistant
-            && !matches!(
-                message.status,
-                Some(
-                    persistence::ChatMessageStatus::Pending
-                        | persistence::ChatMessageStatus::Streaming
-                        | persistence::ChatMessageStatus::Error
-                        | persistence::ChatMessageStatus::Cancelled
-                )
+    chat_state
+        .messages
+        .last()
+        .is_some_and(assistant_message_requests_user_input)
+}
+
+fn assistant_message_requests_user_input(message: &persistence::ChatMessage) -> bool {
+    assistant_message_has_protocol_line(message, "WAITING:")
+}
+
+fn assistant_message_has_protocol_line(message: &persistence::ChatMessage, prefix: &str) -> bool {
+    message.role == persistence::ChatRole::Assistant
+        && !matches!(
+            message.status,
+            Some(
+                persistence::ChatMessageStatus::Pending
+                    | persistence::ChatMessageStatus::Streaming
+                    | persistence::ChatMessageStatus::Error
+                    | persistence::ChatMessageStatus::Cancelled
             )
-            && message
-                .content
-                .lines()
-                .any(|line| line.trim_start().starts_with("WAITING:"))
-    })
+        )
+        && message
+            .content
+            .lines()
+            .any(|line| line.trim_start().starts_with(prefix))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ActiveGraphWaitingTurn<'a> {
+    waiting_message_index: usize,
+    originating_user: &'a persistence::ChatMessage,
+}
+
+fn legacy_waiting_followup_completed(
+    chat_state: &persistence::ChatSessionState,
+    waiting_message_index: usize,
+) -> bool {
+    chat_state.messages[waiting_message_index + 1..]
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| message.role == persistence::ChatRole::User)
+        .any(|(offset, reply)| {
+            let reply_index = waiting_message_index + 1 + offset;
+            let Some(response) = chat_state.messages[reply_index + 1..]
+                .iter()
+                .find(|message| {
+                    message.role == persistence::ChatRole::Assistant
+                        && reply.turn_id.as_ref().is_none_or(|turn_id| {
+                            message
+                                .turn_id
+                                .as_ref()
+                                .is_some_and(|candidate| candidate == turn_id)
+                        })
+                })
+            else {
+                return false;
+            };
+            matches!(
+                response.status,
+                None | Some(persistence::ChatMessageStatus::Complete)
+            ) && !assistant_message_requests_user_input(response)
+                && !assistant_message_has_protocol_line(response, "FINAL:")
+                && reply.turn_id.as_ref().is_none_or(|turn_id| {
+                    chat_state
+                        .turns
+                        .iter()
+                        .rev()
+                        .find(|turn| &turn.id == turn_id)
+                        .is_none_or(|turn| turn.status == persistence::ChatTurnStatus::Complete)
+                })
+        })
+}
+
+fn active_graph_waiting_turn(
+    chat_state: &persistence::ChatSessionState,
+) -> AppResult<Option<ActiveGraphWaitingTurn<'_>>> {
+    let mut waiting_message_index = None;
+    for (index, message) in chat_state.messages.iter().enumerate().rev() {
+        if assistant_message_has_protocol_line(message, "FINAL:") {
+            return Ok(None);
+        }
+        if assistant_message_requests_user_input(message) {
+            waiting_message_index = Some(index);
+            break;
+        }
+    }
+    let Some(waiting_message_index) = waiting_message_index else {
+        return Ok(None);
+    };
+    let waiting_message = &chat_state.messages[waiting_message_index];
+    let originating_user = chat_state.messages[..waiting_message_index]
+        .iter()
+        .rev()
+        .find(|message| {
+            message.role == persistence::ChatRole::User
+                && waiting_message.turn_id.as_ref().is_none_or(|turn_id| {
+                    message
+                        .turn_id
+                        .as_ref()
+                        .is_some_and(|candidate| candidate == turn_id)
+                })
+        })
+        .ok_or_else(|| {
+            AppError::Other(format!(
+                "active graph WAITING message {} has no associated user turn",
+                waiting_message.id
+            ))
+        })?;
+    if originating_user.graph_prompt_plan.is_none()
+        && legacy_waiting_followup_completed(chat_state, waiting_message_index)
+    {
+        return Ok(None);
+    }
+    Ok(Some(ActiveGraphWaitingTurn {
+        waiting_message_index,
+        originating_user,
+    }))
+}
+
+fn graph_continuation_checkpoint(
+    chat_state: &persistence::ChatSessionState,
+) -> AppResult<Option<String>> {
+    let Some(active) = active_graph_waiting_turn(chat_state)? else {
+        return Ok(None);
+    };
+    let mut checkpoint = String::new();
+    for message in &chat_state.messages[active.waiting_message_index..] {
+        checkpoint.push_str(chat_role_label(message.role));
+        checkpoint.push_str(" [");
+        checkpoint.push_str(&message.id);
+        checkpoint.push_str("]:\n");
+        checkpoint.push_str(&message.content);
+        checkpoint.push_str("\n\n");
+    }
+    Ok(Some(checkpoint))
+}
+
+fn normalize_graph_prompt_plan_for_send(
+    chat_state: &persistence::ChatSessionState,
+    is_loop_session: bool,
+    supplied: Option<GraphPromptPlan>,
+    default_missing_plan: bool,
+) -> AppResult<Option<GraphPromptPlan>> {
+    if is_loop_session {
+        return Ok(None);
+    }
+    if let Some(plan) = supplied.as_ref() {
+        work_graph::validate_prompt_plan(plan).map_err(AppError::Other)?;
+    }
+    let active = active_graph_waiting_turn(chat_state)?;
+    let Some(active) = active else {
+        if supplied
+            .as_ref()
+            .is_some_and(|plan| plan.continuation().is_some())
+        {
+            return Err(AppError::Other(
+                "graph continuation is stale because no active WAITING turn exists".to_string(),
+            ));
+        }
+        return Ok(supplied.or_else(|| default_missing_plan.then(GraphPromptPlan::automatic)));
+    };
+
+    let Some(originating_plan) = active.originating_user.graph_prompt_plan.as_ref() else {
+        if supplied
+            .as_ref()
+            .is_some_and(|plan| plan.continuation().is_some())
+        {
+            return Err(AppError::Other(
+                "cannot attach a graph continuation to a legacy plain WAITING turn".to_string(),
+            ));
+        }
+        return Ok(None);
+    };
+    work_graph::validate_prompt_plan(originating_plan).map_err(AppError::Other)?;
+    if let Some(supplied) = supplied.as_ref() {
+        if supplied.without_continuation() != originating_plan.without_continuation() {
+            return Err(AppError::Other(
+                "graph continuation does not match the plan that produced the active WAITING turn"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(Some(originating_plan.as_continuation()))
 }
 
 fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> SessionStatus {
@@ -3356,7 +3628,9 @@ pub(crate) fn run_chat_turn_for_test(
         state,
         None,
         &ai,
+        content.clone(),
         content,
+        None,
         adapter.capabilities(),
         ChatContextOptions::default(),
     )?;
@@ -4386,6 +4660,7 @@ pub async fn create_session(
     project_scoped: Option<bool>,
     mode: Option<SessionMode>,
     goal: Option<SessionGoal>,
+    graph: Option<SessionGraph>,
 ) -> AppResult<Session> {
     create_session_inner(
         state.inner(),
@@ -4398,6 +4673,7 @@ pub async fn create_session(
         project_scoped.unwrap_or(true),
         mode.unwrap_or_default(),
         goal,
+        graph,
         false,
     )
 }
@@ -4428,6 +4704,7 @@ pub async fn create_session_from_dialog<R: Runtime>(
         project_scoped.unwrap_or(true),
         mode.unwrap_or_default(),
         None,
+        None,
         true,
     )?))
 }
@@ -4443,6 +4720,7 @@ fn create_session_inner(
     project_scoped: bool,
     mode: SessionMode,
     goal: Option<SessionGoal>,
+    graph: Option<SessionGraph>,
     allow_project_registration: bool,
 ) -> AppResult<Session> {
     let goal = goal
@@ -4453,8 +4731,16 @@ fn create_session_inner(
             goal.progress = SessionGoalProgress::initial();
             goal
         });
-    validate_goal_session_creation(
+    let graph = graph
+        .map(normalize_session_graph)
+        .transpose()?
+        .map(|mut graph| {
+            graph.revision = 1;
+            graph
+        });
+    validate_special_session_creation(
         goal.as_ref(),
+        graph.as_ref(),
         isolated,
         kind,
         agent_provider,
@@ -4509,6 +4795,7 @@ fn create_session_inner(
     session.agent_provider = agent_provider;
     session.mode = mode;
     session.goal = goal;
+    session.graph = graph;
     let inserted = state.sessions.insert(session);
     if project_scoped {
         ensure_project_for_root(state, &repo);
@@ -4517,35 +4804,194 @@ fn create_session_inner(
     Ok(enrich_session(inserted))
 }
 
-fn validate_goal_session_creation(
+fn validate_special_session_creation(
     goal: Option<&SessionGoal>,
+    graph: Option<&SessionGraph>,
     isolated: bool,
     kind: SessionKind,
     agent_provider: Option<SessionAgentProvider>,
     project_scoped: bool,
     mode: SessionMode,
 ) -> AppResult<()> {
+    if goal.is_some() && graph.is_some() {
+        return Err(AppError::Other(
+            "a session cannot be both a Loop and Graph session".to_string(),
+        ));
+    }
+    if let Some(graph) = graph {
+        if !isolated || !project_scoped || kind != SessionKind::Regular || mode != SessionMode::Chat
+        {
+            return Err(AppError::Other(
+                "Graph sessions must be isolated regular project chat sessions".to_string(),
+            ));
+        }
+        if agent_provider != Some(graph.agent.provider) {
+            return Err(AppError::Other(
+                "Graph session provider must match the selected agent".to_string(),
+            ));
+        }
+    }
     let Some(goal) = goal else {
         return Ok(());
     };
     if !isolated || !project_scoped || kind != SessionKind::Regular || mode != SessionMode::Chat {
         return Err(AppError::Other(
-            "goal sessions must be isolated regular project chat sessions".to_string(),
+            "Loop sessions must be isolated regular project chat sessions".to_string(),
         ));
     }
     if agent_provider != Some(goal.provider) {
         return Err(AppError::Other(
-            "goal session provider must match the selected agent".to_string(),
+            "Loop session provider must match the selected agent".to_string(),
         ));
     }
     Ok(())
+}
+
+const GRAPH_CANVAS_GRID_SIZE: f64 = 16.0;
+
+fn snap_graph_canvas_coordinate(value: f64) -> f64 {
+    (value / GRAPH_CANVAS_GRID_SIZE).round() * GRAPH_CANVAS_GRID_SIZE
+}
+
+fn normalize_session_graph(mut graph: SessionGraph) -> AppResult<SessionGraph> {
+    if graph.version != SESSION_GRAPH_VERSION {
+        return Err(AppError::Other(format!(
+            "unsupported Graph session version: {}",
+            graph.version
+        )));
+    }
+    graph.objective = graph.objective.trim().to_string();
+    if graph.objective.is_empty() {
+        return Err(AppError::Other(
+            "Graph objective must not be empty".to_string(),
+        ));
+    }
+    graph.agent.model = crate::ai::normalize_optional_model_arg(graph.agent.model.as_deref())?;
+    graph.agent.effort = crate::ai::normalize_effort_arg(graph.agent.effort.as_deref())?;
+    if graph.definition.version == work_graph::WORK_GRAPH_VERSION {
+        graph.definition.execution_mode = WorkGraphExecutionMode::Sequential;
+    }
+    work_graph::validate_work_graph(&graph.definition).map_err(AppError::Other)?;
+    if !matches!(graph.canvas.version, 1 | SESSION_GRAPH_CANVAS_VERSION) {
+        return Err(AppError::Other(format!(
+            "unsupported Graph canvas version: {}",
+            graph.canvas.version
+        )));
+    }
+    let node_ids = graph
+        .definition
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<HashSet<_>>();
+    graph
+        .canvas
+        .node_positions
+        .retain(|node_id, _| node_ids.contains(node_id.as_str()));
+    graph
+        .canvas
+        .locked_node_ids
+        .retain(|node_id| node_ids.contains(node_id.as_str()));
+    let canvas_direction = graph.canvas.direction;
+    let mut executable_index = 0usize;
+    for node in &graph.definition.nodes {
+        let horizontal_fallback = if node.kind == WorkGraphNodeKind::GoalSink {
+            SessionGraphNodePosition { x: 560.0, y: 80.0 }
+        } else {
+            let position = SessionGraphNodePosition {
+                x: 80.0 + (executable_index % 3) as f64 * 256.0,
+                y: 80.0 + (executable_index / 3) as f64 * 176.0,
+            };
+            executable_index += 1;
+            position
+        };
+        let fallback = if canvas_direction == WorkGraphGroupDirection::TopDown {
+            SessionGraphNodePosition {
+                x: horizontal_fallback.y,
+                y: horizontal_fallback.x,
+            }
+        } else {
+            horizontal_fallback
+        };
+        let position = graph
+            .canvas
+            .node_positions
+            .entry(node.id.clone())
+            .or_insert(fallback);
+        if !position.x.is_finite() || !position.y.is_finite() {
+            return Err(AppError::Other(format!(
+                "Graph node {} has a non-finite canvas position",
+                node.id
+            )));
+        }
+        position.x = snap_graph_canvas_coordinate(position.x.clamp(-100_000.0, 100_000.0));
+        position.y = snap_graph_canvas_coordinate(position.y.clamp(-100_000.0, 100_000.0));
+    }
+    let group_ids = graph
+        .definition
+        .groups
+        .iter()
+        .map(|group| group.id.as_str())
+        .collect::<HashSet<_>>();
+    graph
+        .canvas
+        .group_positions
+        .retain(|group_id, _| group_ids.contains(group_id.as_str()));
+    for (index, group) in graph.definition.groups.iter().enumerate() {
+        let position = graph
+            .canvas
+            .group_positions
+            .entry(group.id.clone())
+            .or_insert(SessionGraphNodePosition {
+                x: 80.0,
+                y: 80.0 + index as f64 * 240.0,
+            });
+        if !position.x.is_finite() || !position.y.is_finite() {
+            return Err(AppError::Other(format!(
+                "Graph group {} has a non-finite canvas position",
+                group.id
+            )));
+        }
+        position.x = snap_graph_canvas_coordinate(position.x.clamp(-100_000.0, 100_000.0));
+        position.y = snap_graph_canvas_coordinate(position.y.clamp(-100_000.0, 100_000.0));
+    }
+    if let Some(viewport) = graph.canvas.viewport.as_mut() {
+        if !viewport.x.is_finite() || !viewport.y.is_finite() || !viewport.zoom.is_finite() {
+            return Err(AppError::Other(
+                "Graph canvas viewport must contain finite values".to_string(),
+            ));
+        }
+        viewport.x = viewport.x.clamp(-100_000.0, 100_000.0);
+        viewport.y = viewport.y.clamp(-100_000.0, 100_000.0);
+        viewport.zoom = viewport.zoom.clamp(0.1, 4.0);
+    }
+    if graph.revision == 0 {
+        graph.revision = 1;
+    }
+    Ok(graph)
+}
+
+fn normalized_graph_for_session(session: &Session) -> AppResult<Option<SessionGraph>> {
+    let Some(graph) = session.graph.clone() else {
+        return Ok(None);
+    };
+    validate_special_session_creation(
+        session.goal.as_ref(),
+        Some(&graph),
+        session.isolated,
+        session.kind,
+        session.agent_provider,
+        session.project_scoped,
+        session.mode,
+    )?;
+    normalize_session_graph(graph).map(Some)
 }
 
 fn normalize_session_goal(mut goal: SessionGoal) -> AppResult<SessionGoal> {
     goal.objective = goal.objective.trim().to_string();
     if goal.objective.is_empty() {
         return Err(AppError::Other(
-            "goal objective must not be empty".to_string(),
+            "Loop objective must not be empty".to_string(),
         ));
     }
     if !matches!(
@@ -4553,7 +4999,7 @@ fn normalize_session_goal(mut goal: SessionGoal) -> AppResult<SessionGoal> {
         SessionAgentProvider::Claude | SessionAgentProvider::Codex
     ) {
         return Err(AppError::Other(
-            "goal sessions support only Claude or Codex".to_string(),
+            "Loop sessions support only Claude or Codex".to_string(),
         ));
     }
     goal.completion_criteria = normalize_optional_goal_text(goal.completion_criteria);
@@ -4563,7 +5009,7 @@ fn normalize_session_goal(mut goal: SessionGoal) -> AppResult<SessionGoal> {
     goal.preset.name = goal.preset.name.trim().to_string();
     if goal.preset.id.is_empty() || goal.preset.name.is_empty() {
         return Err(AppError::Other(
-            "goal preset id and name must not be empty".to_string(),
+            "Loop preset id and name must not be empty".to_string(),
         ));
     }
     if goal.revision == 0 {
@@ -4586,6 +5032,16 @@ fn goal_ai_provider(provider: SessionAgentProvider) -> crate::ai::AiProvider {
         SessionAgentProvider::Codex => crate::ai::AiProvider::Codex,
         SessionAgentProvider::Antigravity => crate::ai::AiProvider::Antigravity,
         SessionAgentProvider::Grok => crate::ai::AiProvider::Grok,
+    }
+}
+
+fn graph_ai_request(graph: &SessionGraph) -> crate::ai::AiExecutionRequest {
+    crate::ai::AiExecutionRequest {
+        provider: goal_ai_provider(graph.agent.provider),
+        model: graph.agent.model.clone(),
+        effort: graph.agent.effort.clone(),
+        ollama_model: None,
+        llm_model: None,
     }
 }
 
@@ -4661,6 +5117,7 @@ pub async fn save_chat_session_state(
     mut chat_state: persistence::ChatSessionState,
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &chat_state.session_id)?;
+    reject_system_managed_graph_transcript_mutation(&session)?;
     chat_state.session_id = session.id.to_string();
     apply_acorn_session_metadata(&mut chat_state, &session);
     run_blocking("save chat session state", move || {
@@ -4676,6 +5133,7 @@ pub async fn append_chat_message(
     message: persistence::ChatMessage,
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
+    reject_system_managed_graph_transcript_mutation(&session)?;
     let session_id = session.id.to_string();
     run_blocking("append chat message", move || {
         persistence::append_chat_message(&session_id, message)
@@ -4691,6 +5149,7 @@ pub async fn update_chat_message(
     patch: persistence::ChatMessagePatch,
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
+    reject_system_managed_graph_transcript_mutation(&session)?;
     let session_id = session.id.to_string();
     run_blocking("update chat message", move || {
         persistence::update_chat_message(&session_id, &message_id, patch)
@@ -4774,7 +5233,7 @@ fn goal_stage_instruction(stage: SessionGoalStage) -> &'static str {
             "Interpret the requested outcome, success criteria, constraints, and important assumptions. Inspect the repository and produce a concrete implementation and verification plan. Do not implement changes during this stage."
         }
         SessionGoalStage::Implementation => {
-            "Implement the approved/current plan in the worktree. Keep the work scoped to the durable goal and preserve unrelated user changes."
+            "Implement the approved/current plan in the worktree. Keep the work scoped to the durable objective and preserve unrelated user changes."
         }
         SessionGoalStage::Validation => {
             "Run the relevant tests and checks, inspect the resulting behavior, and report concrete failures. Leave non-trivial repairs for the Automatic fixes stage."
@@ -4783,13 +5242,13 @@ fn goal_stage_instruction(stage: SessionGoalStage) -> &'static str {
             "Repair failures found by validation and rerun the relevant checks. If two consecutive repair attempts make no meaningful progress, stop and request input with WAITING: instead of looping."
         }
         SessionGoalStage::SelfReview => {
-            "Review the complete diff and behavior for correctness, regressions, edge cases, and goal drift. Correct issues you find and rerun any directly affected checks."
+            "Review the complete diff and behavior for correctness, regressions, edge cases, and objective drift. Correct issues you find and rerun any directly affected checks."
         }
         SessionGoalStage::OpenPr => {
-            "Prepare the work for review: use an appropriate descriptive branch, commit only goal-related files, push the branch, and create or update a non-draft pull request that is ready for review. If the existing pull request is a draft, mark it ready for review. Never merge it during this stage."
+            "Prepare the work for review: use an appropriate descriptive branch, commit only objective-related files, push the branch, and create or update a non-draft pull request that is ready for review. If the existing pull request is a draft, mark it ready for review. Never merge it during this stage."
         }
         SessionGoalStage::Merge => {
-            "Locate the pull request for this Goal branch and wait for every required CI check. If a required check fails because of goal-related work, make a targeted fix, rerun the affected validation, self-review the resulting diff, commit and push it, then wait for CI again. Merge only when required checks pass, the pull request is mergeable, and this stage's policy authorizes the merge. Never bypass branch protection or merge an unrelated pull request."
+            "Locate the pull request for this Loop branch and wait for every required CI check. If a required check fails because of objective-related work, make a targeted fix, rerun the affected validation, self-review the resulting diff, commit and push it, then wait for CI again. Merge only when required checks pass, the pull request is mergeable, and this stage's policy authorizes the merge. Never bypass branch protection or merge an unrelated pull request."
         }
     }
 }
@@ -4800,7 +5259,7 @@ fn goal_stage_git_guardrail(stage: SessionGoalStage) -> &'static str {
             "- The Open PR stage alone controls branch preparation, commits, pushes, and opening or updating a ready-for-review pull request. Never merge during this stage."
         }
         SessionGoalStage::Merge => {
-            "- Merge only the pull request for this Goal branch, only after required CI passes, and only when this stage's policy authorizes it. Never bypass repository protections."
+            "- Merge only the pull request for this Loop branch, only after required CI passes, and only when this stage's policy authorizes it. Never bypass repository protections."
         }
         _ => {
             "- Do not push, open a pull request, or merge before the dedicated Open PR and Merge stages."
@@ -4824,7 +5283,7 @@ fn build_goal_stage_prompt(
 ) -> String {
     let policy = goal_stage_policy(goal, stage);
     let mut prompt = format!(
-        "# Acorn Goal · {}\n\nYou are executing exactly one stage of a durable Acorn Goal session. Acorn, not you, advances to the next stage and may use a different model there. Complete only this stage.\n\n## Goal\n{}",
+        "# Acorn Loop · {}\n\nYou are executing exactly one stage of a durable Acorn Loop session. Acorn, not you, advances to the next stage and may use a different model there. Complete only this stage.\n\n## Objective\n{}",
         goal_stage_label(stage),
         goal.objective
     );
@@ -4840,7 +5299,7 @@ fn build_goal_stage_prompt(
     prompt.push_str("\n\n## Policy\n");
     match policy {
         SessionGoalStagePolicy::Auto => prompt.push_str(
-            "AUTO: perform this stage without routine confirmation. Ask only when genuinely blocked, missing required authority, or facing a consequential choice the goal does not resolve. In that case, end with a line beginning `WAITING:` and state the exact input needed.",
+            "AUTO: perform this stage without routine confirmation. Ask only when genuinely blocked, missing required authority, or facing a consequential choice the objective does not resolve. In that case, end with a line beginning `WAITING:` and state the exact input needed.",
         ),
         SessionGoalStagePolicy::Approval => prompt.push_str(
             "APPROVAL: prepare the stage result or proposed action, but do not cross this stage's commitment boundary yet. End with a line beginning `WAITING:` that asks the user to approve or revise it. After the user replies in this chat, carry out the approved stage work before reporting completion.",
@@ -4848,14 +5307,14 @@ fn build_goal_stage_prompt(
         SessionGoalStagePolicy::Disabled => {}
     }
     if revision_review {
-        prompt.push_str("\n\nThis is a revised Goal. Treat the saved revision as the current authority. Compare it with the work already present in the worktree, explain what remains valid and what changed, then present the revised plan. Follow the configured Plan policy and do not request confirmation solely because the Goal changed.");
+        prompt.push_str("\n\nThis is a revised objective. Treat the saved revision as the current authority. Compare it with the work already present in the worktree, explain what remains valid and what changed, then present the revised plan. Follow the configured Plan policy and do not request confirmation solely because the objective changed.");
     }
     prompt.push_str(
         "\n\n## Guardrails\n- Treat GitHub issues or other external references as inputs only when the user explicitly named them.\n- Destructive changes are allowed only when the user explicitly requested them and they are necessary for this stage.\n",
     );
     prompt.push_str(goal_stage_git_guardrail(stage));
     prompt.push_str(
-        "\n- Never deploy, publish, or release.\n- Do not begin or simulate the next Goal stage in this response.\n- Finish with a concise stage outcome. Use `WAITING:` only when the policy or a real blocker requires user input.",
+        "\n- Never deploy, publish, or release.\n- Do not begin or simulate the next Loop stage in this response.\n- Finish with a concise stage outcome. Use `WAITING:` only when the policy or a real blocker requires user input.",
     );
     prompt
 }
@@ -5016,7 +5475,7 @@ fn ensure_goal_approval_waiting_marker<R: Runtime>(
     }
     message
         .content
-        .push_str("WAITING: Approve or revise this Goal stage to continue.");
+        .push_str("WAITING: Approve or revise this Loop stage to continue.");
     let chat_state = persistence::save_chat_session_state(chat_state)?;
     emit_chat_session_state_changed(app, &chat_state);
     persist(state);
@@ -5041,7 +5500,7 @@ fn wait_for_previous_goal_turn(state: &AppState, session_id: &Uuid) -> AppResult
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
     Err(AppError::Other(
-        "the previous goal turn is still stopping; try again shortly".to_string(),
+        "the previous Loop turn is still stopping; try again shortly".to_string(),
     ))
 }
 
@@ -5056,7 +5515,7 @@ fn run_goal_session_inner<R: Runtime>(
         let goal = session
             .goal
             .clone()
-            .ok_or_else(|| AppError::Other("session is not a Goal session".to_string()))?;
+            .ok_or_else(|| AppError::Other("session is not a Loop session".to_string()))?;
         let Some(stage) = goal.progress.current_stage else {
             return load_goal_chat_state(state, &session_id);
         };
@@ -5141,11 +5600,107 @@ pub async fn run_goal_session<R: Runtime>(
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
     if session.goal.is_none() {
-        return Err(AppError::Other("session is not a Goal session".to_string()));
+        return Err(AppError::Other("session is not a Loop session".to_string()));
     }
     let app_state = state.inner().clone();
     run_blocking("run goal session", move || {
         run_goal_session_inner(&app, &app_state, session.id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn load_graph_run_state(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Option<GraphRunState>> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    if normalized_graph_for_session(&session)?.is_none() {
+        return Err(AppError::Other(
+            "session is not a Graph session".to_string(),
+        ));
+    }
+    crate::graph_runs::load_graph_run_state(state.inner(), &session)
+}
+
+#[tauri::command]
+pub async fn run_graph_session<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<GraphRunState> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    let Some(graph) = normalized_graph_for_session(&session)? else {
+        return Err(AppError::Other(
+            "session is not a Graph session".to_string(),
+        ));
+    };
+    let app_state = state.inner().clone();
+    let executor: Arc<dyn crate::graph_runs::GraphNodeExecutor> = Arc::new(CliGraphNodeExecutor {
+        ai: graph_ai_request(&graph),
+        cwd: session.worktree_path.clone(),
+    });
+    run_blocking("run graph session", move || {
+        crate::graph_runs::start_graph_run(&app, &app_state, session, graph, executor)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn submit_graph_node_input<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+    run_id: String,
+    node_id: String,
+    input: String,
+    verdict: Option<GraphNodeVerdict>,
+    expected_revision: u64,
+) -> AppResult<GraphRunState> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    let Some(graph) = normalized_graph_for_session(&session)? else {
+        return Err(AppError::Other(
+            "session is not a Graph session".to_string(),
+        ));
+    };
+    let app_state = state.inner().clone();
+    let executor: Arc<dyn crate::graph_runs::GraphNodeExecutor> = Arc::new(CliGraphNodeExecutor {
+        ai: graph_ai_request(&graph),
+        cwd: session.worktree_path.clone(),
+    });
+    run_blocking("submit Graph node input", move || {
+        crate::graph_runs::submit_graph_node_input(
+            &app,
+            &app_state,
+            session,
+            run_id,
+            node_id,
+            input,
+            verdict,
+            expected_revision,
+            executor,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn cancel_graph_run<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+    run_id: String,
+    expected_revision: u64,
+) -> AppResult<GraphRunState> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    if normalized_graph_for_session(&session)?.is_none() {
+        return Err(AppError::Other(
+            "session is not a Graph session".to_string(),
+        ));
+    }
+    let app_state = state.inner().clone();
+    run_blocking("cancel Graph run", move || {
+        crate::graph_runs::cancel_graph_run(&app, &app_state, session, run_id, expected_revision)
     })
     .await
 }
@@ -5157,10 +5712,19 @@ pub async fn send_chat_message<R: Runtime>(
     session_id: String,
     ai: crate::ai::AiExecutionRequest,
     content: String,
+    graph_prompt_plan: Option<GraphPromptPlan>,
 ) -> AppResult<persistence::ChatSessionState> {
-    let session = authorize_chat_session(state.inner(), &session_id)?;
+    let mut session = authorize_chat_session(state.inner(), &session_id)?;
+    if let Some(graph) = normalized_graph_for_session(&session)? {
+        session.graph = Some(graph);
+    }
     let app_state = state.inner().clone();
     run_blocking("send chat message", move || {
+        if session.graph.is_some() {
+            return Err(AppError::Other(
+                "Graph sessions use node input; submit the waiting Human node instead".to_string(),
+            ));
+        }
         let goal_continuation = session.goal.as_ref().and_then(|goal| {
             matches!(
                 goal.progress.state,
@@ -5169,10 +5733,21 @@ pub async fn send_chat_message<R: Runtime>(
             .then_some((goal.revision, goal.progress.current_stage?))
         });
         let effective_ai = session
-            .goal
+            .graph
             .as_ref()
-            .map(|goal| goal_ai_request(goal, goal.progress.current_stage))
+            .map(graph_ai_request)
+            .or_else(|| {
+                session
+                    .goal
+                    .as_ref()
+                    .map(|goal| goal_ai_request(goal, goal.progress.current_stage))
+            })
             .unwrap_or(ai);
+        let graph_prompt_plan = if session.graph.is_some() {
+            None
+        } else {
+            graph_prompt_plan
+        };
         if let Some((revision, stage)) = goal_continuation {
             if !save_goal_progress_if_current(
                 &app_state,
@@ -5186,12 +5761,18 @@ pub async fn send_chat_message<R: Runtime>(
                 },
             )? {
                 return Err(AppError::Other(
-                    "goal changed before the response could be sent".to_string(),
+                    "Loop objective changed before the response could be sent".to_string(),
                 ));
             }
         }
-        let chat_state =
-            send_chat_message_inner(&app, &app_state, session.clone(), effective_ai, content)?;
+        let chat_state = send_chat_message_inner(
+            &app,
+            &app_state,
+            session.clone(),
+            effective_ai,
+            content,
+            graph_prompt_plan,
+        )?;
         let Some((revision, stage)) = goal_continuation else {
             return Ok(chat_state);
         };
@@ -5210,9 +5791,19 @@ fn send_chat_message_inner<R: Runtime>(
     session: Session,
     ai: crate::ai::AiExecutionRequest,
     content: String,
+    graph_prompt_plan: Option<GraphPromptPlan>,
 ) -> AppResult<persistence::ChatSessionState> {
     let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
-    send_chat_message_from_state_inner(app, state, session, ai, content, chat_state)
+    send_chat_message_from_state_inner(
+        app,
+        state,
+        session,
+        ai,
+        content,
+        graph_prompt_plan,
+        true,
+        chat_state,
+    )
 }
 
 fn send_goal_stage_message_inner<R: Runtime>(
@@ -5224,7 +5815,7 @@ fn send_goal_stage_message_inner<R: Runtime>(
 ) -> AppResult<persistence::ChatSessionState> {
     let mut chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
     reset_stale_goal_provider_thread(&mut chat_state, &ai);
-    send_chat_message_from_state_inner(app, state, session, ai, content, chat_state)
+    send_chat_message_from_state_inner(app, state, session, ai, content, None, false, chat_state)
 }
 
 fn reset_stale_goal_provider_thread(
@@ -5249,14 +5840,66 @@ fn reset_stale_goal_provider_thread(
     }
 }
 
+fn compile_chat_provider_content(
+    raw_content: &str,
+    graph_prompt_plan: Option<&GraphPromptPlan>,
+    continuation_checkpoint: Option<&str>,
+) -> AppResult<String> {
+    match graph_prompt_plan {
+        Some(plan) => {
+            work_graph::compile_prompt_with_checkpoint(raw_content, plan, continuation_checkpoint)
+                .map_err(AppError::Other)
+        }
+        None => Ok(raw_content.to_string()),
+    }
+}
+
+fn validate_graph_prompt_plan_for_session(
+    session: &Session,
+    graph_prompt_plan: Option<&GraphPromptPlan>,
+) -> AppResult<()> {
+    let Some(saved_graph) = session.graph.as_ref() else {
+        return Ok(());
+    };
+    match graph_prompt_plan {
+        Some(GraphPromptPlan::Manual { graph, .. }) if graph == &saved_graph.definition => Ok(()),
+        _ => Err(AppError::Other(
+            "Graph continuation does not match the saved session graph".to_string(),
+        )),
+    }
+}
+
 fn send_chat_message_from_state_inner<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
     session: Session,
     ai: crate::ai::AiExecutionRequest,
     content: String,
+    graph_prompt_plan: Option<GraphPromptPlan>,
+    default_missing_graph_prompt_plan: bool,
     chat_state: persistence::ChatSessionState,
 ) -> AppResult<persistence::ChatSessionState> {
+    let graph_prompt_plan = normalize_graph_prompt_plan_for_send(
+        &chat_state,
+        session.goal.is_some(),
+        graph_prompt_plan,
+        default_missing_graph_prompt_plan,
+    )?;
+    validate_graph_prompt_plan_for_session(&session, graph_prompt_plan.as_ref())?;
+    let raw_content = content.trim().to_string();
+    let continuation_checkpoint = if graph_prompt_plan
+        .as_ref()
+        .is_some_and(|plan| plan.continuation().is_some())
+    {
+        graph_continuation_checkpoint(&chat_state)?
+    } else {
+        None
+    };
+    let provider_content = compile_chat_provider_content(
+        &raw_content,
+        graph_prompt_plan.as_ref(),
+        continuation_checkpoint.as_deref(),
+    )?;
     let mut adapter = CliChatProviderAdapter {
         ai: ai.clone(),
         cwd: session.worktree_path.clone(),
@@ -5266,7 +5909,9 @@ fn send_chat_message_from_state_inner<R: Runtime>(
         chat_state,
         Some(&session),
         &ai,
-        content,
+        raw_content,
+        provider_content,
+        graph_prompt_plan,
         adapter.capabilities(),
         ChatContextOptions::default(),
     )?;
@@ -5351,6 +5996,11 @@ pub async fn retry_chat_message<R: Runtime>(
     content: Option<String>,
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
+    if session.graph.is_some() {
+        return Err(AppError::Other(
+            "Graph responses cannot be regenerated; run the saved design again".to_string(),
+        ));
+    }
     let app_state = state.inner().clone();
     run_blocking("retry chat message", move || {
         let goal_retry = session.goal.as_ref().and_then(|goal| {
@@ -5367,9 +6017,15 @@ pub async fn retry_chat_message<R: Runtime>(
             ))
         });
         let effective_ai = session
-            .goal
+            .graph
             .as_ref()
-            .map(|goal| goal_ai_request(goal, goal.progress.current_stage))
+            .map(graph_ai_request)
+            .or_else(|| {
+                session
+                    .goal
+                    .as_ref()
+                    .map(|goal| goal_ai_request(goal, goal.progress.current_stage))
+            })
             .unwrap_or(ai);
         if let Some((revision, stage, approval_pending)) = goal_retry {
             if !save_goal_progress_if_current(
@@ -5384,7 +6040,7 @@ pub async fn retry_chat_message<R: Runtime>(
                 },
             )? {
                 return Err(AppError::Other(
-                    "goal changed before the retry could be sent".to_string(),
+                    "Loop objective changed before the retry could be sent".to_string(),
                 ));
             }
         }
@@ -5431,7 +6087,16 @@ fn retry_chat_message_inner<R: Runtime>(
     ensure_chat_session_has_no_active_run(state, &session.id)?;
     let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
     let branch = prepare_chat_retry_branch(chat_state, &message_id, content)?;
-    send_chat_message_from_state_inner(app, state, session, ai, branch.content, branch.state)
+    send_chat_message_from_state_inner(
+        app,
+        state,
+        session,
+        ai,
+        branch.content,
+        branch.graph_prompt_plan,
+        false,
+        branch.state,
+    )
 }
 
 #[tauri::command]
@@ -5442,6 +6107,7 @@ pub async fn delete_chat_message<R: Runtime>(
     message_id: String,
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
+    reject_system_managed_graph_transcript_mutation(&session)?;
     let app_state = state.inner().clone();
     run_blocking("delete chat message", move || {
         delete_chat_message_inner(&app, &app_state, session, message_id)
@@ -6338,18 +7004,76 @@ pub fn update_session_goal(
     let current = state.sessions.get(&id)?;
     if !current.project_scoped || current.mode != SessionMode::Chat || current.goal.is_none() {
         return Err(AppError::Other(
-            "session is not a project goal session".to_string(),
+            "session is not a project Loop session".to_string(),
         ));
     }
     let next_revision = expected_revision
         .checked_add(1)
-        .ok_or_else(|| AppError::Other("goal revision overflow".to_string()))?;
+        .ok_or_else(|| AppError::Other("Loop revision overflow".to_string()))?;
     let mut goal = normalize_session_goal(goal)?;
     goal.revision = next_revision;
     goal.progress = SessionGoalProgress::revised_plan();
     let Some(updated) = state.sessions.update_goal(&id, expected_revision, goal)? else {
         return Err(AppError::Other(
-            "goal changed since this editor was opened".to_string(),
+            "Loop objective changed since this editor was opened".to_string(),
+        ));
+    };
+    persist(&state);
+    Ok(enrich_session(updated))
+}
+
+#[tauri::command]
+pub fn update_session_graph(
+    state: State<'_, AppState>,
+    id: String,
+    expected_revision: u32,
+    graph: SessionGraph,
+) -> AppResult<Session> {
+    let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
+    let current = state.sessions.get(&id)?;
+    let Some(saved_graph) = normalized_graph_for_session(&current)? else {
+        return Err(AppError::Other(
+            "session is not a project Graph session".to_string(),
+        ));
+    };
+    if matches!(
+        current.status,
+        SessionStatus::Working | SessionStatus::WaitingForInput
+    ) {
+        return Err(AppError::Other(
+            "Graph design cannot be edited while its run is active or waiting".to_string(),
+        ));
+    }
+    ensure_chat_session_has_no_active_run(state.inner(), &id)?;
+    if persistence::load_graph_run_state(&id.to_string())?.is_some_and(|run| {
+        matches!(
+            run.status,
+            acorn_session::GraphRunStatus::Running | acorn_session::GraphRunStatus::Waiting
+        )
+    }) {
+        return Err(AppError::Other(
+            "Graph design cannot be edited while a run is active or waiting".to_string(),
+        ));
+    }
+    let chat_state = persistence::load_chat_session_state(&id.to_string())?;
+    if active_graph_waiting_turn(&chat_state)?.is_some() {
+        return Err(AppError::Other(
+            "Graph design cannot be edited while a run is waiting for input".to_string(),
+        ));
+    }
+    let next_revision = expected_revision
+        .checked_add(1)
+        .ok_or_else(|| AppError::Other("Graph revision overflow".to_string()))?;
+    let mut graph = normalize_session_graph(graph)?;
+    if saved_graph.agent.provider != graph.agent.provider {
+        return Err(AppError::Other(
+            "Graph session provider cannot be changed after creation".to_string(),
+        ));
+    }
+    graph.revision = next_revision;
+    let Some(updated) = state.sessions.update_graph(&id, expected_revision, graph)? else {
+        return Err(AppError::Other(
+            "Graph design changed since this editor was opened".to_string(),
         ));
     };
     persist(&state);
@@ -10192,10 +10916,10 @@ mod tests {
         configured_git_identity, create_unique_worktree, daemon_spawn_name_for_session,
         detach_requested_by_stale_renderer, font_name_from_path,
         infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
-        normalize_session_goal, poll_defers_to_hook, remove_linked_worktree_at_path,
-        restore_pending_session_removal, seed_initial_commit, should_remove_local_project_mirror,
-        validate_editor_command, validate_new_project_name, ChatProviderAdapter,
-        ProcessMemorySnapshot,
+        normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
+        remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
+        should_remove_local_project_mirror, validate_editor_command, validate_new_project_name,
+        ChatProviderAdapter, ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingSessionRemoval};
@@ -10203,7 +10927,9 @@ mod tests {
     use acorn_session::{AgentStatusSource, SessionStatus};
     use acorn_session::{
         Session, SessionAgentProvider, SessionGoal, SessionGoalModelConfig, SessionGoalPolicies,
-        SessionGoalPreset, SessionGoalProgress, SessionGoalStagePolicy, SessionKind, SessionMode,
+        SessionGoalPreset, SessionGoalProgress, SessionGoalStagePolicy, SessionGraph,
+        SessionGraphAgent, SessionGraphCanvas, SessionGraphNodePosition, SessionKind, SessionMode,
+        WorkGraphGroupDirection,
     };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -10266,6 +10992,46 @@ mod tests {
         }
     }
 
+    fn graph_spec(provider: SessionAgentProvider) -> SessionGraph {
+        let mut definition = match single_node_manual_graph_plan("Implement the graph session.") {
+            crate::work_graph::GraphPromptPlan::Manual { graph, .. } => graph,
+            _ => unreachable!("manual graph helper"),
+        };
+        definition.version = crate::work_graph::WORK_GRAPH_VERSION;
+        definition.execution_mode = crate::work_graph::WorkGraphExecutionMode::Parallel;
+        SessionGraph {
+            version: 1,
+            objective: "  Persist the graph  ".to_string(),
+            agent: SessionGraphAgent {
+                provider,
+                model: Some("  model-test  ".to_string()),
+                effort: Some(" high ".to_string()),
+            },
+            definition,
+            canvas: SessionGraphCanvas {
+                version: 1,
+                direction: WorkGraphGroupDirection::LeftToRight,
+                node_positions: std::collections::BTreeMap::from([
+                    (
+                        "build".to_string(),
+                        SessionGraphNodePosition { x: 12.0, y: 24.0 },
+                    ),
+                    (
+                        "unknown".to_string(),
+                        SessionGraphNodePosition { x: 1.0, y: 2.0 },
+                    ),
+                ]),
+                locked_node_ids: std::collections::BTreeSet::from([
+                    "build".to_string(),
+                    "unknown".to_string(),
+                ]),
+                group_positions: std::collections::BTreeMap::new(),
+                viewport: None,
+            },
+            revision: 9,
+        }
+    }
+
     #[test]
     fn goal_spec_normalization_preserves_a_durable_snapshot() {
         let normalized = normalize_session_goal(goal_spec(SessionAgentProvider::Codex))
@@ -10293,8 +11059,9 @@ mod tests {
     fn goal_creation_requires_an_isolated_project_chat_session() {
         let goal = goal_spec(SessionAgentProvider::Codex);
 
-        assert!(super::validate_goal_session_creation(
+        assert!(super::validate_special_session_creation(
             Some(&goal),
+            None,
             true,
             SessionKind::Regular,
             Some(SessionAgentProvider::Codex),
@@ -10302,8 +11069,9 @@ mod tests {
             SessionMode::Chat,
         )
         .is_ok());
-        assert!(super::validate_goal_session_creation(
+        assert!(super::validate_special_session_creation(
             Some(&goal),
+            None,
             false,
             SessionKind::Regular,
             Some(SessionAgentProvider::Codex),
@@ -10311,8 +11079,9 @@ mod tests {
             SessionMode::Chat,
         )
         .is_err());
-        assert!(super::validate_goal_session_creation(
+        assert!(super::validate_special_session_creation(
             Some(&goal),
+            None,
             true,
             SessionKind::Regular,
             Some(SessionAgentProvider::Claude),
@@ -10320,6 +11089,135 @@ mod tests {
             SessionMode::Chat,
         )
         .is_err());
+    }
+
+    #[test]
+    fn graph_normalization_validates_definition_and_canvas_contract() {
+        let normalized = normalize_session_graph(graph_spec(SessionAgentProvider::Codex))
+            .expect("valid graph normalizes");
+
+        assert_eq!(normalized.objective, "Persist the graph");
+        assert_eq!(normalized.agent.model.as_deref(), Some("model-test"));
+        assert_eq!(
+            normalized.definition.execution_mode,
+            crate::work_graph::WorkGraphExecutionMode::Sequential
+        );
+        assert!(!normalized.canvas.node_positions.contains_key("unknown"));
+        assert_eq!(
+            normalized.canvas.locked_node_ids,
+            std::collections::BTreeSet::from(["build".to_string()])
+        );
+        assert!(normalized.canvas.node_positions.contains_key("goal"));
+        assert_eq!(
+            normalized.canvas.node_positions.get("build"),
+            Some(&SessionGraphNodePosition { x: 16.0, y: 32.0 })
+        );
+        assert_eq!(
+            normalized.canvas.node_positions.get("goal"),
+            Some(&SessionGraphNodePosition { x: 560.0, y: 80.0 })
+        );
+
+        let mut invalid = graph_spec(SessionAgentProvider::Codex);
+        invalid.definition.edges.clear();
+        assert!(normalize_session_graph(invalid).is_err());
+
+        let mut vertical = graph_spec(SessionAgentProvider::Codex);
+        vertical.canvas.direction = WorkGraphGroupDirection::TopDown;
+        let normalized_vertical =
+            normalize_session_graph(vertical).expect("vertical graph normalizes");
+        assert_eq!(
+            normalized_vertical.canvas.node_positions.get("goal"),
+            Some(&SessionGraphNodePosition { x: 80.0, y: 560.0 })
+        );
+    }
+
+    #[test]
+    fn graph_creation_requires_an_isolated_project_chat_session_and_matching_provider() {
+        let graph = graph_spec(SessionAgentProvider::Codex);
+
+        assert!(super::validate_special_session_creation(
+            None,
+            Some(&graph),
+            true,
+            SessionKind::Regular,
+            Some(SessionAgentProvider::Codex),
+            true,
+            SessionMode::Chat,
+        )
+        .is_ok());
+        assert!(super::validate_special_session_creation(
+            None,
+            Some(&graph),
+            false,
+            SessionKind::Regular,
+            Some(SessionAgentProvider::Codex),
+            true,
+            SessionMode::Chat,
+        )
+        .is_err());
+        assert!(super::validate_special_session_creation(
+            None,
+            Some(&graph),
+            true,
+            SessionKind::Regular,
+            Some(SessionAgentProvider::Claude),
+            true,
+            SessionMode::Chat,
+        )
+        .is_err());
+        assert!(super::validate_special_session_creation(
+            Some(&goal_spec(SessionAgentProvider::Codex)),
+            Some(&graph),
+            true,
+            SessionKind::Regular,
+            Some(SessionAgentProvider::Codex),
+            true,
+            SessionMode::Chat,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn persisted_graph_contract_is_rechecked_before_execution_or_mutation() {
+        let mut session = scoped_session("graph", "/tmp/acorn", true);
+        session.isolated = true;
+        session.mode = SessionMode::Chat;
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.graph = Some(graph_spec(SessionAgentProvider::Codex));
+
+        assert!(super::normalized_graph_for_session(&session)
+            .expect("valid graph session normalizes")
+            .is_some());
+        assert!(super::reject_system_managed_graph_transcript_mutation(&session).is_err());
+
+        session.goal = Some(goal_spec(SessionAgentProvider::Codex));
+        assert!(super::normalized_graph_for_session(&session).is_err());
+        session.goal = None;
+        session.isolated = false;
+        assert!(super::normalized_graph_for_session(&session).is_err());
+    }
+
+    #[test]
+    fn graph_session_accepts_only_its_saved_manual_prompt_plan() {
+        let graph = graph_spec(SessionAgentProvider::Codex);
+        let mut session = scoped_session("graph", "/tmp/acorn", true);
+        session.isolated = true;
+        session.mode = SessionMode::Chat;
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.graph = Some(graph.clone());
+        let matching = crate::work_graph::GraphPromptPlan::Manual {
+            version: crate::work_graph::GRAPH_PROMPT_PLAN_VERSION,
+            graph: graph.definition.clone(),
+            continuation: None,
+        };
+
+        assert!(super::validate_graph_prompt_plan_for_session(&session, Some(&matching),).is_ok());
+        assert!(super::validate_graph_prompt_plan_for_session(
+            &session,
+            Some(&crate::work_graph::GraphPromptPlan::automatic()),
+        )
+        .is_err());
+        assert!(super::validate_graph_prompt_plan_for_session(&session, None).is_err());
     }
 
     #[test]
@@ -10459,19 +11357,22 @@ mod tests {
             super::build_goal_stage_prompt(&goal, acorn_session::SessionGoalStage::Plan, true);
 
         assert!(prompt.contains("Persist this goal"));
+        assert!(prompt.contains("# Acorn Loop · Plan"));
+        assert!(prompt.contains("## Objective"));
+        assert!(!prompt.contains("# Acorn Goal"));
         assert!(prompt.contains("Done"));
         assert!(prompt.contains("Keep the API stable"));
         assert!(prompt.contains("cargo test"));
         assert!(prompt.contains("AUTO:"));
         assert!(!prompt.contains("APPROVAL:"));
-        assert!(prompt.contains("This is a revised Goal"));
+        assert!(prompt.contains("This is a revised objective"));
         assert!(prompt.contains("current authority"));
         assert!(prompt.contains("do not request confirmation solely"));
         assert!(prompt.contains("user explicitly named them"));
         assert!(prompt.contains("Destructive changes are allowed only"));
         assert!(prompt.contains("Do not push, open a pull request, or merge"));
         assert!(prompt.contains("Never deploy, publish, or release"));
-        assert!(prompt.contains("Do not begin or simulate the next Goal stage"));
+        assert!(prompt.contains("Do not begin or simulate the next Loop stage"));
     }
 
     #[test]
@@ -10532,10 +11433,69 @@ mod tests {
             turn_id: None,
             role,
             content: content.to_string(),
+            graph_prompt_plan: None,
             created_at: chrono::Utc::now(),
             status: Some(crate::persistence::ChatMessageStatus::Complete),
             metadata: None,
         }
+    }
+
+    fn single_node_manual_graph_plan(instruction: &str) -> crate::work_graph::GraphPromptPlan {
+        crate::work_graph::GraphPromptPlan::Manual {
+            version: 1,
+            graph: crate::work_graph::WorkGraph {
+                version: 1,
+                execution_mode: crate::work_graph::WorkGraphExecutionMode::Parallel,
+                nodes: vec![
+                    crate::work_graph::WorkGraphNode {
+                        id: "build".to_string(),
+                        kind: crate::work_graph::WorkGraphNodeKind::Agent,
+                        title: "Build".to_string(),
+                        instruction: instruction.to_string(),
+                        group_id: None,
+                        execution_mode: None,
+                    },
+                    crate::work_graph::WorkGraphNode {
+                        id: "goal".to_string(),
+                        kind: crate::work_graph::WorkGraphNodeKind::GoalSink,
+                        title: "GOAL".to_string(),
+                        instruction: String::new(),
+                        group_id: None,
+                        execution_mode: None,
+                    },
+                ],
+                edges: vec![crate::work_graph::WorkGraphEdge {
+                    id: "build-goal".to_string(),
+                    from: "build".to_string(),
+                    to: "goal".to_string(),
+                    label: None,
+                    condition: crate::work_graph::WorkGraphEdgeCondition::Always,
+                    kind: crate::work_graph::WorkGraphEdgeKind::Dependency,
+                    retry_limit: None,
+                }],
+                groups: Vec::new(),
+            },
+            continuation: None,
+        }
+    }
+
+    fn waiting_graph_state(
+        graph_prompt_plan: Option<crate::work_graph::GraphPromptPlan>,
+    ) -> crate::persistence::ChatSessionState {
+        let mut user = chat_message(
+            "waiting-user",
+            crate::persistence::ChatRole::User,
+            "Run the graph",
+        );
+        user.turn_id = Some("waiting-turn".to_string());
+        user.graph_prompt_plan = graph_prompt_plan;
+        let mut assistant = chat_message(
+            "waiting-assistant",
+            crate::persistence::ChatRole::Assistant,
+            "RUN: build attempt=1 → ok\nWAITING: Approve the result.",
+        );
+        assistant.turn_id = Some("waiting-turn".to_string());
+        chat_state_for_runtime(vec![user, assistant])
     }
 
     #[derive(Default)]
@@ -11220,6 +12180,7 @@ mod tests {
                 turn_id: Some("turn-1".to_string()),
                 role: crate::persistence::ChatRole::Assistant,
                 content: String::new(),
+                graph_prompt_plan: None,
                 created_at: now,
                 status: Some(crate::persistence::ChatMessageStatus::Pending),
                 metadata: None,
@@ -11977,6 +12938,542 @@ mod tests {
     }
 
     #[test]
+    fn graph_prompt_keeps_raw_transcript_and_engineers_both_provider_paths() {
+        let raw = "Ship the raw request".to_string();
+        let plan = crate::work_graph::GraphPromptPlan::automatic();
+        let engineered = crate::work_graph::compile_prompt(&raw, &plan).expect("graph prompt");
+        let ai = crate::ai::AiExecutionRequest {
+            provider: crate::ai::AiProvider::Codex,
+            model: None,
+            effort: None,
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        let compiled = super::start_chat_turn(
+            chat_state_for_runtime(Vec::new()),
+            None,
+            &ai,
+            raw.clone(),
+            engineered.clone(),
+            Some(plan.clone()),
+            super::ChatProviderCapabilities::default(),
+            super::ChatContextOptions::default(),
+        )
+        .expect("compiled-context turn");
+        assert_eq!(compiled.state.messages[0].content, raw);
+        assert_eq!(
+            compiled.state.messages[0].graph_prompt_plan.as_ref(),
+            Some(&plan)
+        );
+        assert_eq!(compiled.input.message.content, engineered);
+        assert!(compiled
+            .input
+            .context
+            .as_ref()
+            .expect("compiled context")
+            .prompt
+            .contains("<acorn_graph_engineering"));
+        assert!(compiled.state.context_snapshots[0]
+            .prompt_or_payload
+            .contains("<acorn_graph_engineering"));
+
+        let mut native_state = chat_state_for_runtime(Vec::new());
+        native_state
+            .provider_threads
+            .push(crate::persistence::ProviderThread {
+                session_id: native_state.session_id.clone(),
+                provider: "codex".to_string(),
+                model: None,
+                native_thread_id: Some("native-thread".to_string()),
+                resume_token: Some("native-thread".to_string()),
+                last_response_id: None,
+                updated_at: chrono::Utc::now(),
+            });
+        let native = super::start_chat_turn(
+            native_state,
+            None,
+            &ai,
+            "Continue raw".to_string(),
+            crate::work_graph::compile_prompt("Continue raw", &plan).expect("graph prompt"),
+            Some(plan),
+            super::ChatProviderCapabilities {
+                native_thread: true,
+                streaming: false,
+                attachments: false,
+            },
+            super::ChatContextOptions::default(),
+        )
+        .expect("native-thread turn");
+        assert_eq!(native.state.messages[0].content, "Continue raw");
+        assert!(native.input.context.is_none());
+        assert!(native
+            .input
+            .message
+            .content
+            .contains("<acorn_graph_engineering"));
+        assert!(native.state.context_snapshots[0]
+            .prompt_or_payload
+            .contains("<acorn_graph_engineering"));
+    }
+
+    #[test]
+    fn maximum_valid_manual_graph_remains_atomic_in_compiled_context() {
+        let mut nodes = vec![crate::work_graph::WorkGraphNode {
+            id: "goal".to_string(),
+            kind: crate::work_graph::WorkGraphNodeKind::GoalSink,
+            title: "GOAL".to_string(),
+            instruction: String::new(),
+            group_id: None,
+            execution_mode: None,
+        }];
+        let mut edges = Vec::new();
+        for index in 0..23 {
+            let id = format!("node-{index}");
+            nodes.push(crate::work_graph::WorkGraphNode {
+                id: id.clone(),
+                kind: crate::work_graph::WorkGraphNodeKind::Agent,
+                title: "T".repeat(120),
+                instruction: "I".repeat(347),
+                group_id: None,
+                execution_mode: None,
+            });
+            edges.push(crate::work_graph::WorkGraphEdge {
+                id: format!("edge-{index}"),
+                from: id,
+                to: "goal".to_string(),
+                label: None,
+                condition: crate::work_graph::WorkGraphEdgeCondition::Always,
+                kind: crate::work_graph::WorkGraphEdgeKind::Dependency,
+                retry_limit: None,
+            });
+        }
+        let plan = crate::work_graph::GraphPromptPlan::Manual {
+            version: 1,
+            graph: crate::work_graph::WorkGraph {
+                version: 1,
+                execution_mode: crate::work_graph::WorkGraphExecutionMode::Parallel,
+                nodes,
+                edges,
+                groups: Vec::new(),
+            },
+            continuation: None,
+        };
+        let raw = "MAX GRAPH RAW REQUEST";
+        let engineered = crate::work_graph::compile_prompt(raw, &plan).expect("maximum graph");
+        assert!(
+            engineered.chars().count() > super::ChatContextOptions::default().max_context_chars
+        );
+
+        let started = super::start_chat_turn(
+            chat_state_for_runtime(Vec::new()),
+            None,
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Codex,
+                model: None,
+                effort: None,
+                ollama_model: None,
+                llm_model: None,
+            },
+            raw.to_string(),
+            engineered,
+            Some(plan),
+            super::ChatProviderCapabilities::default(),
+            super::ChatContextOptions::default(),
+        )
+        .expect("compiled context");
+
+        let provider_context = &started.input.context.as_ref().expect("context").prompt;
+        let snapshot = &started.state.context_snapshots[0].prompt_or_payload;
+        for complete in [provider_context, snapshot] {
+            assert!(complete.contains("<acorn_graph_engineering version=\"1\" mode=\"manual\">"));
+            assert!(complete.contains(raw));
+            assert!(complete.contains("WORK GRAPH JSON:\n```json"));
+            assert!(complete.contains("WORK GRAPH MERMAID:\n```mermaid\nflowchart TD"));
+            assert!(complete.contains("Execution protocol:"));
+            assert!(complete.contains("</acorn_graph_engineering>"));
+        }
+    }
+
+    #[test]
+    fn provider_switch_compiled_context_embeds_the_active_graph_checkpoint() {
+        let mut initial_user = chat_message(
+            "u1",
+            crate::persistence::ChatRole::User,
+            "Design and execute the graph",
+        );
+        initial_user.graph_prompt_plan = Some(crate::work_graph::GraphPromptPlan::automatic());
+        let waiting_checkpoint = concat!(
+            "WORK GRAPH JSON: {\"nodes\":[{\"id\":\"research\"},{\"id\":\"goal\"}]}\n",
+            "RUN: research attempt=1 → ok — evidence gathered\n",
+            "WAITING: Approve the implementation node."
+        );
+        let mut state = chat_state_for_runtime(vec![
+            initial_user,
+            chat_message(
+                "a1",
+                crate::persistence::ChatRole::Assistant,
+                waiting_checkpoint,
+            ),
+        ]);
+        state.provider = Some("claude".to_string());
+        state.session.active_provider = Some("claude".to_string());
+        let continuation = crate::work_graph::GraphPromptPlan::Automatic {
+            version: 1,
+            continuation: Some(crate::work_graph::GraphPromptContinuation { version: 1 }),
+        };
+        let checkpoint = super::graph_continuation_checkpoint(&state)
+            .expect("checkpoint lookup")
+            .expect("active checkpoint");
+        let provider_content = super::compile_chat_provider_content(
+            "Approved; continue.",
+            Some(&continuation),
+            Some(&checkpoint),
+        )
+        .expect("continuation prompt");
+
+        let started = super::start_chat_turn(
+            state,
+            None,
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Codex,
+                model: None,
+                effort: None,
+                ollama_model: None,
+                llm_model: None,
+            },
+            "Approved; continue.".to_string(),
+            provider_content,
+            Some(continuation),
+            super::ChatProviderCapabilities::default(),
+            super::ChatContextOptions::default(),
+        )
+        .expect("provider-switch continuation");
+
+        for complete in [
+            &started.input.message.content,
+            &started
+                .input
+                .context
+                .as_ref()
+                .expect("compiled context")
+                .prompt,
+            &started.state.context_snapshots[0].prompt_or_payload,
+        ] {
+            assert!(complete.contains("WORK GRAPH JSON"));
+            assert!(complete.contains("RUN: research attempt=1"));
+            assert!(complete.contains("Approved; continue."));
+            assert!(complete.contains("continuation=\"1\""));
+            assert!(!complete.contains("LAYER: prompt"));
+        }
+    }
+
+    #[test]
+    fn new_non_loop_messages_default_to_automatic_but_loop_messages_bypass_graphs() {
+        let state = chat_state_for_runtime(Vec::new());
+        assert_eq!(
+            super::normalize_graph_prompt_plan_for_send(&state, false, None, true)
+                .expect("default plan"),
+            Some(crate::work_graph::GraphPromptPlan::automatic())
+        );
+        assert_eq!(
+            super::normalize_graph_prompt_plan_for_send(
+                &state,
+                true,
+                Some(crate::work_graph::GraphPromptPlan::automatic()),
+                true,
+            )
+            .expect("Loop bypass"),
+            None
+        );
+    }
+
+    #[test]
+    fn graph_continuation_rejects_manual_graph_substitution() {
+        let graph_a = single_node_manual_graph_plan("Implement graph A.");
+        let graph_b = single_node_manual_graph_plan("Implement graph B.").as_continuation();
+        let state = waiting_graph_state(Some(graph_a));
+
+        let error = super::normalize_graph_prompt_plan_for_send(&state, false, Some(graph_b), true)
+            .expect_err("graph substitution rejected");
+
+        assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn graph_continuation_rejects_automatic_manual_mode_substitution() {
+        let manual_state = waiting_graph_state(Some(single_node_manual_graph_plan("Build it.")));
+        assert!(super::normalize_graph_prompt_plan_for_send(
+            &manual_state,
+            false,
+            Some(crate::work_graph::GraphPromptPlan::automatic().as_continuation()),
+            true,
+        )
+        .expect_err("manual to automatic rejected")
+        .to_string()
+        .contains("does not match"));
+
+        let automatic_state =
+            waiting_graph_state(Some(crate::work_graph::GraphPromptPlan::automatic()));
+        assert!(super::normalize_graph_prompt_plan_for_send(
+            &automatic_state,
+            false,
+            Some(single_node_manual_graph_plan("Build it.").as_continuation()),
+            true,
+        )
+        .expect_err("automatic to manual rejected")
+        .to_string()
+        .contains("does not match"));
+    }
+
+    #[test]
+    fn matching_or_missing_continuation_metadata_is_bound_to_the_originating_plan() {
+        let origin = single_node_manual_graph_plan("Implement the bound graph.");
+        let mut state = waiting_graph_state(Some(origin.clone()));
+        let mut reply = chat_message(
+            "continuation-user",
+            crate::persistence::ChatRole::User,
+            "Approved",
+        );
+        reply.graph_prompt_plan = Some(origin.as_continuation());
+        state.messages.push(reply);
+        state.messages.push(chat_message(
+            "malformed-assistant",
+            crate::persistence::ChatRole::Assistant,
+            "Progress was made, but the protocol marker was omitted.",
+        ));
+
+        for supplied in [Some(origin.as_continuation()), Some(origin.clone()), None] {
+            assert_eq!(
+                super::normalize_graph_prompt_plan_for_send(&state, false, supplied, true)
+                    .expect("matching continuation"),
+                Some(origin.as_continuation())
+            );
+        }
+        let checkpoint = super::graph_continuation_checkpoint(&state)
+            .expect("checkpoint lookup")
+            .expect("active checkpoint");
+        assert!(checkpoint.contains("WAITING: Approve the result."));
+        assert!(checkpoint.contains("protocol marker was omitted"));
+    }
+
+    #[test]
+    fn stale_continuation_without_an_active_waiting_checkpoint_is_rejected() {
+        let state = chat_state_for_runtime(Vec::new());
+        let error = super::normalize_graph_prompt_plan_for_send(
+            &state,
+            false,
+            Some(crate::work_graph::GraphPromptPlan::automatic().as_continuation()),
+            true,
+        )
+        .expect_err("missing checkpoint rejected");
+
+        assert!(error.to_string().contains("no active WAITING turn"));
+    }
+
+    #[test]
+    fn legacy_plain_waiting_turn_stays_plain_and_rejects_graph_continuation_metadata() {
+        let state = waiting_graph_state(None);
+        assert_eq!(
+            super::normalize_graph_prompt_plan_for_send(
+                &state,
+                false,
+                Some(crate::work_graph::GraphPromptPlan::automatic()),
+                true,
+            )
+            .expect("legacy plain continuation"),
+            None
+        );
+        assert!(super::normalize_graph_prompt_plan_for_send(
+            &state,
+            false,
+            Some(crate::work_graph::GraphPromptPlan::automatic().as_continuation()),
+            true,
+        )
+        .expect_err("legacy graph continuation rejected")
+        .to_string()
+        .contains("legacy plain WAITING"));
+    }
+
+    #[test]
+    fn completed_legacy_plain_followup_consumes_waiting_and_next_message_defaults_to_automatic() {
+        let mut state = waiting_graph_state(None);
+        assert_eq!(
+            super::normalize_graph_prompt_plan_for_send(
+                &state,
+                false,
+                Some(crate::work_graph::GraphPromptPlan::automatic()),
+                true,
+            )
+            .expect("immediate legacy reply remains plain"),
+            None
+        );
+
+        let mut reply = chat_message(
+            "legacy-reply-user",
+            crate::persistence::ChatRole::User,
+            "Continue the legacy turn",
+        );
+        reply.turn_id = Some("legacy-reply-turn".to_string());
+        let mut response = chat_message(
+            "legacy-reply-assistant",
+            crate::persistence::ChatRole::Assistant,
+            "The requested work is complete.",
+        );
+        response.turn_id = Some("legacy-reply-turn".to_string());
+        state.messages.extend([reply, response]);
+
+        assert_eq!(
+            super::normalize_graph_prompt_plan_for_send(&state, false, None, true)
+                .expect("completed legacy waiting is consumed"),
+            Some(crate::work_graph::GraphPromptPlan::automatic())
+        );
+
+        let mut fresh_user = chat_message(
+            "fresh-automatic-user",
+            crate::persistence::ChatRole::User,
+            "Start unrelated work",
+        );
+        fresh_user.turn_id = Some("fresh-automatic-turn".to_string());
+        fresh_user.graph_prompt_plan = Some(crate::work_graph::GraphPromptPlan::automatic());
+        let mut failed_response = chat_message(
+            "fresh-automatic-assistant",
+            crate::persistence::ChatRole::Assistant,
+            "Provider failed",
+        );
+        failed_response.turn_id = Some("fresh-automatic-turn".to_string());
+        failed_response.status = Some(crate::persistence::ChatMessageStatus::Error);
+        state.messages.extend([fresh_user, failed_response]);
+
+        assert_eq!(
+            super::normalize_graph_prompt_plan_for_send(&state, false, None, true)
+                .expect("consumed legacy waiting does not become active again"),
+            Some(crate::work_graph::GraphPromptPlan::automatic())
+        );
+    }
+
+    #[test]
+    fn repeated_legacy_waiting_continues_plain_from_the_latest_waiting_turn() {
+        let mut state = waiting_graph_state(None);
+        let mut reply = chat_message(
+            "legacy-reply-user",
+            crate::persistence::ChatRole::User,
+            "I answered the first question",
+        );
+        reply.turn_id = Some("legacy-reply-turn".to_string());
+        let mut response = chat_message(
+            "legacy-reply-assistant",
+            crate::persistence::ChatRole::Assistant,
+            "More input is required.\nWAITING: Provide the missing value.",
+        );
+        response.turn_id = Some("legacy-reply-turn".to_string());
+        state.messages.extend([reply, response]);
+
+        assert_eq!(
+            super::normalize_graph_prompt_plan_for_send(
+                &state,
+                false,
+                Some(crate::work_graph::GraphPromptPlan::automatic()),
+                true,
+            )
+            .expect("repeated legacy WAITING remains plain"),
+            None
+        );
+        let active = super::active_graph_waiting_turn(&state)
+            .expect("waiting lookup")
+            .expect("latest legacy waiting remains active");
+        assert_eq!(active.waiting_message_index, 3);
+        assert_eq!(active.originating_user.id, "legacy-reply-user");
+    }
+
+    #[test]
+    fn unfinished_or_failed_legacy_followup_does_not_consume_waiting() {
+        for status in [
+            crate::persistence::ChatMessageStatus::Pending,
+            crate::persistence::ChatMessageStatus::Streaming,
+            crate::persistence::ChatMessageStatus::Error,
+        ] {
+            let mut state = waiting_graph_state(None);
+            let mut reply = chat_message(
+                "legacy-reply-user",
+                crate::persistence::ChatRole::User,
+                "Continue the legacy turn",
+            );
+            reply.turn_id = Some("legacy-reply-turn".to_string());
+            let mut response = chat_message(
+                "legacy-reply-assistant",
+                crate::persistence::ChatRole::Assistant,
+                "The followup did not complete normally.",
+            );
+            response.turn_id = Some("legacy-reply-turn".to_string());
+            response.status = Some(status);
+            state.messages.extend([reply, response]);
+
+            assert_eq!(
+                super::normalize_graph_prompt_plan_for_send(
+                    &state,
+                    false,
+                    Some(crate::work_graph::GraphPromptPlan::automatic()),
+                    true,
+                )
+                .expect("unfinished legacy followup remains plain"),
+                None,
+                "status {status:?} should preserve the legacy waiting turn"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_branch_retains_graph_plan_for_edited_raw_content() {
+        let plan = crate::work_graph::GraphPromptPlan::automatic();
+        let mut user = chat_message("u1", crate::persistence::ChatRole::User, "original");
+        user.graph_prompt_plan = Some(plan.clone());
+        let state = chat_state_for_runtime(vec![
+            user,
+            chat_message("a1", crate::persistence::ChatRole::Assistant, "answer"),
+        ]);
+
+        let branch =
+            super::prepare_chat_retry_branch(state, "a1", Some("edited raw content".to_string()))
+                .expect("retry branch");
+
+        assert_eq!(branch.content, "edited raw content");
+        assert_eq!(branch.graph_prompt_plan, Some(plan.clone()));
+        let recompiled = crate::work_graph::compile_prompt(
+            &branch.content,
+            branch.graph_prompt_plan.as_ref().expect("retained plan"),
+        )
+        .expect("recompiled prompt");
+        assert!(recompiled.contains("edited raw content"));
+        assert!(!recompiled.contains("USER REQUEST (preserve its intent exactly):\noriginal"));
+    }
+
+    #[test]
+    fn retrying_a_legacy_plain_message_does_not_invent_an_automatic_plan() {
+        let state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "legacy raw"),
+            chat_message(
+                "a1",
+                crate::persistence::ChatRole::Assistant,
+                "legacy answer",
+            ),
+        ]);
+
+        let branch = super::prepare_chat_retry_branch(state, "a1", None).expect("retry branch");
+
+        assert_eq!(branch.graph_prompt_plan, None);
+        assert_eq!(
+            super::compile_chat_provider_content(
+                &branch.content,
+                branch.graph_prompt_plan.as_ref(),
+                None
+            )
+            .expect("plain provider content"),
+            "legacy raw"
+        );
+    }
+
+    #[test]
     fn chat_runtime_sends_compiled_context_when_native_thread_is_unavailable() {
         let state = chat_state_for_runtime(Vec::new());
         let adapter = RecordingChatProviderAdapter::default();
@@ -12667,6 +14164,7 @@ mod tests {
             turn_id: Some("turn-1".to_string()),
             role: crate::persistence::ChatRole::User,
             content: "stop this".to_string(),
+            graph_prompt_plan: None,
             created_at: now,
             status: Some(crate::persistence::ChatMessageStatus::Complete),
             metadata: None,
@@ -12698,6 +14196,7 @@ mod tests {
             turn_id: Some("turn-1".to_string()),
             role: crate::persistence::ChatRole::Assistant,
             content: String::new(),
+            graph_prompt_plan: None,
             created_at: now,
             status: Some(crate::persistence::ChatMessageStatus::Pending),
             metadata: Some(serde_json::json!({ "provider": "codex" })),
@@ -12875,6 +14374,7 @@ mod tests {
                     turn_id: None,
                     role: crate::persistence::ChatRole::Assistant,
                     content: "old codex answer".to_string(),
+                    graph_prompt_plan: None,
                     created_at: now,
                     status: Some(crate::persistence::ChatMessageStatus::Complete),
                     metadata: None,
@@ -12885,6 +14385,7 @@ mod tests {
                     turn_id: None,
                     role: crate::persistence::ChatRole::Assistant,
                     content: "existing claude answer".to_string(),
+                    graph_prompt_plan: None,
                     created_at: now,
                     status: Some(crate::persistence::ChatMessageStatus::Complete),
                     metadata: Some(serde_json::json!({ "provider": "claude" })),

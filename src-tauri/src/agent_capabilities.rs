@@ -106,7 +106,7 @@ pub fn discover(provider: SessionAgentProvider) -> GoalAgentCapabilities {
             source: GoalAgentCapabilitySource::Unavailable,
             models: Vec::new(),
             effort_options: Vec::new(),
-            warning: Some("Goal sessions support only Claude or Codex".to_string()),
+            warning: Some("Loop sessions support only Claude or Codex".to_string()),
         },
     }
 }

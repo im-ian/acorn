@@ -64,6 +64,7 @@ import { api } from "./lib/api";
 import { useAppStore } from "./store";
 import { defaultTabByGroup } from "./lib/rightPanelGroups";
 import { DEFAULT_SETTINGS, useSettings } from "./lib/settings";
+import { createGraphSessionDraft } from "./lib/graphSession";
 
 const mockApi = vi.mocked(api);
 
@@ -3617,6 +3618,45 @@ describe("createSession", () => {
       "regular",
       null,
       false,
+    );
+  });
+
+  it("forwards the durable graph only through the Graph create path", async () => {
+    const graph = createGraphSessionDraft("codex");
+    const created = session("graph", REPO_A, {
+      isolated: true,
+      mode: "chat",
+      graph,
+    });
+    mockApi.createSession.mockResolvedValueOnce(created);
+
+    await useAppStore
+      .getState()
+      .createSession(
+        "Graph · test",
+        REPO_A,
+        true,
+        "regular",
+        "codex",
+        true,
+        "chat",
+        undefined,
+        undefined,
+        undefined,
+        graph,
+      );
+
+    expect(mockApi.createSession).toHaveBeenCalledWith(
+      "Graph · test",
+      REPO_A,
+      true,
+      "regular",
+      "codex",
+      true,
+      "chat",
+      undefined,
+      undefined,
+      graph,
     );
   });
 

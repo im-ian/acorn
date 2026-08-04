@@ -22,6 +22,7 @@ import {
   SplitSquareVertical,
   SquareX,
   Terminal as TerminalIcon,
+  Waypoints,
   X,
 } from "lucide-react";
 import {
@@ -38,6 +39,7 @@ import { FileViewer } from "./FileViewer";
 import { mediaKindFromPath } from "../lib/mediaFiles";
 import { writeClipboardText } from "../lib/clipboardText";
 import { ChatPane } from "./ChatPane";
+import { GraphSessionView } from "./GraphSessionView";
 import { WorkSummaryView } from "./WorkSummaryView";
 import { api } from "../lib/api";
 import {
@@ -51,6 +53,7 @@ import {
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
 import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
+import { requestNewGraphSession } from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
@@ -602,7 +605,9 @@ export function Pane({ paneId }: PaneProps) {
           no-active-session case — or a FileViewer when the active tab is
           a frontend-owned file tab instead of a PTY session.
         */}
-        {activeSession?.mode === "chat" ? (
+        {activeSession?.graph ? (
+          <GraphSessionView session={activeSession} isActive={isFocused} />
+        ) : activeSession?.mode === "chat" ? (
           <ChatPane
             sessionId={activeSession.id}
             isActive={isFocused}
@@ -666,6 +671,10 @@ export function Pane({ paneId }: PaneProps) {
           onNewGoal:
             autonomousGoalScope?.placement.projectScoped === true
               ? () => requestNewAutonomousGoalSession(autonomousGoalScope)
+              : undefined,
+          onNewGraph:
+            autonomousGoalScope?.placement.projectScoped === true
+              ? () => requestNewGraphSession(autonomousGoalScope)
               : undefined,
           shortcuts,
           activeSessionSilenced,
@@ -1487,6 +1496,16 @@ function TabItem({
                 className="pointer-events-none shrink-0 text-accent"
               />
             </Tooltip>
+          ) : session?.graph ? (
+            <Tooltip label={t("graphSession.label")} side="bottom">
+              <Waypoints
+                size={12}
+                className={cn(
+                  "pointer-events-none shrink-0",
+                  session && STATUS_ICON[session.status],
+                )}
+              />
+            </Tooltip>
           ) : session?.goal ? (
             <Tooltip label={paneT(t, "pane.aria.goalSession")} side="bottom">
               <Sparkles
@@ -1795,6 +1814,7 @@ function buildPaneMenuItems({
   onClose,
   activeProjectFallback,
   onNewGoal,
+  onNewGraph,
   shortcuts,
   activeSessionSilenced,
   setSessionSilenced,
@@ -1809,6 +1829,7 @@ function buildPaneMenuItems({
   onClose: () => void;
   activeProjectFallback: string | null;
   onNewGoal?: () => void;
+  onNewGraph?: () => void;
   shortcuts: Record<HotkeyId, string>;
   activeSessionSilenced: boolean;
   setSessionSilenced: (sessionId: string, silenced: boolean) => void;
@@ -1894,6 +1915,15 @@ function buildPaneMenuItems({
             label: paneT(t, "pane.menu.newGoalSessionInThisPane"),
             icon: <Sparkles size={12} />,
             onClick: onNewGoal,
+          },
+        ]
+      : []),
+    ...(onNewGraph
+      ? [
+          {
+            label: paneT(t, "pane.menu.newGraphSessionInThisPane"),
+            icon: <Waypoints size={12} />,
+            onClick: onNewGraph,
           },
         ]
       : []),

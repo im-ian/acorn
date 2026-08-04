@@ -11,7 +11,25 @@ export const tauriMockSource = `
 
   const handlers = window.__ACORN_MOCK_HANDLERS__ || {};
   let nextCallbackId = 0;
+  let nextEventListenerId = 0;
+  const eventListeners = new Map();
+  const graphRuns = new Map();
   const standardPrGenerationPrompt = 'Use a standard GitHub-style pull request merge message.\\n- First line: Conventional Commit subject when the type is clear, e.g. feat(scope): concise summary. Keep it imperative/present tense and <=72 chars.\\n- Body: 1-2 concise paragraphs explaining why the change matters, user-visible impact, and key implementation notes when useful.\\n- Keep the wording specific to the PR. Avoid boilerplate, markdown headings, labels, and prompt explanations.';
+
+  function clone(value) {
+    return value == null ? value : JSON.parse(JSON.stringify(value));
+  }
+
+  function emitTauriEvent(event, payload) {
+    const listeners = eventListeners.get(event);
+    if (!listeners) return;
+    for (const [id, handler] of listeners) {
+      const callback = window['_' + handler];
+      if (typeof callback === 'function') callback({ event, id, payload: clone(payload) });
+    }
+  }
+
+  window.__ACORN_EMIT_TAURI_EVENT__ = emitTauriEvent;
 
   function chatState(sessionId, provider, messages) {
     const now = '2026-01-01T00:00:00Z';
@@ -47,8 +65,20 @@ export const tauriMockSource = `
   }
 
   function pluginDefault(cmd, args) {
-    if (cmd === 'plugin:event|listen') return Promise.resolve(nextCallbackId++);
-    if (cmd === 'plugin:event|unlisten') return Promise.resolve(undefined);
+    if (cmd === 'plugin:event|listen') {
+      const id = nextEventListenerId++;
+      const event = args?.event || '';
+      const listeners = eventListeners.get(event) || new Map();
+      listeners.set(id, args?.handler);
+      eventListeners.set(event, listeners);
+      return Promise.resolve(id);
+    }
+    if (cmd === 'plugin:event|unlisten') {
+      const event = args?.event || '';
+      const id = args?.eventId ?? args?.event_id ?? args?.id;
+      eventListeners.get(event)?.delete(id);
+      return Promise.resolve(undefined);
+    }
     if (cmd === 'plugin:event|emit') return Promise.resolve(undefined);
     if (cmd === 'plugin:app|version') return Promise.resolve('0.0.0-test');
     if (cmd === 'plugin:app|name') return Promise.resolve('acorn');
@@ -148,6 +178,15 @@ export const tauriMockSource = `
         },
       });
     }
+    if (cmd === 'update_session_graph') {
+      return Promise.resolve({
+        id: args?.id || '',
+        graph: {
+          ...(args?.graph || {}),
+          revision: Number(args?.expectedRevision || 0) + 1,
+        },
+      });
+    }
     if (cmd === 'get_goal_agent_capabilities') {
       const provider = args?.provider === 'claude' ? 'claude' : 'codex';
       if (provider === 'claude') {
@@ -238,6 +277,9 @@ export const tauriMockSource = `
     if (cmd === 'load_chat_session_state') {
       return Promise.resolve(chatState(args?.sessionId, null, []));
     }
+    if (cmd === 'load_graph_run_state') {
+      return Promise.resolve(clone(graphRuns.get(args?.sessionId) || null));
+    }
     if (cmd === 'agent_transcript_summary') {
       return Promise.resolve(null);
     }
@@ -263,6 +305,7 @@ export const tauriMockSource = `
             turn_id: 'mock-turn',
             role: 'user',
             content: args?.content || '',
+            graph_prompt_plan: args?.graphPromptPlan || null,
             created_at: now,
             status: 'complete',
             metadata: null,
@@ -278,6 +321,112 @@ export const tauriMockSource = `
             metadata: { provider, turn_id: 'mock-turn', context_mode: 'compiled_context' },
           },
         ]));
+    }
+    if (cmd === 'run_graph_session') {
+      const now = '2026-01-01T00:00:00Z';
+      const state = {
+        schema_version: 1,
+        session_id: args?.sessionId || '',
+        run_id: 'mock-graph-run',
+        revision: 1,
+        graph_revision: 1,
+        objective: 'Graph objective',
+        agent: { provider: 'claude' },
+        status: 'completed',
+        definition: {
+          version: 2,
+          execution_mode: 'sequential',
+          nodes: [
+            { id: 'agent-1', kind: 'agent', title: 'Agent', instruction: 'Complete the task.' },
+            { id: 'goal', kind: 'goal_sink', title: 'GOAL', instruction: '' },
+          ],
+          edges: [{ id: 'agent-goal', from: 'agent-1', to: 'goal' }],
+          groups: [],
+        },
+        nodes: {
+          'agent-1': {
+            node_id: 'agent-1',
+            status: 'completed',
+            attempt: 1,
+            output: 'Mock graph result',
+            started_at: now,
+            completed_at: now,
+          },
+          goal: {
+            node_id: 'goal',
+            status: 'completed',
+            attempt: 0,
+            output: 'Mock graph result',
+            started_at: now,
+            completed_at: now,
+          },
+        },
+        edges: {
+          'agent-goal': {
+            edge_id: 'agent-goal',
+            active: false,
+            traversed: true,
+            retry_count: 0,
+          },
+        },
+        started_at: now,
+        updated_at: now,
+        completed_at: now,
+        final_output: 'Mock graph result',
+      };
+      graphRuns.set(state.session_id, state);
+      emitTauriEvent('acorn:graph-run-state-changed', {
+        session_id: state.session_id,
+        state,
+      });
+      return Promise.resolve(clone(state));
+    }
+    if (cmd === 'submit_graph_node_input') {
+      const current = graphRuns.get(args?.sessionId);
+      if (!current || current.run_id !== args?.runId) {
+        return Promise.reject('Graph run state not found');
+      }
+      if (current.revision !== args?.expectedRevision) {
+        return Promise.reject('Graph run changed before Human input was submitted');
+      }
+      const now = '2026-01-01T00:00:10Z';
+      const next = {
+        ...current,
+        revision: current.revision + 1,
+        status: 'completed',
+        updated_at: now,
+        completed_at: now,
+        final_output: args?.input || 'Mock Human input',
+      };
+      graphRuns.set(next.session_id, next);
+      emitTauriEvent('acorn:graph-run-state-changed', {
+        session_id: next.session_id,
+        state: next,
+      });
+      return Promise.resolve(clone(next));
+    }
+    if (cmd === 'cancel_graph_run') {
+      const current = graphRuns.get(args?.sessionId);
+      if (!current || current.run_id !== args?.runId) {
+        return Promise.reject('Graph run state not found');
+      }
+      if (['completed', 'failed', 'cancelled'].includes(current.status)) {
+        return Promise.resolve(clone(current));
+      }
+      const next = {
+        ...current,
+        revision: current.revision + 1,
+        status: 'cancelled',
+        updated_at: '2026-01-01T00:00:10Z',
+        completed_at: '2026-01-01T00:00:10Z',
+        error: 'Graph run cancelled',
+      };
+      graphRuns.set(next.session_id, next);
+      emitTauriEvent('acorn:graph-run-state-changed', {
+        session_id: next.session_id,
+        state: next,
+      });
+      return Promise.resolve(clone(next));
     }
     if (cmd === 'cancel_chat_message') {
       return Promise.resolve(chatState(args?.sessionId, null, []));

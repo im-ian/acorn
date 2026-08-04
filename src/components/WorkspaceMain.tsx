@@ -44,12 +44,14 @@ import {
   Tag,
   Terminal as TerminalIcon,
   Trash2,
+  Waypoints,
   X,
   XCircle,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboardText";
 import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
+import { requestNewGraphSession } from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { isInAcornFloatingLayer } from "../lib/floatingLayer";
@@ -998,6 +1000,10 @@ function dispatchKanbanAction(action: ProjectSessionCreateAction) {
     requestNewAutonomousGoalSession();
     return;
   }
+  if (action.flow === "graph") {
+    requestNewGraphSession();
+    return;
+  }
   window.dispatchEvent(
     new CustomEvent(KANBAN_CREATE_ACTION_EVENTS[action.id]),
   );
@@ -1007,6 +1013,8 @@ function kanbanSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
   switch (id) {
     case "goal":
       return <Sparkles size={12} />;
+    case "graph":
+      return <Waypoints size={12} />;
     case "terminal":
       return <Plus size={12} />;
     case "isolated":

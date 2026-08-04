@@ -420,7 +420,7 @@ describe("Pane empty state", () => {
 
     const goalItem = Array.from(
       document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-    ).find((item) => item.textContent === "New Goal Session in This Pane");
+    ).find((item) => item.textContent === "New Loop Session in This Pane");
     expect(goalItem).not.toBeUndefined();
 
     let detail: NewAutonomousGoalSessionEventDetail | undefined;

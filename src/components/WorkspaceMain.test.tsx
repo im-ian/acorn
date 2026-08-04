@@ -247,7 +247,7 @@ describe("WorkspaceMain", () => {
       act(() => createButton?.click());
       const goalItem = Array.from(
         document.querySelectorAll<HTMLElement>("[role='menuitem']"),
-      ).find((item) => item.textContent?.includes("New goal session"));
+      ).find((item) => item.textContent?.includes("New Loop session"));
       expect(goalItem).not.toBeUndefined();
 
       const requested = vi.fn();

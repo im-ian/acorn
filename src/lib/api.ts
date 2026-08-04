@@ -17,6 +17,8 @@ import type {
   GenerateSessionTitleResult,
   GeneratedCommitMessage,
   GoalAgentCapabilities,
+  GraphNodeVerdict,
+  GraphRunState,
   IssueDetailListing,
   IssueListing,
   IssueStateFilter,
@@ -34,6 +36,7 @@ import type {
   SessionAgentDetection,
   SessionAgentProvider,
   SessionGoal,
+  SessionGraph,
   SessionKind,
   SessionMode,
   SessionProcessSummary,
@@ -50,6 +53,7 @@ import type {
   MacosPermissionResetResult,
 } from "./permissionWarmup";
 import type { IpcListWorkspacesResponsePayload } from "./ipcWorkspaces";
+import type { GraphPromptPlan } from "./workGraph";
 
 export type {
   ChatMessage,
@@ -65,6 +69,14 @@ export type {
   ProviderThread,
   SessionMemory,
 } from "./types";
+export type {
+  GraphPromptContinuation,
+  GraphPromptPlan,
+  WorkGraph,
+  WorkGraphEdge,
+  WorkGraphNode,
+  WorkGraphNodeKind,
+} from "./workGraph";
 
 export interface LoadStatus {
   sessionsClean: boolean;
@@ -138,6 +150,7 @@ export const api = {
     mode: SessionMode = "terminal",
     cwdPath?: string,
     goal?: SessionGoal,
+    graph?: SessionGraph,
   ): Promise<Session> {
     const args: {
       name: string;
@@ -149,6 +162,7 @@ export const api = {
       mode: SessionMode;
       cwdPath?: string;
       goal?: SessionGoal;
+      graph?: SessionGraph;
     } = {
       name,
       repoPath,
@@ -160,6 +174,7 @@ export const api = {
     if (projectScoped !== undefined) args.projectScoped = projectScoped;
     if (cwdPath !== undefined) args.cwdPath = cwdPath;
     if (goal !== undefined) args.goal = goal;
+    if (graph !== undefined) args.graph = graph;
     return invoke<Session>("create_session", args);
   },
   createSessionFromDialog(
@@ -199,6 +214,17 @@ export const api = {
       id,
       expectedRevision,
       goal,
+    });
+  },
+  updateSessionGraph(
+    id: string,
+    expectedRevision: number,
+    graph: SessionGraph,
+  ): Promise<Session> {
+    return invoke<Session>("update_session_graph", {
+      id,
+      expectedRevision,
+      graph,
     });
   },
   renameSession(
@@ -285,15 +311,51 @@ export const api = {
   runGoalSession(sessionId: string): Promise<ChatSessionState> {
     return invoke<ChatSessionState>("run_goal_session", { sessionId });
   },
+  loadGraphRunState(sessionId: string): Promise<GraphRunState | null> {
+    return invoke<GraphRunState | null>("load_graph_run_state", { sessionId });
+  },
+  runGraphSession(sessionId: string): Promise<GraphRunState> {
+    return invoke<GraphRunState>("run_graph_session", { sessionId });
+  },
+  submitGraphNodeInput(
+    sessionId: string,
+    runId: string,
+    nodeId: string,
+    input: string,
+    verdict: GraphNodeVerdict | undefined,
+    expectedRevision: number,
+  ): Promise<GraphRunState> {
+    return invoke<GraphRunState>("submit_graph_node_input", {
+      sessionId,
+      runId,
+      nodeId,
+      input,
+      verdict,
+      expectedRevision,
+    });
+  },
+  cancelGraphRun(
+    sessionId: string,
+    runId: string,
+    expectedRevision: number,
+  ): Promise<GraphRunState> {
+    return invoke<GraphRunState>("cancel_graph_run", {
+      sessionId,
+      runId,
+      expectedRevision,
+    });
+  },
   sendChatMessage(
     sessionId: string,
     ai: AiExecutionRequest,
     content: string,
+    graphPromptPlan?: GraphPromptPlan,
   ): Promise<ChatSessionState> {
     return invoke<ChatSessionState>("send_chat_message", {
       sessionId,
       ai,
       content,
+      graphPromptPlan,
     });
   },
   retryChatMessage(

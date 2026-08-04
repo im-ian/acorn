@@ -5,6 +5,7 @@ import type {
   Session,
   SessionAgentProvider,
   SessionGoal,
+  SessionGraph,
   SessionKind,
   SessionMode,
 } from "./types";
@@ -44,6 +45,7 @@ export interface SessionCreateRequest {
   mode: SessionMode;
   projectFolderId?: string;
   goal?: SessionGoal;
+  graph?: SessionGraph;
 }
 
 export interface BuildSessionCreateOptions {
@@ -57,6 +59,7 @@ export interface BuildSessionCreateOptions {
   name?: string;
   projectFolderId?: string;
   goal?: SessionGoal;
+  graph?: SessionGraph;
 }
 
 function projectRootLaunch(): SessionLaunchCwd {
@@ -216,6 +219,7 @@ export function buildSessionCreateRequest(
     projectScoped,
     mode: options.mode ?? "terminal",
     ...(options.goal ? { goal: options.goal } : {}),
+    ...(options.graph ? { graph: options.graph } : {}),
     ...(options.projectFolderId
       ? { projectFolderId: options.projectFolderId }
       : {}),
@@ -258,13 +262,14 @@ export function applySessionCreateRequest(
     projectFolderId?: string,
     cwdPath?: string,
     goal?: SessionGoal,
+    graph?: SessionGraph,
   ) => Promise<Session | null>,
   request: SessionCreateRequest,
 ): Promise<Session | null> {
   const cwdPath =
     request.cwdPath === request.repoPath ? undefined : request.cwdPath;
   if (request.mode !== "terminal") {
-    if (request.goal) {
+    if (request.goal || request.graph) {
       return createSession(
         request.name,
         request.repoPath,
@@ -276,6 +281,7 @@ export function applySessionCreateRequest(
         request.projectFolderId,
         cwdPath,
         request.goal,
+        request.graph,
       );
     }
     return createSession(

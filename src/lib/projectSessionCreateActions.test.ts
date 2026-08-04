@@ -12,6 +12,7 @@ describe("PROJECT_SESSION_CREATE_ACTIONS", () => {
       ),
     ).toEqual({
       goal: undefined,
+      graph: undefined,
       terminal: "newSession",
       isolated: "newIsolatedSession",
       chat: undefined,
@@ -19,11 +20,16 @@ describe("PROJECT_SESSION_CREATE_ACTIONS", () => {
     });
   });
 
-  it("keeps Goal as a configured dialog flow", () => {
+  it("keeps Loop and Graph as configured dialog flows", () => {
     expect(PROJECT_SESSION_CREATE_ACTIONS[0]).toMatchObject({
       id: "goal",
       flow: "goal",
       labelKey: "sidebar.actions.newAutonomousGoalSession",
+    });
+    expect(PROJECT_SESSION_CREATE_ACTIONS[1]).toMatchObject({
+      id: "graph",
+      flow: "graph",
+      labelKey: "sidebar.actions.newGraphSession",
     });
     expect(
       PROJECT_SESSION_CREATE_ACTIONS.filter(

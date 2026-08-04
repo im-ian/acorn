@@ -7,6 +7,7 @@ type SidebarAriaKey = Extract<TranslationKey, `sidebar.aria.${string}`>;
 
 export type ProjectSessionCreateActionId =
   | "goal"
+  | "graph"
   | "terminal"
   | "isolated"
   | "chat"
@@ -22,7 +23,7 @@ interface ProjectSessionCreateActionBase {
 export interface DirectProjectSessionCreateAction
   extends ProjectSessionCreateActionBase {
   flow: "direct";
-  id: Exclude<ProjectSessionCreateActionId, "goal">;
+  id: Exclude<ProjectSessionCreateActionId, "goal" | "graph">;
   isolated: boolean;
   kind: SessionKind;
   mode: SessionMode;
@@ -34,9 +35,16 @@ export interface GoalProjectSessionCreateAction
   id: "goal";
 }
 
+export interface GraphProjectSessionCreateAction
+  extends ProjectSessionCreateActionBase {
+  flow: "graph";
+  id: "graph";
+}
+
 export type ProjectSessionCreateAction =
   | DirectProjectSessionCreateAction
-  | GoalProjectSessionCreateAction;
+  | GoalProjectSessionCreateAction
+  | GraphProjectSessionCreateAction;
 
 const GOAL_ACTION = {
   flow: "goal",
@@ -45,6 +53,14 @@ const GOAL_ACTION = {
   ariaKey: "sidebar.aria.newAutonomousGoalSession",
   hotkeyId: undefined,
 } as const satisfies GoalProjectSessionCreateAction;
+
+const GRAPH_ACTION = {
+  flow: "graph",
+  id: "graph",
+  labelKey: "sidebar.actions.newGraphSession",
+  ariaKey: "sidebar.aria.newGraphSession",
+  hotkeyId: undefined,
+} as const satisfies GraphProjectSessionCreateAction;
 
 const TERMINAL_ACTION = {
   flow: "direct",
@@ -92,6 +108,7 @@ const CONTROL_ACTION = {
 
 export const PROJECT_SESSION_CREATE_ACTIONS = [
   GOAL_ACTION,
+  GRAPH_ACTION,
   TERMINAL_ACTION,
   ISOLATED_ACTION,
   CHAT_ACTION,
@@ -104,6 +121,7 @@ export type ProjectSessionCreateMenuItem =
 
 export const PROJECT_SESSION_CREATE_MENU = [
   { type: "action", action: GOAL_ACTION },
+  { type: "action", action: GRAPH_ACTION },
   { type: "separator" },
   { type: "action", action: TERMINAL_ACTION },
   { type: "action", action: ISOLATED_ACTION },

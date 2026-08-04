@@ -13,6 +13,7 @@ import type {
   Session,
   SessionAgentProvider,
   SessionGoal,
+  SessionGraph,
   SessionKind,
   SessionMode,
   SessionTitleGenerationStatus,
@@ -515,6 +516,7 @@ interface AppStateModel {
     projectFolderId?: string,
     cwdPath?: string,
     goal?: SessionGoal,
+    graph?: SessionGraph,
   ) => Promise<Session | null>;
   placeSessionInWorkspace: (
     sessionId: string,
@@ -2922,6 +2924,7 @@ export const useAppStore = create<AppStateModel>()(
     projectFolderId,
     cwdPath,
     goal,
+    graph,
   ) {
     set({ loading: true, error: null });
     // Capture the user's intended insertion point before the backend call.
@@ -2936,7 +2939,7 @@ export const useAppStore = create<AppStateModel>()(
     let createdId: string | null = null;
     try {
       let created: Session;
-      if (goal) {
+      if (goal || graph) {
         created = await api.createSession(
           name,
           selectedPath,
@@ -2947,6 +2950,7 @@ export const useAppStore = create<AppStateModel>()(
           mode,
           cwdPath,
           goal,
+          graph,
         );
       } else if (projectScoped === false) {
         created =

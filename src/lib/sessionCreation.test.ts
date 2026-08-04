@@ -10,6 +10,7 @@ import {
   scopeWithProjectRootLaunch,
 } from "./sessionCreation";
 import type { Project, Session } from "./types";
+import { createGraphSessionDraft } from "./graphSession";
 
 function project(repoPath: string): Project {
   return {
@@ -428,5 +429,49 @@ describe("session creation policy", () => {
         "/repo/app/.acorn/worktrees/app-worktree",
       ],
     ]);
+  });
+
+  it("carries a durable Graph spec through the isolated chat create request", async () => {
+    const graph = createGraphSessionDraft("codex");
+    graph.objective = "Ship the graph";
+    const addedNode = {
+      id: "build",
+      kind: "agent" as const,
+      title: "Build",
+      instruction: "Implement the graph.",
+    };
+    graph.definition.nodes.unshift(addedNode);
+    graph.definition.edges.push({ id: "build-goal", from: "build", to: "goal" });
+    graph.canvas.node_positions.build = { x: 40, y: 80 };
+
+    const request = buildSessionCreateRequest(
+      { sessions: [], projects: [project("/repo/app")] },
+      {
+        repoPath: "/repo/app",
+        isolated: true,
+        mode: "chat",
+        agentProvider: "codex",
+        graph,
+      },
+    );
+
+    expect(request).toMatchObject({
+      isolated: true,
+      mode: "chat",
+      agentProvider: "codex",
+      graph,
+    });
+
+    const calls: unknown[][] = [];
+    const create = async (...args: unknown[]) => {
+      calls.push(args);
+      return session("graph", "/repo/app", { graph, mode: "chat", isolated: true });
+    };
+    await applySessionCreateRequest(
+      create as Parameters<typeof applySessionCreateRequest>[0],
+      request,
+    );
+
+    expect(calls[0]?.[10]).toEqual(graph);
   });
 });

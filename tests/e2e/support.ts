@@ -35,6 +35,7 @@ declare global {
     __ACORN_MOCK_HANDLERS__: Record<string, InvokeHandler>;
     __ACORN_MOCK_INSTALLED__: boolean;
     __ACORN_TEST_MODE__: boolean;
+    __ACORN_EMIT_TAURI_EVENT__?: (event: string, payload: unknown) => void;
     __TAURI_INTERNALS__: unknown;
     __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => void };
   }

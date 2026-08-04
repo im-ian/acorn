@@ -61,11 +61,11 @@ test.describe("command palette", () => {
     await page.goto("/");
     await pressHotkey(page, { mod: true, key: "p" });
     await page
-      .getByRole("option", { name: "New goal session", exact: true })
+      .getByRole("option", { name: "New Loop session", exact: true })
       .click();
 
     await expect(
-      page.getByRole("dialog", { name: "New goal session" }),
+      page.getByRole("dialog", { name: "New Loop session" }),
     ).toBeVisible();
   });
 
