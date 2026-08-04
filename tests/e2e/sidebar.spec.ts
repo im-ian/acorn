@@ -4451,6 +4451,93 @@ test.describe("sidebar: project lifecycle", () => {
     ).toContainText("demo-api");
   });
 
+  test("top-level sessions reorder across the project's roots", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api"],
+      },
+    ]);
+    await tauri.handle("reorder_sessions", (args) => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      const order = Array.isArray(args?.order) ? args.order : [];
+      const indexById = new Map(order.map((id, index) => [id, index]));
+      w.__sessions = (w.__sessions ?? []).map((session) => {
+        const position = indexById.get(session.id);
+        return typeof position === "number" ? { ...session, position } : session;
+      });
+      return w.__sessions;
+    });
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__sessions = w.__sessions ?? [
+      {
+        id: "primary-session",
+        name: "primary",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "api-session",
+        name: "api",
+        repo_path: "/tmp/demo-api",
+        worktree_path: "/tmp/demo-api",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ];
+      return w.__sessions;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const primary = sidebar.getByRole("button", {
+      name: /^primary main · Ready/,
+    });
+    const api = sidebar.getByRole("button", { name: /^api main · Ready/ });
+
+    // Both roots' sessions share the project's top level, so one can be
+    // dragged past the other even though they live in different repos.
+    expect(await sessionPairOrder(primary, api)).toBe("alpha-beta");
+    await dragBetween(page, api, primary);
+    await expect
+      .poll(async () => sessionPairOrder(primary, api))
+      .toBe("beta-alpha");
+  });
+
   test("the project hover card lists the source folders", async ({
     page,
     tauri,

@@ -1187,8 +1187,18 @@ export function Sidebar() {
       ) {
         return;
       }
-      // Cross-project drops are not supported yet — silently ignore.
-      if (activeSession.repo_path !== overSession.repo_path) return;
+      // Sessions of one project share its top level even when they start in
+      // different roots, so ordering them is a same-project move. Drops that
+      // cross projects are still ignored.
+      const activeProjectRootPath = resolveProjectRootPath(
+        projectRootIndex,
+        activeSession.repo_path,
+      );
+      const overProjectRootPath = resolveProjectRootPath(
+        projectRootIndex,
+        overSession.repo_path,
+      );
+      if (activeProjectRootPath !== overProjectRootPath) return;
       const activeFolderId = projectFolderIdForSession(
         currentAllWorkspaceGroups,
         activeSid,
@@ -1217,13 +1227,22 @@ export function Sidebar() {
       const project =
         activeSession.project_scoped !== false
           ? (currentProjectGroups.find(
-              (group) => group.repoPath === activeSession.repo_path,
+              (group) => group.repoPath === activeProjectRootPath,
             ) ?? null)
           : null;
+      // Every root's default folder renders flat under the project header, so
+      // "is this row at the top level" is a question about the folder, not
+      // about which root the session happens to live in.
+      const isTopLevelFolderId = (folderId: string | null): boolean => {
+        const folder = folderId
+          ? projectFolderById(currentAllWorkspaceGroups, folderId)
+          : null;
+        return folder ? isGroupDefaultFolder(folder) : false;
+      };
       if (
         activeSession.project_scoped !== false &&
         project &&
-        overFolderId === defaultProjectFolderId(activeSession.repo_path) &&
+        isTopLevelFolderId(overFolderId) &&
         activeFolderId !== overFolderId
       ) {
         const movedIntoTopLevel = applySessionDropToProjectTopLevel(
@@ -1244,8 +1263,8 @@ export function Sidebar() {
       }
       if (
         activeSession.project_scoped !== false &&
-        activeFolderId === defaultProjectFolderId(activeSession.repo_path) &&
-        overFolderId === defaultProjectFolderId(activeSession.repo_path)
+        isTopLevelFolderId(activeFolderId) &&
+        isTopLevelFolderId(overFolderId)
       ) {
         if (project && applyProjectTopLevelOrder(project, activeId, overId)) {
           return;
