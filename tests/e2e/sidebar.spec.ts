@@ -4451,6 +4451,31 @@ test.describe("sidebar: project lifecycle", () => {
     ).toContainText("demo-api");
   });
 
+  test("the project hover card lists the source folders", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api"],
+      },
+    ]);
+    await tauri.respond("list_sessions", []);
+
+    await page.goto("/");
+    await page.getByText("demo", { exact: true }).hover();
+
+    // Source roots draw no rows, so the hover card is where the extra
+    // directories every session hands the agent are visible.
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("/tmp/demo");
+    await expect(tooltip).toContainText("/tmp/demo-api");
+  });
+
   test("a source folder creates worktree workspaces in its own repo", async ({
     page,
     tauri,

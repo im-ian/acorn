@@ -2054,6 +2054,14 @@ function ProjectGroupView({
 }: ProjectGroupViewProps) {
   const t = useTranslation();
   const shortcuts = useSettings((s) => s.settings.shortcuts);
+  const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  // Source roots have no rows of their own, so the project's hover card is
+  // where they show up.
+  const sourcePaths = useAppStore(
+    (s) =>
+      s.projects.find((entry) => entry.repo_path === project.repoPath)
+        ?.source_paths,
+  );
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [createMenu, setCreateMenu] = useState<{
     x: number;
@@ -2089,6 +2097,10 @@ function ProjectGroupView({
       isGroupDefaultFolder(folderGroup.folder),
     ) ?? project.folders[0] ?? null;
   const projectSessionCreationFolder = defaultFolderGroup?.folder ?? null;
+
+  const hoverDetails = sessionDisplay.showDetailsOnHover
+    ? buildProjectHoverDetails(t, project, sourcePaths ?? [])
+    : null;
 
   const runCreateAction = useCallback(
     (action: ProjectSessionCreateAction) => {
@@ -2270,9 +2282,17 @@ function ProjectGroupView({
           />
         </button>
         <span className="flex min-w-0 flex-1 items-center gap-1.5 leading-none">
-          <span className="truncate text-sm font-medium leading-5 text-fg">
-            {project.name}
-          </span>
+          {hoverDetails ? (
+            <Tooltip label={hoverDetails} side="right" multiline>
+              <span className="truncate text-sm font-medium leading-5 text-fg">
+                {project.name}
+              </span>
+            </Tooltip>
+          ) : (
+            <span className="truncate text-sm font-medium leading-5 text-fg">
+              {project.name}
+            </span>
+          )}
         </span>
         <div className="ml-auto hidden shrink-0 items-center gap-1 group-hover:flex">
           {PROJECT_SESSION_PRIMARY_CREATE_ACTIONS.map((action) => (
@@ -4944,6 +4964,47 @@ function buildSessionHoverDetails(
           value={sidebarText(t, "sidebar.metadata.isolatedWorktree")}
         />
       ) : null}
+    </span>
+  );
+}
+
+/**
+ * What a project is, in the terms that matter to the agent: the folder its
+ * sessions start in, and the extra roots every session hands over as
+ * `--add-dir`. Those roots have no sidebar rows of their own, so this is where
+ * the user sees them.
+ */
+function buildProjectHoverDetails(
+  t: Translator,
+  project: ProjectFolderProjectGroup,
+  sourcePaths: readonly string[],
+): ReactNode {
+  return (
+    <span className="flex w-72 max-w-full flex-col gap-1.5">
+      <SessionHoverDetailRow
+        icon={<Tag size={12} />}
+        label={sidebarText(t, "sidebar.metadata.name")}
+        value={project.name}
+      />
+      <SessionHoverDetailRow
+        icon={<Folder size={12} />}
+        label={sidebarText(t, "sidebar.metadata.workingDirectory")}
+        value={project.repoPath}
+        valueClassName="break-all font-mono"
+      />
+      {sourcePaths.length > 0 ? (
+        <SessionHoverDetailRow
+          icon={<FolderGit2 size={12} />}
+          label={sidebarText(t, "sidebar.metadata.sourceFolders")}
+          value={sourcePaths.join("\n")}
+          valueClassName="whitespace-pre-line break-all font-mono"
+        />
+      ) : null}
+      <SessionHoverDetailRow
+        icon={<Activity size={12} />}
+        label={sidebarText(t, "sidebar.metadata.sessions")}
+        value={String(project.sessions.length)}
+      />
     </span>
   );
 }

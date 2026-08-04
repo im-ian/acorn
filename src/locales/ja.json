@@ -1342,6 +1342,8 @@
       "branch": "支店",
       "detached": "(切り離された)",
       "workingDirectory": "作業ディレクトリ",
+      "sourceFolders": "ソースフォルダ",
+      "sessions": "セッション",
       "openPullRequest": "オープンPR",
       "processes": "プロセス",
       "status": "ステータス",

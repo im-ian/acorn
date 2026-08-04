@@ -1342,6 +1342,8 @@
       "branch": "分支",
       "detached": "（独立）",
       "workingDirectory": "工作目录",
+      "sourceFolders": "源文件夹",
+      "sessions": "会话",
       "openPullRequest": "打开 PR",
       "processes": "进程",
       "status": "状态",

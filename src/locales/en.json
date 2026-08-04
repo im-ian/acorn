@@ -1342,6 +1342,8 @@
       "branch": "Branch",
       "detached": "(detached)",
       "workingDirectory": "Working directory",
+      "sourceFolders": "Source folders",
+      "sessions": "Sessions",
       "openPullRequest": "Open PR",
       "processes": "Processes",
       "status": "Status",
