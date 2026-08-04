@@ -49,7 +49,7 @@ export function GraphFlowEdgeComponent({
         path={path}
         markerEnd={markerEnd}
         style={style}
-        interactionWidth={24}
+        interactionWidth={32}
       />
       {data?.label || (selected && data?.removable) ? (
         <EdgeLabelRenderer>
@@ -69,13 +69,13 @@ export function GraphFlowEdgeComponent({
                 type="button"
                 aria-label={data.removeLabel}
                 className={cn(
-                  "nodrag nopan pointer-events-auto grid size-5 place-items-center rounded-full",
+                  "nodrag nopan pointer-events-auto grid size-6 place-items-center rounded-full",
                   "border border-danger/45 bg-bg-elevated text-danger shadow-lg",
                   "transition hover:border-danger hover:bg-danger/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/35",
                 )}
                 onClick={() => void deleteElements({ edges: [{ id }] })}
               >
-                <X size={11} />
+                <X size={12} />
               </button>
             ) : null}
           </div>

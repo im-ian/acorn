@@ -11,11 +11,91 @@ import {
   type WorkGraph,
   type WorkGraphEdge,
   type WorkGraphGroup,
+  type WorkGraphGroupDirection,
   type WorkGraphNodeKind,
 } from "./workGraph";
 
 export const SESSION_GRAPH_VERSION = 1 as const;
 export const SESSION_GRAPH_CANVAS_VERSION = 2 as const;
+export const GRAPH_CANVAS_GRID_SIZE = 16;
+export const DEFAULT_GRAPH_CANVAS_DIRECTION = "LR" as const;
+
+const GRAPH_CANVAS_ORIGIN = 80;
+const GRAPH_CANVAS_HORIZONTAL_PITCH = 256;
+const GRAPH_CANVAS_VERTICAL_PITCH = 176;
+
+export function graphCanvasDirection(
+  canvas: SessionGraphCanvas,
+): WorkGraphGroupDirection {
+  return canvas.direction === "TD" ? "TD" : DEFAULT_GRAPH_CANVAS_DIRECTION;
+}
+
+export function snapGraphCanvasCoordinate(value: number): number {
+  return Math.round(value / GRAPH_CANVAS_GRID_SIZE) * GRAPH_CANVAS_GRID_SIZE;
+}
+
+export function snapGraphCanvasPosition(
+  position: { x: number; y: number },
+): { x: number; y: number } {
+  return {
+    x: snapGraphCanvasCoordinate(position.x),
+    y: snapGraphCanvasCoordinate(position.y),
+  };
+}
+
+function defaultExecutablePosition(
+  index: number,
+  direction: WorkGraphGroupDirection,
+): { x: number; y: number } {
+  const primary = index % 3;
+  const cross = Math.floor(index / 3);
+  return direction === "TD"
+    ? {
+        x: GRAPH_CANVAS_ORIGIN + cross * GRAPH_CANVAS_HORIZONTAL_PITCH,
+        y: GRAPH_CANVAS_ORIGIN + primary * GRAPH_CANVAS_VERTICAL_PITCH,
+      }
+    : {
+        x: GRAPH_CANVAS_ORIGIN + primary * GRAPH_CANVAS_HORIZONTAL_PITCH,
+        y: GRAPH_CANVAS_ORIGIN + cross * GRAPH_CANVAS_VERTICAL_PITCH,
+      };
+}
+
+export function setGraphCanvasDirection(
+  canvas: SessionGraphCanvas,
+  graph: WorkGraph,
+  direction: WorkGraphGroupDirection,
+): SessionGraphCanvas {
+  const currentDirection = graphCanvasDirection(canvas);
+  const lockedNodeIds = new Set(canvas.locked_node_ids ?? []);
+  const topLevelNodeIds = new Set(
+    graph.nodes.filter((node) => !node.group_id).map((node) => node.id),
+  );
+  const orientPosition = (position: { x: number; y: number }) => {
+    const snapped = snapGraphCanvasPosition(position);
+    return currentDirection === direction
+      ? snapped
+      : { x: snapped.y, y: snapped.x };
+  };
+
+  return {
+    ...canvas,
+    direction,
+    node_positions: Object.fromEntries(
+      Object.entries(canvas.node_positions).map(([id, position]) => [
+        id,
+        topLevelNodeIds.has(id) && !lockedNodeIds.has(id)
+          ? orientPosition(position)
+          : snapGraphCanvasPosition(position),
+      ]),
+    ),
+    group_positions: Object.fromEntries(
+      Object.entries(canvas.group_positions ?? {}).map(([id, position]) => [
+        id,
+        orientPosition(position),
+      ]),
+    ),
+  };
+}
 
 export function createGraphSessionDraft(
   provider: SessionAgentProvider = "claude",
@@ -27,7 +107,9 @@ export function createGraphSessionDraft(
     definition: createEmptyWorkGraph(),
     canvas: {
       version: SESSION_GRAPH_CANVAS_VERSION,
-      node_positions: { [WORK_GRAPH_GOAL_ID]: { x: 560, y: 220 } },
+      direction: DEFAULT_GRAPH_CANVAS_DIRECTION,
+      node_positions: { [WORK_GRAPH_GOAL_ID]: { x: 560, y: 80 } },
+      locked_node_ids: [],
       group_positions: {},
       viewport: { x: 0, y: 0, zoom: 1 },
     },
@@ -56,6 +138,7 @@ export function cloneSessionGraph(graph: SessionGraph): SessionGraph {
           { ...position },
         ]),
       ),
+      locked_node_ids: [...(graph.canvas.locked_node_ids ?? [])],
       group_positions: Object.fromEntries(
         Object.entries(graph.canvas.group_positions ?? {}).map(
           ([id, position]) => [id, { ...position }],
@@ -81,6 +164,7 @@ export function addGraphNode(
   const executableCount = graph.nodes.filter(
     (node) => node.kind !== "goal_sink",
   ).length;
+  const direction = graphCanvasDirection(canvas);
   return {
     graph: {
       ...graph,
@@ -100,10 +184,7 @@ export function addGraphNode(
       ...canvas,
       node_positions: {
         ...canvas.node_positions,
-        [nodeId]: {
-          x: 80 + (executableCount % 3) * 230,
-          y: 80 + Math.floor(executableCount / 3) * 160,
-        },
+        [nodeId]: defaultExecutablePosition(executableCount, direction),
       },
     },
     nodeId,
@@ -151,7 +232,7 @@ export function addGraphGroup(
           ? "Generate this task from the dynamic group prompt."
           : ""),
       group_id: groupId,
-      execution_mode: "parallel",
+      execution_mode: null,
     });
   }
   const group: WorkGraphGroup = {
@@ -168,14 +249,14 @@ export function addGraphGroup(
   };
   const node_positions = { ...canvas.node_positions };
   for (const [index, nodeId] of nodeIds.entries()) {
-    node_positions[nodeId] = { x: 48 + index * 248, y: 72 };
+    node_positions[nodeId] = { x: 48 + index * 256, y: 80 };
   }
   const groupCount = graph.groups?.length ?? 0;
   return {
     graph: {
       ...graph,
       version: 2,
-      execution_mode: graph.execution_mode ?? "parallel",
+      execution_mode: "sequential",
       nodes: [
         ...nodes,
         graph.nodes.find((node) => node.kind === "goal_sink")!,
@@ -188,7 +269,7 @@ export function addGraphGroup(
       node_positions,
       group_positions: {
         ...(canvas.group_positions ?? {}),
-        [groupId]: { x: 80, y: 80 + groupCount * 240 },
+        [groupId]: { x: 80, y: 80 + groupCount * 288 },
       },
     },
     groupId,
@@ -231,13 +312,16 @@ export function materializeGraphGroup(
       title: task.title.trim() || `Session ${index + 1}`,
       instruction: task.instruction.trim(),
       group_id: groupId,
-      execution_mode: "parallel" as const,
+      execution_mode: null,
     };
   });
   const node_positions = { ...canvas.node_positions };
   for (const id of removed) delete node_positions[id];
+  const locked_node_ids = (canvas.locked_node_ids ?? []).filter(
+    (id) => !removed.has(id),
+  );
   for (const [index, id] of nodeIds.entries()) {
-    node_positions[id] = { x: 48 + index * 248, y: 72 };
+    node_positions[id] = { x: 48 + index * 256, y: 80 };
   }
   return {
     graph: {
@@ -260,7 +344,7 @@ export function materializeGraphGroup(
           : candidate,
       ),
     },
-    canvas: { ...canvas, version: 2, node_positions },
+    canvas: { ...canvas, version: 2, node_positions, locked_node_ids },
     nodeIds,
   };
 }
@@ -277,6 +361,9 @@ export function removeGraphGroup(
   );
   const node_positions = { ...canvas.node_positions };
   for (const id of removed) delete node_positions[id];
+  const locked_node_ids = (canvas.locked_node_ids ?? []).filter(
+    (id) => !removed.has(id),
+  );
   const group_positions = { ...(canvas.group_positions ?? {}) };
   delete group_positions[groupId];
   return {
@@ -292,7 +379,7 @@ export function removeGraphGroup(
       ),
       groups: graph.groups?.filter((group) => group.id !== groupId),
     },
-    canvas: { ...canvas, node_positions, group_positions },
+    canvas: { ...canvas, node_positions, locked_node_ids, group_positions },
   };
 }
 
@@ -321,13 +408,16 @@ export function updateGraphGroup(
     : null;
   return {
     ...graph,
-    nodes: generationPrompt
-      ? graph.nodes.map((node) =>
-          node.group_id === groupId
-            ? { ...node, instruction: generationPrompt }
-            : node,
-        )
-      : graph.nodes,
+    execution_mode: "sequential",
+    nodes: graph.nodes.map((node) =>
+      node.group_id === groupId
+        ? {
+            ...node,
+            execution_mode: null,
+            instruction: generationPrompt || node.instruction,
+          }
+        : node,
+    ),
     groups,
   };
 }
@@ -367,13 +457,34 @@ export function alignGraphNodePositions(
 ): SessionGraphCanvas {
   const anchor = canvas.node_positions[anchorId];
   if (!anchor || nodeIds.length < 2) return canvas;
+  const lockedNodeIds = new Set(canvas.locked_node_ids ?? []);
   const node_positions = { ...canvas.node_positions };
   for (const nodeId of nodeIds) {
+    if (lockedNodeIds.has(nodeId)) continue;
     const position = node_positions[nodeId];
     if (!position) continue;
-    node_positions[nodeId] = { ...position, [axis]: anchor[axis] };
+    node_positions[nodeId] = snapGraphCanvasPosition({
+      ...position,
+      [axis]: anchor[axis],
+    });
   }
   return { ...canvas, node_positions };
+}
+
+export function setGraphNodePositionLocks(
+  canvas: SessionGraphCanvas,
+  nodeIds: readonly string[],
+  locked: boolean,
+): SessionGraphCanvas {
+  const nextLockedNodeIds = new Set(canvas.locked_node_ids ?? []);
+  for (const nodeId of nodeIds) {
+    if (locked) nextLockedNodeIds.add(nodeId);
+    else nextLockedNodeIds.delete(nodeId);
+  }
+  return {
+    ...canvas,
+    locked_node_ids: [...nextLockedNodeIds].sort(),
+  };
 }
 
 function dependencyGraphHasCycle(graph: WorkGraph): boolean {

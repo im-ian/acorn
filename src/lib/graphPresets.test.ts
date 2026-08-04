@@ -53,7 +53,8 @@ describe("graph preset catalogs", () => {
 
     for (const preset of BUILTIN_GRAPH_PRESETS) {
       expect(preset).toMatchObject({ builtIn: true, groupId: "built_in" });
-      expect(preset.snapshot.definition.execution_mode).toBe("parallel");
+      expect(preset.snapshot.definition.execution_mode).toBe("sequential");
+      expect(preset.snapshot.canvas.direction).toBe("LR");
       expect(Object.isFrozen(preset.snapshot.definition.nodes)).toBe(true);
       expect(Object.isFrozen(preset.snapshot.canvas.node_positions)).toBe(true);
       expect(validateWorkGraph(preset.snapshot.definition)).toEqual({
@@ -63,6 +64,13 @@ describe("graph preset catalogs", () => {
       expect(
         Object.keys(preset.snapshot.canvas.node_positions).sort(),
       ).toEqual(preset.snapshot.definition.nodes.map((node) => node.id).sort());
+      for (const position of [
+        ...Object.values(preset.snapshot.canvas.node_positions),
+        ...Object.values(preset.snapshot.canvas.group_positions ?? {}),
+      ]) {
+        expect(position.x % 16).toBe(0);
+        expect(position.y % 16).toBe(0);
+      }
       for (const validator of preset.snapshot.definition.nodes.filter(
         (node) => node.kind === "validator",
       )) {
@@ -149,6 +157,8 @@ describe("graph preset operations", () => {
 
   it("saves, duplicates, updates, selects, and deletes independent custom presets", () => {
     const source = sessionFromBuiltin();
+    source.canvas.direction = "TD";
+    source.canvas.locked_node_ids = ["implement"];
     let preferences = saveCustomGraphPreset(
       freshPreferences(),
       source,
@@ -169,6 +179,13 @@ describe("graph preset operations", () => {
     expect(preferences.customPresets[1].snapshot).not.toBe(
       preferences.customPresets[0].snapshot,
     );
+    expect(preferences.customPresets[0].snapshot.canvas.direction).toBe("TD");
+    expect(preferences.customPresets[0].snapshot.canvas.locked_node_ids).toEqual([
+      "implement",
+    ]);
+    expect(preferences.customPresets[1].snapshot.canvas.locked_node_ids).toEqual([
+      "implement",
+    ]);
     expect(preferences.customPresets[1].snapshot.definition.nodes[0]).not.toBe(
       preferences.customPresets[0].snapshot.definition.nodes[0],
     );
@@ -242,6 +259,12 @@ describe("graph preset persistence", () => {
       implement: { x: 20, y: 30 },
       unknown: { x: 40, y: 50 },
     };
+    damagedCanvas.snapshot.canvas.direction = "TD";
+    damagedCanvas.snapshot.canvas.locked_node_ids = [
+      "implement",
+      "unknown",
+      "implement",
+    ];
     damagedCanvas.snapshot.canvas.viewport = {
       x: 0,
       y: 0,
@@ -291,10 +314,14 @@ describe("graph preset persistence", () => {
     ).toEqual(["goal", "implement", "verify"]);
     expect(
       loaded.customPresets[0].snapshot.canvas.node_positions.implement,
-    ).toEqual({ x: 20, y: 30 });
+    ).toEqual({ x: 16, y: 32 });
     expect(
       loaded.customPresets[0].snapshot.canvas.node_positions.verify,
-    ).toEqual({ x: 310, y: 80 });
+    ).toEqual({ x: 80, y: 336 });
+    expect(loaded.customPresets[0].snapshot.canvas.direction).toBe("TD");
+    expect(loaded.customPresets[0].snapshot.canvas.locked_node_ids).toEqual([
+      "implement",
+    ]);
     expect(loaded.customPresets[0].snapshot.canvas.viewport).toBeNull();
   });
 

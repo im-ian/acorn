@@ -160,7 +160,7 @@ export function GraphPresetToolbar({
 
   return (
     <div
-      className="flex min-w-0 flex-wrap items-center gap-1.5 border-b border-border bg-bg-sidebar/45 px-3 py-2"
+      className="flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-bg-sidebar/45 px-3 py-2"
       data-graph-presets
     >
       <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">

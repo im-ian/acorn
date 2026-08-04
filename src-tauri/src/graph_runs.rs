@@ -565,8 +565,29 @@ fn select_execution_batch(run: &GraphRunState, ready: &[String]) -> Vec<String> 
         .collect::<Vec<_>>();
     candidates.sort();
     if run.definition.execution_mode == WorkGraphExecutionMode::Sequential {
-        candidates.truncate(1);
-        return candidates;
+        let Some(first_node_id) = candidates.first().cloned() else {
+            return candidates;
+        };
+        let first_group_id = run
+            .definition
+            .nodes
+            .iter()
+            .find(|node| node.id == first_node_id)
+            .and_then(|node| node.group_id.as_deref());
+        if let Some(group_id) = first_group_id {
+            if !group_is_sequential(&run.definition, group_id) {
+                return candidates
+                    .into_iter()
+                    .filter(|node_id| {
+                        run.definition.nodes.iter().any(|node| {
+                            node.id == *node_id && node.group_id.as_deref() == Some(group_id)
+                        })
+                    })
+                    .take(MAX_PARALLEL_GRAPH_NODES)
+                    .collect();
+            }
+        }
+        return vec![first_node_id];
     }
     let mut lanes = HashSet::new();
     let mut selected = Vec::new();
@@ -1230,7 +1251,7 @@ fn apply_generated_group_tasks(
             title: task.title.clone(),
             instruction: task.instruction.clone(),
             group_id: Some(group_id.to_string()),
-            execution_mode: Some(WorkGraphExecutionMode::Parallel),
+            execution_mode: None,
         };
         let insertion_index = definition
             .nodes
@@ -1250,6 +1271,7 @@ fn apply_generated_group_tasks(
             .expect("known prompt group member");
         node.title = task.title;
         node.instruction = task.instruction;
+        node.execution_mode = None;
     }
     definition
         .groups
@@ -2101,6 +2123,46 @@ mod tests {
             select_execution_batch(&run, &ready_node_ids(&run)),
             vec!["a"]
         );
+    }
+
+    #[test]
+    fn sequential_graph_runs_one_parallel_group_as_a_single_execution_unit() {
+        let mut first = node("a", WorkGraphNodeKind::Agent);
+        first.group_id = Some("workers".to_string());
+        let mut second = node("b", WorkGraphNodeKind::Agent);
+        second.group_id = Some("workers".to_string());
+        let mut run = run_for(WorkGraph {
+            version: 2,
+            execution_mode: WorkGraphExecutionMode::Sequential,
+            nodes: vec![
+                first,
+                second,
+                node("solo", WorkGraphNodeKind::Agent),
+                node("goal", WorkGraphNodeKind::GoalSink),
+            ],
+            edges: vec![
+                edge("workers-goal", "workers", "goal"),
+                edge("solo-goal", "solo", "goal"),
+            ],
+            groups: vec![WorkGraphGroup {
+                id: "workers".to_string(),
+                title: "Workers".to_string(),
+                direction: WorkGraphGroupDirection::LeftToRight,
+                execution_mode: WorkGraphExecutionMode::Parallel,
+                generation: WorkGraphGroupGeneration {
+                    mode: WorkGraphGroupGenerationMode::Fixed,
+                    count: Some(2),
+                    prompt: None,
+                    max_nodes: Some(12),
+                },
+            }],
+        });
+
+        let ready = ready_node_ids(&run);
+        assert_eq!(select_execution_batch(&run, &ready), vec!["a", "b"]);
+
+        run.definition.groups[0].execution_mode = WorkGraphExecutionMode::Sequential;
+        assert_eq!(select_execution_batch(&run, &ready), vec!["a"]);
     }
 
     #[test]

@@ -162,8 +162,29 @@ test("creates, connects, persists, and runs a visual Graph session", async ({
 
   const dialog = page.getByRole("dialog", { name: "New Graph session" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator('[data-graph-node="goal"]')).toBeVisible();
+  const modelSelect = dialog.getByRole("combobox", { name: "Model" });
+  await expect(modelSelect).toBeEnabled();
+  await modelSelect.click();
+  await page.getByRole("option", { name: /^Sonnet/ }).click();
+  const effortSelect = dialog.getByRole("combobox", { name: "Effort" });
+  await effortSelect.click();
+  await page.getByRole("option", { name: "high", exact: true }).click();
+  const goalNode = dialog.locator('[data-graph-node="goal"]');
+  await expect(goalNode).toBeVisible();
+  await expect(goalNode).toHaveAttribute("data-graph-node-warning", "isolated");
   await expect(dialog.getByRole("button", { name: "Create & Run" })).toBeDisabled();
+
+  const initialGoalPosition = await dialog
+    .getByTestId("rf__node-goal")
+    .evaluate((element) => {
+      const match = (element as HTMLElement).style.transform.match(
+        /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/,
+      );
+      return match ? { x: Number(match[1]), y: Number(match[2]) } : null;
+    });
+  expect(initialGoalPosition).toEqual({ x: 560, y: 80 });
+  expect(initialGoalPosition!.x % 16).toBe(0);
+  expect(initialGoalPosition!.y % 16).toBe(0);
 
   await dialog
     .getByPlaceholder("What should this graph accomplish?")
@@ -174,23 +195,170 @@ test("creates, connects, persists, and runs a visual Graph session", async ({
     .fill("Implement and verify the requested graph editor.");
 
   const agentNode = dialog.locator('[data-graph-node="agent-1"]');
-  const before = await agentNode.boundingBox();
-  expect(before).not.toBeNull();
-  await page.mouse.move(before!.x + 80, before!.y + 35);
+  await expect(agentNode).toHaveAttribute("data-graph-node-warning", "isolated");
+
+  const toolbarMetrics = await dialog
+    .getByTestId("graph-canvas-toolbar")
+    .evaluate((toolbar) =>
+      Array.from(
+        toolbar.querySelectorAll(
+          ':scope > button, :scope > div button[role="combobox"]',
+        ),
+      ).map((element) => {
+        const rect = element.getBoundingClientRect();
+        return { height: rect.height, centerY: rect.y + rect.height / 2 };
+      }),
+    );
+  expect(toolbarMetrics).toHaveLength(7);
+  expect(new Set(toolbarMetrics.map(({ height }) => Math.round(height)))).toEqual(
+    new Set([32]),
+  );
+  expect(
+    Math.max(...toolbarMetrics.map(({ centerY }) => centerY)) -
+      Math.min(...toolbarMetrics.map(({ centerY }) => centerY)),
+  ).toBeLessThanOrEqual(1);
+
+  const nodeInspector = dialog
+    .locator("aside section")
+    .filter({ hasText: "Node inspector" });
+  const inspectorSelects = nodeInspector.getByRole("combobox");
+  const promptControlBox = await inspectorSelects.nth(0).boundingBox();
+  const kindControlBox = await inspectorSelects.nth(1).boundingBox();
+  const kindLabelBox = await nodeInspector
+    .getByText("Kind", { exact: true })
+    .boundingBox();
+  const titleLabelBox = await nodeInspector
+    .getByText("Title", { exact: true })
+    .boundingBox();
+  expect(promptControlBox).not.toBeNull();
+  expect(kindControlBox).not.toBeNull();
+  expect(kindLabelBox).not.toBeNull();
+  expect(titleLabelBox).not.toBeNull();
+  expect(
+    kindLabelBox!.y - (promptControlBox!.y + promptControlBox!.height),
+  ).toBeGreaterThanOrEqual(10);
+  expect(
+    titleLabelBox!.y - (kindControlBox!.y + kindControlBox!.height),
+  ).toBeGreaterThanOrEqual(10);
+
+  const layoutSelect = dialog.getByRole("combobox", { name: "Layout" });
+  await expect(
+    dialog.getByRole("combobox", { name: "Graph execution mode" }),
+  ).toHaveCount(0);
+  await expect(layoutSelect).toContainText("Horizontal");
+  await layoutSelect.click();
+  await page.getByRole("option", { name: "Vertical", exact: true }).click();
+  await expect(layoutSelect).toContainText("Vertical");
+  await expect(agentNode.locator(".react-flow__handle-bottom")).toBeVisible();
+  await expect(goalNode.locator(".react-flow__handle-top")).toBeVisible();
+  const graphPane = dialog.locator(".react-flow__pane");
+  await graphPane.dispatchEvent("click");
+  await expect(dialog).toContainText(
+    "Drag from the bottom handle to another node's top handle.",
+  );
+  await expect
+    .poll(() =>
+      dialog.getByTestId("rf__node-goal").evaluate((element) => {
+        const match = (element as HTMLElement).style.transform.match(
+          /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/,
+        );
+        return match ? `${match[1]},${match[2]}` : null;
+      }),
+    )
+    .toBe("80,560");
+
+  const graphCanvas = dialog.getByTestId("graph-canvas");
+  const viewportLayer = dialog.locator(".react-flow__viewport");
+  await dialog.getByRole("button", { name: "Fit View" }).click();
+  await expect
+    .poll(async () => {
+      const canvasBox = await graphCanvas.boundingBox();
+      const nodeBoxes = await Promise.all([
+        agentNode.boundingBox(),
+        goalNode.boundingBox(),
+      ]);
+      if (!canvasBox || nodeBoxes.some((box) => box === null)) return false;
+      return nodeBoxes.every(
+        (box) =>
+          box!.y >= canvasBox.y &&
+          box!.y + box!.height <= canvasBox.y + canvasBox.height,
+      );
+    })
+    .toBe(true);
+
+  await expect(
+    dialog.getByRole("button", { name: "Toggle Interactivity" }),
+  ).toHaveCount(0);
+  await expect(
+    dialog
+      .locator(".react-flow__controls")
+      .getByRole("button", { name: /selected/i }),
+  ).toHaveCount(0);
+  const lockPositionsButton = dialog.getByRole("button", {
+    name: "Lock selected",
+  });
+  await expect(lockPositionsButton).toBeDisabled();
+  await agentNode.click();
+  await expect(lockPositionsButton).toBeEnabled();
+  await lockPositionsButton.click();
+  const unlockPositionsButton = dialog.getByRole("button", {
+    name: "Unlock selected",
+  });
+  await expect(unlockPositionsButton).toHaveAttribute("aria-pressed", "true");
+  await expect(layoutSelect).toBeEnabled();
+  await expect(agentNode).toHaveAttribute("data-graph-node-locked", "true");
+  await expect(
+    agentNode.getByLabel("Node position locked"),
+  ).toBeVisible();
+
+  const agentFlowNode = dialog.getByTestId("rf__node-agent-1");
+  const goalFlowNode = dialog.getByTestId("rf__node-goal");
+  await expect(agentFlowNode).not.toHaveClass(/draggable/);
+  await expect(goalFlowNode).toHaveClass(/draggable/);
+  const lockedTransform = await agentFlowNode.evaluate(
+    (element) => (element as HTMLElement).style.transform,
+  );
+  const lockedBox = await agentNode.boundingBox();
+  expect(lockedBox).not.toBeNull();
+  const lockedNodeX = lockedBox!.x + lockedBox!.width / 4;
+  const lockedNodeY = lockedBox!.y + lockedBox!.height * 0.7;
+  await page.mouse.move(lockedNodeX, lockedNodeY);
   await page.mouse.down();
-  await page.mouse.move(before!.x + 150, before!.y + 105, { steps: 8 });
+  await page.mouse.move(lockedNodeX + 32, lockedNodeY - 16, { steps: 8 });
   await page.mouse.up();
+  await expect
+    .poll(() =>
+      agentFlowNode.evaluate(
+        (element) => (element as HTMLElement).style.transform,
+      ),
+    )
+    .toBe(lockedTransform);
 
-  const agentSize = await agentNode.boundingBox();
-  const goalSize = await dialog.locator('[data-graph-node="goal"]').boundingBox();
-  expect(agentSize?.width).toBe(goalSize?.width);
-  expect(agentSize?.height).toBe(goalSize?.height);
+  await unlockPositionsButton.click();
+  await expect(agentNode).toHaveAttribute("data-graph-node-locked", "false");
+  await expect(agentFlowNode).toHaveClass(/draggable/);
+  await dialog.getByRole("button", { name: "Lock selected" }).click();
+  await expect(agentNode).toHaveAttribute("data-graph-node-locked", "true");
 
-  const source = agentNode.locator(".react-flow__handle-right");
-  const target = dialog
-    .locator('[data-graph-node="goal"]')
-    .locator(".react-flow__handle-left");
+  const nodeSizes = await dialog.evaluate((element) => {
+    const agent = element.querySelector('[data-graph-node="agent-1"]');
+    const goal = element.querySelector('[data-graph-node="goal"]');
+    if (!agent || !goal) return null;
+    const agentRect = agent.getBoundingClientRect();
+    const goalRect = goal.getBoundingClientRect();
+    return {
+      agent: { width: agentRect.width, height: agentRect.height },
+      goal: { width: goalRect.width, height: goalRect.height },
+    };
+  });
+  expect(nodeSizes).not.toBeNull();
+  expect(nodeSizes!.agent.width).toBeCloseTo(nodeSizes!.goal.width, 2);
+  expect(nodeSizes!.agent.height).toBeCloseTo(nodeSizes!.goal.height, 2);
+
+  const source = agentNode.locator(".react-flow__handle-bottom");
+  const target = goalNode.locator(".react-flow__handle-top");
   const edgePath = dialog.locator(".react-flow__edge-path").first();
+  const edgeInteraction = dialog.locator(".react-flow__edge-interaction").first();
   async function connectAgentToGoal() {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sourceBox = await source.boundingBox();
@@ -215,13 +383,25 @@ test("creates, connects, persists, and runs a visual Graph session", async ({
   }
 
   await connectAgentToGoal();
-  await edgePath.click({ force: true });
-  await dialog.getByRole("button", { name: /Disconnect edge edge-1/ }).click();
+  await expect(edgePath).toHaveCSS("stroke-width", "2.25px");
+  await expect(edgeInteraction).toHaveAttribute("stroke-width", "32");
+  await edgeInteraction.dispatchEvent("click");
+  const disconnectButton = dialog.getByRole("button", {
+    name: /Disconnect edge edge-1/,
+  });
+  await expect(disconnectButton).toBeVisible();
+  await expect(disconnectButton).toHaveCSS("width", "24px");
+  await expect(disconnectButton).toHaveCSS("height", "24px");
+  await disconnectButton.click();
   await expect(dialog.getByRole("status")).toContainText("Graph is incomplete");
+  await expect(edgePath).toHaveCount(0);
 
   await connectAgentToGoal();
 
   await expect(dialog.getByRole("status")).toContainText("Ready to run");
+  await expect(agentNode).toHaveAttribute("data-graph-node-warning", "none");
+  await expect(goalNode).toHaveAttribute("data-graph-node-warning", "none");
+  await expect(dialog.locator("aside pre")).toContainText("flowchart TD");
 
   await dialog.getByRole("textbox", { name: "Graph preset name" }).fill("Simple flow");
   await dialog.getByRole("button", { name: "Save preset" }).click();
@@ -234,7 +414,6 @@ test("creates, connects, persists, and runs a visual Graph session", async ({
     )
     .toBe("Simple flow");
 
-  const viewportLayer = dialog.locator(".react-flow__viewport");
   const savedViewportTransform = await viewportLayer.evaluate(
     (element) => (element as HTMLElement).style.transform,
   );
@@ -269,6 +448,13 @@ test("creates, connects, persists, and runs a visual Graph session", async ({
   const groupInspector = dialog
     .locator("aside section")
     .filter({ hasText: "Group inspector" });
+  const groupExecution = groupInspector.getByRole("combobox", {
+    name: "Group execution mode",
+  });
+  await expect(groupExecution).toContainText("Parallel");
+  await groupExecution.click();
+  await page.getByRole("option", { name: "Sequential", exact: true }).click();
+  await expect(groupExecution).toContainText("Sequential");
   await groupInspector.getByRole("combobox").first().click();
   await page.getByRole("option", { name: "Generated from prompt" }).click();
   await expect(researchGroup).toContainText("auto nodes");
@@ -280,7 +466,12 @@ test("creates, connects, persists, and runs a visual Graph session", async ({
   await page.getByRole("option", { name: /Simple flow/ }).click();
   await dialog.getByRole("button", { name: "Apply" }).click();
   await expect(dialog.locator('[data-graph-group="research-group"]')).toHaveCount(0);
-  await expect(dialog.locator('[data-graph-node="agent-1"]')).toBeVisible();
+  const restoredPresetAgent = dialog.locator('[data-graph-node="agent-1"]');
+  await expect(restoredPresetAgent).toBeVisible();
+  await expect(restoredPresetAgent).toHaveAttribute(
+    "data-graph-node-locked",
+    "true",
+  );
 
   await dialog.getByRole("button", { name: "Create & Run" }).click();
 
@@ -299,21 +490,24 @@ test("creates, connects, persists, and runs a visual Graph session", async ({
     graph: {
       version: 1,
       objective: "Build the visual graph editor",
+      agent: { provider: "claude", model: "sonnet", effort: "high" },
       definition: {
         version: 2,
-        execution_mode: "parallel",
+        execution_mode: "sequential",
         nodes: expect.arrayContaining([
           expect.objectContaining({ id: "agent-1", kind: "agent" }),
           expect.objectContaining({ id: "goal", kind: "goal_sink" }),
         ]),
         edges: [expect.objectContaining({ from: "agent-1", to: "goal" })],
       },
+      canvas: expect.objectContaining({
+        direction: "TD",
+        locked_node_ids: ["agent-1"],
+      }),
     },
   });
-  expect(createArgs.graph.canvas.node_positions["agent-1"]).not.toEqual({
-    x: 80,
-    y: 80,
-  });
+  expect(createArgs.graph.canvas.node_positions["agent-1"].x % 16).toBe(0);
+  expect(createArgs.graph.canvas.node_positions["agent-1"].y % 16).toBe(0);
 
   await page.reload();
   await expect(page.locator("[data-graph-session-view]")).toBeVisible();
@@ -337,6 +531,7 @@ test("creates, connects, persists, and runs a visual Graph session", async ({
     '[data-graph-session-view] [data-graph-node="goal"]',
   );
   await expect(restoredAgent).toBeVisible();
+  await expect(restoredAgent).toHaveAttribute("data-graph-node-locked", "true");
   await expect(restoredGoal).toBeVisible();
   await expect
     .poll(async () => {
@@ -355,6 +550,71 @@ test("creates, connects, persists, and runs a visual Graph session", async ({
       );
     })
     .toBe(true);
+});
+
+test("keeps Graph session actions visible in a short window", async ({
+  page,
+  tauri,
+}) => {
+  await page.setViewportSize({ width: 1_024, height: 600 });
+  await tauri.respond("list_projects", [PROJECT]);
+  await tauri.respond("list_sessions", []);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Project demo" }).hover();
+  await page
+    .getByRole("button", { name: "Create session in this project" })
+    .click();
+  await page.getByRole("menuitem", { name: "New Graph session" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "New Graph session" });
+  const createButton = dialog.getByRole("button", { name: "Create & Run" });
+  const graphCanvas = dialog.getByTestId("graph-canvas");
+  await expect(dialog).toBeVisible();
+  await expect(createButton).toBeInViewport();
+  await expect
+    .poll(async () => (await graphCanvas.boundingBox())?.height ?? 0)
+    .toBeGreaterThan(160);
+});
+
+test("pans the Graph canvas independently on both scroll axes", async ({
+  page,
+  tauri,
+}) => {
+  await tauri.respond("list_projects", [PROJECT]);
+  await tauri.respond("list_sessions", []);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Project demo" }).hover();
+  await page
+    .getByRole("button", { name: "Create session in this project" })
+    .click();
+  await page.getByRole("menuitem", { name: "New Graph session" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "New Graph session" });
+  const graphPane = dialog.locator(".react-flow__pane");
+  const viewportLayer = dialog.locator(".react-flow__viewport");
+  const readViewportTranslation = () =>
+    viewportLayer.evaluate((element) => {
+      const match = (element as HTMLElement).style.transform.match(
+        /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/,
+      );
+      return match ? { x: Number(match[1]), y: Number(match[2]) } : null;
+    });
+
+  const beforeVerticalScroll = await readViewportTranslation();
+  expect(beforeVerticalScroll).not.toBeNull();
+  await graphPane.dispatchEvent("wheel", { deltaX: 0, deltaY: 192 });
+  await expect
+    .poll(async () => (await readViewportTranslation())?.y)
+    .not.toBe(beforeVerticalScroll!.y);
+
+  const beforeHorizontalScroll = await readViewportTranslation();
+  expect(beforeHorizontalScroll).not.toBeNull();
+  await graphPane.dispatchEvent("wheel", { deltaX: 192, deltaY: 0 });
+  await expect
+    .poll(async () => (await readViewportTranslation())?.x)
+    .not.toBe(beforeHorizontalScroll!.x);
 });
 
 test("keeps a newer Graph event when a slower snapshot arrives", async ({

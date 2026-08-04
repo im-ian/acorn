@@ -7,6 +7,7 @@ import {
   serializeWorkGraphToMermaid,
   validateGraphPromptPlan,
   validateWorkGraph,
+  workGraphNodeConnectivityWarnings,
   type WorkGraph,
 } from "./workGraph";
 
@@ -79,10 +80,10 @@ describe("work graph validation", () => {
     expect(result.errors).toContain("Unsupported node kind for build: router");
   });
 
-  it("accepts group boundary edges and defaults execution to parallel", () => {
+  it("accepts group boundary edges with parallel execution inside the group", () => {
     const graph: WorkGraph = {
       version: 2,
-      execution_mode: "parallel",
+      execution_mode: "sequential",
       groups: [
         {
           id: "research",
@@ -123,6 +124,31 @@ describe("work graph validation", () => {
     expect(mermaid).toContain('subgraph g0["Research"]');
     expect(mermaid.match(/n4 --> n[23]/g)).toHaveLength(2);
     expect(mermaid.match(/n[23] --> n1/g)).toHaveLength(2);
+    expect(workGraphNodeConnectivityWarnings(graph).size).toBe(0);
+  });
+
+  it("distinguishes isolated nodes from nodes without a path to GOAL", () => {
+    const isolated = validGraph();
+    isolated.nodes.push({
+      id: "orphan",
+      kind: "agent",
+      title: "Orphan",
+      instruction: "Run alone.",
+    });
+
+    expect(workGraphNodeConnectivityWarnings(isolated)).toEqual(
+      new Map([["orphan", "isolated"]]),
+    );
+
+    const disconnected = validGraph();
+    disconnected.edges = [{ id: "build-check", from: "build", to: "check" }];
+    expect(workGraphNodeConnectivityWarnings(disconnected)).toEqual(
+      new Map([
+        ["goal", "isolated"],
+        ["build", "no_goal_path"],
+        ["check", "no_goal_path"],
+      ]),
+    );
   });
 
   it("requires prompt-generated group edges to use the stable group boundary", () => {
@@ -388,6 +414,12 @@ describe("work graph Mermaid", () => {
         "  n0 --> n1",
         "  n1 --> n2",
       ].join("\n"),
+    );
+  });
+
+  it("uses the selected top-level canvas direction", () => {
+    expect(serializeWorkGraphToMermaid(validGraph(), "LR")).toMatch(
+      /^flowchart LR/,
     );
   });
 });

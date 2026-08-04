@@ -31,7 +31,8 @@ use acorn_session::{
     AgentStatusSource, GraphNodeVerdict, GraphRunState, Project, Session, SessionAgentProvider,
     SessionGoal, SessionGoalModelSelection, SessionGoalProgress, SessionGoalRunState,
     SessionGoalStage, SessionGoalStagePolicy, SessionGraph, SessionGraphNodePosition, SessionKind,
-    SessionMode, SessionOwner, SessionStatus, SESSION_GRAPH_CANVAS_VERSION, SESSION_GRAPH_VERSION,
+    SessionMode, SessionOwner, SessionStatus, WorkGraphExecutionMode, WorkGraphGroupDirection,
+    WorkGraphNodeKind, SESSION_GRAPH_CANVAS_VERSION, SESSION_GRAPH_VERSION,
 };
 use acorn_transcript::{assistant_message_text, collapse_preview};
 
@@ -4846,6 +4847,12 @@ fn validate_special_session_creation(
     Ok(())
 }
 
+const GRAPH_CANVAS_GRID_SIZE: f64 = 16.0;
+
+fn snap_graph_canvas_coordinate(value: f64) -> f64 {
+    (value / GRAPH_CANVAS_GRID_SIZE).round() * GRAPH_CANVAS_GRID_SIZE
+}
+
 fn normalize_session_graph(mut graph: SessionGraph) -> AppResult<SessionGraph> {
     if graph.version != SESSION_GRAPH_VERSION {
         return Err(AppError::Other(format!(
@@ -4861,6 +4868,9 @@ fn normalize_session_graph(mut graph: SessionGraph) -> AppResult<SessionGraph> {
     }
     graph.agent.model = crate::ai::normalize_optional_model_arg(graph.agent.model.as_deref())?;
     graph.agent.effort = crate::ai::normalize_effort_arg(graph.agent.effort.as_deref())?;
+    if graph.definition.version == work_graph::WORK_GRAPH_VERSION {
+        graph.definition.execution_mode = WorkGraphExecutionMode::Sequential;
+    }
     work_graph::validate_work_graph(&graph.definition).map_err(AppError::Other)?;
     if !matches!(graph.canvas.version, 1 | SESSION_GRAPH_CANVAS_VERSION) {
         return Err(AppError::Other(format!(
@@ -4878,23 +4888,44 @@ fn normalize_session_graph(mut graph: SessionGraph) -> AppResult<SessionGraph> {
         .canvas
         .node_positions
         .retain(|node_id, _| node_ids.contains(node_id.as_str()));
-    for (index, node) in graph.definition.nodes.iter().enumerate() {
+    graph
+        .canvas
+        .locked_node_ids
+        .retain(|node_id| node_ids.contains(node_id.as_str()));
+    let canvas_direction = graph.canvas.direction;
+    let mut executable_index = 0usize;
+    for node in &graph.definition.nodes {
+        let horizontal_fallback = if node.kind == WorkGraphNodeKind::GoalSink {
+            SessionGraphNodePosition { x: 560.0, y: 80.0 }
+        } else {
+            let position = SessionGraphNodePosition {
+                x: 80.0 + (executable_index % 3) as f64 * 256.0,
+                y: 80.0 + (executable_index / 3) as f64 * 176.0,
+            };
+            executable_index += 1;
+            position
+        };
+        let fallback = if canvas_direction == WorkGraphGroupDirection::TopDown {
+            SessionGraphNodePosition {
+                x: horizontal_fallback.y,
+                y: horizontal_fallback.x,
+            }
+        } else {
+            horizontal_fallback
+        };
         let position = graph
             .canvas
             .node_positions
             .entry(node.id.clone())
-            .or_insert(SessionGraphNodePosition {
-                x: 80.0 + (index % 4) as f64 * 260.0,
-                y: 80.0 + (index / 4) as f64 * 180.0,
-            });
+            .or_insert(fallback);
         if !position.x.is_finite() || !position.y.is_finite() {
             return Err(AppError::Other(format!(
                 "Graph node {} has a non-finite canvas position",
                 node.id
             )));
         }
-        position.x = position.x.clamp(-100_000.0, 100_000.0);
-        position.y = position.y.clamp(-100_000.0, 100_000.0);
+        position.x = snap_graph_canvas_coordinate(position.x.clamp(-100_000.0, 100_000.0));
+        position.y = snap_graph_canvas_coordinate(position.y.clamp(-100_000.0, 100_000.0));
     }
     let group_ids = graph
         .definition
@@ -4921,8 +4952,8 @@ fn normalize_session_graph(mut graph: SessionGraph) -> AppResult<SessionGraph> {
                 group.id
             )));
         }
-        position.x = position.x.clamp(-100_000.0, 100_000.0);
-        position.y = position.y.clamp(-100_000.0, 100_000.0);
+        position.x = snap_graph_canvas_coordinate(position.x.clamp(-100_000.0, 100_000.0));
+        position.y = snap_graph_canvas_coordinate(position.y.clamp(-100_000.0, 100_000.0));
     }
     if let Some(viewport) = graph.canvas.viewport.as_mut() {
         if !viewport.x.is_finite() || !viewport.y.is_finite() || !viewport.zoom.is_finite() {
@@ -10898,6 +10929,7 @@ mod tests {
         Session, SessionAgentProvider, SessionGoal, SessionGoalModelConfig, SessionGoalPolicies,
         SessionGoalPreset, SessionGoalProgress, SessionGoalStagePolicy, SessionGraph,
         SessionGraphAgent, SessionGraphCanvas, SessionGraphNodePosition, SessionKind, SessionMode,
+        WorkGraphGroupDirection,
     };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -10961,10 +10993,12 @@ mod tests {
     }
 
     fn graph_spec(provider: SessionAgentProvider) -> SessionGraph {
-        let definition = match single_node_manual_graph_plan("Implement the graph session.") {
+        let mut definition = match single_node_manual_graph_plan("Implement the graph session.") {
             crate::work_graph::GraphPromptPlan::Manual { graph, .. } => graph,
             _ => unreachable!("manual graph helper"),
         };
+        definition.version = crate::work_graph::WORK_GRAPH_VERSION;
+        definition.execution_mode = crate::work_graph::WorkGraphExecutionMode::Parallel;
         SessionGraph {
             version: 1,
             objective: "  Persist the graph  ".to_string(),
@@ -10976,6 +11010,7 @@ mod tests {
             definition,
             canvas: SessionGraphCanvas {
                 version: 1,
+                direction: WorkGraphGroupDirection::LeftToRight,
                 node_positions: std::collections::BTreeMap::from([
                     (
                         "build".to_string(),
@@ -10985,6 +11020,10 @@ mod tests {
                         "unknown".to_string(),
                         SessionGraphNodePosition { x: 1.0, y: 2.0 },
                     ),
+                ]),
+                locked_node_ids: std::collections::BTreeSet::from([
+                    "build".to_string(),
+                    "unknown".to_string(),
                 ]),
                 group_positions: std::collections::BTreeMap::new(),
                 viewport: None,
@@ -11059,12 +11098,37 @@ mod tests {
 
         assert_eq!(normalized.objective, "Persist the graph");
         assert_eq!(normalized.agent.model.as_deref(), Some("model-test"));
+        assert_eq!(
+            normalized.definition.execution_mode,
+            crate::work_graph::WorkGraphExecutionMode::Sequential
+        );
         assert!(!normalized.canvas.node_positions.contains_key("unknown"));
+        assert_eq!(
+            normalized.canvas.locked_node_ids,
+            std::collections::BTreeSet::from(["build".to_string()])
+        );
         assert!(normalized.canvas.node_positions.contains_key("goal"));
+        assert_eq!(
+            normalized.canvas.node_positions.get("build"),
+            Some(&SessionGraphNodePosition { x: 16.0, y: 32.0 })
+        );
+        assert_eq!(
+            normalized.canvas.node_positions.get("goal"),
+            Some(&SessionGraphNodePosition { x: 560.0, y: 80.0 })
+        );
 
         let mut invalid = graph_spec(SessionAgentProvider::Codex);
         invalid.definition.edges.clear();
         assert!(normalize_session_graph(invalid).is_err());
+
+        let mut vertical = graph_spec(SessionAgentProvider::Codex);
+        vertical.canvas.direction = WorkGraphGroupDirection::TopDown;
+        let normalized_vertical =
+            normalize_session_graph(vertical).expect("vertical graph normalizes");
+        assert_eq!(
+            normalized_vertical.canvas.node_positions.get("goal"),
+            Some(&SessionGraphNodePosition { x: 80.0, y: 560.0 })
+        );
     }
 
     #[test]

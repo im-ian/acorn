@@ -1530,7 +1530,7 @@ mod tests {
     fn fake_graph(revision: u32) -> SessionGraph {
         use crate::{
             SessionGraphAgent, SessionGraphCanvas, SessionGraphNodePosition, WorkGraph,
-            WorkGraphEdge, WorkGraphNode, WorkGraphNodeKind,
+            WorkGraphEdge, WorkGraphGroupDirection, WorkGraphNode, WorkGraphNodeKind,
         };
 
         SessionGraph {
@@ -1575,6 +1575,7 @@ mod tests {
             },
             canvas: SessionGraphCanvas {
                 version: 1,
+                direction: WorkGraphGroupDirection::LeftToRight,
                 node_positions: std::collections::BTreeMap::from([
                     (
                         "build".to_string(),
@@ -1585,6 +1586,7 @@ mod tests {
                         SessionGraphNodePosition { x: 420.0, y: 40.0 },
                     ),
                 ]),
+                locked_node_ids: std::collections::BTreeSet::from(["build".to_string()]),
                 group_positions: std::collections::BTreeMap::new(),
                 viewport: None,
             },

@@ -5,6 +5,11 @@ import type {
   SessionGraphViewport,
 } from "./types";
 import {
+  DEFAULT_GRAPH_CANVAS_DIRECTION,
+  graphCanvasDirection,
+  snapGraphCanvasPosition,
+} from "./graphSession";
+import {
   WORK_GRAPH_GOAL_ID,
   WORK_GRAPH_LIMITS,
   WORK_GRAPH_VERSION,
@@ -113,7 +118,7 @@ function deepFreeze<T>(value: T): T {
 }
 
 function position(x: number, y: number): SessionGraphNodePosition {
-  return { x, y };
+  return snapGraphCanvasPosition({ x, y });
 }
 
 function graphSnapshot(
@@ -127,14 +132,16 @@ function graphSnapshot(
     version: GRAPH_PRESET_SNAPSHOT_VERSION,
     definition: {
       version: WORK_GRAPH_VERSION,
-      execution_mode: "parallel",
+      execution_mode: "sequential",
       nodes,
       edges,
       groups,
     },
     canvas: {
       version: 2,
+      direction: DEFAULT_GRAPH_CANVAS_DIRECTION,
       node_positions: nodePositions,
+      locked_node_ids: [],
       group_positions: groupPositions,
       viewport: { x: 0, y: 0, zoom: 1 },
     },
@@ -274,7 +281,7 @@ export const BUILTIN_GRAPH_PRESETS: readonly BuiltinGraphPreset[] = deepFreeze([
           title: "Research A",
           instruction: RESEARCH_NODE_PROMPT_PRESET.instruction,
           group_id: "research-group",
-          execution_mode: "parallel",
+          execution_mode: null,
         },
         {
           id: "research-b",
@@ -282,7 +289,7 @@ export const BUILTIN_GRAPH_PRESETS: readonly BuiltinGraphPreset[] = deepFreeze([
           title: "Research B",
           instruction: RESEARCH_NODE_PROMPT_PRESET.instruction,
           group_id: "research-group",
-          execution_mode: "parallel",
+          execution_mode: null,
         },
         {
           id: "research-c",
@@ -290,7 +297,7 @@ export const BUILTIN_GRAPH_PRESETS: readonly BuiltinGraphPreset[] = deepFreeze([
           title: "Research C",
           instruction: RESEARCH_NODE_PROMPT_PRESET.instruction,
           group_id: "research-group",
-          execution_mode: "parallel",
+          execution_mode: null,
         },
         {
           id: "merge-research",
@@ -635,8 +642,7 @@ function sanitizeWorkGraph(value: unknown): WorkGraph | null {
   }
   const graph: WorkGraph = {
     version: WORK_GRAPH_VERSION,
-    execution_mode:
-      (executionMode as WorkGraphExecutionMode | undefined) ?? "parallel",
+    execution_mode: "sequential",
     nodes,
     edges,
     groups,
@@ -654,7 +660,7 @@ function finitePosition(value: unknown): SessionGraphNodePosition | null {
   ) {
     return null;
   }
-  return { x: value.x, y: value.y };
+  return snapGraphCanvasPosition({ x: value.x, y: value.y });
 }
 
 function finiteViewport(value: unknown): SessionGraphViewport | null {
@@ -676,12 +682,17 @@ function finiteViewport(value: unknown): SessionGraphViewport | null {
 function defaultNodePosition(
   node: WorkGraphNode,
   executableIndex: number,
+  direction: WorkGraphGroupDirection,
 ): SessionGraphNodePosition {
-  if (node.kind === "goal_sink") return position(560, 220);
-  return position(
-    80 + (executableIndex % 3) * 230,
-    80 + Math.floor(executableIndex / 3) * 160,
-  );
+  const horizontal = node.kind === "goal_sink"
+    ? position(560, 80)
+    : position(
+        80 + (executableIndex % 3) * 256,
+        80 + Math.floor(executableIndex / 3) * 176,
+      );
+  return direction === "TD"
+    ? { x: horizontal.y, y: horizontal.x }
+    : horizontal;
 }
 
 function sanitizeCanvas(
@@ -689,6 +700,8 @@ function sanitizeCanvas(
   graph: WorkGraph,
 ): SessionGraphCanvas | null {
   if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) return null;
+  const direction: WorkGraphGroupDirection =
+    value.direction === "TD" ? "TD" : DEFAULT_GRAPH_CANVAS_DIRECTION;
   const persistedPositions = isRecord(value.node_positions)
     ? value.node_positions
     : {};
@@ -697,7 +710,7 @@ function sanitizeCanvas(
   for (const node of graph.nodes) {
     nodePositions[node.id] =
       finitePosition(persistedPositions[node.id]) ??
-      defaultNodePosition(node, executableIndex);
+      defaultNodePosition(node, executableIndex, direction);
     if (node.kind !== "goal_sink") executableIndex += 1;
   }
   const persistedGroupPositions = isRecord(value.group_positions)
@@ -708,9 +721,20 @@ function sanitizeCanvas(
     groupPositions[group.id] =
       finitePosition(persistedGroupPositions[group.id]) ?? position(80, 80);
   }
+  const persistedLockedNodeIds = new Set(
+    Array.isArray(value.locked_node_ids)
+      ? value.locked_node_ids.filter(
+          (nodeId): nodeId is string => typeof nodeId === "string",
+        )
+      : [],
+  );
   return {
     version: 2,
+    direction,
     node_positions: nodePositions,
+    locked_node_ids: graph.nodes
+      .map((node) => node.id)
+      .filter((nodeId) => persistedLockedNodeIds.has(nodeId)),
     group_positions: groupPositions,
     viewport:
       value.viewport === undefined || value.viewport === null
@@ -861,7 +885,7 @@ export function cloneGraphPresetSnapshot(
     version: GRAPH_PRESET_SNAPSHOT_VERSION,
     definition: {
       version: WORK_GRAPH_VERSION,
-      execution_mode: snapshot.definition.execution_mode ?? "parallel",
+      execution_mode: "sequential",
       nodes: snapshot.definition.nodes.map((node) => ({ ...node })),
       edges: snapshot.definition.edges.map((edge) => ({ ...edge })),
       groups: snapshot.definition.groups?.map((group) => ({
@@ -871,12 +895,14 @@ export function cloneGraphPresetSnapshot(
     },
     canvas: {
       version: 2,
+      direction: graphCanvasDirection(snapshot.canvas),
       node_positions: Object.fromEntries(
         Object.entries(snapshot.canvas.node_positions).map(([id, value]) => [
           id,
           { ...value },
         ]),
       ),
+      locked_node_ids: [...(snapshot.canvas.locked_node_ids ?? [])],
       group_positions: Object.fromEntries(
         Object.entries(snapshot.canvas.group_positions ?? {}).map(
           ([id, value]) => [id, { ...value }],
@@ -1089,7 +1115,7 @@ export function applyGraphNodePromptPreset(
   return {
     ...graph,
     version: WORK_GRAPH_VERSION,
-    execution_mode: graph.execution_mode ?? "parallel",
+    execution_mode: "sequential",
     nodes: graph.nodes.map((node) =>
       node.id === nodeId
         ? {

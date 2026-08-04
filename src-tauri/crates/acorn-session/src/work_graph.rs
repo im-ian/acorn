@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -135,12 +135,17 @@ fn is_parallel_execution_mode(mode: &WorkGraphExecutionMode) -> bool {
     *mode == WorkGraphExecutionMode::Parallel
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WorkGraphGroupDirection {
     #[serde(rename = "LR")]
+    #[default]
     LeftToRight,
     #[serde(rename = "TD")]
     TopDown,
+}
+
+fn is_left_to_right_direction(direction: &WorkGraphGroupDirection) -> bool {
+    *direction == WorkGraphGroupDirection::LeftToRight
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -242,8 +247,12 @@ fn default_canvas_version() -> u32 {
 pub struct SessionGraphCanvas {
     #[serde(default = "default_canvas_version")]
     pub version: u32,
+    #[serde(default, skip_serializing_if = "is_left_to_right_direction")]
+    pub direction: WorkGraphGroupDirection,
     #[serde(default)]
     pub node_positions: BTreeMap<String, SessionGraphNodePosition>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub locked_node_ids: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub group_positions: BTreeMap<String, SessionGraphNodePosition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -254,7 +263,9 @@ impl Default for SessionGraphCanvas {
     fn default() -> Self {
         Self {
             version: SESSION_GRAPH_CANVAS_VERSION,
+            direction: WorkGraphGroupDirection::LeftToRight,
             node_positions: BTreeMap::new(),
+            locked_node_ids: BTreeSet::new(),
             group_positions: BTreeMap::new(),
             viewport: None,
         }
@@ -410,6 +421,8 @@ mod tests {
         .expect("legacy canvas deserializes");
 
         assert!(canvas.group_positions.is_empty());
+        assert!(canvas.locked_node_ids.is_empty());
+        assert_eq!(canvas.direction, WorkGraphGroupDirection::LeftToRight);
         assert_eq!(canvas.version, 1);
     }
 }

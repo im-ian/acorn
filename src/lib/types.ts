@@ -1,4 +1,8 @@
-import type { GraphPromptPlan, WorkGraph } from "./workGraph";
+import type {
+  GraphPromptPlan,
+  WorkGraph,
+  WorkGraphGroupDirection,
+} from "./workGraph";
 
 export type SessionStatus =
   | "ready"
@@ -176,7 +180,9 @@ export interface SessionGraphViewport {
 
 export interface SessionGraphCanvas {
   version: 1 | 2;
+  direction?: WorkGraphGroupDirection;
   node_positions: Record<string, SessionGraphNodePosition>;
+  locked_node_ids?: string[];
   group_positions?: Record<string, SessionGraphNodePosition>;
   viewport?: SessionGraphViewport | null;
 }

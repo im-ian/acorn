@@ -110,6 +110,10 @@ export interface WorkGraphValidationResult {
   errors: string[];
 }
 
+export type WorkGraphNodeConnectivityWarning =
+  | "isolated"
+  | "no_goal_path";
+
 export const AUTOMATIC_GRAPH_PROMPT_PLAN: GraphPromptPlan = Object.freeze({
   version: GRAPH_PROMPT_PLAN_VERSION,
   mode: "automatic",
@@ -118,7 +122,7 @@ export const AUTOMATIC_GRAPH_PROMPT_PLAN: GraphPromptPlan = Object.freeze({
 export function createEmptyWorkGraph(): WorkGraph {
   return {
     version: WORK_GRAPH_VERSION,
-    execution_mode: "parallel",
+    execution_mode: "sequential",
     nodes: [
       {
         id: WORK_GRAPH_GOAL_ID,
@@ -243,6 +247,51 @@ export function expandWorkGraphEdges(graph: WorkGraph): EffectiveWorkGraphEdge[]
     }
   }
   return expanded;
+}
+
+export function workGraphNodeConnectivityWarnings(
+  graph: WorkGraph,
+): Map<string, WorkGraphNodeConnectivityWarning> {
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  const dependencyEdges = expandWorkGraphEdges(graph).filter(
+    (edge) =>
+      workGraphEdgeKind(edge) === "dependency" &&
+      nodeIds.has(edge.from) &&
+      nodeIds.has(edge.to),
+  );
+  const incident = new Set<string>();
+  const reverse = new Map(graph.nodes.map((node) => [node.id, [] as string[]]));
+  for (const edge of dependencyEdges) {
+    incident.add(edge.from);
+    incident.add(edge.to);
+    reverse.get(edge.to)?.push(edge.from);
+  }
+
+  const reachesGoal = new Set<string>();
+  const pending: string[] = graph.nodes.some(
+    (node) => node.id === WORK_GRAPH_GOAL_ID,
+  )
+    ? [WORK_GRAPH_GOAL_ID]
+    : [];
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (reachesGoal.has(id)) continue;
+    reachesGoal.add(id);
+    pending.push(...(reverse.get(id) ?? []));
+  }
+
+  const warnings = new Map<string, WorkGraphNodeConnectivityWarning>();
+  for (const node of graph.nodes) {
+    if (!incident.has(node.id)) {
+      warnings.set(node.id, "isolated");
+    } else if (
+      node.kind !== "goal_sink" &&
+      !reachesGoal.has(node.id)
+    ) {
+      warnings.set(node.id, "no_goal_path");
+    }
+  }
+  return warnings;
 }
 
 export function validateWorkGraph(graph: WorkGraph): WorkGraphValidationResult {
@@ -645,13 +694,16 @@ function mermaidText(value: string): string {
     .replace(/\r\n|\r|\n/g, "<br/>");
 }
 
-export function serializeWorkGraphToMermaid(graph: WorkGraph): string {
+export function serializeWorkGraphToMermaid(
+  graph: WorkGraph,
+  direction: WorkGraphGroupDirection = "TD",
+): string {
   const validation = validateWorkGraph(graph);
   if (!validation.valid) throw new Error(validation.errors[0]);
 
   const nodes = [...graph.nodes].sort((a, b) => compareStableId(a.id, b.id));
   const aliases = new Map(nodes.map((node, index) => [node.id, `n${index}`]));
-  const lines = ["flowchart TD"];
+  const lines = [`flowchart ${direction}`];
   const appendNode = (node: WorkGraphNode, indent = "  ") => {
     const alias = aliases.get(node.id)!;
     if (node.kind === "goal_sink") {

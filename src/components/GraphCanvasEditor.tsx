@@ -8,6 +8,7 @@ import {
   Position,
   ReactFlow,
   applyNodeChanges,
+  useUpdateNodeInternals,
   type Connection,
   type Node,
   type NodeProps,
@@ -23,6 +24,7 @@ import {
   GitMerge,
   Hand,
   LoaderCircle,
+  Lock,
   MoveHorizontal,
   MoveVertical,
   Plus,
@@ -31,6 +33,7 @@ import {
   SkipForward,
   Sparkles,
   Trash2,
+  Unlock,
   UserRound,
   Waypoints,
 } from "lucide-react";
@@ -46,8 +49,13 @@ import {
   addGraphGroup,
   addGraphNode,
   connectGraphNodes,
+  GRAPH_CANVAS_GRID_SIZE,
+  graphCanvasDirection,
   removeGraphGroup,
   resizeFixedGraphGroup,
+  setGraphCanvasDirection,
+  setGraphNodePositionLocks,
+  snapGraphCanvasPosition,
   updateGraphGroup,
   type GraphConnectionError,
   validateProspectiveGraphEdge,
@@ -62,11 +70,14 @@ import {
   validateWorkGraph,
   workGraphEdgeCondition,
   workGraphGroups,
+  workGraphNodeConnectivityWarnings,
   type WorkGraphExecutionMode,
   type WorkGraphEdgeCondition,
   type WorkGraphEdgeKind,
   type WorkGraphGroup,
+  type WorkGraphGroupDirection,
   type WorkGraphNodeKind,
+  type WorkGraphNodeConnectivityWarning,
 } from "../lib/workGraph";
 import type {
   GraphNodeRunStatus,
@@ -90,11 +101,14 @@ const EXECUTABLE_KINDS = [
 
 const GRAPH_NODE_WIDTH = 224;
 const GRAPH_NODE_HEIGHT = 144;
-const GROUP_HEADER_HEIGHT = 72;
+const GROUP_HEADER_HEIGHT = 80;
 const GROUP_PADDING_X = 48;
 const GROUP_PADDING_BOTTOM = 32;
-const GROUP_GAP = 24;
-const SNAP_GRID: [number, number] = [16, 16];
+const GROUP_GAP = 32;
+const SNAP_GRID: [number, number] = [
+  GRAPH_CANVAS_GRID_SIZE,
+  GRAPH_CANVAS_GRID_SIZE,
+];
 
 const NODE_PROMPT_PRESET_NAME_KEYS: Record<string, TranslationKey> = {
   "builtin:node:agent-research:v1":
@@ -117,10 +131,15 @@ type GraphNodeData = {
   instruction: string;
   sourceHandleLabel: string;
   targetHandleLabel: string;
+  direction: WorkGraphGroupDirection;
+  connectionWarning: WorkGraphNodeConnectivityWarning | null;
+  connectionWarningLabel: string | null;
   status: GraphNodeRunStatus | null;
   question: string | null;
   requiresVerdict: boolean;
   canSubmitHumanInput: boolean;
+  positionLocked: boolean;
+  positionLockedLabel: string;
   onHumanInput?: (
     nodeId: string,
     input: string,
@@ -135,6 +154,7 @@ type GraphGroupData = {
   memberCount: number;
   sourceHandleLabel: string;
   targetHandleLabel: string;
+  direction: WorkGraphGroupDirection;
   status: GraphNodeRunStatus | null;
 };
 
@@ -316,23 +336,34 @@ function HumanNodeInput({ data }: { data: GraphNodeData }) {
 
 function WorkGraphFlowNode({ data, selected }: NodeProps<WorkGraphFlowNode>) {
   const t = useTranslation();
+  const updateNodeInternals = useUpdateNodeInternals();
   const isGoal = data.kind === "goal_sink";
+  const targetPosition = data.direction === "TD" ? Position.Top : Position.Left;
+  const sourcePosition =
+    data.direction === "TD" ? Position.Bottom : Position.Right;
   const showHumanInput =
     data.kind === "human" && data.status === "waiting" && data.onHumanInput;
+  useEffect(() => {
+    updateNodeInternals(data.id);
+  }, [data.direction, data.id, updateNodeInternals]);
   return (
     <div
       className={cn(
         "flex h-36 w-56 flex-col overflow-hidden rounded-xl border bg-bg-elevated shadow-lg transition",
         isGoal ? "border-accent/60 bg-accent/10" : "border-border",
+        data.connectionWarning && !data.status &&
+          "border-warning/70 bg-warning/5",
         data.status && statusClassName(data.status),
         selected && "ring-2 ring-accent/50",
       )}
       data-graph-node={data.id}
       data-graph-node-status={data.status ?? "idle"}
+      data-graph-node-warning={data.connectionWarning ?? "none"}
+      data-graph-node-locked={data.positionLocked ? "true" : "false"}
     >
       <Handle
         type="target"
-        position={Position.Left}
+        position={targetPosition}
         className="!size-3 !border-2 !border-bg !bg-accent"
         aria-label={`${data.id} — ${data.targetHandleLabel}`}
       />
@@ -341,10 +372,28 @@ function WorkGraphFlowNode({ data, selected }: NodeProps<WorkGraphFlowNode>) {
         <span className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
           {isGoal ? "GOAL" : data.kindLabel}
         </span>
-        {data.status ? (
+        {data.connectionWarning ? (
+          <span
+            className="flex items-center gap-1 text-[9px] font-medium text-warning"
+            aria-label={data.connectionWarningLabel ?? undefined}
+            title={data.connectionWarningLabel ?? undefined}
+          >
+            <CircleAlert size={11} />
+            {data.connectionWarningLabel}
+          </span>
+        ) : data.status ? (
           <span className="flex items-center gap-1 text-[9px] font-medium text-fg-muted">
             <StatusMark status={data.status} />
             {t(STATUS_LABEL_KEYS[data.status])}
+          </span>
+        ) : null}
+        {data.positionLocked ? (
+          <span
+            className="shrink-0 text-accent"
+            aria-label={data.positionLockedLabel}
+            title={data.positionLockedLabel}
+          >
+            <Lock size={11} />
           </span>
         ) : null}
       </div>
@@ -365,7 +414,7 @@ function WorkGraphFlowNode({ data, selected }: NodeProps<WorkGraphFlowNode>) {
       {!isGoal ? (
         <Handle
           type="source"
-          position={Position.Right}
+          position={sourcePosition}
           className="!size-3 !border-2 !border-bg !bg-accent"
           aria-label={`${data.id} — ${data.sourceHandleLabel}`}
         />
@@ -379,6 +428,13 @@ function WorkGraphGroupFlowNode({
   selected,
 }: NodeProps<WorkGraphGroupFlowNode>) {
   const t = useTranslation();
+  const updateNodeInternals = useUpdateNodeInternals();
+  const targetPosition = data.direction === "TD" ? Position.Top : Position.Left;
+  const sourcePosition =
+    data.direction === "TD" ? Position.Bottom : Position.Right;
+  useEffect(() => {
+    updateNodeInternals(data.id);
+  }, [data.direction, data.id, updateNodeInternals]);
   return (
     <div
       className={cn(
@@ -391,7 +447,7 @@ function WorkGraphGroupFlowNode({
     >
       <Handle
         type="target"
-        position={Position.Left}
+        position={targetPosition}
         className="!size-3.5 !border-2 !border-bg !bg-accent"
         aria-label={`${data.id} — ${data.targetHandleLabel}`}
       />
@@ -419,7 +475,7 @@ function WorkGraphGroupFlowNode({
       </div>
       <Handle
         type="source"
-        position={Position.Right}
+        position={sourcePosition}
         className="!size-3.5 !border-2 !border-bg !bg-accent"
         aria-label={`${data.id} — ${data.sourceHandleLabel}`}
       />
@@ -442,6 +498,11 @@ const CONNECTION_ERROR_KEYS = {
   duplicate: "graphSession.connectionErrors.duplicate",
   cycle: "graphSession.connectionErrors.cycle",
 } as const satisfies Record<GraphConnectionError, string>;
+
+const CONNECTIVITY_WARNING_KEYS = {
+  isolated: "graphSession.canvas.isolatedNode",
+  no_goal_path: "graphSession.canvas.noGoalPath",
+} as const satisfies Record<WorkGraphNodeConnectivityWarning, TranslationKey>;
 
 function groupDimensions(group: WorkGraphGroup, memberCount: number) {
   const count = Math.max(1, memberCount);
@@ -504,6 +565,7 @@ export function GraphCanvasEditor({
   const t = useTranslation();
   const canEdit = mode === "edit" && !disabled;
   const displayDefinition = runState?.definition ?? value.definition;
+  const canvasDirection = graphCanvasDirection(value.canvas);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
@@ -519,17 +581,25 @@ export function GraphCanvasEditor({
   const latestOnChangeRef = useRef(onChange);
   latestValueRef.current = value;
   latestOnChangeRef.current = onChange;
+  const lockedNodeIds = useMemo(
+    () => new Set(value.canvas.locked_node_ids ?? []),
+    [value.canvas.locked_node_ids],
+  );
 
   const validation = useMemo(
     () => validateWorkGraph(displayDefinition),
     [displayDefinition],
   );
+  const connectivityWarnings = useMemo(
+    () => workGraphNodeConnectivityWarnings(displayDefinition),
+    [displayDefinition],
+  );
   const mermaid = useMemo(
     () =>
       validation.valid
-        ? serializeWorkGraphToMermaid(displayDefinition)
+        ? serializeWorkGraphToMermaid(displayDefinition, canvasDirection)
         : null,
-    [displayDefinition, validation.valid],
+    [canvasDirection, displayDefinition, validation.valid],
   );
   const selectedNode = displayDefinition.nodes.find(
     (node) => node.id === selectedNodeId,
@@ -592,6 +662,7 @@ export function GraphCanvasEditor({
           memberCount: members.length,
           sourceHandleLabel: t("graphSession.sourceHandle"),
           targetHandleLabel: t("graphSession.targetHandle"),
+          direction: canvasDirection,
           status: groupRunStatus(
             members.map((member) => member.id),
             runState,
@@ -627,9 +698,11 @@ export function GraphCanvasEditor({
               y: 80 + Math.floor(index / 3) * (GRAPH_NODE_HEIGHT + GROUP_GAP),
             };
         const runtimeNode = runState?.nodes[node.id];
+        const connectionWarning = connectivityWarnings.get(node.id) ?? null;
         const existsInSavedGraph = value.definition.nodes.some(
           (saved) => saved.id === node.id,
         );
+        const positionLocked = lockedNodeIds.has(node.id);
         return {
           id: node.id,
           type: "workGraph",
@@ -646,6 +719,11 @@ export function GraphCanvasEditor({
                 : t(`chat.graphEditor.kinds.${node.kind}`),
             sourceHandleLabel: t("graphSession.sourceHandle"),
             targetHandleLabel: t("graphSession.targetHandle"),
+            direction: group?.direction ?? canvasDirection,
+            connectionWarning,
+            connectionWarningLabel: connectionWarning
+              ? t(CONNECTIVITY_WARNING_KEYS[connectionWarning])
+              : null,
             status: runtimeNode?.status ?? null,
             question: runtimeNode?.question ?? null,
             requiresVerdict:
@@ -659,11 +737,13 @@ export function GraphCanvasEditor({
               mode === "run" &&
               runtimeNode?.status === "waiting" &&
               Boolean(onHumanInput),
+            positionLocked,
+            positionLockedLabel: t("graphSession.canvas.nodePositionLocked"),
             onHumanInput,
           },
           deletable:
             canEdit && existsInSavedGraph && node.kind !== "goal_sink",
-          draggable: canEdit && existsInSavedGraph,
+          draggable: canEdit && !positionLocked && existsInSavedGraph,
           connectable:
             canEdit &&
             existsInSavedGraph &&
@@ -676,16 +756,23 @@ export function GraphCanvasEditor({
   }, [
     canEdit,
     displayDefinition,
+    lockedNodeIds,
     mode,
     onHumanInput,
     runState,
     t,
+    canvasDirection,
+    connectivityWarnings,
     value.canvas.group_positions,
     value.canvas.node_positions,
     value.definition.nodes,
   ]);
   const [flowNodes, setFlowNodes] = useState<GraphFlowNode[]>(derivedNodes);
   const nodeIdSignature = derivedNodes.map((node) => node.id).join("\0");
+  const layoutSignature = derivedNodes
+    .filter((node) => !node.parentId)
+    .map((node) => `${node.id}:${node.position.x}:${node.position.y}`)
+    .join("\0");
 
   useEffect(() => {
     setFlowNodes((current) => {
@@ -766,7 +853,7 @@ export function GraphCanvasEditor({
       cancelAnimationFrame(firstFrame);
       if (secondFrame) cancelAnimationFrame(secondFrame);
     };
-  }, [ensureGraphIsVisible, nodeIdSignature]);
+  }, [ensureGraphIsVisible, layoutSignature, nodeIdSignature]);
 
   useEffect(() => {
     const container = canvasRef.current;
@@ -787,7 +874,13 @@ export function GraphCanvasEditor({
 
   const handleNodesChange = useCallback(
     (changes: Parameters<typeof applyNodeChanges<GraphFlowNode>>[0]) => {
-      setFlowNodes((current) => applyNodeChanges(changes, current));
+      const lockedIds = new Set(
+        latestValueRef.current.canvas.locked_node_ids ?? [],
+      );
+      const allowedChanges = changes.filter(
+        (change) => change.type !== "position" || !lockedIds.has(change.id),
+      );
+      setFlowNodes((current) => applyNodeChanges(allowedChanges, current));
     },
     [],
   );
@@ -837,7 +930,7 @@ export function GraphCanvasEditor({
                 : state === "traversed"
                   ? "var(--color-success)"
                   : "var(--color-accent)",
-            strokeWidth: state === "active" ? 2.5 : 1.7,
+            strokeWidth: state === "active" || edge.id === selectedEdgeId ? 3 : 2.25,
             opacity: state === "idle" ? 0.72 : 1,
             strokeDasharray: edge.kind === "retry" ? "7 5" : undefined,
           },
@@ -922,7 +1015,13 @@ export function GraphCanvasEditor({
           (edge) => !removable.has(edge.from) && !removable.has(edge.to),
         ),
       };
-      canvas = { ...canvas, node_positions };
+      canvas = {
+        ...canvas,
+        node_positions,
+        locked_node_ids: (canvas.locked_node_ids ?? []).filter(
+          (id) => !removable.has(id),
+        ),
+      };
     }
     if (definition === current.definition && canvas === current.canvas) return;
     latestOnChangeRef.current({ definition, canvas });
@@ -1006,6 +1105,8 @@ export function GraphCanvasEditor({
     ) {
       return;
     }
+    if (!isGroup && current.canvas.locked_node_ids?.includes(node.id)) return;
+    const position = snapGraphCanvasPosition(node.position);
     latestOnChangeRef.current({
       ...current,
       canvas: isGroup
@@ -1013,14 +1114,14 @@ export function GraphCanvasEditor({
             ...current.canvas,
             group_positions: {
               ...(current.canvas.group_positions ?? {}),
-              [node.id]: { x: node.position.x, y: node.position.y },
+              [node.id]: position,
             },
           }
         : {
             ...current.canvas,
             node_positions: {
               ...current.canvas.node_positions,
-              [node.id]: { x: node.position.x, y: node.position.y },
+              [node.id]: position,
             },
           },
     });
@@ -1029,11 +1130,34 @@ export function GraphCanvasEditor({
   const selectedFlowNodes = flowNodes.filter((node) =>
     selectedNodeIds.includes(node.id),
   );
+  const selectedSavedNodeIds = selectedNodeIds.filter((id) =>
+    value.definition.nodes.some((node) => node.id === id),
+  );
+  const allSelectedNodesLocked =
+    selectedSavedNodeIds.length > 0 &&
+    selectedSavedNodeIds.every((id) => lockedNodeIds.has(id));
+  const canToggleNodeLocks = canEdit && selectedSavedNodeIds.length > 0;
   const selectedParents = new Set(
     selectedFlowNodes.map((node) => node.parentId ?? null),
   );
   const canAlign =
-    canEdit && selectedFlowNodes.length >= 2 && selectedParents.size === 1;
+    canEdit &&
+    selectedFlowNodes.length >= 2 &&
+    selectedParents.size === 1 &&
+    selectedFlowNodes.every((node) => !lockedNodeIds.has(node.id));
+
+  function toggleSelectedNodeLocks() {
+    if (!canToggleNodeLocks) return;
+    const current = latestValueRef.current;
+    latestOnChangeRef.current({
+      ...current,
+      canvas: setGraphNodePositionLocks(
+        current.canvas,
+        selectedSavedNodeIds,
+        !allSelectedNodesLocked,
+      ),
+    });
+  }
 
   function alignSelected(axis: "x" | "y") {
     if (!canAlign) return;
@@ -1054,7 +1178,10 @@ export function GraphCanvasEditor({
     const node_positions = { ...current.canvas.node_positions };
     const group_positions = { ...(current.canvas.group_positions ?? {}) };
     for (const node of selectedFlowNodes) {
-      const position = { ...node.position, [axis]: anchor.position[axis] };
+      const position = snapGraphCanvasPosition({
+        ...node.position,
+        [axis]: anchor.position[axis],
+      });
       if (groupIds.has(node.id)) group_positions[node.id] = position;
       else if (current.definition.nodes.some((candidate) => candidate.id === node.id)) {
         node_positions[node.id] = position;
@@ -1069,12 +1196,14 @@ export function GraphCanvasEditor({
   function updateGroupDirection(direction: WorkGraphGroup["direction"]) {
     if (!savedGroup || !canEdit) return;
     const current = latestValueRef.current;
+    const lockedIds = new Set(current.canvas.locked_node_ids ?? []);
     const members = current.definition.nodes.filter(
       (node) => node.group_id === savedGroup.id,
     );
     const nextGroup = { ...savedGroup, direction };
     const node_positions = { ...current.canvas.node_positions };
     for (const [index, member] of members.entries()) {
+      if (lockedIds.has(member.id)) continue;
       node_positions[member.id] = fallbackGroupMemberPosition(nextGroup, index);
     }
     updateGroup(
@@ -1124,15 +1253,16 @@ export function GraphCanvasEditor({
     }
   }
 
-  function updateExecutionMode(executionMode: WorkGraphExecutionMode) {
+  function updateCanvasDirection(direction: WorkGraphGroupDirection) {
     if (!canEdit) return;
     const current = latestValueRef.current;
     latestOnChangeRef.current({
       ...current,
-      definition: {
-        ...current.definition,
-        execution_mode: executionMode,
-      },
+      canvas: setGraphCanvasDirection(
+        current.canvas,
+        current.definition,
+        direction,
+      ),
     });
   }
 
@@ -1168,14 +1298,42 @@ export function GraphCanvasEditor({
     >
       <div ref={canvasRef} className="relative min-h-0 border-r border-border bg-bg">
         {canEdit ? (
-          <div className="absolute left-3 top-3 z-10 flex flex-wrap gap-1 rounded-lg border border-border bg-bg-elevated/95 p-1.5 shadow-lg">
-            <Button size="xs" variant="outline" onClick={addNode}>
+          <div
+            data-testid="graph-canvas-toolbar"
+            className="absolute left-3 top-3 z-10 flex flex-wrap items-center gap-1 rounded-lg border border-border bg-bg-elevated/95 p-1.5 shadow-lg"
+          >
+            <Button size="xs" variant="outline" className="h-8" onClick={addNode}>
               <Plus size={11} /> {t("graphSession.canvas.node")}
             </Button>
-            <Button size="xs" variant="outline" onClick={addGroup}>
+            <Button size="xs" variant="outline" className="h-8" onClick={addGroup}>
               <Boxes size={11} /> {t("graphSession.canvas.group")}
             </Button>
-            <span className="mx-0.5 w-px self-stretch bg-border" />
+            <Button
+              size="xs"
+              variant="ghost"
+              className="h-8"
+              disabled={!canToggleNodeLocks}
+              aria-label={t(
+                allSelectedNodesLocked
+                  ? "graphSession.canvas.unlockSelectedNodes"
+                  : "graphSession.canvas.lockSelectedNodes",
+              )}
+              aria-pressed={allSelectedNodesLocked}
+              title={t(
+                allSelectedNodesLocked
+                  ? "graphSession.canvas.unlockSelectedNodes"
+                  : "graphSession.canvas.lockSelectedNodes",
+              )}
+              onClick={toggleSelectedNodeLocks}
+            >
+              {allSelectedNodesLocked ? <Unlock size={11} /> : <Lock size={11} />}
+              {t(
+                allSelectedNodesLocked
+                  ? "graphSession.canvas.unlockSelectedNodes"
+                  : "graphSession.canvas.lockSelectedNodes",
+              )}
+            </Button>
+            <span className="mx-0.5 h-5 w-px self-center bg-border" />
             <div className="flex items-center gap-1.5 pl-1 text-[10px] text-fg-muted">
               <span>{t("graphSession.canvas.connection")}</span>
               <Select
@@ -1189,26 +1347,27 @@ export function GraphCanvasEditor({
                 ]}
               />
             </div>
-            <span className="mx-0.5 w-px self-stretch bg-border" />
+            <span className="mx-0.5 h-5 w-px self-center bg-border" />
             <div className="flex items-center gap-1.5 pl-1 text-[10px] text-fg-muted">
-              <span>{t("graphSession.canvas.execution")}</span>
+              <span>{t("graphSession.canvas.layout")}</span>
               <Select
-                aria-label={t("graphSession.canvas.graphExecutionMode")}
-                className="w-28"
-                value={value.definition.execution_mode ?? "parallel"}
-                onValueChange={(executionMode) =>
-                  updateExecutionMode(executionMode as WorkGraphExecutionMode)
+                aria-label={t("graphSession.canvas.layout")}
+                className="w-24"
+                value={canvasDirection}
+                onValueChange={(direction) =>
+                  updateCanvasDirection(direction as WorkGraphGroupDirection)
                 }
                 options={[
-                  { value: "parallel", label: t("graphSession.canvas.parallel") },
-                  { value: "sequential", label: t("graphSession.canvas.sequential") },
+                  { value: "LR", label: t("graphSession.canvas.horizontal") },
+                  { value: "TD", label: t("graphSession.canvas.vertical") },
                 ]}
               />
             </div>
-            <span className="mx-0.5 w-px self-stretch bg-border" />
+            <span className="mx-0.5 h-5 w-px self-center bg-border" />
             <Button
               size="xs"
               variant="ghost"
+              className="h-8"
               disabled={!canAlign}
               aria-label={t("graphSession.canvas.alignXAria")}
               onClick={() => alignSelected("x")}
@@ -1218,6 +1377,7 @@ export function GraphCanvasEditor({
             <Button
               size="xs"
               variant="ghost"
+              className="h-8"
               disabled={!canAlign}
               aria-label={t("graphSession.canvas.alignYAria")}
               onClick={() => alignSelected("y")}
@@ -1239,7 +1399,7 @@ export function GraphCanvasEditor({
           snapToGrid
           snapGrid={SNAP_GRID}
           panOnScroll
-          panOnScrollMode={PanOnScrollMode.Horizontal}
+          panOnScrollMode={PanOnScrollMode.Free}
           zoomOnScroll={false}
           selectionOnDrag={canEdit}
           nodesDraggable={canEdit}
@@ -1312,8 +1472,12 @@ export function GraphCanvasEditor({
           deleteKeyCode={canEdit ? ["Backspace", "Delete"] : null}
           proOptions={{ hideAttribution: true }}
         >
-          <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
-          <Controls showInteractive={canEdit} />
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={GRAPH_CANVAS_GRID_SIZE}
+            size={1}
+          />
+          <Controls showInteractive={false} />
           <MiniMap
             pannable
             zoomable
@@ -1357,7 +1521,7 @@ export function GraphCanvasEditor({
               </div>
             ) : null}
             {canEdit && savedNode ? (
-              <>
+              <div className="space-y-3">
                 <Field label={t("graphSession.canvas.promptPreset")}>
                   <Select
                     value={selectedPromptPreset}
@@ -1400,7 +1564,7 @@ export function GraphCanvasEditor({
                   <input
                     value={selectedNode.title}
                     onChange={(event) => updateNode({ title: event.target.value })}
-                    className="mt-1 w-full rounded-md border border-input-border bg-input px-2.5 py-2 text-xs text-fg outline-none focus:border-accent"
+                    className="w-full rounded-md border border-input-border bg-input px-2.5 py-2 text-xs text-fg outline-none focus:border-accent"
                   />
                 </Field>
                 <Field label={t("chat.graphEditor.instruction")}>
@@ -1410,10 +1574,10 @@ export function GraphCanvasEditor({
                     onChange={(event) =>
                       updateNode({ instruction: event.target.value })
                     }
-                    className="mt-1 min-h-28 w-full resize-y rounded-md border border-input-border bg-input px-2.5 py-2 text-xs leading-5 text-fg outline-none focus:border-accent"
+                    className="min-h-28 w-full resize-y rounded-md border border-input-border bg-input px-2.5 py-2 text-xs leading-5 text-fg outline-none focus:border-accent"
                   />
                 </Field>
-              </>
+              </div>
             ) : (
               <div className="text-[10px] leading-4 text-fg-muted">
                 {runState?.nodes[selectedNode.id]?.question ||
@@ -1445,12 +1609,12 @@ export function GraphCanvasEditor({
               </Button>
             </div>
             {canEdit && savedGroup ? (
-              <>
+              <div className="space-y-3">
                 <Field label={t("graphSession.canvas.title")}>
                   <input
                     value={selectedGroup.title}
                     onChange={(event) => updateGroup({ title: event.target.value })}
-                    className="mt-1 w-full rounded-md border border-input-border bg-input px-2.5 py-2 text-xs text-fg outline-none focus:border-accent"
+                    className="w-full rounded-md border border-input-border bg-input px-2.5 py-2 text-xs text-fg outline-none focus:border-accent"
                   />
                 </Field>
                 <Field label={t("graphSession.canvas.generation")}>
@@ -1479,6 +1643,21 @@ export function GraphCanvasEditor({
                     ]}
                   />
                 </Field>
+                <Field label={t("graphSession.canvas.execution")}>
+                  <Select
+                    aria-label={t("graphSession.canvas.groupExecutionMode")}
+                    value={selectedGroup.execution_mode}
+                    onValueChange={(executionMode) =>
+                      updateGroup({
+                        execution_mode: executionMode as WorkGraphExecutionMode,
+                      })
+                    }
+                    options={[
+                      { value: "parallel", label: t("graphSession.canvas.parallel") },
+                      { value: "sequential", label: t("graphSession.canvas.sequential") },
+                    ]}
+                  />
+                </Field>
                 {selectedGroup.generation.mode === "fixed" ? (
                   <Field label={t("graphSession.canvas.nodeCount")}>
                     <input
@@ -1487,7 +1666,7 @@ export function GraphCanvasEditor({
                       max={12}
                       value={selectedGroup.generation.count ?? 1}
                       onChange={(event) => resizeGroup(Number(event.target.value))}
-                      className="mt-1 h-8 w-full rounded-md border border-input-border bg-input px-2.5 text-xs text-fg outline-none focus:border-accent"
+                      className="h-8 w-full rounded-md border border-input-border bg-input px-2.5 text-xs text-fg outline-none focus:border-accent"
                     />
                   </Field>
                 ) : (
@@ -1501,7 +1680,7 @@ export function GraphCanvasEditor({
                             generation: { prompt: event.target.value },
                           })
                         }
-                        className="mt-1 min-h-28 w-full resize-y rounded-md border border-input-border bg-input px-2.5 py-2 text-xs leading-5 text-fg outline-none focus:border-accent"
+                        className="min-h-28 w-full resize-y rounded-md border border-input-border bg-input px-2.5 py-2 text-xs leading-5 text-fg outline-none focus:border-accent"
                       />
                     </Field>
                     <Field label={t("graphSession.canvas.safeNodeLimit")}>
@@ -1520,12 +1699,12 @@ export function GraphCanvasEditor({
                             },
                           })
                         }
-                        className="mt-1 h-8 w-full rounded-md border border-input-border bg-input px-2.5 text-xs text-fg outline-none focus:border-accent"
+                        className="h-8 w-full rounded-md border border-input-border bg-input px-2.5 text-xs text-fg outline-none focus:border-accent"
                       />
                     </Field>
                   </>
                 )}
-              </>
+              </div>
             ) : (
               <div className="text-[10px] text-fg-muted">
                 {selectedGroup.generation.mode === "fixed"
@@ -1557,12 +1736,12 @@ export function GraphCanvasEditor({
               </Button>
             </div>
             {canEdit && savedEdge ? (
-              <>
+              <div className="space-y-3">
                 <Field label={t("graphSession.canvas.edgeLabel")}>
                   <input
                     value={selectedEdge.label ?? ""}
                     onChange={(event) => updateEdge({ label: event.target.value || null })}
-                    className="mt-1 w-full rounded-md border border-input-border bg-input px-2.5 py-2 text-xs text-fg outline-none focus:border-accent"
+                    className="w-full rounded-md border border-input-border bg-input px-2.5 py-2 text-xs text-fg outline-none focus:border-accent"
                   />
                 </Field>
                 <Field label={t("graphSession.canvas.edgeKind")}>
@@ -1611,11 +1790,11 @@ export function GraphCanvasEditor({
                           ),
                         })
                       }
-                      className="mt-1 h-8 w-full rounded-md border border-input-border bg-input px-2.5 text-xs text-fg outline-none focus:border-accent"
+                      className="h-8 w-full rounded-md border border-input-border bg-input px-2.5 text-xs text-fg outline-none focus:border-accent"
                     />
                   </Field>
                 ) : null}
-              </>
+              </div>
             ) : (
               <div className="text-[10px] text-fg-muted">
                 {selectedEdge.from} → {selectedEdge.to}
@@ -1625,7 +1804,11 @@ export function GraphCanvasEditor({
         ) : (
           <div className="rounded-lg border border-border bg-bg-elevated/60 p-4 text-center text-xs text-fg-muted">
             <Hand className="mx-auto mb-2" size={18} />
-            {t("graphSession.selectNodeHelp")}
+            {t(
+              canvasDirection === "TD"
+                ? "graphSession.selectNodeHelpVertical"
+                : "graphSession.selectNodeHelp",
+            )}
           </div>
         )}
 
