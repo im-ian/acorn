@@ -155,8 +155,13 @@ export function ProjectSettingsModal({
   const pendingSourceMerge = useAppStore((s) => s.pendingSourceMerge);
   const removeProjectWorktree = useAppStore((s) => s.removeProjectWorktree);
   const projects = useAppStore((s) => s.projects);
+  // The modal is also opened from a session's repo path, which for a session
+  // in a source folder is not any project's primary root. Match on every root
+  // a project spans so it still resolves to the project that owns it.
   const projectEntry = project
-    ? projects.find((entry) => entry.repo_path === project.repoPath)
+    ? projects.find((entry) =>
+        projectRootPaths(entry).includes(project.repoPath),
+      )
     : undefined;
   // Worktrees belong to a repository, so a multi-root project has to list and
   // remove them per root rather than through its primary one.
@@ -319,7 +324,10 @@ export function ProjectSettingsModal({
     try {
       const trimmed = name.trim();
       if (trimmed && trimmed !== projectName) {
-        const renamed = await renameProject(project.repoPath, trimmed);
+        const renamed = await renameProject(
+          projectEntry?.repo_path ?? project.repoPath,
+          trimmed,
+        );
         if (!renamed) {
           const message = useAppStore.getState().consumeError();
           setError(
@@ -602,7 +610,9 @@ function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const project = projects.find((entry) => entry.repo_path === repoPath);
+  const project = projects.find((entry) =>
+    projectRootPaths(entry).includes(repoPath),
+  );
   const roots = project ? projectRootPaths(project) : [repoPath];
 
   async function add() {
