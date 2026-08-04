@@ -1,15 +1,19 @@
 import {
   AlertTriangle,
+  FolderGit2,
+  FolderPlus,
   GitBranch,
   Loader2,
   Settings,
   Trash2,
+  X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
+import { basenamePath, projectRootPaths } from "../lib/projectFolders";
 import {
   sessionsUsingProjectWorktree,
   sessionsUsingWorktreePath,
@@ -32,13 +36,18 @@ import {
 const PROMPT_MAX_CHARS = 2_000;
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
-type ProjectSettingsTab = "general" | "pullRequests" | "worktrees";
+type ProjectSettingsTab =
+  | "general"
+  | "sources"
+  | "pullRequests"
+  | "worktrees";
 
 const PROJECT_SETTINGS_TABS: Array<{
   id: ProjectSettingsTab;
   labelKey: DialogTranslationKey;
 }> = [
   { id: "general", labelKey: "dialogs.projectSettings.tabs.general" },
+  { id: "sources", labelKey: "dialogs.projectSettings.tabs.sources" },
   {
     id: "pullRequests",
     labelKey: "dialogs.projectSettings.tabs.pullRequests",
@@ -392,6 +401,13 @@ export function ProjectSettingsModal({
                     onChange={updateRememberAfterClose}
                   />
                 </ProjectSettingsGroup>
+              ) : tab === "sources" ? (
+                <ProjectSettingsGroup
+                  title={dt(t, "dialogs.projectSettings.sources")}
+                  description={dt(t, "dialogs.projectSettings.sourcesHint")}
+                >
+                  <ProjectSourceFolderList repoPath={project.repoPath} />
+                </ProjectSettingsGroup>
               ) : tab === "pullRequests" ? (
                 <ProjectSettingsGroup
                   title={dt(t, "dialogs.projectSettings.pullRequests")}
@@ -509,6 +525,132 @@ function ProjectSettingsGroup({
       </div>
       {children}
     </section>
+  );
+}
+
+/**
+ * Source folders of a project: the primary repository root plus every extra
+ * root added to it. Removal is refused by the backend while sessions still
+ * live in a folder, so the row surfaces that count instead of guessing.
+ */
+function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
+  const t = useTranslation();
+  const sessions = useAppStore((s) => s.sessions);
+  const projects = useAppStore((s) => s.projects);
+  const addProjectSource = useAppStore((s) => s.addProjectSource);
+  const removeProjectSource = useAppStore((s) => s.removeProjectSource);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const project = projects.find((entry) => entry.repo_path === repoPath);
+  const roots = project ? projectRootPaths(project) : [repoPath];
+
+  async function add() {
+    setBusy(true);
+    setError(null);
+    const ok = await addProjectSource(
+      repoPath,
+      dt(t, "dialogs.projectSettings.addSourceFolder"),
+    );
+    if (!ok) {
+      const message = useAppStore.getState().consumeError();
+      if (message) {
+        setError(`${dt(t, "dialogs.projectSettings.addSourceFailed")} ${message}`);
+      }
+    }
+    setBusy(false);
+  }
+
+  async function remove(sourcePath: string) {
+    setBusy(true);
+    setError(null);
+    const ok = await removeProjectSource(repoPath, sourcePath);
+    if (!ok) {
+      const message = useAppStore.getState().consumeError();
+      setError(
+        `${dt(t, "dialogs.projectSettings.removeSourceFailed")} ${message ?? ""}`.trim(),
+      );
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="space-y-3">
+      <ul className="divide-y divide-border rounded-[var(--acorn-pane-radius)] border border-border bg-bg">
+        {roots.map((root, index) => {
+          const isPrimary = index === 0;
+          const sessionCount = sessions.filter(
+            (session) => session.repo_path === root,
+          ).length;
+          return (
+            <li
+              key={root}
+              className="flex items-center gap-2 px-3 py-2"
+            >
+              <FolderGit2 size={13} className="shrink-0 text-fg-muted" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-medium text-fg">
+                  {basenamePath(root)}
+                </p>
+                <p className="truncate font-mono text-[10px] text-fg-muted">
+                  {root}
+                </p>
+              </div>
+              {sessionCount > 0 ? (
+                <span className="shrink-0 text-[10px] text-fg-muted">
+                  {sessionCount === 1
+                    ? dt(t, "dialogs.projectSettings.usedBySession")
+                    : dtf(t, "dialogs.projectSettings.usedBySessions", {
+                        count: sessionCount,
+                      })}
+                </span>
+              ) : null}
+              {isPrimary ? (
+                <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-fg-muted">
+                  {dt(t, "dialogs.projectSettings.primarySource")}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void remove(root)}
+                  disabled={busy || sessionCount > 0}
+                  title={
+                    sessionCount > 0
+                      ? dt(t, "dialogs.projectSettings.removeSourceBlocked")
+                      : undefined
+                  }
+                  aria-label={dtf(
+                    t,
+                    "dialogs.projectSettings.removeSourceAria",
+                    { name: basenamePath(root) },
+                  )}
+                  className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-danger disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </li>
+          );
+        })}
+        <li>
+          <button
+            type="button"
+            onClick={() => void add()}
+            disabled={busy}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:opacity-50"
+          >
+            <FolderPlus size={13} className="shrink-0" />
+            {dt(t, "dialogs.projectSettings.addSourceFolder")}
+          </button>
+        </li>
+      </ul>
+      {roots.length === 1 ? (
+        <p className="text-[11px] text-fg-muted/80">
+          {dt(t, "dialogs.projectSettings.noSources")}
+        </p>
+      ) : null}
+      {error ? <Notice tone="danger">{error}</Notice> : null}
+    </div>
   );
 }
 

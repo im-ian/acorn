@@ -29,6 +29,8 @@
     },
     "project": {
       "addFailed": "プロジェクトの追加に失敗しました:",
+      "addSourceFailed": "ソースフォルダーの追加に失敗しました:",
+      "removeSourceFailed": "ソースフォルダーの削除に失敗しました:",
       "createFailed": "プロジェクトの作成に失敗しました:",
       "removeFailed": "プロジェクトの削除に失敗しました:",
       "worktreesRemoved": "プロジェクトのワークツリーがディスクから削除されました。",
@@ -1209,6 +1211,7 @@
     },
     "dialog": {
       "selectExistingProject": "既存のプロジェクトを選択します",
+      "selectSourceFolder": "ソースフォルダーを選択",
       "selectIsolatedRepository": "git リポジトリ (分離されたワークツリー) を選択します",
       "selectControlDirectory": "ディレクトリを選択します (コントロール セッション)",
       "selectDirectory": "ディレクトリを選択してください"
@@ -1232,6 +1235,7 @@
       "newControlSession": "新しいコントロールセッション",
       "newProjectFolder": "新しいワークスペース",
       "newProjectFolderWithWorktree": "新しいワークツリーワークスペース",
+      "addProjectSourceFolder": "ソースフォルダーを追加",
       "createWorkspaceFromWorktree": "ワークツリーからワークスペースを作成する",
       "renameProjectFolder": "ワークスペースの名前を変更する",
       "removeProjectFolder": "ワークスペースを削除する",
@@ -1966,11 +1970,22 @@
       "title": "プロジェクト設定",
       "tabs": {
         "general": "一般",
+        "sources": "ソースフォルダー",
         "pullRequests": "プルリクエスト",
         "worktrees": "ワークツリー"
       },
       "general": "一般",
       "generalHint": "プロジェクトのアイデンティティと永続性の動作。",
+      "sources": "ソースフォルダー",
+      "sourcesHint": "このプロジェクトが扱うリポジトリです。各セッションは開始したフォルダーに固定されます。",
+      "primarySource": "既定",
+      "addSourceFolder": "フォルダーを追加",
+      "removeSource": "削除",
+      "removeSourceAria": "ソースフォルダー {name} を削除",
+      "removeSourceBlocked": "削除する前にこのフォルダーのセッションを閉じてください。",
+      "noSources": "追加されたソースフォルダーはまだありません。",
+      "addSourceFailed": "ソースフォルダーの追加に失敗しました:",
+      "removeSourceFailed": "ソースフォルダーの削除に失敗しました:",
       "pullRequests": "プルリクエスト",
       "pullRequestsHint": "プル リクエスト ワークフローのプロジェクト固有のデフォルト。",
       "worktrees": "ワークツリー",

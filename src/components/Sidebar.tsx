@@ -9,6 +9,7 @@ import {
   Copy,
   ExternalLink,
   Folder,
+  FolderGit2,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -114,11 +115,15 @@ import {
 import {
   buildLocalSessionFolderGroups,
   buildProjectFolderGroups,
+  buildProjectRootIndex,
   defaultProjectFolderId,
   findProjectFolderById,
   findWorktreeWorkspaceForPath,
   isDefaultProjectFolder,
+  isGroupDefaultFolder,
+  projectFolderDisplayName,
   resolveProjectFolderIdForSession,
+  resolveProjectRootPath,
   type ProjectFolder,
   type ProjectFolderGroup,
   type ProjectFolderProjectGroup,
@@ -321,6 +326,8 @@ export function Sidebar() {
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const requestRemoveProject = useAppStore((s) => s.requestRemoveProject);
   const addProject = useAppStore((s) => s.addProject);
+  const addProjectSource = useAppStore((s) => s.addProjectSource);
+  const removeProjectSource = useAppStore((s) => s.removeProjectSource);
   const createNewProject = useAppStore((s) => s.createNewProject);
   const reorderProjects = useAppStore((s) => s.reorderProjects);
   const reorderProjectFolders = useAppStore((s) => s.reorderProjectFolders);
@@ -369,6 +376,15 @@ export function Sidebar() {
       ),
     [projectFolders, projects, sessionFolderIds, sessions],
   );
+  const projectRootIndex = useMemo(
+    () => buildProjectRootIndex(projects),
+    [projects],
+  );
+  // A source folder's workspace makes its own root active; the project row it
+  // belongs to still has to read as the active one.
+  const activeProjectRoot = activeProject
+    ? resolveProjectRootPath(projectRootIndex, activeProject)
+    : null;
   const localWorkspaceGroups = useMemo(
     () =>
       buildLocalSessionFolderGroups(
@@ -474,6 +490,32 @@ export function Sidebar() {
     } catch (e) {
       console.error("create project folder failed", e);
       showToast(`${t("toasts.project.createFailed")} ${String(e)}`);
+    }
+  }
+
+  /** The project a source-folder workspace row belongs to, if it is one. */
+  function sourceFolderOwner(folder: ProjectFolder): string | null {
+    if (!isDefaultProjectFolder(folder)) return null;
+    const owner = projectRootIndex.get(folder.repoPath);
+    return owner && owner !== folder.repoPath ? owner : null;
+  }
+
+  async function onAddProjectSource(repoPath: string) {
+    const ok = await addProjectSource(
+      repoPath,
+      sidebarText(t, "sidebar.dialog.selectSourceFolder"),
+    );
+    if (!ok) {
+      const error = useAppStore.getState().consumeError();
+      if (error) showToast(`${t("toasts.project.addSourceFailed")} ${error}`);
+    }
+  }
+
+  async function onRemoveProjectSource(owner: string, sourcePath: string) {
+    const ok = await removeProjectSource(owner, sourcePath);
+    if (!ok) {
+      const error = useAppStore.getState().consumeError();
+      showToast(`${t("toasts.project.removeSourceFailed")} ${error ?? ""}`.trim());
     }
   }
 
@@ -602,6 +644,13 @@ export function Sidebar() {
       .flatMap((project) => project.folders)
       .find((candidate) => candidate.folder.id === folderId);
     if (!folderGroup) return;
+    // A source folder's root workspace is not a workspace the user can drop —
+    // detaching it means removing the source folder from the project.
+    const owner = sourceFolderOwner(folderGroup.folder);
+    if (owner) {
+      void onRemoveProjectSource(owner, folderGroup.folder.repoPath);
+      return;
+    }
     if (folderGroup.sessions.length === 0) {
       if (isWorktreeWorkspace(folderGroup.folder)) {
         if (deleteEmptyWorktreeWorkspacesWithoutPrompt) {
@@ -1325,9 +1374,9 @@ export function Sidebar() {
                         project={project}
                         collapsed={collapsed.has(project.repoPath)}
                         activeSessionId={activeSessionId}
-                        isActiveProject={activeProject === project.repoPath}
+                        isActiveProject={activeProjectRoot === project.repoPath}
                         workspaceViewMode={
-                          activeProject === project.repoPath
+                          activeProjectRoot === project.repoPath
                             ? workspaceViewMode
                             : "panes"
                         }
@@ -1337,7 +1386,7 @@ export function Sidebar() {
                         onTitleClick={() =>
                           applyClickPlan(
                             planTitleClick({
-                              wasActive: activeProject === project.repoPath,
+                              wasActive: activeProjectRoot === project.repoPath,
                               wasCollapsed: collapsed.has(project.repoPath),
                             }),
                             project,
@@ -1346,7 +1395,7 @@ export function Sidebar() {
                         onChevronClick={() =>
                           applyClickPlan(
                             planChevronClick({
-                              wasActive: activeProject === project.repoPath,
+                              wasActive: activeProjectRoot === project.repoPath,
                               wasCollapsed: collapsed.has(project.repoPath),
                             }),
                             project,
@@ -1378,7 +1427,9 @@ export function Sidebar() {
                             kind,
                             {
                               placement: {
-                                repoPath: project.repoPath,
+                                // The workspace's own root, not the project's:
+                                // a source folder is a separate repository.
+                                repoPath: folder.repoPath,
                                 projectScoped: true,
                                 projectFolderId: folder.id,
                               },
@@ -1394,6 +1445,9 @@ export function Sidebar() {
                         onAddFolder={() => onAddProjectFolder(project.repoPath)}
                         onAddWorktreeFolder={() =>
                           void onAddProjectFolderWorktree(project.repoPath)
+                        }
+                        onAddSourceFolder={() =>
+                          void onAddProjectSource(project.repoPath)
                         }
                         onRenameFolder={renameProjectFolder}
                         onRemoveFolder={requestRemoveProjectFolder}
@@ -1582,7 +1636,7 @@ function ProjectFolderPreview({ folder }: { folder: ProjectFolder }) {
         <WorkspaceIcon folder={folder} size={13} />
       </span>
       <span className="min-w-0 flex-1 truncate text-[12px] font-medium leading-5 text-fg">
-        {folder.name}
+        {projectFolderDisplayName(folder)}
       </span>
     </div>
   );
@@ -1702,7 +1756,11 @@ function WorkspaceIcon({
   size: number;
   className?: string;
 }) {
-  const Icon = isWorktreeWorkspace(folder) ? GitBranch : LayoutPanelLeft;
+  const Icon = isWorktreeWorkspace(folder)
+    ? GitBranch
+    : isDefaultProjectFolder(folder)
+      ? FolderGit2
+      : LayoutPanelLeft;
   return <Icon size={size} className={className} />;
 }
 
@@ -1964,6 +2022,7 @@ interface ProjectGroupViewProps {
   onAddAutonomousGoal: (folder: ProjectFolder) => void;
   onAddFolder: () => void;
   onAddWorktreeFolder: () => void;
+  onAddSourceFolder: () => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onRemoveFolder: (folderId: string) => void;
   onMoveSessionToFolder: (sessionId: string, folderId: string | null) => void;
@@ -1992,6 +2051,7 @@ function ProjectGroupView({
   onAddAutonomousGoal,
   onAddFolder,
   onAddWorktreeFolder,
+  onAddSourceFolder,
   onRenameFolder,
   onRemoveFolder,
   onMoveSessionToFolder,
@@ -2034,7 +2094,7 @@ function ProjectGroupView({
 
   const defaultFolderGroup =
     project.folders.find((folderGroup) =>
-      isDefaultProjectFolder(folderGroup.folder),
+      isGroupDefaultFolder(project.repoPath, folderGroup.folder),
     ) ?? project.folders[0] ?? null;
   const projectSessionCreationFolder = defaultFolderGroup?.folder ?? null;
 
@@ -2104,11 +2164,23 @@ function ProjectGroupView({
           icon: <GitBranch size={12} />,
           onClick: onAddWorktreeFolder,
         },
+        {
+          label: sidebarText(t, "sidebar.actions.addProjectSourceFolder"),
+          icon: <FolderGit2 size={12} />,
+          onClick: onAddSourceFolder,
+        },
         contextMenuGroupTitle(t, "session"),
         ...sessionItems,
       ];
     },
-    [onAddFolder, onAddWorktreeFolder, runCreateAction, shortcuts, t],
+    [
+      onAddFolder,
+      onAddSourceFolder,
+      onAddWorktreeFolder,
+      runCreateAction,
+      shortcuts,
+      t,
+    ],
   );
 
   async function copyText(text: string) {
@@ -2128,7 +2200,7 @@ function ProjectGroupView({
   }
 
   const namedFolderGroups = project.folders.filter(
-    (folderGroup) => !isDefaultProjectFolder(folderGroup.folder),
+    (folderGroup) => !isGroupDefaultFolder(project.repoPath, folderGroup.folder),
   );
   const projectFoldersForRows = project.folders.map(
     (folderGroup) => folderGroup.folder,
@@ -2303,6 +2375,11 @@ function ProjectGroupView({
             ),
             icon: <GitBranch size={12} />,
             onClick: onAddWorktreeFolder,
+          },
+          {
+            label: sidebarText(t, "sidebar.actions.addProjectSourceFolder"),
+            icon: <FolderGit2 size={12} />,
+            onClick: onAddSourceFolder,
           },
           contextMenuGroupTitle(t, "project"),
           {
@@ -2664,14 +2741,14 @@ function ProjectFolderView({
         <span className="min-w-0 flex-1">
           {editing ? (
             <RenameInput
-              initial={folder.name}
+              initial={projectFolderDisplayName(folder)}
               onSubmit={submitRename}
               onCancel={() => setEditing(false)}
             />
           ) : (
             <span className="flex min-w-0 flex-col leading-none">
               <span className="block truncate text-[12px] font-medium leading-4 text-fg">
-                {folder.name}
+                {projectFolderDisplayName(folder)}
               </span>
               {workspaceLabel ? (
                 <Tooltip
@@ -3086,7 +3163,7 @@ function SessionRow({
         continue;
       }
       targetFolderMenuItems.push({
-        label: folder.name,
+        label: projectFolderDisplayName(folder),
         icon: <WorkspaceIcon folder={folder} size={12} />,
         onClick: () => onMoveToProjectFolder(session.id, folder.id),
       });

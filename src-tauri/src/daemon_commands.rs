@@ -247,11 +247,7 @@ pub fn daemon_adopt_session(
         acorn_daemon::protocol::SessionKind::Control => acorn_session::SessionKind::Control,
     };
 
-    let project_name = repo_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| repo_path.display().to_string());
-    state.projects.ensure(repo_path.clone(), project_name);
+    crate::commands::ensure_project_for_root(state.inner(), &repo_path);
 
     let now = chrono::Utc::now();
     let session = acorn_session::Session {

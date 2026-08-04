@@ -74,6 +74,7 @@ import {
   isDefaultProjectFolder,
   isPathInsideOrEqual,
   makeProjectFolderId,
+  projectRootPaths,
   pruneSessionFolderAssignments,
   resolveProjectFolderIdForSession,
   sortProjectFolders,
@@ -542,6 +543,11 @@ interface AppStateModel {
     removeWorktrees?: boolean,
     removeSettings?: boolean,
   ) => Promise<WorktreeRemoval[]>;
+  addProjectSource: (repoPath: string, title?: string) => Promise<boolean>;
+  removeProjectSource: (
+    repoPath: string,
+    sourcePath: string,
+  ) => Promise<boolean>;
   removeProjectWorktree: (
     repoPath: string,
     worktreePath: string,
@@ -803,6 +809,16 @@ type WorkspaceViewContext = Pick<
   "sessions" | "projects" | "projectFolders" | "activeProject"
 >;
 
+/** True when the path is any root a project spans, primary or source folder. */
+function isProjectRootPath(
+  projects: readonly Project[],
+  repoPath: string,
+): boolean {
+  return projects.some((project) =>
+    projectRootPaths(project).includes(repoPath),
+  );
+}
+
 function workspaceViewScopeForActiveWorkspace(
   workspaces: Record<string, ProjectWorkspace>,
   activeWorkspaceId: string | null,
@@ -824,7 +840,7 @@ function workspaceViewScopeForActiveWorkspace(
   if (!repoPath) return "project";
 
   const hasProjectIdentity =
-    context.projects.some((project) => project.repo_path === repoPath) ||
+    isProjectRootPath(context.projects, repoPath) ||
     context.sessions.some(
       (session) =>
         session.repo_path === repoPath && session.project_scoped !== false,
@@ -2276,7 +2292,7 @@ export const useAppStore = create<AppStateModel>()(
       const hasWorkspace = s.workspaces[folderId] !== undefined;
       const knownRepo =
         hasWorkspace ||
-        s.projects.some((project) => project.repo_path === repoPath) ||
+        isProjectRootPath(s.projects, repoPath) ||
         s.sessions.some((session) => session.repo_path === repoPath);
       if (!knownRepo) return s;
       if (
@@ -3294,6 +3310,41 @@ export const useAppStore = create<AppStateModel>()(
     }
   },
 
+  async addProjectSource(repoPath, title) {
+    try {
+      const project = await api.addProjectSource(repoPath, title);
+      if (!project) return false;
+      await get().refreshProjects();
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  async removeProjectSource(repoPath, sourcePath) {
+    try {
+      await api.removeProjectSource(repoPath, sourcePath);
+      set((s) => {
+        const { [sourcePath]: removed, ...projectFolders } = s.projectFolders;
+        const folderIds = new Set((removed ?? []).map((folder) => folder.id));
+        const workspaces = Object.fromEntries(
+          Object.entries(s.workspaces).filter(
+            ([workspaceId]) => !folderIds.has(workspaceId),
+          ),
+        );
+        return { projectFolders, workspaces };
+      });
+      await get().refreshProjects();
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
   async createNewProject(parentPath, name, ignoreSafeName = false, initCommit = true) {
     try {
       const project = await api.createNewProject(
@@ -3324,29 +3375,44 @@ export const useAppStore = create<AppStateModel>()(
       // Drop the project's workspace from local state explicitly — refreshAll
       // also reconciles, but pre-clearing avoids a flash of stale state.
       set((s) => {
-        const folders = s.projectFolders[repoPath] ?? [
-        {
-          id: defaultProjectFolderId(repoPath),
-          repoPath,
-          name: DEFAULT_PROJECT_FOLDER_NAME,
-          cwdPath: repoPath,
-          position: 0,
-        },
-      ];
+        // Closing a project closes every root it spans, so drop the workspaces
+        // of its source folders alongside the primary root's.
+        const roots =
+          s.projects
+            .filter((project) => projectRootPaths(project).includes(repoPath))
+            .flatMap(projectRootPaths) ?? [];
+        const removedRoots = new Set(roots.length > 0 ? roots : [repoPath]);
+        const folders = [...removedRoots].flatMap(
+          (root) =>
+            s.projectFolders[root] ?? [
+              {
+                id: defaultProjectFolderId(root),
+                repoPath: root,
+                name: DEFAULT_PROJECT_FOLDER_NAME,
+                cwdPath: root,
+                position: 0,
+              },
+            ],
+        );
         const folderIds = new Set(folders.map((folder) => folder.id));
         const rest = Object.fromEntries(
           Object.entries(s.workspaces).filter(
             ([workspaceId]) => !folderIds.has(workspaceId),
           ),
         );
-        const { [repoPath]: _folders, ...projectFolders } = s.projectFolders;
+        const projectFolders = Object.fromEntries(
+          Object.entries(s.projectFolders).filter(
+            ([root]) => !removedRoots.has(root),
+          ),
+        );
         const sessionFolderIds = Object.fromEntries(
           Object.entries(s.sessionFolderIds).filter(
             ([, folderId]) => !folderIds.has(folderId),
           ),
         );
-        const nextActive =
-          s.activeProject === repoPath ? null : s.activeProject;
+        const nextActive = removedRoots.has(s.activeProject ?? "")
+          ? null
+          : s.activeProject;
         const nextActiveFolderId = folderIds.has(s.activeProjectFolderId ?? "")
           ? null
           : s.activeProjectFolderId;
@@ -3359,7 +3425,7 @@ export const useAppStore = create<AppStateModel>()(
           ...mirrorActive(rest, nextActiveFolderId, {
             sessions: s.sessions,
             projects: s.projects.filter(
-              (project) => project.repo_path !== repoPath,
+              (project) => !removedRoots.has(project.repo_path),
             ),
             projectFolders,
             activeProject: nextActive,

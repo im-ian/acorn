@@ -327,6 +327,12 @@ export const api = {
   addProject(title?: string): Promise<Project | null> {
     return invoke<Project | null>("add_project", { title });
   },
+  addProjectSource(repoPath: string, title?: string): Promise<Project | null> {
+    return invoke<Project | null>("add_project_source", { repoPath, title });
+  },
+  removeProjectSource(repoPath: string, sourcePath: string): Promise<Project> {
+    return invoke<Project>("remove_project_source", { repoPath, sourcePath });
+  },
   selectProjectParentFolder(title?: string): Promise<string | null> {
     return invoke<string | null>("select_project_parent_folder", { title });
   },
