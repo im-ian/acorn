@@ -1,5 +1,4 @@
 import {
-  defaultProjectFolderId,
   isGroupDefaultFolder,
   type ProjectFolderGroup,
   type ProjectFolderProjectGroup,
@@ -28,24 +27,28 @@ export function buildProjectTopLevelItems(
   order: readonly string[],
   prioritizeNeedsInputTabs = false,
 ): ProjectTopLevelItem[] {
-  const defaultFolderGroup =
-    project.folders.find((folderGroup) =>
-      isGroupDefaultFolder(project.repoPath, folderGroup.folder),
-    ) ?? project.folders[0] ?? null;
+  // Every root's default folder flattens into the same top-level list, so a
+  // session started in a source folder sits beside the primary root's.
+  const defaultFolderGroups = project.folders.filter((folderGroup) =>
+    isGroupDefaultFolder(folderGroup.folder),
+  );
+  const fallbackFolderGroup = defaultFolderGroups[0] ?? project.folders[0] ?? null;
   const directSessions: ProjectTopLevelItem[] = (
-    defaultFolderGroup?.sessions ?? []
-  ).map((session) => ({
-    id: sidebarSessionItemId(session.id),
-    type: "session",
-    session,
-    folderId:
-      defaultFolderGroup?.folder.id ?? defaultProjectFolderId(project.repoPath),
-  }));
+    defaultFolderGroups.length > 0
+      ? defaultFolderGroups
+      : fallbackFolderGroup
+        ? [fallbackFolderGroup]
+        : []
+  ).flatMap((folderGroup) =>
+    folderGroup.sessions.map<ProjectTopLevelItem>((session) => ({
+      id: sidebarSessionItemId(session.id),
+      type: "session",
+      session,
+      folderId: folderGroup.folder.id,
+    })),
+  );
   const folders: ProjectTopLevelItem[] = project.folders
-    .filter(
-      (folderGroup) =>
-        !isGroupDefaultFolder(project.repoPath, folderGroup.folder),
-    )
+    .filter((folderGroup) => !isGroupDefaultFolder(folderGroup.folder))
     .map((folderGroup) => ({
       id: sidebarFolderItemId(folderGroup.folder.id),
       type: "folder",
@@ -141,10 +144,7 @@ export function buildDragPriorityIndex(
   for (const group of groups) {
     const topLevelContainerId = `project:${group.repoPath}`;
     for (const folderGroup of group.folders) {
-      const isDefaultFolder = isGroupDefaultFolder(
-        group.repoPath,
-        folderGroup.folder,
-      );
+      const isDefaultFolder = isGroupDefaultFolder(folderGroup.folder);
       // The default folder is flattened into top-level session rows and never
       // drawn as a folder row, so it has no drag id to index.
       if (!isDefaultFolder) {

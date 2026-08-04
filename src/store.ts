@@ -9,6 +9,7 @@ import {
 import type {
   AgentTranscriptSummary,
   Project,
+  ProjectSourceMerge,
   Session,
   SessionAgentProvider,
   SessionGoal,
@@ -432,6 +433,11 @@ interface AppStateModel {
   error: string | null;
   pendingRemoveId: string | null;
   pendingRemoveProject: string | null;
+  /**
+   * A picked source folder another project owns, awaiting the user's go-ahead
+   * to move it over. `repoPath` is the project that would gain the folder.
+   */
+  pendingSourceMerge: { repoPath: string; merge: ProjectSourceMerge } | null;
 
   /**
    * Set to false at boot if the backend reports that `sessions.json` failed
@@ -531,7 +537,6 @@ interface AppStateModel {
   cycleTab: (direction: 1 | -1) => void;
   selectLatestNeedsInputSession: () => boolean;
   cycleProject: (direction: 1 | -1) => void;
-  addProject: (title?: string) => Promise<Project | null>;
   createNewProject: (
     parentPath: string,
     name: string,
@@ -543,7 +548,11 @@ interface AppStateModel {
     removeWorktrees?: boolean,
     removeSettings?: boolean,
   ) => Promise<WorktreeRemoval[]>;
+  renameProject: (repoPath: string, name: string) => Promise<boolean>;
   addProjectSource: (repoPath: string, title?: string) => Promise<boolean>;
+  /** Apply the pending merge: move the folder into the project that asked. */
+  confirmSourceMerge: () => Promise<boolean>;
+  cancelSourceMerge: () => void;
   removeProjectSource: (
     repoPath: string,
     sourcePath: string,
@@ -1653,6 +1662,7 @@ export const useAppStore = create<AppStateModel>()(
   },
   pendingRemoveId: null,
   pendingRemoveProject: null,
+  pendingSourceMerge: null,
   sessionsLoadedCleanly: true,
   liveInWorktree: {},
   generatingSessionTitleIds: {},
@@ -3296,26 +3306,9 @@ export const useAppStore = create<AppStateModel>()(
     set({ pendingRemoveId: null });
   },
 
-  async addProject(title) {
+  async renameProject(repoPath, name) {
     try {
-      const project = await api.addProject(title);
-      await get().refreshProjects();
-      if (project) {
-        get().setActiveProject(project.repo_path);
-        await createInitialProjectSession(get, project.repo_path);
-      }
-      set({ error: null });
-      return project;
-    } catch (e) {
-      set({ error: errorMessage(e) });
-      return null;
-    }
-  },
-
-  async addProjectSource(repoPath, title) {
-    try {
-      const project = await api.addProjectSource(repoPath, title);
-      if (!project) return false;
+      await api.renameProject(repoPath, name);
       await get().refreshProjects();
       set({ error: null });
       return true;
@@ -3323,6 +3316,44 @@ export const useAppStore = create<AppStateModel>()(
       set({ error: errorMessage(e) });
       return false;
     }
+  },
+
+  async addProjectSource(repoPath, title) {
+    try {
+      const result = await api.addProjectSource(repoPath, title);
+      if (result.merge) {
+        // Another project owns the folder — confirm the move before touching
+        // either project.
+        set({ pendingSourceMerge: { repoPath, merge: result.merge }, error: null });
+        return true;
+      }
+      if (!result.project) return false;
+      await get().refreshProjects();
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  async confirmSourceMerge() {
+    const pending = get().pendingSourceMerge;
+    set({ pendingSourceMerge: null });
+    if (!pending) return false;
+    try {
+      await api.mergeProjectSource(pending.repoPath, pending.merge.sourcePath);
+      await get().refreshProjects();
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  cancelSourceMerge() {
+    set({ pendingSourceMerge: null });
   },
 
   async removeProjectSource(repoPath, sourcePath) {

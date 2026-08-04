@@ -64,15 +64,13 @@ export function resolveProjectRootPath(
 }
 
 /**
- * The folder whose sessions render flat under the project header. Only the
- * primary root has one: a source folder's own default folder is drawn as a
- * workspace row so the two roots never blur together.
+ * Whether a folder's sessions render flat under the project header. Every
+ * root's default folder qualifies: a source folder is a place sessions start,
+ * not a workspace of its own, so it gets no row — the agent already sees it as
+ * an extra directory.
  */
-export function isGroupDefaultFolder(
-  groupRepoPath: string,
-  folder: ProjectFolder,
-): boolean {
-  return folder.id === defaultProjectFolderId(groupRepoPath);
+export function isGroupDefaultFolder(folder: ProjectFolder): boolean {
+  return isDefaultProjectFolder(folder);
 }
 
 /** Display name for a source folder's root workspace row. */

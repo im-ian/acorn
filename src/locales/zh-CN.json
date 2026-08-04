@@ -1342,6 +1342,8 @@
       "branch": "分支",
       "detached": "（独立）",
       "workingDirectory": "工作目录",
+      "sourceFolders": "源文件夹",
+      "sessions": "会话",
       "openPullRequest": "打开 PR",
       "processes": "进程",
       "status": "状态",
@@ -1977,6 +1979,8 @@
       },
       "general": "常规",
       "generalHint": "项目身份和持久性行为。",
+      "name": "项目名称",
+      "renameFailed": "重命名项目失败：",
       "sources": "源文件夹",
       "sourcesHint": "该项目涵盖的仓库。每个会话都固定在其启动的文件夹中。",
       "primarySource": "默认",
@@ -2021,6 +2025,14 @@
       "saving": "正在保存...",
       "save": "保存"
     },
+    "mergeProjectSource": {
+      "title": "合并源文件夹",
+      "messageProject": "“{source}”是独立项目。合并会把它包含的所有文件夹移入“{target}”，并将其从侧边栏移除。",
+      "messageFolder": "该文件夹属于“{source}”。合并会将其移入“{target}”。",
+      "folderLabel": "文件夹",
+      "sessionsKept": "会话保持不变，只有分组位置会改变。",
+      "confirm": "合并"
+    },
     "newProject": {
       "title": "新建项目",
       "subtitle": "创建 Git 仓库并将其添加到 Acorn",
@@ -2044,6 +2056,14 @@
         "null_character": "项目名称不能包含空字符。",
         "component_too_long": "项目名称长度超过 255 个字节，常见文件系统拒绝这样做。"
       }
+    },
+    "addExistingProject": {
+      "title": "添加项目",
+      "agentSupport": "额外的源文件夹只会传给 Claude Code 和 Codex。其他智能体仍可在终端运行，但只能看到会话启动所在的文件夹。",
+      "namePlaceholder": "项目名称",
+      "addFolder": "添加文件夹",
+      "pickTitle": "选择项目文件夹",
+      "folderTaken": "该文件夹已属于项目 {project}。"
     },
     "agentResume": {
       "title": "继续上次对话",

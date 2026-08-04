@@ -1342,6 +1342,8 @@
       "branch": "브랜치",
       "detached": "(detached)",
       "workingDirectory": "작업 디렉터리",
+      "sourceFolders": "소스 폴더",
+      "sessions": "세션",
       "openPullRequest": "열린 PR",
       "processes": "프로세스",
       "status": "상태",
@@ -1977,6 +1979,8 @@
       },
       "general": "일반",
       "generalHint": "프로젝트 식별 정보와 설정 유지 동작입니다.",
+      "name": "프로젝트 이름",
+      "renameFailed": "프로젝트 이름 변경 실패:",
       "sources": "소스 폴더",
       "sourcesHint": "이 프로젝트가 다루는 저장소입니다. 각 세션은 시작한 폴더에 고정됩니다.",
       "primarySource": "기본",
@@ -2021,6 +2025,14 @@
       "saving": "저장 중...",
       "save": "저장"
     },
+    "mergeProjectSource": {
+      "title": "소스 폴더 병합",
+      "messageProject": "\"{source}\"은(는) 별도 프로젝트입니다. 병합하면 이 프로젝트가 포함하는 모든 폴더가 \"{target}\"으로 옮겨지고 사이드바에서 사라집니다.",
+      "messageFolder": "이 폴더는 \"{source}\"에 속해 있습니다. 병합하면 \"{target}\"으로 옮겨집니다.",
+      "folderLabel": "폴더",
+      "sessionsKept": "세션은 그대로 유지되고 묶이는 위치만 바뀝니다.",
+      "confirm": "병합"
+    },
     "newProject": {
       "title": "새 프로젝트",
       "subtitle": "Git 저장소를 만들고 Acorn에 추가합니다",
@@ -2044,6 +2056,14 @@
         "null_character": "프로젝트 이름에는 null 문자를 포함할 수 없습니다.",
         "component_too_long": "프로젝트 이름이 255바이트를 넘어 일반 파일 시스템에서 거부될 수 있습니다."
       }
+    },
+    "addExistingProject": {
+      "title": "프로젝트 생성",
+      "agentSupport": "추가 소스 폴더는 Claude Code 와 Codex 에만 전달됩니다. 다른 에이전트도 터미널에서 실행되지만 세션이 시작된 폴더만 보게 됩니다.",
+      "namePlaceholder": "프로젝트 이름",
+      "addFolder": "폴더 추가",
+      "pickTitle": "프로젝트 폴더 선택",
+      "folderTaken": "이미 {project} 프로젝트에 속한 폴더입니다."
     },
     "agentResume": {
       "title": "이전 대화 재개",

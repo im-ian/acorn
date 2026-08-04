@@ -3601,57 +3601,75 @@ test.describe("sidebar: project lifecycle", () => {
     });
   });
 
-  test("Add existing project opens the backend project picker", async ({
+  test("Add existing project registers what the dialog collected", async ({
     page,
     tauri,
   }) => {
-    // Capture the add_project call arguments on window so the test can
-    // verify the request goes through the backend-owned picker.
-    await tauri.handle("add_project", (args) => {
-      const w = window as unknown as { __addProjectCalls?: unknown[] };
+    // Capture the add_project_at arguments on window so the test can verify
+    // the dialog commits the roots and name it collected, in one call.
+    await tauri.handle("pick_project_folder", () => ({
+      path: "/tmp/picked",
+      name: "picked",
+      ownerName: null,
+    }));
+    await tauri.handle("add_project_at", (args) => {
+      const w = window as unknown as {
+        __addProjectCalls?: unknown[];
+        __projectAdded?: boolean;
+      };
       w.__addProjectCalls = w.__addProjectCalls ?? [];
       w.__addProjectCalls.push(args);
+      w.__projectAdded = true;
       return {
         repo_path: "/tmp/picked",
         name: "picked",
         created_at: "2026-01-01T00:00:00Z",
         position: 0,
+        source_paths: [],
       };
     });
-    await tauri.handle("list_projects", () => [
-      {
-        repo_path: "/tmp/picked",
-        name: "picked",
-        created_at: "2026-01-01T00:00:00Z",
-        position: 0,
-      },
-    ]);
+    await tauri.handle("list_projects", () => {
+      const w = window as unknown as { __projectAdded?: boolean };
+      return w.__projectAdded
+        ? [
+            {
+              repo_path: "/tmp/picked",
+              name: "picked",
+              created_at: "2026-01-01T00:00:00Z",
+              position: 0,
+            },
+          ]
+        : [];
+    });
 
     await page.goto("/");
     await page.getByRole("button", { name: "Add existing project" }).click();
+
+    // Nothing is registered until the dialog is saved.
+    const dialog = page.getByRole("dialog", { name: "Add project" });
+    await expect(dialog).toBeVisible();
+    await expect(
+      page.locator("aside").getByRole("listitem").filter({ hasText: "picked" }),
+    ).toHaveCount(0);
+
+    await dialog.getByRole("button", { name: "Add folder" }).click();
+    await expect(dialog.getByText("/tmp/picked")).toBeVisible();
+    await dialog.getByRole("button", { name: "Save" }).click();
 
     await expect(
       page.locator("aside").getByRole("listitem").filter({ hasText: "picked" }),
     ).toBeVisible();
 
-    // The header button opens a project the same way the empty state does, so
-    // its source folders are set up in the same pass.
-    const modal = page.getByRole("dialog", { name: "Project Settings" });
-    await expect(modal).toBeVisible();
-    await expect(
-      modal.getByRole("listitem").filter({ hasText: "/tmp/picked" }),
-    ).toContainText("Primary");
-
     const calls = (await page.evaluate(
       () =>
         (window as unknown as { __addProjectCalls?: unknown[] })
           .__addProjectCalls,
-    )) as Array<{ title: string }>;
+    )) as Array<{ name: string; roots: string[] }>;
     expect(calls).toHaveLength(1);
-    expect(calls[0].title).toBe("Select an existing project");
+    expect(calls[0]).toMatchObject({ name: "picked", roots: ["/tmp/picked"] });
   });
 
-  test("empty project state opens an existing project picker", async ({
+  test("empty project state opens the add-project dialog", async ({
     page,
     tauri,
   }) => {
@@ -3668,7 +3686,12 @@ test.describe("sidebar: project lifecycle", () => {
           ]
         : [];
     });
-    await tauri.handle("add_project", (args) => {
+    await tauri.handle("pick_project_folder", () => ({
+      path: "/tmp/empty-picked",
+      name: "empty-picked",
+      ownerName: null,
+    }));
+    await tauri.handle("add_project_at", (args) => {
       const w = window as unknown as {
         __addProjectCalls?: unknown[];
         __projectOpened?: boolean;
@@ -3681,6 +3704,7 @@ test.describe("sidebar: project lifecycle", () => {
         name: "empty-picked",
         created_at: "2026-01-01T00:00:00Z",
         position: 0,
+        source_paths: [],
       };
     });
 
@@ -3691,30 +3715,27 @@ test.describe("sidebar: project lifecycle", () => {
       })
       .click();
 
+    // The empty state opens the same dialog as the header button: roots are
+    // collected first, and the project appears only once it is saved.
+    const dialog = page.getByRole("dialog", { name: "Add project" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Add folder" }).click();
+    await expect(dialog.getByText("/tmp/empty-picked")).toBeVisible();
+    await dialog.getByRole("button", { name: "Save" }).click();
+
     await expect(
       page.locator("aside").getByRole("listitem").filter({
         hasText: "empty-picked",
       }),
     ).toBeVisible();
 
-    // Opening a project lands on its source folders so extra repositories can
-    // be attached right away instead of through a separate settings trip.
-    const modal = page.getByRole("dialog", { name: "Project Settings" });
-    await expect(modal).toBeVisible();
-    await expect(
-      modal.getByRole("listitem").filter({ hasText: "/tmp/empty-picked" }),
-    ).toContainText("Primary");
-    await expect(
-      modal.getByRole("button", { name: "Add folder" }),
-    ).toBeVisible();
-
     const calls = (await page.evaluate(
       () =>
         (window as unknown as { __addProjectCalls?: unknown[] })
           .__addProjectCalls,
-    )) as Array<{ title: string }>;
+    )) as Array<{ name: string; roots: string[] }>;
     expect(calls).toHaveLength(1);
-    expect(calls[0].title).toBe("Select an existing project");
+    expect(calls[0].roots).toEqual(["/tmp/empty-picked"]);
   });
 
   test("New project creates a git-backed project under the selected parent", async ({
@@ -4324,7 +4345,7 @@ test.describe("sidebar: project lifecycle", () => {
       .toBe("manual-order");
   });
 
-  test("a source folder renders as a workspace under its project", async ({
+  test("a source folder folds into its project instead of getting a row", async ({
     page,
     tauri,
   }) => {
@@ -4410,20 +4431,136 @@ test.describe("sidebar: project lifecycle", () => {
 
     // One project row, not two, even though the sessions live in two repos.
     await expect(page.getByRole("button", { name: /^Project / })).toHaveCount(1);
-    const sourceWorkspace = page.locator(
-      'aside [data-sidebar-workspace-id="/tmp/demo-api"]',
-    );
-    await expect(sourceWorkspace).toContainText("demo-api");
-    // The source folder's session sits inside its workspace; the primary
-    // root's session stays flat under the project header.
-    await expect(sourceWorkspace).toContainText("api");
-    await expect(sourceWorkspace).not.toContainText("primary");
-    // Its own workspaces sit at the same depth, tagged with the owning root.
+    // A source folder is not a workspace: it gets no row of its own, and the
+    // session started in it sits flat under the project header beside the
+    // primary root's session.
+    await expect(
+      page.locator('aside [data-sidebar-workspace-id="/tmp/demo-api"]'),
+    ).toHaveCount(0);
+    await expect(
+      page.locator("aside").getByRole("listitem").filter({ hasText: /^primarymain/ }),
+    ).toBeVisible();
+    await expect(
+      page.locator("aside").getByRole("listitem").filter({ hasText: /^apimain/ }),
+    ).toBeVisible();
+    // Its named workspaces still render, tagged with the root they belong to.
     await expect(
       page.locator(
         'aside [data-sidebar-workspace-id="project-folder:/tmp/demo-api:scratch"]',
       ),
     ).toContainText("demo-api");
+  });
+
+  test("top-level sessions reorder across the project's roots", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api"],
+      },
+    ]);
+    await tauri.handle("reorder_sessions", (args) => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      const order = Array.isArray(args?.order) ? args.order : [];
+      const indexById = new Map(order.map((id, index) => [id, index]));
+      w.__sessions = (w.__sessions ?? []).map((session) => {
+        const position = indexById.get(session.id);
+        return typeof position === "number" ? { ...session, position } : session;
+      });
+      return w.__sessions;
+    });
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__sessions = w.__sessions ?? [
+      {
+        id: "primary-session",
+        name: "primary",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "api-session",
+        name: "api",
+        repo_path: "/tmp/demo-api",
+        worktree_path: "/tmp/demo-api",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ];
+      return w.__sessions;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const primary = sidebar.getByRole("button", {
+      name: /^primary main · Ready/,
+    });
+    const api = sidebar.getByRole("button", { name: /^api main · Ready/ });
+
+    // Both roots' sessions share the project's top level, so one can be
+    // dragged past the other even though they live in different repos.
+    expect(await sessionPairOrder(primary, api)).toBe("alpha-beta");
+    await dragBetween(page, api, primary);
+    await expect
+      .poll(async () => sessionPairOrder(primary, api))
+      .toBe("beta-alpha");
+  });
+
+  test("the project hover card lists the source folders", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api"],
+      },
+    ]);
+    await tauri.respond("list_sessions", []);
+
+    await page.goto("/");
+    await page.getByText("demo", { exact: true }).hover();
+
+    // Source roots draw no rows, so the hover card is where the extra
+    // directories every session hands the agent are visible.
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("/tmp/demo");
+    await expect(tooltip).toContainText("/tmp/demo-api");
   });
 
   test("a source folder creates worktree workspaces in its own repo", async ({
@@ -4475,10 +4612,43 @@ test.describe("sidebar: project lifecycle", () => {
       return created;
     });
 
+    // The source root's own named workspace is its entry point now that the
+    // root itself no longer draws a row.
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn-workspaces",
+        JSON.stringify({
+          state: {
+            projectFolders: {
+              "/tmp/demo-api": [
+                {
+                  id: "/tmp/demo-api",
+                  repoPath: "/tmp/demo-api",
+                  name: "Default",
+                  cwdPath: "/tmp/demo-api",
+                  position: 0,
+                },
+                {
+                  id: "project-folder:/tmp/demo-api:scratch",
+                  repoPath: "/tmp/demo-api",
+                  name: "scratch",
+                  cwdPath: "/tmp/demo-api",
+                  position: 1,
+                },
+              ],
+            },
+          },
+          version: 0,
+        }),
+      );
+    });
+
     await page.goto("/");
 
     await page
-      .locator('aside [data-sidebar-workspace-id="/tmp/demo-api"]')
+      .locator(
+        'aside [data-sidebar-workspace-id="project-folder:/tmp/demo-api:scratch"]',
+      )
       .click({ button: "right" });
     await page
       .getByRole("menuitem", { name: "New worktree workspace" })

@@ -118,6 +118,13 @@ impl ProjectStore {
             .map(|r| r.value().clone())
     }
 
+    /// Rename a project. Returns `None` when the project is not registered.
+    pub fn rename(&self, repo_path: &std::path::Path, name: String) -> Option<Project> {
+        let mut entry = self.inner.get_mut(repo_path)?;
+        entry.name = name;
+        Some(entry.clone())
+    }
+
     /// Replace a project's extra source roots. Returns `None` when the
     /// project is not registered.
     pub fn set_source_paths(

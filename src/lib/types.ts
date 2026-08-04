@@ -422,6 +422,31 @@ export interface Project {
   source_paths?: string[];
 }
 
+/**
+ * A picked source folder another project already owns. Adding it outright
+ * would draw the same root twice in the sidebar, so the user confirms a merge
+ * and `mergeProjectSource` moves it over instead.
+ */
+export interface ProjectSourceMerge {
+  sourcePath: string;
+  ownerName: string;
+  /** The folder is the owner's primary root, so merging absorbs it whole. */
+  wholeProject: boolean;
+}
+
+/** A folder picked for a project that has not been registered yet. */
+export interface PickedProjectFolder {
+  path: string;
+  name: string;
+  /** Project that already spans this folder, if any. */
+  ownerName: string | null;
+}
+
+export interface AddProjectSourceResult {
+  project: Project | null;
+  merge: ProjectSourceMerge | null;
+}
+
 export interface ProjectWorktree {
   name: string;
   path: string;
