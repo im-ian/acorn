@@ -101,12 +101,20 @@ export const tauriMockSource = `
     }
     if (cmd === 'list_sessions') return Promise.resolve([]);
     if (cmd === 'list_projects') return Promise.resolve([]);
-    if (cmd === 'add_project') {
+    if (cmd === 'pick_project_folder') {
+      return Promise.resolve({
+        path: '/tmp/picked',
+        name: 'picked',
+        ownerName: null,
+      });
+    }
+    if (cmd === 'add_project_at') {
       return Promise.resolve({
         repo_path: '/tmp/picked',
-        name: 'picked',
+        name: args?.name ?? 'picked',
         created_at: '2026-01-01T00:00:00Z',
         position: 0,
+        source_paths: (args?.roots ?? []).slice(1),
       });
     }
     if (cmd === 'add_project_source') return Promise.resolve(null);

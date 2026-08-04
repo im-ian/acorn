@@ -41,7 +41,8 @@ vi.mock("./lib/api", () => {
       }) as unknown as ChatSessionState),
       agentTranscriptSummary: vi.fn(async () => null),
       agentTranscriptSummaryAtPath: vi.fn(async () => null),
-      addProject: vi.fn(async () => ({}) as Project),
+      addProjectSource: vi.fn(async () => ({ project: null, merge: null })),
+      mergeProjectSource: vi.fn(async () => ({}) as Project),
       createNewProject: vi.fn(async () => ({}) as Project),
       removeProject: vi.fn(async () => []),
       reorderProjects: vi.fn(async (paths: string[]) =>
@@ -4017,26 +4018,7 @@ describe("right panel groups", () => {
   });
 });
 
-describe("auto initial session on first project add", () => {
-  it("spawns one regular session when an existing project is added", async () => {
-    mockApi.addProject.mockResolvedValueOnce(project(REPO_B, 1));
-    mockApi.listProjects.mockResolvedValue([project(REPO_B, 1)]);
-    mockApi.createSession.mockResolvedValueOnce(session("s-new", REPO_B));
-    mockApi.listSessions.mockResolvedValue([session("s-new", REPO_B)]);
-
-    await useAppStore.getState().addProject("Select project");
-
-    expect(mockApi.createSession).toHaveBeenCalledTimes(1);
-    expect(mockApi.createSession).toHaveBeenCalledWith(
-      "new session",
-      REPO_B,
-      false,
-      "regular",
-      null,
-    );
-    expect(useAppStore.getState().activeProject).toBe(REPO_B);
-  });
-
+describe("project add and create", () => {
   it("spawns one regular session when a new project is created", async () => {
     mockApi.createNewProject.mockResolvedValueOnce(project(REPO_B, 1));
     mockApi.listProjects.mockResolvedValue([project(REPO_B, 1)]);
@@ -4055,20 +4037,28 @@ describe("auto initial session on first project add", () => {
     );
   });
 
-  it("does not spawn a session when the folder picker is cancelled", async () => {
-    mockApi.addProject.mockResolvedValueOnce(null);
+  it("holds a source folder another project owns until the merge is confirmed", async () => {
+    await seed([project(REPO_A, 0), project(REPO_B, 1)], []);
+    mockApi.addProjectSource.mockResolvedValueOnce({
+      project: null,
+      merge: {
+        sourcePath: REPO_B,
+        ownerName: "repo-b",
+        wholeProject: true,
+      },
+    });
 
-    await useAppStore.getState().addProject("Select project");
+    await useAppStore.getState().addProjectSource(REPO_A, "Select folder");
 
-    expect(mockApi.createSession).not.toHaveBeenCalled();
-  });
+    expect(mockApi.mergeProjectSource).not.toHaveBeenCalled();
+    expect(useAppStore.getState().pendingSourceMerge).toEqual({
+      repoPath: REPO_A,
+      merge: { sourcePath: REPO_B, ownerName: "repo-b", wholeProject: true },
+    });
 
-  it("does not pile on a session when re-adding a project that already has one", async () => {
-    await seed([project(REPO_A, 0)], [session("s1", REPO_A)]);
-    mockApi.addProject.mockResolvedValueOnce(project(REPO_A, 0));
+    await useAppStore.getState().confirmSourceMerge();
 
-    await useAppStore.getState().addProject("Select project");
-
-    expect(mockApi.createSession).not.toHaveBeenCalled();
+    expect(mockApi.mergeProjectSource).toHaveBeenCalledWith(REPO_A, REPO_B);
+    expect(useAppStore.getState().pendingSourceMerge).toBeNull();
   });
 });

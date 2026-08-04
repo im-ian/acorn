@@ -1342,6 +1342,8 @@
       "branch": "Branch",
       "detached": "(detached)",
       "workingDirectory": "Working directory",
+      "sourceFolders": "Source folders",
+      "sessions": "Sessions",
       "openPullRequest": "Open PR",
       "processes": "Processes",
       "status": "Status",
@@ -1977,6 +1979,8 @@
       },
       "general": "General",
       "generalHint": "Project identity and persistence behavior.",
+      "name": "Project name",
+      "renameFailed": "Failed to rename project:",
       "sources": "Source folders",
       "sourcesHint": "Repositories this project spans. Each session stays anchored to the folder it starts in.",
       "primarySource": "Primary",
@@ -2021,6 +2025,14 @@
       "saving": "Saving...",
       "save": "Save"
     },
+    "mergeProjectSource": {
+      "title": "Merge source folder",
+      "messageProject": "\"{source}\" is its own project. Merging moves every folder it spans into \"{target}\" and removes it from the sidebar.",
+      "messageFolder": "This folder belongs to \"{source}\". Merging moves it into \"{target}\".",
+      "folderLabel": "Folder",
+      "sessionsKept": "Sessions stay where they are — only the grouping changes.",
+      "confirm": "Merge"
+    },
     "newProject": {
       "title": "New project",
       "subtitle": "Create a git repository and add it to Acorn",
@@ -2044,6 +2056,14 @@
         "null_character": "Project name cannot contain a null character.",
         "component_too_long": "Project name is longer than 255 bytes, which common filesystems reject."
       }
+    },
+    "addExistingProject": {
+      "title": "Add project",
+      "agentSupport": "Extra source folders are handed to Claude Code and Codex only. Other agents still run in the terminal, but see just the folder their session starts in.",
+      "namePlaceholder": "Project name",
+      "addFolder": "Add folder",
+      "pickTitle": "Select a project folder",
+      "folderTaken": "That folder already belongs to project {project}."
     },
     "agentResume": {
       "title": "Resume previous conversation",

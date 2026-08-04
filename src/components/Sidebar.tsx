@@ -173,6 +173,7 @@ import type {
 } from "../lib/types";
 import { AutonomousGoalDialog } from "./AutonomousGoalDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { AddExistingProjectDialog } from "./AddExistingProjectDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
 import {
   ProjectSettingsModal,
@@ -328,9 +329,7 @@ export function Sidebar() {
   const createSession = useAppStore((s) => s.createSession);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const requestRemoveProject = useAppStore((s) => s.requestRemoveProject);
-  const addProject = useAppStore((s) => s.addProject);
   const addProjectSource = useAppStore((s) => s.addProjectSource);
-  const removeProjectSource = useAppStore((s) => s.removeProjectSource);
   const createNewProject = useAppStore((s) => s.createNewProject);
   const reorderProjects = useAppStore((s) => s.reorderProjects);
   const reorderProjectFolders = useAppStore((s) => s.reorderProjectFolders);
@@ -347,6 +346,7 @@ export function Sidebar() {
     );
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [autonomousGoalOpen, setAutonomousGoalOpen] = useState(false);
   const [autonomousGoalScope, setAutonomousGoalScope] =
     useState<SessionCreateScope | null>(null);
@@ -476,31 +476,6 @@ export function Sidebar() {
     }
   }
 
-  async function onAddExistingProject() {
-    try {
-      const project = await addProject(
-        sidebarText(t, "sidebar.dialog.selectExistingProject"),
-      );
-      const error = useAppStore.getState().consumeError();
-      if (error) {
-        showToast(`${t("toasts.project.addFailed")} ${error}`);
-        return;
-      }
-      // Land on the source folders tab so extra repositories can be attached
-      // as part of opening the project, not as a separate trip into settings.
-      if (project) {
-        setSettingsProject({
-          name: project.name,
-          repoPath: project.repo_path,
-          tab: "sources",
-        });
-      }
-    } catch (e) {
-      console.error("add project failed", e);
-      showToast(`${t("toasts.project.addFailed")} ${String(e)}`);
-    }
-  }
-
   async function onAddProjectFolder(repoPath: string) {
     try {
       const folder = createProjectFolder(repoPath);
@@ -513,13 +488,6 @@ export function Sidebar() {
     }
   }
 
-  /** The project a source-folder workspace row belongs to, if it is one. */
-  function sourceFolderOwner(folder: ProjectFolder): string | null {
-    if (!isDefaultProjectFolder(folder)) return null;
-    const owner = projectRootIndex.get(folder.repoPath);
-    return owner && owner !== folder.repoPath ? owner : null;
-  }
-
   async function onAddProjectSource(repoPath: string) {
     const ok = await addProjectSource(
       repoPath,
@@ -528,14 +496,6 @@ export function Sidebar() {
     if (!ok) {
       const error = useAppStore.getState().consumeError();
       if (error) showToast(`${t("toasts.project.addSourceFailed")} ${error}`);
-    }
-  }
-
-  async function onRemoveProjectSource(owner: string, sourcePath: string) {
-    const ok = await removeProjectSource(owner, sourcePath);
-    if (!ok) {
-      const error = useAppStore.getState().consumeError();
-      showToast(`${t("toasts.project.removeSourceFailed")} ${error ?? ""}`.trim());
     }
   }
 
@@ -664,13 +624,6 @@ export function Sidebar() {
       .flatMap((project) => project.folders)
       .find((candidate) => candidate.folder.id === folderId);
     if (!folderGroup) return;
-    // A source folder's root workspace is not a workspace the user can drop —
-    // detaching it means removing the source folder from the project.
-    const owner = sourceFolderOwner(folderGroup.folder);
-    if (owner) {
-      void onRemoveProjectSource(owner, folderGroup.folder.repoPath);
-      return;
-    }
     if (folderGroup.sessions.length === 0) {
       if (isWorktreeWorkspace(folderGroup.folder)) {
         if (deleteEmptyWorktreeWorkspacesWithoutPrompt) {
@@ -697,7 +650,6 @@ export function Sidebar() {
   const onNewLocalSessionRef = useRef<
     (scopeOverride?: SessionCreateScope) => Promise<void>
   >(async () => {});
-  const onAddProjectRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     const activeScope = (): SessionCreateScope | null => {
@@ -819,7 +771,7 @@ export function Sidebar() {
       setNewProjectOpen(true);
     };
     const addProj = () => {
-      void onAddProjectRef.current();
+      setAddProjectOpen(true);
     };
     window.addEventListener("acorn:new-session", newSession);
     window.addEventListener("acorn:new-isolated-session", newIsolated);
@@ -947,7 +899,6 @@ export function Sidebar() {
 
   onNewSessionRef.current = onNewSession;
   onNewLocalSessionRef.current = onNewLocalSession;
-  onAddProjectRef.current = onAddExistingProject;
 
   function openAutonomousGoalForFolder(folder: ProjectFolder) {
     setAutonomousGoalSession(null);
@@ -1187,10 +1138,15 @@ export function Sidebar() {
         ) {
           return;
         }
-        const repoPath =
-          dropRepoPath === LOCAL_SESSION_ROOT_DROP_ID
-            ? activeSession.repo_path
-            : dropRepoPath;
+        // The drop zone is keyed by the project's primary root, but a session
+        // started in a source folder belongs to that same project top level.
+        const dropOwnsSession =
+          dropRepoPath === LOCAL_SESSION_ROOT_DROP_ID ||
+          resolveProjectRootPath(projectRootIndex, activeSession.repo_path) ===
+            dropRepoPath;
+        const repoPath = dropOwnsSession
+          ? activeSession.repo_path
+          : dropRepoPath;
         const targetFolderId = defaultProjectFolderId(repoPath);
         const targetFolder = projectFolderById(
           currentAllWorkspaceGroups,
@@ -1236,8 +1192,18 @@ export function Sidebar() {
       ) {
         return;
       }
-      // Cross-project drops are not supported yet — silently ignore.
-      if (activeSession.repo_path !== overSession.repo_path) return;
+      // Sessions of one project share its top level even when they start in
+      // different roots, so ordering them is a same-project move. Drops that
+      // cross projects are still ignored.
+      const activeProjectRootPath = resolveProjectRootPath(
+        projectRootIndex,
+        activeSession.repo_path,
+      );
+      const overProjectRootPath = resolveProjectRootPath(
+        projectRootIndex,
+        overSession.repo_path,
+      );
+      if (activeProjectRootPath !== overProjectRootPath) return;
       const activeFolderId = projectFolderIdForSession(
         currentAllWorkspaceGroups,
         activeSid,
@@ -1266,13 +1232,22 @@ export function Sidebar() {
       const project =
         activeSession.project_scoped !== false
           ? (currentProjectGroups.find(
-              (group) => group.repoPath === activeSession.repo_path,
+              (group) => group.repoPath === activeProjectRootPath,
             ) ?? null)
           : null;
+      // Every root's default folder renders flat under the project header, so
+      // "is this row at the top level" is a question about the folder, not
+      // about which root the session happens to live in.
+      const isTopLevelFolderId = (folderId: string | null): boolean => {
+        const folder = folderId
+          ? projectFolderById(currentAllWorkspaceGroups, folderId)
+          : null;
+        return folder ? isGroupDefaultFolder(folder) : false;
+      };
       if (
         activeSession.project_scoped !== false &&
         project &&
-        overFolderId === defaultProjectFolderId(activeSession.repo_path) &&
+        isTopLevelFolderId(overFolderId) &&
         activeFolderId !== overFolderId
       ) {
         const movedIntoTopLevel = applySessionDropToProjectTopLevel(
@@ -1293,8 +1268,8 @@ export function Sidebar() {
       }
       if (
         activeSession.project_scoped !== false &&
-        activeFolderId === defaultProjectFolderId(activeSession.repo_path) &&
-        overFolderId === defaultProjectFolderId(activeSession.repo_path)
+        isTopLevelFolderId(activeFolderId) &&
+        isTopLevelFolderId(overFolderId)
       ) {
         if (project && applyProjectTopLevelOrder(project, activeId, overId)) {
           return;
@@ -1358,7 +1333,7 @@ export function Sidebar() {
           >
             <button
               type="button"
-              onClick={onAddExistingProject}
+              onClick={() => setAddProjectOpen(true)}
               className="rounded-md p-1.5 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
               aria-label={sidebarText(
                 t,
@@ -1380,7 +1355,7 @@ export function Sidebar() {
         >
           <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pb-2">
             {projectGroups.length === 0 ? (
-              <EmptyState onOpenProject={onAddExistingProject} />
+              <EmptyState onOpenProject={() => setAddProjectOpen(true)} />
             ) : (
               <SortableContext
                 items={projectIds}
@@ -1543,6 +1518,10 @@ export function Sidebar() {
           setAutonomousGoalScope(null);
           setAutonomousGoalSession(null);
         }}
+      />
+      <AddExistingProjectDialog
+        open={addProjectOpen}
+        onClose={() => setAddProjectOpen(false)}
       />
       <NewProjectDialog
         open={newProjectOpen}
@@ -2099,6 +2078,14 @@ function ProjectGroupView({
 }: ProjectGroupViewProps) {
   const t = useTranslation();
   const shortcuts = useSettings((s) => s.settings.shortcuts);
+  const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  // Source roots have no rows of their own, so the project's hover card is
+  // where they show up.
+  const sourcePaths = useAppStore(
+    (s) =>
+      s.projects.find((entry) => entry.repo_path === project.repoPath)
+        ?.source_paths,
+  );
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [createMenu, setCreateMenu] = useState<{
     x: number;
@@ -2131,9 +2118,13 @@ function ProjectGroupView({
 
   const defaultFolderGroup =
     project.folders.find((folderGroup) =>
-      isGroupDefaultFolder(project.repoPath, folderGroup.folder),
+      isGroupDefaultFolder(folderGroup.folder),
     ) ?? project.folders[0] ?? null;
   const projectSessionCreationFolder = defaultFolderGroup?.folder ?? null;
+
+  const hoverDetails = sessionDisplay.showDetailsOnHover
+    ? buildProjectHoverDetails(t, project, sourcePaths ?? [])
+    : null;
 
   const runCreateAction = useCallback(
     (action: ProjectSessionCreateAction) => {
@@ -2237,7 +2228,7 @@ function ProjectGroupView({
   }
 
   const namedFolderGroups = project.folders.filter(
-    (folderGroup) => !isGroupDefaultFolder(project.repoPath, folderGroup.folder),
+    (folderGroup) => !isGroupDefaultFolder(folderGroup.folder),
   );
   const projectFoldersForRows = project.folders.map(
     (folderGroup) => folderGroup.folder,
@@ -2315,9 +2306,17 @@ function ProjectGroupView({
           />
         </button>
         <span className="flex min-w-0 flex-1 items-center gap-1.5 leading-none">
-          <span className="truncate text-sm font-medium leading-5 text-fg">
-            {project.name}
-          </span>
+          {hoverDetails ? (
+            <Tooltip label={hoverDetails} side="right" multiline>
+              <span className="truncate text-sm font-medium leading-5 text-fg">
+                {project.name}
+              </span>
+            </Tooltip>
+          ) : (
+            <span className="truncate text-sm font-medium leading-5 text-fg">
+              {project.name}
+            </span>
+          )}
         </span>
         <div className="ml-auto hidden shrink-0 items-center gap-1 group-hover:flex">
           {PROJECT_SESSION_PRIMARY_CREATE_ACTIONS.map((action) => (
@@ -2498,8 +2497,7 @@ function ProjectGroupView({
                     key={item.id}
                     folderGroup={item.folderGroup}
                     projectFolders={projectFoldersForRows}
-                    isSourceFolder={
-                      isDefaultProjectFolder(item.folderGroup.folder) &&
+                    inSourceRoot={
                       item.folderGroup.folder.repoPath !== project.repoPath
                     }
                     sourceRootLabel={
@@ -2570,7 +2568,8 @@ interface ProjectFolderViewProps {
   folderGroup: ProjectFolderGroup;
   projectFolders: ProjectFolder[];
   /** This workspace is a source folder's root, not a workspace inside one. */
-  isSourceFolder: boolean;
+  /** The row's workspace lives in one of the project's extra source roots. */
+  inSourceRoot: boolean;
   /**
    * Name of the source folder this workspace lives in, when it is not the
    * project's primary root. Sibling rows carry no indentation, so without it
@@ -2602,7 +2601,7 @@ interface ProjectFolderViewProps {
 function ProjectFolderView({
   folderGroup,
   projectFolders,
-  isSourceFolder,
+  inSourceRoot,
   sourceRootLabel,
   onAddFolderInRoot,
   onAddWorktreeFolderInRoot,
@@ -2629,15 +2628,8 @@ function ProjectFolderView({
     y: number;
   } | null>(null);
   const folder = folderGroup.folder;
-  // A source folder's root workspace has no default-folder immunity: removing
-  // it detaches the source folder from the project.
-  const removable = isSourceFolder || !isDefaultProjectFolder(folder);
-  const removeLabel = sidebarText(
-    t,
-    isSourceFolder
-      ? "sidebar.actions.removeProjectSourceFolder"
-      : "sidebar.actions.removeProjectFolder",
-  );
+  const removable = !isDefaultProjectFolder(folder);
+  const removeLabel = sidebarText(t, "sidebar.actions.removeProjectFolder");
   const {
     attributes,
     listeners,
@@ -2940,8 +2932,9 @@ function ProjectFolderView({
           ...folderCreateMenuItems,
           contextMenuGroupTitle(t, "workspace"),
           // The project header's workspace actions target the primary root, so
-          // a source folder needs its own way to create workspaces in itself.
-          ...(isSourceFolder
+          // a workspace living in a source root offers its own way to create
+          // siblings there.
+          ...(inSourceRoot
             ? [
                 {
                   label: sidebarText(t, "sidebar.actions.newProjectFolder"),
@@ -4995,6 +4988,47 @@ function buildSessionHoverDetails(
           value={sidebarText(t, "sidebar.metadata.isolatedWorktree")}
         />
       ) : null}
+    </span>
+  );
+}
+
+/**
+ * What a project is, in the terms that matter to the agent: the folder its
+ * sessions start in, and the extra roots every session hands over as
+ * `--add-dir`. Those roots have no sidebar rows of their own, so this is where
+ * the user sees them.
+ */
+function buildProjectHoverDetails(
+  t: Translator,
+  project: ProjectFolderProjectGroup,
+  sourcePaths: readonly string[],
+): ReactNode {
+  return (
+    <span className="flex w-72 max-w-full flex-col gap-1.5">
+      <SessionHoverDetailRow
+        icon={<Tag size={12} />}
+        label={sidebarText(t, "sidebar.metadata.name")}
+        value={project.name}
+      />
+      <SessionHoverDetailRow
+        icon={<Folder size={12} />}
+        label={sidebarText(t, "sidebar.metadata.workingDirectory")}
+        value={project.repoPath}
+        valueClassName="break-all font-mono"
+      />
+      {sourcePaths.length > 0 ? (
+        <SessionHoverDetailRow
+          icon={<FolderGit2 size={12} />}
+          label={sidebarText(t, "sidebar.metadata.sourceFolders")}
+          value={sourcePaths.join("\n")}
+          valueClassName="whitespace-pre-line break-all font-mono"
+        />
+      ) : null}
+      <SessionHoverDetailRow
+        icon={<Activity size={12} />}
+        label={sidebarText(t, "sidebar.metadata.sessions")}
+        value={String(project.sessions.length)}
+      />
     </span>
   );
 }

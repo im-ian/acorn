@@ -1342,6 +1342,8 @@
       "branch": "支店",
       "detached": "(切り離された)",
       "workingDirectory": "作業ディレクトリ",
+      "sourceFolders": "ソースフォルダ",
+      "sessions": "セッション",
       "openPullRequest": "オープンPR",
       "processes": "プロセス",
       "status": "ステータス",
@@ -1977,6 +1979,8 @@
       },
       "general": "一般",
       "generalHint": "プロジェクトのアイデンティティと永続性の動作。",
+      "name": "プロジェクト名",
+      "renameFailed": "プロジェクト名の変更に失敗しました:",
       "sources": "ソースフォルダー",
       "sourcesHint": "このプロジェクトが扱うリポジトリです。各セッションは開始したフォルダーに固定されます。",
       "primarySource": "既定",
@@ -2021,6 +2025,14 @@
       "saving": "保存中...",
       "save": "保存"
     },
+    "mergeProjectSource": {
+      "title": "ソースフォルダを統合",
+      "messageProject": "「{source}」は独立したプロジェクトです。統合すると、そのプロジェクトが含むすべてのフォルダが「{target}」に移り、サイドバーから消えます。",
+      "messageFolder": "このフォルダは「{source}」に属しています。統合すると「{target}」に移ります。",
+      "folderLabel": "フォルダ",
+      "sessionsKept": "セッションはそのまま残り、グループの位置だけが変わります。",
+      "confirm": "統合"
+    },
     "newProject": {
       "title": "新しいプロジェクト",
       "subtitle": "git リポジトリを作成して Acorn に追加します",
@@ -2044,6 +2056,14 @@
         "null_character": "プロジェクト名にヌル文字を含めることはできません。",
         "component_too_long": "プロジェクト名が 255 バイトを超えているため、一般的なファイルシステムはこれを拒否します。"
       }
+    },
+    "addExistingProject": {
+      "title": "プロジェクトを追加",
+      "agentSupport": "追加のソースフォルダは Claude Code と Codex にのみ渡されます。ほかのエージェントもターミナルで動きますが、セッションを開始したフォルダしか見えません。",
+      "namePlaceholder": "プロジェクト名",
+      "addFolder": "フォルダを追加",
+      "pickTitle": "プロジェクトフォルダを選択",
+      "folderTaken": "そのフォルダはすでにプロジェクト {project} に属しています。"
     },
     "agentResume": {
       "title": "前の会話を再開する",

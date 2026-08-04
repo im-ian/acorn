@@ -5518,24 +5518,147 @@ pub fn list_projects(state: State<'_, AppState>) -> Vec<Project> {
     state.projects.list()
 }
 
+/// A folder picked for a project that is still being assembled in the dialog:
+/// resolved to its git root, with the project that already claims it named so
+/// the dialog can refuse it before anything is registered.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedProjectFolder {
+    pub path: String,
+    pub name: String,
+    pub owner_name: Option<String>,
+}
+
+/// Pick a repository folder without registering anything. The add-project
+/// dialog collects roots this way and commits them in one go through
+/// [`add_project_at`], so cancelling leaves no half-made project behind.
 #[tauri::command]
-pub async fn add_project<R: Runtime>(
+pub async fn pick_project_folder<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     title: Option<String>,
-) -> AppResult<Option<Project>> {
-    let Some(path) = pick_folder_path(&app, title).await? else {
+) -> AppResult<Option<PickedProjectFolder>> {
+    let Some(picked) = pick_folder_path(&app, title).await? else {
         return Ok(None);
     };
-    let path = worktree::project_root_for_path(&path)?;
-    // A folder already spanned by a project as an extra source root must not
-    // also become a standalone project — the sidebar would draw it twice.
-    if let Some(owner) = state.projects.owner_of_root(&path) {
-        return Ok(Some(owner));
+    let path = worktree::project_root_for_path(&picked)?;
+    remember_folder_grant(state.inner(), &path)?;
+    Ok(Some(PickedProjectFolder {
+        name: project_basename(&path),
+        owner_name: state
+            .projects
+            .owner_of_root(&path)
+            .map(|project| project.name),
+        path: path.to_string_lossy().into_owned(),
+    }))
+}
+
+/// Register a project spanning `roots`, the first of which is its primary
+/// repository. Every root must be free: a folder another project already
+/// spans would otherwise be drawn twice in the sidebar.
+#[tauri::command]
+pub fn add_project_at(
+    state: State<'_, AppState>,
+    name: String,
+    roots: Vec<String>,
+) -> AppResult<Project> {
+    let mut unique: Vec<PathBuf> = Vec::new();
+    for root in &roots {
+        let root = worktree::project_root_for_path(Path::new(root))?;
+        if let Some(owner) = state.projects.owner_of_root(&root) {
+            return Err(AppError::InvalidPath(format!(
+                "folder already belongs to project {}: {}",
+                owner.name,
+                root.display()
+            )));
+        }
+        if !unique.contains(&root) {
+            unique.push(root);
+        }
     }
-    let project = state.projects.ensure(path.clone(), project_basename(&path));
+    let mut roots = unique.into_iter();
+    let primary = roots
+        .next()
+        .ok_or_else(|| AppError::InvalidPath("no project folder was chosen".to_string()))?;
+    let name = name.trim().to_string();
+    let name = if name.is_empty() {
+        project_basename(&primary)
+    } else {
+        name
+    };
+    let project = state.projects.ensure(primary.clone(), name);
+    let sources: Vec<PathBuf> = roots.collect();
+    let project = if sources.is_empty() {
+        project
+    } else {
+        state
+            .projects
+            .set_source_paths(&primary, sources)
+            .unwrap_or(project)
+    };
     persist(&state);
-    Ok(Some(project))
+    Ok(project)
+}
+
+/// A picked folder another project already claims. Adding it outright would
+/// let the sidebar draw the same root twice, so the pick stops here and the
+/// caller confirms a merge before [`merge_project_source`] moves it over.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSourceMerge {
+    pub source_path: String,
+    pub owner_name: String,
+    /// The picked folder is the owner's primary root, so merging absorbs that
+    /// whole project — every root it spans moves and the project disappears.
+    pub whole_project: bool,
+}
+
+/// Outcome of [`add_project_source`]. Exactly one field is set: `project` when
+/// the folder was added (or the pick was a no-op), `merge` when it needs
+/// confirmation first. Both are `None` when the picker was cancelled.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddProjectSourceResult {
+    pub project: Option<Project>,
+    pub merge: Option<ProjectSourceMerge>,
+}
+
+/// Colon-joined roots of `repo_path`'s project other than `repo_path` itself,
+/// or `None` when the project spans a single root. Paths containing a colon
+/// are dropped rather than shipped as two broken directories.
+fn sibling_project_roots_env(state: &AppState, repo_path: &Path) -> Option<String> {
+    let roots = state.projects.owner_of_root(repo_path)?.roots();
+    let dirs = roots
+        .into_iter()
+        .filter(|root| root != repo_path)
+        .map(|root| root.display().to_string())
+        .filter(|root| !root.contains(':'))
+        .collect::<Vec<_>>();
+    (!dirs.is_empty()).then(|| dirs.join(":"))
+}
+
+/// Rename a project. Only the sidebar label changes — the repository roots the
+/// project spans, and every session anchored to them, stay put.
+#[tauri::command]
+pub fn rename_project(
+    state: State<'_, AppState>,
+    repo_path: String,
+    name: String,
+) -> AppResult<Project> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::InvalidPath("project name is empty".to_string()));
+    }
+    let project = state
+        .projects
+        .owner_of_root(&PathBuf::from(&repo_path))
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    let updated = state
+        .projects
+        .rename(&project.repo_path, name)
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    persist(&state);
+    Ok(updated)
 }
 
 /// Add another repository root to an existing project. The picked folder is
@@ -5547,25 +5670,31 @@ pub async fn add_project_source<R: Runtime>(
     state: State<'_, AppState>,
     repo_path: String,
     title: Option<String>,
-) -> AppResult<Option<Project>> {
+) -> AppResult<AddProjectSourceResult> {
     let project_path = PathBuf::from(&repo_path);
     let project = state
         .projects
         .owner_of_root(&project_path)
         .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
     let Some(picked) = pick_folder_path(&app, title).await? else {
-        return Ok(None);
+        return Ok(AddProjectSourceResult::default());
     };
     let source = worktree::project_root_for_path(&picked)?;
     if let Some(owner) = state.projects.owner_of_root(&source) {
         if owner.repo_path == project.repo_path {
-            return Ok(Some(project));
+            return Ok(AddProjectSourceResult {
+                project: Some(project),
+                merge: None,
+            });
         }
-        return Err(AppError::InvalidPath(format!(
-            "folder already belongs to project {}: {}",
-            owner.name,
-            source.display()
-        )));
+        return Ok(AddProjectSourceResult {
+            project: None,
+            merge: Some(ProjectSourceMerge {
+                source_path: source.to_string_lossy().to_string(),
+                whole_project: owner.repo_path == source,
+                owner_name: owner.name,
+            }),
+        });
     }
     let mut source_paths = project.source_paths.clone();
     source_paths.push(source);
@@ -5574,7 +5703,71 @@ pub async fn add_project_source<R: Runtime>(
         .set_source_paths(&project.repo_path, source_paths)
         .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
     persist(&state);
-    Ok(Some(updated))
+    Ok(AddProjectSourceResult {
+        project: Some(updated),
+        merge: None,
+    })
+}
+
+/// Move a repository root out of the project that currently owns it and into
+/// `repo_path`. Picking another project's primary root absorbs that project
+/// whole — every root it spans moves and its entry is dropped — so each root
+/// still belongs to exactly one project. Sessions are left alone: they record
+/// a root, and the sidebar groups them under whichever project owns it.
+#[tauri::command]
+pub fn merge_project_source(
+    state: State<'_, AppState>,
+    repo_path: String,
+    source_path: String,
+) -> AppResult<Project> {
+    merge_project_source_inner(&state, repo_path, source_path)
+}
+
+fn merge_project_source_inner(
+    state: &AppState,
+    repo_path: String,
+    source_path: String,
+) -> AppResult<Project> {
+    let project_path = PathBuf::from(&repo_path);
+    let source = PathBuf::from(&source_path);
+    let project = state
+        .projects
+        .owner_of_root(&project_path)
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    let owner = state.projects.owner_of_root(&source).ok_or_else(|| {
+        AppError::InvalidPath(format!("folder is not part of a project: {source_path}"))
+    })?;
+    if owner.repo_path == project.repo_path {
+        return Ok(project);
+    }
+    let moved = if owner.repo_path == source {
+        let roots = owner.roots();
+        state.projects.remove(&owner.repo_path);
+        roots
+    } else {
+        state.projects.set_source_paths(
+            &owner.repo_path,
+            owner
+                .source_paths
+                .iter()
+                .filter(|root| *root != &source)
+                .cloned()
+                .collect(),
+        );
+        vec![source]
+    };
+    let mut source_paths = project.source_paths.clone();
+    for root in moved {
+        if root != project.repo_path && !source_paths.contains(&root) {
+            source_paths.push(root);
+        }
+    }
+    let updated = state
+        .projects
+        .set_source_paths(&project.repo_path, source_paths)
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    persist(state);
+    Ok(updated)
 }
 
 /// Drop an extra source root from a project. Refused while sessions still live
@@ -7146,6 +7339,15 @@ fn pty_spawn_blocking<R: Runtime>(
             .or_insert_with(|| wrapper_dir.display().to_string());
     } else {
         tracing::warn!(%id, "agent wrapper dir setup failed; agent hook runtime injection will be inactive");
+    }
+
+    // The other repository roots this session's project spans. The agent
+    // wrappers turn them into `--add-dir` flags so a multi-root project is
+    // one workspace to the agent, not just to the sidebar.
+    if let Some(dirs) = sibling_project_roots_env(&state, &session.repo_path) {
+        effective_env
+            .entry("ACORN_PROJECT_SOURCE_DIRS".to_string())
+            .or_insert(dirs);
     }
 
     // OSC 7 emitter — only zsh needs file-side help (bash/fish self-serve).
@@ -13469,6 +13671,100 @@ mod tests {
                 .owner_of_root(&source)
                 .map(|project| project.repo_path),
             Some(primary),
+        );
+    }
+
+    #[test]
+    fn source_dirs_env_lists_only_the_session_root_siblings() {
+        let state = crate::state::AppState::default();
+        let primary = PathBuf::from("/tmp/acorn-source-env-primary");
+        let source = PathBuf::from("/tmp/acorn-source-env-design");
+        state
+            .projects
+            .ensure(primary.clone(), "primary".to_string());
+
+        assert_eq!(super::sibling_project_roots_env(&state, &primary), None);
+
+        state
+            .projects
+            .set_source_paths(&primary, vec![source.clone()])
+            .expect("project is registered");
+
+        assert_eq!(
+            super::sibling_project_roots_env(&state, &primary),
+            Some(source.display().to_string()),
+        );
+        // A session anchored in the source root sees the primary root instead.
+        assert_eq!(
+            super::sibling_project_roots_env(&state, &source),
+            Some(primary.display().to_string()),
+        );
+    }
+
+    #[test]
+    fn merging_a_project_moves_every_root_it_spans() {
+        let state = crate::state::AppState::default();
+        let target = PathBuf::from("/tmp/acorn-merge-target");
+        let absorbed = PathBuf::from("/tmp/acorn-merge-absorbed");
+        let absorbed_source = PathBuf::from("/tmp/acorn-merge-absorbed-source");
+        state.projects.ensure(target.clone(), "target".to_string());
+        state
+            .projects
+            .ensure(absorbed.clone(), "absorbed".to_string());
+        state
+            .projects
+            .set_source_paths(&absorbed, vec![absorbed_source.clone()])
+            .expect("project is registered");
+
+        let updated = super::merge_project_source_inner(
+            &state,
+            target.display().to_string(),
+            absorbed.display().to_string(),
+        )
+        .expect("merge succeeds");
+
+        assert_eq!(
+            updated.source_paths,
+            vec![absorbed, absorbed_source.clone()]
+        );
+        assert_eq!(state.projects.list().len(), 1);
+        assert_eq!(
+            state
+                .projects
+                .owner_of_root(&absorbed_source)
+                .map(|project| project.repo_path),
+            Some(target),
+        );
+    }
+
+    #[test]
+    fn merging_a_source_root_leaves_its_project_standing() {
+        let state = crate::state::AppState::default();
+        let target = PathBuf::from("/tmp/acorn-merge-root-target");
+        let owner = PathBuf::from("/tmp/acorn-merge-root-owner");
+        let shared = PathBuf::from("/tmp/acorn-merge-root-shared");
+        state.projects.ensure(target.clone(), "target".to_string());
+        state.projects.ensure(owner.clone(), "owner".to_string());
+        state
+            .projects
+            .set_source_paths(&owner, vec![shared.clone()])
+            .expect("project is registered");
+
+        let updated = super::merge_project_source_inner(
+            &state,
+            target.display().to_string(),
+            shared.display().to_string(),
+        )
+        .expect("merge succeeds");
+
+        assert_eq!(updated.source_paths, vec![shared.clone()]);
+        assert_eq!(state.projects.list().len(), 2);
+        assert_eq!(
+            state
+                .projects
+                .owner_of_root(&shared)
+                .map(|project| project.repo_path),
+            Some(target),
         );
     }
 

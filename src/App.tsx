@@ -8,6 +8,7 @@ import { StatusBar } from "./components/StatusBar";
 import { RemoveSessionDialog } from "./components/RemoveSessionDialog";
 import { RunningSessionCloseWarningDialog } from "./components/RunningSessionCloseWarningDialog";
 import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
+import { MergeProjectSourceDialog } from "./components/MergeProjectSourceDialog";
 import { WorkspaceMain } from "./components/WorkspaceMain";
 import { RightPanel } from "./components/RightPanel";
 import { PersistentGroup } from "./components/PersistentGroup";
@@ -328,6 +329,9 @@ function App() {
   );
   const removeSession = useAppStore((s) => s.removeSession);
   const removeProject = useAppStore((s) => s.removeProject);
+  const pendingSourceMerge = useAppStore((s) => s.pendingSourceMerge);
+  const confirmSourceMerge = useAppStore((s) => s.confirmSourceMerge);
+  const cancelSourceMerge = useAppStore((s) => s.cancelSourceMerge);
   const confirmRemoveSession = useSettings(
     (s) => s.settings.sessions.confirmRemove,
   );
@@ -1987,6 +1991,20 @@ function App() {
               return;
             }
             showStoreOperationToast(null, "toasts.project.removeFailed");
+          });
+        }}
+      />
+      <MergeProjectSourceDialog
+        merge={pendingSourceMerge?.merge ?? null}
+        targetName={
+          projects.find(
+            (p) => p.repo_path === pendingSourceMerge?.repoPath,
+          )?.name ?? ""
+        }
+        onCancel={cancelSourceMerge}
+        onConfirm={() => {
+          void confirmSourceMerge().then(() => {
+            showStoreOperationToast(null, "toasts.project.addSourceFailed");
           });
         }}
       />

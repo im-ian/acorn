@@ -113,6 +113,32 @@ if [ -z "$REAL_BIN" ]; then
   exit 127
 fi
 
+# The other repository roots this session's project spans. Prepending them as
+# `--add-dir` — before any subcommand, so global parsing still sees them —
+# makes a multi-root project one workspace for the agent instead of a grouping
+# only the sidebar knows about.
+if [ -n "${ACORN_PROJECT_SOURCE_DIRS-}" ]; then
+  _acorn_argc=$#
+  _acorn_old_ifs=$IFS
+  IFS=:
+  for _acorn_source_dir in $ACORN_PROJECT_SOURCE_DIRS; do
+    IFS=$_acorn_old_ifs
+    if [ -d "$_acorn_source_dir" ]; then
+      # Attached form: `--add-dir /dir` makes Claude's variadic option swallow
+      # the arguments that follow it (`claude mcp list` becomes two more dirs).
+      set -- "$@" "--add-dir=$_acorn_source_dir"
+    fi
+    IFS=:
+  done
+  IFS=$_acorn_old_ifs
+  while [ "$_acorn_argc" -gt 0 ]; do
+    _acorn_arg=$1
+    shift
+    set -- "$@" "$_acorn_arg"
+    _acorn_argc=$((_acorn_argc - 1))
+  done
+fi
+
 # The PTY root marker is consumed by its first wrapper. Provider descendants
 # keep the invocation token only as a nesting marker and cannot reuse the
 # outer session's hook channel. A tokenless process with hook env is a provider
@@ -509,6 +535,32 @@ REAL_BIN=$(_acorn_find_real_binary claude)
 if [ -z "$REAL_BIN" ]; then
   echo "Acorn: claude not found in PATH. Install it and ensure it is available in your shell PATH." >&2
   exit 127
+fi
+
+# The other repository roots this session's project spans. Prepending them as
+# `--add-dir` — before any subcommand, so global parsing still sees them —
+# makes a multi-root project one workspace for the agent instead of a grouping
+# only the sidebar knows about.
+if [ -n "${ACORN_PROJECT_SOURCE_DIRS-}" ]; then
+  _acorn_argc=$#
+  _acorn_old_ifs=$IFS
+  IFS=:
+  for _acorn_source_dir in $ACORN_PROJECT_SOURCE_DIRS; do
+    IFS=$_acorn_old_ifs
+    if [ -d "$_acorn_source_dir" ]; then
+      # Attached form: `--add-dir /dir` makes Claude's variadic option swallow
+      # the arguments that follow it (`claude mcp list` becomes two more dirs).
+      set -- "$@" "--add-dir=$_acorn_source_dir"
+    fi
+    IFS=:
+  done
+  IFS=$_acorn_old_ifs
+  while [ "$_acorn_argc" -gt 0 ]; do
+    _acorn_arg=$1
+    shift
+    set -- "$@" "$_acorn_arg"
+    _acorn_argc=$((_acorn_argc - 1))
+  done
 fi
 
 # The PTY root marker is consumed by its first wrapper. Provider descendants
@@ -3088,6 +3140,46 @@ printf '{}\n' >> "$CODEX_TUI_SESSION_LOG_PATH"
             assert_eq!(
                 String::from_utf8_lossy(&output.stdout),
                 format!("real-{name}:sentinel\n")
+            );
+        }
+    }
+
+    #[test]
+    fn wrappers_prepend_project_source_dirs_as_add_dir_flags() {
+        let base = ScratchDir::new("source-dirs");
+        let wrapper_dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let real_dir = base.path().join("real-bin");
+        let source_dir = base.path().join("design-system");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&source_dir).unwrap();
+        let missing_dir = base.path().join("deleted-root");
+
+        for name in ["claude", "codex"] {
+            write_executable(&real_dir.join(name), "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+
+            let output = Command::new(name)
+                .arg("sentinel")
+                .env(
+                    "PATH",
+                    format!("{}:{}", wrapper_dir.display(), real_dir.display()),
+                )
+                .env(
+                    "ACORN_PROJECT_SOURCE_DIRS",
+                    format!("{}:{}", source_dir.display(), missing_dir.display()),
+                )
+                .env_remove("ACORN_AGENT_WRAPPER_DIR")
+                .env_remove("ACORN_AGENT_HOOK_SESSION_ID")
+                .env_remove("ACORN_AGENT_HOOK_URL")
+                .env_remove("ACORN_AGENT_HOOK_TOKEN")
+                .output()
+                .unwrap_or_else(|err| panic!("{name} wrapper failed to run: {err}"));
+
+            // Flags land before the user's own arguments, and a root that no
+            // longer exists is skipped rather than handed to the agent.
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!("--add-dir={}\nsentinel\n", source_dir.display()),
+                "{name} wrapper did not prepend the project source dirs"
             );
         }
     }
