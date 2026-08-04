@@ -2056,12 +2056,12 @@
       }
     },
     "addExistingProject": {
-      "title": "添加现有项目",
-      "message": "选择一个仓库文件夹即可注册为项目。此时还不会打开 — 接着会显示项目设置，可以命名并添加额外的源文件夹。",
+      "title": "添加项目",
       "agentSupport": "额外的源文件夹只会传给 Claude Code 和 Codex。其他智能体仍可在终端运行，但只能看到会话启动所在的文件夹。",
-      "noSessionHint": "在你主动创建之前不会启动任何会话。",
-      "choose": "选择文件夹…",
-      "choosing": "等待选择文件夹…"
+      "namePlaceholder": "项目名称",
+      "addFolder": "添加文件夹",
+      "pickTitle": "选择项目文件夹",
+      "folderTaken": "该文件夹已属于项目 {project}。"
     },
     "agentResume": {
       "title": "继续上次对话",

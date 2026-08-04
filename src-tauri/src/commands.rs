@@ -5518,24 +5518,86 @@ pub fn list_projects(state: State<'_, AppState>) -> Vec<Project> {
     state.projects.list()
 }
 
+/// A folder picked for a project that is still being assembled in the dialog:
+/// resolved to its git root, with the project that already claims it named so
+/// the dialog can refuse it before anything is registered.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedProjectFolder {
+    pub path: String,
+    pub name: String,
+    pub owner_name: Option<String>,
+}
+
+/// Pick a repository folder without registering anything. The add-project
+/// dialog collects roots this way and commits them in one go through
+/// [`add_project_at`], so cancelling leaves no half-made project behind.
 #[tauri::command]
-pub async fn add_project<R: Runtime>(
+pub async fn pick_project_folder<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     title: Option<String>,
-) -> AppResult<Option<Project>> {
-    let Some(path) = pick_folder_path(&app, title).await? else {
+) -> AppResult<Option<PickedProjectFolder>> {
+    let Some(picked) = pick_folder_path(&app, title).await? else {
         return Ok(None);
     };
-    let path = worktree::project_root_for_path(&path)?;
-    // A folder already spanned by a project as an extra source root must not
-    // also become a standalone project — the sidebar would draw it twice.
-    if let Some(owner) = state.projects.owner_of_root(&path) {
-        return Ok(Some(owner));
+    let path = worktree::project_root_for_path(&picked)?;
+    remember_folder_grant(state.inner(), &path)?;
+    Ok(Some(PickedProjectFolder {
+        name: project_basename(&path),
+        owner_name: state
+            .projects
+            .owner_of_root(&path)
+            .map(|project| project.name),
+        path: path.to_string_lossy().into_owned(),
+    }))
+}
+
+/// Register a project spanning `roots`, the first of which is its primary
+/// repository. Every root must be free: a folder another project already
+/// spans would otherwise be drawn twice in the sidebar.
+#[tauri::command]
+pub fn add_project_at(
+    state: State<'_, AppState>,
+    name: String,
+    roots: Vec<String>,
+) -> AppResult<Project> {
+    let mut unique: Vec<PathBuf> = Vec::new();
+    for root in &roots {
+        let root = worktree::project_root_for_path(Path::new(root))?;
+        if let Some(owner) = state.projects.owner_of_root(&root) {
+            return Err(AppError::InvalidPath(format!(
+                "folder already belongs to project {}: {}",
+                owner.name,
+                root.display()
+            )));
+        }
+        if !unique.contains(&root) {
+            unique.push(root);
+        }
     }
-    let project = state.projects.ensure(path.clone(), project_basename(&path));
+    let mut roots = unique.into_iter();
+    let primary = roots
+        .next()
+        .ok_or_else(|| AppError::InvalidPath("no project folder was chosen".to_string()))?;
+    let name = name.trim().to_string();
+    let name = if name.is_empty() {
+        project_basename(&primary)
+    } else {
+        name
+    };
+    let project = state.projects.ensure(primary.clone(), name);
+    let sources: Vec<PathBuf> = roots.collect();
+    let project = if sources.is_empty() {
+        project
+    } else {
+        state
+            .projects
+            .set_source_paths(&primary, sources)
+            .unwrap_or(project)
+    };
     persist(&state);
-    Ok(Some(project))
+    Ok(project)
 }
 
 /// A picked folder another project already claims. Adding it outright would

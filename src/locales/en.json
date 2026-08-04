@@ -2056,12 +2056,12 @@
       }
     },
     "addExistingProject": {
-      "title": "Add existing project",
-      "message": "Pick a repository folder to register it as a project. Nothing opens yet — the project's settings appear next so you can name it and attach extra source folders.",
+      "title": "Add project",
       "agentSupport": "Extra source folders are handed to Claude Code and Codex only. Other agents still run in the terminal, but see just the folder their session starts in.",
-      "noSessionHint": "No session is started until you ask for one.",
-      "choose": "Choose folder…",
-      "choosing": "Waiting for folder…"
+      "namePlaceholder": "Project name",
+      "addFolder": "Add folder",
+      "pickTitle": "Select a project folder",
+      "folderTaken": "That folder already belongs to project {project}."
     },
     "agentResume": {
       "title": "Resume previous conversation",

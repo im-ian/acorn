@@ -537,7 +537,6 @@ interface AppStateModel {
   cycleTab: (direction: 1 | -1) => void;
   selectLatestNeedsInputSession: () => boolean;
   cycleProject: (direction: 1 | -1) => void;
-  addProject: (title?: string) => Promise<Project | null>;
   createNewProject: (
     parentPath: string,
     name: string,
@@ -3305,21 +3304,6 @@ export const useAppStore = create<AppStateModel>()(
 
   clearPendingRemove() {
     set({ pendingRemoveId: null });
-  },
-
-  // Adding an existing project only registers it. Activating it and spawning
-  // its first session waits for the user — the add dialog leaves them in the
-  // project's setup, not in a session they did not ask for.
-  async addProject(title) {
-    try {
-      const project = await api.addProject(title);
-      await get().refreshProjects();
-      set({ error: null });
-      return project;
-    } catch (e) {
-      set({ error: errorMessage(e) });
-      return null;
-    }
   },
 
   async renameProject(repoPath, name) {

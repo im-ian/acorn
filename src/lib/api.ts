@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AcornIpcStatus,
   AddProjectSourceResult,
+  PickedProjectFolder,
   AgentStatusSource,
   AgentTokenUsageSnapshot,
   AgentHistoryItem,
@@ -325,8 +326,11 @@ export const api = {
   listProjects(): Promise<Project[]> {
     return invoke<Project[]>("list_projects");
   },
-  addProject(title?: string): Promise<Project | null> {
-    return invoke<Project | null>("add_project", { title });
+  pickProjectFolder(title?: string): Promise<PickedProjectFolder | null> {
+    return invoke<PickedProjectFolder | null>("pick_project_folder", { title });
+  },
+  addProjectAt(name: string, roots: string[]): Promise<Project> {
+    return invoke<Project>("add_project_at", { name, roots });
   },
   renameProject(repoPath: string, name: string): Promise<Project> {
     return invoke<Project>("rename_project", { repoPath, name });

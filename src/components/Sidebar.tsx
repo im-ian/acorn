@@ -329,9 +329,7 @@ export function Sidebar() {
   const createSession = useAppStore((s) => s.createSession);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const requestRemoveProject = useAppStore((s) => s.requestRemoveProject);
-  const addProject = useAppStore((s) => s.addProject);
   const addProjectSource = useAppStore((s) => s.addProjectSource);
-  const removeProjectSource = useAppStore((s) => s.removeProjectSource);
   const createNewProject = useAppStore((s) => s.createNewProject);
   const reorderProjects = useAppStore((s) => s.reorderProjects);
   const reorderProjectFolders = useAppStore((s) => s.reorderProjectFolders);
@@ -349,7 +347,6 @@ export function Sidebar() {
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
-  const [addProjectChoosing, setAddProjectChoosing] = useState(false);
   const [autonomousGoalOpen, setAutonomousGoalOpen] = useState(false);
   const [autonomousGoalScope, setAutonomousGoalScope] =
     useState<SessionCreateScope | null>(null);
@@ -479,35 +476,6 @@ export function Sidebar() {
     }
   }
 
-  async function onAddExistingProject() {
-    setAddProjectChoosing(true);
-    try {
-      const project = await addProject(
-        sidebarText(t, "sidebar.dialog.selectExistingProject"),
-      );
-      const error = useAppStore.getState().consumeError();
-      if (error) {
-        showToast(`${t("toasts.project.addFailed")} ${error}`);
-        return;
-      }
-      // Land on the source folders tab so extra repositories can be attached
-      // as part of opening the project, not as a separate trip into settings.
-      if (project) {
-        setAddProjectOpen(false);
-        setSettingsProject({
-          name: project.name,
-          repoPath: project.repo_path,
-          tab: "sources",
-        });
-      }
-    } catch (e) {
-      console.error("add project failed", e);
-      showToast(`${t("toasts.project.addFailed")} ${String(e)}`);
-    } finally {
-      setAddProjectChoosing(false);
-    }
-  }
-
   async function onAddProjectFolder(repoPath: string) {
     try {
       const folder = createProjectFolder(repoPath);
@@ -520,13 +488,6 @@ export function Sidebar() {
     }
   }
 
-  /** The project a source-folder workspace row belongs to, if it is one. */
-  function sourceFolderOwner(folder: ProjectFolder): string | null {
-    if (!isDefaultProjectFolder(folder)) return null;
-    const owner = projectRootIndex.get(folder.repoPath);
-    return owner && owner !== folder.repoPath ? owner : null;
-  }
-
   async function onAddProjectSource(repoPath: string) {
     const ok = await addProjectSource(
       repoPath,
@@ -535,14 +496,6 @@ export function Sidebar() {
     if (!ok) {
       const error = useAppStore.getState().consumeError();
       if (error) showToast(`${t("toasts.project.addSourceFailed")} ${error}`);
-    }
-  }
-
-  async function onRemoveProjectSource(owner: string, sourcePath: string) {
-    const ok = await removeProjectSource(owner, sourcePath);
-    if (!ok) {
-      const error = useAppStore.getState().consumeError();
-      showToast(`${t("toasts.project.removeSourceFailed")} ${error ?? ""}`.trim());
     }
   }
 
@@ -671,13 +624,6 @@ export function Sidebar() {
       .flatMap((project) => project.folders)
       .find((candidate) => candidate.folder.id === folderId);
     if (!folderGroup) return;
-    // A source folder's root workspace is not a workspace the user can drop —
-    // detaching it means removing the source folder from the project.
-    const owner = sourceFolderOwner(folderGroup.folder);
-    if (owner) {
-      void onRemoveProjectSource(owner, folderGroup.folder.repoPath);
-      return;
-    }
     if (folderGroup.sessions.length === 0) {
       if (isWorktreeWorkspace(folderGroup.folder)) {
         if (deleteEmptyWorktreeWorkspacesWithoutPrompt) {
@@ -1385,7 +1331,7 @@ export function Sidebar() {
         >
           <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pb-2">
             {projectGroups.length === 0 ? (
-              <EmptyState onOpenProject={onAddExistingProject} />
+              <EmptyState onOpenProject={() => setAddProjectOpen(true)} />
             ) : (
               <SortableContext
                 items={projectIds}
@@ -1551,9 +1497,7 @@ export function Sidebar() {
       />
       <AddExistingProjectDialog
         open={addProjectOpen}
-        choosing={addProjectChoosing}
-        onCancel={() => setAddProjectOpen(false)}
-        onChoose={() => void onAddExistingProject()}
+        onClose={() => setAddProjectOpen(false)}
       />
       <NewProjectDialog
         open={newProjectOpen}
@@ -2509,8 +2453,7 @@ function ProjectGroupView({
                     key={item.id}
                     folderGroup={item.folderGroup}
                     projectFolders={projectFoldersForRows}
-                    isSourceFolder={
-                      isDefaultProjectFolder(item.folderGroup.folder) &&
+                    inSourceRoot={
                       item.folderGroup.folder.repoPath !== project.repoPath
                     }
                     sourceRootLabel={
@@ -2581,7 +2524,8 @@ interface ProjectFolderViewProps {
   folderGroup: ProjectFolderGroup;
   projectFolders: ProjectFolder[];
   /** This workspace is a source folder's root, not a workspace inside one. */
-  isSourceFolder: boolean;
+  /** The row's workspace lives in one of the project's extra source roots. */
+  inSourceRoot: boolean;
   /**
    * Name of the source folder this workspace lives in, when it is not the
    * project's primary root. Sibling rows carry no indentation, so without it
@@ -2613,7 +2557,7 @@ interface ProjectFolderViewProps {
 function ProjectFolderView({
   folderGroup,
   projectFolders,
-  isSourceFolder,
+  inSourceRoot,
   sourceRootLabel,
   onAddFolderInRoot,
   onAddWorktreeFolderInRoot,
@@ -2640,15 +2584,8 @@ function ProjectFolderView({
     y: number;
   } | null>(null);
   const folder = folderGroup.folder;
-  // A source folder's root workspace has no default-folder immunity: removing
-  // it detaches the source folder from the project.
-  const removable = isSourceFolder || !isDefaultProjectFolder(folder);
-  const removeLabel = sidebarText(
-    t,
-    isSourceFolder
-      ? "sidebar.actions.removeProjectSourceFolder"
-      : "sidebar.actions.removeProjectFolder",
-  );
+  const removable = !isDefaultProjectFolder(folder);
+  const removeLabel = sidebarText(t, "sidebar.actions.removeProjectFolder");
   const {
     attributes,
     listeners,
@@ -2951,8 +2888,9 @@ function ProjectFolderView({
           ...folderCreateMenuItems,
           contextMenuGroupTitle(t, "workspace"),
           // The project header's workspace actions target the primary root, so
-          // a source folder needs its own way to create workspaces in itself.
-          ...(isSourceFolder
+          // a workspace living in a source root offers its own way to create
+          // siblings there.
+          ...(inSourceRoot
             ? [
                 {
                   label: sidebarText(t, "sidebar.actions.newProjectFolder"),

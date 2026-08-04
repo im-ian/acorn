@@ -434,6 +434,14 @@ export interface ProjectSourceMerge {
   wholeProject: boolean;
 }
 
+/** A folder picked for a project that has not been registered yet. */
+export interface PickedProjectFolder {
+  path: string;
+  name: string;
+  /** Project that already spans this folder, if any. */
+  ownerName: string | null;
+}
+
 export interface AddProjectSourceResult {
   project: Project | null;
   merge: ProjectSourceMerge | null;
