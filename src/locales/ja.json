@@ -1028,6 +1028,7 @@
       "contextLayout": "レイアウト",
       "moveSession": "{name} を移動",
       "resizeSession": "{name} のサイズを変更する",
+      "matchOtherSessionSizes": "他のセッションをこのサイズに揃える",
       "expandSession": "{name} を展開します",
       "openInPanes": "ペインで {name} を開きます",
       "closeSession": "セッションを閉じる",

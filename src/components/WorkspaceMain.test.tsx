@@ -301,12 +301,12 @@ describe("WorkspaceMain", () => {
     firePointer(window, "pointerup", { clientX: 180, clientY: 160 });
 
     expect(alpha!.dataset.canvasNodeWidth).toBe("700");
-    expect(alpha!.dataset.canvasNodeHeight).toBe("460");
+    expect(alpha!.dataset.canvasNodeHeight).toBe("500");
     expect(alpha!.dataset.canvasNodeX).toBe("60");
     expect(alpha!.dataset.canvasNodeY).toBe("40");
     expect(
       useAppStore.getState().workspaces[REPO].canvas?.nodes.alpha,
-    ).toMatchObject({ width: 700, height: 460 });
+    ).toMatchObject({ width: 700, height: 500 });
   });
 
   it("renders chat sessions as interactive canvas nodes", () => {

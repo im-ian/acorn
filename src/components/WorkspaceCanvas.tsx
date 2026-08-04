@@ -10,6 +10,7 @@ import {
   PanelsTopLeft,
   Plus,
   RotateCcw,
+  Scaling,
   Scan,
   Sparkles,
   Terminal as TerminalIcon,
@@ -741,6 +742,33 @@ export function WorkspaceCanvas({
     [activateNode],
   );
 
+  const matchOtherSessionSizes = useCallback(
+    (sourceSessionId: string) => {
+      updateCanvas((current) => {
+        const source = current.nodes[sourceSessionId];
+        if (!source) return current;
+        let changed = false;
+        const nodes = Object.fromEntries(
+          Object.entries(current.nodes).map(([sessionId, node]) => {
+            if (
+              sessionId === sourceSessionId ||
+              (node.width === source.width && node.height === source.height)
+            ) {
+              return [sessionId, node];
+            }
+            changed = true;
+            return [
+              sessionId,
+              { ...node, width: source.width, height: source.height },
+            ];
+          }),
+        );
+        return changed ? { ...current, nodes } : current;
+      }, "now");
+    },
+    [updateCanvas],
+  );
+
   const resetLayout = useCallback(() => {
     const previous = canvasRef.current;
     const next = resetWorkspaceCanvasState(reconciliationIds);
@@ -810,6 +838,12 @@ export function WorkspaceCanvas({
         onClick: () => openInPanes(contextSession.id),
       });
       items.push({
+        label: canvasText(t, "workspace.canvas.matchOtherSessionSizes"),
+        icon: <Scaling size={12} />,
+        disabled: canvasSessions.length < 2,
+        onClick: () => matchOtherSessionSizes(contextSession.id),
+      });
+      items.push({
         label: canvasText(t, "workspace.canvas.closeSession"),
         icon: <X size={12} />,
         onClick: () => requestRemoveSession(contextSession.id),
@@ -838,6 +872,7 @@ export function WorkspaceCanvas({
   }, [
     contextSession,
     fitAll,
+    matchOtherSessionSizes,
     openExpanded,
     openInPanes,
     requestRemoveSession,

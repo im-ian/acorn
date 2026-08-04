@@ -1028,6 +1028,7 @@
       "contextLayout": "布局",
       "moveSession": "移动 {name}",
       "resizeSession": "调整 {name} 的大小",
+      "matchOtherSessionSizes": "将其他会话调整为此大小",
       "expandSession": "展开 {name}",
       "openInPanes": "在窗格中打开 {name}",
       "closeSession": "关闭会话",
