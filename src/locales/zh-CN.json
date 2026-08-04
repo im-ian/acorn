@@ -2055,6 +2055,14 @@
         "component_too_long": "项目名称长度超过 255 个字节，常见文件系统拒绝这样做。"
       }
     },
+    "addExistingProject": {
+      "title": "添加现有项目",
+      "message": "选择一个仓库文件夹即可注册为项目。此时还不会打开 — 接着会显示项目设置，可以命名并添加额外的源文件夹。",
+      "agentSupport": "额外的源文件夹只会传给 Claude Code 和 Codex。其他智能体仍可在终端运行，但只能看到会话启动所在的文件夹。",
+      "noSessionHint": "在你主动创建之前不会启动任何会话。",
+      "choose": "选择文件夹…",
+      "choosing": "等待选择文件夹…"
+    },
     "agentResume": {
       "title": "继续上次对话",
       "bodyClaude": "此会话中有未完成的 Claude 对话。您可以从上次中断处继续，或关闭此对话框重新开始。",

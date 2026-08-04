@@ -3307,14 +3307,13 @@ export const useAppStore = create<AppStateModel>()(
     set({ pendingRemoveId: null });
   },
 
+  // Adding an existing project only registers it. Activating it and spawning
+  // its first session waits for the user — the add dialog leaves them in the
+  // project's setup, not in a session they did not ask for.
   async addProject(title) {
     try {
       const project = await api.addProject(title);
       await get().refreshProjects();
-      if (project) {
-        get().setActiveProject(project.repo_path);
-        await createInitialProjectSession(get, project.repo_path);
-      }
       set({ error: null });
       return project;
     } catch (e) {

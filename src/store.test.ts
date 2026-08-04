@@ -4019,24 +4019,23 @@ describe("right panel groups", () => {
   });
 });
 
-describe("auto initial session on first project add", () => {
-  it("spawns one regular session when an existing project is added", async () => {
+describe("project add and create", () => {
+  it("registers an existing project without opening it", async () => {
+    await seed([project(REPO_A, 0)], [session("s1", REPO_A)]);
+    useAppStore.getState().setActiveProject(REPO_A);
     mockApi.addProject.mockResolvedValueOnce(project(REPO_B, 1));
-    mockApi.listProjects.mockResolvedValue([project(REPO_B, 1)]);
-    mockApi.createSession.mockResolvedValueOnce(session("s-new", REPO_B));
-    mockApi.listSessions.mockResolvedValue([session("s-new", REPO_B)]);
+    mockApi.listProjects.mockResolvedValue([
+      project(REPO_A, 0),
+      project(REPO_B, 1),
+    ]);
 
     await useAppStore.getState().addProject("Select project");
 
-    expect(mockApi.createSession).toHaveBeenCalledTimes(1);
-    expect(mockApi.createSession).toHaveBeenCalledWith(
-      "new session",
-      REPO_B,
-      false,
-      "regular",
-      null,
-    );
-    expect(useAppStore.getState().activeProject).toBe(REPO_B);
+    expect(mockApi.createSession).not.toHaveBeenCalled();
+    expect(useAppStore.getState().activeProject).toBe(REPO_A);
+    expect(
+      useAppStore.getState().projects.map((entry) => entry.repo_path),
+    ).toContain(REPO_B);
   });
 
   it("spawns one regular session when a new project is created", async () => {

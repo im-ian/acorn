@@ -173,6 +173,7 @@ import type {
 } from "../lib/types";
 import { AutonomousGoalDialog } from "./AutonomousGoalDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { AddExistingProjectDialog } from "./AddExistingProjectDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
 import {
   ProjectSettingsModal,
@@ -347,6 +348,8 @@ export function Sidebar() {
     );
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [addProjectChoosing, setAddProjectChoosing] = useState(false);
   const [autonomousGoalOpen, setAutonomousGoalOpen] = useState(false);
   const [autonomousGoalScope, setAutonomousGoalScope] =
     useState<SessionCreateScope | null>(null);
@@ -477,6 +480,7 @@ export function Sidebar() {
   }
 
   async function onAddExistingProject() {
+    setAddProjectChoosing(true);
     try {
       const project = await addProject(
         sidebarText(t, "sidebar.dialog.selectExistingProject"),
@@ -489,6 +493,7 @@ export function Sidebar() {
       // Land on the source folders tab so extra repositories can be attached
       // as part of opening the project, not as a separate trip into settings.
       if (project) {
+        setAddProjectOpen(false);
         setSettingsProject({
           name: project.name,
           repoPath: project.repo_path,
@@ -498,6 +503,8 @@ export function Sidebar() {
     } catch (e) {
       console.error("add project failed", e);
       showToast(`${t("toasts.project.addFailed")} ${String(e)}`);
+    } finally {
+      setAddProjectChoosing(false);
     }
   }
 
@@ -697,7 +704,6 @@ export function Sidebar() {
   const onNewLocalSessionRef = useRef<
     (scopeOverride?: SessionCreateScope) => Promise<void>
   >(async () => {});
-  const onAddProjectRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     const activeScope = (): SessionCreateScope | null => {
@@ -819,7 +825,7 @@ export function Sidebar() {
       setNewProjectOpen(true);
     };
     const addProj = () => {
-      void onAddProjectRef.current();
+      setAddProjectOpen(true);
     };
     window.addEventListener("acorn:new-session", newSession);
     window.addEventListener("acorn:new-isolated-session", newIsolated);
@@ -947,7 +953,6 @@ export function Sidebar() {
 
   onNewSessionRef.current = onNewSession;
   onNewLocalSessionRef.current = onNewLocalSession;
-  onAddProjectRef.current = onAddExistingProject;
 
   function openAutonomousGoalForFolder(folder: ProjectFolder) {
     setAutonomousGoalSession(null);
@@ -1358,7 +1363,7 @@ export function Sidebar() {
           >
             <button
               type="button"
-              onClick={onAddExistingProject}
+              onClick={() => setAddProjectOpen(true)}
               className="rounded-md p-1.5 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
               aria-label={sidebarText(
                 t,
@@ -1543,6 +1548,12 @@ export function Sidebar() {
           setAutonomousGoalScope(null);
           setAutonomousGoalSession(null);
         }}
+      />
+      <AddExistingProjectDialog
+        open={addProjectOpen}
+        choosing={addProjectChoosing}
+        onCancel={() => setAddProjectOpen(false)}
+        onChoose={() => void onAddExistingProject()}
       />
       <NewProjectDialog
         open={newProjectOpen}
