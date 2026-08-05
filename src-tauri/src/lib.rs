@@ -721,6 +721,7 @@ pub fn run() {
             commands::merge_project_source,
             commands::split_project_source,
             commands::remove_project_source,
+            commands::reorder_project_sources,
             commands::select_project_parent_folder,
             commands::get_last_project_parent_folder,
             commands::has_git_identity,

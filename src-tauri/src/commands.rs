@@ -6530,6 +6530,44 @@ pub fn remove_project_source(
     Ok(updated)
 }
 
+/// Persist the sidebar order of a project's extra repository roots. The
+/// primary root remains the project identity and is therefore excluded from
+/// `source_paths`; unknown and omitted paths cannot change membership.
+#[tauri::command]
+pub fn reorder_project_sources(
+    state: State<'_, AppState>,
+    repo_path: String,
+    order: Vec<String>,
+) -> AppResult<Project> {
+    reorder_project_sources_inner(state.inner(), repo_path, order)
+}
+
+fn reorder_project_sources_inner(
+    state: &AppState,
+    repo_path: String,
+    order: Vec<String>,
+) -> AppResult<Project> {
+    let project = state
+        .projects
+        .owner_of_root(&PathBuf::from(&repo_path))
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    let mut remaining = project.source_paths.clone();
+    let mut source_paths = Vec::with_capacity(remaining.len());
+    for path in order.into_iter().map(PathBuf::from) {
+        let Some(index) = remaining.iter().position(|candidate| candidate == &path) else {
+            continue;
+        };
+        source_paths.push(remaining.remove(index));
+    }
+    source_paths.extend(remaining);
+    let updated = state
+        .projects
+        .set_source_paths(&project.repo_path, source_paths)
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    persist(state);
+    Ok(updated)
+}
+
 #[tauri::command]
 pub async fn select_project_parent_folder<R: Runtime>(
     app: AppHandle<R>,
@@ -15255,6 +15293,37 @@ mod tests {
             super::sibling_project_roots_env(&state, &source),
             Some(primary.display().to_string()),
         );
+    }
+
+    #[test]
+    fn reordering_project_sources_preserves_membership() {
+        let state = crate::state::AppState::default();
+        let primary = PathBuf::from("/tmp/acorn-source-order-primary");
+        let api = PathBuf::from("/tmp/acorn-source-order-api");
+        let docs = PathBuf::from("/tmp/acorn-source-order-docs");
+        let web = PathBuf::from("/tmp/acorn-source-order-web");
+        state
+            .projects
+            .ensure(primary.clone(), "primary".to_string());
+        state
+            .projects
+            .set_source_paths(&primary, vec![api.clone(), docs.clone(), web.clone()])
+            .expect("project is registered");
+
+        let updated = super::reorder_project_sources_inner(
+            &state,
+            primary.display().to_string(),
+            vec![
+                primary.display().to_string(),
+                web.display().to_string(),
+                "/tmp/not-a-project-root".to_string(),
+                api.display().to_string(),
+                web.display().to_string(),
+            ],
+        )
+        .expect("reorder succeeds");
+
+        assert_eq!(updated.source_paths, vec![web, api, docs]);
     }
 
     #[test]
