@@ -4349,7 +4349,7 @@ test.describe("sidebar: project lifecycle", () => {
       .toBe("manual-order");
   });
 
-  test("a source folder folds into its project instead of getting a row", async ({
+  test("every root of a project draws its own workspace row", async ({
     page,
     tauri,
   }) => {
@@ -4435,18 +4435,22 @@ test.describe("sidebar: project lifecycle", () => {
 
     // One project row, not two, even though the sessions live in two repos.
     await expect(page.getByRole("button", { name: /^Project / })).toHaveCount(1);
-    // A source folder is not a workspace: it gets no row of its own, and the
-    // session started in it sits flat under the project header beside the
-    // primary root's session.
+    // Each root is a workspace of its own — the primary one included — so it
+    // is obvious which repository a session starts in, and each row keeps its
+    // own view mode.
+    await expect(
+      page.locator('aside [data-sidebar-workspace-id="/tmp/demo"]'),
+    ).toBeVisible();
     await expect(
       page.locator('aside [data-sidebar-workspace-id="/tmp/demo-api"]'),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("aside").getByRole("listitem").filter({ hasText: /^primarymain/ }),
     ).toBeVisible();
+    // Each row is labelled after its own repository.
     await expect(
-      page.locator("aside").getByRole("listitem").filter({ hasText: /^apimain/ }),
-    ).toBeVisible();
+      page.locator('aside [data-sidebar-workspace-id="/tmp/demo"]'),
+    ).toContainText("demo");
+    await expect(
+      page.locator('aside [data-sidebar-workspace-id="/tmp/demo-api"]'),
+    ).toContainText("demo-api");
     // Its named workspaces still render, tagged with the root they belong to.
     await expect(
       page.locator(
@@ -4455,7 +4459,7 @@ test.describe("sidebar: project lifecycle", () => {
     ).toContainText("demo-api");
   });
 
-  test("top-level sessions reorder across the project's roots", async ({
+  test("each root's row holds the sessions started in that root", async ({
     page,
     tauri,
   }) => {
@@ -4528,18 +4532,20 @@ test.describe("sidebar: project lifecycle", () => {
     await page.goto("/");
 
     const sidebar = page.locator("aside");
-    const primary = sidebar.getByRole("button", {
-      name: /^primary main · Ready/,
-    });
-    const api = sidebar.getByRole("button", { name: /^api main · Ready/ });
+    const primaryRow = sidebar.locator(
+      'li:has(> [data-sidebar-workspace-id="/tmp/demo"])',
+    );
+    const apiRow = sidebar.locator(
+      'li:has(> [data-sidebar-workspace-id="/tmp/demo-api"])',
+    );
 
-    // Both roots' sessions share the project's top level, so one can be
-    // dragged past the other even though they live in different repos.
-    expect(await sessionPairOrder(primary, api)).toBe("alpha-beta");
-    await dragBetween(page, api, primary);
-    await expect
-      .poll(async () => sessionPairOrder(primary, api))
-      .toBe("beta-alpha");
+    // Each session sits under the row of the root it was started in — a
+    // session records one repository, so the rows are what keeps that visible.
+    await expect(primaryRow.getByText("primary", { exact: true })).toHaveCount(
+      1,
+    );
+    await expect(primaryRow.getByText("api", { exact: true })).toHaveCount(0);
+    await expect(apiRow.getByText("api", { exact: true })).toHaveCount(1);
   });
 
   test("the project hover card lists the source folders", async ({
@@ -4558,10 +4564,15 @@ test.describe("sidebar: project lifecycle", () => {
     await tauri.respond("list_sessions", []);
 
     await page.goto("/");
-    await page.getByText("demo", { exact: true }).hover();
+    // The primary root's own row carries the same basename, so scope the
+    // hover to the project header's label rather than matching either row.
+    await page
+      .getByRole("button", { name: "Project demo" })
+      .getByText("demo", { exact: true })
+      .hover();
 
-    // Source roots draw no rows, so the hover card is where the extra
-    // directories every session hands the agent are visible.
+    // With no sessions yet the rows are empty, so the hover card is still
+    // where the extra directories every session hands the agent are visible.
     const tooltip = page.getByRole("tooltip");
     await expect(tooltip).toContainText("/tmp/demo");
     await expect(tooltip).toContainText("/tmp/demo-api");

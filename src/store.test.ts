@@ -737,6 +737,24 @@ describe("openSessionSurface", () => {
     expect(state.terminalPopupSessionId).toBeNull();
   });
 
+  it("gives every source root of a project its own view mode", async () => {
+    await seed(
+      [{ ...project(REPO_A, 0), source_paths: [REPO_B] }],
+      [session("a1", REPO_A), session("b1", REPO_B)],
+    );
+
+    useAppStore.getState().setActiveProject(REPO_A);
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+
+    // Each root draws its own sidebar row, so its view mode is its own: the
+    // source folder's row stays on panes until the user switches it.
+    expect(useAppStore.getState().openSessionSurface("b1")).toBe(true);
+    expect(useAppStore.getState().workspaceViewMode).toBe("panes");
+
+    expect(useAppStore.getState().openSessionSurface("a1")).toBe(true);
+    expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
+  });
+
   it("does not open a surface for an unknown session", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
 

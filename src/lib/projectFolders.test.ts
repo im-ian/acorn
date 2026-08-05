@@ -8,6 +8,7 @@ import {
   isGroupDefaultFolder,
   makeDefaultProjectFolder,
   projectFolderDisplayName,
+  projectGroupSpansMultipleRoots,
   pruneSessionFolderAssignments,
   resolveProjectFolderIdForSession,
   resolveProjectRootPath,
@@ -375,7 +376,7 @@ describe("project source folders", () => {
     ]);
   });
 
-  it("flattens every root's default folder under the project header", () => {
+  it("draws a row for every root, the primary one included", () => {
     const groups = buildProjectFolderGroups(
       [multiRoot],
       [],
@@ -383,12 +384,24 @@ describe("project source folders", () => {
     );
 
     const flattened = groups[0].folders.filter((group) =>
-      isGroupDefaultFolder(group.folder),
+      isGroupDefaultFolder(groups[0], group.folder),
     );
-    expect(flattened.map((group) => group.folder.repoPath)).toEqual([
-      "/repo/app",
-      "/repo/api",
-    ]);
+    expect(flattened).toEqual([]);
+    expect(projectGroupSpansMultipleRoots(groups[0])).toBe(true);
+  });
+
+  it("keeps a single-root project's sessions flat under its header", () => {
+    const single = project("/repo/app");
+    const groups = buildProjectFolderGroups(
+      [single],
+      [session("a", "/repo/app")],
+      ensureProjectFolders([single], [], {}),
+    );
+
+    expect(projectGroupSpansMultipleRoots(groups[0])).toBe(false);
+    expect(isGroupDefaultFolder(groups[0], groups[0].folders[0].folder)).toBe(
+      true,
+    );
   });
 
   it("names a source root's workspace after its folder", () => {
