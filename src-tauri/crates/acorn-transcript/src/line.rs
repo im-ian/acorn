@@ -40,6 +40,11 @@ pub struct TurnObservation {
     /// it against the moment the hook raised the attention request: a turn
     /// line written afterwards proves the agent resumed past the dialog.
     pub timestamp: Option<String>,
+    /// Newest Claude line that proves the main agent loop is actively running:
+    /// either an in-progress assistant turn or explicit feedback from a Stop
+    /// hook that rejected completion. Unlike a user-side tool result, this is
+    /// safe evidence that a blocked Stop resumed without a new prompt hook.
+    pub agent_activity_timestamp: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,12 +98,20 @@ pub struct TailRead {
 }
 
 pub fn parse_transcript_line(kind: AgentKind, line: &str) -> Option<ParsedTranscriptLine> {
+    parse_transcript_line_details(kind, line).map(|(parsed, _)| parsed)
+}
+
+fn parse_transcript_line_details(
+    kind: AgentKind,
+    line: &str,
+) -> Option<(ParsedTranscriptLine, bool)> {
     let trimmed = line.trim();
     if trimmed.is_empty() || !trimmed.starts_with('{') {
         return None;
     }
     let value = serde_json::from_str::<Value>(trimmed).ok()?;
-    Some(parse_transcript_value(kind, &value))
+    let is_stop_hook_feedback = kind == AgentKind::Claude && is_claude_stop_hook_feedback(&value);
+    Some((parse_transcript_value(kind, &value), is_stop_hook_feedback))
 }
 
 pub fn parse_transcript_value(kind: AgentKind, value: &Value) -> ParsedTranscriptLine {
@@ -119,19 +132,51 @@ pub fn latest_turn_observation(
     tail: &str,
     read_full: bool,
 ) -> Option<TurnObservation> {
+    let mut observation = None;
+    let mut agent_activity_timestamp = None;
+    let mut agent_activity_resolved = kind != AgentKind::Claude;
+
     for line in tail_lines_newest_first(tail, read_full) {
-        let Some(parsed) = parse_transcript_line(kind, line) else {
+        let Some((parsed, is_stop_hook_feedback)) = parse_transcript_line_details(kind, line)
+        else {
             continue;
         };
-        if let Some(state) = parsed.turn_state {
-            return Some(TurnObservation {
-                state,
-                provider_turn_id: parsed.provider_turn_id,
-                timestamp: parsed.timestamp,
-            });
+
+        if observation.is_none() {
+            if let Some(state) = parsed.turn_state {
+                observation = Some(TurnObservation {
+                    state,
+                    provider_turn_id: parsed.provider_turn_id.clone(),
+                    timestamp: parsed.timestamp.clone(),
+                    agent_activity_timestamp: None,
+                });
+            }
+        }
+
+        if !agent_activity_resolved {
+            if is_stop_hook_feedback {
+                agent_activity_timestamp = parsed.timestamp.clone();
+                agent_activity_resolved = true;
+            } else if parsed.role == TranscriptRole::Assistant {
+                if parsed.turn_state == Some(TurnState::Working) {
+                    agent_activity_timestamp = parsed.timestamp.clone();
+                }
+                // The newest assistant line is the relevant boundary. A
+                // completed assistant turn deliberately prevents older tool
+                // activity from reviving a genuine Stop.
+                agent_activity_resolved = true;
+            }
+        }
+
+        if observation.is_some() && agent_activity_resolved {
+            break;
         }
     }
-    None
+
+    observation.map(|observation| TurnObservation {
+        agent_activity_timestamp,
+        ..observation
+    })
 }
 
 pub fn read_tail(path: &Path, max_bytes: u64) -> io::Result<TailRead> {
@@ -759,6 +804,14 @@ fn is_claude_meta_event(value: &Value) -> bool {
     value.get("isMeta").and_then(Value::as_bool) == Some(true)
 }
 
+fn is_claude_stop_hook_feedback(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("user")
+        && is_claude_meta_event(value)
+        && value_texts(value)
+            .iter()
+            .any(|text| text.trim_start().starts_with("Stop hook feedback:"))
+}
+
 fn looks_like_claude_control_text(text: &str) -> bool {
     let lower = text.trim_start().to_ascii_lowercase();
     [
@@ -930,6 +983,69 @@ mod tests {
         assert_eq!(
             classify(AgentKind::Claude, &tail, true),
             Some(TurnState::Ready),
+        );
+    }
+
+    #[test]
+    fn claude_stop_hook_feedback_proves_a_blocked_stop_resumed() {
+        let tail = concat!(
+            r#"{"timestamp":"2026-08-05T07:37:55Z","type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[]}}"#,
+            "\n",
+            r#"{"timestamp":"2026-08-05T07:38:01Z","type":"user","isMeta":true,"message":{"role":"user","content":"Stop hook feedback: keep working"}}"#,
+        );
+
+        assert_eq!(
+            latest_turn_observation(AgentKind::Claude, tail, true),
+            Some(TurnObservation {
+                state: TurnState::Working,
+                provider_turn_id: None,
+                timestamp: Some("2026-08-05T07:38:01Z".to_string()),
+                agent_activity_timestamp: Some("2026-08-05T07:38:01Z".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn claude_in_progress_assistant_proves_activity_over_a_later_tool_result() {
+        let tail = concat!(
+            r#"{"timestamp":"2026-08-05T07:38:01Z","type":"user","isMeta":true,"message":{"role":"user","content":"Stop hook feedback: keep working"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-08-05T07:38:08Z","type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[]}}"#,
+            "\n",
+            r#"{"timestamp":"2026-08-05T07:38:09Z","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"done"}]}}"#,
+        );
+
+        assert_eq!(
+            latest_turn_observation(AgentKind::Claude, tail, true),
+            Some(TurnObservation {
+                state: TurnState::Working,
+                provider_turn_id: None,
+                timestamp: Some("2026-08-05T07:38:09Z".to_string()),
+                agent_activity_timestamp: Some("2026-08-05T07:38:08Z".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn claude_old_stop_feedback_and_background_result_do_not_revive_a_completed_turn() {
+        let tail = concat!(
+            r#"{"timestamp":"2026-08-05T07:37:40Z","type":"user","isMeta":true,"message":{"role":"user","content":"Stop hook feedback: keep working"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-08-05T07:37:45Z","type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[]}}"#,
+            "\n",
+            r#"{"timestamp":"2026-08-05T07:37:55Z","type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[]}}"#,
+            "\n",
+            r#"{"timestamp":"2026-08-05T07:38:09Z","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"background-1","content":"done"}]}}"#,
+        );
+
+        assert_eq!(
+            latest_turn_observation(AgentKind::Claude, tail, true),
+            Some(TurnObservation {
+                state: TurnState::Working,
+                provider_turn_id: None,
+                timestamp: Some("2026-08-05T07:38:09Z".to_string()),
+                agent_activity_timestamp: None,
+            })
         );
     }
 
@@ -1209,6 +1325,7 @@ mod tests {
                 state: TurnState::Ready,
                 provider_turn_id: Some("t1".to_string()),
                 timestamp: Some("t".to_string()),
+                agent_activity_timestamp: None,
             }),
         );
     }
@@ -1282,6 +1399,7 @@ mod tests {
                 state: TurnState::Ready,
                 provider_turn_id: Some("prompt-7".to_string()),
                 timestamp: None,
+                agent_activity_timestamp: None,
             })
         );
     }

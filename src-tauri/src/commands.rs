@@ -9090,13 +9090,16 @@ enum HookStatusReconciliation {
     Boot,
     CurrentCodexTurn(String),
     ClaudeAttentionResolved(SystemTime),
+    ClaudeBlockedStopResumed(SystemTime),
 }
 
 impl HookStatusReconciliation {
     fn target(&self) -> SessionStatus {
         match self {
             Self::Boot | Self::CurrentCodexTurn(_) => SessionStatus::WaitingForInput,
-            Self::ClaudeAttentionResolved(_) => SessionStatus::Working,
+            Self::ClaudeAttentionResolved(_) | Self::ClaudeBlockedStopResumed(_) => {
+                SessionStatus::Working
+            }
         }
     }
 }
@@ -9143,6 +9146,36 @@ fn claude_attention_resolution(
     ))
 }
 
+/// Recover when a session-scoped Claude Stop hook rejects completion.
+///
+/// Claude still emits its native `Stop`, so Acorn first marks the session as
+/// waiting. The rejecting hook then injects `Stop hook feedback` and resumes
+/// the same turn without another `UserPromptSubmit`. Only explicit feedback
+/// or an in-progress assistant line counts as agent activity here; a late
+/// background tool result must not revive a genuinely completed turn.
+fn claude_blocked_stop_resolution(
+    hook_provider: Option<AgentKind>,
+    detection: &session_status::StatusDetection,
+    stop_at: Option<SystemTime>,
+) -> Option<HookStatusReconciliation> {
+    if hook_provider != Some(AgentKind::Claude) {
+        return None;
+    }
+    let stop_at = stop_at?;
+    if detection.status != SessionStatus::Working
+        || detection.evidence != session_status::StatusEvidence::Transcript
+    {
+        return None;
+    }
+    let resumed_at: SystemTime =
+        chrono::DateTime::parse_from_rfc3339(detection.agent_activity_timestamp.as_deref()?)
+            .ok()?
+            .into();
+    (resumed_at > stop_at).then_some(HookStatusReconciliation::ClaudeBlockedStopResumed(
+        resumed_at,
+    ))
+}
+
 /// Recover a hook-owned Working status from a durable turn-complete marker.
 ///
 /// `hook_active` persists across restarts, so right after boot the poll
@@ -9163,9 +9196,11 @@ fn hook_status_reconciliation(
     hook_provider: Option<AgentKind>,
     detection: &session_status::StatusDetection,
     attention_at: Option<SystemTime>,
+    claude_stop_at: Option<SystemTime>,
 ) -> Option<HookStatusReconciliation> {
     if stored == SessionStatus::WaitingForInput {
-        return claude_attention_resolution(hook_provider, detection, attention_at);
+        return claude_attention_resolution(hook_provider, detection, attention_at)
+            .or_else(|| claude_blocked_stop_resolution(hook_provider, detection, claude_stop_at));
     }
     if stored != SessionStatus::Working {
         return None;
@@ -9383,6 +9418,7 @@ fn detect_session_statuses_blocking(
             let codex_permission_waiting_at =
                 parsed_id.and_then(|uuid| state.sessions.codex_permission_waiting_at(&uuid));
             let attention_at = parsed_id.and_then(|uuid| state.sessions.attention_at(&uuid));
+            let claude_stop_at = parsed_id.and_then(|uuid| state.sessions.claude_stop_at(&uuid));
             let codex_activity_started_at =
                 match (codex_tool_started_at, codex_permission_waiting_at) {
                     (Some(tool), Some(permission)) => Some(tool.max(permission)),
@@ -9506,6 +9542,7 @@ fn detect_session_statuses_blocking(
                     hook_provider,
                     &detection,
                     attention_at,
+                    claude_stop_at,
                 );
                 let reconciled = parsed_id.and_then(|uuid| {
                     reconciliation_requested
@@ -9532,6 +9569,14 @@ fn detect_session_statuses_blocking(
                                 }
                                 HookStatusReconciliation::ClaudeAttentionResolved(resumed_at) => {
                                     state.sessions.resolve_attention_if_current(
+                                        &uuid,
+                                        stored_source,
+                                        lifecycle_revision,
+                                        *resumed_at,
+                                    )
+                                }
+                                HookStatusReconciliation::ClaudeBlockedStopResumed(resumed_at) => {
+                                    state.sessions.resolve_claude_stop_if_current(
                                         &uuid,
                                         stored_source,
                                         lifecycle_revision,
@@ -11934,6 +11979,7 @@ mod tests {
             evidence: super::session_status::StatusEvidence::Transcript,
             completed_provider_turn_id: None,
             turn_timestamp: None,
+            agent_activity_timestamp: None,
         };
         assert_eq!(
             super::hook_status_reconciliation(
@@ -11941,6 +11987,7 @@ mod tests {
                 false,
                 None,
                 &detection,
+                None,
                 None,
             ),
             Some(super::HookStatusReconciliation::Boot)
@@ -11960,6 +12007,7 @@ mod tests {
             evidence: super::session_status::StatusEvidence::Transcript,
             completed_provider_turn_id: None,
             turn_timestamp: Some(timestamp.to_string()),
+            agent_activity_timestamp: None,
         };
         let resolution = |detection, attention_at| {
             super::hook_status_reconciliation(
@@ -11968,6 +12016,7 @@ mod tests {
                 Some(AgentKind::Claude),
                 &detection,
                 attention_at,
+                None,
             )
         };
 
@@ -12031,6 +12080,82 @@ mod tests {
                     "2023-11-14T22:13:21Z"
                 ),
                 Some(attention_at),
+                None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn blocked_claude_stop_requires_later_agent_owned_activity() {
+        use acorn_agent::AgentKind;
+        use std::time::Duration;
+
+        // 2023-11-14T22:13:20Z
+        let stop_at = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let detection =
+            |status, activity_timestamp: Option<&str>| super::session_status::StatusDetection {
+                status,
+                reason: None,
+                evidence: super::session_status::StatusEvidence::Transcript,
+                completed_provider_turn_id: None,
+                turn_timestamp: Some("2023-11-14T22:13:22Z".to_string()),
+                agent_activity_timestamp: activity_timestamp.map(str::to_string),
+            };
+        let resolution = |detection, stop_at| {
+            super::hook_status_reconciliation(
+                acorn_session::SessionStatus::WaitingForInput,
+                true,
+                Some(AgentKind::Claude),
+                &detection,
+                None,
+                stop_at,
+            )
+        };
+
+        assert_eq!(
+            resolution(
+                detection(
+                    acorn_session::SessionStatus::Working,
+                    Some("2023-11-14T22:13:21Z"),
+                ),
+                Some(stop_at),
+            ),
+            Some(super::HookStatusReconciliation::ClaudeBlockedStopResumed(
+                stop_at + Duration::from_secs(1),
+            ))
+        );
+
+        // A late background tool result leaves the turn classified Working,
+        // but carries no main-agent activity and cannot revive a real Stop.
+        assert_eq!(
+            resolution(
+                detection(acorn_session::SessionStatus::Working, None),
+                Some(stop_at),
+            ),
+            None
+        );
+
+        // Activity before the Stop belongs to the completed turn.
+        assert_eq!(
+            resolution(
+                detection(
+                    acorn_session::SessionStatus::Working,
+                    Some("2023-11-14T22:13:19Z"),
+                ),
+                Some(stop_at),
+            ),
+            None
+        );
+
+        // A subsequent completed turn remains waiting for the next prompt.
+        assert_eq!(
+            resolution(
+                detection(
+                    acorn_session::SessionStatus::Ready,
+                    Some("2023-11-14T22:13:21Z"),
+                ),
+                Some(stop_at),
             ),
             None
         );
@@ -12046,6 +12171,7 @@ mod tests {
             evidence: super::session_status::StatusEvidence::Transcript,
             completed_provider_turn_id: None,
             turn_timestamp: None,
+            agent_activity_timestamp: None,
         };
         assert_eq!(
             super::hook_status_reconciliation(
@@ -12053,6 +12179,7 @@ mod tests {
                 false,
                 None,
                 &detection,
+                None,
                 None,
             ),
             None
@@ -12075,6 +12202,7 @@ mod tests {
             evidence: super::session_status::StatusEvidence::Previous,
             completed_provider_turn_id: None,
             turn_timestamp: None,
+            agent_activity_timestamp: None,
         };
         assert_eq!(
             super::hook_status_reconciliation(
@@ -12082,6 +12210,7 @@ mod tests {
                 false,
                 None,
                 &detection,
+                None,
                 None,
             ),
             None
@@ -12096,6 +12225,7 @@ mod tests {
             evidence: super::session_status::StatusEvidence::Transcript,
             completed_provider_turn_id: Some("turn-1".to_string()),
             turn_timestamp: None,
+            agent_activity_timestamp: None,
         };
         assert_eq!(
             super::hook_status_reconciliation(
@@ -12103,6 +12233,7 @@ mod tests {
                 true,
                 Some(super::AgentKind::Codex),
                 &detection,
+                None,
                 None,
             ),
             None
@@ -12119,6 +12250,7 @@ mod tests {
             evidence: super::session_status::StatusEvidence::Transcript,
             completed_provider_turn_id: None,
             turn_timestamp: None,
+            agent_activity_timestamp: None,
         };
         assert_eq!(
             super::hook_status_reconciliation(
@@ -12126,6 +12258,7 @@ mod tests {
                 true,
                 Some(super::AgentKind::Codex),
                 &detection,
+                None,
                 None,
             ),
             None
@@ -12140,6 +12273,7 @@ mod tests {
             evidence: super::session_status::StatusEvidence::Transcript,
             completed_provider_turn_id: Some("turn-1".to_string()),
             turn_timestamp: None,
+            agent_activity_timestamp: None,
         };
         assert_eq!(
             super::hook_status_reconciliation(
@@ -12147,6 +12281,7 @@ mod tests {
                 true,
                 Some(super::AgentKind::Codex),
                 &detection,
+                None,
                 None,
             ),
             Some(super::HookStatusReconciliation::CurrentCodexTurn(
@@ -12163,6 +12298,7 @@ mod tests {
             evidence: super::session_status::StatusEvidence::Transcript,
             completed_provider_turn_id: Some("turn-1".to_string()),
             turn_timestamp: None,
+            agent_activity_timestamp: None,
         };
         assert_eq!(
             super::hook_status_reconciliation(
@@ -12170,6 +12306,7 @@ mod tests {
                 true,
                 Some(super::AgentKind::Claude),
                 &detection,
+                None,
                 None,
             ),
             None
@@ -12186,6 +12323,7 @@ mod tests {
             evidence: super::session_status::StatusEvidence::Previous,
             completed_provider_turn_id: None,
             turn_timestamp: None,
+            agent_activity_timestamp: None,
         };
         assert_eq!(
             super::hook_status_reconciliation(
@@ -12193,6 +12331,7 @@ mod tests {
                 false,
                 None,
                 &detection,
+                None,
                 None,
             ),
             None
@@ -12209,6 +12348,7 @@ mod tests {
             evidence: super::session_status::StatusEvidence::Process,
             completed_provider_turn_id: None,
             turn_timestamp: None,
+            agent_activity_timestamp: None,
         };
         assert_eq!(
             super::hook_status_reconciliation(
@@ -12216,6 +12356,7 @@ mod tests {
                 false,
                 None,
                 &detection,
+                None,
                 None,
             ),
             None
