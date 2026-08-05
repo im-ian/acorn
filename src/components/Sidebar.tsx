@@ -340,6 +340,7 @@ export function Sidebar() {
   const addProjectSource = useAppStore((s) => s.addProjectSource);
   const createNewProject = useAppStore((s) => s.createNewProject);
   const reorderProjects = useAppStore((s) => s.reorderProjects);
+  const reorderProjectSources = useAppStore((s) => s.reorderProjectSources);
   const reorderProjectFolders = useAppStore((s) => s.reorderProjectFolders);
   const reorderSessions = useAppStore((s) => s.reorderSessions);
   const [collapsed, setCollapsed] = useState<Set<string>>(() =>
@@ -1030,6 +1031,16 @@ export function Sidebar() {
         )
         .map((item) => item.folderGroup.folder.id),
     );
+    const orderedRootPaths = nextItems
+      .filter(
+        (item): item is ProjectTopLevelFolderItem =>
+          item.type === "folder" &&
+          isDefaultProjectFolder(item.folderGroup.folder),
+      )
+      .map((item) => item.folderGroup.folder.repoPath);
+    if (orderedRootPaths.length > 1) {
+      void reorderProjectSources(project.repoPath, orderedRootPaths);
+    }
     const sessionIds = nextItems
       .filter(
         (item): item is ProjectTopLevelSessionItem => item.type === "session",
