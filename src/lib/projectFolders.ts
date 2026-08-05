@@ -63,13 +63,26 @@ export function resolveProjectRootPath(
   return index.get(repoPath) ?? repoPath;
 }
 
+/** Whether the group's folders come from more than one repository root. */
+export function projectGroupSpansMultipleRoots(
+  group: ProjectFolderProjectGroup,
+): boolean {
+  const roots = new Set(group.folders.map((entry) => entry.folder.repoPath));
+  return roots.size > 1;
+}
+
 /**
- * Whether a folder's sessions render flat under the project header. Every
- * root's default folder qualifies: a source folder is a place sessions start,
- * not a workspace of its own, so it gets no row — the agent already sees it as
- * an extra directory.
+ * Whether a folder's sessions render flat under the project header. Only a
+ * single-root project flattens. Once a project spans several roots every root
+ * — the primary one included — draws its own workspace row: the row is where a
+ * session or worktree is started in that repository, and each root keeps its
+ * own view mode (panes/kanban/canvas) instead of borrowing a sibling's.
  */
-export function isGroupDefaultFolder(folder: ProjectFolder): boolean {
+export function isGroupDefaultFolder(
+  group: ProjectFolderProjectGroup,
+  folder: ProjectFolder,
+): boolean {
+  if (projectGroupSpansMultipleRoots(group)) return false;
   return isDefaultProjectFolder(folder);
 }
 
