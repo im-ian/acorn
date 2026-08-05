@@ -85,6 +85,10 @@ pub struct StatusDetection {
     /// Provider timestamp of the transcript line this detection classified.
     /// Only transcript evidence carries one.
     pub turn_timestamp: Option<String>,
+    /// Newest provider line that proves the main agent loop is actively
+    /// running. Claude uses this to distinguish a Stop hook that actually
+    /// returned control from one that rejected completion and resumed.
+    pub agent_activity_timestamp: Option<String>,
 }
 
 impl StatusDetection {
@@ -95,6 +99,7 @@ impl StatusDetection {
             evidence,
             completed_provider_turn_id: None,
             turn_timestamp: None,
+            agent_activity_timestamp: None,
         }
     }
 
@@ -105,6 +110,11 @@ impl StatusDetection {
 
     fn with_turn_timestamp(mut self, timestamp: Option<String>) -> Self {
         self.turn_timestamp = timestamp;
+        self
+    }
+
+    fn with_agent_activity_timestamp(mut self, timestamp: Option<String>) -> Self {
+        self.agent_activity_timestamp = timestamp;
         self
     }
 }
@@ -167,19 +177,23 @@ pub fn detect_with_reason(
             state: TurnState::Ready,
             provider_turn_id,
             timestamp,
+            agent_activity_timestamp,
         }) => StatusDetection::new(
             completed_turn_status(kind),
             Some(StatusReason::TurnComplete),
             StatusEvidence::Transcript,
         )
         .with_completed_provider_turn_id(provider_turn_id)
-        .with_turn_timestamp(timestamp),
+        .with_turn_timestamp(timestamp)
+        .with_agent_activity_timestamp(agent_activity_timestamp),
         Some(TurnObservation {
             state: TurnState::Working,
             timestamp,
+            agent_activity_timestamp,
             ..
         }) => StatusDetection::new(SessionStatus::Working, None, StatusEvidence::Transcript)
-            .with_turn_timestamp(timestamp),
+            .with_turn_timestamp(timestamp)
+            .with_agent_activity_timestamp(agent_activity_timestamp),
         // Transcript exists but the tail held no turn lines; keep
         // whatever the caller previously observed instead of regressing
         // to Ready. The next poll that lands on a real turn line corrects
@@ -549,6 +563,34 @@ mod tests {
                 Some(ShellHint::Running),
             ),
             SessionStatus::Ready,
+        );
+    }
+
+    #[test]
+    fn detect_carries_claude_agent_activity_for_blocked_stop_recovery() {
+        let path = write_status_transcript(concat!(
+            r#"{"timestamp":"2026-08-05T07:38:01Z","type":"user","isMeta":true,"message":{"role":"user","content":"Stop hook feedback: keep working"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-08-05T07:38:08Z","type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[]}}"#,
+            "\n",
+            r#"{"timestamp":"2026-08-05T07:38:09Z","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"done"}]}}"#,
+        ));
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Claude)),
+            SessionStatus::WaitingForInput,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::Working);
+        assert_eq!(detection.evidence, StatusEvidence::Transcript);
+        assert_eq!(
+            detection.turn_timestamp.as_deref(),
+            Some("2026-08-05T07:38:09Z")
+        );
+        assert_eq!(
+            detection.agent_activity_timestamp.as_deref(),
+            Some("2026-08-05T07:38:08Z")
         );
     }
 
