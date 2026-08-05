@@ -165,6 +165,25 @@ fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
+fn authoritative_hook_transcript(
+    provider: acorn_session::SessionAgentProvider,
+    ownership: agent_hooks::AgentHookOwnership,
+    provider_session_id: Option<&str>,
+) -> Option<(acorn_agent::AgentKind, &str)> {
+    if ownership != agent_hooks::AgentHookOwnership::Owner
+        || !matches!(
+            provider,
+            acorn_session::SessionAgentProvider::Claude
+                | acorn_session::SessionAgentProvider::Codex
+        )
+    {
+        return None;
+    }
+    let provider_session_id = provider_session_id?;
+    uuid::Uuid::parse_str(provider_session_id).ok()?;
+    Some((provider, provider_session_id))
+}
+
 #[cfg(test)]
 mod project_path_tests {
     use super::*;
@@ -220,6 +239,58 @@ mod project_path_tests {
         assert_eq!(normalized.repo_path, root.canonicalize().unwrap());
         assert_eq!(normalized.worktree_path, subdir);
         std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+#[cfg(test)]
+mod hook_transcript_tests {
+    use super::*;
+
+    const PROVIDER_SESSION_ID: &str = "019fd0e8-57a5-77a0-b317-bebfbd855c7d";
+
+    #[test]
+    fn owner_hooks_bind_claude_and_codex_conversations() {
+        for provider in [
+            acorn_session::SessionAgentProvider::Claude,
+            acorn_session::SessionAgentProvider::Codex,
+        ] {
+            assert_eq!(
+                authoritative_hook_transcript(
+                    provider,
+                    agent_hooks::AgentHookOwnership::Owner,
+                    Some(PROVIDER_SESSION_ID),
+                ),
+                Some((provider, PROVIDER_SESSION_ID)),
+            );
+        }
+    }
+
+    #[test]
+    fn hook_transcript_binding_rejects_children_and_unverified_ids() {
+        assert_eq!(
+            authoritative_hook_transcript(
+                acorn_session::SessionAgentProvider::Codex,
+                agent_hooks::AgentHookOwnership::Child,
+                Some(PROVIDER_SESSION_ID),
+            ),
+            None,
+        );
+        assert_eq!(
+            authoritative_hook_transcript(
+                acorn_session::SessionAgentProvider::Antigravity,
+                agent_hooks::AgentHookOwnership::Owner,
+                Some(PROVIDER_SESSION_ID),
+            ),
+            None,
+        );
+        assert_eq!(
+            authoritative_hook_transcript(
+                acorn_session::SessionAgentProvider::Codex,
+                agent_hooks::AgentHookOwnership::Owner,
+                Some("not-a-uuid"),
+            ),
+            None,
+        );
     }
 }
 
@@ -498,27 +569,26 @@ pub fn run() {
                         return agent_hooks::AgentHookHandlerOutcome::Conflict;
                     }
                 };
-                // Claude names the active conversation directly. Bind that
-                // provider-owned identifier without applying transcript mtime
-                // heuristics; the PTY-tree scan remains the fallback and
-                // multi-process arbiter when hooks are unavailable.
-                if provider == acorn_session::SessionAgentProvider::Claude {
-                    if let Some(claude_uuid) = provider_session_id
-                        .as_deref()
-                        .filter(|id| uuid::Uuid::parse_str(id).is_ok())
-                    {
-                        if let Err(err) = agent_resume_persister::bind_provider_session_marker(
-                            session_id,
-                            acorn_agent::AgentKind::Claude,
-                            claude_uuid,
-                        ) {
-                            tracing::warn!(
-                                %session_id,
-                                claude_uuid,
-                                error = %err,
-                                "claude hook transcript bind failed",
-                            );
-                        }
+                // Owner hooks name the active Claude or Codex conversation
+                // directly, so they take precedence over cwd and mtime
+                // inference when both are available.
+                if let Some((provider, provider_uuid)) = authoritative_hook_transcript(
+                    provider,
+                    ownership,
+                    provider_session_id.as_deref(),
+                ) {
+                    if let Err(err) = agent_resume_persister::bind_provider_session_marker(
+                        session_id,
+                        provider,
+                        provider_uuid,
+                    ) {
+                        tracing::warn!(
+                            %session_id,
+                            ?provider,
+                            provider_uuid,
+                            error = %err,
+                            "agent hook transcript bind failed",
+                        );
                     }
                 }
                 if let Err(err) = persistence::save_sessions(&hook_sessions) {
