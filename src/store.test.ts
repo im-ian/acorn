@@ -41,6 +41,7 @@ vi.mock("./lib/api", () => {
       }) as unknown as ChatSessionState),
       agentTranscriptSummary: vi.fn(async () => null),
       agentTranscriptSummaryAtPath: vi.fn(async () => null),
+      addProjectAt: vi.fn(async () => ({}) as Project),
       addProjectSource: vi.fn(async () => ({ project: null, merge: null })),
       mergeProjectSource: vi.fn(async () => ({}) as Project),
       createNewProject: vi.fn(async () => ({}) as Project),
@@ -4075,6 +4076,19 @@ describe("project add and create", () => {
       "regular",
       null,
     );
+  });
+
+  it("spawns one regular session when an existing project is added", async () => {
+    mockApi.addProjectAt.mockResolvedValueOnce(project(REPO_B, 1));
+    mockApi.listProjects.mockResolvedValue([project(REPO_B, 1)]);
+    mockApi.createSession.mockResolvedValueOnce(session("s-added", REPO_B));
+    mockApi.listSessions.mockResolvedValue([session("s-added", REPO_B)]);
+
+    await useAppStore.getState().addProjectAt("repo-b", [REPO_B]);
+
+    expect(mockApi.addProjectAt).toHaveBeenCalledWith("repo-b", [REPO_B]);
+    expect(mockApi.createSession).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().activeProject).toBe(REPO_B);
   });
 
   it("holds a source folder another project owns until the merge is confirmed", async () => {
