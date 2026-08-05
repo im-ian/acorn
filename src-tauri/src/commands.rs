@@ -7355,11 +7355,16 @@ fn generate_session_title_inner(
         Some(&session.worktree_path),
     )?;
     let latest = state.sessions.get(&id)?;
-    let can_store = if force {
-        crate::session_titles::can_force_generate_title(&latest)
-    } else {
-        crate::session_titles::can_generate_title(&latest, Some(&title_input.transcript_id))
-    };
+    let current_title_input = resolve_title_input_for_session(&latest, id);
+    let current_transcript_id = current_title_input
+        .as_ref()
+        .map(|input| input.transcript_id.as_str());
+    let can_store = can_store_generated_session_title(
+        &latest,
+        &title_input.transcript_id,
+        current_transcript_id,
+        force,
+    );
     if !can_store {
         return Ok(GenerateSessionTitleResult {
             status: GenerateSessionTitleStatus::Skipped,
@@ -7382,6 +7387,22 @@ fn generate_session_title_inner(
         status: GenerateSessionTitleStatus::Generated,
         session: enrich_session(updated),
     })
+}
+
+fn can_store_generated_session_title(
+    session: &Session,
+    expected_transcript_id: &str,
+    current_transcript_id: Option<&str>,
+    force: bool,
+) -> bool {
+    if current_transcript_id != Some(expected_transcript_id) {
+        return false;
+    }
+    if force {
+        crate::session_titles::can_force_generate_title(session)
+    } else {
+        crate::session_titles::can_generate_title(session, current_transcript_id)
+    }
 }
 
 fn resolve_title_input_for_session(
@@ -11005,9 +11026,9 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_title_enabled_for_new_session, collect_memory_usage_from_roots,
-        configured_git_identity, create_unique_worktree, daemon_spawn_name_for_session,
-        detach_requested_by_stale_renderer, font_name_from_path,
+        auto_title_enabled_for_new_session, can_store_generated_session_title,
+        collect_memory_usage_from_roots, configured_git_identity, create_unique_worktree,
+        daemon_spawn_name_for_session, detach_requested_by_stale_renderer, font_name_from_path,
         infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
         normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
         remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
@@ -11022,7 +11043,7 @@ mod tests {
         Session, SessionAgentProvider, SessionGoal, SessionGoalModelConfig, SessionGoalPolicies,
         SessionGoalPreset, SessionGoalProgress, SessionGoalStagePolicy, SessionGraph,
         SessionGraphAgent, SessionGraphCanvas, SessionGraphNodePosition, SessionKind, SessionMode,
-        WorkGraphGroupDirection,
+        SessionTitleSource, WorkGraphGroupDirection,
     };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -14897,6 +14918,47 @@ mod tests {
             SessionKind::Control,
             SessionMode::Chat,
             Some(SessionAgentProvider::Codex),
+        ));
+    }
+
+    #[test]
+    fn generated_title_store_is_fenced_to_the_resolved_transcript() {
+        let mut session = Session::new(
+            "new session".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.auto_title_enabled = Some(true);
+
+        assert!(can_store_generated_session_title(
+            &session,
+            "codex-current",
+            Some("codex-current"),
+            false,
+        ));
+        assert!(!can_store_generated_session_title(
+            &session,
+            "codex-stale",
+            Some("codex-current"),
+            false,
+        ));
+        assert!(!can_store_generated_session_title(
+            &session,
+            "codex-stale",
+            None,
+            true,
+        ));
+
+        session.title_source = SessionTitleSource::Generated;
+        session.generated_title_transcript_id = Some("codex-previous".to_string());
+        assert!(can_store_generated_session_title(
+            &session,
+            "codex-current",
+            Some("codex-current"),
+            false,
         ));
     }
 
