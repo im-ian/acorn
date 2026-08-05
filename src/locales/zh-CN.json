@@ -1289,6 +1289,7 @@
     },
     "aria": {
       "project": "项目",
+      "projectMenu": "项目菜单",
       "dragToReorderProject": "拖动以重新排序项目",
       "newSessionMenuInProject": "在此项目中创建会话",
       "newSessionMenuInProjectFolder": "在此工作区中创建会话",

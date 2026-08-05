@@ -1289,6 +1289,7 @@
     },
     "aria": {
       "project": "프로젝트",
+      "projectMenu": "프로젝트 메뉴",
       "dragToReorderProject": "프로젝트 순서를 바꾸려면 드래그",
       "newSessionMenuInProject": "이 프로젝트에 세션 만들기",
       "newSessionMenuInProjectFolder": "이 작업공간에 세션 만들기",
