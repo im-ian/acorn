@@ -43,6 +43,7 @@ vi.mock("./lib/api", () => {
       agentTranscriptSummaryAtPath: vi.fn(async () => null),
       addProjectSource: vi.fn(async () => ({ project: null, merge: null })),
       mergeProjectSource: vi.fn(async () => ({}) as Project),
+      splitProjectSource: vi.fn(async () => ({}) as Project),
       createNewProject: vi.fn(async () => ({}) as Project),
       removeProject: vi.fn(async () => []),
       reorderProjects: vi.fn(async (paths: string[]) =>
@@ -4100,5 +4101,52 @@ describe("project add and create", () => {
 
     expect(mockApi.mergeProjectSource).toHaveBeenCalledWith(REPO_A, REPO_B);
     expect(useAppStore.getState().pendingSourceMerge).toBeNull();
+  });
+});
+
+describe("source folder and project conversion", () => {
+  it("splits a source folder out into a project of its own", async () => {
+    await seed(
+      [{ ...project(REPO_A, 0), source_paths: [REPO_B] }],
+      [session("s1", REPO_B)],
+    );
+    mockApi.listProjects.mockResolvedValue([
+      project(REPO_A, 0),
+      project(REPO_B, 1),
+    ]);
+
+    await expect(
+      useAppStore.getState().splitProjectSource(REPO_A, REPO_B),
+    ).resolves.toBe(true);
+
+    expect(mockApi.splitProjectSource).toHaveBeenCalledWith(REPO_A, REPO_B);
+    expect(
+      useAppStore.getState().projects.map((entry) => entry.repo_path),
+    ).toEqual([REPO_A, REPO_B]);
+  });
+
+  it("converts a project into a source folder of another project", async () => {
+    await seed([project(REPO_A, 0), project(REPO_B, 1)], []);
+    useAppStore.setState({ activeProject: REPO_B });
+    mockApi.listProjects.mockResolvedValue([
+      { ...project(REPO_A, 0), source_paths: [REPO_B] },
+    ]);
+
+    await expect(
+      useAppStore.getState().convertProjectToSourceFolder(REPO_B, REPO_A),
+    ).resolves.toBe(true);
+
+    // The host is the first argument: the absorbed project is the folder.
+    expect(mockApi.mergeProjectSource).toHaveBeenCalledWith(REPO_A, REPO_B);
+    expect(useAppStore.getState().activeProject).toBe(REPO_A);
+  });
+
+  it("refuses to convert a project into a source folder of itself", async () => {
+    await seed([project(REPO_A, 0)], []);
+
+    await expect(
+      useAppStore.getState().convertProjectToSourceFolder(REPO_A, REPO_A),
+    ).resolves.toBe(false);
+    expect(mockApi.mergeProjectSource).not.toHaveBeenCalled();
   });
 });

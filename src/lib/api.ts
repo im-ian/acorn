@@ -409,6 +409,9 @@ export const api = {
   mergeProjectSource(repoPath: string, sourcePath: string): Promise<Project> {
     return invoke<Project>("merge_project_source", { repoPath, sourcePath });
   },
+  splitProjectSource(repoPath: string, sourcePath: string): Promise<Project> {
+    return invoke<Project>("split_project_source", { repoPath, sourcePath });
+  },
   removeProjectSource(repoPath: string, sourcePath: string): Promise<Project> {
     return invoke<Project>("remove_project_source", { repoPath, sourcePath });
   },

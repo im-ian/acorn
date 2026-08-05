@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   FolderGit2,
   FolderPlus,
+  FolderSymlink,
   GitBranch,
   Loader2,
   Settings,
@@ -21,6 +22,7 @@ import {
 import type { ProjectSettings, ProjectWorktree, Session } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
+import { ContextMenu } from "./ContextMenu";
 import {
   Button,
   CheckboxRow,
@@ -153,6 +155,9 @@ export function ProjectSettingsModal({
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   // The merge confirmation renders above this modal, so hand it the keyboard.
   const pendingSourceMerge = useAppStore((s) => s.pendingSourceMerge);
+  // So does the source folder's context menu — Escape should dismiss the menu
+  // rather than the whole modal underneath it.
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
   const removeProjectWorktree = useAppStore((s) => s.removeProjectWorktree);
   const projects = useAppStore((s) => s.projects);
   // The modal is also opened from a session's repo path, which for a session
@@ -211,7 +216,10 @@ export function ProjectSettingsModal({
     confirmRemove !== null && confirmRemoveOtherSessions.length === 0;
 
   useDialogShortcuts(
-    project !== null && confirmRemove === null && pendingSourceMerge === null,
+    project !== null &&
+      confirmRemove === null &&
+      pendingSourceMerge === null &&
+      !sourceMenuOpen,
     {
       onCancel: onClose,
       onConfirm: () => {},
@@ -474,7 +482,10 @@ export function ProjectSettingsModal({
                   title={dt(t, "dialogs.projectSettings.sources")}
                   description={dt(t, "dialogs.projectSettings.sourcesHint")}
                 >
-                  <ProjectSourceFolderList repoPath={project.repoPath} />
+                  <ProjectSourceFolderList
+                    repoPath={project.repoPath}
+                    onMenuOpenChange={setSourceMenuOpen}
+                  />
                 </ProjectSettingsGroup>
               ) : tab === "pullRequests" ? (
                 <ProjectSettingsGroup
@@ -601,14 +612,33 @@ function ProjectSettingsGroup({
  * root added to it. Removal is refused by the backend while sessions still
  * live in a folder, so the row surfaces that count instead of guessing.
  */
-function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
+function ProjectSourceFolderList({
+  repoPath,
+  onMenuOpenChange,
+}: {
+  repoPath: string;
+  onMenuOpenChange: (open: boolean) => void;
+}) {
   const t = useTranslation();
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
   const addProjectSource = useAppStore((s) => s.addProjectSource);
   const removeProjectSource = useAppStore((s) => s.removeProjectSource);
+  const splitProjectSource = useAppStore((s) => s.splitProjectSource);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{
+    sourcePath: string;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  useEffect(() => {
+    onMenuOpenChange(menu !== null);
+    // Leaving the tab with the menu open must not leave the modal's Escape
+    // handler switched off.
+    return () => onMenuOpenChange(false);
+  }, [menu, onMenuOpenChange]);
 
   const project = projects.find((entry) =>
     projectRootPaths(entry).includes(repoPath),
@@ -644,6 +674,19 @@ function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
     setBusy(false);
   }
 
+  async function split(sourcePath: string) {
+    setBusy(true);
+    setError(null);
+    const ok = await splitProjectSource(repoPath, sourcePath);
+    if (!ok) {
+      const message = useAppStore.getState().consumeError();
+      setError(
+        `${dt(t, "dialogs.projectSettings.splitSourceFailed")} ${message ?? ""}`.trim(),
+      );
+    }
+    setBusy(false);
+  }
+
   return (
     <div className="space-y-3">
       <ul className="divide-y divide-border rounded-[var(--acorn-pane-radius)] border border-border bg-bg">
@@ -655,6 +698,11 @@ function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
           return (
             <li
               key={root}
+              onContextMenu={(e) => {
+                if (isPrimary) return;
+                e.preventDefault();
+                setMenu({ sourcePath: root, x: e.clientX, y: e.clientY });
+              }}
               className="flex items-center gap-2 px-3 py-2"
             >
               <FolderGit2 size={13} className="shrink-0 text-fg-muted" />
@@ -714,11 +762,31 @@ function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
           </button>
         </li>
       </ul>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        onClose={() => setMenu(null)}
+        items={[
+          {
+            label: dt(t, "dialogs.projectSettings.splitSourceFolder"),
+            icon: <FolderSymlink size={12} />,
+            disabled: busy,
+            onClick: () => {
+              if (menu) void split(menu.sourcePath);
+            },
+          },
+        ]}
+      />
       {roots.length === 1 ? (
         <p className="text-[11px] text-fg-muted/80">
           {dt(t, "dialogs.projectSettings.noSources")}
         </p>
-      ) : null}
+      ) : (
+        <p className="text-[11px] text-fg-muted/80">
+          {dt(t, "dialogs.projectSettings.splitSourceHint")}
+        </p>
+      )}
       {error ? <Notice tone="danger">{error}</Notice> : null}
     </div>
   );

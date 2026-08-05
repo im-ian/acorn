@@ -6439,6 +6439,52 @@ fn merge_project_source_inner(
     Ok(updated)
 }
 
+/// Split an extra source root out of the project that spans it and register it
+/// as a project of its own — the inverse of [`merge_project_source`]. Unlike
+/// [`remove_project_source`] this is allowed with sessions still inside: the
+/// root stays registered, so their authorization survives and the sidebar
+/// simply regroups them under the project that now owns it.
+#[tauri::command]
+pub fn split_project_source(
+    state: State<'_, AppState>,
+    repo_path: String,
+    source_path: String,
+) -> AppResult<Project> {
+    split_project_source_inner(&state, repo_path, source_path)
+}
+
+fn split_project_source_inner(
+    state: &AppState,
+    repo_path: String,
+    source_path: String,
+) -> AppResult<Project> {
+    let source = PathBuf::from(&source_path);
+    let project = state
+        .projects
+        .owner_of_root(&PathBuf::from(&repo_path))
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    if !project.source_paths.iter().any(|root| root == &source) {
+        return Err(AppError::InvalidPath(format!(
+            "not a source folder of this project: {source_path}"
+        )));
+    }
+    let source_paths = project
+        .source_paths
+        .iter()
+        .filter(|root| *root != &source)
+        .cloned()
+        .collect();
+    state
+        .projects
+        .set_source_paths(&project.repo_path, source_paths)
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
+    let split = state
+        .projects
+        .ensure(source.clone(), project_basename(&source));
+    persist(state);
+    Ok(split)
+}
+
 /// Drop an extra source root from a project. Refused while sessions still live
 /// in that root: removing it would strip the root's authorization and leave
 /// those sessions unable to spawn or read files.
@@ -15276,6 +15322,70 @@ mod tests {
                 .map(|project| project.repo_path),
             Some(target),
         );
+    }
+
+    #[test]
+    fn splitting_a_source_root_registers_it_as_its_own_project() {
+        let state = crate::state::AppState::default();
+        let owner = PathBuf::from("/tmp/acorn-split-owner");
+        let source = PathBuf::from("/tmp/acorn-split-source");
+        state.projects.ensure(owner.clone(), "owner".to_string());
+        state
+            .projects
+            .set_source_paths(&owner, vec![source.clone()])
+            .expect("project is registered");
+        // Sessions inside the folder must not block the split: the root stays
+        // registered, so their authorization survives the regrouping.
+        state.sessions.insert(worktree_session(
+            "inside",
+            &source.display().to_string(),
+            &source.display().to_string(),
+        ));
+
+        let split = super::split_project_source_inner(
+            &state,
+            owner.display().to_string(),
+            source.display().to_string(),
+        )
+        .expect("split succeeds");
+
+        assert_eq!(split.repo_path, source);
+        assert!(split.source_paths.is_empty());
+        assert_eq!(state.projects.list().len(), 2);
+        assert!(state
+            .projects
+            .owner_of_root(&owner)
+            .expect("owner is registered")
+            .source_paths
+            .is_empty());
+        assert_eq!(
+            state
+                .projects
+                .owner_of_root(&source)
+                .map(|project| project.repo_path),
+            Some(source),
+        );
+    }
+
+    #[test]
+    fn splitting_refuses_a_root_the_project_does_not_span() {
+        let state = crate::state::AppState::default();
+        let owner = PathBuf::from("/tmp/acorn-split-guard-owner");
+        let stranger = PathBuf::from("/tmp/acorn-split-guard-stranger");
+        state.projects.ensure(owner.clone(), "owner".to_string());
+
+        let error = super::split_project_source_inner(
+            &state,
+            owner.display().to_string(),
+            stranger.display().to_string(),
+        )
+        .expect_err("split is refused");
+
+        assert!(
+            error.to_string().contains("not a source folder"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(state.projects.list().len(), 1);
     }
 
     #[test]
