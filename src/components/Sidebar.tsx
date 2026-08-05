@@ -10,6 +10,7 @@ import {
   ExternalLink,
   Folder,
   FolderGit2,
+  FolderInput,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -2147,6 +2148,18 @@ function ProjectGroupView({
       s.projects.find((entry) => entry.repo_path === project.repoPath)
         ?.source_paths,
   );
+  const showToast = useToasts((s) => s.show);
+  const projects = useAppStore((s) => s.projects);
+  const convertProjectToSourceFolder = useAppStore(
+    (s) => s.convertProjectToSourceFolder,
+  );
+  // Any other project can host this one: a session records the root it started
+  // in, and that root stays registered, so only the grouping moves.
+  const sourceFolderHosts = useMemo(
+    () =>
+      projects.filter((candidate) => candidate.repo_path !== project.repoPath),
+    [projects, project.repoPath],
+  );
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [createMenu, setCreateMenu] = useState<{
     x: number;
@@ -2275,6 +2288,18 @@ function ProjectGroupView({
       t,
     ],
   );
+
+  async function convertToSourceFolder(targetRepoPath: string) {
+    const converted = await convertProjectToSourceFolder(
+      project.repoPath,
+      targetRepoPath,
+    );
+    if (converted) return;
+    const error = useAppStore.getState().consumeError();
+    showToast(
+      `${t("toasts.project.convertToSourceFailed")} ${error ?? ""}`.trim(),
+    );
+  }
 
   async function copyText(text: string) {
     try {
@@ -2483,6 +2508,25 @@ function ProjectGroupView({
             onClick: onAddSourceFolder,
           },
           contextMenuGroupTitle(t, "project"),
+          ...(sourceFolderHosts.length > 0
+            ? [
+                {
+                  type: "submenu" as const,
+                  label: sidebarText(
+                    t,
+                    "sidebar.actions.convertProjectToSourceFolder",
+                  ),
+                  icon: <FolderInput size={12} />,
+                  children: sourceFolderHosts.map((host) => ({
+                    label: host.name,
+                    icon: <FolderGit2 size={12} />,
+                    onClick: () => {
+                      void convertToSourceFolder(host.repo_path);
+                    },
+                  })),
+                },
+              ]
+            : []),
           {
             label: sidebarText(t, "sidebar.actions.projectSettings"),
             icon: <SettingsIcon size={12} />,

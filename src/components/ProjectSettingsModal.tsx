@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   FolderGit2,
   FolderPlus,
+  FolderSymlink,
   GitBranch,
   Loader2,
   Settings,
@@ -10,6 +11,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { ContextMenu } from "./ContextMenu";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
@@ -607,8 +609,14 @@ function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
   const projects = useAppStore((s) => s.projects);
   const addProjectSource = useAppStore((s) => s.addProjectSource);
   const removeProjectSource = useAppStore((s) => s.removeProjectSource);
+  const splitProjectSource = useAppStore((s) => s.splitProjectSource);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{
+    sourcePath: string;
+    x: number;
+    y: number;
+  } | null>(null);
 
   const project = projects.find((entry) =>
     projectRootPaths(entry).includes(repoPath),
@@ -644,6 +652,19 @@ function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
     setBusy(false);
   }
 
+  async function split(sourcePath: string) {
+    setBusy(true);
+    setError(null);
+    const ok = await splitProjectSource(repoPath, sourcePath);
+    if (!ok) {
+      const message = useAppStore.getState().consumeError();
+      setError(
+        `${dt(t, "dialogs.projectSettings.splitSourceFailed")} ${message ?? ""}`.trim(),
+      );
+    }
+    setBusy(false);
+  }
+
   return (
     <div className="space-y-3">
       <ul className="divide-y divide-border rounded-[var(--acorn-pane-radius)] border border-border bg-bg">
@@ -655,6 +676,11 @@ function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
           return (
             <li
               key={root}
+              onContextMenu={(e) => {
+                if (isPrimary) return;
+                e.preventDefault();
+                setMenu({ sourcePath: root, x: e.clientX, y: e.clientY });
+              }}
               className="flex items-center gap-2 px-3 py-2"
             >
               <FolderGit2 size={13} className="shrink-0 text-fg-muted" />
@@ -714,11 +740,31 @@ function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
           </button>
         </li>
       </ul>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        onClose={() => setMenu(null)}
+        items={[
+          {
+            label: dt(t, "dialogs.projectSettings.splitSourceFolder"),
+            icon: <FolderSymlink size={12} />,
+            disabled: busy,
+            onClick: () => {
+              if (menu) void split(menu.sourcePath);
+            },
+          },
+        ]}
+      />
       {roots.length === 1 ? (
         <p className="text-[11px] text-fg-muted/80">
           {dt(t, "dialogs.projectSettings.noSources")}
         </p>
-      ) : null}
+      ) : (
+        <p className="text-[11px] text-fg-muted/80">
+          {dt(t, "dialogs.projectSettings.splitSourceHint")}
+        </p>
+      )}
       {error ? <Notice tone="danger">{error}</Notice> : null}
     </div>
   );
