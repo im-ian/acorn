@@ -555,6 +555,18 @@ interface AppStateModel {
   /** Apply the pending merge: move the folder into the project that asked. */
   confirmSourceMerge: () => Promise<boolean>;
   cancelSourceMerge: () => void;
+  /** Split a source folder out of its project and register it as a project of
+   *  its own. Sessions inside it keep running — only the grouping changes. */
+  splitProjectSource: (
+    repoPath: string,
+    sourcePath: string,
+  ) => Promise<boolean>;
+  /** Turn a whole project into a source folder of `targetRepoPath`. Every root
+   *  it spans moves across and its own entry disappears. */
+  convertProjectToSourceFolder: (
+    repoPath: string,
+    targetRepoPath: string,
+  ) => Promise<boolean>;
   removeProjectSource: (
     repoPath: string,
     sourcePath: string,
@@ -3358,6 +3370,35 @@ export const useAppStore = create<AppStateModel>()(
 
   cancelSourceMerge() {
     set({ pendingSourceMerge: null });
+  },
+
+  async splitProjectSource(repoPath, sourcePath) {
+    try {
+      await api.splitProjectSource(repoPath, sourcePath);
+      await get().refreshProjects();
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  async convertProjectToSourceFolder(repoPath, targetRepoPath) {
+    if (repoPath === targetRepoPath) return false;
+    const wasActive = get().activeProject === repoPath;
+    try {
+      await api.mergeProjectSource(targetRepoPath, repoPath);
+      await get().refreshProjects();
+      // The absorbed root is no longer a project of its own, so an active
+      // pointer at it has nothing left to draw.
+      if (wasActive) get().setActiveProject(targetRepoPath);
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
   },
 
   async removeProjectSource(repoPath, sourcePath) {
