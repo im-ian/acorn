@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { ContextMenu } from "./ContextMenu";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
@@ -23,6 +22,7 @@ import {
 import type { ProjectSettings, ProjectWorktree, Session } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
+import { ContextMenu } from "./ContextMenu";
 import {
   Button,
   CheckboxRow,
@@ -155,6 +155,9 @@ export function ProjectSettingsModal({
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   // The merge confirmation renders above this modal, so hand it the keyboard.
   const pendingSourceMerge = useAppStore((s) => s.pendingSourceMerge);
+  // So does the source folder's context menu — Escape should dismiss the menu
+  // rather than the whole modal underneath it.
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
   const removeProjectWorktree = useAppStore((s) => s.removeProjectWorktree);
   const projects = useAppStore((s) => s.projects);
   // The modal is also opened from a session's repo path, which for a session
@@ -213,7 +216,10 @@ export function ProjectSettingsModal({
     confirmRemove !== null && confirmRemoveOtherSessions.length === 0;
 
   useDialogShortcuts(
-    project !== null && confirmRemove === null && pendingSourceMerge === null,
+    project !== null &&
+      confirmRemove === null &&
+      pendingSourceMerge === null &&
+      !sourceMenuOpen,
     {
       onCancel: onClose,
       onConfirm: () => {},
@@ -476,7 +482,10 @@ export function ProjectSettingsModal({
                   title={dt(t, "dialogs.projectSettings.sources")}
                   description={dt(t, "dialogs.projectSettings.sourcesHint")}
                 >
-                  <ProjectSourceFolderList repoPath={project.repoPath} />
+                  <ProjectSourceFolderList
+                    repoPath={project.repoPath}
+                    onMenuOpenChange={setSourceMenuOpen}
+                  />
                 </ProjectSettingsGroup>
               ) : tab === "pullRequests" ? (
                 <ProjectSettingsGroup
@@ -603,7 +612,13 @@ function ProjectSettingsGroup({
  * root added to it. Removal is refused by the backend while sessions still
  * live in a folder, so the row surfaces that count instead of guessing.
  */
-function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
+function ProjectSourceFolderList({
+  repoPath,
+  onMenuOpenChange,
+}: {
+  repoPath: string;
+  onMenuOpenChange: (open: boolean) => void;
+}) {
   const t = useTranslation();
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
@@ -617,6 +632,13 @@ function ProjectSourceFolderList({ repoPath }: { repoPath: string }) {
     x: number;
     y: number;
   } | null>(null);
+
+  useEffect(() => {
+    onMenuOpenChange(menu !== null);
+    // Leaving the tab with the menu open must not leave the modal's Escape
+    // handler switched off.
+    return () => onMenuOpenChange(false);
+  }, [menu, onMenuOpenChange]);
 
   const project = projects.find((entry) =>
     projectRootPaths(entry).includes(repoPath),
