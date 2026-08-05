@@ -4779,7 +4779,7 @@ fn create_session_inner(
             name = project_basename(&repo);
         }
         let base = sanitize_worktree_name(&name);
-        let (_safe_name, path) = create_unique_worktree(&repo, &base)?;
+        let (_safe_name, path) = create_unique_project_worktree(&repo, &base)?;
         path
     } else {
         cwd_path.unwrap_or(selected_path)
@@ -6747,7 +6747,17 @@ pub fn update_project_settings(
     repo_path: String,
     settings: ProjectSettings,
 ) -> AppResult<ProjectSettingsRecord> {
-    project_settings::update(&PathBuf::from(repo_path), settings)
+    let repo_path = PathBuf::from(repo_path);
+    if let Some(branch) = settings
+        .worktrees
+        .base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty())
+    {
+        worktree::validate_worktree_base_branch(&repo_path, branch)?;
+    }
+    project_settings::update(&repo_path, settings)
 }
 
 fn validate_new_project_name(name: &str, ignore_safe_name: bool) -> AppResult<&str> {
@@ -7481,7 +7491,7 @@ pub fn prepare_chat_session_worktree(
         return Ok(enrich_session(session));
     }
     let base = new_chat_worktree_base_name(&session.repo_path);
-    let (_safe_name, path) = create_unique_worktree(&session.repo_path, &base)?;
+    let (_safe_name, path) = create_unique_project_worktree(&session.repo_path, &base)?;
     let updated = state.sessions.update_worktree_path(&session.id, path)?;
     persist(&state);
     Ok(enrich_session(updated))
@@ -7842,6 +7852,12 @@ pub fn git_worktrees(repo_path: String) -> AppResult<Vec<String>> {
 pub fn list_project_worktrees(repo_path: String) -> AppResult<Vec<worktree::ProjectWorktreeInfo>> {
     let path = PathBuf::from(repo_path);
     crate::worktree::list_worktree_infos(&path)
+}
+
+#[tauri::command]
+pub fn list_project_branches(repo_path: String) -> AppResult<Vec<worktree::ProjectBranchInfo>> {
+    let path = PathBuf::from(repo_path);
+    crate::worktree::list_branch_infos(&path)
 }
 
 #[tauri::command]
@@ -10745,9 +10761,30 @@ pub async fn generate_pr_commit_message(
     pull_requests::generate_pr_commit_message(&PathBuf::from(repo_path), number, method, ai, prompt)
 }
 
+#[cfg(test)]
 pub(crate) fn create_unique_worktree(
     repo: &std::path::Path,
     base: &str,
+) -> AppResult<(String, PathBuf)> {
+    create_unique_worktree_from_base_branch(repo, base, None)
+}
+
+pub(crate) fn create_unique_project_worktree(
+    repo: &std::path::Path,
+    base: &str,
+) -> AppResult<(String, PathBuf)> {
+    let settings = project_settings::get(repo)?;
+    create_unique_worktree_from_base_branch(
+        repo,
+        base,
+        settings.settings.worktrees.base_branch.as_deref(),
+    )
+}
+
+fn create_unique_worktree_from_base_branch(
+    repo: &std::path::Path,
+    base: &str,
+    base_branch: Option<&str>,
 ) -> AppResult<(String, PathBuf)> {
     let root = worktree::worktree_root(repo);
     let mut candidate = base.to_string();
@@ -10755,7 +10792,7 @@ pub(crate) fn create_unique_worktree(
     loop {
         let target = root.join(&candidate);
         if !target.exists() {
-            match worktree::create_worktree(repo, &candidate) {
+            match worktree::create_worktree_from_base_branch(repo, &candidate, base_branch) {
                 Ok(path) => return Ok((candidate, path)),
                 Err(AppError::InvalidPath(_)) => {}
                 // libgit2 auto-creates a branch named after the worktree when
