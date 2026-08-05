@@ -24,15 +24,15 @@ interface AddExistingProjectDialogProps {
 /**
  * Assembles a project before anything is registered: the roots it spans and
  * the name it carries are collected here, and cancelling leaves the app
- * exactly as it was. Nothing opens on save either — the project appears in the
- * sidebar and the user decides when to start a session in it.
+ * exactly as it was. Saving registers the project and opens one session in it,
+ * matching what creating a brand new project does.
  */
 export function AddExistingProjectDialog({
   open,
   onClose,
 }: AddExistingProjectDialogProps) {
   const t = useTranslation();
-  const refreshProjects = useAppStore((s) => s.refreshProjects);
+  const addProjectAt = useAppStore((s) => s.addProjectAt);
   const [roots, setRoots] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
@@ -81,8 +81,7 @@ export function AddExistingProjectDialog({
     setBusy(true);
     setError(null);
     try {
-      await api.addProjectAt(name.trim() || basenamePath(roots[0]), roots);
-      await refreshProjects();
+      await addProjectAt(name.trim() || basenamePath(roots[0]), roots);
       onClose();
     } catch (e) {
       setError(String(e));
