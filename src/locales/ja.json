@@ -1297,6 +1297,7 @@
       "newAutonomousGoalSession": "新しい Loop セッション",
       "newGraphSession": "新しい Graph セッション",
       "newIsolatedSessionInProject": "このプロジェクトの新しいワークツリー セッション",
+      "newIsolatedSessionInProjectFolder": "このワークスペースの新しいワークツリー セッション",
       "newChatSessionInProject": "このプロジェクトの新しいチャット セッション",
       "newControlSessionInProject": "このプロジェクトの新しいコントロール セッション",
       "goalSession": "Loop セッション",

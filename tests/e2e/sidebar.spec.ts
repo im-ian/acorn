@@ -4459,6 +4459,91 @@ test.describe("sidebar: project lifecycle", () => {
     ).toContainText("demo-api");
   });
 
+  test("a source folder header creates a worktree session in that source repository", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/acorn"],
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      return w.__sessions ?? [];
+    });
+    await tauri.handle("create_session", (args) => {
+      const input = args as {
+        name: string;
+        repoPath: string;
+        isolated: boolean;
+        kind: string;
+      };
+      const w = window as unknown as {
+        __createCalls?: unknown[];
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__createCalls = [...(w.__createCalls ?? []), args];
+      const created = {
+        id: "created-worktree-session",
+        name: input.name,
+        repo_path: input.repoPath,
+        worktree_path: `${input.repoPath}/.acorn/worktrees/${input.name}`,
+        branch: "worktree",
+        isolated: input.isolated,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "default",
+        kind: input.kind,
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: true,
+      };
+      w.__sessions = [...(w.__sessions ?? []), created];
+      return created;
+    });
+
+    await page.goto("/");
+
+    const sourceFolderHeader = page.locator(
+      'aside [data-sidebar-workspace-id="/tmp/acorn"]',
+    );
+    await sourceFolderHeader.hover();
+    const createWorktreeSessionButton = sourceFolderHeader.getByRole("button", {
+      name: "New worktree session in this workspace",
+    });
+    await expect(createWorktreeSessionButton).toBeVisible();
+    await createWorktreeSessionButton.click();
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __createCalls?: Array<Record<string, unknown>>;
+              }
+            ).__createCalls ?? [],
+        ),
+      )
+      .toEqual([
+        expect.objectContaining({
+          repoPath: "/tmp/acorn",
+          isolated: true,
+          kind: "regular",
+        }),
+      ]);
+  });
+
   test("each root's row holds the sessions started in that root", async ({
     page,
     tauri,

@@ -1297,6 +1297,7 @@
       "newAutonomousGoalSession": "New Loop session",
       "newGraphSession": "New Graph session",
       "newIsolatedSessionInProject": "New worktree session in this project",
+      "newIsolatedSessionInProjectFolder": "New worktree session in this workspace",
       "newChatSessionInProject": "New chat session in this project",
       "newControlSessionInProject": "New control session in this project",
       "goalSession": "Loop session",

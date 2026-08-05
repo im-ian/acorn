@@ -2983,6 +2983,33 @@ function ProjectFolderView({
                 <Plus size={12} />
               </button>
             </Tooltip>
+            {inSourceRoot && isDefaultProjectFolder(folder) ? (
+              <Tooltip
+                label={sidebarText(
+                  t,
+                  "sidebar.aria.newIsolatedSessionInProjectFolder",
+                )}
+                shortcut={formatHotkey(shortcuts.newIsolatedSession)}
+                side="bottom"
+              >
+                <button
+                  type="button"
+                  aria-label={sidebarText(
+                    t,
+                    "sidebar.aria.newIsolatedSessionInProjectFolder",
+                  )}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAddSession(true, "regular", "terminal");
+                  }}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                >
+                  <GitBranch size={12} />
+                </button>
+              </Tooltip>
+            ) : null}
             <Tooltip
               label={sidebarText(
                 t,
