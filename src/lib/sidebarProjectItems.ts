@@ -1,5 +1,6 @@
 import {
   isGroupDefaultFolder,
+  projectGroupSpansMultipleRoots,
   type ProjectFolderGroup,
   type ProjectFolderProjectGroup,
 } from "./projectFolders";
@@ -27,12 +28,14 @@ export function buildProjectTopLevelItems(
   order: readonly string[],
   prioritizeNeedsInputTabs = false,
 ): ProjectTopLevelItem[] {
-  // Every root's default folder flattens into the same top-level list, so a
-  // session started in a source folder sits beside the primary root's.
+  // A multi-root project draws a row per root instead, so nothing flattens —
+  // falling back to the first folder there would render its sessions twice.
   const defaultFolderGroups = project.folders.filter((folderGroup) =>
-    isGroupDefaultFolder(folderGroup.folder),
+    isGroupDefaultFolder(project, folderGroup.folder),
   );
-  const fallbackFolderGroup = defaultFolderGroups[0] ?? project.folders[0] ?? null;
+  const fallbackFolderGroup = projectGroupSpansMultipleRoots(project)
+    ? null
+    : (defaultFolderGroups[0] ?? project.folders[0] ?? null);
   const directSessions: ProjectTopLevelItem[] = (
     defaultFolderGroups.length > 0
       ? defaultFolderGroups
@@ -48,7 +51,7 @@ export function buildProjectTopLevelItems(
     })),
   );
   const folders: ProjectTopLevelItem[] = project.folders
-    .filter((folderGroup) => !isGroupDefaultFolder(folderGroup.folder))
+    .filter((folderGroup) => !isGroupDefaultFolder(project, folderGroup.folder))
     .map((folderGroup) => ({
       id: sidebarFolderItemId(folderGroup.folder.id),
       type: "folder",
@@ -144,7 +147,7 @@ export function buildDragPriorityIndex(
   for (const group of groups) {
     const topLevelContainerId = `project:${group.repoPath}`;
     for (const folderGroup of group.folders) {
-      const isDefaultFolder = isGroupDefaultFolder(folderGroup.folder);
+      const isDefaultFolder = isGroupDefaultFolder(group, folderGroup.folder);
       // The default folder is flattened into top-level session rows and never
       // drawn as a folder row, so it has no drag id to index.
       if (!isDefaultFolder) {

@@ -15368,6 +15368,41 @@ mod tests {
     }
 
     #[test]
+    fn splitting_refuses_the_primary_root() {
+        // The primary root *is* the project — splitting it out would leave the
+        // project pointing at a root it no longer owns, so only extra source
+        // folders are separable.
+        let state = crate::state::AppState::default();
+        let owner = PathBuf::from("/tmp/acorn-split-primary-owner");
+        let source = PathBuf::from("/tmp/acorn-split-primary-source");
+        state.projects.ensure(owner.clone(), "owner".to_string());
+        state
+            .projects
+            .set_source_paths(&owner, vec![source.clone()])
+            .expect("project is registered");
+
+        let error = super::split_project_source_inner(
+            &state,
+            owner.display().to_string(),
+            owner.display().to_string(),
+        )
+        .expect_err("split is refused");
+
+        assert!(
+            error.to_string().contains("not a source folder"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(state.projects.list().len(), 1);
+        assert_eq!(
+            state
+                .projects
+                .owner_of_root(&source)
+                .map(|project| project.repo_path),
+            Some(owner),
+        );
+    }
+
+    #[test]
     fn splitting_refuses_a_root_the_project_does_not_span() {
         let state = crate::state::AppState::default();
         let owner = PathBuf::from("/tmp/acorn-split-guard-owner");

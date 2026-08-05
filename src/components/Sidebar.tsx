@@ -1291,7 +1291,7 @@ export function Sidebar() {
         const folder = folderId
           ? projectFolderById(currentAllWorkspaceGroups, folderId)
           : null;
-        return folder ? isGroupDefaultFolder(folder) : false;
+        return folder && project ? isGroupDefaultFolder(project, folder) : false;
       };
       if (
         activeSession.project_scoped !== false &&
@@ -2190,9 +2190,12 @@ function ProjectGroupView({
     transition,
   };
 
+  // A multi-root project flattens nothing, so this falls through to the
+  // primary root's folder — the project header's own create actions still
+  // start there, and every other root has its own row to start from.
   const defaultFolderGroup =
     project.folders.find((folderGroup) =>
-      isGroupDefaultFolder(folderGroup.folder),
+      isGroupDefaultFolder(project, folderGroup.folder),
     ) ?? project.folders[0] ?? null;
   const projectSessionCreationFolder = defaultFolderGroup?.folder ?? null;
 
@@ -2318,7 +2321,7 @@ function ProjectGroupView({
   }
 
   const namedFolderGroups = project.folders.filter(
-    (folderGroup) => !isGroupDefaultFolder(folderGroup.folder),
+    (folderGroup) => !isGroupDefaultFolder(project, folderGroup.folder),
   );
   const projectFoldersForRows = project.folders.map(
     (folderGroup) => folderGroup.folder,
