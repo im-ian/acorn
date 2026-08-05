@@ -1,3 +1,4 @@
+import type { Locator, Page } from "@playwright/test";
 import {
   test,
   expect,
@@ -6,7 +7,124 @@ import {
   modalShell,
 } from "./support";
 
+async function dragBetween(
+  page: Page,
+  source: Locator,
+  target: Locator,
+): Promise<void> {
+  const sourceBox = await source.boundingBox();
+  const targetBox = await target.boundingBox();
+  if (!sourceBox || !targetBox) {
+    throw new Error("drag source or target is not visible");
+  }
+  await page.mouse.move(
+    sourceBox.x + Math.min(60, sourceBox.width / 2),
+    sourceBox.y + sourceBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    sourceBox.x + Math.min(84, sourceBox.width - 2),
+    sourceBox.y + sourceBox.height / 2,
+    { steps: 3 },
+  );
+  await page.mouse.move(
+    targetBox.x + targetBox.width / 2,
+    targetBox.y + targetBox.height / 2,
+    { steps: 10 },
+  );
+  await page.mouse.up();
+}
+
 test.describe("project settings", () => {
+  test("keeps source folders in the order set by sidebar drag and drop", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => {
+      const w = window as unknown as {
+        __projects?: Array<Record<string, unknown>>;
+      };
+      w.__projects = w.__projects ?? [
+        {
+          repo_path: "/tmp/acorn",
+          name: "acorn",
+          created_at: "2026-01-01T00:00:00Z",
+          position: 0,
+          source_paths: ["/tmp/acorn-api", "/tmp/acorn-docs"],
+        },
+      ];
+      return w.__projects;
+    });
+    await tauri.respond("list_sessions", []);
+    await tauri.handle("reorder_project_sources", (args) => {
+      const w = window as unknown as {
+        __projects?: Array<Record<string, unknown>>;
+        __reorderSourceCalls?: unknown[];
+      };
+      const input = args as { repoPath: string; order: string[] };
+      w.__reorderSourceCalls = [...(w.__reorderSourceCalls ?? []), input];
+      w.__projects = (w.__projects ?? []).map((project) =>
+        project.repo_path === input.repoPath
+          ? {
+              ...project,
+              source_paths: input.order.filter(
+                (path) => path !== input.repoPath,
+              ),
+            }
+          : project,
+      );
+      return w.__projects.find(
+        (project) => project.repo_path === input.repoPath,
+      );
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const api = sidebar.locator('[data-sidebar-workspace-id="/tmp/acorn-api"]');
+    const docs = sidebar.locator(
+      '[data-sidebar-workspace-id="/tmp/acorn-docs"]',
+    );
+    await dragBetween(page, docs, api);
+
+    await expect
+      .poll(async () => {
+        const docsBox = await docs.boundingBox();
+        const apiBox = await api.boundingBox();
+        return docsBox && apiBox && docsBox.y < apiBox.y;
+      })
+      .toBe(true);
+
+    await page
+      .getByRole("button", { name: "Project acorn" })
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Project Settings" }).click();
+    const modal = page.getByRole("dialog", { name: "Project Settings" });
+    await modal.getByRole("button", { name: "Source folders" }).click();
+
+    const paths = await modal.locator("li p.font-mono").allTextContents();
+    expect(paths).toEqual([
+      "/tmp/acorn",
+      "/tmp/acorn-docs",
+      "/tmp/acorn-api",
+    ]);
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __reorderSourceCalls?: unknown[];
+            }
+          ).__reorderSourceCalls,
+      ),
+    ).toEqual([
+      {
+        repoPath: "/tmp/acorn",
+        order: ["/tmp/acorn", "/tmp/acorn-docs", "/tmp/acorn-api"],
+      },
+    ]);
+  });
+
   test("manages project worktrees from the Worktrees settings tab", async ({
     page,
     tauri,

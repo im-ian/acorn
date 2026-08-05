@@ -157,6 +157,17 @@ export const tauriMockSource = `
         source_paths: [],
       });
     }
+    if (cmd === 'reorder_project_sources') {
+      return Promise.resolve({
+        repo_path: args?.repoPath ?? '/tmp/picked',
+        name: 'picked',
+        created_at: '2026-01-01T00:00:00Z',
+        position: 0,
+        source_paths: (args?.order ?? []).filter(
+          (path) => path !== args?.repoPath,
+        ),
+      });
+    }
     if (cmd === 'select_project_parent_folder') {
       return Promise.resolve('/tmp');
     }

@@ -573,6 +573,10 @@ interface AppStateModel {
     repoPath: string,
     sourcePath: string,
   ) => Promise<boolean>;
+  reorderProjectSources: (
+    repoPath: string,
+    orderedRootPaths: string[],
+  ) => Promise<void>;
   removeProjectWorktree: (
     repoPath: string,
     worktreePath: string,
@@ -3436,6 +3440,42 @@ export const useAppStore = create<AppStateModel>()(
     } catch (e) {
       set({ error: errorMessage(e) });
       return false;
+    }
+  },
+
+  async reorderProjectSources(repoPath, orderedRootPaths) {
+    const previous = get().projects;
+    const project = previous.find((candidate) =>
+      projectRootPaths(candidate).includes(repoPath),
+    );
+    if (!project || (project.source_paths?.length ?? 0) < 2) return;
+
+    const remaining = new Set(project.source_paths ?? []);
+    const sourcePaths: string[] = [];
+    for (const path of orderedRootPaths) {
+      if (!remaining.delete(path)) continue;
+      sourcePaths.push(path);
+    }
+    sourcePaths.push(...remaining);
+    const optimistic = previous.map((candidate) =>
+      candidate.repo_path === project.repo_path
+        ? { ...candidate, source_paths: sourcePaths }
+        : candidate,
+    );
+    set({ projects: optimistic });
+    try {
+      const updated = await api.reorderProjectSources(
+        project.repo_path,
+        orderedRootPaths,
+      );
+      set((state) => ({
+        projects: state.projects.map((candidate) =>
+          candidate.repo_path === updated.repo_path ? updated : candidate,
+        ),
+        error: null,
+      }));
+    } catch (e) {
+      set({ projects: previous, error: errorMessage(e) });
     }
   },
 

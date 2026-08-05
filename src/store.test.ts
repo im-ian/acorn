@@ -55,6 +55,15 @@ vi.mock("./lib/api", () => {
           position: i,
         })),
       ),
+      reorderProjectSources: vi.fn(
+        async (repoPath: string, orderedRootPaths: string[]) => ({
+          repo_path: repoPath,
+          name: repoPath,
+          created_at: "2026-01-01",
+          position: 0,
+          source_paths: orderedRootPaths.filter((path) => path !== repoPath),
+        }),
+      ),
       reorderSessions: vi.fn(async (_repoPath: string, _ids: string[]) =>
         [] as Session[],
       ),
@@ -3567,6 +3576,57 @@ describe("reorderProjects", () => {
     mockApi.reorderProjects.mockRejectedValueOnce(new Error("nope"));
     await useAppStore.getState().reorderProjects([REPO_B, REPO_A]);
     expect(useAppStore.getState().projects).toEqual(before);
+    expect(useAppStore.getState().error).toBe("nope");
+  });
+});
+
+describe("reorderProjectSources", () => {
+  const SOURCE_A = `${REPO_A}/api`;
+  const SOURCE_B = `${REPO_A}/docs`;
+
+  it("optimistically reorders source folders and commits the backend result", async () => {
+    await seed(
+      [
+        {
+          ...project(REPO_A, 0),
+          source_paths: [SOURCE_A, SOURCE_B],
+        },
+      ],
+      [],
+    );
+    mockApi.reorderProjectSources.mockResolvedValueOnce({
+      ...project(REPO_A, 0),
+      source_paths: [SOURCE_B, SOURCE_A],
+    });
+
+    await useAppStore
+      .getState()
+      .reorderProjectSources(REPO_A, [REPO_A, SOURCE_B, SOURCE_A]);
+
+    expect(useAppStore.getState().projects[0]?.source_paths).toEqual([
+      SOURCE_B,
+      SOURCE_A,
+    ]);
+    expect(mockApi.reorderProjectSources).toHaveBeenCalledWith(REPO_A, [
+      REPO_A,
+      SOURCE_B,
+      SOURCE_A,
+    ]);
+  });
+
+  it("rolls back the source order on failure", async () => {
+    const original = {
+      ...project(REPO_A, 0),
+      source_paths: [SOURCE_A, SOURCE_B],
+    };
+    await seed([original], []);
+    mockApi.reorderProjectSources.mockRejectedValueOnce(new Error("nope"));
+
+    await useAppStore
+      .getState()
+      .reorderProjectSources(REPO_A, [SOURCE_B, SOURCE_A]);
+
+    expect(useAppStore.getState().projects).toEqual([original]);
     expect(useAppStore.getState().error).toBe("nope");
   });
 });

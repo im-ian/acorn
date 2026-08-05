@@ -415,6 +415,9 @@ export const api = {
   removeProjectSource(repoPath: string, sourcePath: string): Promise<Project> {
     return invoke<Project>("remove_project_source", { repoPath, sourcePath });
   },
+  reorderProjectSources(repoPath: string, order: string[]): Promise<Project> {
+    return invoke<Project>("reorder_project_sources", { repoPath, order });
+  },
   selectProjectParentFolder(title?: string): Promise<string | null> {
     return invoke<string | null>("select_project_parent_folder", { title });
   },
