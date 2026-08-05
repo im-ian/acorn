@@ -153,7 +153,7 @@ export function buildDragPriorityIndex(
       if (!isDefaultFolder) {
         index.set(sidebarFolderItemId(folderGroup.folder.id), {
           containerId: topLevelContainerId,
-          isPrioritized: folderGroupHasPriorityStatus(folderGroup),
+          isPrioritized: folderGroupHasProjectPriorityStatus(folderGroup),
         });
       }
       const sessionContainerId = isDefaultFolder
@@ -235,12 +235,17 @@ function orderItemsByPriority(
 
 function itemHasPriorityStatus(item: ProjectTopLevelItem): boolean {
   if (item.type === "session") return hasPriorityStatus(item.session);
-  return folderGroupHasPriorityStatus(item.folderGroup);
+  return folderGroupHasProjectPriorityStatus(item.folderGroup);
 }
 
-/** A folder joins the priority group as soon as one session inside it does. */
-function folderGroupHasPriorityStatus(folderGroup: ProjectFolderGroup): boolean {
-  return folderGroup.sessions.some(hasPriorityStatus);
+/** A single-tab workspace has no useful internal slot to promote into. */
+function folderGroupHasProjectPriorityStatus(
+  folderGroup: ProjectFolderGroup,
+): boolean {
+  return (
+    folderGroup.sessions.length <= 1 &&
+    folderGroup.sessions.some(hasPriorityStatus)
+  );
 }
 
 function hasPriorityStatus(session: Session): boolean {

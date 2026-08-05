@@ -4295,11 +4295,11 @@ test.describe("sidebar: project lifecycle", () => {
 
     await pressHotkey(page, { mod: true, key: "," });
     const settings = page.getByRole("dialog", { name: "Settings" });
-    await settings
-      .getByRole("checkbox", {
-        name: /Move waiting and error tabs to the top/,
-      })
-      .click();
+    const priorityToggle = settings.getByRole("checkbox", {
+      name: /Move waiting and error tabs to the top/,
+    });
+    await priorityToggle.click();
+    await expect(priorityToggle).toBeChecked();
     await page.keyboard.press("Escape");
 
     await expect
@@ -4329,11 +4329,9 @@ test.describe("sidebar: project lifecycle", () => {
       .toBe("reordered-priority-group");
 
     await pressHotkey(page, { mod: true, key: "," });
-    await settings
-      .getByRole("checkbox", {
-        name: /Move waiting and error tabs to the top/,
-      })
-      .click();
+    await expect(settings).toBeVisible();
+    await priorityToggle.click();
+    await expect(priorityToggle).not.toBeChecked();
     await page.keyboard.press("Escape");
 
     await expect
@@ -4347,6 +4345,146 @@ test.describe("sidebar: project lifecycle", () => {
           : "different";
       })
       .toBe("manual-order");
+  });
+
+  test("priority sorting respects source workspace tab count", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          interface: { prioritizeNeedsInputTabs: true },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api", "/tmp/demo-docs"],
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "primary-ready",
+        name: "primary-ready",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "source-ready",
+        name: "source-ready",
+        repo_path: "/tmp/demo-api",
+        worktree_path: "/tmp/demo-api",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "source-needs",
+        name: "source-needs",
+        repo_path: "/tmp/demo-api",
+        worktree_path: "/tmp/demo-api",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "waiting_for_input",
+        created_at: "2026-01-01T00:00:02Z",
+        updated_at: "2026-01-01T00:00:02Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+      {
+        id: "docs-needs",
+        name: "docs-needs",
+        repo_path: "/tmp/demo-docs",
+        worktree_path: "/tmp/demo-docs",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "waiting_for_input",
+        created_at: "2026-01-01T00:00:03Z",
+        updated_at: "2026-01-01T00:00:03Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const primaryWorkspace = sidebar.locator(
+      '[data-sidebar-workspace-id="/tmp/demo"]',
+    );
+    const sourceWorkspace = sidebar.locator(
+      '[data-sidebar-workspace-id="/tmp/demo-api"]',
+    );
+    const singleTabWorkspace = sidebar.locator(
+      '[data-sidebar-workspace-id="/tmp/demo-docs"]',
+    );
+    const sourceReady = sidebar.getByRole("button", {
+      name: /^source-ready main · Ready/,
+    });
+    const sourceNeeds = sidebar.getByRole("button", {
+      name: /^source-needs main · Waiting for input/,
+    });
+
+    await expect
+      .poll(async () => {
+        const primaryBox = await primaryWorkspace.boundingBox();
+        const sourceBox = await sourceWorkspace.boundingBox();
+        const singleTabBox = await singleTabWorkspace.boundingBox();
+        const readyBox = await sourceReady.boundingBox();
+        const needsBox = await sourceNeeds.boundingBox();
+        if (
+          !primaryBox ||
+          !sourceBox ||
+          !singleTabBox ||
+          !readyBox ||
+          !needsBox
+        ) {
+          return "missing";
+        }
+        return singleTabBox.y < primaryBox.y &&
+          primaryBox.y < sourceBox.y &&
+          needsBox.y < readyBox.y
+          ? "scoped-priority-order"
+          : "different";
+      })
+      .toBe("scoped-priority-order");
   });
 
   test("every root of a project draws its own workspace row", async ({
