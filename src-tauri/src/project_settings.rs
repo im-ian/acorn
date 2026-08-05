@@ -10,6 +10,7 @@ use crate::{git_ops, persistence};
 const PROJECT_SETTINGS_FILE: &str = "project_settings.json";
 const PROJECT_SETTINGS_TMP_FILE: &str = "project_settings.json.tmp";
 pub const PR_GENERATION_PROMPT_MAX_CHARS: usize = 2_000;
+pub const WORKTREE_BASE_BRANCH_MAX_CHARS: usize = 255;
 pub const STANDARD_PR_GENERATION_PROMPT: &str = "Use a standard GitHub-style pull request merge message.
 - First line: Conventional Commit subject when the type is clear, e.g. feat(scope): concise summary. Keep it imperative/present tense and <=72 chars.
 - Body: 1-2 concise paragraphs explaining why the change matters, user-visible impact, and key implementation notes when useful.
@@ -21,6 +22,8 @@ pub struct ProjectSettings {
     pub remember_after_close: bool,
     #[serde(default)]
     pub pull_requests: ProjectPullRequestSettings,
+    #[serde(default)]
+    pub worktrees: ProjectWorktreeSettings,
 }
 
 impl Default for ProjectSettings {
@@ -28,6 +31,7 @@ impl Default for ProjectSettings {
         Self {
             remember_after_close: true,
             pull_requests: ProjectPullRequestSettings::default(),
+            worktrees: ProjectWorktreeSettings::default(),
         }
     }
 }
@@ -44,6 +48,12 @@ impl Default for ProjectPullRequestSettings {
             generation_prompt: Some(STANDARD_PR_GENERATION_PROMPT.to_string()),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectWorktreeSettings {
+    #[serde(default)]
+    pub base_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -140,6 +150,19 @@ fn normalize_settings(mut settings: ProjectSettings) -> ProjectSettings {
                 )
             }
         });
+    settings.worktrees.base_branch = settings.worktrees.base_branch.and_then(|branch| {
+        let trimmed = branch.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(
+                trimmed
+                    .chars()
+                    .take(WORKTREE_BASE_BRANCH_MAX_CHARS)
+                    .collect(),
+            )
+        }
+    });
     settings
 }
 
@@ -171,6 +194,9 @@ mod tests {
                 pull_requests: ProjectPullRequestSettings {
                     generation_prompt: Some("Write concise Korean PR messages.".to_string()),
                 },
+                worktrees: ProjectWorktreeSettings {
+                    base_branch: Some("develop".to_string()),
+                },
             };
 
             let saved = update(&repo, settings).unwrap();
@@ -181,6 +207,10 @@ mod tests {
             assert_eq!(
                 loaded.settings.pull_requests.generation_prompt.as_deref(),
                 Some("Write concise Korean PR messages.")
+            );
+            assert_eq!(
+                loaded.settings.worktrees.base_branch.as_deref(),
+                Some("develop")
             );
         });
     }
@@ -202,6 +232,17 @@ mod tests {
     }
 
     #[test]
+    fn settings_without_worktree_fields_use_automatic_base_branch() {
+        let settings: ProjectSettings = serde_json::from_value(serde_json::json!({
+            "remember_after_close": true,
+            "pull_requests": { "generation_prompt": null }
+        }))
+        .unwrap();
+
+        assert_eq!(settings.worktrees, ProjectWorktreeSettings::default());
+    }
+
+    #[test]
     fn blank_prompt_normalizes_to_none() {
         with_data_dir(|_| {
             let repo = PathBuf::from("/tmp/acorn-settings-repo");
@@ -213,6 +254,9 @@ mod tests {
                     pull_requests: ProjectPullRequestSettings {
                         generation_prompt: Some("   ".to_string()),
                     },
+                    worktrees: ProjectWorktreeSettings {
+                        base_branch: Some("   ".to_string()),
+                    },
                 },
             )
             .unwrap();
@@ -221,6 +265,7 @@ mod tests {
                 get(&repo).unwrap().settings.pull_requests.generation_prompt,
                 None
             );
+            assert_eq!(get(&repo).unwrap().settings.worktrees.base_branch, None);
         });
     }
 
@@ -236,6 +281,7 @@ mod tests {
                 ProjectSettings {
                     remember_after_close: false,
                     pull_requests: ProjectPullRequestSettings::default(),
+                    worktrees: ProjectWorktreeSettings::default(),
                 },
             )
             .unwrap();

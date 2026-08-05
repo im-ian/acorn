@@ -25,6 +25,7 @@ import type {
   MemoryUsage,
   MergeMethod,
   Project,
+  ProjectBranch,
   ProjectSettings,
   ProjectSettingsRecord,
   ProjectWorktree,
@@ -467,6 +468,9 @@ export const api = {
   },
   listProjectWorktrees(repoPath: string): Promise<ProjectWorktree[]> {
     return invoke<ProjectWorktree[]>("list_project_worktrees", { repoPath });
+  },
+  listProjectBranches(repoPath: string): Promise<ProjectBranch[]> {
+    return invoke<ProjectBranch[]>("list_project_branches", { repoPath });
   },
   reorderProjects(order: string[]): Promise<Project[]> {
     return invoke<Project[]>("reorder_projects", { order });
