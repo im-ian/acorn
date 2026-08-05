@@ -599,6 +599,17 @@ struct HookRuntimeState {
     /// Kept apart from `permission_waiting_at`, whose clearing rules belong
     /// to the Codex turn lifecycle.
     attention_at: Option<SystemTime>,
+    /// Claude's most recent `Stop` hook boundary. A separate Stop hook can
+    /// reject completion and resume the same turn without emitting a new
+    /// `UserPromptSubmit`; later agent-owned transcript activity closes this
+    /// boundary.
+    claude_stop_at: Option<SystemTime>,
+}
+
+#[derive(Clone, Copy)]
+enum ClaudeWaitingBoundary {
+    Attention,
+    Stop,
 }
 
 impl HookRuntimeState {
@@ -619,6 +630,7 @@ impl HookRuntimeState {
         self.turn_id = None;
         self.permission_waiting_at = None;
         self.attention_at = None;
+        self.claude_stop_at = None;
     }
 }
 
@@ -1040,10 +1052,10 @@ impl SessionStore {
 
     /// Record that an attention request without a resolving hook is open.
     pub fn mark_attention_at(&self, id: &Uuid, requested_at: SystemTime) {
-        self.lock_hook_runtime()
-            .entry(*id)
-            .or_default()
-            .attention_at = Some(requested_at);
+        let mut runtime = self.lock_hook_runtime();
+        let state = runtime.entry(*id).or_default();
+        state.attention_at = Some(requested_at);
+        state.claude_stop_at = None;
     }
 
     pub fn attention_at(&self, id: &Uuid) -> Option<SystemTime> {
@@ -1052,9 +1064,25 @@ impl SessionStore {
             .and_then(|state| state.attention_at)
     }
 
-    pub fn clear_attention(&self, id: &Uuid) {
+    /// Record a Claude Stop boundary that may still be rejected by another
+    /// session-scoped Stop hook.
+    pub fn mark_claude_stop_at(&self, id: &Uuid, stopped_at: SystemTime) {
+        let mut runtime = self.lock_hook_runtime();
+        let state = runtime.entry(*id).or_default();
+        state.attention_at = None;
+        state.claude_stop_at = Some(stopped_at);
+    }
+
+    pub fn claude_stop_at(&self, id: &Uuid) -> Option<SystemTime> {
+        self.lock_hook_runtime()
+            .get(id)
+            .and_then(|state| state.claude_stop_at)
+    }
+
+    pub fn clear_claude_waiting(&self, id: &Uuid) {
         if let Some(state) = self.lock_hook_runtime().get_mut(id) {
             state.attention_at = None;
+            state.claude_stop_at = None;
         }
     }
 
@@ -1075,18 +1103,57 @@ impl SessionStore {
         expected_lifecycle_revision: u64,
         resumed_at: SystemTime,
     ) -> SessionResult<Option<u64>> {
+        self.resolve_claude_waiting_if_current(
+            id,
+            expected_source,
+            expected_lifecycle_revision,
+            resumed_at,
+            ClaudeWaitingBoundary::Attention,
+        )
+    }
+
+    /// Resolve a Stop that another hook rejected after Claude resumed the
+    /// same turn without a new prompt lifecycle event.
+    pub fn resolve_claude_stop_if_current(
+        &self,
+        id: &Uuid,
+        expected_source: Option<AgentStatusSource>,
+        expected_lifecycle_revision: u64,
+        resumed_at: SystemTime,
+    ) -> SessionResult<Option<u64>> {
+        self.resolve_claude_waiting_if_current(
+            id,
+            expected_source,
+            expected_lifecycle_revision,
+            resumed_at,
+            ClaudeWaitingBoundary::Stop,
+        )
+    }
+
+    fn resolve_claude_waiting_if_current(
+        &self,
+        id: &Uuid,
+        expected_source: Option<AgentStatusSource>,
+        expected_lifecycle_revision: u64,
+        resumed_at: SystemTime,
+        boundary: ClaudeWaitingBoundary,
+    ) -> SessionResult<Option<u64>> {
         let mut runtime = self.lock_hook_runtime();
         let mut entry = self
             .inner
             .get_mut(id)
             .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         let state = runtime.entry(*id).or_default();
+        let waiting_at = match boundary {
+            ClaudeWaitingBoundary::Attention => state.attention_at,
+            ClaudeWaitingBoundary::Stop => state.claude_stop_at,
+        };
         if entry.status != SessionStatus::WaitingForInput
             || state.status_source != expected_source
             || state.lifecycle_revision != expected_lifecycle_revision
             || !state.confirmed
             || !entry.hook_active
-            || state.attention_at.is_none_or(|at| resumed_at <= at)
+            || waiting_at.is_none_or(|at| resumed_at <= at)
         {
             return Ok(None);
         }
@@ -1094,6 +1161,7 @@ impl SessionStore {
         entry.status = SessionStatus::Working;
         state.status_source = Some(AgentStatusSource::TranscriptFallback);
         state.attention_at = None;
+        state.claude_stop_at = None;
         Ok(Some(state.advance_lifecycle_revision()))
     }
 

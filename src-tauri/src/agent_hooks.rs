@@ -1522,10 +1522,15 @@ fn event_can_switch_provider(event: &AgentHookEvent) -> bool {
 }
 
 /// Whether this Claude event is a dialog that stays open until the user acts.
-/// `Stop` also reports `NeedsInput`, but its close is the next
-/// `UserPromptSubmit`, so only the dialog sources need transcript recovery.
 fn claude_event_opens_attention_dialog(event: &AgentHookEvent) -> bool {
     event.event == AgentHookEventKind::NeedsInput && event.source.as_deref() == Some("native")
+}
+
+/// Whether this is a Stop that another session-scoped Stop hook may reject.
+/// A rejected Stop resumes the same turn without `UserPromptSubmit`, so the
+/// transcript poll must retain this boundary until it sees agent-owned work.
+fn claude_event_opens_stop_boundary(event: &AgentHookEvent) -> bool {
+    event.event == AgentHookEventKind::NeedsInput && event.source.as_deref() == Some("native_stop")
 }
 
 fn apply_validated_agent_hook_event(
@@ -1553,8 +1558,10 @@ fn apply_validated_agent_hook_event(
     if event.provider == SessionAgentProvider::Claude {
         if claude_event_opens_attention_dialog(&event) {
             sessions.mark_attention_at(&event.session_id, SystemTime::now());
+        } else if claude_event_opens_stop_boundary(&event) {
+            sessions.mark_claude_stop_at(&event.session_id, SystemTime::now());
         } else {
-            sessions.clear_attention(&event.session_id);
+            sessions.clear_claude_waiting(&event.session_id);
         }
     }
 
@@ -5435,7 +5442,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_dialog_marks_attention_and_turn_boundaries_clear_it() {
+    fn claude_waiting_boundaries_track_dialogs_and_stops_separately() {
         let (sessions, session_id, reducer) = claude_reducer_fixture();
 
         // A permission prompt or elicitation dialog has no resolving hook, so
@@ -5448,6 +5455,7 @@ mod tests {
             ))
             .expect("dialog applies");
         assert!(sessions.attention_at(&session_id).is_some());
+        assert_eq!(sessions.claude_stop_at(&session_id), None);
 
         // Answering the dialog is invisible to hooks, but the next prompt is
         // not: a turn boundary retires the request outright.
@@ -5459,9 +5467,11 @@ mod tests {
             ))
             .expect("prompt applies");
         assert_eq!(sessions.attention_at(&session_id), None);
+        assert_eq!(sessions.claude_stop_at(&session_id), None);
 
-        // Stop reports NeedsInput too, yet its close (`UserPromptSubmit`) is
-        // reliable, so it must not leave a request behind for the poll.
+        // Stop usually closes on the next UserPromptSubmit, but another Stop
+        // hook can reject completion and resume the same turn. Retain its own
+        // timestamp so transcript activity can prove that happened.
         reducer
             .apply(claude_event(
                 session_id,
@@ -5470,6 +5480,17 @@ mod tests {
             ))
             .expect("stop applies");
         assert_eq!(sessions.attention_at(&session_id), None);
+        assert!(sessions.claude_stop_at(&session_id).is_some());
+
+        reducer
+            .apply(claude_event(
+                session_id,
+                AgentHookEventKind::Start,
+                "native",
+            ))
+            .expect("next prompt applies");
+        assert_eq!(sessions.attention_at(&session_id), None);
+        assert_eq!(sessions.claude_stop_at(&session_id), None);
     }
 
     #[test]
@@ -5520,6 +5541,54 @@ mod tests {
             SessionStatus::Working
         );
         assert_eq!(sessions.attention_at(&session_id), None);
+    }
+
+    #[test]
+    fn claude_blocked_stop_resolves_only_from_later_agent_activity() {
+        let (sessions, session_id, reducer) = claude_reducer_fixture();
+        reducer
+            .apply(claude_event(
+                session_id,
+                AgentHookEventKind::NeedsInput,
+                "native_stop",
+            ))
+            .expect("stop applies");
+        let stop_at = sessions
+            .claude_stop_at(&session_id)
+            .expect("stop boundary recorded");
+        let (_, source, _, lifecycle_revision) =
+            sessions.lifecycle_snapshot(&session_id).expect("snapshot");
+
+        assert_eq!(
+            sessions
+                .resolve_claude_stop_if_current(
+                    &session_id,
+                    source,
+                    lifecycle_revision,
+                    stop_at - Duration::from_secs(1),
+                )
+                .expect("store reachable"),
+            None
+        );
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+
+        assert!(sessions
+            .resolve_claude_stop_if_current(
+                &session_id,
+                source,
+                lifecycle_revision,
+                stop_at + Duration::from_secs(1),
+            )
+            .expect("store reachable")
+            .is_some());
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::Working
+        );
+        assert_eq!(sessions.claude_stop_at(&session_id), None);
     }
 
     #[test]
