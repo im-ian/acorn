@@ -1297,6 +1297,7 @@
       "newAutonomousGoalSession": "새 Loop 세션",
       "newGraphSession": "새 Graph 세션",
       "newIsolatedSessionInProject": "이 프로젝트에 새 워크트리 세션 만들기",
+      "newIsolatedSessionInProjectFolder": "이 작업공간에 새 워크트리 세션 만들기",
       "newChatSessionInProject": "이 프로젝트에 새 채팅 세션 만들기",
       "newControlSessionInProject": "이 프로젝트에 새 컨트롤 세션 만들기",
       "goalSession": "Loop 세션",
