@@ -1297,6 +1297,7 @@
       "newAutonomousGoalSession": "新建 Loop 会话",
       "newGraphSession": "新建 Graph 会话",
       "newIsolatedSessionInProject": "此项目中的新工作树会话",
+      "newIsolatedSessionInProjectFolder": "此工作区中的新工作树会话",
       "newChatSessionInProject": "此项目中的新聊天会话",
       "newControlSessionInProject": "此项目中的新控制会话",
       "goalSession": "Loop 会话",
