@@ -94,7 +94,7 @@
         "hint": "Controls the order of sessions and workspaces inside each project in the left sidebar.",
         "priority": {
           "label": "Move waiting and error tabs to the top",
-          "description": "Keeps your manual order saved, but displays tabs waiting on you or blocked by errors ahead of ready work."
+          "description": "Keeps your manual order saved. Waiting and error tabs move ahead within their project or workspace; a workspace with one tab can move ahead within its project."
         }
       },
       "kanbanTerminalPopover": {

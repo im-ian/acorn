@@ -274,8 +274,9 @@ export interface AcornSettings {
      */
     defaultWorkspaceViewMode: DefaultWorkspaceViewMode;
     /**
-     * Move project sidebar tabs that need attention ahead of ready work.
-     * The saved manual order is preserved and restored when this is off.
+     * Move sidebar tabs that need attention to the front within their project
+     * or workspace. Single-tab workspaces may move inside the project instead.
+     * The saved manual order remains unchanged.
      */
     prioritizeNeedsInputTabs: boolean;
     /**

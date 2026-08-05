@@ -102,7 +102,7 @@ describe("sidebar project items", () => {
     ]);
   });
 
-  it("can move waiting and error project items above ready work", () => {
+  it("moves direct sessions and single-tab workspaces above ready work", () => {
     const items = buildProjectTopLevelItems(
       project(),
       [
@@ -124,6 +124,47 @@ describe("sidebar project items", () => {
       "session:running-root",
       "session:idle-root",
     ]);
+  });
+
+  it("keeps source roots ordered while prioritizing sessions inside one", () => {
+    const primaryFolder = makeDefaultProjectFolder("/repo/app");
+    const sourceFolder = makeDefaultProjectFolder("/repo/api");
+    const primaryReady = session("primary-ready", "ready", 0);
+    const sourceReady = {
+      ...session("source-ready", "ready", 0),
+      repo_path: "/repo/api",
+      worktree_path: "/repo/api",
+    };
+    const sourceNeeds = {
+      ...session("source-needs", "waiting_for_input", 1),
+      repo_path: "/repo/api",
+      worktree_path: "/repo/api",
+    };
+    const multiRootProject: ProjectFolderProjectGroup = {
+      repoPath: "/repo/app",
+      name: "app",
+      sessions: [primaryReady, sourceReady, sourceNeeds],
+      folders: [
+        { folder: primaryFolder, sessions: [primaryReady] },
+        { folder: sourceFolder, sessions: [sourceReady, sourceNeeds] },
+      ],
+    };
+
+    const items = buildProjectTopLevelItems(
+      multiRootProject,
+      ["folder:/repo/app", "folder:/repo/api"],
+      true,
+    );
+
+    expect(items.map((item) => item.id)).toEqual([
+      "folder:/repo/app",
+      "folder:/repo/api",
+    ]);
+    expect(
+      orderSessionsByPriority([sourceReady, sourceNeeds], true).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["source-needs", "source-ready"]);
   });
 
   it("orders urgent items without rewriting the saved order", () => {
@@ -259,8 +300,8 @@ describe("sidebar project items", () => {
     expect(index.get("session:failed-root")?.isPrioritized).toBe(true);
     expect(index.get("session:idle-root")?.isPrioritized).toBe(false);
     expect(index.get("session:running-root")?.isPrioritized).toBe(false);
-    // A folder joins the priority group as soon as one session inside it needs
-    // attention, matching how the folder row is displayed.
+    // A single-tab workspace has no meaningful internal reorder, so its row
+    // joins the project's priority group instead.
     expect(index.get("folder:needs-folder")).toEqual({
       containerId: "project:/repo/app",
       isPrioritized: true,
