@@ -29,6 +29,12 @@ pub struct ProjectWorktreeInfo {
     pub modified_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProjectBranchInfo {
+    pub name: String,
+    pub is_remote: bool,
+}
+
 pub fn ensure_repo(path: &Path) -> AppResult<Repository> {
     // `discover` walks up from `path` to find the nearest `.git`, so callers
     // can pass any subdirectory (e.g. a session's PTY cwd that drifted into
@@ -211,7 +217,16 @@ fn validate_same_file(_path: &Path, _before: &Metadata, _opened: &Metadata) -> A
     Ok(())
 }
 
+#[cfg(test)]
 pub fn create_worktree(repo_path: &Path, name: &str) -> AppResult<PathBuf> {
+    create_worktree_from_base_branch(repo_path, name, None)
+}
+
+pub fn create_worktree_from_base_branch(
+    repo_path: &Path,
+    name: &str,
+    base_branch: Option<&str>,
+) -> AppResult<PathBuf> {
     let repo = ensure_repo(repo_path)?;
     ensure_git_excluded(&repo).ok();
     let root = checked_worktree_root(repo_path, true)?;
@@ -224,7 +239,7 @@ pub fn create_worktree(repo_path: &Path, name: &str) -> AppResult<PathBuf> {
         )));
     }
 
-    let base = worktree_base_commit(&repo)?;
+    let base = worktree_base_commit(&repo, base_branch)?;
     repo.branch(name, &base, false)?;
     let branch_ref_name = format!("refs/heads/{name}");
     let branch_ref = repo.find_reference(&branch_ref_name)?;
@@ -239,7 +254,19 @@ pub fn create_worktree(repo_path: &Path, name: &str) -> AppResult<PathBuf> {
     Ok(target)
 }
 
-fn worktree_base_commit(repo: &Repository) -> AppResult<git2::Commit<'_>> {
+pub fn validate_worktree_base_branch(repo_path: &Path, branch: &str) -> AppResult<()> {
+    let repo = ensure_repo(repo_path)?;
+    configured_worktree_base_commit(&repo, branch).map(|_| ())
+}
+
+fn worktree_base_commit<'repo>(
+    repo: &'repo Repository,
+    configured_branch: Option<&str>,
+) -> AppResult<git2::Commit<'repo>> {
+    if let Some(branch) = configured_branch {
+        return configured_worktree_base_commit(repo, branch);
+    }
+
     // Acorn-created worktrees start from the project's stable default branch,
     // not whichever feature branch the project root is currently using.
     for name in [
@@ -256,6 +283,37 @@ fn worktree_base_commit(repo: &Repository) -> AppResult<git2::Commit<'_>> {
         }
     }
     Ok(repo.head()?.peel_to_commit()?)
+}
+
+fn configured_worktree_base_commit<'repo>(
+    repo: &'repo Repository,
+    branch: &str,
+) -> AppResult<git2::Commit<'repo>> {
+    let branch = branch.trim();
+    let candidates = if branch.starts_with("refs/heads/") || branch.starts_with("refs/remotes/") {
+        vec![branch.to_string()]
+    } else if branch.starts_with("refs/") {
+        Vec::new()
+    } else {
+        vec![
+            format!("refs/heads/{branch}"),
+            format!("refs/remotes/{branch}"),
+            format!("refs/remotes/origin/{branch}"),
+        ]
+    };
+
+    for name in candidates {
+        if let Ok(commit) = repo
+            .find_reference(&name)
+            .and_then(|reference| reference.peel_to_commit())
+        {
+            return Ok(commit);
+        }
+    }
+
+    Err(AppError::Other(format!(
+        "configured worktree base branch was not found: {branch}"
+    )))
 }
 
 /// Returns absolute on-disk paths of linked worktrees. Used by the
@@ -289,6 +347,35 @@ pub fn list_worktree_infos(repo_path: &Path) -> AppResult<Vec<ProjectWorktreeInf
             .cmp(&a.modified_ms)
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.path.cmp(&b.path))
+    });
+    Ok(infos)
+}
+
+pub fn list_branch_infos(repo_path: &Path) -> AppResult<Vec<ProjectBranchInfo>> {
+    let repo = ensure_repo(repo_path)?;
+    let mut infos = Vec::new();
+    for entry in repo.branches(None)? {
+        let (branch, kind) = entry?;
+        if branch.get().symbolic_target()?.is_some() {
+            continue;
+        }
+        let Some(name) = branch.name()? else {
+            continue;
+        };
+        infos.push(ProjectBranchInfo {
+            name: name.to_string(),
+            is_remote: kind == BranchType::Remote,
+        });
+    }
+    infos.sort_by(|a, b| {
+        a.is_remote
+            .cmp(&b.is_remote)
+            .then_with(|| {
+                a.name
+                    .to_ascii_lowercase()
+                    .cmp(&b.name.to_ascii_lowercase())
+            })
+            .then_with(|| a.name.cmp(&b.name))
     });
     Ok(infos)
 }
@@ -839,6 +926,72 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    #[test]
+    fn create_worktree_starts_from_configured_base_branch() {
+        let root = unique_temp_dir("base-configured");
+        let repo = init_repo_with_tracked_file(&root);
+        let sig = git2::Signature::now("acorn-test", "test@acorn").expect("sig");
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        repo.branch("main", &initial, false)
+            .expect("create main branch");
+        repo.branch("develop", &initial, false)
+            .expect("create develop branch");
+        drop(initial);
+
+        checkout_branch(&repo, "develop");
+        std::fs::write(root.join("tracked.txt"), "develop").expect("write develop contents");
+        let tree_id = {
+            let mut idx = repo.index().expect("index");
+            idx.add_path(Path::new("tracked.txt"))
+                .expect("add develop file");
+            idx.write_tree().expect("write develop tree")
+        };
+        let tree = repo.find_tree(tree_id).expect("develop tree");
+        let parent = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("develop parent");
+        let develop_oid = repo
+            .commit(Some("HEAD"), &sig, &sig, "develop", &tree, &[&parent])
+            .expect("develop commit");
+        drop(parent);
+        drop(tree);
+        checkout_branch(&repo, "main");
+        drop(repo);
+
+        let worktree_path = create_worktree_from_base_branch(&root, "worker", Some("develop"))
+            .expect("create worktree");
+        let worktree_repo = Repository::open(&worktree_path).expect("open worktree repo");
+        let head = worktree_repo.head().expect("worktree head");
+
+        assert_eq!(head.shorthand().expect("branch shorthand"), "worker");
+        assert_eq!(head.target(), Some(develop_oid));
+        assert_eq!(
+            std::fs::read_to_string(worktree_path.join("tracked.txt")).unwrap(),
+            "develop"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn configured_worktree_base_branch_must_exist() {
+        let root = unique_temp_dir("base-missing");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+
+        let error = validate_worktree_base_branch(&root, "missing")
+            .expect_err("missing base branch must be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("configured worktree base branch was not found: missing"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[cfg(unix)]
     #[test]
     fn create_worktree_rejects_symlinked_acorn_directory() {
@@ -1158,6 +1311,53 @@ mod tests {
             infos[0].modified_ms.unwrap_or_default() > 0,
             "worktree mtime should be captured"
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_branch_infos_includes_local_and_remote_tracking_branches() {
+        let root = unique_temp_dir("branch-info");
+        let repo = init_repo_with_tracked_file(&root);
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        repo.branch("develop", &initial, false)
+            .expect("create local branch");
+        repo.reference(
+            "refs/remotes/origin/release",
+            initial.id(),
+            false,
+            "create remote-tracking branch",
+        )
+        .expect("create remote-tracking branch");
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/release",
+            false,
+            "set remote HEAD",
+        )
+        .expect("create symbolic remote HEAD");
+        drop(initial);
+        drop(repo);
+
+        let infos = list_branch_infos(&root).expect("list branches");
+
+        assert!(infos.contains(&ProjectBranchInfo {
+            name: "develop".to_string(),
+            is_remote: false,
+        }));
+        assert!(infos.contains(&ProjectBranchInfo {
+            name: "origin/release".to_string(),
+            is_remote: true,
+        }));
+        assert!(!infos.iter().any(|branch| branch.name == "origin/HEAD"));
+        let first_remote = infos
+            .iter()
+            .position(|branch| branch.is_remote)
+            .expect("remote branch");
+        assert!(infos[..first_remote].iter().all(|branch| !branch.is_remote));
 
         std::fs::remove_dir_all(&root).ok();
     }

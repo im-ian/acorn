@@ -220,6 +220,141 @@ test.describe("project settings", () => {
     ]);
   });
 
+  test("selects a detected base branch for new project worktrees", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/acorn",
+        name: "acorn",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("get_project_settings", {
+      key: "path:/tmp/acorn",
+      settings: {
+        remember_after_close: true,
+        pull_requests: { generation_prompt: null },
+        worktrees: { base_branch: "release/2026" },
+      },
+    });
+    await tauri.respond("list_project_branches", [
+      { name: "develop", is_remote: false },
+      { name: "release/2026", is_remote: false },
+      { name: "origin/main", is_remote: true },
+    ]);
+    await tauri.handle("update_project_settings", (args) => {
+      const w = window as unknown as { __projectSettingsCalls?: unknown[] };
+      w.__projectSettingsCalls = w.__projectSettingsCalls ?? [];
+      w.__projectSettingsCalls.push(args);
+      return {
+        key: "path:/tmp/acorn",
+        settings: (args as { settings: unknown }).settings,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: "Project acorn" })
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Project Settings" }).click();
+
+    const modal = page.getByRole("dialog", { name: "Project Settings" });
+    await modal.getByRole("button", { name: "Worktrees" }).click();
+    const baseBranch = modal.getByRole("combobox", {
+      name: "Base branch for new worktrees",
+    });
+    await expect(baseBranch).toContainText("release/2026");
+    await baseBranch.click();
+    await page.getByRole("option", { name: "develop", exact: true }).click();
+    await modal.getByRole("button", { name: "Save" }).click();
+
+    await expect(modal).toHaveCount(0);
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __projectSettingsCalls?: unknown[] })
+          .__projectSettingsCalls,
+    )) as Array<{ repoPath: string; settings: unknown }>;
+    expect(calls).toEqual([
+      {
+        repoPath: "/tmp/acorn",
+        settings: {
+          remember_after_close: true,
+          pull_requests: { generation_prompt: null },
+          worktrees: { base_branch: "refs/heads/develop" },
+        },
+      },
+    ]);
+  });
+
+  test("accepts a base branch name that is not in the detected list", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/acorn",
+        name: "acorn",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("get_project_settings", {
+      key: "path:/tmp/acorn",
+      settings: {
+        remember_after_close: true,
+        pull_requests: { generation_prompt: null },
+        worktrees: { base_branch: null },
+      },
+    });
+    await tauri.respond("list_project_branches", [
+      { name: "main", is_remote: false },
+      { name: "origin/main", is_remote: true },
+    ]);
+    await tauri.handle("update_project_settings", (args) => {
+      const w = window as unknown as { __projectSettingsCalls?: unknown[] };
+      w.__projectSettingsCalls = w.__projectSettingsCalls ?? [];
+      w.__projectSettingsCalls.push(args);
+      return {
+        key: "path:/tmp/acorn",
+        settings: (args as { settings: unknown }).settings,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: "Project acorn" })
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Project Settings" }).click();
+
+    const modal = page.getByRole("dialog", { name: "Project Settings" });
+    await modal.getByRole("button", { name: "Worktrees" }).click();
+    await modal
+      .getByRole("combobox", { name: "Base branch for new worktrees" })
+      .click();
+    await page.getByRole("option", { name: "Enter a branch name…" }).click();
+    await modal
+      .getByRole("textbox", { name: "Custom base branch" })
+      .fill("team/integration");
+    await modal.getByRole("button", { name: "Save" }).click();
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __projectSettingsCalls?: unknown[] })
+          .__projectSettingsCalls,
+    )) as Array<{ repoPath: string; settings: unknown }>;
+    expect(calls[0]).toEqual({
+      repoPath: "/tmp/acorn",
+      settings: {
+        remember_after_close: true,
+        pull_requests: { generation_prompt: null },
+        worktrees: { base_branch: "team/integration" },
+      },
+    });
+  });
+
   test("confirms before deleting a worktree used by the active sidebar session", async ({
     page,
     tauri,

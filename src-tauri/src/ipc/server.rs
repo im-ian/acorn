@@ -43,7 +43,8 @@ use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
 
 use crate::commands::{
-    create_unique_worktree, sanitize_worktree_name, session_removal_cascade, terminate_session_pty,
+    create_unique_project_worktree, sanitize_worktree_name, session_removal_cascade,
+    terminate_session_pty,
 };
 use crate::ipc::workspaces::{ListWorkspacesRequestPayload, LIST_WORKSPACES_REQUEST_EVENT};
 use crate::persistence;
@@ -737,7 +738,7 @@ fn handle_new_session<R: Runtime>(
     };
     let worktree_path = if isolated {
         let base = sanitize_worktree_name(&name);
-        match create_unique_worktree(&repo, &base) {
+        match create_unique_project_worktree(&repo, &base) {
             Ok((_safe, path)) => path,
             Err(err) => {
                 return Response::Error {

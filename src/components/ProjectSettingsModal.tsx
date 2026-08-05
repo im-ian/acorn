@@ -9,7 +9,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -19,7 +19,12 @@ import {
   sessionsUsingProjectWorktree,
   sessionsUsingWorktreePath,
 } from "../lib/sessionWorktree";
-import type { ProjectSettings, ProjectWorktree, Session } from "../lib/types";
+import type {
+  ProjectBranch,
+  ProjectSettings,
+  ProjectWorktree,
+  Session,
+} from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
 import { ContextMenu } from "./ContextMenu";
@@ -33,10 +38,17 @@ import {
   ModalHeader,
   Notice,
   SegmentedControl,
+  Select,
+  type SelectItem,
+  type SelectOptionGroup,
 } from "./ui";
 
 const PROMPT_MAX_CHARS = 2_000;
 const NAME_MAX_CHARS = 120;
+const BRANCH_MAX_CHARS = 255;
+const AUTOMATIC_BASE_BRANCH_VALUE = "automatic";
+const CUSTOM_BASE_BRANCH_VALUE = "custom";
+const BRANCH_VALUE_PREFIX = "branch:";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 export type ProjectSettingsTab =
@@ -100,7 +112,16 @@ function defaultProjectSettings(): ProjectSettings {
     pull_requests: {
       generation_prompt: STANDARD_PR_GENERATION_PROMPT,
     },
+    worktrees: {
+      base_branch: null,
+    },
   };
+}
+
+function projectBranchReference(branch: ProjectBranch): string {
+  return branch.is_remote
+    ? `refs/remotes/${branch.name}`
+    : `refs/heads/${branch.name}`;
 }
 
 function promptCount(template: string, count: number): string {
@@ -185,8 +206,10 @@ export function ProjectSettingsModal({
   );
   const [identity, setIdentity] = useState<string | null>(null);
   const [worktrees, setWorktrees] = useState<RootedWorktree[]>([]);
+  const [branches, setBranches] = useState<ProjectBranch[]>([]);
   const [loading, setLoading] = useState(false);
   const [worktreesLoading, setWorktreesLoading] = useState(false);
+  const [branchesLoading, setBranchesLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [removingPath, setRemovingPath] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] =
@@ -196,6 +219,7 @@ export function ProjectSettingsModal({
     kind: "load" | "remove";
     message: string;
   } | null>(null);
+  const [branchError, setBranchError] = useState<string | null>(null);
 
   const confirmRemoveSessions = confirmRemove
     ? sessionsUsingProjectWorktree(
@@ -250,23 +274,29 @@ export function ProjectSettingsModal({
       setSettings(defaultProjectSettings());
       setIdentity(null);
       setWorktrees([]);
+      setBranches([]);
       setLoading(false);
       setWorktreesLoading(false);
+      setBranchesLoading(false);
       setSaving(false);
       setRemovingPath(null);
       setConfirmRemove(null);
       setError(null);
       setWorktreeError(null);
+      setBranchError(null);
       return;
     }
 
     let cancelled = false;
     setLoading(true);
     setWorktreesLoading(true);
+    setBranchesLoading(true);
+    setBranches([]);
     setRemovingPath(null);
     setConfirmRemove(null);
     setError(null);
     setWorktreeError(null);
+    setBranchError(null);
 
     api
       .getProjectSettings(project.repoPath)
@@ -299,6 +329,21 @@ export function ProjectSettingsModal({
         if (!cancelled) setWorktreesLoading(false);
       });
 
+    api
+      .listProjectBranches(project.repoPath)
+      .then((items) => {
+        if (cancelled) return;
+        setBranches(items);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setBranches([]);
+        setBranchError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setBranchesLoading(false);
+      });
+
     return () => {
       cancelled = true;
     };
@@ -306,6 +351,56 @@ export function ProjectSettingsModal({
   }, [project, projectRootsKey]);
 
   const prompt = settings.pull_requests.generation_prompt ?? "";
+  const configuredBaseBranch = settings.worktrees.base_branch;
+  const configuredProjectBranch = branches.find(
+    (branch) => projectBranchReference(branch) === configuredBaseBranch,
+  ) ?? branches.find((branch) => branch.name === configuredBaseBranch);
+  const selectedBaseBranch =
+    configuredBaseBranch === null
+      ? AUTOMATIC_BASE_BRANCH_VALUE
+      : configuredProjectBranch
+        ? `${BRANCH_VALUE_PREFIX}${projectBranchReference(configuredProjectBranch)}`
+        : CUSTOM_BASE_BRANCH_VALUE;
+  const branchOptions = useMemo<Array<SelectItem | SelectOptionGroup>>(() => {
+    const localBranches: SelectItem[] = branches
+      .filter((branch) => !branch.is_remote)
+      .map((branch) => ({
+        value: `${BRANCH_VALUE_PREFIX}${projectBranchReference(branch)}`,
+        label: branch.name,
+      }));
+    const remoteBranches: SelectItem[] = branches
+      .filter((branch) => branch.is_remote)
+      .map((branch) => ({
+        value: `${BRANCH_VALUE_PREFIX}${projectBranchReference(branch)}`,
+        label: branch.name,
+      }));
+    return [
+      {
+        value: AUTOMATIC_BASE_BRANCH_VALUE,
+        label: dt(t, "dialogs.projectSettings.worktreeBaseBranchAutomatic"),
+      },
+      ...(localBranches.length > 0
+        ? [
+            {
+              label: dt(t, "dialogs.projectSettings.localBranches"),
+              options: localBranches,
+            } satisfies SelectOptionGroup,
+          ]
+        : []),
+      ...(remoteBranches.length > 0
+        ? [
+            {
+              label: dt(t, "dialogs.projectSettings.remoteBranches"),
+              options: remoteBranches,
+            } satisfies SelectOptionGroup,
+          ]
+        : []),
+      {
+        value: CUSTOM_BASE_BRANCH_VALUE,
+        label: dt(t, "dialogs.projectSettings.worktreeBaseBranchCustom"),
+      },
+    ];
+  }, [branches, t]);
 
   function updatePrompt(value: string) {
     const next = Array.from(value).slice(0, PROMPT_MAX_CHARS).join("");
@@ -323,6 +418,39 @@ export function ProjectSettingsModal({
       ...current,
       remember_after_close: value,
     }));
+  }
+
+  function updateWorktreeBaseBranch(value: string) {
+    const next = Array.from(value).slice(0, BRANCH_MAX_CHARS).join("");
+    setSettings((current) => ({
+      ...current,
+      worktrees: {
+        ...current.worktrees,
+        base_branch: next,
+      },
+    }));
+  }
+
+  function selectWorktreeBaseBranch(value: string) {
+    if (value === AUTOMATIC_BASE_BRANCH_VALUE) {
+      setSettings((current) => ({
+        ...current,
+        worktrees: { ...current.worktrees, base_branch: null },
+      }));
+      return;
+    }
+    if (value === CUSTOM_BASE_BRANCH_VALUE) {
+      if (selectedBaseBranch !== CUSTOM_BASE_BRANCH_VALUE) {
+        setSettings((current) => ({
+          ...current,
+          worktrees: { ...current.worktrees, base_branch: "" },
+        }));
+      }
+      return;
+    }
+    if (value.startsWith(BRANCH_VALUE_PREFIX)) {
+      updateWorktreeBaseBranch(value.slice(BRANCH_VALUE_PREFIX.length));
+    }
   }
 
   async function save() {
@@ -527,6 +655,57 @@ export function ProjectSettingsModal({
                   title={dt(t, "dialogs.projectSettings.worktrees")}
                   description={dt(t, "dialogs.projectSettings.worktreesHint")}
                 >
+                  <Field
+                    label={dt(t, "dialogs.projectSettings.worktreeBaseBranch")}
+                    hint={dt(
+                      t,
+                      "dialogs.projectSettings.worktreeBaseBranchHint",
+                    )}
+                  >
+                    <Select
+                      value={selectedBaseBranch}
+                      onValueChange={selectWorktreeBaseBranch}
+                      options={branchOptions}
+                      searchable
+                      disabled={loading || saving}
+                      aria-label={dt(
+                        t,
+                        "dialogs.projectSettings.worktreeBaseBranch",
+                      )}
+                      searchPlaceholder={dt(
+                        t,
+                        "dialogs.projectSettings.searchBranches",
+                      )}
+                    />
+                    {branchesLoading ? (
+                      <p className="text-[10px] text-fg-muted">
+                        {dt(t, "dialogs.projectSettings.loadingBranches")}
+                      </p>
+                    ) : branchError ? (
+                      <p className="text-[10px] text-danger">
+                        {dt(t, "dialogs.projectSettings.loadBranchesFailed")} {branchError}
+                      </p>
+                    ) : null}
+                    {selectedBaseBranch === CUSTOM_BASE_BRANCH_VALUE ? (
+                      <input
+                        value={configuredBaseBranch ?? ""}
+                        onChange={(e) =>
+                          updateWorktreeBaseBranch(e.target.value)
+                        }
+                        disabled={loading || saving}
+                        maxLength={BRANCH_MAX_CHARS}
+                        aria-label={dt(
+                          t,
+                          "dialogs.projectSettings.customWorktreeBaseBranch",
+                        )}
+                        placeholder={dt(
+                          t,
+                          "dialogs.projectSettings.worktreeBaseBranchPlaceholder",
+                        )}
+                        className="w-full rounded-md border border-input-border bg-input px-2 py-1.5 font-mono text-xs text-fg outline-none transition focus:border-accent focus:bg-input-hover disabled:opacity-60"
+                      />
+                    ) : null}
+                  </Field>
                   <ProjectWorktreeList
                     showRoot={projectRoots.length > 1}
                     worktrees={worktrees}

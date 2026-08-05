@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   Project,
+  ProjectBranch,
   ProjectSettingsRecord,
   ProjectWorktree,
   Session,
@@ -14,6 +15,9 @@ vi.mock("../lib/api", () => ({
     getProjectSettings: vi.fn<() => Promise<ProjectSettingsRecord>>(),
     listProjectWorktrees: vi.fn<
       (repoPath: string) => Promise<ProjectWorktree[]>
+    >(),
+    listProjectBranches: vi.fn<
+      (repoPath: string) => Promise<ProjectBranch[]>
     >(),
     listProjects: vi.fn<() => Promise<Project[]>>(),
     listSessions: vi.fn<() => Promise<Session[]>>(),
@@ -96,11 +100,13 @@ describe("ProjectSettingsModal", () => {
     });
     mockApi.getProjectSettings.mockReset();
     mockApi.listProjectWorktrees.mockReset();
+    mockApi.listProjectBranches.mockReset();
     mockApi.listProjects.mockReset();
     mockApi.listSessions.mockReset();
     mockApi.removeWorktree.mockReset();
     mockApi.updateProjectSettings.mockReset();
     mockApi.listProjectWorktrees.mockResolvedValue([]);
+    mockApi.listProjectBranches.mockResolvedValue([]);
     mockApi.listProjects.mockResolvedValue([]);
     mockApi.listSessions.mockResolvedValue([]);
     mockApi.removeWorktree.mockResolvedValue(null);
@@ -119,6 +125,7 @@ describe("ProjectSettingsModal", () => {
         pull_requests: {
           generation_prompt: "Use concise release-note style.",
         },
+        worktrees: { base_branch: null },
       },
     });
     mockApi.updateProjectSettings.mockImplementation(
@@ -185,6 +192,7 @@ describe("ProjectSettingsModal", () => {
       pull_requests: {
         generation_prompt: "Write Korean release notes.",
       },
+      worktrees: { base_branch: null },
     });
     expect(onClose).toHaveBeenCalled();
   });
@@ -216,6 +224,7 @@ describe("ProjectSettingsModal", () => {
         pull_requests: {
           generation_prompt: "Use concise release-note style.",
         },
+        worktrees: { base_branch: null },
       },
     });
     mockApi.listProjectWorktrees
@@ -304,6 +313,7 @@ describe("ProjectSettingsModal", () => {
         pull_requests: {
           generation_prompt: "Use concise release-note style.",
         },
+        worktrees: { base_branch: null },
       },
     });
     mockApi.listProjectWorktrees
@@ -401,6 +411,7 @@ describe("ProjectSettingsModal", () => {
         pull_requests: {
           generation_prompt: "Use concise release-note style.",
         },
+        worktrees: { base_branch: null },
       },
     });
     mockApi.listProjectWorktrees.mockResolvedValue([
@@ -487,6 +498,7 @@ describe("ProjectSettingsModal", () => {
         pull_requests: {
           generation_prompt: "Use concise release-note style.",
         },
+        worktrees: { base_branch: null },
       },
     });
     mockApi.listProjectWorktrees.mockResolvedValue([
@@ -572,6 +584,7 @@ describe("ProjectSettingsModal", () => {
       settings: {
         remember_after_close: false,
         pull_requests: { generation_prompt: null },
+        worktrees: { base_branch: null },
       },
     });
     useAppStore.setState({

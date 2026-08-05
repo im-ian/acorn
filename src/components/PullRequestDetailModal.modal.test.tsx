@@ -35,6 +35,7 @@ vi.mock("../lib/api", () => {
       generatePrCommitMessage: vi.fn(),
       getProjectSettings: vi.fn(),
       listProjectWorktrees: vi.fn(),
+      listProjectBranches: vi.fn(),
       removeWorktree: vi.fn(),
       updateProjectSettings: vi.fn(),
     },
@@ -112,6 +113,7 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     mockApi.generatePrCommitMessage.mockReset();
     mockApi.getProjectSettings.mockReset();
     mockApi.listProjectWorktrees.mockReset();
+    mockApi.listProjectBranches.mockReset();
     mockApi.removeWorktree.mockReset();
     mockApi.updateProjectSettings.mockReset();
     mockApi.getProjectSettings.mockResolvedValue({
@@ -119,9 +121,11 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
       settings: {
         remember_after_close: true,
         pull_requests: { generation_prompt: null },
+        worktrees: { base_branch: null },
       },
     });
     mockApi.listProjectWorktrees.mockResolvedValue([]);
+    mockApi.listProjectBranches.mockResolvedValue([]);
     mockApi.removeWorktree.mockResolvedValue(null);
     window.localStorage.clear();
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
@@ -553,6 +557,7 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
           generation_prompt:
             "프로젝트 규칙대로 PR title과 comment를 한국어 릴리즈 노트 스타일로 작성해.",
         },
+        worktrees: { base_branch: null },
       },
     });
     mockApi.getPullRequestDetail.mockResolvedValueOnce({

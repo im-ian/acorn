@@ -568,13 +568,23 @@ export interface ProjectWorktree {
   modified_ms: number | null;
 }
 
+export interface ProjectBranch {
+  name: string;
+  is_remote: boolean;
+}
+
 export interface ProjectPullRequestSettings {
   generation_prompt: string | null;
+}
+
+export interface ProjectWorktreeSettings {
+  base_branch: string | null;
 }
 
 export interface ProjectSettings {
   remember_after_close: boolean;
   pull_requests: ProjectPullRequestSettings;
+  worktrees: ProjectWorktreeSettings;
 }
 
 export interface ProjectSettingsRecord {

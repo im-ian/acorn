@@ -256,6 +256,7 @@ export const tauriMockSource = `
         settings: {
           remember_after_close: true,
           pull_requests: { generation_prompt: standardPrGenerationPrompt },
+          worktrees: { base_branch: null },
         },
       });
     }
@@ -265,6 +266,7 @@ export const tauriMockSource = `
         settings: args?.settings || {
           remember_after_close: true,
           pull_requests: { generation_prompt: standardPrGenerationPrompt },
+          worktrees: { base_branch: null },
         },
       });
     }
@@ -542,6 +544,7 @@ export const tauriMockSource = `
     if (cmd === 'pty_in_worktree_all') return Promise.resolve({});
     if (cmd === 'is_path_linked_worktree') return Promise.resolve(false);
     if (cmd === 'list_project_worktrees') return Promise.resolve([]);
+    if (cmd === 'list_project_branches') return Promise.resolve([]);
     if (cmd === 'remove_worktree') return Promise.resolve(null);
     if (cmd === 'restore_removed_worktree') return Promise.resolve(undefined);
     if (cmd === 'discard_removed_worktree') return Promise.resolve(undefined);
