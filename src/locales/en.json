@@ -1289,6 +1289,7 @@
     },
     "aria": {
       "project": "Project",
+      "projectMenu": "Project menu",
       "dragToReorderProject": "Drag to reorder project",
       "newSessionMenuInProject": "Create session in this project",
       "newSessionMenuInProjectFolder": "Create session in this workspace",

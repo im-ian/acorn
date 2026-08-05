@@ -4459,6 +4459,54 @@ test.describe("sidebar: project lifecycle", () => {
     ).toContainText("demo-api");
   });
 
+  test("a multi-root project header keeps only project management actions", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api"],
+      },
+    ]);
+    await tauri.respond("list_sessions", []);
+
+    await page.goto("/");
+
+    const projectRow = page.getByRole("button", { name: "Project demo" });
+    await projectRow.hover();
+    await expect(
+      projectRow.getByRole("button", { name: "New session in this project" }),
+    ).toHaveCount(0);
+    await expect(
+      projectRow.getByRole("button", {
+        name: "New worktree session in this project",
+      }),
+    ).toHaveCount(0);
+
+    const projectMenuButton = projectRow.getByRole("button", {
+      name: "Project menu",
+    });
+    await expect(projectMenuButton).toBeVisible();
+    await projectMenuButton.click();
+
+    const expectedProjectActions = [
+      "Add source folder",
+      "Project Settings",
+      "Reveal in Finder",
+      "Copy path",
+      "Close project",
+    ];
+    await expect(page.getByRole("menuitem")).toHaveText(expectedProjectActions);
+
+    await page.keyboard.press("Escape");
+    await projectRow.click({ button: "right" });
+    await expect(page.getByRole("menuitem")).toHaveText(expectedProjectActions);
+  });
+
   test("a source folder header creates a worktree session in that source repository", async ({
     page,
     tauri,

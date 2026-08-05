@@ -2141,13 +2141,14 @@ function ProjectGroupView({
   const t = useTranslation();
   const shortcuts = useSettings((s) => s.settings.shortcuts);
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
-  // Source roots have no rows of their own, so the project's hover card is
-  // where they show up.
+  // The persisted source list drives both project hover details and whether
+  // creation belongs on the project header or on the individual root rows.
   const sourcePaths = useAppStore(
     (s) =>
       s.projects.find((entry) => entry.repo_path === project.repoPath)
         ?.source_paths,
   );
+  const hasMultipleProjectRoots = (sourcePaths?.length ?? 0) > 0;
   const showToast = useToasts((s) => s.show);
   const projects = useAppStore((s) => s.projects);
   const convertProjectToSourceFolder = useAppStore(
@@ -2190,9 +2191,8 @@ function ProjectGroupView({
     transition,
   };
 
-  // A multi-root project flattens nothing, so this falls through to the
-  // primary root's folder — the project header's own create actions still
-  // start there, and every other root has its own row to start from.
+  // Single-root project headers create in this folder. Multi-root projects
+  // leave creation to their root rows so the target repository is explicit.
   const defaultFolderGroup =
     project.folders.find((folderGroup) =>
       isGroupDefaultFolder(project, folderGroup.folder),
@@ -2320,6 +2320,63 @@ function ProjectGroupView({
     }
   }
 
+  const projectActionMenuItems: ContextMenuItem[] = [
+    ...(sourceFolderHosts.length > 0
+      ? [
+          {
+            type: "submenu" as const,
+            label: sidebarText(
+              t,
+              "sidebar.actions.convertProjectToSourceFolder",
+            ),
+            icon: <FolderInput size={12} />,
+            children: sourceFolderHosts.map((host) => ({
+              label: host.name,
+              icon: <FolderGit2 size={12} />,
+              onClick: () => {
+                void convertToSourceFolder(host.repo_path);
+              },
+            })),
+          },
+        ]
+      : []),
+    {
+      label: sidebarText(t, "sidebar.actions.projectSettings"),
+      icon: <SettingsIcon size={12} />,
+      onClick: onOpenSettings,
+    },
+    {
+      label: sidebarText(t, "sidebar.actions.revealInFinder"),
+      icon: <FolderOpen size={12} />,
+      onClick: () => {
+        void openInFinder(project.repoPath);
+      },
+    },
+    {
+      label: sidebarText(t, "sidebar.actions.copyPath"),
+      icon: <Copy size={12} />,
+      onClick: () => {
+        void copyText(project.repoPath);
+      },
+    },
+  ];
+  const closeProjectMenuItem: ContextMenuItem = {
+    label: sidebarText(t, "sidebar.actions.closeProject"),
+    icon: <X size={12} />,
+    onClick: onRemoveProject,
+  };
+  const projectManagementMenuItems: ContextMenuItem[] = [
+    contextMenuGroupTitle(t, "project"),
+    {
+      label: sidebarText(t, "sidebar.actions.addProjectSourceFolder"),
+      icon: <FolderGit2 size={12} />,
+      onClick: onAddSourceFolder,
+    },
+    ...projectActionMenuItems,
+    contextMenuGroupTitle(t, "danger"),
+    closeProjectMenuItem,
+  ];
+
   const namedFolderGroups = project.folders.filter(
     (folderGroup) => !isGroupDefaultFolder(project, folderGroup.folder),
   );
@@ -2412,51 +2469,70 @@ function ProjectGroupView({
           )}
         </span>
         <div className="ml-auto hidden shrink-0 items-center gap-1 group-hover:flex">
-          {PROJECT_SESSION_PRIMARY_CREATE_ACTIONS.map((action) => (
-            <Tooltip
-              key={action.id}
-              label={sidebarText(t, action.labelKey)}
-              shortcut={
-                action.hotkeyId
-                  ? formatHotkey(shortcuts[action.hotkeyId])
-                  : undefined
-              }
-              side="bottom"
-            >
-              <button
-                type="button"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMenu(null);
-                  setCreateMenu(null);
-                  runCreateAction(action);
-                }}
-                className="flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-                aria-label={sidebarText(t, action.ariaKey)}
-              >
-                {projectSessionCreateIcon(action.id)}
-              </button>
-            </Tooltip>
-          ))}
-          <button
-            type="button"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              const rect = e.currentTarget.getBoundingClientRect();
-              setMenu(null);
-              setCreateMenu((current) =>
-                current === null ? { x: rect.left, y: rect.bottom + 4 } : null,
-              );
-            }}
-            className="flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-            aria-label={sidebarText(t, "sidebar.aria.newSessionMenuInProject")}
-            aria-haspopup="menu"
-            aria-expanded={createMenu !== null}
+          {!hasMultipleProjectRoots
+            ? PROJECT_SESSION_PRIMARY_CREATE_ACTIONS.map((action) => (
+                <Tooltip
+                  key={action.id}
+                  label={sidebarText(t, action.labelKey)}
+                  shortcut={
+                    action.hotkeyId
+                      ? formatHotkey(shortcuts[action.hotkeyId])
+                      : undefined
+                  }
+                  side="bottom"
+                >
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMenu(null);
+                      setCreateMenu(null);
+                      runCreateAction(action);
+                    }}
+                    className="flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                    aria-label={sidebarText(t, action.ariaKey)}
+                  >
+                    {projectSessionCreateIcon(action.id)}
+                  </button>
+                </Tooltip>
+              ))
+            : null}
+          <Tooltip
+            label={sidebarText(
+              t,
+              hasMultipleProjectRoots
+                ? "sidebar.aria.projectMenu"
+                : "sidebar.aria.newSessionMenuInProject",
+            )}
+            side="bottom"
           >
-            <MoreHorizontal size={13} />
-          </button>
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                const rect = e.currentTarget.getBoundingClientRect();
+                setMenu(null);
+                setCreateMenu((current) =>
+                  current === null
+                    ? { x: rect.left, y: rect.bottom + 4 }
+                    : null,
+                );
+              }}
+              className="flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+              aria-label={sidebarText(
+                t,
+                hasMultipleProjectRoots
+                  ? "sidebar.aria.projectMenu"
+                  : "sidebar.aria.newSessionMenuInProject",
+              )}
+              aria-haspopup="menu"
+              aria-expanded={createMenu !== null}
+            >
+              <MoreHorizontal size={13} />
+            </button>
+          </Tooltip>
           <Tooltip
             label={sidebarText(t, "sidebar.actions.closeProject")}
             side="bottom"
@@ -2481,81 +2557,51 @@ function ProjectGroupView({
         x={createMenu?.x ?? 0}
         y={createMenu?.y ?? 0}
         onClose={() => setCreateMenu(null)}
-        items={overflowCreateMenuItems}
+        items={
+          hasMultipleProjectRoots
+            ? projectManagementMenuItems
+            : overflowCreateMenuItems
+        }
       />
       <ContextMenu
         open={menu !== null}
         x={menu?.x ?? 0}
         y={menu?.y ?? 0}
         onClose={() => setMenu(null)}
-        items={[
-          contextMenuGroupTitle(t, "session"),
-          ...createMenuItems,
-          contextMenuGroupTitle(t, "workspace"),
-          {
-            label: sidebarText(t, "sidebar.actions.newProjectFolder"),
-            icon: <FolderPlus size={12} />,
-            onClick: onAddFolder,
-          },
-          {
-            label: sidebarText(
-              t,
-              "sidebar.actions.newProjectFolderWithWorktree",
-            ),
-            icon: <GitBranch size={12} />,
-            onClick: onAddWorktreeFolder,
-          },
-          {
-            label: sidebarText(t, "sidebar.actions.addProjectSourceFolder"),
-            icon: <FolderGit2 size={12} />,
-            onClick: onAddSourceFolder,
-          },
-          contextMenuGroupTitle(t, "project"),
-          ...(sourceFolderHosts.length > 0
-            ? [
+        items={
+          hasMultipleProjectRoots
+            ? projectManagementMenuItems
+            : [
+                contextMenuGroupTitle(t, "session"),
+                ...createMenuItems,
+                contextMenuGroupTitle(t, "workspace"),
                 {
-                  type: "submenu" as const,
+                  label: sidebarText(t, "sidebar.actions.newProjectFolder"),
+                  icon: <FolderPlus size={12} />,
+                  onClick: onAddFolder,
+                },
+                {
                   label: sidebarText(
                     t,
-                    "sidebar.actions.convertProjectToSourceFolder",
+                    "sidebar.actions.newProjectFolderWithWorktree",
                   ),
-                  icon: <FolderInput size={12} />,
-                  children: sourceFolderHosts.map((host) => ({
-                    label: host.name,
-                    icon: <FolderGit2 size={12} />,
-                    onClick: () => {
-                      void convertToSourceFolder(host.repo_path);
-                    },
-                  })),
+                  icon: <GitBranch size={12} />,
+                  onClick: onAddWorktreeFolder,
                 },
+                {
+                  label: sidebarText(
+                    t,
+                    "sidebar.actions.addProjectSourceFolder",
+                  ),
+                  icon: <FolderGit2 size={12} />,
+                  onClick: onAddSourceFolder,
+                },
+                contextMenuGroupTitle(t, "project"),
+                ...projectActionMenuItems,
+                contextMenuGroupTitle(t, "danger"),
+                closeProjectMenuItem,
               ]
-            : []),
-          {
-            label: sidebarText(t, "sidebar.actions.projectSettings"),
-            icon: <SettingsIcon size={12} />,
-            onClick: onOpenSettings,
-          },
-          {
-            label: sidebarText(t, "sidebar.actions.revealInFinder"),
-            icon: <FolderOpen size={12} />,
-            onClick: () => {
-              void openInFinder(project.repoPath);
-            },
-          },
-          {
-            label: sidebarText(t, "sidebar.actions.copyPath"),
-            icon: <Copy size={12} />,
-            onClick: () => {
-              void copyText(project.repoPath);
-            },
-          },
-          contextMenuGroupTitle(t, "danger"),
-          {
-            label: sidebarText(t, "sidebar.actions.closeProject"),
-            icon: <X size={12} />,
-            onClick: onRemoveProject,
-          },
-        ]}
+        }
       />
       {!collapsed ? (
         <ul
@@ -5141,8 +5187,8 @@ function buildSessionHoverDetails(
 /**
  * What a project is, in the terms that matter to the agent: the folder its
  * sessions start in, and the extra roots every session hands over as
- * `--add-dir`. Those roots have no sidebar rows of their own, so this is where
- * the user sees them.
+ * `--add-dir`. The hover summary keeps the complete paths available while the
+ * sidebar rows use compact root names.
  */
 function buildProjectHoverDetails(
   t: Translator,

@@ -1289,6 +1289,7 @@
     },
     "aria": {
       "project": "プロジェクト",
+      "projectMenu": "プロジェクトメニュー",
       "dragToReorderProject": "ドラッグしてプロジェクトを並べ替えます",
       "newSessionMenuInProject": "このプロジェクトにセッションを作成する",
       "newSessionMenuInProjectFolder": "このワークスペースにセッションを作成する",
