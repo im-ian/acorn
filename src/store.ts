@@ -550,6 +550,8 @@ interface AppStateModel {
     removeWorktrees?: boolean,
     removeSettings?: boolean,
   ) => Promise<WorktreeRemoval[]>;
+  /** Register an existing project spanning `roots` and open its first session. */
+  addProjectAt: (name: string, roots: string[]) => Promise<Project>;
   renameProject: (repoPath: string, name: string) => Promise<boolean>;
   addProjectSource: (repoPath: string, title?: string) => Promise<boolean>;
   /** Apply the pending merge: move the folder into the project that asked. */
@@ -3320,6 +3322,20 @@ export const useAppStore = create<AppStateModel>()(
 
   clearPendingRemove() {
     set({ pendingRemoveId: null });
+  },
+
+  async addProjectAt(name, roots) {
+    try {
+      const project = await api.addProjectAt(name, roots);
+      await get().refreshProjects();
+      get().setActiveProject(project.repo_path);
+      await createInitialProjectSession(get, project.repo_path);
+      set({ error: null });
+      return project;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      throw e;
+    }
   },
 
   async renameProject(repoPath, name) {
