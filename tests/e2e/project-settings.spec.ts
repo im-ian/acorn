@@ -289,6 +289,123 @@ test.describe("project settings", () => {
     ]);
   });
 
+  test("saves a separate base branch for each project source root", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/acorn",
+        name: "acorn",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/backoffice"],
+      },
+    ]);
+    await tauri.handle("get_project_settings", (args) => {
+      const repoPath = (args as { repoPath: string }).repoPath;
+      const source = repoPath === "/tmp/backoffice";
+      return {
+        key: `path:${repoPath}`,
+        settings: {
+          remember_after_close: !source,
+          pull_requests: {
+            generation_prompt: source ? "Backoffice prompt" : "Acorn prompt",
+          },
+          worktrees: {
+            base_branch: source
+              ? "refs/heads/release/backoffice"
+              : "refs/heads/develop",
+          },
+        },
+      };
+    });
+    await tauri.handle("list_project_branches", (args) => {
+      const w = window as unknown as { __branchRootCalls?: string[] };
+      const repoPath = (args as { repoPath: string }).repoPath;
+      w.__branchRootCalls = [...(w.__branchRootCalls ?? []), repoPath];
+      return repoPath === "/tmp/backoffice"
+        ? [
+            { name: "main", is_remote: false },
+            { name: "release/backoffice", is_remote: false },
+          ]
+        : [
+            { name: "main", is_remote: false },
+            { name: "develop", is_remote: false },
+          ];
+    });
+    await tauri.handle("update_project_settings", (args) => {
+      const w = window as unknown as { __settingsRootCalls?: unknown[] };
+      w.__settingsRootCalls = [...(w.__settingsRootCalls ?? []), args];
+      const input = args as {
+        repoPath: string;
+        settings: Record<string, unknown>;
+      };
+      return { key: `path:${input.repoPath}`, settings: input.settings };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: "Project acorn" })
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Project Settings" }).click();
+
+    const modal = page.getByRole("dialog", { name: "Project Settings" });
+    await modal.getByRole("button", { name: "Worktrees" }).click();
+    const repository = modal.getByRole("combobox", {
+      name: "Repository for new worktrees",
+    });
+    await expect(repository).toContainText("/tmp/acorn");
+    await repository.click();
+    await page.getByRole("option", { name: /backoffice/ }).click();
+
+    const baseBranch = modal.getByRole("combobox", {
+      name: "Base branch for new worktrees",
+    });
+    await expect(baseBranch).toContainText("release/backoffice");
+    await baseBranch.click();
+    await page.getByRole("option", { name: "main", exact: true }).click();
+    await modal.getByRole("button", { name: "Save" }).click();
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __settingsRootCalls?: unknown[] })
+          .__settingsRootCalls,
+    )) as Array<{
+      repoPath: string;
+      settings: {
+        remember_after_close: boolean;
+        pull_requests: { generation_prompt: string };
+        worktrees: { base_branch: string };
+      };
+    }>;
+    expect(calls).toEqual([
+      {
+        repoPath: "/tmp/backoffice",
+        settings: {
+          remember_after_close: false,
+          pull_requests: { generation_prompt: "Backoffice prompt" },
+          worktrees: { base_branch: "refs/heads/main" },
+        },
+      },
+      {
+        repoPath: "/tmp/acorn",
+        settings: {
+          remember_after_close: true,
+          pull_requests: { generation_prompt: "Acorn prompt" },
+          worktrees: { base_branch: "refs/heads/develop" },
+        },
+      },
+    ]);
+    const branchRoots = await page.evaluate(
+      () =>
+        (window as unknown as { __branchRootCalls?: string[] })
+          .__branchRootCalls ?? [],
+    );
+    expect(branchRoots).toContain("/tmp/acorn");
+    expect(branchRoots).toContain("/tmp/backoffice");
+  });
+
   test("accepts a base branch name that is not in the detected list", async ({
     page,
     tauri,
