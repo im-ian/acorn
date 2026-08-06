@@ -3050,7 +3050,7 @@ function ProjectFolderView({
                 <Plus size={12} />
               </button>
             </Tooltip>
-            {inSourceRoot && isDefaultProjectFolder(folder) ? (
+            {isDefaultProjectFolder(folder) ? (
               <Tooltip
                 label={sidebarText(
                   t,
