@@ -204,6 +204,13 @@ export function ProjectSettingsModal({
   const [settings, setSettings] = useState<ProjectSettings>(() =>
     defaultProjectSettings(),
   );
+  const [settingsByRoot, setSettingsByRoot] = useState<
+    Record<string, ProjectSettings>
+  >({});
+  const [dirtyWorktreeRoots, setDirtyWorktreeRoots] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [worktreeRootPath, setWorktreeRootPath] = useState("");
   const [identity, setIdentity] = useState<string | null>(null);
   const [worktrees, setWorktrees] = useState<RootedWorktree[]>([]);
   const [branches, setBranches] = useState<ProjectBranch[]>([]);
@@ -270,8 +277,24 @@ export function ProjectSettingsModal({
   }, [project?.repoPath, projectName]);
 
   useEffect(() => {
+    const requestedRoot = project?.repoPath;
+    setWorktreeRootPath(
+      requestedRoot && projectRoots.includes(requestedRoot)
+        ? requestedRoot
+        : (projectRoots[0] ?? ""),
+    );
+  }, [project?.repoPath, projectRootsKey]);
+
+  const activeWorktreeRoot = projectRoots.includes(worktreeRootPath)
+    ? worktreeRootPath
+    : (projectRoots[0] ?? "");
+
+  useEffect(() => {
     if (!project) {
       setSettings(defaultProjectSettings());
+      setSettingsByRoot({});
+      setDirtyWorktreeRoots(new Set());
+      setWorktreeRootPath("");
       setIdentity(null);
       setWorktrees([]);
       setBranches([]);
@@ -290,24 +313,36 @@ export function ProjectSettingsModal({
     let cancelled = false;
     setLoading(true);
     setWorktreesLoading(true);
-    setBranchesLoading(true);
-    setBranches([]);
     setRemovingPath(null);
     setConfirmRemove(null);
     setError(null);
     setWorktreeError(null);
     setBranchError(null);
 
-    api
-      .getProjectSettings(project.repoPath)
-      .then((record) => {
+    Promise.all(
+      projectRoots.map(async (rootPath) => ({
+        rootPath,
+        record: await api.getProjectSettings(rootPath),
+      })),
+    )
+      .then((entries) => {
         if (cancelled) return;
-        setSettings(record.settings);
-        setIdentity(record.key);
+        const nextByRoot = Object.fromEntries(
+          entries.map(({ rootPath, record }) => [rootPath, record.settings]),
+        );
+        const currentRecord = entries.find(
+          ({ rootPath }) => rootPath === project.repoPath,
+        )?.record;
+        setSettings(currentRecord?.settings ?? defaultProjectSettings());
+        setSettingsByRoot(nextByRoot);
+        setDirtyWorktreeRoots(new Set());
+        setIdentity(currentRecord?.key ?? null);
       })
       .catch((e) => {
         if (cancelled) return;
         setSettings(defaultProjectSettings());
+        setSettingsByRoot({});
+        setDirtyWorktreeRoots(new Set());
         setIdentity(null);
         setError(String(e));
       })
@@ -329,11 +364,28 @@ export function ProjectSettingsModal({
         if (!cancelled) setWorktreesLoading(false);
       });
 
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, projectRootsKey]);
+
+  useEffect(() => {
+    if (!project || !activeWorktreeRoot) {
+      setBranches([]);
+      setBranchesLoading(false);
+      setBranchError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setBranches([]);
+    setBranchesLoading(true);
+    setBranchError(null);
     api
-      .listProjectBranches(project.repoPath)
+      .listProjectBranches(activeWorktreeRoot)
       .then((items) => {
-        if (cancelled) return;
-        setBranches(items);
+        if (!cancelled) setBranches(items);
       })
       .catch((e) => {
         if (cancelled) return;
@@ -347,11 +399,15 @@ export function ProjectSettingsModal({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, projectRootsKey]);
+  }, [project, activeWorktreeRoot]);
 
   const prompt = settings.pull_requests.generation_prompt ?? "";
-  const configuredBaseBranch = settings.worktrees.base_branch;
+  const activeRootSettings =
+    settingsByRoot[activeWorktreeRoot] ??
+    (activeWorktreeRoot === project?.repoPath
+      ? settings
+      : defaultProjectSettings());
+  const configuredBaseBranch = activeRootSettings.worktrees.base_branch;
   const configuredProjectBranch = branches.find(
     (branch) => projectBranchReference(branch) === configuredBaseBranch,
   ) ?? branches.find((branch) => branch.name === configuredBaseBranch);
@@ -401,6 +457,11 @@ export function ProjectSettingsModal({
       },
     ];
   }, [branches, t]);
+  const worktreeRootOptions: SelectItem[] = projectRoots.map((rootPath) => ({
+    value: rootPath,
+    label: rootPath,
+    searchText: `${basenamePath(rootPath)} ${rootPath}`,
+  }));
 
   function updatePrompt(value: string) {
     const next = Array.from(value).slice(0, PROMPT_MAX_CHARS).join("");
@@ -420,31 +481,44 @@ export function ProjectSettingsModal({
     }));
   }
 
-  function updateWorktreeBaseBranch(value: string) {
-    const next = Array.from(value).slice(0, BRANCH_MAX_CHARS).join("");
-    setSettings((current) => ({
-      ...current,
-      worktrees: {
-        ...current.worktrees,
-        base_branch: next,
-      },
-    }));
+  function updateWorktreeBaseBranch(value: string | null) {
+    if (!activeWorktreeRoot) return;
+    const next =
+      value === null
+        ? null
+        : Array.from(value).slice(0, BRANCH_MAX_CHARS).join("");
+    setSettingsByRoot((current) => {
+      const currentSettings =
+        current[activeWorktreeRoot] ??
+        (activeWorktreeRoot === project?.repoPath
+          ? settings
+          : defaultProjectSettings());
+      return {
+        ...current,
+        [activeWorktreeRoot]: {
+          ...currentSettings,
+          worktrees: {
+            ...currentSettings.worktrees,
+            base_branch: next,
+          },
+        },
+      };
+    });
+    setDirtyWorktreeRoots((current) => {
+      const nextRoots = new Set(current);
+      nextRoots.add(activeWorktreeRoot);
+      return nextRoots;
+    });
   }
 
   function selectWorktreeBaseBranch(value: string) {
     if (value === AUTOMATIC_BASE_BRANCH_VALUE) {
-      setSettings((current) => ({
-        ...current,
-        worktrees: { ...current.worktrees, base_branch: null },
-      }));
+      updateWorktreeBaseBranch(null);
       return;
     }
     if (value === CUSTOM_BASE_BRANCH_VALUE) {
       if (selectedBaseBranch !== CUSTOM_BASE_BRANCH_VALUE) {
-        setSettings((current) => ({
-          ...current,
-          worktrees: { ...current.worktrees, base_branch: "" },
-        }));
+        updateWorktreeBaseBranch("");
       }
       return;
     }
@@ -472,9 +546,18 @@ export function ProjectSettingsModal({
           return;
         }
       }
+      for (const rootPath of dirtyWorktreeRoots) {
+        if (rootPath === project.repoPath) continue;
+        const rootSettings = settingsByRoot[rootPath];
+        if (rootSettings) {
+          await api.updateProjectSettings(rootPath, rootSettings);
+        }
+      }
+      const currentRootWorktreeSettings =
+        settingsByRoot[project.repoPath]?.worktrees ?? settings.worktrees;
       const record = await api.updateProjectSettings(
         project.repoPath,
-        settings,
+        { ...settings, worktrees: currentRootWorktreeSettings },
       );
       setSettings(record.settings);
       setIdentity(record.key);
@@ -655,6 +738,34 @@ export function ProjectSettingsModal({
                   title={dt(t, "dialogs.projectSettings.worktrees")}
                   description={dt(t, "dialogs.projectSettings.worktreesHint")}
                 >
+                  {projectRoots.length > 1 ? (
+                    <Field
+                      label={dt(
+                        t,
+                        "dialogs.projectSettings.worktreeRepository",
+                      )}
+                      hint={dt(
+                        t,
+                        "dialogs.projectSettings.worktreeRepositoryHint",
+                      )}
+                    >
+                      <Select
+                        value={activeWorktreeRoot}
+                        onValueChange={setWorktreeRootPath}
+                        options={worktreeRootOptions}
+                        searchable
+                        disabled={loading || saving}
+                        aria-label={dt(
+                          t,
+                          "dialogs.projectSettings.worktreeRepository",
+                        )}
+                        searchPlaceholder={dt(
+                          t,
+                          "dialogs.projectSettings.searchRepositories",
+                        )}
+                      />
+                    </Field>
+                  ) : null}
                   <Field
                     label={dt(t, "dialogs.projectSettings.worktreeBaseBranch")}
                     hint={dt(
