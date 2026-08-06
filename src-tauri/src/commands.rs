@@ -2252,6 +2252,7 @@ impl AntigravityTranscriptFollower {
 struct CliChatProviderAdapter {
     ai: crate::ai::AiExecutionRequest,
     cwd: PathBuf,
+    additional_dirs: Vec<PathBuf>,
     cancellation: Option<crate::chat_runs::ChatCancellation>,
 }
 
@@ -2259,6 +2260,7 @@ struct CliChatProviderAdapter {
 struct CliGraphNodeExecutor {
     ai: crate::ai::AiExecutionRequest,
     cwd: PathBuf,
+    additional_dirs: Vec<PathBuf>,
 }
 
 impl crate::graph_runs::GraphNodeExecutor for CliGraphNodeExecutor {
@@ -2273,6 +2275,7 @@ impl crate::graph_runs::GraphNodeExecutor for CliGraphNodeExecutor {
         let adapter = CliChatProviderAdapter {
             ai: self.ai.clone(),
             cwd: self.cwd.clone(),
+            additional_dirs: self.additional_dirs.clone(),
             cancellation: Some(cancellation),
         };
         let response = adapter.send_message(ChatProviderInput {
@@ -2323,7 +2326,7 @@ impl ChatProviderAdapter for CliChatProviderAdapter {
         input: ChatProviderInput,
         on_event: &mut dyn FnMut(ChatProviderStreamEvent),
     ) -> AppResult<ProviderResponse> {
-        let invocation = resolve_chat_cli_invocation(&self.ai, &input)?;
+        let invocation = resolve_chat_cli_invocation(&self.ai, &input, &self.additional_dirs)?;
         let started_at = SystemTime::now();
         let mut output_parser = ChatCliOutputParser::new(invocation.output_mode);
         let mut antigravity_follower = (self.ai.provider == crate::ai::AiProvider::Antigravity)
@@ -2406,6 +2409,7 @@ fn chat_prompt_for_provider_input(input: &ChatProviderInput) -> String {
 fn resolve_chat_cli_invocation(
     ai: &crate::ai::AiExecutionRequest,
     input: &ChatProviderInput,
+    additional_dirs: &[PathBuf],
 ) -> AppResult<ChatCliInvocation> {
     debug_assert_eq!(
         input.model.as_deref(),
@@ -2423,6 +2427,7 @@ fn resolve_chat_cli_invocation(
                 "--verbose".to_string(),
                 "--include-partial-messages".to_string(),
             ];
+            append_project_source_args(&mut args, additional_dirs);
             crate::ai::append_native_model_and_effort_args(ai, &mut args)?;
             let thread_id = match cursor {
                 Some(cursor) => {
@@ -2451,11 +2456,13 @@ fn resolve_chat_cli_invocation(
             })
         }
         crate::ai::AiProvider::Codex => {
-            let mut base_args = vec![
+            let mut base_args = Vec::new();
+            append_project_source_args(&mut base_args, additional_dirs);
+            base_args.extend([
                 "exec".to_string(),
                 "--skip-git-repo-check".to_string(),
                 "--json".to_string(),
-            ];
+            ]);
             crate::ai::append_native_model_and_effort_args(ai, &mut base_args)?;
             if let Some(cursor) = cursor {
                 base_args.extend(["resume".to_string(), cursor.clone(), "-".to_string()]);
@@ -2562,6 +2569,14 @@ fn resolve_chat_cli_invocation(
             })
         }
     }
+}
+
+fn append_project_source_args(args: &mut Vec<String>, additional_dirs: &[PathBuf]) {
+    args.extend(
+        additional_dirs
+            .iter()
+            .map(|dir| format!("--add-dir={}", dir.display())),
+    );
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -5642,6 +5657,7 @@ pub async fn run_graph_session<R: Runtime>(
     let executor: Arc<dyn crate::graph_runs::GraphNodeExecutor> = Arc::new(CliGraphNodeExecutor {
         ai: graph_ai_request(&graph),
         cwd: session.worktree_path.clone(),
+        additional_dirs: sibling_project_roots(state.inner(), &session.repo_path),
     });
     run_blocking("run graph session", move || {
         crate::graph_runs::start_graph_run(&app, &app_state, session, graph, executor)
@@ -5670,6 +5686,7 @@ pub async fn submit_graph_node_input<R: Runtime>(
     let executor: Arc<dyn crate::graph_runs::GraphNodeExecutor> = Arc::new(CliGraphNodeExecutor {
         ai: graph_ai_request(&graph),
         cwd: session.worktree_path.clone(),
+        additional_dirs: sibling_project_roots(state.inner(), &session.repo_path),
     });
     run_blocking("submit Graph node input", move || {
         crate::graph_runs::submit_graph_node_input(
@@ -5906,6 +5923,7 @@ fn send_chat_message_from_state_inner<R: Runtime>(
     let mut adapter = CliChatProviderAdapter {
         ai: ai.clone(),
         cwd: session.worktree_path.clone(),
+        additional_dirs: sibling_project_roots(state, &session.repo_path),
         cancellation: None,
     };
     let mut started = start_chat_turn(
@@ -6292,14 +6310,23 @@ pub struct AddProjectSourceResult {
     pub merge: Option<ProjectSourceMerge>,
 }
 
+fn sibling_project_roots(state: &AppState, repo_path: &Path) -> Vec<PathBuf> {
+    state
+        .projects
+        .owner_of_root(repo_path)
+        .map(|project| project.roots())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|root| root != repo_path)
+        .collect()
+}
+
 /// Colon-joined roots of `repo_path`'s project other than `repo_path` itself,
 /// or `None` when the project spans a single root. Paths containing a colon
 /// are dropped rather than shipped as two broken directories.
 fn sibling_project_roots_env(state: &AppState, repo_path: &Path) -> Option<String> {
-    let roots = state.projects.owner_of_root(repo_path)?.roots();
-    let dirs = roots
+    let dirs = sibling_project_roots(state, repo_path)
         .into_iter()
-        .filter(|root| root != repo_path)
         .map(|root| root.display().to_string())
         .filter(|root| !root.contains(':'))
         .collect::<Vec<_>>();
@@ -13885,6 +13912,7 @@ mod tests {
                     llm_model: None,
                 },
                 cwd: PathBuf::from("/tmp/acorn"),
+                additional_dirs: Vec::new(),
                 cancellation: None,
             };
 
@@ -13929,6 +13957,7 @@ mod tests {
                 llm_model: None,
             },
             &input,
+            &[],
         )
         .unwrap();
 
@@ -13994,6 +14023,7 @@ mod tests {
                 llm_model: None,
             },
             &input,
+            &[],
         )
         .unwrap();
 
@@ -14050,6 +14080,7 @@ mod tests {
                 llm_model: None,
             },
             &input,
+            &[],
         )
         .unwrap();
 
@@ -14103,6 +14134,7 @@ mod tests {
                 llm_model: None,
             },
             &input,
+            &[],
         )
         .unwrap();
 
@@ -14121,6 +14153,84 @@ mod tests {
                 "-"
             ]
         );
+    }
+
+    #[test]
+    fn chat_cli_invocation_adds_project_sources_for_claude_and_codex() {
+        let input = super::ChatProviderInput {
+            thread: None,
+            message: chat_message(
+                "current-user",
+                crate::persistence::ChatRole::User,
+                "inspect every project root",
+            ),
+            context: None,
+            model: None,
+        };
+        let additional_dirs = vec![
+            PathBuf::from("/tmp/acorn design"),
+            PathBuf::from("/tmp/acorn:docs"),
+        ];
+
+        let claude = super::resolve_chat_cli_invocation(
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Claude,
+                model: None,
+                effort: None,
+                ollama_model: None,
+                llm_model: None,
+            },
+            &input,
+            &additional_dirs,
+        )
+        .unwrap();
+        assert!(claude
+            .cli
+            .args
+            .contains(&"--add-dir=/tmp/acorn design".to_string()));
+        assert!(claude
+            .cli
+            .args
+            .contains(&"--add-dir=/tmp/acorn:docs".to_string()));
+
+        let codex = super::resolve_chat_cli_invocation(
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Codex,
+                model: None,
+                effort: None,
+                ollama_model: None,
+                llm_model: None,
+            },
+            &input,
+            &additional_dirs,
+        )
+        .unwrap();
+        assert_eq!(
+            codex.cli.args[0..3],
+            [
+                "--add-dir=/tmp/acorn design",
+                "--add-dir=/tmp/acorn:docs",
+                "exec"
+            ]
+        );
+
+        let antigravity = super::resolve_chat_cli_invocation(
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Antigravity,
+                model: None,
+                effort: None,
+                ollama_model: None,
+                llm_model: None,
+            },
+            &input,
+            &additional_dirs,
+        )
+        .unwrap();
+        assert!(!antigravity
+            .cli
+            .args
+            .iter()
+            .any(|arg| arg.starts_with("--add-dir=")));
     }
 
     #[test]
@@ -14145,6 +14255,7 @@ mod tests {
                 llm_model: None,
             },
             &input,
+            &[],
         )
         .unwrap();
 
@@ -14187,6 +14298,7 @@ mod tests {
                 llm_model: None,
             },
             &input,
+            &[],
         )
         .unwrap();
 
@@ -14224,6 +14336,7 @@ mod tests {
                 llm_model: None,
             },
             &input,
+            &[],
         )
         .unwrap();
 
@@ -14281,6 +14394,7 @@ mod tests {
                 llm_model: None,
             },
             &input,
+            &[],
         )
         .unwrap();
 
@@ -15523,6 +15637,11 @@ mod tests {
             .projects
             .set_source_paths(&primary, vec![source.clone()])
             .expect("project is registered");
+
+        assert_eq!(
+            super::sibling_project_roots(&state, &primary),
+            vec![source.clone()],
+        );
 
         assert_eq!(
             super::sibling_project_roots_env(&state, &primary),
