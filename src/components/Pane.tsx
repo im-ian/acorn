@@ -26,6 +26,8 @@ import {
   X,
 } from "lucide-react";
 import {
+  Suspense,
+  lazy,
   useCallback,
   useMemo,
   useRef,
@@ -39,7 +41,6 @@ import { FileViewer } from "./FileViewer";
 import { mediaKindFromPath } from "../lib/mediaFiles";
 import { writeClipboardText } from "../lib/clipboardText";
 import { ChatPane } from "./ChatPane";
-import { GraphSessionView } from "./GraphSessionView";
 import { WorkSummaryView } from "./WorkSummaryView";
 import { api } from "../lib/api";
 import {
@@ -122,6 +123,11 @@ import {
   useWorkspaceTabDragSession,
   type WorkspaceTabDragSession,
 } from "../lib/workspaceTabDrag";
+
+const GraphSessionView = lazy(async () => {
+  const module = await import("./GraphSessionView");
+  return { default: module.GraphSessionView };
+});
 
 const SESSION_STATUS_TONE: Record<SessionStatus, StatusTone> = {
   ready: "neutral",
@@ -606,7 +612,9 @@ export function Pane({ paneId }: PaneProps) {
           a frontend-owned file tab instead of a PTY session.
         */}
         {activeSession?.graph ? (
-          <GraphSessionView session={activeSession} isActive={isFocused} />
+          <Suspense fallback={null}>
+            <GraphSessionView session={activeSession} isActive={isFocused} />
+          </Suspense>
         ) : activeSession?.mode === "chat" ? (
           <ChatPane
             sessionId={activeSession.id}

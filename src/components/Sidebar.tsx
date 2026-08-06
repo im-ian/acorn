@@ -32,6 +32,8 @@ import {
 import { homeDir } from "@tauri-apps/api/path";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -179,7 +181,6 @@ import type {
   SessionStatusReason,
 } from "../lib/types";
 import { AutonomousGoalDialog } from "./AutonomousGoalDialog";
-import { GraphSessionDialog } from "./GraphSessionDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { AddExistingProjectDialog } from "./AddExistingProjectDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
@@ -220,6 +221,11 @@ const ACTIVITY_DEFAULT_HEIGHT = 192;
 const ACTIVITY_MIN_HEIGHT = 96;
 const ACTIVITY_MAX_HEIGHT = 420;
 const ACTIVITY_KEYBOARD_STEP = 16;
+
+const GraphSessionDialog = lazy(async () => {
+  const module = await import("./GraphSessionDialog");
+  return { default: module.GraphSessionDialog };
+});
 
 const PROJECT_DRAG_PREFIX = "project:";
 const FOLDER_DRAG_PREFIX = "folder:";
@@ -1584,14 +1590,18 @@ export function Sidebar() {
         open={addProjectOpen}
         onClose={() => setAddProjectOpen(false)}
       />
-      <GraphSessionDialog
-        open={graphSessionOpen}
-        scope={graphSessionScope}
-        onClose={() => {
-          setGraphSessionOpen(false);
-          setGraphSessionScope(null);
-        }}
-      />
+      {graphSessionOpen ? (
+        <Suspense fallback={null}>
+          <GraphSessionDialog
+            open
+            scope={graphSessionScope}
+            onClose={() => {
+              setGraphSessionOpen(false);
+              setGraphSessionScope(null);
+            }}
+          />
+        </Suspense>
+      ) : null}
       <NewProjectDialog
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
