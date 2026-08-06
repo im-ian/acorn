@@ -15,6 +15,7 @@ import {
   type ReactFlowInstance,
   type Viewport,
 } from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 import {
   Boxes,
   Check,
