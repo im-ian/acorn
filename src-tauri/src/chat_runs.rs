@@ -193,6 +193,18 @@ impl ChatRunRegistry {
         Some(cancellation)
     }
 
+    pub fn cancel_active(&self, session_id: &Uuid) -> bool {
+        let active = self.active.lock();
+        let Some(active) = active.get(session_id) else {
+            return false;
+        };
+        match active {
+            ActiveRun::Chat(cancellation) => cancellation.cancel(),
+            ActiveRun::Graph(cancellation) => cancellation.cancel(),
+        }
+        true
+    }
+
     pub fn is_active(&self, session_id: &Uuid) -> bool {
         self.active.lock().contains_key(session_id)
     }
@@ -265,5 +277,20 @@ mod tests {
         assert!(second.is_cancelled());
         registry.finish_graph(&session_id, "run-1");
         assert!(!registry.is_active(&session_id));
+    }
+
+    #[test]
+    fn active_session_cancellation_handles_chat_turns_without_a_turn_id() {
+        let registry = ChatRunRegistry::default();
+        let session_id = Uuid::new_v4();
+        let cancellation = registry
+            .start(session_id, "turn-1".to_string())
+            .expect("start chat run");
+
+        assert!(registry.cancel_active(&session_id));
+        assert!(cancellation.is_cancelled());
+
+        registry.finish(&session_id, cancellation.turn_id());
+        assert!(!registry.cancel_active(&session_id));
     }
 }
