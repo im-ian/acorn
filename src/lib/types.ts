@@ -10,7 +10,10 @@ export type SessionStatus =
   | "waiting_for_input"
   | "errored";
 
-export type SessionStatusReason = "turn_complete" | "shell_prompt";
+export type SessionStatusReason =
+  | "turn_complete"
+  | "turn_interrupted"
+  | "shell_prompt";
 
 export type AgentStatusSource =
   | "hook"

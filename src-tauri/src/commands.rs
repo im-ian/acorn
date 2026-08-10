@@ -9116,6 +9116,7 @@ fn fallback_agent_status_source(
 enum HookStatusReconciliation {
     Boot,
     CurrentCodexTurn(String),
+    CurrentClaudeInterruption(SystemTime),
     ClaudeAttentionResolved(SystemTime),
     ClaudeBlockedStopResumed(SystemTime),
 }
@@ -9123,7 +9124,9 @@ enum HookStatusReconciliation {
 impl HookStatusReconciliation {
     fn target(&self) -> SessionStatus {
         match self {
-            Self::Boot | Self::CurrentCodexTurn(_) => SessionStatus::WaitingForInput,
+            Self::Boot | Self::CurrentCodexTurn(_) | Self::CurrentClaudeInterruption(_) => {
+                SessionStatus::WaitingForInput
+            }
             Self::ClaudeAttentionResolved(_) | Self::ClaudeBlockedStopResumed(_) => {
                 SessionStatus::Working
             }
@@ -9203,7 +9206,7 @@ fn claude_blocked_stop_resolution(
     ))
 }
 
-/// Recover a hook-owned Working status from a durable turn-complete marker.
+/// Recover a hook-owned Working status from a durable terminal turn marker.
 ///
 /// `hook_active` persists across restarts, so right after boot the poll
 /// already defers to the persisted hook-set status. Durable hook delivery
@@ -9211,12 +9214,13 @@ fn claude_blocked_stop_resolution(
 /// transcript remains the bounded compatibility signal for records that
 /// predate durable delivery or could not be retained. Until the first hook
 /// event of this run confirms the channel, allow exactly one recovery:
-/// Working -> WaitingForInput backed by a real turn-complete marker.
+/// Working -> WaitingForInput backed by a real completion or interruption.
 ///
-/// During the current run, Codex completion recovery is allowed only when the
-/// transcript carries a provider turn id. The store compares that id with the
-/// active native-hook turn under the lifecycle lock before applying it, so a
-/// new prompt cannot be overwritten by the previous turn's completion.
+/// During the current run, Codex recovery requires an exact provider turn id.
+/// Claude's interruption marker has no turn id, so it instead must be newer
+/// than the current `UserPromptSubmit` hook receipt. Both checks are repeated
+/// under the lifecycle lock before applying, so a new prompt cannot be
+/// overwritten by the previous turn's transcript tail.
 fn hook_status_reconciliation(
     stored: SessionStatus,
     hook_confirmed_this_run: bool,
@@ -9224,6 +9228,7 @@ fn hook_status_reconciliation(
     detection: &session_status::StatusDetection,
     attention_at: Option<SystemTime>,
     claude_stop_at: Option<SystemTime>,
+    claude_turn_started_at: Option<SystemTime>,
 ) -> Option<HookStatusReconciliation> {
     if stored == SessionStatus::WaitingForInput {
         return claude_attention_resolution(hook_provider, detection, attention_at)
@@ -9232,22 +9237,41 @@ fn hook_status_reconciliation(
     if stored != SessionStatus::Working {
         return None;
     }
-    if detection.status != SessionStatus::Ready
-        || detection.reason != Some(SessionStatusReason::TurnComplete)
-        || detection.evidence != session_status::StatusEvidence::Transcript
-    {
+    let terminal_turn = matches!(
+        (detection.status, detection.reason),
+        (
+            SessionStatus::Ready,
+            Some(SessionStatusReason::TurnComplete)
+        ) | (
+            SessionStatus::WaitingForInput,
+            Some(SessionStatusReason::TurnInterrupted)
+        )
+    );
+    if !terminal_turn || detection.evidence != session_status::StatusEvidence::Transcript {
         return None;
     }
     if !hook_confirmed_this_run {
         return Some(HookStatusReconciliation::Boot);
     }
-    if hook_provider != Some(AgentKind::Codex) {
-        return None;
+    if hook_provider == Some(AgentKind::Codex) {
+        return detection
+            .completed_provider_turn_id
+            .clone()
+            .map(HookStatusReconciliation::CurrentCodexTurn);
     }
-    detection
-        .completed_provider_turn_id
-        .clone()
-        .map(HookStatusReconciliation::CurrentCodexTurn)
+    if hook_provider == Some(AgentKind::Claude)
+        && detection.reason == Some(SessionStatusReason::TurnInterrupted)
+    {
+        let started_at = claude_turn_started_at?;
+        let interrupted_at: SystemTime =
+            chrono::DateTime::parse_from_rfc3339(detection.turn_timestamp.as_deref()?)
+                .ok()?
+                .into();
+        return (interrupted_at > started_at).then_some(
+            HookStatusReconciliation::CurrentClaudeInterruption(interrupted_at),
+        );
+    }
+    None
 }
 
 fn detect_session_statuses_blocking(
@@ -9446,6 +9470,8 @@ fn detect_session_statuses_blocking(
                 parsed_id.and_then(|uuid| state.sessions.codex_permission_waiting_at(&uuid));
             let attention_at = parsed_id.and_then(|uuid| state.sessions.attention_at(&uuid));
             let claude_stop_at = parsed_id.and_then(|uuid| state.sessions.claude_stop_at(&uuid));
+            let claude_turn_started_at =
+                parsed_id.and_then(|uuid| state.sessions.claude_turn_started_at(&uuid));
             let codex_activity_started_at =
                 match (codex_tool_started_at, codex_permission_waiting_at) {
                     (Some(tool), Some(permission)) => Some(tool.max(permission)),
@@ -9560,9 +9586,10 @@ fn detect_session_statuses_blocking(
                         observed_lifecycle_revision,
                     ));
                 // Boot recovery is allowed before this app instance receives
-                // a native event. In-run recovery is limited to an exact
-                // Codex turn id; the store checks that id together with the
-                // revision/source fence in one conditional write.
+                // a native event. In-run terminal recovery requires either an
+                // exact Codex turn id or a Claude interruption newer than the
+                // current prompt; the store repeats that correlation together
+                // with the revision/source fence in one conditional write.
                 let reconciliation_requested = hook_status_reconciliation(
                     stored,
                     hook_revision > 0,
@@ -9570,6 +9597,7 @@ fn detect_session_statuses_blocking(
                     &detection,
                     attention_at,
                     claude_stop_at,
+                    claude_turn_started_at,
                 );
                 let reconciled = parsed_id.and_then(|uuid| {
                     reconciliation_requested
@@ -9587,13 +9615,21 @@ fn detect_session_statuses_blocking(
                                         Some(AgentStatusSource::TranscriptFallback),
                                     ),
                                 HookStatusReconciliation::CurrentCodexTurn(completed_turn_id) => {
-                                    state.sessions.reconcile_codex_turn_completion_if_current(
+                                    state.sessions.reconcile_codex_turn_end_if_current(
                                         &uuid,
                                         stored_source,
                                         lifecycle_revision,
                                         completed_turn_id,
                                     )
                                 }
+                                HookStatusReconciliation::CurrentClaudeInterruption(
+                                    interrupted_at,
+                                ) => state.sessions.reconcile_claude_interruption_if_current(
+                                    &uuid,
+                                    stored_source,
+                                    lifecycle_revision,
+                                    *interrupted_at,
+                                ),
                                 HookStatusReconciliation::ClaudeAttentionResolved(resumed_at) => {
                                     state.sessions.resolve_attention_if_current(
                                         &uuid,
@@ -11971,9 +12007,13 @@ mod tests {
             .lifecycle_snapshot(&session.id)
             .expect("read lifecycle before terminal input");
         for (label, data) in [
+            ("escape", "Gw=="),
             ("carriage return", "DQ=="),
             ("line feed", "Cg=="),
             ("text followed by carriage return", "YW5zd2VyDQ=="),
+            // Keep Ctrl-C last: the PTY line discipline may terminate `cat`,
+            // but the transport byte still must not mutate session lifecycle.
+            ("control-c", "Aw=="),
         ] {
             super::pty_write(
                 app.state::<AppState>(),
@@ -12016,6 +12056,32 @@ mod tests {
                 &detection,
                 None,
                 None,
+                None,
+            ),
+            Some(super::HookStatusReconciliation::Boot)
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_recovers_an_interrupted_turn() {
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::WaitingForInput,
+            reason: Some(super::SessionStatusReason::TurnInterrupted),
+            evidence: super::session_status::StatusEvidence::Transcript,
+            completed_provider_turn_id: None,
+            turn_timestamp: Some("2026-08-10T00:00:00Z".to_string()),
+            agent_activity_timestamp: None,
+        };
+
+        assert_eq!(
+            super::hook_status_reconciliation(
+                acorn_session::SessionStatus::Working,
+                false,
+                Some(super::AgentKind::Claude),
+                &detection,
+                None,
+                None,
+                None,
             ),
             Some(super::HookStatusReconciliation::Boot)
         );
@@ -12043,6 +12109,7 @@ mod tests {
                 Some(AgentKind::Claude),
                 &detection,
                 attention_at,
+                None,
                 None,
             )
         };
@@ -12108,6 +12175,7 @@ mod tests {
                 ),
                 Some(attention_at),
                 None,
+                None,
             ),
             None
         );
@@ -12137,6 +12205,7 @@ mod tests {
                 &detection,
                 None,
                 stop_at,
+                None,
             )
         };
 
@@ -12208,6 +12277,7 @@ mod tests {
                 &detection,
                 None,
                 None,
+                None,
             ),
             None
         );
@@ -12239,6 +12309,7 @@ mod tests {
                 &detection,
                 None,
                 None,
+                None,
             ),
             None
         );
@@ -12260,6 +12331,7 @@ mod tests {
                 true,
                 Some(super::AgentKind::Codex),
                 &detection,
+                None,
                 None,
                 None,
             ),
@@ -12287,6 +12359,7 @@ mod tests {
                 &detection,
                 None,
                 None,
+                None,
             ),
             None
         );
@@ -12310,10 +12383,83 @@ mod tests {
                 &detection,
                 None,
                 None,
+                None,
             ),
             Some(super::HookStatusReconciliation::CurrentCodexTurn(
                 "turn-1".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn confirmed_codex_hook_accepts_a_scoped_interruption_candidate() {
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::WaitingForInput,
+            reason: Some(super::SessionStatusReason::TurnInterrupted),
+            evidence: super::session_status::StatusEvidence::Transcript,
+            completed_provider_turn_id: Some("turn-1".to_string()),
+            turn_timestamp: Some("2026-08-10T00:00:00Z".to_string()),
+            agent_activity_timestamp: None,
+        };
+
+        assert_eq!(
+            super::hook_status_reconciliation(
+                acorn_session::SessionStatus::Working,
+                true,
+                Some(super::AgentKind::Codex),
+                &detection,
+                None,
+                None,
+                None,
+            ),
+            Some(super::HookStatusReconciliation::CurrentCodexTurn(
+                "turn-1".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn confirmed_claude_hook_accepts_only_a_current_interruption_candidate() {
+        use std::time::Duration;
+
+        let started_at: std::time::SystemTime =
+            chrono::DateTime::parse_from_rfc3339("2026-08-10T00:00:00Z")
+                .expect("valid start timestamp")
+                .into();
+        let detection = |timestamp: &str| super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::WaitingForInput,
+            reason: Some(super::SessionStatusReason::TurnInterrupted),
+            evidence: super::session_status::StatusEvidence::Transcript,
+            completed_provider_turn_id: None,
+            turn_timestamp: Some(timestamp.to_string()),
+            agent_activity_timestamp: None,
+        };
+
+        assert_eq!(
+            super::hook_status_reconciliation(
+                acorn_session::SessionStatus::Working,
+                true,
+                Some(super::AgentKind::Claude),
+                &detection("2026-08-10T00:00:01Z"),
+                None,
+                None,
+                Some(started_at),
+            ),
+            Some(super::HookStatusReconciliation::CurrentClaudeInterruption(
+                started_at + Duration::from_secs(1)
+            ))
+        );
+        assert_eq!(
+            super::hook_status_reconciliation(
+                acorn_session::SessionStatus::Working,
+                true,
+                Some(super::AgentKind::Claude),
+                &detection("2026-08-09T23:59:59Z"),
+                None,
+                None,
+                Some(started_at),
+            ),
+            None
         );
     }
 
@@ -12333,6 +12479,7 @@ mod tests {
                 true,
                 Some(super::AgentKind::Claude),
                 &detection,
+                None,
                 None,
                 None,
             ),
@@ -12360,6 +12507,7 @@ mod tests {
                 &detection,
                 None,
                 None,
+                None,
             ),
             None
         );
@@ -12383,6 +12531,7 @@ mod tests {
                 false,
                 None,
                 &detection,
+                None,
                 None,
                 None,
             ),

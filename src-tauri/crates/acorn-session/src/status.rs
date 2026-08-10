@@ -2,6 +2,7 @@
 //! transcript the in-flight agent is writing. Status mapping:
 //!
 //! Claude transcripts:
+//! - user record with `interruptedMessageId` -> WaitingForInput.
 //! - last assistant turn with `stop_reason=end_turn` -> Ready
 //!   (claude finished its turn and accepts an optional follow-up).
 //! - last assistant turn with `stop_reason=tool_use` -> Working (tool pending)
@@ -9,6 +10,7 @@
 //! - no transcript yet -> Ready (session has not produced any conversation)
 //!
 //! Codex transcripts:
+//! - last `payload.type=turn_aborted` -> WaitingForInput.
 //! - last `payload.type=task_complete` / `turn_complete` (also accepted
 //!   `msg`-wrapped or top-level; or `agent_message` with `phase=final_answer`)
 //!   -> Ready (codex finished a turn).
@@ -24,6 +26,8 @@
 //! - last `type=USER_INPUT` or any non-DONE model/tool line -> Working.
 //!
 //! Grok transcripts:
+//! - last `sessionUpdate=turn_completed` with `stop_reason=cancelled` ->
+//!   WaitingForInput as an interrupted turn.
 //! - last `sessionUpdate=turn_completed` -> WaitingForInput while the Grok
 //!   process remains live (the TUI has returned to its prompt).
 //! - user/agent/thought chunks and tool call updates -> Working.
@@ -59,6 +63,7 @@ const TAIL_BYTES: u64 = 262_144;
 #[serde(rename_all = "snake_case")]
 pub enum StatusReason {
     TurnComplete,
+    TurnInterrupted,
     ShellPrompt,
 }
 
@@ -77,10 +82,9 @@ pub struct StatusDetection {
     pub status: SessionStatus,
     pub reason: Option<StatusReason>,
     pub evidence: StatusEvidence,
-    /// Provider turn identity carried by the completion event that produced
-    /// `TurnComplete`. Codex uses `turn_id` and Grok uses `prompt_id`;
-    /// providers or completion formats without a scoped identity leave this
-    /// empty.
+    /// Provider turn identity carried by the terminal turn event. Codex uses
+    /// `turn_id` and Grok uses `prompt_id`; providers or formats without a
+    /// scoped identity leave this empty.
     pub completed_provider_turn_id: Option<String>,
     /// Provider timestamp of the transcript line this detection classified.
     /// Only transcript evidence carries one.
@@ -194,6 +198,18 @@ pub fn detect_with_reason(
         }) => StatusDetection::new(SessionStatus::Working, None, StatusEvidence::Transcript)
             .with_turn_timestamp(timestamp)
             .with_agent_activity_timestamp(agent_activity_timestamp),
+        Some(TurnObservation {
+            state: TurnState::Interrupted,
+            provider_turn_id,
+            timestamp,
+            ..
+        }) => StatusDetection::new(
+            SessionStatus::WaitingForInput,
+            Some(StatusReason::TurnInterrupted),
+            StatusEvidence::Transcript,
+        )
+        .with_completed_provider_turn_id(provider_turn_id)
+        .with_turn_timestamp(timestamp),
         // Transcript exists but the tail held no turn lines; keep
         // whatever the caller previously observed instead of regressing
         // to Ready. The next poll that lands on a real turn line corrects
@@ -610,6 +626,45 @@ mod tests {
         assert_eq!(detection.reason, Some(StatusReason::TurnComplete));
         assert_eq!(detection.evidence, StatusEvidence::Transcript);
         assert_eq!(detection.completed_provider_turn_id.as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn detect_reports_waiting_for_an_interrupted_turn() {
+        let path = write_status_transcript(
+            r#"{"timestamp":"t","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t1"}}"#,
+        );
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Codex)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::WaitingForInput);
+        assert_eq!(detection.reason, Some(StatusReason::TurnInterrupted));
+        assert_eq!(detection.evidence, StatusEvidence::Transcript);
+        assert_eq!(detection.completed_provider_turn_id.as_deref(), Some("t1"));
+        assert_eq!(detection.turn_timestamp.as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn detect_reports_grok_cancel_as_an_interrupted_turn() {
+        let path = write_status_transcript(
+            r#"{"method":"session/update","params":{"sessionId":"session-1","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7","stop_reason":"cancelled"}}}"#,
+        );
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::WaitingForInput);
+        assert_eq!(detection.reason, Some(StatusReason::TurnInterrupted));
+        assert_eq!(
+            detection.completed_provider_turn_id.as_deref(),
+            Some("prompt-7")
+        );
     }
 
     #[test]
