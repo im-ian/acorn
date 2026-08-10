@@ -6876,6 +6876,30 @@ pub(crate) fn terminate_session_pty(state: &AppState, id: &Uuid) {
     }
 }
 
+fn terminate_session_runtime(state: &AppState, id: &Uuid) -> AppResult<()> {
+    let run_was_active = state.chat_runs.cancel_active(id);
+    terminate_session_pty(state, id);
+    if !run_was_active {
+        return Ok(());
+    }
+    for _ in 0..200 {
+        if !state.chat_runs.is_active(id) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    Err(AppError::Other(
+        "the session run is still stopping; try removing it again shortly".to_string(),
+    ))
+}
+
+async fn terminate_session_runtime_blocking(state: AppState, id: Uuid) -> AppResult<()> {
+    run_blocking("terminate session runtime", move || {
+        terminate_session_runtime(&state, &id)
+    })
+    .await
+}
+
 pub(crate) fn session_removal_cascade(state: &AppState, session: &Session) -> Vec<Session> {
     let mut sessions = vec![session.clone()];
     let mut seen = HashSet::from([session.id]);
@@ -6979,14 +7003,16 @@ pub async fn remove_project(
         .map(|project| project.roots())
         .unwrap_or_else(|| vec![path.clone()]);
     if cascade {
-        let session_ids: Vec<_> = app_state
+        let sessions_to_remove: Vec<_> = app_state
             .sessions
             .list()
             .into_iter()
             .filter(|s| roots.iter().any(|root| &s.repo_path == root))
             .collect();
-        for session in session_ids {
-            terminate_session_pty(&app_state, &session.id);
+        for session in &sessions_to_remove {
+            terminate_session_runtime_blocking(app_state.clone(), session.id).await?;
+        }
+        for session in sessions_to_remove {
             if drop_worktrees && staged_worktree_paths.insert(session.worktree_path.clone()) {
                 if worktree_path_used_outside_project(&app_state, &path, &session.worktree_path) {
                     tracing::warn!(
@@ -7058,7 +7084,7 @@ pub async fn remove_session(
         )?;
     }
     for session in &sessions_to_remove {
-        terminate_session_pty(&app_state, &session.id);
+        terminate_session_runtime_blocking(app_state.clone(), session.id).await?;
     }
     let removed_worktree = if remove_worktree.unwrap_or(false) {
         match stage_remove_linked_worktree_blocking(
@@ -10958,15 +10984,16 @@ fn stage_remove_linked_worktree_at_path_and_sessions(
 ) -> AppResult<Option<worktree::RemovedWorktree>> {
     let sessions = sessions_using_linked_worktree(state, repo_path, worktree_path);
 
+    for session in &sessions {
+        terminate_session_runtime(state, &session.id)?;
+    }
+
     let removed = stage_remove_linked_worktree_at_path(repo_path, worktree_path)?;
 
     if let Ok(dir) = persistence::data_dir() {
         for session in &sessions {
             scrollback::delete(&dir, &session.id.to_string()).ok();
         }
-    }
-    for session in &sessions {
-        terminate_session_pty(state, &session.id);
     }
     for session in sessions {
         state.sessions.remove(&session.id).ok();
@@ -11177,8 +11204,8 @@ mod tests {
         infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
         normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
         remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
-        should_remove_local_project_mirror, validate_editor_command, validate_new_project_name,
-        ChatProviderAdapter, ProcessMemorySnapshot,
+        should_remove_local_project_mirror, terminate_session_runtime, validate_editor_command,
+        validate_new_project_name, ChatProviderAdapter, ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingSessionRemoval};
@@ -11223,6 +11250,29 @@ mod tests {
         );
         session.in_worktree = true;
         session
+    }
+
+    #[test]
+    fn session_runtime_stop_cancels_an_active_graph_before_removal() {
+        let state = AppState::new();
+        let session_id = Uuid::new_v4();
+        let run_id = "run-1".to_string();
+        let cancellation = state
+            .chat_runs
+            .start_graph(session_id, run_id.clone())
+            .expect("start graph run");
+        let registry = state.chat_runs.clone();
+        let worker = std::thread::spawn(move || {
+            while !cancellation.is_cancelled() {
+                std::thread::yield_now();
+            }
+            registry.finish_graph(&session_id, &run_id);
+        });
+
+        terminate_session_runtime(&state, &session_id).expect("stop session runtime");
+        worker.join().expect("graph worker exits");
+
+        assert!(!state.chat_runs.is_active(&session_id));
     }
 
     fn goal_spec(provider: SessionAgentProvider) -> SessionGoal {
