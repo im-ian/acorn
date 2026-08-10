@@ -26,6 +26,7 @@ impl TranscriptRole {
 pub enum TurnState {
     Ready,
     Working,
+    Interrupted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -395,7 +396,7 @@ fn parse_grok_value(value: &Value) -> ParsedTranscriptLine {
         TranscriptRole::Other => None,
     };
     let turn_state = match update_type {
-        "turn_completed" => Some(TurnState::Ready),
+        "turn_completed" => Some(grok_completed_turn_state(update)),
         "user_message_chunk"
         | "agent_message_chunk"
         | "agent_thought_chunk"
@@ -418,6 +419,19 @@ fn parse_grok_value(value: &Value) -> ParsedTranscriptLine {
         session_id: string_at(value.get("params"), "sessionId")
             .or_else(|| string_at(value.get("params"), "session_id")),
         ..ParsedTranscriptLine::default()
+    }
+}
+
+fn grok_completed_turn_state(update: &Value) -> TurnState {
+    let stop_reason = update
+        .get("stop_reason")
+        .or_else(|| update.get("stopReason"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if matches!(stop_reason, "cancelled" | "canceled" | "interrupted") {
+        TurnState::Interrupted
+    } else {
+        TurnState::Ready
     }
 }
 
@@ -445,6 +459,13 @@ fn claude_turn_state(value: &Value) -> Option<TurnState> {
     if line_type != "user" && line_type != "assistant" {
         return None;
     }
+    if value
+        .get("interruptedMessageId")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.trim().is_empty())
+    {
+        return Some(TurnState::Interrupted);
+    }
     let msg = value.get("message")?;
     if line_type == "user" {
         return Some(TurnState::Working);
@@ -462,6 +483,7 @@ fn codex_turn_state(value: &Value) -> Option<TurnState> {
     let payload_type = event.get("type").and_then(Value::as_str).unwrap_or("");
     match payload_type {
         "task_complete" | "turn_complete" => Some(TurnState::Ready),
+        "turn_aborted" => Some(TurnState::Interrupted),
         "user_message" => Some(TurnState::Working),
         "function_call" | "function_call_output" | "reasoning" => Some(TurnState::Working),
         "agent_message" => {
@@ -475,6 +497,12 @@ fn codex_turn_state(value: &Value) -> Option<TurnState> {
         "message" => {
             if event.get("role").and_then(Value::as_str) == Some("assistant") {
                 Some(TurnState::Working)
+            } else if event.get("role").and_then(Value::as_str) == Some("user")
+                && codex_event_texts(value, event)
+                    .iter()
+                    .any(|text| text.trim_start().starts_with("<turn_aborted>"))
+            {
+                Some(TurnState::Interrupted)
             } else {
                 None
             }
@@ -973,6 +1001,20 @@ mod tests {
     }
 
     #[test]
+    fn claude_interrupted_message_maps_to_interrupted() {
+        let tail = r#"{"timestamp":"2026-08-10T00:00:01Z","type":"user","interruptedMessageId":"message-1","message":{"role":"user","content":[]}}"#;
+        assert_eq!(
+            latest_turn_observation(AgentKind::Claude, tail, true),
+            Some(TurnObservation {
+                state: TurnState::Interrupted,
+                provider_turn_id: None,
+                timestamp: Some("2026-08-10T00:00:01Z".to_string()),
+                agent_activity_timestamp: None,
+            })
+        );
+    }
+
+    #[test]
     fn claude_assistant_end_turn_maps_to_ready_over_trailing_meta() {
         let tail = format!(
             "{}\n{}\n{}\n",
@@ -1097,6 +1139,20 @@ mod tests {
     }
 
     #[test]
+    fn codex_turn_aborted_maps_to_interrupted_with_turn_id() {
+        let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t1"}}"#;
+        assert_eq!(
+            latest_turn_observation(AgentKind::Codex, tail, true),
+            Some(TurnObservation {
+                state: TurnState::Interrupted,
+                provider_turn_id: Some("t1".to_string()),
+                timestamp: Some("t".to_string()),
+                agent_activity_timestamp: None,
+            })
+        );
+    }
+
+    #[test]
     fn codex_turn_complete_maps_to_ready() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"turn_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
         assert_eq!(
@@ -1192,6 +1248,26 @@ mod tests {
             );
             assert_eq!(parsed.preview_text, None, "message: {message}");
         }
+    }
+
+    #[test]
+    fn codex_hidden_turn_aborted_marker_maps_to_interrupted() {
+        let value = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<turn_aborted>\nThe user interrupted the turn.\n</turn_aborted>",
+                }],
+            },
+        });
+
+        assert_eq!(
+            parse_transcript_value(AgentKind::Codex, &value).turn_state,
+            Some(TurnState::Interrupted)
+        );
     }
 
     #[test]
@@ -1397,6 +1473,21 @@ mod tests {
             latest_turn_observation(AgentKind::Grok, tail, true),
             Some(TurnObservation {
                 state: TurnState::Ready,
+                provider_turn_id: Some("prompt-7".to_string()),
+                timestamp: None,
+                agent_activity_timestamp: None,
+            })
+        );
+    }
+
+    #[test]
+    fn grok_cancelled_turn_maps_to_interrupted() {
+        let tail = r#"{"method":"session/update","params":{"sessionId":"session-1","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7","stop_reason":"cancelled"}}}"#;
+
+        assert_eq!(
+            latest_turn_observation(AgentKind::Grok, tail, true),
+            Some(TurnObservation {
+                state: TurnState::Interrupted,
                 provider_turn_id: Some("prompt-7".to_string()),
                 timestamp: None,
                 agent_activity_timestamp: None,

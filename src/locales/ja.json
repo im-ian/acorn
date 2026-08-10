@@ -943,6 +943,7 @@
     },
     "sessionStatusReason": {
       "turn_complete": "エージェントのターンが完了しました",
+      "turn_interrupted": "エージェントのターンが中断されました",
       "shell_prompt": "シェルプロンプトが検出されました"
     },
     "notifications": {
@@ -1208,6 +1209,7 @@
     },
     "statusReason": {
       "turn_complete": "エージェントのターンが完了しました",
+      "turn_interrupted": "エージェントのターンが中断されました",
       "shell_prompt": "シェルプロンプトが検出されました"
     },
     "dialog": {

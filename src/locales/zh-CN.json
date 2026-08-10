@@ -943,6 +943,7 @@
     },
     "sessionStatusReason": {
       "turn_complete": "智能体轮次完成",
+      "turn_interrupted": "智能体轮次已中断",
       "shell_prompt": "检测到 shell 提示"
     },
     "notifications": {
@@ -1208,6 +1209,7 @@
     },
     "statusReason": {
       "turn_complete": "智能体轮次完成",
+      "turn_interrupted": "智能体轮次已中断",
       "shell_prompt": "检测到 shell 提示"
     },
     "dialog": {
