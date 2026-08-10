@@ -590,6 +590,10 @@ struct HookRuntimeState {
     status_source: Option<AgentStatusSource>,
     tool_started_at: Option<SystemTime>,
     turn_id: Option<String>,
+    /// Receipt time of the current Claude `UserPromptSubmit` hook. Claude's
+    /// interruption transcript marker has no turn id, so the poll uses this
+    /// boundary to reject a marker left by the previous prompt.
+    claude_turn_started_at: Option<SystemTime>,
     permission_waiting_at: Option<SystemTime>,
     /// When an attention request (permission prompt, elicitation dialog) was
     /// raised by a hook that has no resolving counterpart. Claude emits
@@ -628,6 +632,7 @@ impl HookRuntimeState {
         self.status_source = None;
         self.tool_started_at = None;
         self.turn_id = None;
+        self.claude_turn_started_at = None;
         self.permission_waiting_at = None;
         self.attention_at = None;
         self.claude_stop_at = None;
@@ -644,11 +649,12 @@ pub struct SessionStore {
     /// its hook channel is live, the transcript-tail poll stops heuristically
     /// second-guessing turn completion (a long or tool-heavy Claude turn often
     /// leaves no `end_turn` line inside the tail window, so the tail keeps
-    /// reading Working long after the turn ended). The one in-run exception is
-    /// a Codex `task_complete` carrying the exact current hook turn id, which
-    /// can be reconciled under this ledger's lock without admitting a stale
-    /// previous-turn completion. The poll otherwise only keeps ownership of
-    /// the process-liveness edge after no agent remains.
+    /// reading Working long after the turn ended). Bounded in-run exceptions
+    /// are a Codex terminal marker carrying the exact current hook turn id and
+    /// a Claude interruption timestamp newer than the current hook turn. Both
+    /// are reconciled under this ledger's lock without admitting a stale
+    /// previous-turn marker. The poll otherwise only keeps ownership of the
+    /// process-liveness edge after no agent remains.
     ///
     /// Hook activity itself also persists across restarts via the session's
     /// `hook_active` field; this ledger distinguishes "confirmed live this run"
@@ -875,12 +881,12 @@ impl SessionStore {
         Ok(Some(state.advance_lifecycle_revision()))
     }
 
-    /// Reconcile a Codex completion observed in its durable transcript while
-    /// the native hook channel still owns status. The completed turn id is
+    /// Reconcile a Codex turn end observed in its durable transcript while
+    /// the native hook channel still owns status. The terminal turn id is
     /// checked under the same runtime lock as the lifecycle fence so a new
     /// `UserPromptSubmit` cannot race an old `task_complete` into a resting
     /// status.
-    pub fn reconcile_codex_turn_completion_if_current(
+    pub fn reconcile_codex_turn_end_if_current(
         &self,
         id: &Uuid,
         expected_source: Option<AgentStatusSource>,
@@ -912,6 +918,44 @@ impl SessionStore {
         entry.status = SessionStatus::WaitingForInput;
         state.status_source = Some(AgentStatusSource::TranscriptFallback);
         state.permission_waiting_at = None;
+        Ok(Some(state.advance_lifecycle_revision()))
+    }
+
+    /// Reconcile a Claude interruption marker only when it belongs to the
+    /// current native-hook turn. Claude does not include a turn id in
+    /// `interruptedMessageId`, so its provider timestamp is fenced against the
+    /// latest `UserPromptSubmit` receipt under the same lock as status/source.
+    pub fn reconcile_claude_interruption_if_current(
+        &self,
+        id: &Uuid,
+        expected_source: Option<AgentStatusSource>,
+        expected_lifecycle_revision: u64,
+        interrupted_at: SystemTime,
+    ) -> SessionResult<Option<u64>> {
+        let mut runtime = self.lock_hook_runtime();
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let state = runtime.entry(*id).or_default();
+        if entry.status != SessionStatus::Working
+            || state.status_source != expected_source
+            || state.lifecycle_revision != expected_lifecycle_revision
+            || !state.confirmed
+            || !entry.hook_active
+            || entry.hook_provider != Some(SessionAgentProvider::Claude)
+            || state
+                .claude_turn_started_at
+                .is_none_or(|started_at| interrupted_at <= started_at)
+        {
+            return Ok(None);
+        }
+
+        entry.status = SessionStatus::WaitingForInput;
+        state.status_source = Some(AgentStatusSource::TranscriptFallback);
+        state.claude_turn_started_at = None;
+        state.attention_at = None;
+        state.claude_stop_at = None;
         Ok(Some(state.advance_lifecycle_revision()))
     }
 
@@ -960,6 +1004,9 @@ impl SessionStore {
         state.advance_lifecycle_revision();
         state.confirmed = true;
         state.status_source = Some(AgentStatusSource::Hook);
+        if provider == SessionAgentProvider::Claude && status == SessionStatus::Working {
+            state.claude_turn_started_at = Some(SystemTime::now());
+        }
         entry.status = status;
         entry.hook_active = true;
         entry.hook_provider = Some(provider);
@@ -1021,6 +1068,12 @@ impl SessionStore {
             .get(id)
             .and_then(|state| state.turn_id.clone())
             .filter(|turn_id| !turn_id.is_empty())
+    }
+
+    pub fn claude_turn_started_at(&self, id: &Uuid) -> Option<SystemTime> {
+        self.lock_hook_runtime()
+            .get(id)
+            .and_then(|state| state.claude_turn_started_at)
     }
 
     /// Whether this app run has observed a Codex turn boundary, including a
@@ -1969,12 +2022,7 @@ mod tests {
             .expect("session exists");
 
         assert!(store
-            .reconcile_codex_turn_completion_if_current(
-                &session.id,
-                source,
-                lifecycle_revision,
-                "turn-1",
-            )
+            .reconcile_codex_turn_end_if_current(&session.id, source, lifecycle_revision, "turn-1",)
             .expect("session exists")
             .is_some());
         assert_eq!(
@@ -2011,7 +2059,7 @@ mod tests {
         store.begin_hook_turn(&session.id, Some("turn-2"));
         assert_eq!(
             store
-                .reconcile_codex_turn_completion_if_current(
+                .reconcile_codex_turn_end_if_current(
                     &session.id,
                     source,
                     lifecycle_revision,
@@ -2025,6 +2073,56 @@ mod tests {
             SessionStatus::Working
         );
         assert_eq!(store.hook_turn_id(&session.id).as_deref(), Some("turn-2"));
+    }
+
+    #[test]
+    fn claude_transcript_interruption_must_follow_the_current_hook_turn() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        store
+            .apply_native_status(
+                &session.id,
+                SessionAgentProvider::Claude,
+                SessionStatus::Working,
+            )
+            .expect("session exists");
+        let started_at = store
+            .claude_turn_started_at(&session.id)
+            .expect("Claude start is recorded");
+        let (_, source, _, lifecycle_revision) = store
+            .lifecycle_snapshot(&session.id)
+            .expect("session exists");
+
+        assert_eq!(
+            store
+                .reconcile_claude_interruption_if_current(
+                    &session.id,
+                    source,
+                    lifecycle_revision,
+                    started_at - std::time::Duration::from_secs(1),
+                )
+                .expect("session exists"),
+            None
+        );
+        assert!(store
+            .reconcile_claude_interruption_if_current(
+                &session.id,
+                source,
+                lifecycle_revision,
+                started_at + std::time::Duration::from_secs(1),
+            )
+            .expect("session exists")
+            .is_some());
+        assert_eq!(
+            store.get(&session.id).expect("session exists").status,
+            SessionStatus::WaitingForInput
+        );
+        assert_eq!(
+            store.agent_status_source(&session.id),
+            Some(AgentStatusSource::TranscriptFallback)
+        );
+        assert_eq!(store.claude_turn_started_at(&session.id), None);
+        assert_eq!(store.claude_stop_at(&session.id), None);
     }
 
     #[test]

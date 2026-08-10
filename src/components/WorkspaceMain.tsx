@@ -3062,6 +3062,8 @@ function statusReasonLabel(
   switch (reason) {
     case "turn_complete":
       return t("sidebar.statusReason.turn_complete");
+    case "turn_interrupted":
+      return t("sidebar.statusReason.turn_interrupted");
     case "shell_prompt":
       return t("sidebar.statusReason.shell_prompt");
     default:

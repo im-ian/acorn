@@ -71,6 +71,8 @@ function sessionStatusReasonLabel(
   switch (reason) {
     case "turn_complete":
       return statusBarText(t, "statusBar.sessionStatusReason.turn_complete");
+    case "turn_interrupted":
+      return statusBarText(t, "statusBar.sessionStatusReason.turn_interrupted");
     case "shell_prompt":
       return statusBarText(t, "statusBar.sessionStatusReason.shell_prompt");
     default:

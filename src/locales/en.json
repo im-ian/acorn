@@ -943,6 +943,7 @@
     },
     "sessionStatusReason": {
       "turn_complete": "agent turn complete",
+      "turn_interrupted": "agent turn interrupted",
       "shell_prompt": "shell prompt detected"
     },
     "notifications": {
@@ -1208,6 +1209,7 @@
     },
     "statusReason": {
       "turn_complete": "Agent turn complete",
+      "turn_interrupted": "Agent turn interrupted",
       "shell_prompt": "Shell prompt detected"
     },
     "dialog": {
