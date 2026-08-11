@@ -368,10 +368,10 @@ export function ProjectSettingsModal({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, projectRootsKey]);
+  }, [project?.repoPath, projectRootsKey]);
 
   useEffect(() => {
-    if (!project || !activeWorktreeRoot) {
+    if (!project?.repoPath || !activeWorktreeRoot) {
       setBranches([]);
       setBranchesLoading(false);
       setBranchError(null);
@@ -399,7 +399,7 @@ export function ProjectSettingsModal({
     return () => {
       cancelled = true;
     };
-  }, [project, activeWorktreeRoot]);
+  }, [project?.repoPath, activeWorktreeRoot]);
 
   const prompt = settings.pull_requests.generation_prompt ?? "";
   const activeRootSettings =
@@ -590,13 +590,22 @@ export function ProjectSettingsModal({
     setRemovingPath(target.path);
     setWorktreeError(null);
     try {
-      await removeProjectWorktree(
+      const removedWorktree = await removeProjectWorktree(
         target.rootPath,
         target.path,
         targetSessions.length > 0,
       );
+      if (removedWorktree) {
+        await api.discardRemovedWorktree(removedWorktree);
+      }
       setConfirmRemove(null);
-      setWorktrees(await listWorktreesForRoots(projectRoots));
+      setWorktrees((current) =>
+        current.filter(
+          (worktree) =>
+            worktree.rootPath !== target.rootPath ||
+            worktree.path !== target.path,
+        ),
+      );
     } catch (e) {
       setWorktreeError({ kind: "remove", message: String(e) });
     } finally {

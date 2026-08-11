@@ -162,10 +162,24 @@ test.describe("project settings", () => {
     await tauri.handle("remove_worktree", (args) => {
       const w = window as unknown as {
         __removeWorktreeCalls?: unknown[];
-        __worktrees?: Array<{ path: string }>;
       };
       w.__removeWorktreeCalls = w.__removeWorktreeCalls ?? [];
       w.__removeWorktreeCalls.push(args);
+      const worktreePath = (args as { worktreePath?: string }).worktreePath;
+      return {
+        token: "remove-feature-alpha",
+        repoPath: "/tmp/acorn",
+        worktreePath,
+        gitCommonDir: "/tmp/acorn/.git",
+      };
+    });
+    await tauri.handle("discard_removed_worktree", (args) => {
+      const w = window as unknown as {
+        __discardWorktreeCalls?: unknown[];
+        __worktrees?: Array<{ path: string }>;
+      };
+      w.__discardWorktreeCalls = w.__discardWorktreeCalls ?? [];
+      w.__discardWorktreeCalls.push(args);
       const worktreePath = (args as { worktreePath?: string }).worktreePath;
       w.__worktrees = (w.__worktrees ?? []).filter(
         (worktree) => worktree.path !== worktreePath,
@@ -216,6 +230,20 @@ test.describe("project settings", () => {
       {
         repoPath: "/tmp/acorn",
         worktreePath: "/tmp/acorn/.acorn/worktrees/feature-alpha",
+      },
+    ]);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __discardWorktreeCalls?: unknown[] })
+            .__discardWorktreeCalls,
+      ),
+    ).toEqual([
+      {
+        token: "remove-feature-alpha",
+        repoPath: "/tmp/acorn",
+        worktreePath: "/tmp/acorn/.acorn/worktrees/feature-alpha",
+        gitCommonDir: "/tmp/acorn/.git",
       },
     ]);
   });
