@@ -28,6 +28,9 @@ vi.mock("../lib/api", () => ({
         removeSessions?: boolean,
       ) => Promise<WorktreeRemoval | null>
     >(),
+    discardRemovedWorktree: vi.fn<
+      (removal: WorktreeRemoval) => Promise<void>
+    >(),
     updateProjectSettings: vi.fn<
       (
         repoPath: string,
@@ -104,12 +107,14 @@ describe("ProjectSettingsModal", () => {
     mockApi.listProjects.mockReset();
     mockApi.listSessions.mockReset();
     mockApi.removeWorktree.mockReset();
+    mockApi.discardRemovedWorktree.mockReset();
     mockApi.updateProjectSettings.mockReset();
     mockApi.listProjectWorktrees.mockResolvedValue([]);
     mockApi.listProjectBranches.mockResolvedValue([]);
     mockApi.listProjects.mockResolvedValue([]);
     mockApi.listSessions.mockResolvedValue([]);
     mockApi.removeWorktree.mockResolvedValue(null);
+    mockApi.discardRemovedWorktree.mockResolvedValue();
   });
 
   afterEach(() => {
@@ -217,6 +222,12 @@ describe("ProjectSettingsModal", () => {
   });
 
   it("lists project worktrees and removes one after confirmation", async () => {
+    const removal: WorktreeRemoval = {
+      token: "remove-feature-alpha",
+      repoPath: "/repo/acorn",
+      worktreePath: "/repo/acorn/.acorn/worktrees/feature-alpha",
+      gitCommonDir: "/repo/acorn/.git",
+    };
     mockApi.getProjectSettings.mockResolvedValue({
       key: "github:im-ian/acorn",
       settings: {
@@ -227,26 +238,19 @@ describe("ProjectSettingsModal", () => {
         worktrees: { base_branch: null },
       },
     });
-    mockApi.listProjectWorktrees
-      .mockResolvedValueOnce([
-        {
-          name: "feature-alpha",
-          path: "/repo/acorn/.acorn/worktrees/feature-alpha",
-          modified_ms: Date.UTC(2026, 4, 19, 12, 0, 0),
-        },
-        {
-          name: "feature-beta",
-          path: "/repo/acorn/.acorn/worktrees/feature-beta",
-          modified_ms: null,
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          name: "feature-beta",
-          path: "/repo/acorn/.acorn/worktrees/feature-beta",
-          modified_ms: null,
-        },
-      ]);
+    mockApi.listProjectWorktrees.mockResolvedValueOnce([
+      {
+        name: "feature-alpha",
+        path: "/repo/acorn/.acorn/worktrees/feature-alpha",
+        modified_ms: Date.UTC(2026, 4, 19, 12, 0, 0),
+      },
+      {
+        name: "feature-beta",
+        path: "/repo/acorn/.acorn/worktrees/feature-beta",
+        modified_ms: null,
+      },
+    ]);
+    mockApi.removeWorktree.mockResolvedValueOnce(removal);
     const onClose = vi.fn();
 
     await act(async () => {
@@ -301,8 +305,45 @@ describe("ProjectSettingsModal", () => {
       "/repo/acorn/.acorn/worktrees/feature-alpha",
       false,
     );
+    expect(mockApi.discardRemovedWorktree).toHaveBeenCalledWith(removal);
+    expect(mockApi.listProjectWorktrees).toHaveBeenCalledTimes(1);
     expect(document.body.textContent).not.toContain("feature-alpha");
     expect(document.body.textContent).toContain("feature-beta");
+  });
+
+  it("does not reload project data for an equivalent project prop", async () => {
+    mockApi.getProjectSettings.mockResolvedValue({
+      key: "github:im-ian/acorn",
+      settings: {
+        remember_after_close: true,
+        pull_requests: { generation_prompt: null },
+        worktrees: { base_branch: null },
+      },
+    });
+
+    await act(async () => {
+      root.render(
+        <ProjectSettingsModal
+          project={{ name: "acorn", repoPath: "/repo/acorn" }}
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    await act(async () => {
+      root.render(
+        <ProjectSettingsModal
+          project={{ name: "acorn", repoPath: "/repo/acorn" }}
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    expect(mockApi.getProjectSettings).toHaveBeenCalledTimes(1);
+    expect(mockApi.listProjectWorktrees).toHaveBeenCalledTimes(1);
+    expect(mockApi.listProjectBranches).toHaveBeenCalledTimes(1);
   });
 
   it("requires confirmation before deleting a worktree used by the active session", async () => {
