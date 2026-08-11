@@ -561,10 +561,33 @@ mod tests {
         let id = Uuid::new_v4();
         let mut spec = long_running_test_spec(id);
         spec.command = "powershell.exe".to_string();
-        spec.args = vec!["-NoLogo".to_string()];
+        spec.args = vec!["-NoLogo".to_string(), "-NoProfile".to_string()];
 
         manager.spawn(spec, registry).unwrap();
         manager.resize(&id, 101, 37).unwrap();
+
+        // Interactive PowerShell asks the terminal for its cursor position
+        // before presenting the first prompt. xterm.js answers this DSR in the
+        // app; this headless test must provide the same terminal response or
+        // PSReadLine waits indefinitely before consuming typed input.
+        let startup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut answered_cursor_queries = 0;
+        while std::time::Instant::now() < startup_deadline {
+            let startup_output = manager
+                .scrollback_snapshot(&id)
+                .map(|snapshot| String::from_utf8_lossy(&snapshot.bytes).into_owned())
+                .unwrap_or_default();
+            let cursor_queries = startup_output.matches("\u{1b}[6n").count();
+            while answered_cursor_queries < cursor_queries {
+                manager.write(&id, b"\x1b[1;1R").unwrap();
+                answered_cursor_queries += 1;
+            }
+            if cursor_queries > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+
         manager
             .write(
                 &id,
@@ -579,6 +602,11 @@ mod tests {
                 .scrollback_snapshot(&id)
                 .map(|snapshot| String::from_utf8_lossy(&snapshot.bytes).into_owned())
                 .unwrap_or_default();
+            let cursor_queries = output.matches("\u{1b}[6n").count();
+            while answered_cursor_queries < cursor_queries {
+                manager.write(&id, b"\x1b[1;1R").unwrap();
+                answered_cursor_queries += 1;
+            }
             if output.contains("ACORN_WINDOWS_PTY_OK") && output.contains("101") {
                 break;
             }
