@@ -10,6 +10,7 @@ name = "acorn_daemon"
 [dependencies]
 acorn-agent = { path = "../acorn-agent" }
 acorn-local-ipc = { path = "../acorn-local-ipc" }
+acorn-platform = { path = "../acorn-platform" }
 acorn-paths = { path = "../acorn-paths" }
 serde = { workspace = true }
 serde_json = { workspace = true }

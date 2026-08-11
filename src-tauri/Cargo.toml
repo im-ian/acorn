@@ -3,6 +3,7 @@ members = [
     ".",
     "crates/acorn-agent",
     "crates/acorn-local-ipc",
+    "crates/acorn-platform",
     "crates/acorn-paths",
     "crates/acorn-daemon",
     "crates/acorn-ipc",
@@ -43,6 +44,12 @@ ignore = "0.4"
 globset = "0.4"
 trash = "5"
 tempfile = "3"
+windows-sys = "0.61"
+
+[patch.crates-io]
+# portable-pty 0.9.0 inverted the Win32 TerminateProcess success check.
+# Pin the upstream fix until a crates.io release contains it.
+portable-pty = { git = "https://github.com/wezterm/wezterm.git", rev = "8afe0ad30739c5aa106c19e8a75b1dfc83bcfb56" }
 
 [profile.release]
 opt-level = 3
@@ -97,6 +104,7 @@ acorn-agent = { path = "crates/acorn-agent" }
 acorn-daemon = { path = "crates/acorn-daemon" }
 acorn-ipc = { path = "crates/acorn-ipc" }
 acorn-local-ipc = { path = "crates/acorn-local-ipc" }
+acorn-platform = { path = "crates/acorn-platform" }
 acorn-paths = { path = "crates/acorn-paths" }
 acorn-pty = { path = "crates/acorn-pty" }
 acorn-session = { path = "crates/acorn-session" }

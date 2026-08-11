@@ -4002,9 +4002,7 @@ fn folder_permission_error(
 /// install hint with a copyable shell command.
 #[tauri::command]
 pub fn get_acorn_ipc_status(state: State<'_, AppState>) -> AcornIpcStatus {
-    let bundled = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("acorn-ipc")));
+    let bundled = acorn_platform::executable::sibling_executable("acorn-ipc").ok();
     let bundled_path = bundled
         .as_ref()
         .map(|p| p.display().to_string())
@@ -4496,19 +4494,15 @@ pub struct MemoryUsage {
     pub processes: Vec<MemoryProcess>,
 }
 
-fn basename(s: &str) -> &str {
-    s.rsplit('/').next().unwrap_or(s)
-}
-
 fn snapshot_basename_matches(snapshot: &ProcessMemorySnapshot, target: &str) -> bool {
-    if basename(&snapshot.name) == target {
+    if acorn_platform::executable::executable_name_matches(&snapshot.name, target) {
         return true;
     }
     snapshot
         .command_line
         .split_whitespace()
         .next()
-        .map(|first| basename(first) == target)
+        .map(|first| acorn_platform::executable::executable_name_matches(first, target))
         .unwrap_or(false)
 }
 
@@ -10322,7 +10316,11 @@ fn session_process_summaries(
 }
 
 fn is_session_process_noise(name: &str) -> bool {
-    let base = basename(name).trim_matches(&['(', ')'][..]);
+    let base = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .trim_matches(&['(', ')'][..]);
     matches!(base, "sh" | "bash" | "zsh" | "tail")
 }
 
@@ -11143,15 +11141,7 @@ fn process_primary_basename_matches(proc: &sysinfo::Process, target: &str) -> bo
 }
 
 fn process_basename_part_matches(s: &str, target: &str) -> bool {
-    fn basename_matches(s: &str, target: &str) -> bool {
-        let base = s.rsplit('/').next().unwrap_or(s);
-        base == target
-            || base.strip_suffix(".js") == Some(target)
-            || base.strip_suffix(".mjs") == Some(target)
-            || base.strip_suffix(".cjs") == Some(target)
-    }
-
-    basename_matches(s, target)
+    acorn_platform::executable::executable_name_matches(s, target)
 }
 
 pub(crate) fn sanitize_worktree_name(name: &str) -> String {

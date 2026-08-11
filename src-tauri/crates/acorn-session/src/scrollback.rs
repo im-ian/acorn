@@ -6,7 +6,7 @@
 //! mount it loads via `scrollback_load` and `term.write`s the bytes back into
 //! xterm before spawning the PTY.
 //!
-//! Atomic writes use a temp file + rename. Files are best-effort: read errors
+//! Atomic writes use same-directory replace semantics. Files are best-effort: read errors
 //! return `None` so the UI can proceed with an empty buffer.
 //!
 //! Callers pass the application's data directory in explicitly so this crate
@@ -178,9 +178,7 @@ where
 }
 
 fn write_atomic(final_path: &Path, bytes: &[u8]) -> ScrollbackResult<()> {
-    let tmp_path = final_path.with_extension("txt.tmp");
-    fs::write(&tmp_path, bytes)?;
-    fs::rename(&tmp_path, final_path)?;
+    acorn_platform::fs::write_atomic(final_path, bytes)?;
     Ok(())
 }
 

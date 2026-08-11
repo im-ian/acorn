@@ -30,9 +30,8 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 use super::paths;
 
-/// Basename the daemon binary ships as. Compared (case-sensitive) against
-/// the running process's `exe()` / `name()` / `argv[0]` to defeat PID
-/// reuse — see [`is_our_daemon`].
+/// Logical basename of the daemon binary. Compared against the running
+/// process's `exe()` / `name()` / `argv[0]` with platform naming rules.
 const DAEMON_EXECUTABLE: &str = "acornd";
 
 /// Outcome of attempting to acquire the daemon singleton lock.
@@ -71,44 +70,10 @@ pub fn release_pid_lock(path: &PathBuf) {
     let _ = std::fs::remove_file(path);
 }
 
-#[cfg(unix)]
-fn is_process_alive(pid: u32) -> bool {
-    // `kill -0` semantics: signal-0 does no work but performs the
-    // permission/existence check. Two edge cases need guarding before
-    // we cast to the `i32` `Pid::from_raw` wants:
-    //   * `pid == 0` is the calling process group — `kill(0, ...)`
-    //     signals every process in our group, which would say "alive"
-    //     for a stale pidfile that happens to read "0".
-    //   * `pid > i32::MAX` overflows on cast to a negative `pid_t`.
-    //     `kill(-1, 0)` has the special meaning "any process the
-    //     caller can signal", which also returns success and would
-    //     mis-report a corrupt pidfile as a live daemon.
-    if pid == 0 || pid > i32::MAX as u32 {
-        return false;
-    }
-    use nix::sys::signal::kill;
-    use nix::unistd::Pid;
-    kill(Pid::from_raw(pid as i32), None).is_ok()
-}
-
-#[cfg(not(unix))]
-fn is_process_alive(_pid: u32) -> bool {
-    // Conservative on non-Unix: report "alive" so the caller refuses
-    // to start a second daemon. The current macOS-only build never
-    // hits this branch; the stub keeps the function buildable when
-    // Windows support is added later.
-    true
-}
-
-/// `kill -0` alone treats a PID as "the daemon" when the OS has reused
-/// that PID slot for an unrelated binary (commonly seen on macOS where
-/// a recycled PID lands on a system XPC like `com.apple.geod`). That
-/// stale-but-alive case causes every restart to fail with `daemon
-/// already running` until the user manually deletes `daemon.pid`.
-/// Require *both* signals: the PID is live, and its executable basename
-/// matches our daemon binary.
+/// A PID claim is valid only while that process exists and its executable
+/// identity matches the daemon. This rejects both dead and recycled PIDs.
 fn is_our_daemon(pid: u32) -> bool {
-    if !is_process_alive(pid) {
+    if pid == 0 {
         return false;
     }
     let target_pid = Pid::from_u32(pid);
@@ -125,23 +90,22 @@ fn is_our_daemon(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-fn basename(s: &str) -> &str {
-    s.rsplit('/').next().unwrap_or(s)
-}
-
 fn process_basename_is_daemon(proc: &sysinfo::Process) -> bool {
     if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
-        if basename(exe) == DAEMON_EXECUTABLE {
+        if acorn_platform::executable::executable_name_matches(exe, DAEMON_EXECUTABLE) {
             return true;
         }
     }
     if let Some(name) = proc.name().to_str() {
-        if basename(name) == DAEMON_EXECUTABLE {
+        if acorn_platform::executable::executable_name_matches(name, DAEMON_EXECUTABLE) {
             return true;
         }
     }
     if let Some(first) = proc.cmd().first() {
-        if basename(&first.to_string_lossy()) == DAEMON_EXECUTABLE {
+        if acorn_platform::executable::executable_name_matches(
+            &first.to_string_lossy(),
+            DAEMON_EXECUTABLE,
+        ) {
             return true;
         }
     }
@@ -153,16 +117,23 @@ fn process_basename_is_daemon(proc: &sysinfo::Process) -> bool {
 /// `Ok(false)` on a refused / not-found connection, and an `Err` only
 /// on unexpected I/O failures the caller may want to log.
 pub fn probe_daemon() -> io::Result<bool> {
-    let path = paths::control_socket_path()?;
-    if !path.exists() {
-        return Ok(false);
+    match super::socket::connect_control() {
+        Ok(stream) => {
+            drop(stream);
+            Ok(true)
+        }
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound
+                    | io::ErrorKind::ConnectionRefused
+                    | io::ErrorKind::TimedOut
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(err) => Err(err),
     }
-    // Use a short timeout via the underlying `interprocess` connect.
-    // We do not import the actual connect logic here to avoid pulling
-    // a socket lib into the lifecycle module — instead, just check that
-    // the file is a socket that the OS thinks is bound. A real connect
-    // happens in `client::connect_control` which has its own timeout.
-    Ok(path.exists())
 }
 
 /// Detach the calling process from the parent's process group on Unix
@@ -262,8 +233,7 @@ mod tests {
         let tmp = short_tmp_root().join(format!("acn-pid-stale-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&tmp).unwrap();
         unsafe { std::env::set_var(paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
-        // Pre-write a guaranteed-dead PID. `1` is `launchd` on macOS and
-        // alive, so we use `u32::MAX` which `kill -0` rejects with ESRCH.
+        // `u32::MAX` cannot name a live process on supported hosts.
         let pidfile = paths::pid_file_path().unwrap();
         std::fs::write(&pidfile, u32::MAX.to_string()).unwrap();
         match try_acquire_pid_lock().unwrap() {
@@ -274,10 +244,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Regression: an alive PID whose binary is *not* `acornd` (e.g. the
-    /// OS recycled the slot to an unrelated process) must be treated as
-    /// stale. Pre-fix, `kill -0` returned success and the daemon refused
-    /// to start with `daemon already running`.
+    /// An alive PID whose binary is not `acornd` must be treated as stale.
     #[test]
     fn pid_lock_reclaims_when_pid_belongs_to_unrelated_binary() {
         let _g = ENV_LOCK.lock();

@@ -704,9 +704,7 @@ pub fn run() {
             // is non-fatal — the bridge will surface a `BinaryNotFound`
             // error on the first daemon-routed call so the user sees
             // exactly which path was searched.
-            let acornd_hint = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("acornd")));
+            let acornd_hint = acorn_platform::executable::sibling_executable("acornd").ok();
             state.daemon_bridge.cache_binary_path(acornd_hint);
             // Eagerly spawn the daemon on a background thread so the
             // StatusBar indicator goes green within the first poll

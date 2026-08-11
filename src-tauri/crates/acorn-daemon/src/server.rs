@@ -369,6 +369,9 @@ impl Daemon {
                 },
             },
             ControlPayload::Shutdown => {
+                if let Err(err) = self.pty.kill_all() {
+                    tracing::warn!(error = %err, "failed to terminate every PTY during shutdown");
+                }
                 self.shutdown_flag.store(true, Ordering::SeqCst);
                 ControlResult::Ack
             }

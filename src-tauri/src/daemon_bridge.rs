@@ -147,11 +147,8 @@ impl DaemonBridge {
     /// `pnpm run tauri dev` mode the daemon is at `target/debug/acornd`
     /// next to `target/debug/acorn`.
     pub fn cache_binary_path(&self, hint: Option<PathBuf>) -> Option<PathBuf> {
-        let resolved = hint.or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("acornd")))
-        });
+        let resolved =
+            hint.or_else(|| acorn_platform::executable::sibling_executable("acornd").ok());
         *self.binary_path.lock() = resolved.clone();
         resolved
     }

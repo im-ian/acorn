@@ -879,11 +879,7 @@ fn owner_rotation_scope(session_id: uuid::Uuid, kind: AgentKind, cwd: &Path) -> 
 }
 
 fn basename_matches(s: &str, target: &str) -> bool {
-    let base = s.rsplit('/').next().unwrap_or(s);
-    base == target
-        || base.strip_suffix(".js") == Some(target)
-        || base.strip_suffix(".mjs") == Some(target)
-        || base.strip_suffix(".cjs") == Some(target)
+    acorn_platform::executable::executable_name_matches(s, target)
 }
 
 fn agent_kind_for_basename(value: &str) -> Option<AgentKind> {

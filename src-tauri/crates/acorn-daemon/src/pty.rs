@@ -24,6 +24,7 @@ use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use acorn_platform::process::ProcessTree;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
@@ -64,6 +65,8 @@ struct PtyHandle {
     master: Mutex<Box<dyn MasterPty + Send>>,
     /// Kill switch shared with the child. Safe to clone freely.
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    /// Owns the complete descendant tree for reliable shutdown on every OS.
+    process_tree: ProcessTree,
     /// Reader-loop stop flag. Tripped by `kill()` or by the wait
     /// thread on natural exit so the read loop never spins on a
     /// half-closed PTY.
@@ -192,10 +195,14 @@ impl PtyManager {
         // color regressions whenever the daemon killswitch was on.
         (self.env_applier)(&mut cmd, spec.env.clone());
 
-        let child = pair
+        let mut child = pair
             .slave
             .spawn_command(cmd)
             .map_err(|e| std::io::Error::other(format!("spawn_command failed: {e}")))?;
+        let process_tree = ProcessTree::from_portable_child(child.as_ref()).map_err(|err| {
+            let _ = child.kill();
+            std::io::Error::other(format!("track PTY process tree failed: {err}"))
+        })?;
         drop(pair.slave);
 
         let writer = pair
@@ -218,6 +225,7 @@ impl PtyManager {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             killer: Mutex::new(killer),
+            process_tree,
             stop: stop.clone(),
             output_tx: output_tx.clone(),
             scrollback: scrollback.clone(),
@@ -321,12 +329,35 @@ impl PtyManager {
                 std::io::Error::new(std::io::ErrorKind::NotFound, format!("no pty for {id}"))
             })?;
         handle.stop.store(true, Ordering::SeqCst);
-        let mut killer = handle.killer.lock();
-        killer
-            .kill()
-            .map_err(|e| std::io::Error::other(format!("kill failed: {e}")))?;
-        drop(killer);
+        if let Err(tree_err) = handle.process_tree.terminate() {
+            let mut killer = handle.killer.lock();
+            killer.kill().map_err(|kill_err| {
+                std::io::Error::other(format!(
+                    "process-tree kill failed ({tree_err}); child kill failed ({kill_err})"
+                ))
+            })?;
+        }
         Ok(())
+    }
+
+    /// Terminate every live PTY tree. Shutdown is best-effort across
+    /// sessions, but reports the first failure after attempting them all.
+    pub fn kill_all(&self) -> std::io::Result<()> {
+        let ids = self
+            .handles
+            .iter()
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        let mut first_error = None;
+        for id in ids {
+            if let Err(err) = self.kill(&id) {
+                first_error.get_or_insert(err);
+            }
+        }
+        match first_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     /// Subscribe to a session's live output stream. The returned receiver
@@ -354,6 +385,12 @@ impl PtyManager {
 
     pub fn contains(&self, id: &Uuid) -> bool {
         self.handles.contains_key(id)
+    }
+}
+
+impl Drop for PtyManager {
+    fn drop(&mut self) {
+        let _ = self.kill_all();
     }
 }
 
