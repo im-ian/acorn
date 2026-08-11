@@ -4347,7 +4347,7 @@ test.describe("sidebar: project lifecycle", () => {
       .toBe("manual-order");
   });
 
-  test("priority sorting respects source workspace tab count", async ({
+  test("priority sorting stays within source root rows", async ({
     page,
     tauri,
   }) => {
@@ -4452,7 +4452,7 @@ test.describe("sidebar: project lifecycle", () => {
     const sourceWorkspace = sidebar.locator(
       '[data-sidebar-workspace-id="/tmp/demo-api"]',
     );
-    const singleTabWorkspace = sidebar.locator(
+    const singleSessionSource = sidebar.locator(
       '[data-sidebar-workspace-id="/tmp/demo-docs"]',
     );
     const sourceReady = sidebar.getByRole("button", {
@@ -4466,20 +4466,20 @@ test.describe("sidebar: project lifecycle", () => {
       .poll(async () => {
         const primaryBox = await primaryWorkspace.boundingBox();
         const sourceBox = await sourceWorkspace.boundingBox();
-        const singleTabBox = await singleTabWorkspace.boundingBox();
+        const singleSessionBox = await singleSessionSource.boundingBox();
         const readyBox = await sourceReady.boundingBox();
         const needsBox = await sourceNeeds.boundingBox();
         if (
           !primaryBox ||
           !sourceBox ||
-          !singleTabBox ||
+          !singleSessionBox ||
           !readyBox ||
           !needsBox
         ) {
           return "missing";
         }
-        return singleTabBox.y < primaryBox.y &&
-          primaryBox.y < sourceBox.y &&
+        return primaryBox.y < sourceBox.y &&
+          sourceBox.y < singleSessionBox.y &&
           needsBox.y < readyBox.y
           ? "scoped-priority-order"
           : "different";
@@ -4834,6 +4834,126 @@ test.describe("sidebar: project lifecycle", () => {
     );
     await expect(primaryRow.getByText("api", { exact: true })).toHaveCount(0);
     await expect(apiRow.getByText("api", { exact: true })).toHaveCount(1);
+  });
+
+  test("source root rows stay manually sortable with priority enabled", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          interface: { prioritizeNeedsInputTabs: true },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api", "/tmp/demo-web"],
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "primary-session",
+        name: "primary",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "api-session",
+        name: "api session",
+        repo_path: "/tmp/demo-api",
+        worktree_path: "/tmp/demo-api",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "waiting_for_input",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "web-session",
+        name: "web session",
+        repo_path: "/tmp/demo-web",
+        worktree_path: "/tmp/demo-web",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:02Z",
+        updated_at: "2026-01-01T00:00:02Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+
+    const apiRow = page.locator(
+      'aside [data-sidebar-workspace-id="/tmp/demo-api"]',
+    );
+    const webRow = page.locator(
+      'aside [data-sidebar-workspace-id="/tmp/demo-web"]',
+    );
+    await expect(apiRow).toBeVisible();
+    await expect(webRow).toBeVisible();
+    await expect(
+      page.getByRole("button", {
+        name: /^api session main · Waiting for input/,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^web session main · Ready/ }),
+    ).toBeVisible();
+
+    await dragBetween(page, webRow, apiRow);
+
+    await expect
+      .poll(async () => {
+        const apiBox = await apiRow.boundingBox();
+        const webBox = await webRow.boundingBox();
+        if (!apiBox || !webBox) return "missing";
+        return webBox.y < apiBox.y ? "web-api" : "api-web";
+      })
+      .toBe("web-api");
+
+    await page.reload();
+
+    await expect
+      .poll(async () => {
+        const apiBox = await apiRow.boundingBox();
+        const webBox = await webRow.boundingBox();
+        if (!apiBox || !webBox) return "missing";
+        return webBox.y < apiBox.y ? "web-api" : "api-web";
+      })
+      .toBe("web-api");
   });
 
   test("the project hover card lists the source folders", async ({
