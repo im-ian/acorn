@@ -107,3 +107,232 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
+
+  windows-nsis:
+    name: Windows x64 NSIS smoke
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      WINDOWS_TARGET: x86_64-pc-windows-msvc
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: 9.15.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: src-tauri
+          shared-key: windows-x86_64
+          cache-on-failure: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test portable release tooling
+        run: >-
+          pnpm exec vitest run
+          scripts/build-sidecar.test.mjs
+          scripts/release-artifacts.test.mjs
+
+      - name: Test Windows transport and process contracts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo test --manifest-path src-tauri/Cargo.toml --locked `
+            -p acorn-local-ipc `
+            -p acorn-platform `
+            -p acorn-daemon
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows native contract tests failed"
+          }
+
+          cargo check --manifest-path src-tauri/Cargo.toml --locked --bin acornd
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows acornd host compile check failed"
+          }
+
+      - name: Build frontend
+        run: pnpm run build:frontend
+
+      # A throwaway updater key lets pull requests exercise Tauri's real
+      # createUpdaterArtifacts path without exposing release secrets. Its
+      # signature intentionally cannot update a production Acorn install.
+      - name: Build and inspect NSIS updater artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $keyPath = Join-Path $env:RUNNER_TEMP "acorn-ci-updater.key"
+          try {
+            pnpm exec tauri signer generate --ci --force --write-keys $keyPath --password "ci-smoke"
+            if ($LASTEXITCODE -ne 0) {
+              throw "failed to generate the ephemeral updater key"
+            }
+
+            $env:TAURI_SIGNING_PRIVATE_KEY = $keyPath
+            $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "ci-smoke"
+            pnpm run tauri build --target $env:WINDOWS_TARGET --bundles nsis --config '{"build":{"beforeBuildCommand":"pnpm run build:sidecar:release-ci"}}' -- --profile release-ci --locked
+            if ($LASTEXITCODE -ne 0) {
+              throw "Windows Tauri build failed"
+            }
+
+            $bundleDir = "src-tauri/target/$env:WINDOWS_TARGET/release-ci/bundle"
+            New-Item -ItemType Directory -Force -Path staged | Out-Null
+            node scripts/release-artifacts.mjs stage-windows $bundleDir staged x86_64
+            if ($LASTEXITCODE -ne 0) {
+              throw "Windows artifact staging failed"
+            }
+            Get-ChildItem -LiteralPath staged
+          }
+          finally {
+            Remove-Item -LiteralPath @($keyPath, "${keyPath}.pub") -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Smoke detached acornd lifecycle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $acornd = "src-tauri/target/$env:WINDOWS_TARGET/release-ci/acornd.exe"
+          $smokeDataDir = Join-Path $env:RUNNER_TEMP "acorn-daemon-smoke-$([guid]::NewGuid().ToString('N'))"
+          $previousDataDir = [Environment]::GetEnvironmentVariable("ACORN_DATA_DIR", "Process")
+          $daemonLaunched = $false
+
+          try {
+            if (!(Test-Path -LiteralPath $acornd -PathType Leaf)) {
+              throw "release-ci acornd.exe is missing: $acornd"
+            }
+            if ((Get-Item -LiteralPath $acornd).Length -eq 0) {
+              throw "release-ci acornd.exe is empty: $acornd"
+            }
+
+            New-Item -ItemType Directory -Force -Path $smokeDataDir | Out-Null
+            $env:ACORN_DATA_DIR = $smokeDataDir
+            $expectedVersion = (Get-Content -LiteralPath src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+
+            & $acornd serve --detach
+            $serveExit = $LASTEXITCODE
+            if ($serveExit -ne 0) {
+              throw "acornd serve --detach failed with exit code $serveExit"
+            }
+            $daemonLaunched = $true
+
+            $ready = $false
+            $statusOutput = @()
+            for ($attempt = 0; $attempt -lt 50; $attempt += 1) {
+              $statusOutput = @(& $acornd status 2>&1)
+              $statusExit = $LASTEXITCODE
+              if ($statusExit -eq 0) {
+                $ready = $true
+                break
+              }
+              if ($statusExit -notin @(1, 2)) {
+                throw "acornd status returned unexpected exit code $statusExit during startup"
+              }
+              Start-Sleep -Milliseconds 200
+            }
+            if (!$ready) {
+              throw "acornd did not become ready: $($statusOutput -join [Environment]::NewLine)"
+            }
+            if ($statusOutput -notcontains "running" -or $statusOutput -notcontains "version=$expectedVersion") {
+              throw "acornd status omitted the running state or expected version ${expectedVersion}: $($statusOutput -join [Environment]::NewLine)"
+            }
+            $statusOutput | Write-Host
+
+            $sessionsOutput = @(& $acornd list-sessions 2>&1)
+            $sessionsExit = $LASTEXITCODE
+            if ($sessionsExit -ne 0) {
+              throw "acornd list-sessions failed with exit code ${sessionsExit}: $($sessionsOutput -join [Environment]::NewLine)"
+            }
+            if ($sessionsOutput -notcontains "(no sessions)") {
+              throw "fresh acornd returned an unexpected session list: $($sessionsOutput -join [Environment]::NewLine)"
+            }
+            $sessionsOutput | Write-Host
+
+            $shutdownOutput = @(& $acornd shutdown 2>&1)
+            $shutdownExit = $LASTEXITCODE
+            if ($shutdownExit -ne 0) {
+              throw "acornd shutdown failed with exit code ${shutdownExit}: $($shutdownOutput -join [Environment]::NewLine)"
+            }
+            if ($shutdownOutput -notcontains "shutdown acknowledged") {
+              throw "acornd shutdown response was unexpected: $($shutdownOutput -join [Environment]::NewLine)"
+            }
+
+            $stopped = $false
+            $stoppedStatusOutput = @()
+            for ($attempt = 0; $attempt -lt 50; $attempt += 1) {
+              $stoppedStatusOutput = @(& $acornd status 2>&1)
+              $stoppedStatusExit = $LASTEXITCODE
+              if ($stoppedStatusExit -eq 2) {
+                $stopped = $true
+                break
+              }
+              if ($stoppedStatusExit -notin @(0, 1)) {
+                throw "acornd status returned unexpected exit code $stoppedStatusExit during shutdown"
+              }
+              Start-Sleep -Milliseconds 200
+            }
+            if (!$stopped -or $stoppedStatusOutput -notcontains "not running") {
+              throw "acornd did not stop with the expected status exit 2: $($stoppedStatusOutput -join [Environment]::NewLine)"
+            }
+            $daemonLaunched = $false
+          }
+          finally {
+            if ($daemonLaunched -and (Test-Path -LiteralPath $acornd -PathType Leaf)) {
+              $cleanupOutput = @(& $acornd shutdown 2>&1)
+              $cleanupExit = $LASTEXITCODE
+              if ($cleanupExit -notin @(0, 1)) {
+                Write-Warning "cleanup shutdown returned exit code ${cleanupExit}: $($cleanupOutput -join [Environment]::NewLine)"
+              }
+              Start-Sleep -Milliseconds 250
+            }
+
+            $pidFile = Join-Path $smokeDataDir "daemon.pid"
+            if (Test-Path -LiteralPath $pidFile -PathType Leaf) {
+              [int]$daemonPid = 0
+              $pidText = (Get-Content -LiteralPath $pidFile -Raw).Trim()
+              if ([int]::TryParse($pidText, [ref]$daemonPid)) {
+                $daemonProcess = Get-Process -Id $daemonPid -ErrorAction SilentlyContinue
+                if ($null -ne $daemonProcess -and $daemonProcess.ProcessName -eq "acornd") {
+                  Stop-Process -Id $daemonPid -Force -ErrorAction SilentlyContinue
+                  Wait-Process -Id $daemonPid -Timeout 5 -ErrorAction SilentlyContinue
+                }
+              }
+            }
+
+            Remove-Item -LiteralPath $smokeDataDir -Recurse -Force -ErrorAction SilentlyContinue
+            if ($null -eq $previousDataDir) {
+              Remove-Item Env:ACORN_DATA_DIR -ErrorAction SilentlyContinue
+            }
+            else {
+              $env:ACORN_DATA_DIR = $previousDataDir
+            }
+          }
+
+      - name: Upload NSIS smoke artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-nsis-smoke-do-not-publish
+          path: staged/**
+          if-no-files-found: error
+          retention-days: 1

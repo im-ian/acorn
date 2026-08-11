@@ -16,10 +16,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:sidecar": "TAURI_SIDECAR_PROFILE=debug ./src-tauri/scripts/build-sidecar.sh",
+    "dev:sidecar": "node src-tauri/scripts/build-sidecar.mjs --profile debug",
     "build": "tsc && vite build",
     "build:frontend": "vite build",
-    "build:sidecar": "./src-tauri/scripts/build-sidecar.sh",
+    "build:sidecar": "node src-tauri/scripts/build-sidecar.mjs --profile release",
+    "build:sidecar:release-ci": "node src-tauri/scripts/build-sidecar.mjs --profile release-ci --force-target",
     "preview": "vite preview",
     "tauri": "tauri",
     "typecheck": "tsc --noEmit",

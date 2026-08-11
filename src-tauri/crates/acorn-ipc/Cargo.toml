@@ -8,8 +8,8 @@ publish = false
 name = "acorn_ipc"
 
 # Companion CLI for the in-app IPC server. The host crate's
-# `scripts/build-sidecar.sh` builds this with `-p acorn-ipc --bin acorn-ipc`
-# and stages it under `src-tauri/binaries/acorn-ipc-<target-triple>` so
+# `scripts/build-sidecar.mjs` builds this with `-p acorn-ipc --bin acorn-ipc`
+# and stages it under `src-tauri/binaries/acorn-ipc-<target-triple>[.exe]` so
 # Tauri's `externalBin` machinery bundles it next to the app.
 [[bin]]
 name = "acorn-ipc"
