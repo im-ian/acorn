@@ -333,6 +333,11 @@ jobs:
             }
           }
 
+          # The successful shutdown probe intentionally leaves the native exit
+          # code at 2 ("not running"). Do not let pwsh report that expected
+          # status as the workflow step's exit code.
+          $global:LASTEXITCODE = 0
+
       - name: Upload NSIS smoke artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
