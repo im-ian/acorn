@@ -76,7 +76,13 @@ fn terminate_platform(tree: &PlatformProcessTree) -> io::Result<()> {
     let kill_result = kill(group, Signal::SIGKILL);
     match (term_result, kill_result) {
         (Err(nix::errno::Errno::ESRCH), Err(nix::errno::Errno::ESRCH)) => Ok(()),
-        (_, Ok(())) | (Ok(()), Err(nix::errno::Errno::ESRCH)) => Ok(()),
+        (_, Ok(()))
+        | (Ok(()), Err(nix::errno::Errno::ESRCH))
+        // Darwin reports EPERM when the group now contains only a zombie
+        // owned by this parent. A successful group-wide SIGTERM immediately
+        // beforehand proves every live member was signalable; the wait owner
+        // will reap the zombie next.
+        | (Ok(()), Err(nix::errno::Errno::EPERM)) => Ok(()),
         (_, Err(err)) => Err(io::Error::other(err.to_string())),
     }
 }
@@ -186,4 +192,123 @@ fn terminate_platform(_tree: &PlatformProcessTree) -> io::Result<()> {
         io::ErrorKind::Unsupported,
         "process-tree termination is unsupported on this platform",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    const ROLE_ENV: &str = "ACORN_PROCESS_TREE_TEST_ROLE";
+    const DIRECTORY_ENV: &str = "ACORN_PROCESS_TREE_TEST_DIRECTORY";
+
+    #[test]
+    fn process_tree_helper() {
+        let Ok(role) = std::env::var(ROLE_ENV) else {
+            return;
+        };
+        let directory = std::path::PathBuf::from(
+            std::env::var_os(DIRECTORY_ENV).expect("helper directory environment"),
+        );
+        if role == "grandchild" {
+            std::thread::sleep(Duration::from_secs(30));
+            return;
+        }
+
+        assert_eq!(role, "child");
+        let go = directory.join("go");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !go.exists() {
+            assert!(Instant::now() < deadline, "parent never released helper");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let mut grandchild = Command::new(std::env::current_exe().unwrap());
+        grandchild
+            .args([
+                "--exact",
+                "process::tests::process_tree_helper",
+                "--nocapture",
+            ])
+            .env(ROLE_ENV, "grandchild")
+            .env(DIRECTORY_ENV, &directory);
+        let grandchild = grandchild.spawn().expect("spawn grandchild helper");
+        std::fs::write(
+            directory.join("grandchild.pid"),
+            grandchild.id().to_string(),
+        )
+        .unwrap();
+        std::mem::forget(grandchild);
+        std::thread::sleep(Duration::from_secs(30));
+    }
+
+    #[test]
+    fn terminates_a_child_and_its_descendant() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "process::tests::process_tree_helper",
+                "--nocapture",
+            ])
+            .env(ROLE_ENV, "child")
+            .env(DIRECTORY_ENV, directory.path());
+        configure_tree_root(&mut command);
+        let mut child = command.spawn().expect("spawn process-tree helper");
+        let tree = ProcessTree::from_std_child(&child).expect("track helper process tree");
+
+        std::fs::write(directory.path().join("go"), b"go").unwrap();
+        let pid_path = directory.path().join("grandchild.pid");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !pid_path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "helper did not publish grandchild pid"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let grandchild_pid = std::fs::read_to_string(pid_path)
+            .unwrap()
+            .trim()
+            .parse::<u32>()
+            .unwrap();
+        assert!(pid_is_alive(grandchild_pid));
+
+        tree.terminate().expect("terminate process tree");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while child.try_wait().unwrap().is_none() || pid_is_alive(grandchild_pid) {
+            assert!(Instant::now() < deadline, "process tree did not terminate");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    fn pid_is_alive(pid: u32) -> bool {
+        let Ok(pid) = i32::try_from(pid) else {
+            return false;
+        };
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
+    }
+
+    #[cfg(windows)]
+    fn pid_is_alive(pid: u32) -> bool {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+        use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+
+        const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
+
+        let raw = unsafe { OpenProcess(SYNCHRONIZE_ACCESS, 0, pid) };
+        if raw.is_null() {
+            return false;
+        }
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw.cast()) };
+        (unsafe { WaitForSingleObject(handle.as_raw_handle().cast(), 0) }) == WAIT_TIMEOUT
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn pid_is_alive(_pid: u32) -> bool {
+        false
+    }
 }

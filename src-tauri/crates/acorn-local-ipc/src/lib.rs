@@ -177,4 +177,44 @@ mod tests {
         std::fs::create_dir_all(&path).unwrap();
         path
     }
+
+    #[cfg(windows)]
+    fn unique_pipe(stem: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(format!(
+            r"\\.\pipe\acorn-local-ipc-test-{}-{}-{stem}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_named_pipe_round_trip() {
+        let endpoint = unique_pipe("roundtrip");
+        let listener = bind(&endpoint).expect("bind named pipe");
+        let client = std::thread::spawn({
+            let endpoint = endpoint.clone();
+            move || {
+                let mut stream = connect(&endpoint).expect("connect named pipe");
+                stream.write_all(b"ping").unwrap();
+            }
+        });
+        let mut server = listener.accept().expect("accept named pipe");
+        let mut bytes = [0; 4];
+        server.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"ping");
+        client.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn duplicate_named_pipe_listener_is_rejected() {
+        let endpoint = unique_pipe("singleton");
+        let listener = bind(&endpoint).expect("first named-pipe bind");
+        assert!(bind(&endpoint).is_err());
+        drop(listener);
+    }
 }
