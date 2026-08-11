@@ -30,17 +30,21 @@ const LOG_TAIL_BYTES: usize = 64 * 1024;
 /// before delegating to the default handler. Safe to call multiple times
 /// (the previous hook is preserved and re-invoked so we do not silence
 /// the default stderr trace developers expect).
-pub fn install() {
+pub fn install(daemon_version: impl Into<String>) {
+    let daemon_version = daemon_version.into();
     let prev = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
-        if let Err(e) = write_crash_log(info) {
+        if let Err(e) = write_crash_log(info, &daemon_version) {
             eprintln!("[acornd] failed to write crash log: {e}");
         }
         prev(info);
     }));
 }
 
-fn write_crash_log(info: &panic::PanicHookInfo<'_>) -> std::io::Result<PathBuf> {
+fn write_crash_log(
+    info: &panic::PanicHookInfo<'_>,
+    daemon_version: &str,
+) -> std::io::Result<PathBuf> {
     let dir = paths::crash_dir()?;
     let now = Utc::now();
     let filename = format!("{}.log", now.format("%Y%m%dT%H%M%SZ"));
@@ -55,11 +59,7 @@ fn write_crash_log(info: &panic::PanicHookInfo<'_>) -> std::io::Result<PathBuf> 
     writeln!(f, "# acornd crash log")?;
     writeln!(f, "timestamp: {}", now.to_rfc3339())?;
     writeln!(f, "pid: {}", std::process::id())?;
-    writeln!(
-        f,
-        "version: {}",
-        option_env!("CARGO_PKG_VERSION").unwrap_or("unknown")
-    )?;
+    writeln!(f, "version: {daemon_version}")?;
     writeln!(f)?;
     writeln!(f, "## panic")?;
     let payload_str = panic_payload_str(info);

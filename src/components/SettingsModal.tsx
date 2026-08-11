@@ -16,7 +16,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import {
   importBackgroundImage,
@@ -164,10 +164,19 @@ const TABS: Array<{ id: Tab; labelKey: TranslationKey }> = [
   { id: "about", labelKey: "settings.tabs.about" },
 ];
 
-const TAB_IDS = new Set<string>(TABS.map((t) => t.id));
 const TAB_ALIASES: Record<string, Tab> = {
   services: "sessions",
 };
+
+function settingsTabsForPlatform(platform: string): typeof TABS {
+  return platform.startsWith("Mac")
+    ? TABS
+    : TABS.filter((tab) => tab.id !== "permissions");
+}
+
+function isWindowsPlatform(platform: string): boolean {
+  return /^(Win32|Win64|Windows)/u.test(platform);
+}
 type SettingsTranslator = Translator;
 
 type ShortcutItem = {
@@ -431,6 +440,17 @@ export function SettingsModal() {
   const [sessionTitlePromptOpen, setSessionTitlePromptOpen] = useState(false);
   const [confirmResetOpen, setConfirmResetOpen] = useState(false);
   const t = useTranslation();
+  const availableTabs = useMemo(
+    () =>
+      settingsTabsForPlatform(
+        typeof navigator === "undefined" ? "" : navigator.platform,
+      ),
+    [],
+  );
+  const availableTabIds = useMemo(
+    () => new Set<string>(availableTabs.map((item) => item.id)),
+    [availableTabs],
+  );
 
   // When the store reports a pending tab (e.g. StatusBar daemon button
   // dispatched `acorn:open-settings` with `tab: "sessions"`),
@@ -443,10 +463,10 @@ export function SettingsModal() {
     if (!open || pendingTab === null) return;
     const pending = consumePendingTab();
     const nextTab = pending ? (TAB_ALIASES[pending] ?? pending) : null;
-    if (nextTab && TAB_IDS.has(nextTab)) {
+    if (nextTab && availableTabIds.has(nextTab)) {
       setTab(nextTab as Tab);
     }
-  }, [open, pendingTab, consumePendingTab]);
+  }, [open, pendingTab, consumePendingTab, availableTabIds]);
 
   useEffect(() => {
     if (!open) setSessionTitlePromptOpen(false);
@@ -483,7 +503,7 @@ export function SettingsModal() {
           lets it shrink instead when the window is too short for 28 rem. */}
       <div className="flex h-[28rem] min-h-0">
         <nav className="flex w-40 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-bg-sidebar/40 px-1.5 py-2">
-          {TABS.map((tabMeta) => (
+          {availableTabs.map((tabMeta) => (
             <button
               key={tabMeta.id}
               type="button"
@@ -1214,7 +1234,7 @@ function SessionSettings() {
               onChange={(n) => patchTerminal({ maxMountedTerminals: n })}
             />
           </Field>
-          <PowerSettings />
+          {IS_MAC ? <PowerSettings /> : null}
         </div>
       </SettingsGroup>
       <ControlSessionInstallSection />
@@ -1273,6 +1293,9 @@ function ControlSessionInstallSection() {
   >(null);
   const [error, setError] = useState<string | null>(null);
   const t = useTranslation();
+  const isWindows = isWindowsPlatform(
+    typeof navigator === "undefined" ? "" : navigator.platform,
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -1320,7 +1343,12 @@ function ControlSessionInstallSection() {
   return (
     <Field
       label={st(t, "settings.sessions.controlCli.label")}
-      hint={st(t, "settings.sessions.controlCli.hint")}
+      hint={st(
+        t,
+        isWindows
+          ? "settings.sessions.controlCli.windowsHint"
+          : "settings.sessions.controlCli.hint",
+      )}
     >
       <div className="space-y-2">
         <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px]">
@@ -1345,30 +1373,34 @@ function ControlSessionInstallSection() {
             {status.bundled_path || "(unknown)"}
           </CodeValue>
         </div>
-        <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px]">
-          <div className="flex items-center justify-between">
-            <span className="text-fg-muted">
-              {st(t, "settings.sessions.controlCli.installedShim")}
-            </span>
-            <span
-              className={cn(
-                "rounded px-1.5 py-0.5 text-[10px] font-medium",
-                activeShim
-                  ? "bg-accent/15 text-accent"
-                  : "bg-bg-elevated text-fg-muted",
-              )}
-            >
-              {activeShim
-                ? st(t, "settings.sessions.controlCli.installed")
-                : st(t, "settings.sessions.controlCli.notInstalled")}
-            </span>
-          </div>
-          <CodeValue overflow="truncate" className="mt-1">
-            {activeShim ? activeShim.path : installTarget}
-          </CodeValue>
-        </div>
-        {!activeShim && status.bundled_exists && installCommand ? (
-          <CommandHint command={installCommand} repoPath={null} />
+        {!isWindows ? (
+          <>
+            <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px]">
+              <div className="flex items-center justify-between">
+                <span className="text-fg-muted">
+                  {st(t, "settings.sessions.controlCli.installedShim")}
+                </span>
+                <span
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[10px] font-medium",
+                    activeShim
+                      ? "bg-accent/15 text-accent"
+                      : "bg-bg-elevated text-fg-muted",
+                  )}
+                >
+                  {activeShim
+                    ? st(t, "settings.sessions.controlCli.installed")
+                    : st(t, "settings.sessions.controlCli.notInstalled")}
+                </span>
+              </div>
+              <CodeValue overflow="truncate" className="mt-1">
+                {activeShim ? activeShim.path : installTarget}
+              </CodeValue>
+            </div>
+            {!activeShim && status.bundled_exists && installCommand ? (
+              <CommandHint command={installCommand} repoPath={null} />
+            ) : null}
+          </>
         ) : null}
         <button
           type="button"

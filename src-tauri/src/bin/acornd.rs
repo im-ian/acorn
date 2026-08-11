@@ -5,7 +5,7 @@
 //! ```text
 //! acornd                    # default → daemon foreground (alias of `serve --foreground`)
 //! acornd serve              # daemon mode (foreground)
-//! acornd serve --detach     # daemon mode, fork into the background (Unix)
+//! acornd serve --detach     # daemon mode, detach into the background
 //! acornd status             # CLI: probe a running daemon, print version + counts
 //! acornd list-sessions      # CLI: enumerate sessions
 //! acornd shutdown           # CLI: ask daemon to quit gracefully
@@ -19,6 +19,11 @@
 use std::io;
 use std::process::ExitCode;
 use std::sync::Arc;
+
+#[cfg(windows)]
+use std::path::Path;
+#[cfg(windows)]
+use std::process::{Command as ProcessCommand, Stdio};
 
 use clap::{Parser, Subcommand};
 
@@ -41,11 +46,10 @@ struct Cli {
 enum Command {
     /// Run the daemon. Default when no subcommand is given.
     Serve {
-        /// Detach from the controlling terminal (Unix only). The default
-        /// is foreground so `acornd` is straightforward to debug from a
-        /// shell. The Acorn app passes `--detach` when spawning the
-        /// daemon as a background process so the daemon survives the
-        /// app exiting.
+        /// Detach from the spawning terminal or process. The default is
+        /// foreground so `acornd` is straightforward to debug from a shell.
+        /// The Acorn app passes `--detach` so the daemon survives the app
+        /// exiting.
         #[arg(long)]
         detach: bool,
     },
@@ -129,7 +133,8 @@ fn main() -> ExitCode {
 
 fn run_serve(detach: bool) -> io::Result<()> {
     // 1) Detach BEFORE doing anything thread-spawning. fork() after we have
-    //    spawned tokio / tracing threads is undefined behavior on Unix.
+    //    spawned tokio / tracing threads is undefined behavior on Unix, and
+    //    the Windows re-exec must not inherit initialized daemon state.
     #[cfg(unix)]
     if detach {
         match daemon::lifecycle::detach_into_own_session()? {
@@ -143,7 +148,12 @@ fn run_serve(detach: bool) -> io::Result<()> {
             daemon::lifecycle::DetachStatus::Detached => {}
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    if detach {
+        spawn_detached_windows()?;
+        return Ok(());
+    }
+    #[cfg(not(any(unix, windows)))]
     if detach {
         return Err(io::Error::other(
             "--detach not supported on this platform yet",
@@ -151,7 +161,7 @@ fn run_serve(detach: bool) -> io::Result<()> {
     }
 
     // 2) Install crash handler so a panic produces a usable bug report.
-    daemon::crash::install();
+    daemon::crash::install(env!("CARGO_PKG_VERSION"));
 
     // 3) Init tracing into the rotating log file. Falls back to stderr
     //    if the file cannot be opened — better than silent loss.
@@ -195,7 +205,7 @@ fn run_serve(detach: bool) -> io::Result<()> {
     // host-only modules into the `acorn-daemon` leaf crate.
     let env_applier: daemon::pty::EnvApplier =
         Arc::new(|cmd, env| pty_env::apply_layered_env(cmd, env));
-    let daemon_handle = daemon::server::Daemon::new(env_applier);
+    let daemon_handle = daemon::server::Daemon::new(env!("CARGO_PKG_VERSION"), env_applier);
     let serve_result = daemon_handle.serve(listeners);
 
     // 7) Cleanup on the way out. Always reached on graceful shutdown;
@@ -206,6 +216,36 @@ fn run_serve(detach: bool) -> io::Result<()> {
     tracing::info!("acornd exited");
 
     serve_result
+}
+
+/// Build the Windows daemon re-exec command. Unlike Unix, Windows has no
+/// safe post-startup `fork`, so `--detach` starts a fresh foreground daemon
+/// process without forwarding `--detach` (which also prevents recursion).
+#[cfg(windows)]
+fn detached_windows_command(executable: &Path) -> ProcessCommand {
+    use std::os::windows::process::CommandExt;
+
+    // Win32 process creation flags from winbase.h. `DETACHED_PROCESS` avoids
+    // inheriting the app's console, while `CREATE_NEW_PROCESS_GROUP` keeps
+    // console control events aimed at the app from reaching the daemon.
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+    let mut command = ProcessCommand::new(executable);
+    command
+        .arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    command
+}
+
+#[cfg(windows)]
+fn spawn_detached_windows() -> io::Result<()> {
+    let executable = std::env::current_exe()?;
+    detached_windows_command(&executable).spawn()?;
+    Ok(())
 }
 
 fn run_status() -> ExitCode {
@@ -567,5 +607,23 @@ fn init_tracing() {
                 .with_ansi(false)
                 .init();
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_detach_tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn detached_reexec_enters_foreground_serve_without_recursing() {
+        let executable = Path::new(r"C:\Program Files\Acorn\acornd.exe");
+        let command = detached_windows_command(executable);
+
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec![OsStr::new("serve")]
+        );
     }
 }

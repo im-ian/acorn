@@ -19,10 +19,17 @@
 
 use std::io;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+#[cfg(any(all(windows, not(debug_assertions)), test))]
+use std::fs::{self, File};
+#[cfg(any(all(windows, not(debug_assertions)), test))]
+use std::io::Read;
+#[cfg(any(all(windows, not(debug_assertions)), test))]
+use std::path::Path;
 
 use parking_lot::Mutex;
 use uuid::Uuid;
@@ -45,6 +52,11 @@ const SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// transient `bind()` race on a stale socket file without hiding a
 /// real "daemon binary is missing" misconfiguration.
 const MAX_SPAWN_RETRIES: u32 = 5;
+/// Bundled Windows executables cannot be replaced while running. Release
+/// builds therefore launch a copy outside the NSIS install directory, under
+/// a package-versioned data directory that is immutable for that release.
+#[cfg(any(all(windows, not(debug_assertions)), test))]
+const DAEMON_BIN_CACHE_DIR: &str = "daemon-bin";
 
 #[derive(Debug)]
 pub enum BridgeError {
@@ -141,14 +153,33 @@ impl DaemonBridge {
         }
     }
 
-    /// Resolve and cache the bundled `acornd` binary path. macOS app
-    /// bundle layout: the GUI binary lives at `Contents/MacOS/acorn`
-    /// and the daemon sits next to it as `Contents/MacOS/acornd`. In
-    /// `pnpm run tauri dev` mode the daemon is at `target/debug/acornd`
-    /// next to `target/debug/acorn`.
+    /// Resolve and cache the bundled `acornd` binary path. On Windows release
+    /// builds, first copy the sidecar into `daemon-bin/<version>/acornd.exe`
+    /// below the data directory. Running the cached copy keeps NSIS free to
+    /// replace the installed sidecar during an update. Debug builds continue
+    /// to run the sibling binary directly so rebuilds are visible immediately.
     pub fn cache_binary_path(&self, hint: Option<PathBuf>) -> Option<PathBuf> {
-        let resolved =
-            hint.or_else(|| acorn_platform::executable::sibling_executable("acornd").ok());
+        let source = hint.or_else(|| acorn_platform::executable::sibling_executable("acornd").ok());
+
+        #[cfg(all(windows, not(debug_assertions)))]
+        let resolved = source.and_then(|source| {
+            let data_dir = match paths::data_dir() {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        source = %source.display(),
+                        %error,
+                        "failed to resolve data directory for cached acornd binary"
+                    );
+                    return None;
+                }
+            };
+            cache_versioned_daemon_binary(&source, &data_dir, env!("CARGO_PKG_VERSION"))
+        });
+
+        #[cfg(any(not(windows), debug_assertions))]
+        let resolved = source;
+
         *self.binary_path.lock() = resolved.clone();
         resolved
     }
@@ -203,14 +234,27 @@ impl DaemonBridge {
         if !path.exists() {
             return Err(BridgeError::BinaryNotFound(path));
         }
-        // `--detach` so the daemon survives the app's exit. Spawn
-        // returns immediately; the detached grandchild keeps running.
+        // `--detach` so the daemon survives the app's exit. Spawn returns
+        // immediately; acornd forks on Unix and re-execs on Windows.
         let data_dir = paths::data_dir()?;
-        Command::new(&path)
+        let mut command = Command::new(&path);
+        command
             .arg("serve")
             .arg("--detach")
             .env(paths::ENV_DATA_DIR_OVERRIDE, data_dir)
-            .spawn()?;
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+
+            // The first acornd process is only a short-lived detached-process
+            // launcher. Suppress its console window as well as the re-exec's.
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        command.spawn()?;
         // Wait for the socket to come up.
         let deadline = Instant::now() + SOCKET_WAIT_TIMEOUT;
         while Instant::now() < deadline {
@@ -411,6 +455,175 @@ impl DaemonBridge {
     }
 }
 
+#[cfg(any(all(windows, not(debug_assertions)), test))]
+fn versioned_daemon_path(source: &Path, data_dir: &Path, version: &str) -> io::Result<PathBuf> {
+    let file_name = source.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("daemon binary has no file name: {}", source.display()),
+        )
+    })?;
+    Ok(data_dir
+        .join(DAEMON_BIN_CACHE_DIR)
+        .join(version)
+        .join(file_name))
+}
+
+#[cfg(any(all(windows, not(debug_assertions)), test))]
+fn cache_versioned_daemon_binary(source: &Path, data_dir: &Path, version: &str) -> Option<PathBuf> {
+    let destination = match versioned_daemon_path(source, data_dir, version) {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(
+                source = %source.display(),
+                %error,
+                "failed to resolve cached acornd binary path"
+            );
+            return None;
+        }
+    };
+    match stage_versioned_daemon_binary(source, data_dir, version) {
+        Ok(path) => Some(path),
+        Err(error) => {
+            // Never fall back to running the installed executable: doing so
+            // would bring back the NSIS file-lock failure this cache exists to
+            // prevent. An invalid existing destination must not run either.
+            tracing::warn!(
+                source = %source.display(),
+                destination = %destination.display(),
+                %error,
+                "failed to stage cached acornd binary"
+            );
+            None
+        }
+    }
+}
+
+/// Copy the bundled daemon to its immutable, package-versioned launch path.
+/// An existing non-empty destination is deliberately reused without replace:
+/// it may be the executable held open by the currently running daemon.
+#[cfg(any(all(windows, not(debug_assertions)), test))]
+fn stage_versioned_daemon_binary(
+    source: &Path,
+    data_dir: &Path,
+    version: &str,
+) -> io::Result<PathBuf> {
+    let destination = versioned_daemon_path(source, data_dir, version)?;
+
+    if let Ok(destination_metadata) = fs::metadata(&destination) {
+        if destination_metadata.is_file() && destination_metadata.len() > 0 {
+            verify_cached_daemon(source, &destination)?;
+            return Ok(destination);
+        }
+        if destination_metadata.is_file() {
+            fs::remove_file(&destination)?;
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "cached daemon destination is not a file: {}",
+                    destination.display()
+                ),
+            ));
+        }
+    }
+
+    let parent = destination.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "cached daemon destination has no parent: {}",
+                destination.display()
+            ),
+        )
+    })?;
+    fs::create_dir_all(parent)?;
+
+    let mut source_file = File::open(source)?;
+    let source_len = source_file.metadata()?.len();
+    if source_len == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("daemon binary is empty: {}", source.display()),
+        ));
+    }
+
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    let copied = io::copy(&mut source_file, staged.as_file_mut())?;
+    if copied != source_len {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!(
+                "daemon binary changed while copying: expected {source_len} bytes, copied {copied}"
+            ),
+        ));
+    }
+    staged.as_file_mut().sync_all()?;
+
+    publish_staged_daemon(staged, source, &destination)
+}
+
+#[cfg(any(all(windows, not(debug_assertions)), test))]
+fn publish_staged_daemon(
+    staged: tempfile::NamedTempFile,
+    source: &Path,
+    destination: &Path,
+) -> io::Result<PathBuf> {
+    match staged.persist_noclobber(destination) {
+        Ok(_) => Ok(destination.to_path_buf()),
+        Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {
+            // Another app instance won the publish race. Apply the same
+            // fail-closed content contract as the initial precheck before
+            // allowing its destination to become executable.
+            verify_cached_daemon(source, destination)?;
+            Ok(destination.to_path_buf())
+        }
+        Err(error) => Err(error.error),
+    }
+}
+
+#[cfg(any(all(windows, not(debug_assertions)), test))]
+fn verify_cached_daemon(source: &Path, destination: &Path) -> io::Result<()> {
+    if files_equal(source, destination)? {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "versioned daemon cache differs from bundled binary: {} != {}",
+            destination.display(),
+            source.display()
+        ),
+    ))
+}
+
+#[cfg(any(all(windows, not(debug_assertions)), test))]
+fn files_equal(left_path: &Path, right_path: &Path) -> io::Result<bool> {
+    let mut left = File::open(left_path)?;
+    let mut right = File::open(right_path)?;
+    let left_len = left.metadata()?.len();
+    if left_len != right.metadata()?.len() {
+        return Ok(false);
+    }
+
+    // Compare fixed-size chunks with read_exact so different short-read
+    // boundaries cannot make identical regular files appear different.
+    let mut left_buffer = [0_u8; 64 * 1024];
+    let mut right_buffer = [0_u8; 64 * 1024];
+    let mut remaining = left_len;
+    while remaining > 0 {
+        let chunk_len = usize::try_from(remaining.min(left_buffer.len() as u64))
+            .expect("comparison chunk length always fits usize");
+        left.read_exact(&mut left_buffer[..chunk_len])?;
+        right.read_exact(&mut right_buffer[..chunk_len])?;
+        if left_buffer[..chunk_len] != right_buffer[..chunk_len] {
+            return Ok(false);
+        }
+        remaining -= chunk_len as u64;
+    }
+    Ok(true)
+}
+
 fn unexpected(result: ControlResult) -> BridgeError {
     BridgeError::Daemon {
         code: acorn_daemon::protocol::ErrorCode::Internal,
@@ -483,5 +696,120 @@ mod tests {
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+    }
+
+    #[test]
+    fn stages_daemon_in_package_version_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("bundle").join("acornd.exe");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"first daemon binary").unwrap();
+
+        let destination = stage_versioned_daemon_binary(&source, temp.path(), "9.8.7").unwrap();
+
+        assert_eq!(
+            destination,
+            temp.path()
+                .join(DAEMON_BIN_CACHE_DIR)
+                .join("9.8.7")
+                .join("acornd.exe")
+        );
+        assert_eq!(std::fs::read(destination).unwrap(), b"first daemon binary");
+    }
+
+    #[test]
+    fn reuses_identical_non_empty_version_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("bundle").join("acornd.exe");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"original").unwrap();
+        let destination = stage_versioned_daemon_binary(&source, temp.path(), "9.8.7").unwrap();
+
+        let reused = stage_versioned_daemon_binary(&source, temp.path(), "9.8.7").unwrap();
+
+        assert_eq!(reused, destination);
+        assert_eq!(std::fs::read(destination).unwrap(), b"original");
+    }
+
+    #[test]
+    fn rejects_same_length_mismatched_version_cache_without_replacing_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("bundle").join("acornd.exe");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"original").unwrap();
+        let destination = stage_versioned_daemon_binary(&source, temp.path(), "9.8.7").unwrap();
+
+        // The equal length ensures verification compares bytes rather than
+        // treating metadata alone as sufficient. The cache helper must fail
+        // closed so spawn_daemon_once cannot execute the stale destination.
+        std::fs::write(&source, b"modified").unwrap();
+        let cached = cache_versioned_daemon_binary(&source, temp.path(), "9.8.7");
+
+        assert!(cached.is_none());
+        assert_eq!(std::fs::read(destination).unwrap(), b"original");
+    }
+
+    #[test]
+    fn replaces_incomplete_empty_version_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("bundle").join("acornd.exe");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"complete binary").unwrap();
+        let destination = versioned_daemon_path(&source, temp.path(), "9.8.7").unwrap();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&destination, b"").unwrap();
+
+        let staged = stage_versioned_daemon_binary(&source, temp.path(), "9.8.7").unwrap();
+
+        assert_eq!(staged, destination);
+        assert_eq!(std::fs::read(destination).unwrap(), b"complete binary");
+    }
+
+    #[test]
+    fn file_verification_compares_bytes_across_chunk_boundaries() {
+        let temp = tempfile::tempdir().unwrap();
+        let left = temp.path().join("left.exe");
+        let right = temp.path().join("right.exe");
+        let bytes = vec![b'A'; 64 * 1024 + 1];
+        std::fs::write(&left, &bytes).unwrap();
+        std::fs::write(&right, &bytes).unwrap();
+        assert!(files_equal(&left, &right).unwrap());
+
+        let mut changed = bytes;
+        *changed.last_mut().unwrap() = b'B';
+        std::fs::write(&right, changed).unwrap();
+        assert!(!files_equal(&left, &right).unwrap());
+    }
+
+    #[test]
+    fn atomic_publish_race_accepts_only_identical_winner() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("acornd-source.exe");
+        let destination = temp.path().join("acornd.exe");
+        std::fs::write(&source, b"expected").unwrap();
+        std::fs::write(&destination, b"expected").unwrap();
+        let staged = tempfile::NamedTempFile::new_in(temp.path()).unwrap();
+        std::fs::write(staged.path(), b"expected").unwrap();
+
+        assert_eq!(
+            publish_staged_daemon(staged, &source, &destination).unwrap(),
+            destination
+        );
+    }
+
+    #[test]
+    fn atomic_publish_race_rejects_mismatched_winner() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("acornd-source.exe");
+        let destination = temp.path().join("acornd.exe");
+        std::fs::write(&source, b"expected").unwrap();
+        std::fs::write(&destination, b"modified").unwrap();
+        let staged = tempfile::NamedTempFile::new_in(temp.path()).unwrap();
+        std::fs::write(staged.path(), b"expected").unwrap();
+
+        let error = publish_staged_daemon(staged, &source, &destination).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read(destination).unwrap(), b"modified");
     }
 }

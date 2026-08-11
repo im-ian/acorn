@@ -24,6 +24,13 @@ export type NativeFileDropHoverTarget = ResolvedFileDropTarget;
 
 const DOM_DRAG_POINT_MAX_AGE_MS = 500;
 
+export function resolveNativeDropScaleFactor(
+  candidate: number,
+  fallback = 1,
+): number {
+  return Number.isFinite(candidate) && candidate > 0 ? candidate : fallback;
+}
+
 function toLogicalPoint(
   position: NativeDropPosition,
   scaleFactor: number,
@@ -102,8 +109,10 @@ export function useNativeFileDropBridge(): NativeFileDropHoverTarget | null {
     if (!("__TAURI_INTERNALS__" in window)) return;
 
     let disposed = false;
-    let scaleFactor = window.devicePixelRatio || 1;
-    let unlisten: (() => void) | null = null;
+    let scaleFactor = resolveNativeDropScaleFactor(window.devicePixelRatio, 1);
+    let receivedScaleChange = false;
+    let dragUnlisten: (() => void) | null = null;
+    let scaleUnlisten: (() => void) | null = null;
     let currentNativePaths: string[] = [];
     let lastDomDragPoint: { point: FileDropPoint; at: number } | null = null;
 
@@ -125,15 +134,36 @@ export function useNativeFileDropBridge(): NativeFileDropHoverTarget | null {
 
     window.addEventListener("dragover", onDomDragOver, true);
 
-    void getCurrentWindow()
+    const currentWindow = getCurrentWindow();
+    void currentWindow
       .scaleFactor()
       .then((factor) => {
-        if (!disposed && Number.isFinite(factor) && factor > 0) {
-          scaleFactor = factor;
+        if (!disposed && !receivedScaleChange) {
+          scaleFactor = resolveNativeDropScaleFactor(factor, scaleFactor);
         }
       })
       .catch((err: unknown) => {
         console.debug("[nativeFileDrop] scale factor probe failed", err);
+      });
+
+    void currentWindow
+      .onScaleChanged(({ payload }) => {
+        if (disposed) return;
+        receivedScaleChange = true;
+        scaleFactor = resolveNativeDropScaleFactor(
+          payload.scaleFactor,
+          scaleFactor,
+        );
+      })
+      .then((off) => {
+        if (disposed) {
+          off();
+          return;
+        }
+        scaleUnlisten = off;
+      })
+      .catch((err: unknown) => {
+        console.debug("[nativeFileDrop] scale change listener failed", err);
       });
 
     void getCurrentWebview()
@@ -184,7 +214,7 @@ export function useNativeFileDropBridge(): NativeFileDropHoverTarget | null {
           off();
           return;
         }
-        unlisten = off;
+        dragUnlisten = off;
       })
       .catch((err: unknown) => {
         console.error("[nativeFileDrop] listener setup failed", err);
@@ -193,7 +223,8 @@ export function useNativeFileDropBridge(): NativeFileDropHoverTarget | null {
     return () => {
       disposed = true;
       window.removeEventListener("dragover", onDomDragOver, true);
-      unlisten?.();
+      dragUnlisten?.();
+      scaleUnlisten?.();
     };
   }, []);
 

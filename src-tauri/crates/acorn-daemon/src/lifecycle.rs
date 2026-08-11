@@ -10,13 +10,12 @@
 //!    the executable check, OS PID reuse (e.g. macOS handing the slot to
 //!    a system XPC) wedges every restart with `daemon already running`.
 //!
-//! 2. **Detach from the spawning Acorn process group.** The app launches
-//!    `acornd serve --detach`; that child forks once, calls `setsid()` to
-//!    leave the app's session, forks again (so it is not a session
-//!    leader and cannot accidentally re-acquire a controlling TTY), and
-//!    only then exec's the daemon proper. Result: when the user quits
-//!    the Acorn app, SIGTERM to the app's group does NOT reach the
-//!    daemon. The daemon only exits on an explicit `Shutdown` RPC.
+//! 2. **Detach from the spawning Acorn process group.** On Unix, the app's
+//!    `acornd serve --detach` child forks once, calls `setsid()`, then forks
+//!    again so the daemon cannot re-acquire a controlling TTY. On Windows,
+//!    the `acornd` entry point re-execs itself with detached-process creation
+//!    flags before entering this crate. In both cases, quitting Acorn leaves
+//!    the daemon running until an explicit `Shutdown` RPC.
 //!
 //! 3. **Probe** — used by the app's pre-spawn check ("is a daemon already
 //!    running on the canonical socket?"). Just a `connect()` attempt with
@@ -198,10 +197,18 @@ mod tests {
     use super::*;
     use crate::test_env::ENV_LOCK;
 
-    /// Short tmp root to dodge `sockaddr_un` length limits when the
-    /// same dir is reused for socket-bearing tests.
+    /// Unix needs a short root to dodge `sockaddr_un` length limits. Windows
+    /// must use the account's writable temporary directory rather than the
+    /// Unix-specific `/tmp` path (which would resolve to `C:\tmp`).
     fn short_tmp_root() -> PathBuf {
-        PathBuf::from("/tmp")
+        #[cfg(unix)]
+        {
+            PathBuf::from("/tmp")
+        }
+        #[cfg(not(unix))]
+        {
+            std::env::temp_dir()
+        }
     }
 
     #[test]

@@ -13,7 +13,7 @@
 //! * Acorn app's `sessions.json` is the rich source-of-truth; the
 //!   daemon keeps only the minimum metadata needed to reconcile.
 //! * Daemon survives Acorn-app exit. Only an explicit `Shutdown` RPC
-//!   (or a `SIGKILL` from outside) terminates it.
+//!   (or forced external process termination) terminates it.
 //! * Crash recovery: panic hook writes a timestamped crash file; the
 //!   app auto-respawns the daemon on socket-probe failure.
 

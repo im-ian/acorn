@@ -102,9 +102,17 @@ mod tests {
     /// returns `/var/folders/qb/xxxxxxxx/T/` which already eats ~50 chars
     /// before our suffix; combined with `daemon-stream.sock` (18 chars)
     /// we'd overflow the 104-byte `sockaddr_un` cap on real socket
-    /// binds. `/tmp` is always short and writable on macOS / Linux.
+    /// binds. Unix `/tmp` is short; Windows uses the account's writable temp
+    /// directory instead of interpreting `/tmp` as `C:\tmp`.
     fn short_tmp_root() -> PathBuf {
-        PathBuf::from("/tmp")
+        #[cfg(unix)]
+        {
+            PathBuf::from("/tmp")
+        }
+        #[cfg(not(unix))]
+        {
+            std::env::temp_dir()
+        }
     }
 
     #[test]
@@ -118,7 +126,14 @@ mod tests {
         assert_eq!(dd, tmp);
         assert!(tmp.exists());
         let sock = control_socket_path().unwrap();
+        #[cfg(unix)]
         assert_eq!(sock.parent().unwrap(), tmp);
+        #[cfg(windows)]
+        {
+            let rendered = sock.to_string_lossy();
+            assert!(rendered.starts_with(r"\\.\pipe\acorn-"));
+            assert!(rendered.ends_with("-daemon"));
+        }
         unsafe { std::env::remove_var(ENV_DATA_DIR_OVERRIDE) };
         let _ = std::fs::remove_dir_all(&tmp);
     }

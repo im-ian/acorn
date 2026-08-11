@@ -5,7 +5,9 @@ import {
   buildProjectRootIndex,
   defaultProjectFolderId,
   ensureProjectFolders,
+  findWorktreeWorkspaceForPath,
   isGroupDefaultFolder,
+  isPathInsideOrEqual,
   makeDefaultProjectFolder,
   projectFolderDisplayName,
   projectGroupSpansMultipleRoots,
@@ -150,6 +152,25 @@ describe("project folders", () => {
 
     expect(groups[0].folders[0].sessions.map((s) => s.id)).toEqual(["root"]);
     expect(groups[0].folders[1].sessions.map((s) => s.id)).toEqual(["worker"]);
+  });
+
+  it("matches Windows workspace paths across case and separator variants", () => {
+    const repoPath = String.raw`C:\Repo\App`;
+    const worktreePath = String.raw`C:\Repo\App\.acorn\worktrees\feature`;
+    const worktree = folder("worktree", repoPath, worktreePath, "Worktree");
+    const folders = [makeDefaultProjectFolder(repoPath), worktree];
+    const worker = session("worker", repoPath, {
+      worktree_path: "c:/repo/app/.acorn/worktrees/feature/",
+    });
+
+    expect(
+      findWorktreeWorkspaceForPath(
+        folders,
+        "c:/REPO/app/.acorn/worktrees/feature",
+      ),
+    ).toBe(worktree);
+    expect(resolveProjectFolderIdForSession(folders, worker)).toBe("worktree");
+    expect(isPathInsideOrEqual("c:/repo/app/src", repoPath)).toBe(true);
   });
 
   it("ignores stale assignments that move sessions across worktree workspace boundaries", () => {

@@ -83,18 +83,24 @@ fn connect_one(path: &PathBuf) -> io::Result<acorn_local_ipc::Stream> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parking_lot::Mutex;
+    use crate::test_env::ENV_LOCK;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// macOS / Linux: `sockaddr_un::sun_path` is 104 bytes (mac) / 108
     /// (linux). The default `std::env::temp_dir()` on macOS resolves to
     /// `/var/folders/qb/.../T/` which leaves only ~20-30 chars for the
-    /// suffix before we overflow. `/tmp` keeps us comfortably under.
+    /// suffix before we overflow. Unix `/tmp` keeps us comfortably under;
+    /// Windows uses the account's writable temporary directory.
     fn short_tmp_root() -> PathBuf {
-        PathBuf::from("/tmp")
+        #[cfg(unix)]
+        {
+            PathBuf::from("/tmp")
+        }
+        #[cfg(not(unix))]
+        {
+            std::env::temp_dir()
+        }
     }
 
     #[test]

@@ -3,8 +3,9 @@
 //! `acorn-ipc` CLI in this crate's `src/bin/acorn-ipc.rs`.
 //!
 //! Each request/response pair travels as a single newline-terminated JSON
-//! object over a Unix domain socket. The CLI sends exactly one request and
-//! reads exactly one response, then closes the connection.
+//! object over the platform's local IPC transport (Unix domain socket or
+//! Windows named pipe). The CLI sends exactly one request and reads exactly
+//! one response, then closes the connection.
 //!
 //! Errors are returned as a typed `Response::Error { code, message }` rather
 //! than as a transport-level signal, so the CLI can render meaningful exit

@@ -181,6 +181,14 @@ import { useAppStore } from "../store";
 import { SettingsModal, SHORTCUT_GROUPS } from "./SettingsModal";
 
 const mockApi = vi.mocked(api);
+const originalNavigatorPlatform = navigator.platform;
+
+function setNavigatorPlatform(platform: string) {
+  Object.defineProperty(navigator, "platform", {
+    value: platform,
+    configurable: true,
+  });
+}
 
 function cloneSettings() {
   return structuredClone(DEFAULT_SETTINGS);
@@ -565,6 +573,7 @@ describe("SettingsModal font controls", () => {
     }
     root = null;
     document.body.innerHTML = "";
+    setNavigatorPlatform(originalNavigatorPlatform);
     vi.clearAllMocks();
   });
 
@@ -899,6 +908,35 @@ describe("SettingsModal font controls", () => {
     expect(valueInput?.disabled).toBe(true);
     expect(increase).toBeInstanceOf(HTMLButtonElement);
     expect((increase as HTMLButtonElement | undefined)?.disabled).toBe(true);
+  });
+
+  it("uses Windows control CLI guidance without Unix shim or macOS power controls", async () => {
+    setNavigatorPlatform("Win32");
+    mocks.getAcornIpcStatus.mockResolvedValue({
+      bundled_path: "C:\\Program Files\\Acorn\\acorn-ipc.exe",
+      bundled_exists: true,
+      shim_paths: [],
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openSessionsTab();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const bodyText = document.body.textContent ?? "";
+    expect(bodyText).toContain(
+      "automatically added to PATH inside Acorn terminals",
+    );
+    expect(bodyText).toContain("C:\\Program Files\\Acorn\\acorn-ipc.exe");
+    expect(bodyText).not.toContain("Installed shim");
+    expect(bodyText).not.toContain("/usr/local/bin");
+    expect(bodyText).not.toContain("sudo ln -sf");
+    expect(bodyText).not.toContain("Keep this Mac awake");
   });
 
   it("maps legacy Services deep links to the Sessions tab", async () => {
@@ -1643,6 +1681,7 @@ describe("SettingsModal font controls", () => {
   });
 
   it("requires confirmation before resetting macOS permissions", async () => {
+    setNavigatorPlatform("MacIntel");
     mocks.resetMacosDeveloperPermissions.mockResolvedValue([]);
     mocks.warmMacosFolderPermissions.mockResolvedValue([]);
 
@@ -1680,6 +1719,24 @@ describe("SettingsModal font controls", () => {
 
     expect(mocks.resetMacosDeveloperPermissions).toHaveBeenCalledTimes(1);
     expect(mocks.warmMacosFolderPermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides macOS permission controls on Windows", async () => {
+    setNavigatorPlatform("Win32");
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+
+    const permissionButton = Array.from(
+      document.querySelectorAll("button"),
+    ).find(
+      (element) =>
+        element.textContent === "Permissions" || element.textContent === "권한",
+    );
+    expect(permissionButton).toBeUndefined();
+    expect(document.body.textContent).not.toContain("macOS privacy permissions");
   });
 });
 

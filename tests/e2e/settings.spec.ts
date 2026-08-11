@@ -676,6 +676,12 @@ test.describe("settings modal", () => {
     page,
     tauri,
   }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "platform", {
+        get: () => "MacIntel",
+        configurable: true,
+      });
+    });
     await tauri.handle("reset_macos_developer_permissions", () => {
       const w = window as unknown as { __permissionResetCalls?: number };
       w.__permissionResetCalls = (w.__permissionResetCalls ?? 0) + 1;

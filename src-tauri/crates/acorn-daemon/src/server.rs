@@ -40,21 +40,27 @@ use super::wire::read_request_frame_line;
 pub struct Daemon {
     pub registry: Arc<SessionRegistry>,
     pub pty: Arc<PtyManager>,
+    daemon_version: String,
     started_at: Instant,
     shutdown_flag: Arc<AtomicBool>,
     next_seq: AtomicU64,
 }
 
 impl Daemon {
-    /// `env_applier` is threaded into [`PtyManager`] and called once per
-    /// spawned PTY to layer login-shell env + caller overrides; see
-    /// [`crate::pty::EnvApplier`]. The host crate's `acornd` binary
+    /// `daemon_version` comes from the host `acornd` package rather than this
+    /// leaf crate's independent Cargo version. `env_applier` is threaded into
+    /// [`PtyManager`] and called once per spawned PTY to layer login-shell env
+    /// + caller overrides; see [`crate::pty::EnvApplier`]. The host binary
     /// provides the same closure that wires `pty_env::apply_layered_env`,
     /// keeping daemon and in-process spawn paths byte-identical.
-    pub fn new(env_applier: crate::pty::EnvApplier) -> Arc<Self> {
+    pub fn new(
+        daemon_version: impl Into<String>,
+        env_applier: crate::pty::EnvApplier,
+    ) -> Arc<Self> {
         Arc::new(Self {
             registry: SessionRegistry::new(),
             pty: PtyManager::new(env_applier),
+            daemon_version: daemon_version.into(),
             started_at: Instant::now(),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             next_seq: AtomicU64::new(1),
@@ -247,7 +253,7 @@ impl Daemon {
     ) -> ControlResponse {
         let payload = match req.payload {
             ControlPayload::Ping => ControlResult::Pong {
-                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                daemon_version: self.daemon_version.clone(),
                 uptime_seconds: self.uptime_seconds(),
             },
             ControlPayload::ListSessions => ControlResult::Sessions {
@@ -360,7 +366,7 @@ impl Daemon {
             }
             ControlPayload::Status => ControlResult::Status {
                 snapshot: StatusSnapshot {
-                    daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                    daemon_version: self.daemon_version.clone(),
                     uptime_seconds: self.uptime_seconds(),
                     session_count_total: self.registry.count_total() as u32,
                     session_count_alive: self.registry.count_alive() as u32,
@@ -684,7 +690,7 @@ mod tests {
 
     #[test]
     fn ping_returns_pong() {
-        let d = Daemon::new(noop_env_applier());
+        let d = Daemon::new("test-version", noop_env_applier());
         let req = ControlRequest {
             seq: 1,
             payload: ControlPayload::Ping,
@@ -692,14 +698,35 @@ mod tests {
         let resp = d.dispatch(req, None);
         assert_eq!(resp.seq, 1);
         match resp.payload {
-            ControlResult::Pong { .. } => {}
+            ControlResult::Pong { daemon_version, .. } => {
+                assert_eq!(daemon_version, "test-version");
+            }
             other => panic!("expected pong, got {other:?}"),
         }
     }
 
     #[test]
+    fn status_reports_the_host_binary_version() {
+        let d = Daemon::new("1.32.0-host", noop_env_applier());
+        let resp = d.dispatch(
+            ControlRequest {
+                seq: 4,
+                payload: ControlPayload::Status,
+            },
+            None,
+        );
+
+        match resp.payload {
+            ControlResult::Status { snapshot } => {
+                assert_eq!(snapshot.daemon_version, "1.32.0-host");
+            }
+            other => panic!("expected status, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn forget_alive_session_is_rejected() {
-        let d = Daemon::new(noop_env_applier());
+        let d = Daemon::new("test-version", noop_env_applier());
         let id = uuid::Uuid::new_v4();
         d.registry.insert(super::super::session::DaemonSession::new(
             id,
@@ -722,7 +749,7 @@ mod tests {
 
     #[test]
     fn forget_dead_session_succeeds() {
-        let d = Daemon::new(noop_env_applier());
+        let d = Daemon::new("test-version", noop_env_applier());
         let id = uuid::Uuid::new_v4();
         let mut session = super::super::session::DaemonSession::new(
             id,

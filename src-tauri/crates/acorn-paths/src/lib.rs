@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use directories::ProjectDirs;
+use directories::{ProjectDirs, UserDirs};
 
 pub const ENV_DATA_DIR_OVERRIDE: &str = "ACORN_DATA_DIR";
 pub const ENV_PROFILE: &str = "ACORN_PROFILE";
@@ -57,6 +57,15 @@ pub fn base_data_dir() -> io::Result<PathBuf> {
         )
     })?;
     Ok(pd.data_dir().to_path_buf())
+}
+
+/// Resolve the current user's home directory through the OS account APIs.
+/// This works for Explorer-launched Windows apps where `HOME` is normally
+/// absent, while preserving the conventional home directory on Unix.
+pub fn user_home_dir() -> io::Result<PathBuf> {
+    UserDirs::new()
+        .map(|dirs| dirs.home_dir().to_path_buf())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "user home directory unavailable"))
 }
 
 fn ensure_private_dir(path: &Path) -> io::Result<()> {

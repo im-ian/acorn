@@ -191,6 +191,13 @@ describe("resolveHotkeys", () => {
     expect(DEFAULT_HOTKEYS.renameItem).toBe("F2");
   });
 
+  it("keeps the persisted commits binding unchanged for contextual terminal routing", () => {
+    expect(DEFAULT_HOTKEYS.toggleCommits).toBe("$mod+Shift+c");
+    expect(
+      resolveHotkeys({ toggleCommits: "$mod+Alt+KeyU" }).toggleCommits,
+    ).toBe("$mod+Alt+KeyU");
+  });
+
   it("migrates persisted legacy defaults to current defaults", () => {
     const hotkeys = resolveHotkeys({
       previousConversation: "$mod+ArrowLeft",
