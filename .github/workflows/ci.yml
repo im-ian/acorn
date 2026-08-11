@@ -189,7 +189,9 @@ jobs:
               throw "failed to generate the ephemeral updater key"
             }
 
-            $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
+            # The updater bundler consumes the key contents, not the signer
+            # command's separate TAURI_SIGNING_PRIVATE_KEY_PATH variable.
+            $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath $keyPath -Raw
             $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "ci-smoke"
             # Pass the override by path because PowerShell's native argument
             # marshalling strips the quotes from an inline JSON value.
