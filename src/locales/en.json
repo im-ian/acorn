@@ -2571,10 +2571,10 @@
   "backgroundSessions": {
     "daemon": {
       "label": "Daemon",
-      "hint": "The acornd daemon owns long-running terminal sessions. With the daemon on, Acorn can quit and reopen without losing your PTYs. Off falls back to the legacy in-process path - sessions die with the app.",
+      "hint": "The acornd daemon owns long-running terminal sessions. With the daemon on, Acorn can quit and reopen without losing your PTYs. Turning it off sends new sessions to the in-process path; existing daemon sessions remain attached until you quit them.",
       "enableLabel": "Enable background sessions (acornd)",
       "enabledDescription": "Sessions persist across Acorn restarts until you explicitly quit them.",
-      "disabledDescription": "Sessions are bound to this Acorn process - closing the app kills them."
+      "disabledDescription": "New sessions are bound to this Acorn process. Existing daemon sessions keep running until you quit them."
     },
     "status": {
       "label": "Status",

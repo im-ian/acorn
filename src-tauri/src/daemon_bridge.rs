@@ -3,9 +3,9 @@
 //!
 //! * Daemon spawn lifecycle (probe → spawn detached → wait for socket
 //!   to come up → cache a persistent `ControlConn`).
-//! * Settings-gated routing — when the user has the daemon disabled,
-//!   every helper short-circuits to `Err(BridgeError::Disabled)` so
-//!   the caller can fall back to the legacy in-process PTY path.
+//! * Settings-gated routing — disabling the daemon sends new sessions to the
+//!   in-process PTY path, while existing daemon-bound sessions retain passive
+//!   access to their original owner until explicitly terminated.
 //! * Auto-respawn on connection failure up to `MAX_SPAWN_RETRIES`
 //!   before surfacing the error to the user.
 //!
@@ -60,8 +60,8 @@ const DAEMON_BIN_CACHE_DIR: &str = "daemon-bin";
 
 #[derive(Debug)]
 pub enum BridgeError {
-    /// The user has the daemon toggle off in Settings — the caller
-    /// should fall back to the legacy in-process PTY path.
+    /// The user has the daemon toggle off and no existing daemon is available.
+    /// Only an unbound session may fall back to the in-process PTY path.
     Disabled,
     /// The `acornd` binary could not be located on disk. Returned with
     /// the path we expected to find it at so the caller can render a
@@ -120,6 +120,10 @@ pub struct SpawnOutcome {
 pub struct DaemonBridge {
     enabled: AtomicBool,
     conn: Mutex<Option<ControlConn>>,
+    /// True while the cached connection intentionally targets an older
+    /// daemon because it still owns live PTYs. Once those sessions end,
+    /// `ensure_connection` replaces the idle daemon before the next RPC.
+    incompatible_daemon: AtomicBool,
     /// Path to the `acornd` binary discovered at app startup. Cached so
     /// we do not re-resolve it on every reconnect.
     binary_path: Mutex<Option<PathBuf>>,
@@ -133,6 +137,7 @@ impl DaemonBridge {
             // runtime via `set_enabled`.
             enabled: AtomicBool::new(true),
             conn: Mutex::new(None),
+            incompatible_daemon: AtomicBool::new(false),
             binary_path: Mutex::new(None),
         })
     }
@@ -141,16 +146,20 @@ impl DaemonBridge {
         self.enabled.load(Ordering::SeqCst)
     }
 
-    /// Toggle the daemon path on/off. Off-flip drops the cached
-    /// connection so the next call cannot accidentally hit a stale
-    /// daemon channel; the daemon process itself is left running
-    /// (the user may flip back on; killing the daemon should be
-    /// explicit).
+    /// Toggle the default route for new sessions. Existing daemon-backed
+    /// sessions keep their cached connection so disabling persistence cannot
+    /// strand their input or tempt callers to create a duplicate local PTY.
+    /// Killing the daemon and its PTYs remains an explicit user action.
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::SeqCst);
-        if !enabled {
-            *self.conn.lock() = None;
-        }
+    }
+
+    /// Drop only the app-side control connection. The daemon and its PTYs are
+    /// untouched; the next enabled call probes and reconnects.
+    pub fn reset_connection(&self) {
+        let mut conn = self.conn.lock();
+        *conn = None;
+        self.incompatible_daemon.store(false, Ordering::SeqCst);
     }
 
     /// Resolve and cache the bundled `acornd` binary path. On Windows release
@@ -190,10 +199,20 @@ impl DaemonBridge {
 
     /// Ensure a daemon is running and we have a live `ControlConn` to
     /// it. Spawns the daemon if no instance answers the canonical
-    /// socket. Returns `Err(Disabled)` when the killswitch is off so
-    /// the caller can route to the in-process PTY path.
+    /// socket. Returns `Disabled` for explicit lifecycle callers when the
+    /// killswitch is off; session RPCs use the private passive-connect path so
+    /// already-bound sessions remain controllable without starting a daemon.
     pub fn ensure_connection(&self) -> BridgeResult<()> {
-        if !self.is_enabled() {
+        self.ensure_connection_inner(false)
+    }
+
+    fn ensure_connection_for_existing_session(&self) -> BridgeResult<()> {
+        self.ensure_connection_inner(true)
+    }
+
+    fn ensure_connection_inner(&self, allow_existing_when_disabled: bool) -> BridgeResult<()> {
+        let enabled = self.is_enabled();
+        if !enabled && !allow_existing_when_disabled {
             return Err(BridgeError::Disabled);
         }
         // Hold the lock across the whole probe/spawn/connect sequence.
@@ -203,14 +222,120 @@ impl DaemonBridge {
         // freshly opened connection get silently dropped.
         let mut conn = self.conn.lock();
         if conn.is_some() {
+            if !enabled || !self.incompatible_daemon.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+
+            // An older daemon was preserved for live PTYs. Recheck only while
+            // that compatibility state is active; once it becomes idle, drop
+            // the stale channel and replace it before servicing this RPC.
+            let observed = client::probe_status()?;
+            if observed.as_ref().is_some_and(|snapshot| {
+                daemon_version_action(snapshot, env!("CARGO_PKG_VERSION"))
+                    == DaemonVersionAction::PreserveActive
+            }) {
+                return Ok(());
+            }
+            *conn = None;
+        }
+
+        let observed = client::probe_status()?;
+        if !enabled {
+            let Some(snapshot) = observed else {
+                return Err(BridgeError::Disabled);
+            };
+            self.incompatible_daemon.store(
+                snapshot.daemon_version != env!("CARGO_PKG_VERSION"),
+                Ordering::SeqCst,
+            );
+            *conn = Some(ControlConn::persistent("acorn-app")?);
             return Ok(());
         }
-        // No cached conn — probe; if down, spawn; then connect.
-        if client::probe_status()?.is_none() {
-            self.spawn_daemon_with_retries()?;
-        }
+
+        let incompatible = self.prepare_enabled_daemon(observed)?;
         *conn = Some(ControlConn::persistent("acorn-app")?);
+        self.incompatible_daemon
+            .store(incompatible, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Ensure the canonical endpoint is served by this app version unless an
+    /// older daemon still owns live PTYs. Returns whether such an older daemon
+    /// was deliberately preserved.
+    fn prepare_enabled_daemon(&self, observed: Option<StatusSnapshot>) -> BridgeResult<bool> {
+        let expected = env!("CARGO_PKG_VERSION");
+        match observed {
+            None => {
+                self.spawn_daemon_with_retries()?;
+                self.require_expected_daemon_version(expected)?;
+                Ok(false)
+            }
+            Some(snapshot) => match daemon_version_action(&snapshot, expected) {
+                DaemonVersionAction::UseCurrent => Ok(false),
+                DaemonVersionAction::PreserveActive => {
+                    // One canonical endpoint means the old process remains
+                    // the daemon generation for all RPCs, including new
+                    // spawns, until every PTY in that generation drains.
+                    tracing::warn!(
+                        daemon_version = %snapshot.daemon_version,
+                        app_version = expected,
+                        live_sessions = snapshot.session_count_alive,
+                        "preserving older acornd until its live PTYs finish"
+                    );
+                    Ok(true)
+                }
+                DaemonVersionAction::RestartIdle => {
+                    self.replace_idle_daemon(&snapshot, expected)?;
+                    Ok(false)
+                }
+            },
+        }
+    }
+
+    fn replace_idle_daemon(&self, snapshot: &StatusSnapshot, expected: &str) -> BridgeResult<()> {
+        tracing::info!(
+            daemon_version = %snapshot.daemon_version,
+            app_version = expected,
+            "replacing idle daemon from another app version"
+        );
+        let response = client::one_shot(ControlPayload::Shutdown)?;
+        match Self::unpack_error(response.payload)? {
+            ControlResult::Ack => {}
+            other => return Err(unexpected(other)),
+        }
+
+        let deadline = Instant::now() + SOCKET_WAIT_TIMEOUT;
+        while Instant::now() < deadline {
+            match client::probe_status()? {
+                None => {
+                    self.spawn_daemon_with_retries()?;
+                    return self.require_expected_daemon_version(expected);
+                }
+                Some(current) if current.daemon_version == expected => return Ok(()),
+                Some(_) => std::thread::sleep(SOCKET_POLL_INTERVAL),
+            }
+        }
+        Err(BridgeError::Io(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "idle acornd {} did not release its endpoint for app {expected}",
+                snapshot.daemon_version
+            ),
+        )))
+    }
+
+    fn require_expected_daemon_version(&self, expected: &str) -> BridgeResult<()> {
+        let snapshot = client::probe_status()?.ok_or(BridgeError::SpawnTimeout)?;
+        if snapshot.daemon_version == expected {
+            return Ok(());
+        }
+        Err(BridgeError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "acornd version mismatch after spawn: expected {expected}, got {}",
+                snapshot.daemon_version
+            ),
+        )))
     }
 
     fn spawn_daemon_with_retries(&self) -> BridgeResult<()> {
@@ -270,7 +395,7 @@ impl DaemonBridge {
     /// the typed result. On `Disconnected` automatically drops the
     /// cached connection so the next call re-establishes.
     fn call(&self, payload: ControlPayload) -> BridgeResult<ControlResult> {
-        self.ensure_connection()?;
+        self.ensure_connection_for_existing_session()?;
         // First attempt over the persistent conn. A concurrent caller's
         // error path can null the cached conn between `ensure_connection`
         // and the lock here, so treat a missing conn as a stale-connection
@@ -294,7 +419,7 @@ impl DaemonBridge {
             {
                 // Stale connection — drop and reconnect once.
                 *self.conn.lock() = None;
-                self.ensure_connection()?;
+                self.ensure_connection_for_existing_session()?;
                 let mut guard = self.conn.lock();
                 let conn = guard.as_mut().ok_or_else(|| {
                     BridgeError::from(io::Error::new(
@@ -341,8 +466,9 @@ impl DaemonBridge {
     /// Lightweight check: does the daemon currently hold an alive PTY
     /// for `id`? Used by `commands::pty_spawn` to decide between a
     /// re-spawn (no entry / dead entry) and a stream-attach (still
-    /// alive). Returns `false` on any bridge error — the caller will
-    /// then re-spawn, which is the conservative outcome.
+    /// alive). Returns `false` on any bridge error; the caller remains on
+    /// the sticky daemon route and uses an idempotent SpawnSession retry, so
+    /// this fallback cannot create an in-process duplicate.
     pub fn is_alive(&self, id: Uuid) -> bool {
         match self.list_sessions() {
             Ok(sessions) => sessions.iter().any(|s| s.id == id && s.alive),
@@ -447,11 +573,30 @@ impl DaemonBridge {
             ControlResult::Ack => {
                 // Daemon will close its end shortly; drop the cached
                 // connection now so subsequent traffic respawns cleanly.
-                *self.conn.lock() = None;
+                let mut conn = self.conn.lock();
+                *conn = None;
+                self.incompatible_daemon.store(false, Ordering::SeqCst);
                 Ok(())
             }
             other => Err(unexpected(other)),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DaemonVersionAction {
+    UseCurrent,
+    RestartIdle,
+    PreserveActive,
+}
+
+fn daemon_version_action(snapshot: &StatusSnapshot, expected: &str) -> DaemonVersionAction {
+    if snapshot.daemon_version == expected {
+        DaemonVersionAction::UseCurrent
+    } else if snapshot.session_count_alive == 0 {
+        DaemonVersionAction::RestartIdle
+    } else {
+        DaemonVersionAction::PreserveActive
     }
 }
 
@@ -677,6 +822,17 @@ pub fn data_dir_path() -> io::Result<PathBuf> {
 mod tests {
     use super::*;
 
+    fn status(version: &str, alive: u32) -> StatusSnapshot {
+        StatusSnapshot {
+            daemon_version: version.to_string(),
+            uptime_seconds: 10,
+            session_count_total: alive,
+            session_count_alive: alive,
+            pid: Some(42),
+            rss_bytes: None,
+        }
+    }
+
     #[test]
     fn disabled_bridge_short_circuits() {
         let bridge = DaemonBridge::new();
@@ -686,6 +842,22 @@ mod tests {
             Err(BridgeError::Disabled) => {}
             other => panic!("expected Disabled, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn daemon_version_policy_reuses_current_restarts_idle_and_preserves_live() {
+        assert_eq!(
+            daemon_version_action(&status("2.0.0", 0), "2.0.0"),
+            DaemonVersionAction::UseCurrent
+        );
+        assert_eq!(
+            daemon_version_action(&status("1.0.0", 0), "2.0.0"),
+            DaemonVersionAction::RestartIdle
+        );
+        assert_eq!(
+            daemon_version_action(&status("1.0.0", 1), "2.0.0"),
+            DaemonVersionAction::PreserveActive
+        );
     }
 
     #[test]

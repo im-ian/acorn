@@ -2571,10 +2571,10 @@
   "backgroundSessions": {
     "daemon": {
       "label": "데몬",
-      "hint": "acornd 데몬은 장시간 실행되는 터미널 세션을 관리합니다. 데몬을 켜면 PTY를 잃지 않고 Acorn을 종료했다 다시 열 수 있습니다. 끄면 기존 인프로세스 경로를 사용하며, 앱과 함께 세션이 종료됩니다.",
+      "hint": "acornd 데몬은 장시간 실행되는 터미널 세션을 관리합니다. 데몬을 켜면 PTY를 잃지 않고 Acorn을 종료했다 다시 열 수 있습니다. 끄면 새 세션은 인프로세스 경로를 사용하고, 기존 데몬 세션은 명시적으로 종료할 때까지 유지됩니다.",
       "enableLabel": "백그라운드 세션 사용(acornd)",
       "enabledDescription": "세션은 명시적으로 종료할 때까지 Acorn 재시작 후에도 유지됩니다.",
-      "disabledDescription": "세션은 현재 Acorn 프로세스에 묶이며, 앱을 닫으면 종료됩니다."
+      "disabledDescription": "새 세션은 현재 Acorn 프로세스에 묶입니다. 기존 데몬 세션은 명시적으로 종료할 때까지 계속 실행됩니다."
     },
     "status": {
       "label": "상태",

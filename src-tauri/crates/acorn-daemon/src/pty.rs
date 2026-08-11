@@ -119,6 +119,9 @@ pub type EnvApplier =
 
 pub struct PtyManager {
     handles: Arc<DashMap<Uuid, Arc<PtyHandle>>>,
+    /// Serializes the check-and-publish portion of spawn so duplicate RPCs
+    /// for one UUID cannot both create children before either handle appears.
+    spawn_guard: Mutex<()>,
     env_applier: EnvApplier,
 }
 
@@ -129,6 +132,7 @@ impl PtyManager {
     pub fn new(env_applier: EnvApplier) -> Arc<Self> {
         Arc::new(Self {
             handles: Arc::new(DashMap::new()),
+            spawn_guard: Mutex::new(()),
             env_applier,
         })
     }
@@ -136,19 +140,27 @@ impl PtyManager {
     /// Spawn a new PTY child according to `spec`, register it with the
     /// session registry, and start reader / waiter threads. Returns the
     /// session id (taken from `spec.session_id` if `Some`, otherwise a
-    /// fresh v4). Idempotent in the absence of a UUID collision — duplicate
-    /// IDs are rejected with an `AlreadyExists` IO error.
+    /// fresh v4). Repeating a supplied UUID while its PTY is alive returns the
+    /// existing identity and pid. This makes a SpawnSession retry idempotent
+    /// when the daemon created the child but the client lost the response.
     pub fn spawn(
         &self,
         spec: SpawnSpec,
         registry: Arc<SessionRegistry>,
     ) -> std::io::Result<SpawnedSession> {
         let session_id = spec.session_id.unwrap_or_else(Uuid::new_v4);
+        let _spawn_guard = self.spawn_guard.lock();
         if self.handles.contains_key(&session_id) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!("session {session_id} already has a live pty"),
-            ));
+            let existing = registry.get(&session_id).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!("session {session_id} already has a live pty"),
+                )
+            })?;
+            return Ok(SpawnedSession {
+                session_id,
+                pid: existing.pid,
+            });
         }
 
         let size = PtySize {
@@ -499,6 +511,90 @@ fn wait_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(unix, windows))]
+    fn long_running_test_spec(id: Uuid) -> SpawnSpec {
+        #[cfg(unix)]
+        let (command, args) = ("/bin/cat".to_string(), Vec::new());
+        #[cfg(windows)]
+        let (command, args) = ("cmd.exe".to_string(), vec!["/Q".to_string()]);
+
+        SpawnSpec {
+            session_id: Some(id),
+            name: "idempotent-spawn".to_string(),
+            cwd: std::env::current_dir().unwrap(),
+            command,
+            args,
+            env: HashMap::new(),
+            cols: 80,
+            rows: 24,
+            kind: crate::protocol::SessionKind::Regular,
+            repo_path: None,
+            branch: None,
+            agent_resume_token: None,
+            agent_kind: None,
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn repeated_live_session_uuid_returns_existing_pty() {
+        let manager = PtyManager::new(Arc::new(|_, _| {}));
+        let registry = SessionRegistry::new();
+        let id = Uuid::new_v4();
+        let spec = long_running_test_spec(id);
+
+        let first = manager.spawn(spec.clone(), registry.clone()).unwrap();
+        let repeated = manager.spawn(spec, registry.clone()).unwrap();
+
+        assert_eq!(repeated.session_id, first.session_id);
+        assert_eq!(repeated.pid, first.pid);
+        assert_eq!(registry.count_alive(), 1);
+        manager.kill(&id).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_conpty_accepts_input_resize_and_captures_output() {
+        let manager = PtyManager::new(Arc::new(|_, _| {}));
+        let registry = SessionRegistry::new();
+        let id = Uuid::new_v4();
+        let mut spec = long_running_test_spec(id);
+        spec.command = "powershell.exe".to_string();
+        spec.args = vec!["-NoLogo".to_string()];
+
+        manager.spawn(spec, registry).unwrap();
+        manager.resize(&id, 101, 37).unwrap();
+        manager
+            .write(
+                &id,
+                b"$Host.UI.RawUI.WindowSize; Write-Output 'ACORN_WINDOWS_PTY_OK'\r",
+            )
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut output = String::new();
+        while std::time::Instant::now() < deadline {
+            output = manager
+                .scrollback_snapshot(&id)
+                .map(|snapshot| String::from_utf8_lossy(&snapshot.bytes).into_owned())
+                .unwrap_or_default();
+            if output.contains("ACORN_WINDOWS_PTY_OK") && output.contains("101") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        manager.kill(&id).unwrap();
+        assert!(
+            output.contains("ACORN_WINDOWS_PTY_OK"),
+            "PowerShell marker missing from ConPTY output: {output:?}"
+        );
+        assert!(
+            output.contains("101"),
+            "resized PowerShell width missing from ConPTY output: {output:?}"
+        );
+    }
 
     #[test]
     fn resume_strategy_injects_claude_session_id() {

@@ -3,7 +3,9 @@
 //! Callers provide a platform endpoint as a `Path`: a filesystem pathname on
 //! Unix or a `\\.\pipe\...` pathname on Windows. The wire protocols stay in
 //! their owning crates; this leaf only owns bind/connect/cleanup semantics and
-//! the platform security boundary.
+//! the platform security boundary. Windows listeners use an owner-only DACL,
+//! and clients verify the connected server process has the same TokenUser SID
+//! before any protocol bytes are exchanged.
 
 use std::io;
 use std::path::Path;
@@ -23,10 +25,15 @@ pub fn bind(endpoint: &Path) -> io::Result<Listener> {
     bind_platform(endpoint)
 }
 
-/// Connect to a previously bound endpoint.
+/// Connect to a previously bound endpoint. On Windows, reject a named-pipe
+/// server owned by another user even if it pre-bound the predictable name with
+/// a permissive DACL.
 pub fn connect(endpoint: &Path) -> io::Result<Stream> {
     let name = endpoint_name(endpoint)?;
-    Stream::connect(name)
+    let stream = Stream::connect(name)?;
+    #[cfg(windows)]
+    verify_windows_server_owner(&stream)?;
+    Ok(stream)
 }
 
 /// Remove filesystem-backed endpoint state after a graceful shutdown.
@@ -120,6 +127,149 @@ fn bind_platform(endpoint: &Path) -> io::Result<Listener> {
         .create_sync()
 }
 
+#[cfg(windows)]
+fn verify_windows_server_owner(stream: &Stream) -> io::Result<()> {
+    use interprocess::local_socket::traits::StreamCommon;
+
+    let server_pid = stream.peer_creds()?.pid().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "named-pipe server did not expose a process id",
+        )
+    })?;
+    if process_runs_as_current_user(server_pid)? {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!("named-pipe server process {server_pid} belongs to another Windows user"),
+    ))
+}
+
+#[cfg(windows)]
+fn process_runs_as_current_user(process_id: u32) -> io::Result<bool> {
+    use std::ptr;
+    use windows_sys::Win32::Security::{EqualSid, IsValidSid};
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+    let process = WinHandle::new(process)?;
+    let process_token = open_process_token(process.raw())?;
+    let current_token = open_process_token(unsafe { GetCurrentProcess() })?;
+    let process_user = token_user(process_token.raw())?;
+    let current_user = token_user(current_token.raw())?;
+    let process_sid = process_user.sid();
+    let current_sid = current_user.sid();
+    if process_sid == ptr::null_mut()
+        || current_sid == ptr::null_mut()
+        || unsafe { IsValidSid(process_sid) } == 0
+        || unsafe { IsValidSid(current_sid) } == 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows process token returned an invalid user SID",
+        ));
+    }
+    Ok(unsafe { EqualSid(process_sid, current_sid) } != 0)
+}
+
+#[cfg(windows)]
+struct WinHandle(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl WinHandle {
+    fn new(handle: windows_sys::Win32::Foundation::HANDLE) -> io::Result<Self> {
+        if handle.is_null() {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(Self(handle))
+        }
+    }
+
+    fn raw(&self) -> windows_sys::Win32::Foundation::HANDLE {
+        self.0
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WinHandle {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn open_process_token(process: windows_sys::Win32::Foundation::HANDLE) -> io::Result<WinHandle> {
+    use windows_sys::Win32::Security::TOKEN_QUERY;
+    use windows_sys::Win32::System::Threading::OpenProcessToken;
+
+    let mut token = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    WinHandle::new(token)
+}
+
+#[cfg(windows)]
+struct TokenUserBuffer(Vec<usize>);
+
+#[cfg(windows)]
+impl TokenUserBuffer {
+    fn sid(&self) -> windows_sys::Win32::Security::PSID {
+        let user = self
+            .0
+            .as_ptr()
+            .cast::<windows_sys::Win32::Security::TOKEN_USER>();
+        unsafe { (*user).User.Sid }
+    }
+}
+
+#[cfg(windows)]
+fn token_user(token: windows_sys::Win32::Foundation::HANDLE) -> io::Result<TokenUserBuffer> {
+    use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser};
+
+    let mut required = 0;
+    if unsafe { GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut required) } != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows token user query unexpectedly returned no data",
+        ));
+    }
+    let query_error = io::Error::last_os_error();
+    if query_error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) || required == 0 {
+        return Err(query_error);
+    }
+    if (required as usize) < std::mem::size_of::<windows_sys::Win32::Security::TOKEN_USER>() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows token user query returned a truncated buffer size",
+        ));
+    }
+
+    let word_size = std::mem::size_of::<usize>();
+    let word_count = (required as usize).div_ceil(word_size);
+    let mut buffer = vec![0usize; word_count];
+    if unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            buffer.as_mut_ptr().cast(),
+            required,
+            &mut required,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(TokenUserBuffer(buffer))
+}
+
 #[cfg(not(any(unix, windows)))]
 fn bind_platform(endpoint: &Path) -> io::Result<Listener> {
     let name = endpoint_name(endpoint)?;
@@ -207,6 +357,12 @@ mod tests {
         server.read_exact(&mut bytes).unwrap();
         assert_eq!(&bytes, b"ping");
         client.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn current_process_matches_its_windows_user() {
+        assert!(process_runs_as_current_user(std::process::id()).unwrap());
     }
 
     #[cfg(windows)]

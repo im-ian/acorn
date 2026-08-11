@@ -2571,10 +2571,10 @@
   "backgroundSessions": {
     "daemon": {
       "label": "守护进程",
-      "hint": "acornd 守护进程管理长时间运行的终端会话。启用后，Acorn 可退出并重新打开而不会丢失 PTY；禁用后会回退到传统的进程内路径，应用退出时会话也会结束。",
+      "hint": "acornd 守护进程管理长时间运行的终端会话。启用后，Acorn 可退出并重新打开而不会丢失 PTY；禁用后，新会话会使用进程内路径，现有守护进程会话则会保留到您明确退出为止。",
       "enableLabel": "启用后台会话 (acornd)",
       "enabledDescription": "会话在 Acorn 重新启动期间持续存在，直到您明确退出它们。",
-      "disabledDescription": "会话绑定到当前 Acorn 进程；关闭应用会终止这些会话。"
+      "disabledDescription": "新会话会绑定到当前 Acorn 进程。现有守护进程会话会继续运行，直到您明确退出。"
     },
     "status": {
       "label": "状态",

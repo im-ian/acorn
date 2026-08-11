@@ -26,6 +26,7 @@ use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
 
 use crate::pty_output::{self, PtyOutputRouter};
+use acorn_daemon::client::validate_server_hello;
 use acorn_daemon::protocol::{ClientRole, Hello, StreamAttach, StreamFrame};
 use acorn_daemon::socket;
 use acorn_daemon::wire::read_response_frame_line;
@@ -170,12 +171,17 @@ pub fn attach<R: Runtime>(
         serde_json::to_string(&hello).map_err(std::io::Error::other)?
     )?;
     conn.flush()?;
-    // Drain the daemon's hello so subsequent reads land on stream
-    // frames. We do not validate it further — the connect+major-version
-    // check already succeeded, the rest is telemetry.
+    // Drain and validate the daemon's hello so subsequent reads land on
+    // stream frames from a protocol-compatible stream endpoint.
     let mut reader = BufReader::new(conn);
     let mut buf = String::new();
-    read_response_frame_line(&mut reader, &mut buf)?;
+    if read_response_frame_line(&mut reader, &mut buf)? == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "daemon closed before stream server hello",
+        ));
+    }
+    validate_server_hello(&buf, ClientRole::Stream)?;
 
     let attach = StreamAttach {
         session_id,

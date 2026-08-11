@@ -8345,13 +8345,14 @@ fn pty_spawn_blocking<R: Runtime>(
         write_control_marker(&cwd, &primer);
     }
 
-    // Daemon path — when the killswitch is on, route through `acornd`
-    // so the PTY survives an Acorn app close. The in-process branch
-    // below is kept verbatim as the fallback for users who flip the
-    // toggle off (or for environments where the daemon binary is
-    // missing / refusing to start).
-    if state.daemon_bridge.is_enabled() {
-        match spawn_via_daemon(
+    // Daemon path — when the killswitch is on, route exclusively through
+    // `acornd` so the PTY survives an Acorn app close. Any RPC failure can
+    // happen after the daemon accepted the spawn but before the app received
+    // its response, so only an explicitly disabled session with no persisted
+    // daemon binding may use the local branch without risking two PTYs under
+    // one session UUID.
+    if should_route_session_to_daemon(state.daemon_bridge.is_enabled(), session.daemon_session_id) {
+        spawn_via_daemon(
             &app,
             &state,
             id,
@@ -8363,12 +8364,9 @@ fn pty_spawn_blocking<R: Runtime>(
             rows.unwrap_or(0),
             output_token,
             replay_scrollback.unwrap_or(true),
-        ) {
-            Ok(()) => return Ok(()),
-            Err(err) => {
-                tracing::warn!(%id, error = %err, "daemon spawn failed; falling back to in-process PTY");
-            }
-        }
+        )
+        .map_err(AppError::Pty)?;
+        return Ok(());
     }
 
     let output_router = state.pty_output.clone();
@@ -8391,6 +8389,10 @@ fn pty_spawn_blocking<R: Runtime>(
             rows.unwrap_or(0),
         )
         .map_err(|e| AppError::Pty(e.to_string()))
+}
+
+fn should_route_session_to_daemon(enabled: bool, daemon_session_id: Option<Uuid>) -> bool {
+    enabled || daemon_session_id.is_some()
 }
 
 /// Route a `pty_spawn` through the daemon. Three cases:
@@ -8434,6 +8436,7 @@ fn spawn_via_daemon<R: Runtime>(
         .unwrap_or(SessionKind::Regular);
     let repo_path = session.as_ref().map(|s| s.repo_path.clone());
     let branch = session.as_ref().map(|s| s.branch.clone());
+    let previous_daemon_session_id = session.as_ref().and_then(|s| s.daemon_session_id);
 
     // `pty_spawn` always launches the selected native shell, never an agent binary
     // directly, so the daemon's per-agent resume strategy registry
@@ -8462,7 +8465,11 @@ fn spawn_via_daemon<R: Runtime>(
             output_token,
             replay_scrollback,
         )
-        .map_err(|e| format!("daemon stream attach failed: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "daemon stream attach failed: {e}; retry the attachment instead of starting a duplicate local PTY"
+            )
+        })?;
         return Ok(());
     }
 
@@ -8470,6 +8477,24 @@ fn spawn_via_daemon<R: Runtime>(
         SessionKind::Regular => acorn_daemon::protocol::SessionKind::Regular,
         SessionKind::Control => acorn_daemon::protocol::SessionKind::Control,
     };
+
+    // Persist daemon ownership intent before sending SpawnSession. The RPC is
+    // not transactional with the app DB: the daemon may create the PTY and
+    // the response may be lost. Writing the sticky route first guarantees a
+    // restart or killswitch change cannot then start a local PTY under the
+    // same UUID. If durable persistence fails, roll back before any RPC.
+    state
+        .sessions
+        .set_daemon_session_id(&id, Some(id))
+        .map_err(|error| format!("record daemon ownership intent failed: {error}"))?;
+    if let Err(error) = persistence::save_sessions(&state.sessions) {
+        let _ = state
+            .sessions
+            .set_daemon_session_id(&id, previous_daemon_session_id);
+        return Err(format!(
+            "persist daemon ownership intent failed before spawn: {error}"
+        ));
+    }
 
     let outcome = bridge
         .spawn(
@@ -8487,15 +8512,11 @@ fn spawn_via_daemon<R: Runtime>(
             agent_kind,
             resume_token.clone(),
         )
-        .map_err(|e| format!("daemon spawn failed: {e}"))?;
-
-    // Persist the daemon binding so next-restart's reconcile picks
-    // this row up. Failures are non-fatal — the user can still use the
-    // session, they just lose persistence across one restart.
-    if let Err(err) = state.sessions.set_daemon_session_id(&id, Some(id)) {
-        tracing::warn!(%id, error = %err, "persist daemon_session_id failed");
-    }
-    persist(state);
+        .map_err(|e| {
+            format!(
+                "daemon spawn failed: {e}; retry the daemon path because ownership is uncertain and Acorn will not start a duplicate local PTY"
+            )
+        })?;
 
     crate::daemon_stream::attach(
         app.clone(),
@@ -8506,7 +8527,11 @@ fn spawn_via_daemon<R: Runtime>(
         output_token,
         replay_scrollback,
     )
-    .map_err(|e| format!("daemon stream attach failed: {e}"))
+    .map_err(|e| {
+        format!(
+            "daemon stream attach failed: {e}; retry the attachment instead of starting a duplicate local PTY"
+        )
+    })
 }
 
 fn daemon_spawn_name_for_session(session: Option<&Session>, id: Uuid) -> String {
@@ -11241,8 +11266,9 @@ mod tests {
         infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
         normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
         remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
-        should_remove_local_project_mirror, terminate_session_runtime, validate_editor_command,
-        validate_new_project_name, ChatProviderAdapter, ProcessMemorySnapshot,
+        should_remove_local_project_mirror, should_route_session_to_daemon,
+        terminate_session_runtime, validate_editor_command, validate_new_project_name,
+        ChatProviderAdapter, ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingSessionRemoval};
@@ -15229,6 +15255,15 @@ mod tests {
         let id = Uuid::new_v4();
 
         assert_eq!(daemon_spawn_name_for_session(None, id), id.to_string());
+    }
+
+    #[test]
+    fn daemon_route_is_sticky_for_persisted_sessions() {
+        let daemon_id = Uuid::new_v4();
+
+        assert!(should_route_session_to_daemon(true, None));
+        assert!(should_route_session_to_daemon(false, Some(daemon_id)));
+        assert!(!should_route_session_to_daemon(false, None));
     }
 
     #[test]

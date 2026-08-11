@@ -15,7 +15,7 @@ use acorn_local_ipc::{Stream, TryClone};
 
 use super::protocol::{
     ClientRole, ControlPayload, ControlRequest, ControlResponse, ControlResult, Hello,
-    StatusSnapshot,
+    StatusSnapshot, PROTOCOL_VERSION_MAJOR,
 };
 use super::socket;
 use super::wire::read_response_frame_line;
@@ -45,13 +45,14 @@ impl ControlConn {
             serde_json::to_string(&hello).map_err(io::Error::other)?
         )?;
         writer.flush()?;
-        // Read server hello.
         let mut buf = String::new();
-        read_response_frame_line(&mut reader, &mut buf)?;
-        // Currently we do not enforce server hello details — the server
-        // already validated ours and will close the connection if its
-        // own version is too far ahead. Future versions may inspect
-        // `client_name` or feature flags here.
+        if read_response_frame_line(&mut reader, &mut buf)? == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "daemon closed before server hello",
+            ));
+        }
+        validate_server_hello(&buf, ClientRole::ControlPersistent)?;
 
         Ok(Self {
             writer,
@@ -97,8 +98,16 @@ pub fn one_shot(payload: ControlPayload) -> io::Result<ControlResponse> {
     )?;
     writer.flush()?;
     let mut buf = String::new();
-    read_response_frame_line(&mut reader, &mut buf)?;
-    // Server hello consumed (not currently inspected).
+    if read_response_frame_line(&mut reader, &mut buf)? == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "daemon closed before server hello",
+        ));
+    }
+    // The daemon identifies the control endpoint as ControlPersistent for
+    // both client lifetimes; the request-side role still tells it whether to
+    // keep this particular connection open after one response.
+    validate_server_hello(&buf, ClientRole::ControlPersistent)?;
 
     let req = ControlRequest { seq: 1, payload };
     writeln!(
@@ -130,5 +139,81 @@ pub fn probe_status() -> io::Result<Option<StatusSnapshot>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => Ok(None),
         Err(e) => Err(e),
+    }
+}
+
+/// Parse and validate the daemon's first response on a fresh connection.
+/// Transport-level peer authentication establishes which Windows user owns
+/// the server; this check then fails closed on malformed or incompatible wire
+/// endpoints owned by that user.
+pub fn validate_server_hello(line: &str, expected_role: ClientRole) -> io::Result<Hello> {
+    let hello: Hello = serde_json::from_str(line.trim()).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid daemon hello: {error}"),
+        )
+    })?;
+    if hello.protocol_version_major != PROTOCOL_VERSION_MAJOR {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "daemon protocol major mismatch: expected {PROTOCOL_VERSION_MAJOR}, got {}",
+                hello.protocol_version_major
+            ),
+        ));
+    }
+    if hello.role != expected_role {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unexpected daemon hello role: expected {expected_role:?}, got {:?}",
+                hello.role
+            ),
+        ));
+    }
+    Ok(hello)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_hello_accepts_expected_role_and_protocol() {
+        let hello = Hello::current(ClientRole::ControlPersistent);
+        let encoded = serde_json::to_string(&hello).unwrap();
+
+        assert_eq!(
+            validate_server_hello(&encoded, ClientRole::ControlPersistent).unwrap(),
+            hello
+        );
+    }
+
+    #[test]
+    fn server_hello_rejects_malformed_payload() {
+        let error = validate_server_hello("not-json", ClientRole::ControlPersistent).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn server_hello_rejects_protocol_or_role_mismatch() {
+        let mut hello = Hello::current(ClientRole::ControlPersistent);
+        hello.protocol_version_major += 1;
+        let encoded = serde_json::to_string(&hello).unwrap();
+        assert_eq!(
+            validate_server_hello(&encoded, ClientRole::ControlPersistent)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        let encoded = serde_json::to_string(&Hello::current(ClientRole::Stream)).unwrap();
+        assert_eq!(
+            validate_server_hello(&encoded, ClientRole::ControlPersistent)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 }
