@@ -167,9 +167,9 @@ jobs:
             throw "Windows native contract tests failed"
           }
 
-          cargo check --manifest-path src-tauri/Cargo.toml --locked --bin acornd
+          pnpm run dev:sidecar
           if ($LASTEXITCODE -ne 0) {
-            throw "Windows acornd host compile check failed"
+            throw "Windows debug sidecar build failed"
           }
 
       - name: Build frontend
