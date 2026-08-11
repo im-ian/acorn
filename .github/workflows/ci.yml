@@ -189,9 +189,11 @@ jobs:
               throw "failed to generate the ephemeral updater key"
             }
 
-            $env:TAURI_SIGNING_PRIVATE_KEY = $keyPath
+            $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
             $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "ci-smoke"
-            pnpm run tauri build --target $env:WINDOWS_TARGET --bundles nsis --config '{"build":{"beforeBuildCommand":"pnpm run build:sidecar:release-ci"}}' -- --profile release-ci --locked
+            # Pass the override by path because PowerShell's native argument
+            # marshalling strips the quotes from an inline JSON value.
+            pnpm run tauri build --target $env:WINDOWS_TARGET --bundles nsis --config src-tauri/tauri.release-ci.conf.json -- --profile release-ci --locked
             if ($LASTEXITCODE -ne 0) {
               throw "Windows Tauri build failed"
             }
