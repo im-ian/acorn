@@ -139,7 +139,12 @@ describe("resolveBuildPlan", () => {
 
     expect(plan.useExplicitTarget).toBe(true);
     expect(plan.artifactDirectory).toBe(
-      join("/workspace", "shared-target", "x86_64-apple-darwin", "release"),
+      resolve(
+        tauriDirectory,
+        "../shared-target",
+        "x86_64-apple-darwin",
+        "release",
+      ),
     );
     expect(plan.cargoArguments.at(-1)).toBe("--release");
   });
