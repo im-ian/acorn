@@ -9,6 +9,7 @@ dependencies = [
  "acorn-agent",
  "acorn-daemon",
  "acorn-ipc",
+ "acorn-local-ipc",
  "acorn-paths",
  "acorn-pty",
  "acorn-session",
@@ -23,7 +24,6 @@ dependencies = [
  "git2",
  "globset",
  "ignore",
- "interprocess",
  "nix 0.31.3",
  "notify",
  "objc2",
@@ -66,10 +66,10 @@ name = "acorn-daemon"
 version = "0.1.0"
 dependencies = [
  "acorn-agent",
+ "acorn-local-ipc",
  "acorn-paths",
  "chrono",
  "dashmap",
- "interprocess",
  "nix 0.31.3",
  "parking_lot",
  "portable-pty",
@@ -85,11 +85,20 @@ dependencies = [
 name = "acorn-ipc"
 version = "0.1.0"
 dependencies = [
+ "acorn-local-ipc",
  "acorn-paths",
  "base64 0.23.1",
  "clap",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "acorn-local-ipc"
+version = "0.1.0"
+dependencies = [
+ "interprocess",
+ "widestring",
 ]
 
 [[package]]

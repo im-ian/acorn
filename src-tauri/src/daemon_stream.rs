@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use acorn_local_ipc::Stream;
 use dashmap::DashMap;
-use interprocess::local_socket::Stream;
 use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};

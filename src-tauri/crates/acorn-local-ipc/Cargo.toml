@@ -1,0 +1,14 @@
+[package]
+name = "acorn-local-ipc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "acorn_local_ipc"
+
+[dependencies]
+interprocess = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+widestring = { workspace = true }

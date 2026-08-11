@@ -1,4 +1,4 @@
-//! Unix-socket IPC server for the `acorn-ipc` CLI. Runs on a dedicated
+//! Local IPC server for the `acorn-ipc` CLI. Runs on a dedicated
 //! background thread because every downstream interaction (PTY writes,
 //! `SessionStore` reads) is synchronous and the `parking_lot::Mutex`es
 //! around the PTY pool are not async-aware.
@@ -8,7 +8,8 @@
 //! connection per command, so we do not need streaming or multiplexing.
 //!
 //! Security:
-//!   * Socket file is created with permission `0600` (owner-only).
+//!   * The endpoint is owner-only (`0600` on Unix; protected named-pipe
+//!     DACL on Windows).
 //!   * Every request carries a `source_session_id`. The server requires that
 //!     id to resolve to a live `Session` whose `kind == Control`. Any other
 //!     state (missing, wrong kind) returns `Unauthorized`.
@@ -23,8 +24,6 @@
 //! a runtime hop.
 
 use std::io::{BufRead, BufReader, ErrorKind, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
@@ -37,6 +36,9 @@ use acorn_ipc::proto::{
     PROTOCOL_VERSION,
 };
 use acorn_ipc::socket_path;
+use acorn_local_ipc::{
+    Listener, ListenerNonblockingMode, ListenerTrait as _, Stream, StreamTrait as _,
+};
 use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -110,37 +112,18 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Option<IpcServer
             return None;
         }
     };
-    if let Some(parent) = path.parent() {
-        if let Err(err) = std::fs::create_dir_all(parent) {
-            tracing::warn!(
-                error = %err,
-                path = %parent.display(),
-                "ipc: could not create socket parent dir; server disabled",
-            );
-            return None;
-        }
-    }
-    // Best-effort cleanup of any previous socket inode. We do not block on
-    // failure because the next `bind` will surface the real error.
-    let _ = std::fs::remove_file(&path);
-    // Bind at a temporary name, tighten permissions, then rename onto the
-    // advertised path. Binding directly at `path` would leave a window
-    // between bind (umask-derived permissions) and chmod during which any
-    // local user could connect.
-    let staging_path = path.with_extension("sock-staging");
-    let _ = std::fs::remove_file(&staging_path);
-    let listener = match UnixListener::bind(&staging_path) {
+    let listener = match acorn_local_ipc::bind(&path) {
         Ok(l) => l,
         Err(err) => {
             tracing::warn!(
                 error = %err,
-                path = %staging_path.display(),
+                path = %path.display(),
                 "ipc: bind failed; server disabled",
             );
             return None;
         }
     };
-    if let Err(err) = listener.set_nonblocking(true) {
+    if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Accept) {
         // Required for the shutdown poll. Bail rather than fall back to
         // blocking accept — a blocking listener could never honour a stop
         // signal and would leak its thread on every restart.
@@ -148,28 +131,6 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Option<IpcServer
             error = %err,
             "ipc: set_nonblocking failed; server disabled",
         );
-        return None;
-    }
-    if let Err(err) =
-        std::fs::set_permissions(&staging_path, std::fs::Permissions::from_mode(0o600))
-    {
-        tracing::warn!(
-            error = %err,
-            path = %staging_path.display(),
-            "ipc: chmod 0600 failed; server disabled",
-        );
-        drop(listener);
-        let _ = std::fs::remove_file(&staging_path);
-        return None;
-    }
-    if let Err(err) = std::fs::rename(&staging_path, &path) {
-        tracing::warn!(
-            error = %err,
-            from = %staging_path.display(),
-            to = %path.display(),
-            "ipc: socket rename failed; server disabled",
-        );
-        let _ = std::fs::remove_file(&staging_path);
         return None;
     }
     tracing::info!(path = %path.display(), "ipc: listening");
@@ -189,14 +150,14 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Option<IpcServer
 }
 
 fn run_listener<R: Runtime>(
-    listener: UnixListener,
+    listener: Listener,
     app: AppHandle<R>,
     state: AppState,
     running: Arc<AtomicBool>,
 ) {
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
-            Ok((stream, _addr)) => {
+            Ok(stream) => {
                 // Accepted streams inherit the listener's non-blocking flag,
                 // but the per-connection handler does blocking reads/writes.
                 // Restoring blocking mode here keeps the handler code simple.
@@ -235,12 +196,11 @@ fn run_listener<R: Runtime>(
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 
 fn handle_connection<R: Runtime>(
-    stream: UnixStream,
+    stream: Stream,
     app: &AppHandle<R>,
     state: &AppState,
 ) -> std::io::Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut writer = stream;
+    let mut reader = BufReader::new(stream);
     let mut line = String::new();
     let n = std::io::Read::take(&mut reader, MAX_REQUEST_BYTES).read_line(&mut line)?;
     if n == 0 {
@@ -258,8 +218,8 @@ fn handle_connection<R: Runtime>(
             .to_vec()
     });
     out.push(b'\n');
-    writer.write_all(&out)?;
-    writer.flush()?;
+    reader.get_mut().write_all(&out)?;
+    reader.get_mut().flush()?;
     Ok(())
 }
 

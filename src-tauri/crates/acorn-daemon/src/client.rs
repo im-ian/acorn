@@ -11,8 +11,7 @@
 use std::io::{self, BufReader, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use interprocess::local_socket::Stream;
-use interprocess::TryClone;
+use acorn_local_ipc::{Stream, TryClone};
 
 use super::protocol::{
     ClientRole, ControlPayload, ControlRequest, ControlResponse, ControlResult, Hello,

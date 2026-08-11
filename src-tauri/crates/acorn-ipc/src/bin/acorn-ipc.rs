@@ -11,7 +11,6 @@
 //! specific failure mode (`2` = unauthorized, `3` = not-found, etc.).
 
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -19,8 +18,8 @@ use base64::Engine;
 use clap::{Parser, Subcommand};
 
 use acorn_ipc::proto::{
-    Envelope, ErrorCode, NewSessionOwner, PROTOCOL_VERSION, Request, Response, SessionSummary,
-    WorkspaceSummary,
+    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, WorkspaceSummary,
+    PROTOCOL_VERSION,
 };
 use acorn_ipc::socket_path;
 
@@ -34,8 +33,8 @@ const ENV_WORKSPACE_NAME: &str = "ACORN_WORKSPACE_NAME";
 #[command(
     name = "acorn-ipc",
     about = "Talk to a running Acorn app from inside an Acorn terminal.",
-    long_about = "acorn-ipc speaks to the in-app IPC server over a Unix \
-                  socket. Acorn terminals export session identity and socket \
+    long_about = "acorn-ipc speaks to the in-app server over private local \
+                  IPC. Acorn terminals export session identity and endpoint \
                   paths into their PTY environment. Run `promote-self` once \
                   from a regular Acorn terminal to turn it into a control \
                   session; other commands require that control permission."
@@ -396,8 +395,8 @@ fn resolve_source_id_from(
 /// down servers, so we exit 0 in both branches and let callers parse the
 /// output (or the `reachable` JSON field).
 fn run_status(socket_path: &Path, json: bool) -> ExitCode {
-    let exists = socket_path.exists();
-    let (reachable, error) = match UnixStream::connect(socket_path) {
+    let exists = acorn_local_ipc::marker_exists(socket_path);
+    let (reachable, error) = match acorn_local_ipc::connect(socket_path) {
         Ok(stream) => {
             // Close immediately — the server treats every connection as a
             // single request and would otherwise wait for one.
@@ -461,7 +460,7 @@ fn run_status(socket_path: &Path, json: bool) -> ExitCode {
 }
 
 fn send(path: &std::path::Path, envelope: &Envelope) -> Result<Response, String> {
-    let mut stream = UnixStream::connect(path).map_err(|e| format!("connect: {e}"))?;
+    let mut stream = acorn_local_ipc::connect(path).map_err(|e| format!("connect: {e}"))?;
     let mut payload = serde_json::to_vec(envelope).map_err(|e| format!("encode: {e}"))?;
     payload.push(b'\n');
     stream

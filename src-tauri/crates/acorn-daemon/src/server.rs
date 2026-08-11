@@ -23,9 +23,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use interprocess::local_socket::traits::{Listener as _ListenerTrait, Stream as _StreamTrait};
-use interprocess::local_socket::{ListenerNonblockingMode, Stream};
-use interprocess::TryClone;
+use acorn_local_ipc::{
+    Listener, ListenerNonblockingMode, ListenerTrait as _, Stream, StreamTrait as _, TryClone,
+};
 
 use super::protocol::{
     ClientRole, ControlPayload, ControlRequest, ControlResponse, ControlResult, ErrorCode, Hello,
@@ -94,7 +94,7 @@ impl Daemon {
         Ok(())
     }
 
-    fn run_control_accept(self: Arc<Self>, listener: interprocess::local_socket::Listener) {
+    fn run_control_accept(self: Arc<Self>, listener: Listener) {
         self.accept_loop(listener, "control", |me, conn| {
             if let Err(err) = me.handle_control_conn(conn) {
                 tracing::warn!(error = %err, "control conn error");
@@ -102,7 +102,7 @@ impl Daemon {
         });
     }
 
-    fn run_stream_accept(self: Arc<Self>, listener: interprocess::local_socket::Listener) {
+    fn run_stream_accept(self: Arc<Self>, listener: Listener) {
         self.accept_loop(listener, "stream", |me, conn| {
             if let Err(err) = me.handle_stream_conn(conn) {
                 tracing::warn!(error = %err, "stream conn error");
@@ -118,12 +118,8 @@ impl Daemon {
     /// client closed. 50 ms is short enough that `acornd shutdown`
     /// feels instant and long enough that the loop is not a busy-spin
     /// (~20 syscalls per second per socket).
-    fn accept_loop<F>(
-        self: Arc<Self>,
-        listener: interprocess::local_socket::Listener,
-        kind: &'static str,
-        handle: F,
-    ) where
+    fn accept_loop<F>(self: Arc<Self>, listener: Listener, kind: &'static str, handle: F)
+    where
         F: Fn(Arc<Self>, Stream) + Send + Sync + 'static,
     {
         if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Accept) {

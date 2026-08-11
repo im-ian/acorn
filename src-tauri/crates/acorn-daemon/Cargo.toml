@@ -9,6 +9,7 @@ name = "acorn_daemon"
 
 [dependencies]
 acorn-agent = { path = "../acorn-agent" }
+acorn-local-ipc = { path = "../acorn-local-ipc" }
 acorn-paths = { path = "../acorn-paths" }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -17,7 +18,6 @@ uuid = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { workspace = true }
-interprocess = { workspace = true }
 sysinfo = { workspace = true }
 portable-pty = { workspace = true }
 tracing = { workspace = true }

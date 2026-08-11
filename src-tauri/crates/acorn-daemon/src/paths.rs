@@ -54,7 +54,7 @@ pub fn control_socket_path() -> std::io::Result<PathBuf> {
             return Ok(PathBuf::from(over));
         }
     }
-    Ok(data_dir()?.join("daemon.sock"))
+    acorn_paths::local_ipc_endpoint("daemon")
 }
 
 /// Daemon stream socket path. Honors `ACORN_DAEMON_STREAM_SOCKET` override.
@@ -64,7 +64,7 @@ pub fn stream_socket_path() -> std::io::Result<PathBuf> {
             return Ok(PathBuf::from(over));
         }
     }
-    Ok(data_dir()?.join("daemon-stream.sock"))
+    acorn_paths::local_ipc_endpoint("daemon-stream")
 }
 
 /// PID lockfile path. The daemon writes its PID here on startup and

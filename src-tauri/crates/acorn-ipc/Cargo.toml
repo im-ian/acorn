@@ -16,6 +16,7 @@ name = "acorn-ipc"
 path = "src/bin/acorn-ipc.rs"
 
 [dependencies]
+acorn-local-ipc = { path = "../acorn-local-ipc" }
 acorn-paths = { path = "../acorn-paths" }
 serde = { workspace = true }
 serde_json = { workspace = true }
