@@ -1050,7 +1050,7 @@ test.describe("workspace kanban mode", () => {
       "Silence Notifications",
       "Open Work Summary",
       "Open Worktree in Editor",
-      "Reveal in Finder",
+      "Reveal in File Manager",
       "Copy",
       "Remove Session",
     ]);
@@ -1118,7 +1118,7 @@ test.describe("workspace kanban mode", () => {
       page.getByRole("menuitem", { name: "Silence Notifications" }),
     ).toBeVisible();
     await expect(
-      page.getByRole("menuitem", { name: "Reveal in Finder" }),
+      page.getByRole("menuitem", { name: "Reveal in File Manager" }),
     ).toBeVisible();
     await page.getByRole("menuitem", { name: "Rename" }).click();
     const titleInput = page.getByTestId(

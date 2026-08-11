@@ -582,6 +582,10 @@ test.describe("settings modal", () => {
     tauri,
   }) => {
     await page.addInitScript(() => {
+      Object.defineProperty(navigator, "platform", {
+        get: () => "MacIntel",
+        configurable: true,
+      });
       window.localStorage.setItem(
         "acorn:settings:v1",
         JSON.stringify({ power: { preventSleep: true } }),
