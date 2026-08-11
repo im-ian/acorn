@@ -1063,6 +1063,27 @@ impl SessionStore {
         );
     }
 
+    /// Fill the provider id for a turn that began before Codex assigned one.
+    /// Existing per-turn activity stays intact because this is the same turn,
+    /// not a new boundary. A conflicting id is rejected so delayed events
+    /// cannot replace the current owner.
+    pub fn bind_hook_turn_id(&self, id: &Uuid, turn_id: &str) -> bool {
+        let turn_id = turn_id.trim();
+        if turn_id.is_empty() {
+            return false;
+        }
+
+        let mut runtime = self.lock_hook_runtime();
+        let state = runtime.entry(*id).or_default();
+        match state.turn_id.as_deref() {
+            None | Some("") => {
+                state.turn_id = Some(turn_id.to_string());
+                true
+            }
+            Some(current) => current == turn_id,
+        }
+    }
+
     pub fn hook_turn_id(&self, id: &Uuid) -> Option<String> {
         self.lock_hook_runtime()
             .get(id)
@@ -1862,6 +1883,30 @@ mod tests {
         store.remove(&session.id).expect("session exists");
         assert_eq!(store.hook_tool_started_at(&session.id), None);
         assert_eq!(store.hook_turn_id(&session.id), None);
+    }
+
+    #[test]
+    fn hook_turn_id_binding_preserves_current_turn_activity() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        let observed_at =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(123_456);
+
+        store.begin_hook_turn(&session.id, None);
+        store.mark_hook_tool_started_at(&session.id, observed_at);
+        store.mark_codex_permission_waiting_at(&session.id, observed_at);
+
+        assert!(store.bind_hook_turn_id(&session.id, "turn-1"));
+        assert_eq!(store.hook_turn_id(&session.id).as_deref(), Some("turn-1"));
+        assert_eq!(store.hook_tool_started_at(&session.id), Some(observed_at));
+        assert_eq!(
+            store.codex_permission_waiting_at(&session.id),
+            Some(observed_at)
+        );
+
+        assert!(store.bind_hook_turn_id(&session.id, "turn-1"));
+        assert!(!store.bind_hook_turn_id(&session.id, "turn-2"));
+        assert_eq!(store.hook_turn_id(&session.id).as_deref(), Some("turn-1"));
     }
 
     #[test]

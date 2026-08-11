@@ -235,10 +235,21 @@ impl AgentHookReducer {
         };
 
         let mut candidate = lane.codex.clone();
+        let active_turn_id_before = candidate.active_turn_id().map(str::to_string);
         let reduction = candidate.reduce(lifecycle_id, signal, &event);
+        let newly_learned_turn_id =
+            match (active_turn_id_before.as_deref(), candidate.active_turn_id()) {
+                (None, Some(turn_id)) => Some(turn_id.to_string()),
+                _ => None,
+            };
         let effects = match reduction {
             CodexReduction::Apply(effects) => effects,
             CodexReduction::IgnoreAndCommit(reason) => {
+                bind_learned_codex_turn_id(
+                    &self.sessions,
+                    event.session_id,
+                    newly_learned_turn_id.as_deref(),
+                )?;
                 lane.codex = candidate;
                 return Ok(AgentHookApplyOutcome::Ignored {
                     status: current_status,
@@ -252,10 +263,34 @@ impl AgentHookReducer {
                 });
             }
         };
+        if !effects.begin_turn {
+            bind_learned_codex_turn_id(
+                &self.sessions,
+                event.session_id,
+                newly_learned_turn_id.as_deref(),
+            )?;
+        }
         let status = apply_validated_agent_hook_event(&self.sessions, event, effects)?;
         lane.codex = candidate;
         Ok(AgentHookApplyOutcome::Applied(status))
     }
+}
+
+fn bind_learned_codex_turn_id(
+    sessions: &SessionStore,
+    session_id: Uuid,
+    turn_id: Option<&str>,
+) -> Result<(), AgentHookApplyError> {
+    let Some(turn_id) = turn_id else {
+        return Ok(());
+    };
+    if sessions.bind_hook_turn_id(&session_id, turn_id) {
+        return Ok(());
+    }
+    Err(AgentHookApplyError::Conflict(format!(
+        "Codex turn id conflict for {session_id}: current {:?}, got {turn_id}",
+        sessions.hook_turn_id(&session_id)
+    )))
 }
 
 fn unsequenced_codex_effects(signal: CodexSignal, event: &AgentHookEvent) -> CodexStoreEffects {
@@ -447,6 +482,15 @@ struct CodexStoreEffects {
 }
 
 impl CodexLane {
+    fn active_turn_id(&self) -> Option<&str> {
+        self.current
+            .as_ref()?
+            .turn
+            .as_ref()?
+            .provider_turn_id
+            .as_deref()
+    }
+
     fn retire_current(&mut self) {
         let Some(current) = self.current.take() else {
             return;
@@ -4624,6 +4668,52 @@ mod tests {
             reducer.apply(unrelated),
             Err(super::AgentHookApplyError::Conflict(_))
         ));
+    }
+
+    #[test]
+    fn reducer_backfills_store_turn_id_after_a_provisional_boundary() {
+        let (sessions, session_id, reducer) = codex_reducer_fixture();
+        let mut fallback = codex_event(session_id, "jsonl_user", None);
+        fallback.native_hooks_enabled = Some(true);
+        assert!(matches!(
+            reducer
+                .apply(fallback)
+                .expect("provisional recorder boundary applies"),
+            AgentHookApplyOutcome::Applied(SessionStatus::Working)
+        ));
+        assert!(sessions.has_hook_turn_boundary(&session_id));
+        assert_eq!(sessions.hook_turn_id(&session_id), None);
+
+        let mut prompt = codex_event(session_id, "native_prompt", Some("turn-1"));
+        prompt.native_hooks_enabled = Some(true);
+        assert!(matches!(
+            reducer
+                .apply(prompt)
+                .expect("native prompt claims provisional boundary"),
+            AgentHookApplyOutcome::Applied(SessionStatus::Working)
+        ));
+        assert_eq!(
+            sessions.hook_turn_id(&session_id).as_deref(),
+            Some("turn-1")
+        );
+
+        let (_, source, _, lifecycle_revision) =
+            sessions.lifecycle_snapshot(&session_id).expect("snapshot");
+        assert_eq!(
+            sessions
+                .reconcile_codex_turn_end_if_current(
+                    &session_id,
+                    source,
+                    lifecycle_revision,
+                    "turn-1",
+                )
+                .expect("transcript completion reconciles"),
+            Some(lifecycle_revision + 1)
+        );
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
     }
 
     #[test]
