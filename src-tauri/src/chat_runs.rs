@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use acorn_platform::process::ProcessTree;
 
 #[derive(Clone)]
 pub struct ChatCancellation {
@@ -16,7 +17,12 @@ pub struct ChatCancellation {
 struct ChatCancellationInner {
     turn_id: String,
     cancelled: AtomicBool,
-    child: Mutex<Option<Child>>,
+    child: Mutex<Option<TrackedChild>>,
+}
+
+struct TrackedChild {
+    child: Child,
+    tree: Arc<ProcessTree>,
 }
 
 impl ChatCancellation {
@@ -38,8 +44,8 @@ impl ChatCancellation {
         self.inner.cancelled.load(Ordering::SeqCst)
     }
 
-    pub fn set_child(&self, child: Child) {
-        *self.inner.child.lock() = Some(child);
+    pub fn set_child(&self, child: Child, tree: Arc<ProcessTree>) {
+        *self.inner.child.lock() = Some(TrackedChild { child, tree });
     }
 
     pub fn clear_child(&self) {
@@ -52,21 +58,24 @@ impl ChatCancellation {
             .as_mut()
             .ok_or_else(|| AppError::Other(format!("{command} child missing")))?;
         child
+            .child
             .try_wait()
             .map_err(|e| AppError::Other(format!("failed waiting for {command}: {e}")))
     }
 
     pub fn cancel(&self) {
         self.inner.cancelled.store(true, Ordering::SeqCst);
-        if let Some(child) = self.inner.child.lock().as_mut() {
-            let _ = child.kill();
+        if let Some(tracked) = self.inner.child.lock().as_mut() {
+            let _ = tracked.tree.terminate();
+            let _ = tracked.child.kill();
         }
     }
 
     pub fn kill_and_wait(&self) {
-        if let Some(child) = self.inner.child.lock().as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(tracked) = self.inner.child.lock().as_mut() {
+            let _ = tracked.tree.terminate();
+            let _ = tracked.child.kill();
+            let _ = tracked.child.wait();
         }
     }
 }

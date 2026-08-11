@@ -280,6 +280,7 @@
         "errorHint": "インストールステータスをクエリできませんでした。",
         "loadingHint": "インストール ステータスを読み込んでいます...",
         "hint": "コントロール セッションは、acorn-ipc CLI を介して兄弟にコマンドをディスパッチできます。 CLI はアプリに同梱されています。任意の端末から使用するには、それを $PATH にシンボリックリンクします。",
+        "windowsHint": "同梱の acorn-ipc CLI は Acorn ターミナル内の PATH に自動的に追加されます。システム全体の shim は必要ありません。",
         "bundledBinary": "バンドルされたバイナリ",
         "found": "見つかりました",
         "missing": "行方不明",
@@ -1250,7 +1251,7 @@
       "moveToProjectRoot": "プロジェクトルート",
       "projectSettings": "プロジェクト設定",
       "closeProject": "プロジェクトを閉じる",
-      "revealInFinder": "ファインダーで表示",
+      "revealInFinder": "ファイルマネージャーで表示",
       "copy": "コピー",
       "copyPath": "パスをコピーする",
       "rename": "名前の変更",
@@ -1607,7 +1608,7 @@
       "equalizePaneSizes": "ペインのサイズを均等化する",
       "openWorktreeInEditor": "エディタでワークツリーを開く",
       "openFileInEditor": "エディタでファイルを開く",
-      "revealInFinder": "ファインダーで表示",
+      "revealInFinder": "ファイルマネージャーで表示",
       "copy": "コピー",
       "worktreePath": "ワークツリーのパス",
       "filePath": "ファイルパス",
@@ -2570,10 +2571,10 @@
   "backgroundSessions": {
     "daemon": {
       "label": "デーモン",
-      "hint": "acornd デーモンは、長時間実行される端末セッションを所有します。デーモンがオンになっていると、PTY を失うことなく Acorn を終了して再度開くことができます。 Off は従来のインプロセス パスにフォールバックします。セッションはアプリとともに終了します。",
+      "hint": "acornd デーモンは、長時間実行される端末セッションを管理します。有効にすると、PTY を失わずに Acorn を終了して再度開けます。無効にすると新しいセッションはインプロセス経路を使用し、既存のデーモンセッションは明示的に終了するまで維持されます。",
       "enableLabel": "バックグラウンドセッションを有効にする (acorn)",
       "enabledDescription": "セッションは、Acorn が再起動しても、明示的に終了するまで持続します。",
-      "disabledDescription": "セッションはこの Acorn プロセスにバインドされており、アプリを閉じるとセッションが強制終了されます。"
+      "disabledDescription": "新しいセッションはこの Acorn プロセスにバインドされます。既存のデーモンセッションは明示的に終了するまで実行を続けます。"
     },
     "status": {
       "label": "ステータス",

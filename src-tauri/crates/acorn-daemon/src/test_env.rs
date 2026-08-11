@@ -1,6 +1,6 @@
 //! Shared test-env mutex.
 //!
-//! Multiple test modules (`paths`, `lifecycle`) set + unset the same
+//! Multiple test modules (`paths`, `lifecycle`, `socket`) set + unset the same
 //! process-global env var (`ACORN_DATA_DIR`) inside their tests. Per-module
 //! locks let `paths::*` and `lifecycle::*` tests overlap and read each
 //! other's mid-flight overrides — surfacing as flaky failures (e.g.

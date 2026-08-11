@@ -48,11 +48,13 @@ jobs:
         run: cargo install cargo-audit --version 0.22.2 --locked
 
       - name: Audit Rust dependencies
-        # quick-xml 0.37.5 is Windows-only through tauri-winrt-notification.
-        # The current official release workflow ships macOS bundles, and
-        # neither vulnerable XML API is reachable in Acorn's Windows-only
-        # notification dependency path. Keep the explicit exceptions visible
-        # until upstream moves to quick-xml >=0.41; every other advisory fails.
+        # The affected quick-xml versions have no untrusted XML input here.
+        # tauri-winrt-notification uses 0.37.5 only for `escape::escape`, not
+        # the vulnerable attribute or namespace readers. wayland-scanner uses
+        # 0.39.4 at build time on protocol XML shipped by its dependency, not
+        # user/network data. Keep these reachability exceptions visible until
+        # both upstream paths move to quick-xml >=0.41; every other advisory
+        # still fails the audit.
         run: >-
           cargo audit --file src-tauri/Cargo.lock
           --ignore RUSTSEC-2026-0194

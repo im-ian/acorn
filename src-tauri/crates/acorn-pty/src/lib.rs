@@ -1,6 +1,6 @@
 //! Pseudoterminal (PTY) backend for Acorn.
 //!
-//! Manages a pool of PTY-backed child processes (the user's `$SHELL`), keyed
+//! Manages a pool of PTY-backed child processes (the selected native shell), keyed
 //! by session UUID. Each session has:
 //!   * a master writer used to forward stdin
 //!   * a process child handle used to kill the process
@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use acorn_platform::process::ProcessTree;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
@@ -115,6 +116,9 @@ struct PtyHandle {
     writer: Mutex<Box<dyn std::io::Write + Send>>,
     /// Killer cloned from the child process — safe to use across threads.
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    /// Owns the complete child tree (a process group on Unix, Job Object on
+    /// Windows) so cancellation cannot strand grandchildren.
+    process_tree: ProcessTree,
     /// When set, the reader task will exit on its next loop iteration.
     stop: Arc<AtomicBool>,
     /// PID of the spawned PTY child. Captured at spawn time because the
@@ -204,10 +208,14 @@ impl PtyManager {
         cmd.cwd(&cwd);
         env_applier(&mut cmd);
 
-        let child = pair
+        let mut child = pair
             .slave
             .spawn_command(cmd)
             .map_err(|e| PtyError::Other(format!("spawn_command failed: {e}")))?;
+        let process_tree = ProcessTree::from_portable_child(child.as_ref()).map_err(|err| {
+            let _ = child.kill();
+            PtyError::Other(format!("track PTY process tree failed: {err}"))
+        })?;
         // Slave is no longer needed in this process; dropping it lets the child
         // own the pty slave fd and prevents EOF stalls when the child exits.
         drop(pair.slave);
@@ -228,6 +236,7 @@ impl PtyManager {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             killer: Mutex::new(killer),
+            process_tree,
             stop: stop.clone(),
             pid,
             had_child: AtomicBool::new(false),
@@ -315,11 +324,13 @@ impl PtyManager {
             .ok_or_else(|| PtyError::Other(format!("no pty for session {session_id}")))?
             .clone();
         handle.stop.store(true, Ordering::SeqCst);
-        handle
-            .killer
-            .lock()
-            .kill()
-            .map_err(|e| PtyError::Other(format!("kill failed: {e}")))?;
+        if let Err(tree_err) = handle.process_tree.terminate() {
+            handle.killer.lock().kill().map_err(|kill_err| {
+                PtyError::Other(format!(
+                    "process-tree kill failed ({tree_err}); child kill failed ({kill_err})"
+                ))
+            })?;
+        }
         Ok(())
     }
 

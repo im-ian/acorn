@@ -29,6 +29,13 @@ describe("joinPath", () => {
   it("handles empty relative", () => {
     expect(joinPath("/Users/me/repo", "")).toBe("/Users/me/repo/");
   });
+
+  it("preserves Windows separators", () => {
+    expect(joinPath("C:\\Users\\me\\repo", "src/App.tsx")).toBe(
+      "C:\\Users\\me\\repo\\src\\App.tsx",
+    );
+    expect(joinPath("C:\\", "src/App.tsx")).toBe("C:\\src\\App.tsx");
+  });
 });
 
 describe("fileUrlToPath", () => {

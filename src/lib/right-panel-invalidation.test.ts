@@ -22,6 +22,19 @@ describe("classifyRightPanelFsChange", () => {
     ).toEqual({ commits: true, staged: true });
   });
 
+  it("uses Windows case-insensitive path identity for watcher events", () => {
+    expect(
+      classifyRightPanelFsChange(String.raw`C:\Repo\App`, [
+        "c:/repo/app/src/main.ts",
+      ]),
+    ).toEqual({ commits: false, staged: true });
+    expect(
+      classifyRightPanelFsChange(String.raw`C:\Repo\App`, [
+        "c:/REPO/app/.git/HEAD",
+      ]),
+    ).toEqual({ commits: true, staged: true });
+  });
+
   it("ignores empty events and missing repos", () => {
     expect(classifyRightPanelFsChange(null, ["/repo/app/.git/HEAD"])).toEqual({
       commits: false,

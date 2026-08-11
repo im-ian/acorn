@@ -280,6 +280,7 @@
         "errorHint": "无法查询安装状态。",
         "loadingHint": "正在加载安装状态...",
         "hint": "控制会话可通过 acorn-ipc CLI 向同级会话分派命令。该 CLI 随应用提供；将其符号链接到 $PATH 后即可从任意终端使用。",
+        "windowsHint": "捆绑的 acorn-ipc CLI 会自动添加到 Acorn 终端内的 PATH，无需安装系统级 shim。",
         "bundledBinary": "捆绑可执行文件",
         "found": "已找到",
         "missing": "缺失",
@@ -342,7 +343,7 @@
         },
         "rescanTitle": "重新扫描主题文件夹",
         "refresh": "刷新",
-        "revealFolder": "在 Finder 中显示文件夹",
+        "revealFolder": "在文件管理器中显示文件夹",
         "library": {
           "title": "主题库",
           "description": "从 Acorn 主题仓库下载和更新主题。删除已下载主题不会影响自定义 CSS 文件。",
@@ -1250,7 +1251,7 @@
       "moveToProjectRoot": "项目根目录",
       "projectSettings": "项目设置",
       "closeProject": "关闭项目",
-      "revealInFinder": "在 Finder 中显示",
+      "revealInFinder": "在文件管理器中显示",
       "copy": "复制",
       "copyPath": "复制路径",
       "rename": "重命名",
@@ -1607,7 +1608,7 @@
       "equalizePaneSizes": "均衡窗格大小",
       "openWorktreeInEditor": "在编辑器中打开工作树",
       "openFileInEditor": "在编辑器中打开文件",
-      "revealInFinder": "在 Finder 中显示",
+      "revealInFinder": "在文件管理器中显示",
       "copy": "复制",
       "worktreePath": "工作树路径",
       "filePath": "文件路径",
@@ -2570,10 +2571,10 @@
   "backgroundSessions": {
     "daemon": {
       "label": "守护进程",
-      "hint": "acornd 守护进程管理长时间运行的终端会话。启用后，Acorn 可退出并重新打开而不会丢失 PTY；禁用后会回退到传统的进程内路径，应用退出时会话也会结束。",
+      "hint": "acornd 守护进程管理长时间运行的终端会话。启用后，Acorn 可退出并重新打开而不会丢失 PTY；禁用后，新会话会使用进程内路径，现有守护进程会话则会保留到您明确退出为止。",
       "enableLabel": "启用后台会话 (acornd)",
       "enabledDescription": "会话在 Acorn 重新启动期间持续存在，直到您明确退出它们。",
-      "disabledDescription": "会话绑定到当前 Acorn 进程；关闭应用会终止这些会话。"
+      "disabledDescription": "新会话会绑定到当前 Acorn 进程。现有守护进程会话会继续运行，直到您明确退出。"
     },
     "status": {
       "label": "状态",

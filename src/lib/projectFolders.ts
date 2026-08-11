@@ -1,4 +1,9 @@
 import type { Project, Session } from "./types";
+import {
+  basename,
+  isPathInsideOrEqual as pathIsInsideOrEqual,
+  pathsEqual,
+} from "./pathUtils";
 
 export const DEFAULT_PROJECT_FOLDER_NAME = "Default";
 
@@ -136,7 +141,7 @@ export function findWorktreeWorkspaceForPath(
     folders.find(
       (folder) =>
         isWorktreeFolder(folder) &&
-        normalizePath(folder.cwdPath) === normalizePath(worktreePath),
+        pathsEqual(folder.cwdPath, worktreePath),
     ) ?? null
   );
 }
@@ -150,13 +155,11 @@ export function makeProjectFolderId(repoPath: string): string {
 }
 
 export function basenamePath(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+  return basename(path);
 }
 
 export function isPathInsideOrEqual(path: string, parentPath: string): boolean {
-  const child = normalizePath(path);
-  const parent = normalizePath(parentPath);
-  return child === parent || child.startsWith(`${parent}/`);
+  return pathIsInsideOrEqual(path, parentPath);
 }
 
 export function ensureProjectFolders(
@@ -416,7 +419,7 @@ function normalizeProjectFolder(
 function isWorktreeFolder(folder: ProjectFolder): boolean {
   return (
     !isDefaultProjectFolder(folder) &&
-    normalizePath(folder.cwdPath) !== normalizePath(folder.repoPath)
+    !pathsEqual(folder.cwdPath, folder.repoPath)
   );
 }
 
@@ -426,7 +429,7 @@ function isMatchingWorktreeFolder(
 ): boolean {
   return (
     isWorktreeFolder(folder) &&
-    normalizePath(folder.cwdPath) === normalizePath(session.worktree_path)
+    pathsEqual(folder.cwdPath, session.worktree_path)
   );
 }
 
@@ -486,12 +489,6 @@ function knownWorkspaceRepos(
     })
     .map(([repoPath]) => repoPath);
 }
-
-function normalizePath(path: string): string {
-  const normalized = path.replace(/\\/g, "/").replace(/\/+$/g, "");
-  return normalized.length > 0 ? normalized : "/";
-}
-
 
 function isProjectSession(session: Session): boolean {
   return session.project_scoped !== false;

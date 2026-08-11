@@ -57,6 +57,7 @@ import {
   type HotkeyId,
 } from "../lib/hotkeys";
 import { joinPath } from "../lib/paths";
+import { trimTrailingPathSeparators } from "../lib/pathUtils";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import { findSessionsForPullRequest } from "../lib/sessionContext";
 import { readSessionPullRequestBranchLinks } from "../lib/sessionPullRequestLinks";
@@ -1096,18 +1097,18 @@ function useRightPanelInvalidations(
 }
 
 /**
- * Strip a trailing slash so a backend-resolved repo path byte-matches the
- * slash-free paths Acorn records (project `repo_path`, session
+ * Strip trailing path separators so a backend-resolved repo path byte-matches
+ * the separator-free paths Acorn records (project `repo_path`, session
  * `worktree_path`). `pty_repo_root` returns libgit2's `Repository::workdir()`,
  * which always carries a trailing slash (e.g. `/repo/.acorn/worktrees/wt/`).
  * If that slashed form reaches the right panel as `repoPath`, it never matches
  * a retained repo path, so `rightPanelCache.canStore` silently drops File
  * Explorer expansion writes — collapsing every expanded folder on the next
- * remount (tab switch). Preserve a bare root `/`.
+ * remount (tab switch). Filesystem roots remain intact.
  */
 function normalizeRepoPath(path: string | null): string | null {
   if (path === null) return null;
-  const trimmed = path.replace(/\/+$/, "");
+  const trimmed = trimTrailingPathSeparators(path);
   return trimmed === "" ? "/" : trimmed;
 }
 

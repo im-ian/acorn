@@ -101,6 +101,23 @@ const TAB_MARKERS: Array<{
 ];
 
 test.describe("settings modal: tab content", () => {
+  test("hides macOS-only permissions on Windows", async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "platform", {
+        get: () => "Win32",
+        configurable: true,
+      });
+    });
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await expect(modal).toBeVisible();
+    await expect(
+      modal.getByRole("button", { name: /^(Permissions|権限|권한|权限)$/ }),
+    ).toHaveCount(0);
+  });
+
   test("clicking each tab swaps the body content", async ({ page }) => {
     await page.goto("/");
     await pressHotkey(page, { mod: true, key: "," });

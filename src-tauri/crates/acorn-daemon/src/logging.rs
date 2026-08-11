@@ -12,7 +12,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use super::paths;
@@ -33,7 +33,9 @@ pub struct RotatingFile {
 
 struct Inner {
     path: PathBuf,
-    file: File,
+    // `Option` lets rotation take and drop the live handle before renaming.
+    // Windows rejects a rename while this process still has the file open.
+    file: Option<File>,
     written: u64,
 }
 
@@ -57,38 +59,48 @@ impl RotatingFile {
         Ok(Self {
             inner: Mutex::new(Inner {
                 path,
-                file,
+                file: Some(file),
                 written,
             }),
         })
     }
 
     fn rotate(inner: &mut Inner) -> io::Result<()> {
-        // Walk back-to-front so .N → .N+1 moves do not clobber a file
-        // we still need to read.
-        for i in (1..KEEP_ROTATIONS).rev() {
-            let src = with_suffix(&inner.path, i);
-            let dst = with_suffix(&inner.path, i + 1);
-            if src.exists() {
-                let _ = std::fs::rename(&src, &dst);
-            }
-        }
-        let first_rotation = with_suffix(&inner.path, 1);
-        if inner.path.exists() {
-            let _ = std::fs::rename(&inner.path, &first_rotation);
-        }
-        // Reopen the live log fresh.
-        inner.file = OpenOptions::new()
+        // Flush, then close the live handle before any rename. Keeping the
+        // handle open happened to work on Unix but fails with a sharing
+        // violation on Windows.
+        let close_result = match inner.file.take() {
+            Some(mut file) => file.flush(),
+            None => Ok(()),
+        };
+
+        let rotation_result = close_result.and_then(|()| rotate_paths(&inner.path));
+
+        // Always attempt to restore a writable live file, even when a remove
+        // or rename failed. A single rotation error must not permanently turn
+        // off daemon logging for the rest of the process lifetime.
+        Self::reopen(inner)?;
+        rotation_result
+    }
+
+    fn reopen(inner: &mut Inner) -> io::Result<()> {
+        let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&inner.path)?;
-        inner.written = 0;
-        // Drop anything beyond the keep budget.
-        let stale = with_suffix(&inner.path, KEEP_ROTATIONS + 1);
-        if stale.exists() {
-            let _ = std::fs::remove_file(&stale);
-        }
+        inner.written = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        inner.file = Some(file);
         Ok(())
+    }
+
+    fn file_mut(inner: &mut Inner) -> io::Result<&mut File> {
+        if inner.file.is_none() {
+            Self::reopen(inner)?;
+        }
+        inner
+            .file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("daemon log file unavailable after reopen attempt"))
     }
 }
 
@@ -98,16 +110,47 @@ impl Write for &RotatingFile {
         if inner.written + buf.len() as u64 > MAX_FILE_BYTES {
             RotatingFile::rotate(&mut inner)?;
         }
-        let n = inner.file.write(buf)?;
+        let n = RotatingFile::file_mut(&mut inner)?.write(buf)?;
         inner.written += n as u64;
         Ok(n)
     }
     fn flush(&mut self) -> io::Result<()> {
-        self.inner.lock().unwrap().file.flush()
+        let mut inner = self.inner.lock().unwrap();
+        RotatingFile::file_mut(&mut inner)?.flush()
     }
 }
 
-fn with_suffix(base: &PathBuf, n: u32) -> PathBuf {
+fn rotate_paths(path: &Path) -> io::Result<()> {
+    // Delete the oldest destination first. The remaining back-to-front
+    // renames now always target a missing path, which is required by Windows
+    // (unlike Unix, rename does not replace an existing file there).
+    // `.4` is also removed for compatibility with files left by the previous
+    // rotation implementation.
+    remove_file_if_exists(&with_suffix(path, KEEP_ROTATIONS + 1))?;
+    remove_file_if_exists(&with_suffix(path, KEEP_ROTATIONS))?;
+    for i in (1..KEEP_ROTATIONS).rev() {
+        rename_if_exists(&with_suffix(path, i), &with_suffix(path, i + 1))?;
+    }
+    rename_if_exists(path, &with_suffix(path, 1))
+}
+
+fn remove_file_if_exists(path: &Path) -> io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn rename_if_exists(source: &Path, destination: &Path) -> io::Result<()> {
+    match std::fs::rename(source, destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn with_suffix(base: &Path, n: u32) -> PathBuf {
     let mut name = base
         .file_name()
         .map(|s| s.to_owned())
@@ -140,6 +183,7 @@ mod tests {
             "live log expected < {MAX_FILE_BYTES}, got {live_size}"
         );
         assert!(dir.join("daemon.log.1").exists());
+        drop(writer);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -160,6 +204,52 @@ mod tests {
         assert!(dir.join("daemon.log.2").exists());
         assert!(dir.join("daemon.log.3").exists());
         assert!(!dir.join("daemon.log.4").exists());
+        drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotation_replaces_existing_history_in_order() {
+        let dir = std::env::temp_dir().join(format!("acorn-log-order-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daemon.log");
+        std::fs::write(&path, b"live").unwrap();
+        std::fs::write(with_suffix(&path, 1), b"one").unwrap();
+        std::fs::write(with_suffix(&path, 2), b"two").unwrap();
+        std::fs::write(with_suffix(&path, 3), b"three").unwrap();
+        std::fs::write(with_suffix(&path, 4), b"stale").unwrap();
+
+        let writer = RotatingFile::open(path.clone()).unwrap();
+        RotatingFile::rotate(&mut writer.inner.lock().unwrap()).unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+        assert_eq!(std::fs::read(with_suffix(&path, 1)).unwrap(), b"live");
+        assert_eq!(std::fs::read(with_suffix(&path, 2)).unwrap(), b"one");
+        assert_eq!(std::fs::read(with_suffix(&path, 3)).unwrap(), b"two");
+        assert!(!with_suffix(&path, 4).exists());
+        drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotation_error_reopens_live_log_for_later_writes() {
+        let dir = std::env::temp_dir().join(format!("acorn-log-recover-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daemon.log");
+        std::fs::write(&path, b"before").unwrap();
+        // A directory at the oldest rotation path makes remove_file fail on
+        // every supported OS and exercises the reopen-on-error path.
+        std::fs::create_dir(with_suffix(&path, KEEP_ROTATIONS)).unwrap();
+
+        let writer = RotatingFile::open(path.clone()).unwrap();
+        assert!(RotatingFile::rotate(&mut writer.inner.lock().unwrap()).is_err());
+        std::fs::remove_dir(with_suffix(&path, KEEP_ROTATIONS)).unwrap();
+
+        let mut output = &writer;
+        output.write_all(b"-after").unwrap();
+        output.flush().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"before-after");
+        drop(writer);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

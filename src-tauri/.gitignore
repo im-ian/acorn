@@ -6,6 +6,6 @@
 # will have schema files for capabilities auto-completion
 /gen/schemas
 
-# Sidecar binaries staged by scripts/build-sidecar.sh for Tauri's
+# Sidecar binaries staged by scripts/build-sidecar.mjs for Tauri's
 # externalBin bundling. Produced at build time, never committed.
 /binaries/

@@ -26,6 +26,7 @@ import {
   hasNativeFileDropData,
 } from "../lib/fileDrop";
 import { formatTerminalFileMention } from "../lib/fileMention";
+import { writeClipboardText } from "../lib/clipboardText";
 import {
   AGENT_PROVIDER_ORDER,
   providerSupportsImagePasteFallback,
@@ -229,6 +230,9 @@ interface ContextPromptDetail {
 const IS_MAC =
   typeof navigator !== "undefined" &&
   /Mac|iP(hone|od|ad)/.test(navigator.platform);
+const IS_WINDOWS =
+  typeof navigator !== "undefined" &&
+  /^(Win32|Win64|Windows)/u.test(navigator.platform);
 const MODIFIER_LINK_LABEL = IS_MAC ? "Command-click" : "Ctrl-click";
 
 interface TerminalRenderInternals {
@@ -1858,6 +1862,24 @@ export function Terminal({
 
     const onKeydown = (e: Event) => {
       const ev = e as KeyboardEvent;
+      if (
+        IS_WINDOWS &&
+        ev.ctrlKey &&
+        ev.shiftKey &&
+        !ev.metaKey &&
+        !ev.altKey &&
+        ev.key.toLowerCase() === "c"
+      ) {
+        const text = selectedTextForTerminalContextPaste(container, term);
+        if (text.length > 0) {
+          void writeClipboardText(text).catch((err: unknown) => {
+            console.warn("[Terminal] clipboard write failed", err);
+          });
+        }
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        return;
+      }
       // keyCode 229 = IME composing key. xterm's keydown reacts to
       // 229 with a `_handleAnyTextareaChanges` setTimeout that would
       // emit duplicate text — swallow at capture, and remember the
@@ -2576,7 +2598,7 @@ export function Terminal({
         // fires before `pty_spawn` and `pty_resize` errors out with
         // "no pty for session".
         //
-        // Sessions always drop into $SHELL on the backend.
+        // Sessions always drop into the selected native shell on the backend.
         const spawnCols = term.cols;
         const spawnRows = term.rows;
         const env: Record<string, string> = {};

@@ -1,8 +1,8 @@
-//! Capture a small whitelist of environment variables out of the user's
-//! login+interactive shell so PTY children and native one-shot CLI runs see
-//! the same PATH, locale, editor, pager, etc. that the user gets in
-//! Terminal.app — without acorn having to know each shell's rc-file
-//! conventions.
+//! Capture a small whitelist of environment variables for PTY children and
+//! native one-shot CLI runs. On Unix, values come from the user's
+//! login+interactive shell. On Windows, GUI apps already inherit the merged
+//! user and machine environment from Explorer, so Acorn snapshots those
+//! inherited values directly.
 //!
 //! ## Why
 //!
@@ -27,10 +27,11 @@
 //!
 //! ## Pattern
 //!
-//! Mirrors [`crate::cli_resolver`]'s shell-bootstrap-and-cache approach:
-//!   1. Run `$SHELL -l -i -c` with a script that prints each whitelisted
-//!      variable, base64-encoded so newlines/spaces in values can't break
-//!      parsing, between known marker pairs.
+//! Mirrors [`crate::cli_resolver`]'s bootstrap-and-cache approach:
+//!   1. On Unix, run `$SHELL -l -i -c` with a script that prints each
+//!      whitelisted variable, base64-encoded so newlines/spaces in values
+//!      can't break parsing, between known marker pairs. On Windows, copy the
+//!      same allowlist from Acorn's inherited process environment.
 //!   2. Parse the output bracketed by markers, base64-decode each value.
 //!   3. Cache the resulting map in a `OnceLock`-backed `Mutex` so subsequent
 //!      PTY spawns pay zero shell-startup cost.
@@ -108,19 +109,17 @@ pub fn resolve() -> HashMap<String, String> {
     resolved
 }
 
-/// Drop the cached snapshot. Subsequent [`resolve`] calls re-run the
-/// shell, picking up dotfile edits the user has made since the last
-/// capture.
+/// Drop the cached snapshot. Subsequent [`resolve`] calls re-run the Unix
+/// shell capture or re-read Acorn's inherited Windows environment.
 pub fn invalidate() {
     *cache().lock().unwrap() = None;
 }
 
 /// Apply the captured login-shell environment to a native command spawn.
 ///
-/// This is intentionally narrower than spawning through `$SHELL -l -i -c`:
+/// This is intentionally narrower than spawning through a shell bootstrap:
 /// the target command still executes directly, but child interpreters looked
-/// up via shebangs such as `/usr/bin/env node` see the same PATH the user's
-/// terminal would provide.
+/// up via shebangs such as `/usr/bin/env node` see the expected PATH.
 pub fn apply_to_command(cmd: &mut Command) {
     for (k, v) in resolve() {
         cmd.env(k, v);
@@ -153,19 +152,34 @@ pub fn system_locale_lang() -> Option<String> {
     Some(format!("{locale}.UTF-8"))
 }
 
-/// Run `$SHELL -l -i -c '<script>'` and parse the marker-bracketed output
-/// into a `HashMap<String, String>`. The script base64-encodes each
-/// captured value so values containing newlines, spaces, or shell
-/// metacharacters round-trip cleanly.
+/// Capture the environment Acorn should pass to a new PTY. Windows GUI apps
+/// already inherit the merged user and machine environment from Explorer, so
+/// those values are copied directly. Unix launches the login shell and parses
+/// marker-bracketed, base64-encoded output so rc-managed values round-trip.
 fn shell_capture() -> Option<HashMap<String, String>> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let script = build_capture_script(CAPTURED_VARS);
-    let out = Command::new(&shell)
-        .args(["-l", "-i", "-c", &script])
-        .output()
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    parse_env_block(&stdout)
+    #[cfg(windows)]
+    {
+        let captured = CAPTURED_VARS
+            .iter()
+            .filter_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .map(|value| ((*key).to_string(), value))
+            })
+            .collect();
+        return Some(captured);
+    }
+    #[cfg(not(windows))]
+    {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let script = build_capture_script(CAPTURED_VARS);
+        let out = Command::new(&shell)
+            .args(["-l", "-i", "-c", &script])
+            .output()
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        parse_env_block(&stdout)
+    }
 }
 
 /// Build the shell script that prints the captured vars between markers.

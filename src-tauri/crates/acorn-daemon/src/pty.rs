@@ -24,6 +24,7 @@ use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use acorn_platform::process::ProcessTree;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
@@ -64,6 +65,8 @@ struct PtyHandle {
     master: Mutex<Box<dyn MasterPty + Send>>,
     /// Kill switch shared with the child. Safe to clone freely.
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    /// Owns the complete descendant tree for reliable shutdown on every OS.
+    process_tree: ProcessTree,
     /// Reader-loop stop flag. Tripped by `kill()` or by the wait
     /// thread on natural exit so the read loop never spins on a
     /// half-closed PTY.
@@ -116,6 +119,9 @@ pub type EnvApplier =
 
 pub struct PtyManager {
     handles: Arc<DashMap<Uuid, Arc<PtyHandle>>>,
+    /// Serializes the check-and-publish portion of spawn so duplicate RPCs
+    /// for one UUID cannot both create children before either handle appears.
+    spawn_guard: Mutex<()>,
     env_applier: EnvApplier,
 }
 
@@ -126,6 +132,7 @@ impl PtyManager {
     pub fn new(env_applier: EnvApplier) -> Arc<Self> {
         Arc::new(Self {
             handles: Arc::new(DashMap::new()),
+            spawn_guard: Mutex::new(()),
             env_applier,
         })
     }
@@ -133,19 +140,27 @@ impl PtyManager {
     /// Spawn a new PTY child according to `spec`, register it with the
     /// session registry, and start reader / waiter threads. Returns the
     /// session id (taken from `spec.session_id` if `Some`, otherwise a
-    /// fresh v4). Idempotent in the absence of a UUID collision — duplicate
-    /// IDs are rejected with an `AlreadyExists` IO error.
+    /// fresh v4). Repeating a supplied UUID while its PTY is alive returns the
+    /// existing identity and pid. This makes a SpawnSession retry idempotent
+    /// when the daemon created the child but the client lost the response.
     pub fn spawn(
         &self,
         spec: SpawnSpec,
         registry: Arc<SessionRegistry>,
     ) -> std::io::Result<SpawnedSession> {
         let session_id = spec.session_id.unwrap_or_else(Uuid::new_v4);
+        let _spawn_guard = self.spawn_guard.lock();
         if self.handles.contains_key(&session_id) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!("session {session_id} already has a live pty"),
-            ));
+            let existing = registry.get(&session_id).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!("session {session_id} already has a live pty"),
+                )
+            })?;
+            return Ok(SpawnedSession {
+                session_id,
+                pid: existing.pid,
+            });
         }
 
         let size = PtySize {
@@ -192,10 +207,14 @@ impl PtyManager {
         // color regressions whenever the daemon killswitch was on.
         (self.env_applier)(&mut cmd, spec.env.clone());
 
-        let child = pair
+        let mut child = pair
             .slave
             .spawn_command(cmd)
             .map_err(|e| std::io::Error::other(format!("spawn_command failed: {e}")))?;
+        let process_tree = ProcessTree::from_portable_child(child.as_ref()).map_err(|err| {
+            let _ = child.kill();
+            std::io::Error::other(format!("track PTY process tree failed: {err}"))
+        })?;
         drop(pair.slave);
 
         let writer = pair
@@ -218,6 +237,7 @@ impl PtyManager {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             killer: Mutex::new(killer),
+            process_tree,
             stop: stop.clone(),
             output_tx: output_tx.clone(),
             scrollback: scrollback.clone(),
@@ -321,12 +341,35 @@ impl PtyManager {
                 std::io::Error::new(std::io::ErrorKind::NotFound, format!("no pty for {id}"))
             })?;
         handle.stop.store(true, Ordering::SeqCst);
-        let mut killer = handle.killer.lock();
-        killer
-            .kill()
-            .map_err(|e| std::io::Error::other(format!("kill failed: {e}")))?;
-        drop(killer);
+        if let Err(tree_err) = handle.process_tree.terminate() {
+            let mut killer = handle.killer.lock();
+            killer.kill().map_err(|kill_err| {
+                std::io::Error::other(format!(
+                    "process-tree kill failed ({tree_err}); child kill failed ({kill_err})"
+                ))
+            })?;
+        }
         Ok(())
+    }
+
+    /// Terminate every live PTY tree. Shutdown is best-effort across
+    /// sessions, but reports the first failure after attempting them all.
+    pub fn kill_all(&self) -> std::io::Result<()> {
+        let ids = self
+            .handles
+            .iter()
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        let mut first_error = None;
+        for id in ids {
+            if let Err(err) = self.kill(&id) {
+                first_error.get_or_insert(err);
+            }
+        }
+        match first_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     /// Subscribe to a session's live output stream. The returned receiver
@@ -354,6 +397,12 @@ impl PtyManager {
 
     pub fn contains(&self, id: &Uuid) -> bool {
         self.handles.contains_key(id)
+    }
+}
+
+impl Drop for PtyManager {
+    fn drop(&mut self) {
+        let _ = self.kill_all();
     }
 }
 
@@ -462,6 +511,118 @@ fn wait_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(unix, windows))]
+    fn long_running_test_spec(id: Uuid) -> SpawnSpec {
+        #[cfg(unix)]
+        let (command, args) = ("/bin/cat".to_string(), Vec::new());
+        #[cfg(windows)]
+        let (command, args) = ("cmd.exe".to_string(), vec!["/Q".to_string()]);
+
+        SpawnSpec {
+            session_id: Some(id),
+            name: "idempotent-spawn".to_string(),
+            cwd: std::env::current_dir().unwrap(),
+            command,
+            args,
+            env: HashMap::new(),
+            cols: 80,
+            rows: 24,
+            kind: crate::protocol::SessionKind::Regular,
+            repo_path: None,
+            branch: None,
+            agent_resume_token: None,
+            agent_kind: None,
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn repeated_live_session_uuid_returns_existing_pty() {
+        let manager = PtyManager::new(Arc::new(|_, _| {}));
+        let registry = SessionRegistry::new();
+        let id = Uuid::new_v4();
+        let spec = long_running_test_spec(id);
+
+        let first = manager.spawn(spec.clone(), registry.clone()).unwrap();
+        let repeated = manager.spawn(spec, registry.clone()).unwrap();
+
+        assert_eq!(repeated.session_id, first.session_id);
+        assert_eq!(repeated.pid, first.pid);
+        assert_eq!(registry.count_alive(), 1);
+        manager.kill(&id).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_conpty_accepts_input_resize_and_captures_output() {
+        let manager = PtyManager::new(Arc::new(|_, _| {}));
+        let registry = SessionRegistry::new();
+        let id = Uuid::new_v4();
+        let mut spec = long_running_test_spec(id);
+        spec.command = "powershell.exe".to_string();
+        spec.args = vec!["-NoLogo".to_string(), "-NoProfile".to_string()];
+
+        manager.spawn(spec, registry).unwrap();
+        manager.resize(&id, 101, 37).unwrap();
+
+        // Interactive PowerShell asks the terminal for its cursor position
+        // before presenting the first prompt. xterm.js answers this DSR in the
+        // app; this headless test must provide the same terminal response or
+        // PSReadLine waits indefinitely before consuming typed input.
+        let startup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut answered_cursor_queries = 0;
+        while std::time::Instant::now() < startup_deadline {
+            let startup_output = manager
+                .scrollback_snapshot(&id)
+                .map(|snapshot| String::from_utf8_lossy(&snapshot.bytes).into_owned())
+                .unwrap_or_default();
+            let cursor_queries = startup_output.matches("\u{1b}[6n").count();
+            while answered_cursor_queries < cursor_queries {
+                manager.write(&id, b"\x1b[1;1R").unwrap();
+                answered_cursor_queries += 1;
+            }
+            if cursor_queries > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+
+        manager
+            .write(
+                &id,
+                b"$Host.UI.RawUI.WindowSize; Write-Output 'ACORN_WINDOWS_PTY_OK'\r",
+            )
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut output = String::new();
+        while std::time::Instant::now() < deadline {
+            output = manager
+                .scrollback_snapshot(&id)
+                .map(|snapshot| String::from_utf8_lossy(&snapshot.bytes).into_owned())
+                .unwrap_or_default();
+            let cursor_queries = output.matches("\u{1b}[6n").count();
+            while answered_cursor_queries < cursor_queries {
+                manager.write(&id, b"\x1b[1;1R").unwrap();
+                answered_cursor_queries += 1;
+            }
+            if output.contains("ACORN_WINDOWS_PTY_OK") && output.contains("101") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        manager.kill(&id).unwrap();
+        assert!(
+            output.contains("ACORN_WINDOWS_PTY_OK"),
+            "PowerShell marker missing from ConPTY output: {output:?}"
+        );
+        assert!(
+            output.contains("101"),
+            "resized PowerShell width missing from ConPTY output: {output:?}"
+        );
+    }
 
     #[test]
     fn resume_strategy_injects_claude_session_id() {

@@ -39,6 +39,7 @@ use std::process::{Command, Output};
 use std::sync::{Mutex, OnceLock};
 
 use crate::error::{AppError, AppResult};
+#[cfg(not(windows))]
 use crate::shell_util::shell_quote;
 
 /// Per-name absolute-path cache. Keyed by the bare CLI name passed to
@@ -120,17 +121,22 @@ pub fn spawn_error(name: &str, e: std::io::Error) -> AppError {
     }
 }
 
-/// Run `$SHELL -l -i -c '<path lookup>'` and parse stdout for the
-/// resolved absolute path. The shell sources rc files (so PATH from
-/// Homebrew/npm/asdf/etc. is loaded) before resolving the binary, mirroring
-/// the rc-loading approach in `commands.rs::pty_spawn`.
+/// Resolve an external command according to the host platform. Unix launches
+/// the login shell so rc-managed PATH entries are visible; Windows delegates
+/// to the system `where.exe`, including PATHEXT expansion.
 fn shell_resolve(name: &str) -> AppResult<PathBuf> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    // `command -v` reports aliases in interactive zsh, which is exactly the
-    // shell mode we need for rc-loaded PATH. Prefer shell-specific external
-    // command lookup first, then fall back to POSIX `command -v`.
-    let script = format!(
-        "\
+    #[cfg(windows)]
+    {
+        return windows_resolve(name);
+    }
+    #[cfg(not(windows))]
+    {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        // `command -v` reports aliases in interactive zsh, which is exactly the
+        // shell mode we need for rc-loaded PATH. Prefer shell-specific external
+        // command lookup first, then fall back to POSIX `command -v`.
+        let script = format!(
+            "\
 _acorn_name={name};
 _acorn_path='';
 if [ -n \"${{ZSH_VERSION-}}\" ]; then
@@ -143,30 +149,73 @@ if [ -z \"$_acorn_path\" ]; then
   _acorn_path=$(command -v \"$_acorn_name\" 2>/dev/null || :);
 fi;
 printf '<<<ACORN_CLI_PATH>>>%s<<<END>>>' \"$_acorn_path\"",
-        name = shell_quote(name)
-    );
-    let out = Command::new(&shell)
-        .args(["-l", "-i", "-c", &script])
-        .output()
-        .map_err(|e| {
-            AppError::Other(format!(
-                "failed to invoke shell {shell} to resolve {name}: {e}"
-            ))
-        })?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let extracted = extract_path(&stdout).map(str::trim).unwrap_or("");
-    if extracted.is_empty() {
-        return Err(AppError::Other(format!(
+            name = shell_quote(name)
+        );
+        let out = Command::new(&shell)
+            .args(["-l", "-i", "-c", &script])
+            .output()
+            .map_err(|e| {
+                AppError::Other(format!(
+                    "failed to invoke shell {shell} to resolve {name}: {e}"
+                ))
+            })?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let extracted = extract_path(&stdout).map(str::trim).unwrap_or("");
+        if extracted.is_empty() {
+            return Err(AppError::Other(format!(
             "`{name}` not found in your shell PATH. Install it and ensure it's available in your login shell."
         )));
+        }
+        let path = PathBuf::from(extracted);
+        if !path.is_absolute() {
+            return Err(AppError::Other(format!(
+                "shell returned a non-absolute path for `{name}`: {extracted}"
+            )));
+        }
+        Ok(path)
     }
-    let path = PathBuf::from(extracted);
-    if !path.is_absolute() {
-        return Err(AppError::Other(format!(
-            "shell returned a non-absolute path for `{name}`: {extracted}"
-        )));
-    }
-    Ok(path)
+}
+
+#[cfg(windows)]
+fn windows_resolve(name: &str) -> AppResult<PathBuf> {
+    let where_exe = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .map(|root| root.join("System32").join("where.exe"))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from("where.exe"));
+    let output = Command::new(&where_exe).arg(name).output().map_err(|err| {
+        AppError::Other(format!(
+            "failed to invoke where.exe to resolve {name}: {err}"
+        ))
+    })?;
+    first_existing_windows_command(&output.stdout).ok_or_else(|| {
+        AppError::Other(format!(
+            "`{name}` not found in PATH. Install it and ensure it is available to Windows."
+        ))
+    })
+}
+
+/// Select the first executable path emitted by `where.exe`. Windows editor
+/// shims are commonly `.cmd`/`.bat` files, so retain those alongside native
+/// executables while rejecting extensionless Unix shims and PowerShell scripts.
+#[cfg(any(windows, test))]
+fn first_existing_windows_command(stdout: &[u8]) -> Option<PathBuf> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .find(|path| {
+            let launchable_extension = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    ["exe", "com", "cmd", "bat"]
+                        .iter()
+                        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+                });
+            path.is_absolute() && path.is_file() && launchable_extension
+        })
 }
 
 /// Pull the resolved-path payload out of the marker we wrap around
@@ -223,6 +272,28 @@ mod tests {
         // found".
         let stdout = "<<<ACORN_CLI_PATH>>><<<END>>>";
         assert_eq!(extract_path(stdout), Some(""));
+    }
+
+    #[test]
+    fn windows_command_output_accepts_cmd_shims_and_skips_ps1() {
+        let directory = tempfile::tempdir().unwrap();
+        let extensionless = directory.path().join("code");
+        let powershell = directory.path().join("code.ps1");
+        let command = directory.path().join("code.cmd");
+        std::fs::write(&extensionless, b"#!/bin/sh").unwrap();
+        std::fs::write(&powershell, b"Write-Host code").unwrap();
+        std::fs::write(&command, b"@echo off").unwrap();
+        let output = format!(
+            "{}\r\n{}\r\n{}\r\n",
+            extensionless.display(),
+            powershell.display(),
+            command.display()
+        );
+
+        assert_eq!(
+            first_existing_windows_command(output.as_bytes()),
+            Some(command)
+        );
     }
 
     #[test]

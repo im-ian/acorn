@@ -25,6 +25,21 @@ describe("pathRelativeToCwd", () => {
       "README.md",
     );
   });
+
+  it("returns slash-separated relative paths for Windows drive paths", () => {
+    expect(
+      pathRelativeToCwd(
+        "C:\\Users\\me\\repo\\src\\Terminal.tsx",
+        "c:/users/me/repo\\",
+      ),
+    ).toBe("src/Terminal.tsx");
+  });
+
+  it("keeps Windows sibling-prefix paths absolute", () => {
+    expect(
+      pathRelativeToCwd("C:\\Users\\me\\repo-other\\file.ts", "C:\\Users\\me\\repo"),
+    ).toBe("C:/Users/me/repo-other/file.ts");
+  });
 });
 
 describe("formatTerminalFileMention", () => {
@@ -56,12 +71,12 @@ describe("formatTerminalFileMention", () => {
     ).toBe("docs/PR\\ notes/final\\ plan.md ");
   });
 
-  it("backslash-escapes literal backslashes", () => {
+  it("normalizes Windows separators before escaping the mention", () => {
     expect(
       formatTerminalFileMention(
-        "/Users/me/repo/docs/back\\slash.md",
-        "/Users/me/repo",
+        "C:\\Users\\me\\repo\\docs\\guide.md",
+        "C:\\Users\\me\\repo",
       ),
-    ).toBe("docs/back\\\\slash.md ");
+    ).toBe("docs/guide.md ");
   });
 });
