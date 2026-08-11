@@ -441,8 +441,8 @@ function folderGroupsForRepo(
 
 /**
  * Flatten a project's roots into one workspace list: the primary root's
- * folders first (its default one is what renders flat under the header), then
- * each source folder's own workspaces in the order the roots were added.
+ * folders first, then each source root's workspaces in the order the roots
+ * were added. Rendering decides whether the single-root default is flattened.
  */
 function folderGroupsForRoots(
   roots: readonly string[],
