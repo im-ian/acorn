@@ -1303,9 +1303,8 @@ export function Sidebar() {
               (group) => group.repoPath === activeProjectRootPath,
             ) ?? null)
           : null;
-      // Every root's default folder renders flat under the project header, so
-      // "is this row at the top level" is a question about the folder, not
-      // about which root the session happens to live in.
+      // Only a single-root project's default folder renders flat under the
+      // project header. Multi-root sessions stay inside their repository row.
       const isTopLevelFolderId = (folderId: string | null): boolean => {
         const folder = folderId
           ? projectFolderById(currentAllWorkspaceGroups, folderId)

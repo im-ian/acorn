@@ -81,6 +81,33 @@ function project(): ProjectFolderProjectGroup {
   };
 }
 
+function multiRootProject(): ProjectFolderProjectGroup {
+  const primaryFolder = makeDefaultProjectFolder("/repo/app");
+  const apiFolder = makeDefaultProjectFolder("/repo/api");
+  const webFolder = makeDefaultProjectFolder("/repo/web");
+  const primaryIdle = session("primary-idle", "ready");
+  const apiNeeds = {
+    ...session("api-needs", "waiting_for_input"),
+    repo_path: "/repo/api",
+    worktree_path: "/repo/api",
+  };
+  const webIdle = {
+    ...session("web-idle", "ready"),
+    repo_path: "/repo/web",
+    worktree_path: "/repo/web",
+  };
+  return {
+    repoPath: "/repo/app",
+    name: "app",
+    sessions: [primaryIdle, apiNeeds, webIdle],
+    folders: [
+      { folder: primaryFolder, sessions: [primaryIdle] },
+      { folder: apiFolder, sessions: [apiNeeds] },
+      { folder: webFolder, sessions: [webIdle] },
+    ],
+  };
+}
+
 describe("sidebar project items", () => {
   it("preserves manual project item order by default", () => {
     const items = buildProjectTopLevelItems(project(), [
@@ -165,6 +192,34 @@ describe("sidebar project items", () => {
         (item) => item.id,
       ),
     ).toEqual(["source-needs", "source-ready"]);
+  });
+
+  it("keeps single-session source roots manually sortable", () => {
+    const group = multiRootProject();
+    const manualOrder = [
+      "folder:/repo/web",
+      "folder:/repo/api",
+      "folder:/repo/app",
+    ];
+
+    expect(
+      buildProjectTopLevelItems(group, manualOrder, true).map(
+        (item) => item.id,
+      ),
+    ).toEqual(manualOrder);
+
+    const index = buildDragPriorityIndex([group]);
+    expect(index.get("folder:/repo/api")).toEqual({
+      containerId: "project:/repo/app",
+      isPrioritized: false,
+    });
+    expect(
+      isPriorityDropAllowed(
+        index,
+        "folder:/repo/web",
+        "folder:/repo/api",
+      ),
+    ).toBe(true);
   });
 
   it("orders urgent items without rewriting the saved order", () => {

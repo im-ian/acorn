@@ -1,4 +1,5 @@
 import {
+  isDefaultProjectFolder,
   isGroupDefaultFolder,
   projectGroupSpansMultipleRoots,
   type ProjectFolderGroup,
@@ -147,16 +148,19 @@ export function buildDragPriorityIndex(
   for (const group of groups) {
     const topLevelContainerId = `project:${group.repoPath}`;
     for (const folderGroup of group.folders) {
-      const isDefaultFolder = isGroupDefaultFolder(group, folderGroup.folder);
-      // The default folder is flattened into top-level session rows and never
-      // drawn as a folder row, so it has no drag id to index.
-      if (!isDefaultFolder) {
+      const isFlattenedFolder = isGroupDefaultFolder(
+        group,
+        folderGroup.folder,
+      );
+      // A flattened folder becomes top-level session rows and has no folder
+      // drag id of its own.
+      if (!isFlattenedFolder) {
         index.set(sidebarFolderItemId(folderGroup.folder.id), {
           containerId: topLevelContainerId,
           isPrioritized: folderGroupHasProjectPriorityStatus(folderGroup),
         });
       }
-      const sessionContainerId = isDefaultFolder
+      const sessionContainerId = isFlattenedFolder
         ? topLevelContainerId
         : `folder:${folderGroup.folder.id}`;
       for (const session of folderGroup.sessions) {
@@ -238,11 +242,12 @@ function itemHasPriorityStatus(item: ProjectTopLevelItem): boolean {
   return folderGroupHasProjectPriorityStatus(item.folderGroup);
 }
 
-/** A single-tab workspace has no useful internal slot to promote into. */
+/** A named single-tab workspace has no useful internal slot to promote into. */
 function folderGroupHasProjectPriorityStatus(
   folderGroup: ProjectFolderGroup,
 ): boolean {
   return (
+    !isDefaultProjectFolder(folderGroup.folder) &&
     folderGroup.sessions.length <= 1 &&
     folderGroup.sessions.some(hasPriorityStatus)
   );
