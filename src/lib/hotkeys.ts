@@ -196,6 +196,36 @@ function isMacPlatform(): boolean {
   );
 }
 
+function isWindowsPlatform(): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    /^(Win32|Win64|Windows)/u.test(navigator.platform)
+  );
+}
+
+export function isTerminalKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return target.closest(".acorn-terminal") !== null;
+}
+
+/**
+ * Windows terminal Ctrl+letter chords belong to xterm/readline while it is
+ * focused. Shifted app shortcuts remain available except for the conventional
+ * terminal clipboard variants Ctrl+Shift+C/V/X. Persisted bindings still work
+ * on every other surface.
+ */
+export function shouldDeferAppHotkeyToTerminal(
+  event: KeyboardEvent,
+): boolean {
+  if (!isWindowsPlatform() || !isTerminalKeyboardTarget(event.target)) {
+    return false;
+  }
+  if (!event.ctrlKey || event.metaKey || event.altKey) return false;
+  const key = event.key.toLowerCase();
+  if (!/^[a-z]$/u.test(key)) return false;
+  return !event.shiftKey || key === "c" || key === "v" || key === "x";
+}
+
 function normalizeModifierToken(token: string): string | null {
   return MODIFIER_ALIASES[token] ?? null;
 }
@@ -518,6 +548,7 @@ function stopPropagationAfterHandling(
           event.stopImmediatePropagation();
           return;
         }
+        if (shouldDeferAppHotkeyToTerminal(event)) return;
         handler(event);
         // App-level shortcuts that handled the key must own it before focused
         // surfaces like xterm also interpret the same chord.

@@ -1040,16 +1040,10 @@ pub fn write_agent_hook_endpoint(url: &str, token: &str) -> io::Result<PathBuf> 
 
 fn write_agent_hook_endpoint_at(dir: &Path, url: &str, token: &str) -> io::Result<PathBuf> {
     let path = dir.join(HOOK_ENDPOINT_NAME);
-    let tmp = dir.join(format!("{HOOK_ENDPOINT_NAME}.tmp"));
-    fs::write(&tmp, format!("{url}\n{token}\n"))?;
-    // The token authorizes status-event POSTs for any session id; keep it
-    // owner-readable only, like an SSH key. Set perms before the rename so
-    // the file is never observable in a looser mode.
-    #[cfg(unix)]
-    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
-    // Atomic rename — a notify script reading mid-publish sees either the
-    // previous endpoint or the new one, never a torn file.
-    fs::rename(&tmp, &path)?;
+    // The token authorizes status-event POSTs for any session id. Publish it
+    // owner-only so readers see either the previous endpoint or the complete
+    // new value.
+    acorn_platform::fs::write_atomic_private(&path, format!("{url}\n{token}\n").as_bytes())?;
     Ok(path)
 }
 

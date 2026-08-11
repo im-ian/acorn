@@ -4,16 +4,14 @@
 > Acorn 1.0.9. Expect rough edges; expect the protocol to bump if the wire
 > shape needs revision.
 >
-> **Platform support: macOS and Linux only.** The IPC transport is a Unix
-> domain socket, so the `acorn-ipc` binary and the in-app server do not
-> compile on Windows. Acorn itself runs on Windows; control sessions and
-> everything in this document do not. See [Limitations](#limitations) for
-> what porting would entail.
+> **Platform support: macOS, Windows, and Linux.** The shared local transport
+> uses owner-only Unix domain sockets on macOS/Linux and owner-only named
+> pipes on Windows.
 
 A **control session** is an ordinary Acorn terminal that has been marked with
 `SessionKind::Control`. The mark gives the terminal — and any process running
 inside it, including agents like Claude, Codex, or Grok — permission to drive its
-sibling sessions over a Unix-socket protocol called `acorn-ipc`.
+sibling sessions over a local IPC protocol called `acorn-ipc`.
 
 The mental model is tmux's *control mode*: one pane acts as the dispatcher,
 the others are workers. Acorn just leans on the system process tree instead
@@ -42,14 +40,15 @@ regular shell.
 
 ## Agent priming
 
-Sessions always spawn the user's `$SHELL`, so Acorn never invokes the
-agent CLI directly — the user does, from inside the shell. The point of a
+Sessions always spawn the native interactive shell (`$SHELL` on Unix, then
+PowerShell/cmd fallbacks on Windows), so Acorn never invokes the agent CLI
+directly — the user does, from inside the shell. The point of a
 control session is that whichever agent the user launches inside it
 should be able to orchestrate siblings *immediately*, not only after the
 user has explained the protocol. Acorn ships that priming through two
 layers that fire automatically every time a control-session PTY spawns:
 
-1. **PTY environment.** All Acorn terminals get enough identity and socket
+1. **PTY environment.** All Acorn terminals get enough identity and endpoint
    state to bootstrap `acorn-ipc`; control sessions get the privileged source
    marker before any user code runs:
    - `ACORN_RESUME_TOKEN` — this session's UUID. `acorn-ipc` uses it as a
@@ -58,7 +57,7 @@ layers that fire automatically every time a control-session PTY spawns:
    - `ACORN_DATA_DIR` — the resolved Acorn profile data directory. This
      keeps bundled release sidecars aligned with the app's selected
      profile.
-   - `ACORN_IPC_SOCKET` — the canonical IPC socket path.
+   - `ACORN_IPC_SOCKET` — the canonical Unix-socket or Windows named-pipe endpoint.
    - `PATH` — the directory containing the bundled `acorn-ipc` binary is
      prepended (de-duplicated), so the agent can invoke `acorn-ipc` by name
      without the user installing a shim.
@@ -69,7 +68,7 @@ layers that fire automatically every time a control-session PTY spawns:
      `acorn-ipc new-session --workspace current` uses these to place new
      sessions back into the same workspace.
    - `ACORN_DAEMON_SOCKET` — injected for control sessions so scripts can
-     also reach the background daemon control socket.
+     also reach the background daemon control endpoint.
 2. **Worktree marker file.** A `.acorn-control.md` is written to the
    session's cwd on every spawn (overwritten each time so the substituted
    session id is current). Agents that read project docs (Claude Code,
@@ -79,7 +78,7 @@ layers that fire automatically every time a control-session PTY spawns:
    ingest project docs on startup.
 
 The primer text itself is generated server-side and lists the control
-session id, socket paths, natural-language mapping for phrases like "new
+session id, IPC endpoints, natural-language mapping for phrases like "new
 session", the ownership rule for worker sessions, and every `acorn-ipc`
 subcommand with copy-pasteable examples. Agents can also reload the same
 text at any time with `acorn-ipc context`.
@@ -92,7 +91,7 @@ When Acorn spawns a terminal it injects these env vars into the PTY:
 | ------------------- | --------------------------------- |
 | `ACORN_RESUME_TOKEN` | The session's UUID               |
 | `ACORN_DATA_DIR`    | Resolved Acorn profile data dir   |
-| `ACORN_IPC_SOCKET`  | Path to the in-app IPC socket     |
+| `ACORN_IPC_SOCKET`  | In-app IPC endpoint              |
 
 Control sessions additionally receive:
 
@@ -102,7 +101,7 @@ Control sessions additionally receive:
 | `ACORN_WORKSPACE_ID` | Current frontend workspace id    |
 | `ACORN_WORKSPACE_PATH` | Current frontend workspace cwd |
 | `ACORN_WORKSPACE_NAME` | Current frontend workspace name |
-| `ACORN_DAEMON_SOCKET` | Path to the daemon control socket |
+| `ACORN_DAEMON_SOCKET` | Daemon control endpoint        |
 
 The `acorn-ipc` binary reads `ACORN_SESSION_ID` first, then falls back to
 `ACORN_RESUME_TOKEN`, and uses `ACORN_IPC_SOCKET` for transport. Commands run
@@ -112,7 +111,7 @@ still rejects requests unless the source session is already `Control`.
 By default, release builds use `profiles/prod` and debug builds use
 `profiles/dev` below Acorn's app data directory. Set `ACORN_PROFILE=<name>`
 to select another profile, or `ACORN_DATA_DIR=<path>` to pin all runtime
-state, IPC sockets, daemon sockets, and staged shell init files to an
+state, IPC endpoints, and staged shell init files to an
 explicit directory.
 
 > **Gotcha for agents running inside an Acorn terminal.** Acorn injects
@@ -156,7 +155,7 @@ explicit directory.
 
 ### Install
 
-`acorn-ipc` ships inside the Acorn `.app` bundle (Tauri's `externalBin`
+`acorn-ipc` ships inside the Acorn application bundle (Tauri's `externalBin`
 mechanism — see `src-tauri/tauri.conf.json`). Inside an Acorn PTY there is
 **nothing to install**: the bundled binary's directory is prepended to `PATH`,
 so `acorn-ipc promote-self` and, once promoted, `acorn-ipc list-sessions` work
@@ -177,9 +176,9 @@ pnpm run build:sidecar   # one-time; run again after sidecar changes
 pnpm run tauri dev
 ```
 
-`pnpm run build:sidecar` shells out to `src-tauri/scripts/build-sidecar.sh`,
+`pnpm run build:sidecar` runs `src-tauri/scripts/build-sidecar.mjs`,
 which compiles the bundled sidecars and stages them at
-`src-tauri/binaries/<name>-<target-triple>`, the paths Tauri's
+`src-tauri/binaries/<name>-<target-triple>[.exe]`, the paths Tauri's
 `externalBin` existence check requires before `tauri dev` / `tauri build`
 will even start. Plain `cargo build -p acorn-ipc --bin acorn-ipc` skips the
 staging step, so the build fails with
@@ -294,8 +293,8 @@ acorn-ipc select-session -t "$new_id"
 
 ## Security model
 
-- The socket file is created with mode `0600`, so only the user the Acorn
-  app is running as can connect.
+- Unix socket files are created with mode `0600`. Windows named pipes use an
+  owner-only DACL. In both cases, other local users are denied access.
 - Every request carries the source session's UUID. `promote-self` is the
   bootstrap exception: it may mark its own regular source session as
   `Control`. The server rejects every other request whose source is missing,
@@ -346,17 +345,9 @@ version `1`. See `src-tauri/src/ipc/proto.rs` for the canonical types.
 
 ## Limitations
 
-- **macOS and Linux only.** Both `acorn-ipc` and the in-app server import
-  `std::os::unix::net::{UnixListener, UnixStream}` directly (see
-  `src-tauri/src/ipc/server.rs` and `src-tauri/crates/acorn-ipc/src/bin/acorn-ipc.rs`), so the
-  crate does not compile on Windows targets at all. Porting would mean
-  abstracting the transport — e.g. via the `interprocess` crate, which
-  unifies Unix domain sockets and Windows named pipes behind one API — and
-  finding a Windows-equivalent permission model for the `chmod 0600` step
-  (named-pipe SDDL ACLs). The PTY layer would also need an audit; nothing
-  in this stack tests that path on Windows.
-- The CLI does not currently auto-install. Use the Settings shortcut or
-  symlink it manually.
+- The CLI does not currently auto-install system-wide. The Settings-generated
+  symlink command is Unix-only; Windows users can invoke the bundled CLI from
+  an Acorn terminal, where its directory is already prepended to `PATH`.
 - `send-keys` does not interpret tmux-style escapes (`C-c`, `Enter`); pass
   literal bytes via `--data` or pre-encoded base64 via `--raw-base64`.
 - Audit logging is `tracing::info!`-level only; there is no on-disk audit
@@ -364,6 +355,6 @@ version `1`. See `src-tauri/src/ipc/proto.rs` for the canonical types.
 - Priming relies entirely on env vars + the `.acorn-control.md` marker
   file. The previous spawn-time CLI flag injection (Claude
   `--append-system-prompt`, `llm -s`) is dormant because Acorn no longer
-  spawns the agent directly — the user does, from inside `$SHELL`. The
-  flag-injection code remains and will activate again if `$SHELL` is
+  spawns the agent directly — the user does, from inside the selected shell.
+  The flag-injection code remains and will activate again if that shell is
   ever set to a recognised agent binary.

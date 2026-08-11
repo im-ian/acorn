@@ -1,0 +1,5 @@
+{
+  "build": {
+    "beforeBuildCommand": "pnpm run build:sidecar:release-ci"
+  }
+}

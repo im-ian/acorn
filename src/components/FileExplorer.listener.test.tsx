@@ -7,6 +7,17 @@ const apiMocks = vi.hoisted(() => ({
   fsGitDiffStats: vi.fn(),
   fsListDir: vi.fn(),
   fsShellEditor: vi.fn(),
+  fsOpenDefault: vi.fn(),
+  ptyWrite: vi.fn(),
+  detectSessionAgent: vi.fn(),
+}));
+
+const editorMocks = vi.hoisted(() => ({
+  openFileInEditor: vi.fn(),
+}));
+
+const storeMocks = vi.hoisted(() => ({
+  activeSessionId: null as string | null,
 }));
 
 const eventMocks = vi.hoisted(() => ({
@@ -20,7 +31,14 @@ vi.mock("../lib/api", () => ({
     fsGitDiffStats: apiMocks.fsGitDiffStats,
     fsListDir: apiMocks.fsListDir,
     fsShellEditor: apiMocks.fsShellEditor,
+    fsOpenDefault: apiMocks.fsOpenDefault,
+    ptyWrite: apiMocks.ptyWrite,
+    detectSessionAgent: apiMocks.detectSessionAgent,
   },
+}));
+
+vi.mock("../lib/editor", () => ({
+  openFileInEditor: editorMocks.openFileInEditor,
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -29,7 +47,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("../store", () => ({
   useAppStore: {
-    getState: () => ({ activeSessionId: null }),
+    getState: () => ({ activeSessionId: storeMocks.activeSessionId }),
     subscribe: () => () => {},
   },
 }));
@@ -44,6 +62,15 @@ vi.mock("../lib/useTranslation", () => ({
 }));
 
 import { FileExplorer } from "./FileExplorer";
+
+const originalNavigatorPlatform = navigator.platform;
+
+function setNavigatorPlatform(platform: string) {
+  Object.defineProperty(navigator, "platform", {
+    value: platform,
+    configurable: true,
+  });
+}
 
 describe("FileExplorer filesystem listener", () => {
   let container: HTMLDivElement;
@@ -60,8 +87,21 @@ describe("FileExplorer filesystem listener", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     resolveListen = null;
+    storeMocks.activeSessionId = null;
 
     apiMocks.fsShellEditor.mockResolvedValue("");
+    apiMocks.fsOpenDefault.mockResolvedValue(undefined);
+    apiMocks.ptyWrite.mockResolvedValue(undefined);
+    apiMocks.detectSessionAgent.mockResolvedValue({
+      claude: null,
+      antigravity: null,
+      codex: null,
+      grok: null,
+      ollama: null,
+      llm: null,
+      custom: null,
+    });
+    editorMocks.openFileInEditor.mockResolvedValue(undefined);
     apiMocks.fsListDir.mockResolvedValue({ entries: [], repo_root: null });
     apiMocks.fsGitStatus.mockResolvedValue({
       statuses: {},
@@ -82,6 +122,7 @@ describe("FileExplorer filesystem listener", () => {
       act(() => root?.unmount());
     }
     container.remove();
+    setNavigatorPlatform(originalNavigatorPlatform);
     vi.clearAllMocks();
     vi.useRealTimers();
   });
@@ -102,6 +143,119 @@ describe("FileExplorer filesystem listener", () => {
     });
 
     expect(unlisten).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the active-PTY $EDITOR flow on Unix", async () => {
+    setNavigatorPlatform("Linux x86_64");
+    storeMocks.activeSessionId = "session-1";
+    const filePath = "/tmp/acorn/O'Brien file.ts";
+    apiMocks.fsShellEditor.mockResolvedValue("vim");
+    apiMocks.fsListDir.mockResolvedValue({
+      entries: [
+        {
+          name: "O'Brien file.ts",
+          path: filePath,
+          is_dir: false,
+          is_symlink: false,
+          size: 1,
+          modified_ms: 1,
+          gitignored: false,
+        },
+      ],
+      repo_root: "/tmp/acorn",
+    });
+
+    await act(async () => {
+      root?.render(<FileExplorer rootPath="/tmp/acorn" />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const fileButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("O'Brien file.ts"),
+    );
+    expect(fileButton).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      fileButton?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 20,
+          clientY: 20,
+        }),
+      );
+    });
+    const openButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((button) =>
+      button.textContent?.includes("fileExplorer.menu.openIn vim"),
+    );
+    expect(openButton).toBeInstanceOf(HTMLButtonElement);
+
+    await act(async () => {
+      openButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(editorMocks.openFileInEditor).not.toHaveBeenCalled();
+    expect(apiMocks.ptyWrite).toHaveBeenCalledWith(
+      "session-1",
+      "$EDITOR '/tmp/acorn/O'\\''Brien file.ts'\n",
+    );
+  });
+
+  it("uses the native editor adapter without probing $EDITOR on Windows", async () => {
+    setNavigatorPlatform("Win32");
+    const filePath = "C:\\repo\\src\\App.tsx";
+    apiMocks.fsListDir.mockResolvedValue({
+      entries: [
+        {
+          name: "App.tsx",
+          path: filePath,
+          is_dir: false,
+          is_symlink: false,
+          size: 1,
+          modified_ms: 1,
+          gitignored: false,
+        },
+      ],
+      repo_root: "C:\\repo",
+    });
+
+    await act(async () => {
+      root?.render(<FileExplorer rootPath="C:\\repo" />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const fileButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("App.tsx"),
+    );
+    expect(fileButton).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      fileButton?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 20,
+          clientY: 20,
+        }),
+      );
+    });
+    const openButton = document.querySelector<HTMLButtonElement>(
+      '[role="menuitem"]',
+    );
+    expect(openButton).toBeInstanceOf(HTMLButtonElement);
+
+    await act(async () => {
+      openButton?.click();
+      await Promise.resolve();
+    });
+
+    expect(editorMocks.openFileInEditor).toHaveBeenCalledWith(filePath);
+    expect(apiMocks.fsShellEditor).not.toHaveBeenCalled();
+    expect(apiMocks.ptyWrite).not.toHaveBeenCalled();
   });
 
   it("queues one follow-up diff-stat refresh instead of overlapping a slow request", async () => {
@@ -342,6 +496,74 @@ describe("FileExplorer filesystem listener", () => {
 
     expect(apiMocks.fsListDir).toHaveBeenCalledWith(rootPath, false, true);
     expect(apiMocks.fsListDir).toHaveBeenCalledWith(generatedPath, false, true);
+  });
+
+  it("refreshes a loaded Windows directory for mixed-separator watcher paths", async () => {
+    const rootPath = "C:\\Repo";
+    const sourcePath = "C:\\Repo\\src";
+    let fsListener:
+      | ((event: {
+          payload: {
+            paths: string[];
+            root: string;
+            cap: number;
+            dotgit_changed: boolean;
+          };
+        }) => void)
+      | null = null;
+    eventMocks.listen.mockImplementation((_event, handler) => {
+      fsListener = handler;
+      return Promise.resolve(() => {});
+    });
+    apiMocks.fsListDir.mockImplementation(async (path: string) => ({
+      entries:
+        path === rootPath
+          ? [
+              {
+                name: "src",
+                path: sourcePath,
+                is_dir: true,
+                is_symlink: false,
+                size: 0,
+                modified_ms: 1,
+                gitignored: false,
+              },
+            ]
+          : [],
+      repo_root: rootPath,
+    }));
+
+    await act(async () => {
+      root?.render(<FileExplorer rootPath={rootPath} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const sourceButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("src"),
+    );
+    expect(sourceButton).toBeInstanceOf(HTMLButtonElement);
+
+    await act(async () => {
+      sourceButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    apiMocks.fsListDir.mockClear();
+
+    await act(async () => {
+      fsListener?.({
+        payload: {
+          paths: ["c:/repo/src/App.tsx"],
+          root: "c:/repo",
+          cap: 256,
+          dotgit_changed: false,
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.fsListDir).toHaveBeenCalledWith(sourcePath, false, true);
   });
 
   it("refreshes loaded directories and git status when the branch revision changes", async () => {

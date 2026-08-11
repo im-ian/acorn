@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use directories::ProjectDirs;
+use directories::{ProjectDirs, UserDirs};
 
 pub const ENV_DATA_DIR_OVERRIDE: &str = "ACORN_DATA_DIR";
 pub const ENV_PROFILE: &str = "ACORN_PROFILE";
@@ -59,6 +59,15 @@ pub fn base_data_dir() -> io::Result<PathBuf> {
     Ok(pd.data_dir().to_path_buf())
 }
 
+/// Resolve the current user's home directory through the OS account APIs.
+/// This works for Explorer-launched Windows apps where `HOME` is normally
+/// absent, while preserving the conventional home directory on Unix.
+pub fn user_home_dir() -> io::Result<PathBuf> {
+    UserDirs::new()
+        .map(|dirs| dirs.home_dir().to_path_buf())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "user home directory unavailable"))
+}
+
 fn ensure_private_dir(path: &Path) -> io::Result<()> {
     std::fs::create_dir_all(path)?;
     #[cfg(unix)]
@@ -82,6 +91,48 @@ pub fn data_dir() -> io::Result<PathBuf> {
     let dir = profiles.join(effective_profile()?);
     ensure_private_dir(&dir)?;
     Ok(dir)
+}
+
+/// Resolve a private local-IPC endpoint for the selected data profile.
+///
+/// Unix transports are filesystem sockets inside the profile directory.
+/// Windows transports are named pipes, whose namespace is independent from
+/// the filesystem. The data-directory hash keeps production, development,
+/// test, and explicit override profiles isolated without placing user paths
+/// (or path separators) in the pipe name.
+pub fn local_ipc_endpoint(stem: &str) -> io::Result<PathBuf> {
+    if stem.is_empty()
+        || !stem
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "local IPC endpoint stem contains unsupported characters",
+        ));
+    }
+
+    let dir = data_dir()?;
+    #[cfg(windows)]
+    {
+        let identity = dir.to_string_lossy().replace('/', "\\").to_lowercase();
+        let hash = fnv1a64(identity.as_bytes());
+        return Ok(PathBuf::from(format!(r"\\.\pipe\acorn-{hash:016x}-{stem}")));
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(dir.join(format!("{stem}.sock")))
+    }
+}
+
+#[cfg(windows)]
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 #[cfg(test)]
@@ -164,5 +215,33 @@ mod tests {
         assert_eq!(data_dir().unwrap_err().kind(), io::ErrorKind::InvalidInput);
 
         unsafe { std::env::remove_var(ENV_PROFILE) };
+    }
+
+    #[test]
+    fn local_ipc_endpoint_uses_selected_data_profile() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("acorn-paths-ipc-{}", std::process::id()));
+        unsafe { std::env::set_var(ENV_DATA_DIR_OVERRIDE, &tmp) };
+
+        let endpoint = local_ipc_endpoint("daemon-stream").unwrap();
+        #[cfg(unix)]
+        assert_eq!(endpoint, tmp.join("daemon-stream.sock"));
+        #[cfg(windows)]
+        {
+            let rendered = endpoint.to_string_lossy();
+            assert!(rendered.starts_with(r"\\.\pipe\acorn-"));
+            assert!(rendered.ends_with("-daemon-stream"));
+        }
+
+        unsafe { std::env::remove_var(ENV_DATA_DIR_OVERRIDE) };
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn local_ipc_endpoint_rejects_path_like_stems() {
+        assert_eq!(
+            local_ipc_endpoint("../ipc").unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
 }

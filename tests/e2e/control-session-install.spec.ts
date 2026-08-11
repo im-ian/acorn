@@ -103,4 +103,43 @@ test.describe("control session: settings install section", () => {
     // is nothing to symlink to.
     await expect(modal.getByText(/sudo ln -sf/)).toHaveCount(0);
   });
+
+  test("uses PATH guidance and hides Unix shim and macOS power controls on Windows", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "platform", {
+        value: "Win32",
+        configurable: true,
+      });
+    });
+    await tauri.respond("get_acorn_ipc_status", {
+      bundled_path: "C:\\Program Files\\Acorn\\acorn-ipc.exe",
+      bundled_exists: true,
+      socket_path: "C:\\Users\\me\\AppData\\Local\\Acorn\\ipc.sock",
+      shim_paths: [],
+    });
+
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+    const modal = page.getByRole("dialog", { name: /Settings/i });
+    await modal.getByRole("button", { name: "Sessions", exact: true }).click();
+
+    await expect(
+      modal.getByText(/automatically added to PATH inside Acorn terminals/i),
+    ).toBeVisible();
+    await expect(
+      modal.getByText("C:\\Program Files\\Acorn\\acorn-ipc.exe", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      modal.getByText("Installed shim", { exact: true }),
+    ).toHaveCount(0);
+    await expect(modal.getByText(/\/usr\/local\/bin|sudo ln -sf/)).toHaveCount(0);
+    await expect(
+      modal.getByText("Keep this Mac awake", { exact: true }),
+    ).toHaveCount(0);
+  });
 });

@@ -8,6 +8,7 @@ publish = false
 name = "acorn_pty"
 
 [dependencies]
+acorn-platform = { path = "../acorn-platform" }
 tauri = { workspace = true }
 tokio = { workspace = true }
 parking_lot = { workspace = true }

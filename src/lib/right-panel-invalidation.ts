@@ -1,26 +1,16 @@
+import { isPathInsideOrEqual, joinPath } from "./pathUtils";
+
 export interface RightPanelFsInvalidation {
   commits: boolean;
   staged: boolean;
 }
 
-function normalizePath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/, "");
-}
-
 function isSameOrInside(parent: string, child: string): boolean {
-  const normalizedParent = normalizePath(parent);
-  const normalizedChild = normalizePath(child);
-  return (
-    normalizedChild === normalizedParent ||
-    normalizedChild.startsWith(`${normalizedParent}/`)
-  );
+  return isPathInsideOrEqual(child, parent);
 }
 
 function isRepoGitPath(repoPath: string, path: string): boolean {
-  const repo = normalizePath(repoPath);
-  const normalized = normalizePath(path);
-  const gitPath = `${repo}/.git`;
-  return normalized === gitPath || normalized.startsWith(`${gitPath}/`);
+  return isPathInsideOrEqual(path, joinPath(repoPath, ".git"));
 }
 
 /**

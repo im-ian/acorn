@@ -83,6 +83,68 @@ describe("terminal file links", () => {
     ]);
   });
 
+  it("finds Windows drive and UNC file references", () => {
+    expect(
+      findTerminalFileReferences(
+        "open C:\\repo\\src\\App.tsx:12:4 then \\\\server\\share\\README.md:8",
+      ),
+    ).toEqual([
+      {
+        path: "C:\\repo\\src\\App.tsx",
+        line: 12,
+        column: 4,
+        text: "C:\\repo\\src\\App.tsx:12:4",
+        startIndex: 5,
+      },
+      {
+        path: "\\\\server\\share\\README.md",
+        line: 8,
+        text: "\\\\server\\share\\README.md:8",
+        startIndex: 35,
+      },
+    ]);
+  });
+
+  it("finds quoted Windows paths containing spaces without linking a tail", () => {
+    const text =
+      'error: "C:\\Program Files\\Acorn\\src\\main.rs:42:7" failed';
+
+    expect(findTerminalFileReferences(text)).toEqual([
+      {
+        path: "C:\\Program Files\\Acorn\\src\\main.rs",
+        line: 42,
+        column: 7,
+        text: "C:\\Program Files\\Acorn\\src\\main.rs:42:7",
+        startIndex: text.indexOf("C:\\"),
+      },
+    ]);
+  });
+
+  it("finds quoted UNC paths containing spaces", () => {
+    const text = 'open "\\\\server\\team share\\docs\\guide.md"';
+
+    expect(findTerminalFileReferences(text)).toEqual([
+      {
+        path: "\\\\server\\team share\\docs\\guide.md",
+        text: "\\\\server\\team share\\docs\\guide.md",
+        startIndex: text.indexOf("\\\\server"),
+      },
+    ]);
+  });
+
+  it("finds relative Windows file references", () => {
+    expect(findTerminalFileReferences("open src\\components\\App.tsx:9")).toEqual(
+      [
+        {
+          path: "src\\components\\App.tsx",
+          line: 9,
+          text: "src\\components\\App.tsx:9",
+          startIndex: 5,
+        },
+      ],
+    );
+  });
+
   it("finds home-relative file references", () => {
     expect(
       findTerminalFileReferences("see ~/projects/acorn/src/App.tsx:12:5"),
@@ -242,6 +304,30 @@ describe("terminal file links", () => {
     expect(resolveTerminalFilePath("/repo/app", "/tmp/file.ts")).toBe(
       "/tmp/file.ts",
     );
+  });
+
+  it("resolves Windows drive paths without treating the drive colon as a line", () => {
+    expect(resolveTerminalFilePath("C:\\repo\\app", "src\\App.tsx")).toBe(
+      "C:/repo/app/src/App.tsx",
+    );
+    expect(resolveTerminalFilePath("C:\\repo\\app\\src", "..\\README.md")).toBe(
+      "C:/repo/app/README.md",
+    );
+    expect(
+      resolveTerminalFilePath(
+        "C:\\repo\\app",
+        "C:\\outside\\file.ts",
+      ),
+    ).toBe("C:/outside/file.ts");
+  });
+
+  it("keeps UNC resolution inside the share root", () => {
+    expect(
+      resolveTerminalFilePath(
+        "\\\\server\\share\\repo",
+        "..\\..\\..\\file.ts",
+      ),
+    ).toBe("//server/share/file.ts");
   });
 
   it("resolves home-relative paths when a home directory is available", () => {

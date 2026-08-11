@@ -3548,6 +3548,88 @@ test.describe("terminal: spawn", () => {
     });
   });
 
+  test("copies terminal selection with Ctrl+Shift+C on Windows", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "platform", {
+        get: () => "Win32",
+        configurable: true,
+      });
+    });
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __windowsCopyChannelId?: number };
+      w.__windowsCopyChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("plugin:clipboard-manager|write_text", (args) => {
+      const w = window as unknown as { __clipboardWrites?: string[] };
+      w.__clipboardWrites = w.__clipboardWrites ?? [];
+      w.__clipboardWrites.push((args as { text?: string }).text ?? "");
+      return undefined;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    const textarea = page.locator(".xterm-helper-textarea");
+    await textarea.waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __windowsCopyChannelId?: number })
+              .__windowsCopyChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__windowsCopyChannelId",
+      "windows-copy-selection\r\n",
+    );
+    await expect(page.locator(".xterm")).toContainText("windows-copy-selection");
+
+    const textRect = await terminalTextRect(page, "windows-copy-selection");
+    expect(textRect).not.toBeNull();
+    const y = (textRect!.top + textRect!.bottom) / 2;
+    await page.mouse.move(textRect!.left + 2, y);
+    await page.mouse.down();
+    await page.mouse.move(textRect!.left + textRect!.width - 2, y, {
+      steps: 8,
+    });
+    await page.mouse.up();
+
+    const canceled = await textarea.evaluate((element) =>
+      !element.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "c",
+          code: "KeyC",
+          ctrlKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+
+    expect(canceled).toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __clipboardWrites?: string[] })
+              .__clipboardWrites?.at(-1) ?? null,
+        ),
+      )
+      .toBe("windows-copy-selection");
+  });
+
   test("reattaching a live daemon session replays daemon scrollback instead of stale disk scrollback", async ({
     page,
     tauri,

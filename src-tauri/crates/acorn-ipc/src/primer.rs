@@ -8,10 +8,10 @@
 //!      for every control session. Agents that read project-local docs
 //!      (Claude Code follows CLAUDE.md, Aider follows .aider config, …)
 //!      can discover it; humans `cat`-ing the file get the same content.
-//!      This is the primary delivery channel because Acorn always spawns
-//!      `$SHELL` — the user invokes the agent from inside.
+//!      This is the primary delivery channel because Acorn always spawns the
+//!      selected native shell — the user invokes the agent from inside.
 //!   2. Per-agent CLI flag injection, kept as a dormant fallback: if
-//!      `$SHELL` itself ever resolves to a recognised agent (Claude
+//!      the selected shell itself ever resolves to a recognised agent (Claude
 //!      Code's `--append-system-prompt`, llm CLI's `-s`) the primer is
 //!      threaded into argv at spawn time. For ordinary shells the
 //!      `AgentFlavor::Unknown` branch is a no-op.

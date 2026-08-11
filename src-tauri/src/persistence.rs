@@ -13,7 +13,6 @@ use uuid::Uuid;
 const SESSIONS_FILE: &str = "sessions.json";
 const SESSIONS_TMP_FILE: &str = "sessions.json.tmp";
 const PROJECTS_FILE: &str = "projects.json";
-const PROJECTS_TMP_FILE: &str = "projects.json.tmp";
 const LAST_PROJECT_PARENT_FOLDER_FILE: &str = "last-project-parent-folder.json";
 const LAST_PROJECT_PARENT_FOLDER_TMP_FILE: &str = "last-project-parent-folder.json.tmp";
 const CHAT_SESSIONS_DIR: &str = "chat-sessions";
@@ -455,8 +454,8 @@ fn save_session_store_to_paths(
     let payload = serde_json::to_vec_pretty(&sessions)
         .map_err(|err| AppError::Other(format!("failed to serialize sessions: {err}")))?;
 
-    fs::write(tmp_path, &payload)?;
-    fs::rename(tmp_path, final_path)?;
+    let _ = tmp_path;
+    acorn_platform::fs::write_atomic(final_path, &payload)?;
     tracing::info!(
         count = sessions.len(),
         path = %final_path.display(),
@@ -467,10 +466,6 @@ fn save_session_store_to_paths(
 
 fn projects_path() -> AppResult<PathBuf> {
     Ok(data_dir()?.join(PROJECTS_FILE))
-}
-
-fn projects_tmp_path() -> AppResult<PathBuf> {
-    Ok(data_dir()?.join(PROJECTS_TMP_FILE))
 }
 
 #[allow(dead_code)]
@@ -506,11 +501,9 @@ pub fn load_projects_with_status() -> AppResult<(Vec<Project>, bool)> {
 
 pub fn save_projects(projects: &[Project]) -> AppResult<()> {
     let final_path = projects_path()?;
-    let tmp_path = projects_tmp_path()?;
     let payload = serde_json::to_vec_pretty(projects)
         .map_err(|err| AppError::Other(format!("failed to serialize projects: {err}")))?;
-    fs::write(&tmp_path, &payload)?;
-    fs::rename(&tmp_path, &final_path)?;
+    acorn_platform::fs::write_atomic(&final_path, &payload)?;
     tracing::info!(
         count = projects.len(),
         path = %final_path.display(),
@@ -552,14 +545,12 @@ pub(crate) fn save_last_project_parent_folder_to_dir(
 ) -> AppResult<()> {
     fs::create_dir_all(base_dir)?;
     let final_path = last_project_parent_folder_path(base_dir);
-    let tmp_path = last_project_parent_folder_tmp_path(base_dir);
     let payload = serde_json::to_vec(&parent.to_string_lossy().into_owned()).map_err(|err| {
         AppError::Other(format!(
             "failed to serialize remembered project parent folder: {err}"
         ))
     })?;
-    fs::write(&tmp_path, payload)?;
-    fs::rename(tmp_path, final_path)?;
+    acorn_platform::fs::write_atomic(&final_path, &payload)?;
     Ok(())
 }
 
@@ -800,11 +791,9 @@ fn save_chat_session_state_to_dir(
     let dir = chat_sessions_dir_for_data_dir(base_dir);
     fs::create_dir_all(&dir)?;
     let final_path = chat_session_path_for_data_dir(base_dir, &session_id);
-    let tmp_path = final_path.with_extension("json.tmp");
     let payload = serde_json::to_vec_pretty(&state)
         .map_err(|err| AppError::Other(format!("failed to serialize chat session: {err}")))?;
-    fs::write(&tmp_path, payload)?;
-    fs::rename(&tmp_path, &final_path)?;
+    acorn_platform::fs::write_atomic(&final_path, &payload)?;
     tracing::info!(
         session_id = %session_id,
         path = %final_path.display(),
@@ -995,11 +984,9 @@ fn save_graph_run_state_to_dir(base_dir: &Path, state: GraphRunState) -> AppResu
     let dir = graph_runs_dir_for_data_dir(base_dir);
     fs::create_dir_all(&dir)?;
     let final_path = graph_run_path_for_data_dir(base_dir, &session_id);
-    let tmp_path = final_path.with_extension("json.tmp");
     let payload = serde_json::to_vec_pretty(&state)
         .map_err(|err| AppError::Other(format!("failed to serialize Graph run: {err}")))?;
-    fs::write(&tmp_path, payload)?;
-    fs::rename(&tmp_path, &final_path)?;
+    acorn_platform::fs::write_atomic(&final_path, &payload)?;
     tracing::info!(
         session_id = %session_id,
         run_id = %state.run_id,

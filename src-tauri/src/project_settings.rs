@@ -8,7 +8,6 @@ use crate::error::{AppError, AppResult};
 use crate::{git_ops, persistence};
 
 const PROJECT_SETTINGS_FILE: &str = "project_settings.json";
-const PROJECT_SETTINGS_TMP_FILE: &str = "project_settings.json.tmp";
 pub const PR_GENERATION_PROMPT_MAX_CHARS: usize = 2_000;
 pub const WORKTREE_BASE_BRANCH_MAX_CHARS: usize = 255;
 pub const STANDARD_PR_GENERATION_PROMPT: &str = "Use a standard GitHub-style pull request merge message.
@@ -72,10 +71,6 @@ fn settings_path() -> AppResult<PathBuf> {
     Ok(persistence::data_dir()?.join(PROJECT_SETTINGS_FILE))
 }
 
-fn settings_tmp_path() -> AppResult<PathBuf> {
-    Ok(persistence::data_dir()?.join(PROJECT_SETTINGS_TMP_FILE))
-}
-
 fn load_all() -> AppResult<SettingsMap> {
     let path = settings_path()?;
     if !path.exists() {
@@ -88,11 +83,9 @@ fn load_all() -> AppResult<SettingsMap> {
 
 fn save_all(settings: &SettingsMap) -> AppResult<()> {
     let final_path = settings_path()?;
-    let tmp_path = settings_tmp_path()?;
     let payload = serde_json::to_vec_pretty(settings)
         .map_err(|err| AppError::Other(format!("failed to serialize project settings: {err}")))?;
-    fs::write(&tmp_path, payload)?;
-    fs::rename(&tmp_path, &final_path)?;
+    acorn_platform::fs::write_atomic(&final_path, &payload)?;
     Ok(())
 }
 

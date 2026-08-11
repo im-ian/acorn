@@ -92,9 +92,9 @@ pub fn daemon_status(state: State<'_, AppState>) -> DaemonStatus {
     }
 }
 
-/// Toggle the daemon path. Persistence (so the toggle survives a restart)
-/// happens on the frontend in `localStorage` under `acorn:daemon-enabled`;
-/// the backend's `AppState` reflects the runtime-active value only.
+/// Toggle the default path for new sessions. Persistence (so the toggle
+/// survives a restart) happens on the frontend in `localStorage` under
+/// `acorn:daemon-enabled`; existing daemon-bound sessions remain sticky.
 #[tauri::command]
 pub fn daemon_set_enabled(enabled: bool, state: State<'_, AppState>) {
     state.daemon_bridge.set_enabled(enabled);
@@ -105,9 +105,9 @@ pub fn daemon_set_enabled(enabled: bool, state: State<'_, AppState>) {
 /// a manual `acornd shutdown`.
 #[tauri::command]
 pub fn daemon_restart(state: State<'_, AppState>) -> Result<(), String> {
-    // Drop any cached connection so `ensure_connection` re-spawns.
-    state.daemon_bridge.set_enabled(false);
-    state.daemon_bridge.set_enabled(true);
+    // Drop only the app-side channel so `ensure_connection` probes and
+    // reconnects. The enabled preference remains unchanged.
+    state.daemon_bridge.reset_connection();
     state
         .daemon_bridge
         .ensure_connection()

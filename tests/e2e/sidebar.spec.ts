@@ -4647,7 +4647,7 @@ test.describe("sidebar: project lifecycle", () => {
     const expectedProjectActions = [
       "Add source folder",
       "Project Settings",
-      "Reveal in Finder",
+      "Reveal in File Manager",
       "Copy path",
       "Close project",
     ];

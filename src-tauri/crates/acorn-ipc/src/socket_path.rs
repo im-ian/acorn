@@ -1,15 +1,16 @@
-//! Single source of truth for the IPC Unix socket path. The app and the
+//! Single source of truth for the IPC local endpoint. The app and the
 //! `acorn-ipc` CLI compute it the same way so the CLI does not have to be
 //! told where to connect via flag every invocation.
 //!
 //! Resolution order:
 //! 1. `ACORN_IPC_SOCKET` env (override; takes precedence so test harnesses
 //!    can point at an isolated path).
-//! 2. `<data_dir>/ipc.sock`, where `data_dir` comes from `acorn-paths` and
-//!    matches the app and daemon profile layout.
+//! 2. `<data_dir>/ipc.sock` on Unix or a profile-scoped named pipe on
+//!    Windows, derived by `acorn-paths`.
 
 use std::path::PathBuf;
 
+#[cfg(all(test, unix))]
 const SOCKET_FILE: &str = "ipc.sock";
 const ENV_OVERRIDE: &str = "ACORN_IPC_SOCKET";
 
@@ -21,9 +22,7 @@ pub fn resolve() -> Result<PathBuf, String> {
             return Ok(PathBuf::from(override_path));
         }
     }
-    Ok(acorn_paths::data_dir()
-        .map_err(|err| err.to_string())?
-        .join(SOCKET_FILE))
+    acorn_paths::local_ipc_endpoint("ipc").map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
@@ -55,26 +54,38 @@ mod tests {
     fn falls_back_to_data_dir() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let prev = std::env::var(ENV_OVERRIDE).ok();
+        let prev_data_dir = std::env::var(acorn_paths::ENV_DATA_DIR_OVERRIDE).ok();
         let prev_profile = std::env::var(acorn_paths::ENV_PROFILE).ok();
         unsafe {
             std::env::remove_var(ENV_OVERRIDE);
+            std::env::remove_var(acorn_paths::ENV_DATA_DIR_OVERRIDE);
             std::env::set_var(acorn_paths::ENV_PROFILE, "ipc-test");
         }
         let resolved = resolve().expect("default resolves");
-        assert!(resolved.ends_with(SOCKET_FILE));
-        assert!(
-            resolved.ends_with("profiles/ipc-test/ipc.sock"),
-            "fallback socket should use the selected profile data dir, got {resolved:?}"
-        );
+        #[cfg(unix)]
+        {
+            assert!(resolved.ends_with(SOCKET_FILE));
+            assert!(
+                resolved.ends_with("profiles/ipc-test/ipc.sock"),
+                "fallback socket should use the selected profile data dir, got {resolved:?}"
+            );
+        }
+        #[cfg(windows)]
+        assert!(resolved.to_string_lossy().starts_with(r"\\.\pipe\acorn-"));
         unsafe {
             if let Some(v) = prev {
                 std::env::set_var(ENV_OVERRIDE, v);
+            }
+            match prev_data_dir {
+                Some(v) => std::env::set_var(acorn_paths::ENV_DATA_DIR_OVERRIDE, v),
+                None => std::env::remove_var(acorn_paths::ENV_DATA_DIR_OVERRIDE),
             }
             match prev_profile {
                 Some(v) => std::env::set_var(acorn_paths::ENV_PROFILE, v),
                 None => std::env::remove_var(acorn_paths::ENV_PROFILE),
             }
         }
+        #[cfg(unix)]
         let _ = std::fs::remove_dir_all(resolved.parent().unwrap());
     }
 }

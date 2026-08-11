@@ -327,9 +327,8 @@ fn authorize_project_session_cwd(repo: &Path, cwd: &Path) -> AppResult<()> {
 
 fn authorize_local_session_root(path: &Path) -> AppResult<PathBuf> {
     let path = canonical_existing_path(path)?;
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| AppError::InvalidPath("HOME is not available".into()))?
+    let home = acorn_paths::user_home_dir()
+        .map_err(|_| AppError::InvalidPath("user home directory is not available".into()))?
         .canonicalize()?;
     if path == home {
         Ok(path)
@@ -4002,9 +4001,7 @@ fn folder_permission_error(
 /// install hint with a copyable shell command.
 #[tauri::command]
 pub fn get_acorn_ipc_status(state: State<'_, AppState>) -> AcornIpcStatus {
-    let bundled = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("acorn-ipc")));
+    let bundled = acorn_platform::executable::sibling_executable("acorn-ipc").ok();
     let bundled_path = bundled
         .as_ref()
         .map(|p| p.display().to_string())
@@ -4162,10 +4159,16 @@ pub fn ipc_list_workspaces_response(
         .map_err(|_| "IPC workspace request receiver dropped".to_string())
 }
 
-/// Locations a user might symlink the CLI into, in priority order. The
-/// first one that exists is the canonical install for this user. Kept
-/// macOS/Linux-only because the IPC server is Unix-socket based — Windows
-/// is not supported yet.
+/// Locations a Unix user might symlink the CLI into, in priority order. The
+/// bundled CLI is already placed on PATH inside every Acorn PTY. Windows has
+/// no symlink-based install suggestion because it would either require
+/// elevated/developer-mode privileges or create a stale copied executable.
+#[cfg(windows)]
+fn standard_shim_paths() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+#[cfg(not(windows))]
 fn standard_shim_paths() -> Vec<PathBuf> {
     let mut out = vec![
         PathBuf::from("/usr/local/bin/acorn-ipc"),
@@ -4178,6 +4181,24 @@ fn standard_shim_paths() -> Vec<PathBuf> {
     out
 }
 
+#[cfg(windows)]
+fn system_font_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(system_root) = std::env::var_os("SystemRoot") {
+        dirs.push(PathBuf::from(system_root).join("Fonts"));
+    }
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        dirs.push(
+            PathBuf::from(local_app_data)
+                .join("Microsoft")
+                .join("Windows")
+                .join("Fonts"),
+        );
+    }
+    dirs
+}
+
+#[cfg(not(windows))]
 fn system_font_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![
         PathBuf::from("/System/Library/Fonts"),
@@ -4185,8 +4206,7 @@ fn system_font_dirs() -> Vec<PathBuf> {
         PathBuf::from("/usr/share/fonts"),
         PathBuf::from("/usr/local/share/fonts"),
     ];
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
+    if let Ok(home) = acorn_paths::user_home_dir() {
         dirs.push(home.join("Library/Fonts"));
         dirs.push(home.join(".local/share/fonts"));
         dirs.push(home.join(".fonts"));
@@ -4496,19 +4516,15 @@ pub struct MemoryUsage {
     pub processes: Vec<MemoryProcess>,
 }
 
-fn basename(s: &str) -> &str {
-    s.rsplit('/').next().unwrap_or(s)
-}
-
 fn snapshot_basename_matches(snapshot: &ProcessMemorySnapshot, target: &str) -> bool {
-    if basename(&snapshot.name) == target {
+    if acorn_platform::executable::executable_name_matches(&snapshot.name, target) {
         return true;
     }
     snapshot
         .command_line
         .split_whitespace()
         .next()
-        .map(|first| basename(first) == target)
+        .map(|first| acorn_platform::executable::executable_name_matches(first, target))
         .unwrap_or(false)
 }
 
@@ -8143,12 +8159,10 @@ fn pty_spawn_blocking<R: Runtime>(
     {
         return Ok(());
     }
-    // Sessions always spawn the user's interactive `$SHELL` in login
-    // mode so `.zprofile` / `.bash_profile` / `.profile` run — matches
-    // macOS Terminal.app / iTerm2 / VS Code so the PTY feels identical
-    // to opening the user's native terminal.
-    let resolved_command = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let resolved_args: Vec<String> = crate::shell_args::login_args_for(&resolved_command);
+    let shell = crate::shell_runtime::interactive_shell();
+    let resolved_command = shell.program.to_string_lossy().into_owned();
+    let shell_kind = shell.kind;
+    let resolved_args = shell.args;
     // Inject Acorn session identity and CLI reachability so a regular
     // terminal can explicitly bootstrap itself with `acorn-ipc promote-self`.
     // Privileged IPC commands still fail server-side until the session kind
@@ -8165,7 +8179,7 @@ fn pty_spawn_blocking<R: Runtime>(
     effective_env
         .entry("SHELL".to_string())
         .or_insert_with(|| resolved_command.clone());
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Ok(home) = acorn_paths::user_home_dir() {
         effective_env
             .entry("HOME".to_string())
             .or_insert_with(|| home.to_string_lossy().into_owned());
@@ -8231,6 +8245,7 @@ fn pty_spawn_blocking<R: Runtime>(
             .entry("ACORN_CLI_DIR".to_string())
             .or_insert_with(|| bin_dir.display().to_string());
     }
+    #[cfg(unix)]
     if let Ok(wrapper_dir) = crate::agent_wrappers::ensure_agent_wrapper_dir() {
         let existing = effective_env
             .get("PATH")
@@ -8264,32 +8279,34 @@ fn pty_spawn_blocking<R: Runtime>(
     // off `$ZDOTDIR` too, so the staged dir also ships a `.zshenv` that
     // forwards to the user's `$HOME/.zshenv` (rustup, asdf etc. live there
     // and break without it) before pinning `ZDOTDIR` back to ours.
-    if let Ok(dir) = crate::shell_init::ensure_shell_init_dir() {
-        let mut user_zdotdir = effective_env
-            .get("ZDOTDIR")
-            .cloned()
-            .or_else(|| std::env::var("ZDOTDIR").ok())
-            .unwrap_or_default();
-        let shell_init_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
-        let points_at_shell_init = Path::new(&user_zdotdir)
-            .canonicalize()
-            .map(|path| path == shell_init_dir)
-            .unwrap_or(false);
-        let points_at_acorn_shell_init = Path::new(&user_zdotdir)
-            .canonicalize()
-            .map(|path| crate::shell_init::is_shell_init_dir(&path))
-            .unwrap_or(false);
-        if user_zdotdir.is_empty() || points_at_shell_init || points_at_acorn_shell_init {
-            user_zdotdir = effective_env
-                .get("HOME")
+    if shell_kind == crate::shell_runtime::ShellKind::Zsh {
+        if let Ok(dir) = crate::shell_init::ensure_shell_init_dir() {
+            let mut user_zdotdir = effective_env
+                .get("ZDOTDIR")
                 .cloned()
-                .or_else(|| std::env::var("HOME").ok())
+                .or_else(|| std::env::var("ZDOTDIR").ok())
                 .unwrap_or_default();
+            let shell_init_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+            let points_at_shell_init = Path::new(&user_zdotdir)
+                .canonicalize()
+                .map(|path| path == shell_init_dir)
+                .unwrap_or(false);
+            let points_at_acorn_shell_init = Path::new(&user_zdotdir)
+                .canonicalize()
+                .map(|path| crate::shell_init::is_shell_init_dir(&path))
+                .unwrap_or(false);
+            if user_zdotdir.is_empty() || points_at_shell_init || points_at_acorn_shell_init {
+                user_zdotdir = effective_env
+                    .get("HOME")
+                    .cloned()
+                    .or_else(|| std::env::var("HOME").ok())
+                    .unwrap_or_default();
+            }
+            effective_env.insert("ACORN_USER_ZDOTDIR".to_string(), user_zdotdir);
+            effective_env.insert("ZDOTDIR".to_string(), dir.display().to_string());
+        } else {
+            tracing::warn!(%id, "shell init dir setup failed; OSC 7 cwd tracking will fall back to focus-based refresh");
         }
-        effective_env.insert("ACORN_USER_ZDOTDIR".to_string(), user_zdotdir);
-        effective_env.insert("ZDOTDIR".to_string(), dir.display().to_string());
-    } else {
-        tracing::warn!(%id, "shell init dir setup failed; OSC 7 cwd tracking will fall back to focus-based refresh");
     }
 
     let agent_hooks = state.agent_hooks.lock().clone();
@@ -8328,13 +8345,14 @@ fn pty_spawn_blocking<R: Runtime>(
         write_control_marker(&cwd, &primer);
     }
 
-    // Daemon path — when the killswitch is on, route through `acornd`
-    // so the PTY survives an Acorn app close. The in-process branch
-    // below is kept verbatim as the fallback for users who flip the
-    // toggle off (or for environments where the daemon binary is
-    // missing / refusing to start).
-    if state.daemon_bridge.is_enabled() {
-        match spawn_via_daemon(
+    // Daemon path — when the killswitch is on, route exclusively through
+    // `acornd` so the PTY survives an Acorn app close. Any RPC failure can
+    // happen after the daemon accepted the spawn but before the app received
+    // its response, so only an explicitly disabled session with no persisted
+    // daemon binding may use the local branch without risking two PTYs under
+    // one session UUID.
+    if should_route_session_to_daemon(state.daemon_bridge.is_enabled(), session.daemon_session_id) {
+        spawn_via_daemon(
             &app,
             &state,
             id,
@@ -8346,12 +8364,9 @@ fn pty_spawn_blocking<R: Runtime>(
             rows.unwrap_or(0),
             output_token,
             replay_scrollback.unwrap_or(true),
-        ) {
-            Ok(()) => return Ok(()),
-            Err(err) => {
-                tracing::warn!(%id, error = %err, "daemon spawn failed; falling back to in-process PTY");
-            }
-        }
+        )
+        .map_err(AppError::Pty)?;
+        return Ok(());
     }
 
     let output_router = state.pty_output.clone();
@@ -8374,6 +8389,10 @@ fn pty_spawn_blocking<R: Runtime>(
             rows.unwrap_or(0),
         )
         .map_err(|e| AppError::Pty(e.to_string()))
+}
+
+fn should_route_session_to_daemon(enabled: bool, daemon_session_id: Option<Uuid>) -> bool {
+    enabled || daemon_session_id.is_some()
 }
 
 /// Route a `pty_spawn` through the daemon. Three cases:
@@ -8417,8 +8436,9 @@ fn spawn_via_daemon<R: Runtime>(
         .unwrap_or(SessionKind::Regular);
     let repo_path = session.as_ref().map(|s| s.repo_path.clone());
     let branch = session.as_ref().map(|s| s.branch.clone());
+    let previous_daemon_session_id = session.as_ref().and_then(|s| s.daemon_session_id);
 
-    // `pty_spawn` always launches `$SHELL`, never an agent binary
+    // `pty_spawn` always launches the selected native shell, never an agent binary
     // directly, so the daemon's per-agent resume strategy registry
     // has nothing to react to here. The shim layer in the PTY is
     // what specialises behaviour by agent.
@@ -8445,7 +8465,11 @@ fn spawn_via_daemon<R: Runtime>(
             output_token,
             replay_scrollback,
         )
-        .map_err(|e| format!("daemon stream attach failed: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "daemon stream attach failed: {e}; retry the attachment instead of starting a duplicate local PTY"
+            )
+        })?;
         return Ok(());
     }
 
@@ -8453,6 +8477,24 @@ fn spawn_via_daemon<R: Runtime>(
         SessionKind::Regular => acorn_daemon::protocol::SessionKind::Regular,
         SessionKind::Control => acorn_daemon::protocol::SessionKind::Control,
     };
+
+    // Persist daemon ownership intent before sending SpawnSession. The RPC is
+    // not transactional with the app DB: the daemon may create the PTY and
+    // the response may be lost. Writing the sticky route first guarantees a
+    // restart or killswitch change cannot then start a local PTY under the
+    // same UUID. If durable persistence fails, roll back before any RPC.
+    state
+        .sessions
+        .set_daemon_session_id(&id, Some(id))
+        .map_err(|error| format!("record daemon ownership intent failed: {error}"))?;
+    if let Err(error) = persistence::save_sessions(&state.sessions) {
+        let _ = state
+            .sessions
+            .set_daemon_session_id(&id, previous_daemon_session_id);
+        return Err(format!(
+            "persist daemon ownership intent failed before spawn: {error}"
+        ));
+    }
 
     let outcome = bridge
         .spawn(
@@ -8470,15 +8512,11 @@ fn spawn_via_daemon<R: Runtime>(
             agent_kind,
             resume_token.clone(),
         )
-        .map_err(|e| format!("daemon spawn failed: {e}"))?;
-
-    // Persist the daemon binding so next-restart's reconcile picks
-    // this row up. Failures are non-fatal — the user can still use the
-    // session, they just lose persistence across one restart.
-    if let Err(err) = state.sessions.set_daemon_session_id(&id, Some(id)) {
-        tracing::warn!(%id, error = %err, "persist daemon_session_id failed");
-    }
-    persist(state);
+        .map_err(|e| {
+            format!(
+                "daemon spawn failed: {e}; retry the daemon path because ownership is uncertain and Acorn will not start a duplicate local PTY"
+            )
+        })?;
 
     crate::daemon_stream::attach(
         app.clone(),
@@ -8489,7 +8527,11 @@ fn spawn_via_daemon<R: Runtime>(
         output_token,
         replay_scrollback,
     )
-    .map_err(|e| format!("daemon stream attach failed: {e}"))
+    .map_err(|e| {
+        format!(
+            "daemon stream attach failed: {e}; retry the attachment instead of starting a duplicate local PTY"
+        )
+    })
 }
 
 fn daemon_spawn_name_for_session(session: Option<&Session>, id: Uuid) -> String {
@@ -8686,10 +8728,9 @@ fn detach_requested_by_stale_renderer(
 }
 
 /// Drop the cached snapshot of the user's shell environment. The next PTY
-/// spawn re-runs `$SHELL -l -i -c` and picks up dotfile edits the user has
-/// made since the last capture. Existing PTY children are unaffected —
-/// their environment is fixed at fork time, so the frontend should tell
-/// the user "restart sessions to apply".
+/// spawn re-runs the Unix shell capture or re-reads Acorn's inherited Windows
+/// environment. Existing PTY children are unaffected because their
+/// environment is fixed at spawn time.
 #[tauri::command]
 pub fn pty_reload_shell_env() {
     crate::shell_env::invalidate();
@@ -8697,7 +8738,7 @@ pub fn pty_reload_shell_env() {
 
 /// Resolve the *live* working directory of a session's PTY tree.
 ///
-/// The PTY child is always `$SHELL`; we walk descendants and return the
+/// The PTY child is always the selected native shell; we walk descendants and return the
 /// cwd of the deepest descendant that exposes one. This catches the
 /// common drift case where the user types e.g. `claude -w` and the agent
 /// chdirs into a freshly created worktree as a grandchild, while the
@@ -10322,7 +10363,11 @@ fn session_process_summaries(
 }
 
 fn is_session_process_noise(name: &str) -> bool {
-    let base = basename(name).trim_matches(&['(', ')'][..]);
+    let base = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .trim_matches(&['(', ')'][..]);
     matches!(base, "sh" | "bash" | "zsh" | "tail")
 }
 
@@ -10637,11 +10682,27 @@ pub async fn is_git_repository(repo_path: String) -> AppResult<bool> {
 pub async fn open_in_editor(command: String, args: Vec<String>, path: String) -> AppResult<()> {
     let command = validate_editor_command(&command, &args)?;
     let path = canonical_existing_path(&PathBuf::from(path))?;
-    std::process::Command::new(&command)
-        .args(args)
-        .arg(path)
-        .spawn()
-        .map_err(|e| AppError::Other(format!("failed to spawn editor: {e}")))?;
+    #[cfg(windows)]
+    let program = crate::cli_resolver::resolve(&command)?;
+    #[cfg(not(windows))]
+    let program = PathBuf::from(&command);
+    let mut editor = std::process::Command::new(&program);
+    editor.args(args).arg(path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // `.cmd` editor launchers run through cmd.exe. Keep that helper from
+        // flashing a console window over Acorn's GUI.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        editor.creation_flags(CREATE_NO_WINDOW);
+    }
+    editor.spawn().map_err(|error| {
+        AppError::Other(format!(
+            "failed to spawn editor {}: {error}",
+            program.display()
+        ))
+    })?;
     Ok(())
 }
 
@@ -11143,15 +11204,7 @@ fn process_primary_basename_matches(proc: &sysinfo::Process, target: &str) -> bo
 }
 
 fn process_basename_part_matches(s: &str, target: &str) -> bool {
-    fn basename_matches(s: &str, target: &str) -> bool {
-        let base = s.rsplit('/').next().unwrap_or(s);
-        base == target
-            || base.strip_suffix(".js") == Some(target)
-            || base.strip_suffix(".mjs") == Some(target)
-            || base.strip_suffix(".cjs") == Some(target)
-    }
-
-    basename_matches(s, target)
+    acorn_platform::executable::executable_name_matches(s, target)
 }
 
 pub(crate) fn sanitize_worktree_name(name: &str) -> String {
@@ -11213,8 +11266,9 @@ mod tests {
         infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
         normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
         remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
-        should_remove_local_project_mirror, terminate_session_runtime, validate_editor_command,
-        validate_new_project_name, ChatProviderAdapter, ProcessMemorySnapshot,
+        should_remove_local_project_mirror, should_route_session_to_daemon,
+        terminate_session_runtime, validate_editor_command, validate_new_project_name,
+        ChatProviderAdapter, ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingSessionRemoval};
@@ -15201,6 +15255,15 @@ mod tests {
         let id = Uuid::new_v4();
 
         assert_eq!(daemon_spawn_name_for_session(None, id), id.to_string());
+    }
+
+    #[test]
+    fn daemon_route_is_sticky_for_persisted_sessions() {
+        let daemon_id = Uuid::new_v4();
+
+        assert!(should_route_session_to_daemon(true, None));
+        assert!(should_route_session_to_daemon(false, Some(daemon_id)));
+        assert!(!should_route_session_to_daemon(false, None));
     }
 
     #[test]

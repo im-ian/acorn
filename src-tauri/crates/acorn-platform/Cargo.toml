@@ -1,0 +1,23 @@
+[package]
+name = "acorn-platform"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "acorn_platform"
+
+[dependencies]
+portable-pty = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["process", "signal"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }

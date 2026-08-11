@@ -28,6 +28,7 @@ mod session_titles;
 mod shell_args;
 mod shell_env;
 mod shell_init;
+mod shell_runtime;
 mod shell_util;
 mod staged_rev_reconcile;
 mod state;
@@ -324,14 +325,14 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(app_state)
         .setup(|app| {
-            // Build the macOS app menu with a Settings... item that fires the
-            // `acorn:open-settings` event the frontend listens for. The
-            // accelerator (Cmd+,) is registered on the OS menu, so it works
-            // even if the webview doesn't see the keystroke.
+            // The native Settings accelerator remains available when the
+            // webview does not see the keystroke. Windows omits native Edit and
+            // Window roles so terminal Ctrl-letter chords reach xterm first.
             let settings_item = MenuItemBuilder::new("Settings...")
                 .id("settings")
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?;
+            #[cfg(not(target_os = "windows"))]
             let app_submenu = SubmenuBuilder::new(app, "Acorn")
                 .about(None)
                 .separator()
@@ -345,11 +346,18 @@ pub fn run() {
                 .separator()
                 .quit()
                 .build()?;
+            #[cfg(target_os = "windows")]
+            let app_submenu = SubmenuBuilder::new(app, "Acorn")
+                .item(&settings_item)
+                .separator()
+                .quit()
+                .build()?;
             #[cfg(target_os = "macos")]
             let paste_item = MenuItemBuilder::new("Paste")
                 .id("paste")
                 .accelerator("CmdOrCtrl+V")
                 .build(app)?;
+            #[cfg(not(target_os = "windows"))]
             let edit_submenu = SubmenuBuilder::new(app, "Edit")
                 .undo()
                 .redo()
@@ -358,8 +366,9 @@ pub fn run() {
                 .copy();
             #[cfg(target_os = "macos")]
             let edit_submenu = edit_submenu.item(&paste_item);
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
             let edit_submenu = edit_submenu.paste();
+            #[cfg(not(target_os = "windows"))]
             let edit_submenu = edit_submenu.select_all().build()?;
             let multi_input_item = MenuItemBuilder::new("Toggle Multi Input")
                 .id("toggle-multi-input")
@@ -371,10 +380,11 @@ pub fn run() {
             // long-lived app and an accidental Cmd+R would drop every PTY's
             // in-memory state.
             #[cfg(debug_assertions)]
-            let reload_item = MenuItemBuilder::new("Reload")
-                .id("reload")
-                .accelerator("CmdOrCtrl+R")
-                .build(app)?;
+            let reload_item = MenuItemBuilder::new("Reload").id("reload");
+            #[cfg(all(debug_assertions, not(target_os = "windows")))]
+            let reload_item = reload_item.accelerator("CmdOrCtrl+R");
+            #[cfg(debug_assertions)]
+            let reload_item = reload_item.build(app)?;
             #[cfg(debug_assertions)]
             let view_submenu = SubmenuBuilder::new(app, "View")
                 .item(&multi_input_item)
@@ -389,18 +399,20 @@ pub fn run() {
                 .separator()
                 .fullscreen()
                 .build()?;
+            #[cfg(not(target_os = "windows"))]
             let window_submenu = SubmenuBuilder::new(app, "Window")
                 .minimize()
                 .maximize()
                 .separator()
                 .close_window()
                 .build()?;
-            let menu = MenuBuilder::new(app)
-                .item(&app_submenu)
-                .item(&edit_submenu)
-                .item(&view_submenu)
-                .item(&window_submenu)
-                .build()?;
+            let menu = MenuBuilder::new(app).item(&app_submenu);
+            #[cfg(not(target_os = "windows"))]
+            let menu = menu.item(&edit_submenu);
+            let menu = menu.item(&view_submenu);
+            #[cfg(not(target_os = "windows"))]
+            let menu = menu.item(&window_submenu);
+            let menu = menu.build()?;
             app.set_menu(menu)?;
             app.on_menu_event(move |handle, event| {
                 if event.id() == "settings" {
@@ -704,9 +716,7 @@ pub fn run() {
             // is non-fatal — the bridge will surface a `BinaryNotFound`
             // error on the first daemon-routed call so the user sees
             // exactly which path was searched.
-            let acornd_hint = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("acornd")));
+            let acornd_hint = acorn_platform::executable::sibling_executable("acornd").ok();
             state.daemon_bridge.cache_binary_path(acornd_hint);
             // Eagerly spawn the daemon on a background thread so the
             // StatusBar indicator goes green within the first poll

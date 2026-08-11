@@ -4,6 +4,7 @@ import type {
   ILinkProvider,
   Terminal as XTerm,
 } from "@xterm/xterm";
+import { isAbsolutePath, normalizePath, pathsEqual } from "./pathUtils";
 
 export interface TerminalFileReference {
   path: string;
@@ -28,18 +29,26 @@ export interface TerminalFileLinkProviderOptions {
 }
 
 const LINK_PREFIX_RE = String.raw`(^|[\s([{"'\x60<])`;
-const OPTIONAL_PATH_ROOT_RE = String.raw`(?:~\/|\.{1,2}\/|\/)?`;
+const PATH_SEPARATOR_RE = String.raw`[\\/]`;
+const OPTIONAL_PATH_ROOT_RE = String.raw`(?:(?:[A-Za-z]:|~|\.{1,2})${PATH_SEPARATOR_RE}|${PATH_SEPARATOR_RE}{1,2})?`;
 // Next.js route groups need parentheses in directory segments, but the final
 // file segment excludes them so code like `unwrap().reset_at` is not linked.
 const DIRECTORY_SEGMENT_RE = String.raw`[\p{L}\p{N}._@+\[\]()-]+`;
 const FILE_SEGMENT_RE = String.raw`[\p{L}\p{N}._@+\[\]-]+`;
 const FILE_STEM_RE = String.raw`[\p{L}\p{N}._@+\[\]-]*`;
-const FILE_REF_PATH_RE = String.raw`${OPTIONAL_PATH_ROOT_RE}(?:(?:${DIRECTORY_SEGMENT_RE}\/)+${FILE_SEGMENT_RE}|${FILE_STEM_RE}\.${FILE_SEGMENT_RE})`;
+const FILE_REF_PATH_RE = String.raw`${OPTIONAL_PATH_ROOT_RE}(?:(?:${DIRECTORY_SEGMENT_RE}${PATH_SEPARATOR_RE})+${FILE_SEGMENT_RE}|${FILE_STEM_RE}\.${FILE_SEGMENT_RE})`;
 const FILE_EXTENSION_RE = String.raw`[\p{L}][\p{L}\p{N}_@+\[\]-]+`;
-const FILE_PATH_REQUIRING_EXTENSION_RE = String.raw`${OPTIONAL_PATH_ROOT_RE}(?:(?:${DIRECTORY_SEGMENT_RE}\/)+${FILE_STEM_RE}\.${FILE_EXTENSION_RE}|${FILE_STEM_RE}\.${FILE_EXTENSION_RE})`;
+const FILE_PATH_REQUIRING_EXTENSION_RE = String.raw`${OPTIONAL_PATH_ROOT_RE}(?:(?:${DIRECTORY_SEGMENT_RE}${PATH_SEPARATOR_RE})+${FILE_STEM_RE}\.${FILE_EXTENSION_RE}|${FILE_STEM_RE}\.${FILE_EXTENSION_RE})`;
 const FILE_REF_LOCATION_RE = String.raw`:(?:(\d{1,7})(?:-\d{1,7})?(?::(\d{1,5}))?)?`;
 const FILE_REF_TRAILER_RE = String.raw`(?=$|[\s)\]}>,;!?:]|[.](?=$|[\s)\]}>,;!?:]))`;
 const FILE_PATH_TRAILER_RE = String.raw`(?=$|[\s)\]}>,;!?]|[.](?=$|[\s)\]}>,;!?]))`;
+const QUOTED_LINK_PREFIX_RE = String.raw`(^|[\s([{<])`;
+const QUOTED_WINDOWS_ROOT_RE = String.raw`(?:[A-Za-z]:${PATH_SEPARATOR_RE}|${PATH_SEPARATOR_RE}{2})`;
+const QUOTED_WINDOWS_PATH_RE = String.raw`${QUOTED_WINDOWS_ROOT_RE}[^"\r\n]*?\.${FILE_EXTENSION_RE}`;
+const QUOTED_WINDOWS_FILE_REF_RE = new RegExp(
+  `${QUOTED_LINK_PREFIX_RE}"((${QUOTED_WINDOWS_PATH_RE})(?:${FILE_REF_LOCATION_RE})?)"`,
+  "gu",
+);
 const FILE_REF_RE = new RegExp(
   `${LINK_PREFIX_RE}(${FILE_REF_PATH_RE})${FILE_REF_LOCATION_RE}${FILE_REF_TRAILER_RE}`,
   "gu",
@@ -135,9 +144,42 @@ export function findTerminalFileReferences(
   text: string,
 ): TerminalFileReference[] {
   const references: TerminalFileReference[] = [];
+  collectQuotedWindowsFileReferences(text, references);
   collectTerminalFileReferences(text, FILE_REF_RE, references, true);
   collectTerminalFileReferences(text, FILE_PATH_RE, references, false);
   return references.sort((a, b) => a.startIndex - b.startIndex);
+}
+
+function collectQuotedWindowsFileReferences(
+  text: string,
+  references: TerminalFileReference[],
+): void {
+  const regex = new RegExp(
+    QUOTED_WINDOWS_FILE_REF_RE.source,
+    QUOTED_WINDOWS_FILE_REF_RE.flags,
+  );
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    const prefix = match[1] ?? "";
+    const referenceText = match[2] ?? "";
+    const path = match[3] ?? "";
+    const lineText = match[4];
+    const line = lineText ? Number(lineText) : undefined;
+    const column = match[5] ? Number(match[5]) : undefined;
+    if (line !== undefined && (!Number.isSafeInteger(line) || line < 1)) {
+      continue;
+    }
+    if (column !== undefined && (!Number.isSafeInteger(column) || column < 1)) {
+      continue;
+    }
+    references.push({
+      path,
+      ...(line === undefined ? {} : { line }),
+      ...(column === undefined ? {} : { column }),
+      text: referenceText,
+      startIndex: match.index + prefix.length + 1,
+    });
+  }
 }
 
 function collectTerminalFileReferences(
@@ -162,13 +204,25 @@ function collectTerminalFileReferences(
     if (column !== undefined && (!Number.isSafeInteger(column) || column < 1)) {
       continue;
     }
-    references.push({
+    const reference: TerminalFileReference = {
       path,
       ...(line === undefined ? {} : { line }),
       ...(column === undefined ? {} : { column }),
       text: referenceText,
       startIndex: match.index + prefix.length,
-    });
+    };
+    const referenceEnd = reference.startIndex + reference.text.length;
+    if (
+      references.some((existing) => {
+        const existingEnd = existing.startIndex + existing.text.length;
+        return (
+          reference.startIndex < existingEnd && existing.startIndex < referenceEnd
+        );
+      })
+    ) {
+      continue;
+    }
+    references.push(reference);
   }
 }
 
@@ -207,75 +261,143 @@ export function resolveTerminalFilePathCandidates(
   referencePath: string,
   options: { home?: string | null; basePaths?: string[] } = {},
 ): string[] {
-  if (referencePath.startsWith("/")) {
-    return [normalizePosixPath(referencePath)];
+  if (isAbsolutePath(referencePath)) {
+    return [normalizeTerminalPath(referencePath)];
   }
-  if (referencePath.startsWith("~/")) {
+  if (/^~[\\/]/u.test(referencePath)) {
     const { home } = options;
     if (!home) return [referencePath];
     return [
-      normalizePosixPath(
-        `${home.replace(/\/+$/u, "")}/${referencePath.slice(2)}`,
+      normalizeTerminalPath(
+        `${normalizePath(home)}/${normalizePath(referencePath.slice(2))}`,
       ),
     ];
   }
+  const normalizedReference = normalizePath(referencePath);
   const candidates = [cwd, ...(options.basePaths ?? [])].flatMap((base) => {
-    const basePath = base.replace(/\/+$/u, "");
+    const basePath = normalizeTerminalPath(base);
     return [
-      normalizePosixPath(`${basePath}/${referencePath}`),
-      ...resolveAncestorPrefixedPathCandidates(basePath, referencePath),
+      normalizeTerminalPath(`${basePath}/${normalizedReference}`),
+      ...resolveAncestorPrefixedPathCandidates(basePath, normalizedReference),
     ];
   });
-  return Array.from(new Set(candidates));
+  return candidates.filter(
+    (candidate, index) =>
+      candidates.findIndex((other) => pathsEqual(other, candidate)) === index,
+  );
 }
 
 function resolveAncestorPrefixedPathCandidates(
   base: string,
   referencePath: string,
 ): string[] {
-  if (referencePath.startsWith("./") || referencePath.startsWith("../")) {
+  if (/^\.{1,2}[\\/]/u.test(referencePath)) {
     return [];
   }
-  const normalizedBase = normalizePosixPath(base);
-  const absolute = normalizedBase.startsWith("/");
-  const baseParts = normalizedBase.split("/").filter(Boolean);
-  const referenceParts = referencePath.split("/").filter(Boolean);
+  const parsedBase = parseTerminalPath(normalizeTerminalPath(base));
+  const baseParts = parsedBase.parts;
+  const referenceParts = parseTerminalPath(referencePath).parts;
   const maxMatchLength = Math.min(baseParts.length, referenceParts.length - 1);
   const candidates: string[] = [];
   for (let matchLength = maxMatchLength; matchLength >= 1; matchLength -= 1) {
     const baseSuffix = baseParts.slice(baseParts.length - matchLength);
     const referencePrefix = referenceParts.slice(0, matchLength);
-    if (!samePathParts(baseSuffix, referencePrefix)) continue;
+    if (
+      !samePathParts(
+        baseSuffix,
+        referencePrefix,
+        parsedBase.caseInsensitive,
+      )
+    ) {
+      continue;
+    }
     const candidateParts = [
       ...baseParts.slice(0, baseParts.length - matchLength),
       ...referenceParts,
     ];
-    const candidate = candidateParts.join("/");
-    candidates.push(normalizePosixPath(absolute ? `/${candidate}` : candidate));
+    candidates.push(
+      formatTerminalPath({ ...parsedBase, parts: candidateParts }),
+    );
   }
   return candidates;
 }
 
-function samePathParts(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((part, index) => part === b[index]);
+function samePathParts(
+  a: string[],
+  b: string[],
+  caseInsensitive: boolean,
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every((part, index) =>
+      caseInsensitive
+        ? part.toLocaleLowerCase("en-US") ===
+          b[index].toLocaleLowerCase("en-US")
+        : part === b[index],
+    )
+  );
 }
 
-function normalizePosixPath(path: string): string {
-  const absolute = path.startsWith("/");
+interface ParsedTerminalPath {
+  root: string;
+  parts: string[];
+  caseInsensitive: boolean;
+}
+
+function parseTerminalPath(path: string): ParsedTerminalPath {
+  const normalized = path.replace(/\\/gu, "/");
+  const drive = /^([a-zA-Z]:)\/(.*)$/u.exec(normalized);
+  if (drive) {
+    return {
+      root: `${drive[1]}/`,
+      parts: drive[2].split("/").filter(Boolean),
+      caseInsensitive: true,
+    };
+  }
+  if (normalized.startsWith("//")) {
+    const parts = normalized.slice(2).split("/").filter(Boolean);
+    const shareParts = parts.slice(0, 2);
+    return {
+      root: `//${shareParts.join("/")}`,
+      parts: parts.slice(shareParts.length),
+      caseInsensitive: true,
+    };
+  }
+  if (normalized.startsWith("/")) {
+    return {
+      root: "/",
+      parts: normalized.slice(1).split("/").filter(Boolean),
+      caseInsensitive: false,
+    };
+  }
+  return {
+    root: "",
+    parts: normalized.split("/").filter(Boolean),
+    caseInsensitive: false,
+  };
+}
+
+function formatTerminalPath(path: ParsedTerminalPath): string {
+  const suffix = path.parts.join("/");
+  if (!path.root) return suffix || ".";
+  if (path.root.endsWith("/")) return `${path.root}${suffix}`;
+  return suffix ? `${path.root}/${suffix}` : path.root;
+}
+
+function normalizeTerminalPath(path: string): string {
+  const parsed = parseTerminalPath(path);
   const parts: string[] = [];
-  for (const part of path.split("/")) {
+  for (const part of parsed.parts) {
     if (part === "" || part === ".") continue;
     if (part === "..") {
       if (parts.length > 0 && parts[parts.length - 1] !== "..") {
         parts.pop();
-      } else if (!absolute) {
+      } else if (!parsed.root) {
         parts.push(part);
       }
       continue;
     }
     parts.push(part);
   }
-  const normalized = parts.join("/");
-  if (absolute) return `/${normalized}`;
-  return normalized || ".";
+  return formatTerminalPath({ ...parsed, parts });
 }

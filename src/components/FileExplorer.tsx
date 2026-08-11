@@ -37,6 +37,7 @@ import {
 } from "../lib/agentContextMenu";
 import { cn } from "../lib/cn";
 import { writeClipboardText } from "../lib/clipboardText";
+import { openFileInEditor } from "../lib/editor";
 import { retainRecentGitStatPaths } from "../lib/fileExplorerGitStats";
 import { matchesHotkeyEvent } from "../lib/hotkeys";
 import {
@@ -45,6 +46,15 @@ import {
 } from "../lib/git-refresh-scheduler";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { rightPanelCache } from "../lib/right-panel-cache";
+import {
+  basename,
+  isPathInsideOrEqual,
+  joinPath,
+  parentPath,
+  pathsEqual,
+  relativePath,
+  trimTrailingPathSeparators,
+} from "../lib/pathUtils";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import {
   beginFileExplorerDrag,
@@ -92,6 +102,13 @@ interface DirState {
 
 type Cache = Record<string, DirState>;
 
+function matchingCachedPath(cache: Cache, path: string): string | null {
+  if (cache[path]) return path;
+  return (
+    Object.keys(cache).find((candidate) => pathsEqual(candidate, path)) ?? null
+  );
+}
+
 interface DraftRename {
   path: string;
   value: string;
@@ -103,22 +120,11 @@ interface MenuState {
   entry: FsEntry | null;
 }
 
-function parentOf(path: string): string {
-  const idx = path.lastIndexOf("/");
-  if (idx <= 0) return "/";
-  return path.slice(0, idx);
-}
-
-function trimTrailingSlash(path: string): string {
-  if (path.length <= 1) return path;
-  return path.replace(/\/+$/, "");
-}
-
-function pathInsideRoot(path: string, rootPath: string): boolean {
-  const root = trimTrailingSlash(rootPath);
-  const target = trimTrailingSlash(path);
-  if (root === "/") return target.startsWith("/");
-  return target === root || target.startsWith(root + "/");
+function isWindowsPlatform(): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    /^(Win32|Win64|Windows)/u.test(navigator.platform)
+  );
 }
 
 function isGitignorePath(path: string): boolean {
@@ -130,20 +136,18 @@ function nearestCachedRefreshDir(
   cache: Cache,
   rootPath: string,
 ): string {
-  const root = trimTrailingSlash(rootPath);
-  let current = trimTrailingSlash(path);
-  if (!pathInsideRoot(current, root)) return rootPath;
+  const root = trimTrailingPathSeparators(rootPath);
+  let current = trimTrailingPathSeparators(path);
+  if (!isPathInsideOrEqual(current, root)) return rootPath;
 
-  while (current !== root) {
-    if (cache[current]) return current;
-    current = parentOf(current);
+  while (!pathsEqual(current, root)) {
+    const cached = matchingCachedPath(cache, current);
+    if (cached) return cached;
+    const parent = parentPath(current);
+    if (pathsEqual(parent, current)) break;
+    current = parent;
   }
   return rootPath;
-}
-
-function joinPath(parent: string, name: string): string {
-  if (parent.endsWith("/")) return parent + name;
-  return parent + "/" + name;
 }
 
 interface MatcherResult {
@@ -236,14 +240,15 @@ function buildDirtyAncestors(
 ): Set<string> {
   const out = new Set<string>();
   for (const p of Object.keys(status)) {
-    let cur = p;
-    while (true) {
-      const idx = cur.lastIndexOf("/");
-      if (idx <= 0) break;
-      const parent = cur.slice(0, idx);
-      if (parent === rootPath || !parent.startsWith(rootPath)) break;
-      out.add(parent);
-      cur = parent;
+    let current = parentPath(p);
+    while (
+      isPathInsideOrEqual(current, rootPath) &&
+      !pathsEqual(current, rootPath)
+    ) {
+      out.add(current);
+      const parent = parentPath(current);
+      if (pathsEqual(parent, current)) break;
+      current = parent;
     }
   }
   return out;
@@ -270,23 +275,13 @@ function collectVisiblePaths(
   return out;
 }
 
-/**
- * POSIX shell-quote a path with single quotes. Inside `'…'` every byte
- * except `'` is literal — even newlines, `!`, `$`, backticks. The only
- * escape needed is closing the quote, inserting a literal `'`, and
- * reopening: `'\''`. Safer than the double-quote + char-class regex
- * dance because it cannot be defeated by history expansion or by an
- * unescaped metacharacter that we forgot to list.
- */
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
+function relativeToRoot(rootPath: string, path: string): string {
+  return pathsEqual(rootPath, path) ? "." : relativePath(rootPath, path);
 }
 
-function relativeTo(base: string, abs: string): string {
-  const b = base.endsWith("/") ? base : base + "/";
-  if (abs === base) return ".";
-  if (abs.startsWith(b)) return abs.slice(b.length);
-  return abs;
+/** Quote a path for the POSIX shell command used by the legacy $EDITOR flow. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 async function writeToActiveSession(
@@ -323,6 +318,7 @@ export function FileExplorer({
   const t = useTranslation();
   const findShortcut = useSettings((s) => s.settings.shortcuts.findInView);
   const renameShortcut = useSettings((s) => s.settings.shortcuts.renameItem);
+  const editorCommand = useSettings((s) => s.settings.editor.command.trim());
   const showToast = useToasts((s) => s.show);
   const [cache, setCache] = useState<Cache>({});
   const [expanded, setExpanded] = useState<Set<string>>(() =>
@@ -338,9 +334,9 @@ export function FileExplorer({
   const [draftRename, setDraftRename] = useState<DraftRename | null>(null);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Cached `$EDITOR` value from the user's shell rc. Empty string means
-  // the user did not set one, in which case the open action falls back
-  // to the OS default app and the menu label reflects that.
+  // macOS/Linux preserve the existing shell-derived $EDITOR behavior. Windows
+  // uses the configured editor command (or the OS default association) because
+  // injecting POSIX shell syntax into a PowerShell/cmd PTY is not portable.
   const [shellEditor, setShellEditor] = useState<string>("");
   // Selection — Cmd-click toggle, Shift-click range. When non-empty
   // the context menu offers bulk actions across `selection`.
@@ -398,6 +394,7 @@ export function FileExplorer({
   );
 
   useEffect(() => {
+    if (isWindowsPlatform()) return;
     let cancelled = false;
     api
       .fsShellEditor()
@@ -804,16 +801,18 @@ export function FileExplorer({
       const payload = event.payload;
       if (
         payload.root &&
-        payload.root !== rootPath &&
-        !pathInsideRoot(payload.root, rootPath) &&
-        !pathInsideRoot(rootPath, payload.root)
+        !pathsEqual(payload.root, rootPath) &&
+        !isPathInsideOrEqual(payload.root, rootPath) &&
+        !isPathInsideOrEqual(rootPath, payload.root)
       ) {
         return;
       }
 
       const current = cacheRef.current;
       const toFetch = new Set<string>();
-      const changedPaths = payload.paths.filter((p) => pathInsideRoot(p, rootPath));
+      const changedPaths = payload.paths.filter((p) =>
+        isPathInsideOrEqual(p, rootPath),
+      );
       const gitignoreChanged = changedPaths.some(isGitignorePath);
 
       retainRecentGitStatPaths(
@@ -831,9 +830,12 @@ export function FileExplorer({
         toFetch.add(nearestCachedRefreshDir(refreshPath, current, rootPath));
       } else {
         for (const p of changedPaths) {
-          const dir = parentOf(p);
-          if (current[dir] || dir === rootPath) {
-            toFetch.add(dir);
+          const dir = parentPath(p);
+          const cached = matchingCachedPath(current, dir);
+          if (cached) {
+            toFetch.add(cached);
+          } else if (pathsEqual(dir, rootPath)) {
+            toFetch.add(rootPath);
           }
         }
       }
@@ -884,6 +886,11 @@ export function FileExplorer({
   const openInEditor = useCallback(async (entry: FsEntry) => {
     setActivePath(entry.path);
     try {
+      if (isWindowsPlatform()) {
+        await openFileInEditor(entry.path);
+        return;
+      }
+
       // Probe `$EDITOR` from cached shell env. Empty means the user has
       // not configured one — fall back to the OS default app for the
       // file type. Without this fallback the PTY path becomes
@@ -914,7 +921,7 @@ export function FileExplorer({
       setDraftRename(null);
       return;
     }
-    const target = joinPath(parentOf(path), name);
+    const target = joinPath(parentPath(path), name);
     if (target === path) {
       setDraftRename(null);
       return;
@@ -922,7 +929,7 @@ export function FileExplorer({
     try {
       await api.fsRename(path, target);
       setDraftRename(null);
-      await fetchDir(parentOf(path));
+      await fetchDir(parentPath(path));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
@@ -934,7 +941,7 @@ export function FileExplorer({
     async (entry: FsEntry) => {
       try {
         await api.fsTrash(entry.path);
-        await fetchDir(parentOf(entry.path));
+        await fetchDir(parentPath(entry.path));
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         setError(message);
@@ -993,13 +1000,11 @@ export function FileExplorer({
       );
       if (!hasMatch) continue;
       let cur = dirPath;
-      while (cur && cur.length >= rootPath.length) {
+      while (isPathInsideOrEqual(cur, rootPath)) {
         result.add(cur);
-        if (cur === rootPath) break;
-        const idx = cur.lastIndexOf("/");
-        if (idx <= 0) break;
-        const next = cur.slice(0, idx);
-        if (next === cur) break;
+        if (pathsEqual(cur, rootPath)) break;
+        const next = parentPath(cur);
+        if (pathsEqual(next, cur)) break;
         cur = next;
       }
     }
@@ -1017,13 +1022,11 @@ export function FileExplorer({
           )
         ) {
           let cur = dirPath;
-          while (cur && cur.length >= rootPath.length) {
+          while (isPathInsideOrEqual(cur, rootPath)) {
             result.add(cur);
-            if (cur === rootPath) break;
-            const idx = cur.lastIndexOf("/");
-            if (idx <= 0) break;
-            const next = cur.slice(0, idx);
-            if (next === cur) break;
+            if (pathsEqual(cur, rootPath)) break;
+            const next = parentPath(cur);
+            if (pathsEqual(next, cur)) break;
             cur = next;
           }
           changed = true;
@@ -1090,7 +1093,7 @@ export function FileExplorer({
     async (mode: "relative" | "absolute") => {
       const paths = Array.from(selection);
       const lines = paths.map((p) =>
-        mode === "absolute" ? p : relativeTo(rootPath, p),
+        mode === "absolute" ? p : relativeToRoot(rootPath, p),
       );
       try {
         await writeClipboardText(lines.join("\n"));
@@ -1109,7 +1112,9 @@ export function FileExplorer({
       return;
     }
     const paths = Array.from(selection);
-    const rels = paths.map((p) => `@${relativeTo(rootPath, p)}`).join(" ");
+    const rels = paths
+      .map((p) => `@${relativeToRoot(rootPath, p)}`)
+      .join(" ");
     try {
       await api.ptyWrite(activeSessionId, ` ${rels} `);
     } catch (e) {
@@ -1138,20 +1143,23 @@ export function FileExplorer({
         return;
       }
       const name =
-        folderPath.split("/").filter(Boolean).pop() ??
+        basename(folderPath) ||
         fileExplorerText(t, "fileExplorer.defaults.sessionName");
-      // Spawn a regular session in the current project, then queue a
-      // `cd <folder>` to land inside the clicked directory once the PTY
-      // is up. Mirrors how CommandRunDialog primes new sessions.
+      const windows = isWindowsPlatform();
       const session = await applySessionCreateRequest(
         state.createSession,
         buildSessionCreateRequestFromScope(
           { sessions: state.sessions, projects: state.projects },
-          scopeWithProjectRootLaunch(scope),
-          { name },
+          windows ? scope : scopeWithProjectRootLaunch(scope),
+          windows
+            ? {
+                name,
+                launch: { kind: "workspaceCwd", cwdPath: folderPath },
+              }
+            : { name },
         ),
       );
-      if (session) {
+      if (!windows && session) {
         state.setPendingTerminalInput(
           session.id,
           `cd ${shellQuote(folderPath)}\n`,
@@ -1197,13 +1205,13 @@ export function FileExplorer({
       if (!matchesHotkeyEvent(renameShortcut, e)) return;
       if (selection.size === 1) {
         const path = Array.from(selection)[0];
-        const name = path.split("/").pop() ?? "";
+        const name = basename(path);
         setDraftRename({ path, value: name });
         e.preventDefault();
         return;
       }
       if (activePath) {
-        const name = activePath.split("/").pop() ?? "";
+        const name = basename(activePath);
         setDraftRename({ path: activePath, value: name });
         e.preventDefault();
       }
@@ -1223,7 +1231,7 @@ export function FileExplorer({
   const menuItems: ContextMenuItem[] = useMemo(() => {
     if (!menu) return [];
     const entry = menu.entry;
-    const rel = entry ? relativeTo(rootPath, entry.path) : "";
+    const rel = entry ? relativeToRoot(rootPath, entry.path) : "";
     const items: ContextMenuItem[] = [];
 
     // Bulk-action mode: ≥2 entries selected (and the right-clicked
@@ -1259,7 +1267,9 @@ export function FileExplorer({
 
     // Group 1: Open actions
     if (entry && !entry.is_dir) {
-      const editorBin = shellEditor.split(/\s+/)[0];
+      const editorBin = (
+        isWindowsPlatform() ? editorCommand : shellEditor
+      ).split(/\s+/)[0];
       const openLabel = editorBin
         ? `${fileExplorerText(t, "fileExplorer.menu.openIn")} ${editorBin}`
         : fileExplorerText(t, "fileExplorer.menu.openWithDefaultProgram");
@@ -1356,6 +1366,7 @@ export function FileExplorer({
     toggleDir,
     openInEditor,
     handleTrash,
+    editorCommand,
     shellEditor,
     agent,
     activeSessionId,
@@ -1478,7 +1489,7 @@ interface ToolbarProps {
 
 function Toolbar(props: ToolbarProps) {
   const t = useTranslation();
-  const rootName = props.rootPath.split("/").filter(Boolean).pop() ?? "/";
+  const rootName = basename(props.rootPath) || props.rootPath;
   return (
     <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1 text-[11px]">
       <Tooltip

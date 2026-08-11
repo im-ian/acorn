@@ -87,7 +87,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 - URL 클릭, 줄 높이, 마지막 사용자 프롬프트 고정 등 동작 옵션
 
 ### 🤖 AI 에이전트 세션
-- 세션은 항상 `$SHELL`로 시작 — 그 안에서 원하는 AI CLI(`claude` / `codex` / `agy` / `grok` / `ollama` / `llm` 등) 직접 실행
+- 세션은 항상 네이티브 대화형 셸(`$SHELL` 또는 Windows PowerShell/cmd)로 시작 — 그 안에서 원하는 AI CLI(`claude` / `codex` / `agy` / `grok` / `ollama` / `llm` 등) 직접 실행
 - Claude / Codex / Antigravity / Grok 세션을 현재 Pane이나 새 worktree로 fork
 - **에이전트 탭 제목 자동 생성** — 대화 내용에 맞춰 탭 제목 갱신
 - 사이드바 라이브 상태 — 유휴 / 입력 대기 / 작업 중 (provider transcript 기반, 지원되는 CLI는 hook 병행)
@@ -110,9 +110,9 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 
 ### 🛰️ Control session — 에이전트가 다른 세션 조작
 - 한 세션 안의 AI가 같은 프로젝트의 다른 세션을 직접 조작 (입력 전송, 화면 읽기, 새 세션 생성, 선택, 종료)
-- 시작: `⌘⌥⇧T` 또는 커맨드 팔레트 → **New control session**
+- 시작: `⌘⌥⇧T`(macOS) / `Ctrl+Alt+Shift+T`(Windows·Linux) 또는 커맨드 팔레트 → **New control session**
 - 자세한 사용법 + 보안 모델: [`docs/CONTROL_SESSIONS.md`](docs/CONTROL_SESSIONS.md)
-- 플랫폼: macOS / Linux (Windows 미지원)
+- 플랫폼: macOS / Windows / Linux
 
 ### 🎯 우측 패널
 세 그룹으로 묶인 탭:
@@ -123,7 +123,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 
 ### 🔍 File Explorer + Code / Diff / Media 뷰어
 - 파일명·내용 검색 (정규식, 대소문자, include/exclude) + dotfile·gitignored 파일 표시 전환
-- 파일·폴더 이름 변경, 휴지통 이동, 상대·절대 경로 복사, Finder/기본 프로그램/외부 에디터로 열기
+- 파일·폴더 이름 변경, 휴지통 이동, 상대·절대 경로 복사, 파일 관리자/기본 프로그램/외부 에디터로 열기
 - 파일을 Claude / Codex / Antigravity / Grok 대화에 첨부하고 탭 영역으로 드래그해 열기
 - 파일 탐색기 또는 터미널의 파일 참조 클릭으로 코드 뷰어 진입
 - 신택스 하이라이팅, in-file 검색, markdown source/preview 전환
@@ -157,6 +157,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 | 설정 | `⌘,` |
 
 전체 목록은 Settings → Shortcuts 탭에서 확인하고 원하는 조합으로 변경할 수 있습니다.
+표의 `⌘`는 Windows·Linux에서 `Ctrl`, `⌥`는 `Alt`에 해당합니다. 터미널에 포커스가 있을 때는 `Ctrl+C`가 SIGINT, `Ctrl+Shift+C`가 선택 영역 복사로 동작합니다.
 
 ### 🎛️ 설정
 - 언어 / UI 배율 / theme / 배경 이미지 / 기본 Pane·Kanban 보기
@@ -170,14 +171,22 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 ### 📊 상태 표시줄 + 자동 업데이트
 - 메모리 + 프로세스별 Breakdown, 현재 worktree 브랜치, GitHub 계정 배지
 - 활성 Claude / Codex 세션의 토큰 사용량, Background sessions / multi-input 상태 표시
-- macOS 자동 업데이트 — 새 버전 감지 시 배너, 적용 시점은 사용자가 선택
+- macOS·Windows 자동 업데이트 — 새 버전 감지 시 배너, 적용 시점은 사용자가 선택
 - About 탭에서 현재 버전의 GitHub 릴리스 노트 확인
 
 ---
 
-## 설치 (macOS)
+## 설치
 
-### 설치 스크립트
+### Windows 10/11 (x64)
+
+[Releases](https://github.com/im-ian/acorn/releases/latest)에서 `Acorn_*_x64-setup.exe`를 내려받아 실행합니다. NSIS 설치 프로그램은 현재 사용자 영역에 설치되므로 관리자 권한이 필요하지 않으며, 이후 업데이트는 앱 안에서 받을 수 있습니다.
+
+> 현재 Windows 설치 프로그램은 Tauri updater 서명으로 업데이트 무결성을 검증하지만 Authenticode 코드 서명은 적용되지 않았습니다. 브라우저에서 내려받으면 Microsoft Defender SmartScreen이 **알 수 없는 게시자** 경고를 표시할 수 있습니다. 공식 `im-ian/acorn` Releases URL에서 받은 파일인지 확인한 뒤 실행하세요.
+
+### macOS
+
+#### 설치 스크립트
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/im-ian/acorn/main/scripts/install-macos.sh | bash
@@ -190,7 +199,7 @@ curl -fsSL https://raw.githubusercontent.com/im-ian/acorn/main/scripts/install-m
   | ACORN_INSTALL_DIR="$HOME/Applications" bash
 ```
 
-### 수동 DMG
+#### 수동 DMG
 
 [Releases](https://github.com/im-ian/acorn/releases/latest)에서 `Acorn_*_aarch64.dmg`(Apple Silicon) 또는 `Acorn_*_x64.dmg`(Intel)를 받아 `Applications`로 복사한 뒤 quarantine 속성 제거:
 
@@ -204,7 +213,7 @@ xattr -dr com.apple.quarantine /Applications/Acorn.app
 
 ## 소스에서 빌드
 
-요구사항: **pnpm** 9.x, **Rust** stable, **Xcode CLT** (macOS) 또는 OS 별 Tauri 사전 요구사항.
+요구사항: **pnpm** 9.x, **Rust** stable, **Xcode CLT**(macOS) 또는 **Microsoft C++ Build Tools + WebView2**(Windows) 등 [OS별 Tauri 사전 요구사항](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 pnpm install
@@ -213,9 +222,9 @@ pnpm run tauri dev      # 개발 모드
 pnpm run tauri build    # 프로덕션 빌드
 ```
 
-> ℹ️ `pnpm run tauri dev` / `tauri build`는 `src-tauri/binaries/acorn-ipc-<target-triple>`, `acornd-<target-triple>` 파일이 존재해야 시작합니다. 이 경로는 `.gitignore`에 포함돼 있어 fresh checkout(특히 `git worktree add`로 만든 worktree)에서는 비어 있고, 미리 빌드하지 않으면 `resource path 'binaries/...' doesn't exist` 에러로 빌드가 실패합니다. `pnpm run build:sidecar`가 호스트 타깃에 맞는 두 바이너리를 빌드하고 올바른 위치에 stage합니다.
+> ℹ️ `pnpm run tauri dev` / `tauri build`는 `src-tauri/binaries/acorn-ipc-<target-triple>[.exe]`, `acornd-<target-triple>[.exe]` 파일이 존재해야 시작합니다. 이 경로는 `.gitignore`에 포함돼 있어 fresh checkout(특히 `git worktree add`로 만든 worktree)에서는 비어 있고, 미리 빌드하지 않으면 `resource path 'binaries/...' doesn't exist` 에러로 빌드가 실패합니다. `pnpm run build:sidecar`가 호스트 타깃에 맞는 두 바이너리를 빌드하고 올바른 위치에 stage합니다.
 
-개발 모드의 런타임 데이터는 설치된 앱과 분리되어 `~/Library/Application Support/io.im-ian.acorn/profiles/dev/`에 저장됩니다. 프로덕션 빌드는 `profiles/prod/`. 임시 격리가 필요하면 `ACORN_PROFILE=<name>` 또는 `ACORN_DATA_DIR=/tmp/acorn-test`로 앱·IPC CLI·daemon이 볼 데이터 디렉터리를 바꿀 수 있습니다.
+개발 모드의 런타임 데이터는 설치된 앱과 분리되어 OS별 Acorn application-data 디렉터리의 `profiles/dev/`에 저장됩니다. 프로덕션 빌드는 `profiles/prod/`. 임시 격리가 필요하면 `ACORN_PROFILE=<name>` 또는 `ACORN_DATA_DIR=<path>`로 앱·IPC CLI·daemon이 볼 데이터 디렉터리를 바꿀 수 있습니다.
 
 ### 테스트
 

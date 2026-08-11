@@ -1,10 +1,9 @@
 use std::io::{self, Read, Write};
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::str;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,6 +12,7 @@ use serde::Deserialize;
 use crate::chat_runs::ChatCancellation;
 use crate::cli_resolver;
 use crate::error::{AppError, AppResult};
+use acorn_platform::process::{configure_tree_root, ProcessTree};
 
 const ONESHOT_TIMEOUT: Duration = Duration::from_secs(60);
 const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -291,7 +291,7 @@ fn run_oneshot_in_dir_cancellable_with_transport(
     }
     let mut command_builder = Command::new(&resolved);
     crate::shell_env::apply_to_command(&mut command_builder);
-    isolate_child_process_group(&mut command_builder);
+    configure_tree_root(&mut command_builder);
     command_builder
         .args(&command_args)
         .stdin(match prompt_transport {
@@ -313,6 +313,7 @@ fn run_oneshot_in_dir_cancellable_with_transport(
             AppError::Other(format!("failed to invoke {command}: {e}"))
         }
     })?;
+    let process_tree = track_child_tree(command, &mut child)?;
 
     if prompt_transport == PromptTransport::Stdin {
         if let Some(mut stdin) = child.stdin.take() {
@@ -324,7 +325,7 @@ fn run_oneshot_in_dir_cancellable_with_transport(
         }
     }
 
-    let output = wait_with_timeout(command, child, ONESHOT_TIMEOUT, cancellation)?;
+    let output = wait_with_timeout(command, child, process_tree, ONESHOT_TIMEOUT, cancellation)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -363,7 +364,7 @@ where
     }
     let mut command_builder = Command::new(&resolved);
     crate::shell_env::apply_to_command(&mut command_builder);
-    isolate_child_process_group(&mut command_builder);
+    configure_tree_root(&mut command_builder);
     command_builder
         .args(&command_args)
         .stdin(match prompt_transport {
@@ -385,6 +386,7 @@ where
             AppError::Other(format!("failed to invoke {command}: {e}"))
         }
     })?;
+    let process_tree = track_child_tree(command, &mut child)?;
 
     if prompt_transport == PromptTransport::Stdin {
         if let Some(mut stdin) = child.stdin.take() {
@@ -396,7 +398,14 @@ where
         }
     }
 
-    let output = wait_with_timeout_streaming(command, child, None, cancellation, &mut on_event)?;
+    let output = wait_with_timeout_streaming(
+        command,
+        child,
+        process_tree,
+        None,
+        cancellation,
+        &mut on_event,
+    )?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -414,10 +423,10 @@ where
 fn wait_with_timeout(
     command: &str,
     mut child: std::process::Child,
+    process_tree: Arc<ProcessTree>,
     timeout: Duration,
     cancellation: Option<ChatCancellation>,
 ) -> AppResult<Output> {
-    let child_id = child.id();
     let stdout = child
         .stdout
         .take()
@@ -437,7 +446,7 @@ fn wait_with_timeout(
 
     let started = Instant::now();
     let status = if let Some(cancellation) = cancellation {
-        cancellation.set_child(child);
+        cancellation.set_child(child, Arc::clone(&process_tree));
         let status = loop {
             drain_pipe_events(
                 command,
@@ -448,7 +457,7 @@ fn wait_with_timeout(
                 &mut stderr_open,
             )?;
             if cancellation.is_cancelled() {
-                terminate_child_process_group(child_id);
+                let _ = process_tree.terminate();
                 cancellation.kill_and_wait();
                 drain_pipe_events_until_closed(
                     command,
@@ -465,7 +474,7 @@ fn wait_with_timeout(
             match cancellation.try_wait(command)? {
                 Some(status) => break status,
                 None if started.elapsed() >= timeout => {
-                    terminate_child_process_group(child_id);
+                    let _ = process_tree.terminate();
                     cancellation.kill_and_wait();
                     drain_pipe_events_until_closed(
                         command,
@@ -503,7 +512,7 @@ fn wait_with_timeout(
             {
                 Some(status) => break status,
                 None if started.elapsed() >= timeout => {
-                    terminate_child_process_group(child_id);
+                    let _ = process_tree.terminate();
                     let _ = child.kill();
                     let _ = child.wait();
                     drain_pipe_events_until_closed(
@@ -526,7 +535,7 @@ fn wait_with_timeout(
     };
 
     if stdout_open || stderr_open {
-        terminate_child_process_group(child_id);
+        let _ = process_tree.terminate();
     }
     drain_pipe_events_until_closed(
         command,
@@ -553,30 +562,15 @@ fn wait_with_timeout(
     })
 }
 
-#[cfg(unix)]
-fn isolate_child_process_group(command: &mut Command) {
-    command.process_group(0);
+fn track_child_tree(command: &str, child: &mut std::process::Child) -> AppResult<Arc<ProcessTree>> {
+    ProcessTree::from_std_child(child)
+        .map(Arc::new)
+        .map_err(|err| {
+            let _ = child.kill();
+            let _ = child.wait();
+            AppError::Other(format!("failed to track {command} process tree: {err}"))
+        })
 }
-
-#[cfg(not(unix))]
-fn isolate_child_process_group(_command: &mut Command) {}
-
-#[cfg(unix)]
-fn terminate_child_process_group(child_id: u32) {
-    use nix::sys::signal::{kill, Signal};
-    use nix::unistd::Pid;
-
-    let Ok(raw_child_id) = i32::try_from(child_id) else {
-        return;
-    };
-    let process_group = Pid::from_raw(-raw_child_id);
-    let _ = kill(process_group, Signal::SIGTERM);
-    thread::sleep(Duration::from_millis(50));
-    let _ = kill(process_group, Signal::SIGKILL);
-}
-
-#[cfg(not(unix))]
-fn terminate_child_process_group(_child_id: u32) {}
 
 #[derive(Clone, Copy)]
 enum PipeKind {
@@ -801,6 +795,7 @@ where
 fn wait_with_timeout_streaming<F>(
     command: &str,
     mut child: std::process::Child,
+    process_tree: Arc<ProcessTree>,
     timeout: Option<Duration>,
     cancellation: Option<ChatCancellation>,
     on_event: &mut F,
@@ -808,7 +803,6 @@ fn wait_with_timeout_streaming<F>(
 where
     F: FnMut(AiProcessStreamEvent<'_>),
 {
-    let child_id = child.id();
     let stdout_pipe = child
         .stdout
         .take()
@@ -847,12 +841,12 @@ where
     let mut decoder = Utf8ChunkDecoder::new();
     let started = Instant::now();
     let status = if let Some(cancellation) = cancellation {
-        cancellation.set_child(child);
+        cancellation.set_child(child, Arc::clone(&process_tree));
         let status = loop {
             drain_stdout_chunks(command, &stdout_rx, &mut stdout, &mut decoder, on_event)?;
             on_event(AiProcessStreamEvent::Tick);
             if cancellation.is_cancelled() {
-                terminate_child_process_group(child_id);
+                let _ = process_tree.terminate();
                 cancellation.kill_and_wait();
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
@@ -862,7 +856,7 @@ where
             match cancellation.try_wait(command)? {
                 Some(status) => break status,
                 None if timeout.is_some_and(|timeout| started.elapsed() >= timeout) => {
-                    terminate_child_process_group(child_id);
+                    let _ = process_tree.terminate();
                     cancellation.kill_and_wait();
                     let _ = stdout_reader.join();
                     let _ = stderr_reader.join();
@@ -888,7 +882,7 @@ where
             {
                 Some(status) => break status,
                 None if timeout.is_some_and(|timeout| started.elapsed() >= timeout) => {
-                    terminate_child_process_group(child_id);
+                    let _ = process_tree.terminate();
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = stdout_reader.join();
@@ -905,7 +899,7 @@ where
     };
 
     if !stdout_reader.is_finished() || !stderr_reader.is_finished() {
-        terminate_child_process_group(child_id);
+        let _ = process_tree.terminate();
     }
     stdout_reader
         .join()
