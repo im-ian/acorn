@@ -2135,7 +2135,7 @@ struct GhCheck {
 }
 
 // ---------------------------------------------------------------------------
-// PR mutations: merge / close / AI commit message
+// PR mutations: merge / lifecycle state / AI commit message
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -2144,6 +2144,14 @@ pub enum MergeMethod {
     Squash,
     Merge,
     Rebase,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PullRequestStateChange {
+    Ready,
+    Draft,
+    Reopen,
 }
 
 impl MergeMethod {
@@ -2206,6 +2214,27 @@ pub fn close_pull_request(repo_path: &Path, number: u64) -> AppResult<()> {
         AccountOutcome::Ok { value, .. } => Ok(value),
         AccountOutcome::NoAccess { .. } => Err(AppError::Other(
             "No logged-in gh account can close this PR.".to_string(),
+        )),
+    }
+}
+
+pub fn change_pull_request_state(
+    repo_path: &Path,
+    number: u64,
+    change: PullRequestStateChange,
+) -> AppResult<()> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "Origin remote is not a GitHub repository.".to_string(),
+        ));
+    };
+
+    match try_with_account(repo_path, &slug, |token| {
+        run_pr_state_change(&slug, number, token, change)
+    })? {
+        AccountOutcome::Ok { value, .. } => Ok(value),
+        AccountOutcome::NoAccess { .. } => Err(AppError::Other(
+            "No logged-in gh account can change this PR's state.".to_string(),
         )),
     }
 }
@@ -2312,6 +2341,47 @@ fn run_pr_close(slug: &str, number: u64, token: &str) -> AppResult<()> {
         cmd.env("GH_TOKEN", token)
             .env("GH_HOST", GH_HOST)
             .args(["pr", "close", &number_s, "--repo", slug]);
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(())
+}
+
+fn pr_state_change_args(slug: &str, number: u64, change: PullRequestStateChange) -> Vec<String> {
+    let subcommand = match change {
+        PullRequestStateChange::Ready | PullRequestStateChange::Draft => "ready",
+        PullRequestStateChange::Reopen => "reopen",
+    };
+    let mut args = vec![
+        "pr".to_string(),
+        subcommand.to_string(),
+        number.to_string(),
+        "--repo".to_string(),
+        slug.to_string(),
+    ];
+    if matches!(change, PullRequestStateChange::Draft) {
+        args.push("--undo".to_string());
+    }
+    args
+}
+
+fn run_pr_state_change(
+    slug: &str,
+    number: u64,
+    token: &str,
+    change: PullRequestStateChange,
+) -> AppResult<()> {
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token)
+            .env("GH_HOST", GH_HOST)
+            .args(pr_state_change_args(slug, number, change));
     })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -3050,6 +3120,22 @@ mod tests {
 
         assert_eq!(pr.closed_at.as_deref(), Some("2026-07-10T00:59:00Z"));
         assert_eq!(pr.merged_at.as_deref(), Some("2026-07-10T00:58:00Z"));
+    }
+
+    #[test]
+    fn pr_state_changes_map_to_non_interactive_gh_commands() {
+        assert_eq!(
+            pr_state_change_args("acme/widgets", 42, PullRequestStateChange::Ready),
+            ["pr", "ready", "42", "--repo", "acme/widgets"]
+        );
+        assert_eq!(
+            pr_state_change_args("acme/widgets", 42, PullRequestStateChange::Draft),
+            ["pr", "ready", "42", "--repo", "acme/widgets", "--undo"]
+        );
+        assert_eq!(
+            pr_state_change_args("acme/widgets", 42, PullRequestStateChange::Reopen),
+            ["pr", "reopen", "42", "--repo", "acme/widgets"]
+        );
     }
 
     #[test]

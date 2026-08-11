@@ -53,6 +53,7 @@
     "pullRequests": {
       "mergeFailed": "无法合并拉取请求：",
       "closeFailed": "无法关闭拉取请求：",
+      "stateChangeFailed": "无法更改拉取请求状态：",
       "bodyUpdateFailed": "无法更新拉取请求："
     }
   },
@@ -2438,6 +2439,10 @@
       "tabChecks": "检查",
       "tabFiles": "文件",
       "merge": "合并",
+      "readyForReview": "可供审阅",
+      "convertToDraft": "转换为草稿",
+      "reopen": "重新打开",
+      "draftMustBeReadyToMerge": "请先标记为可供审阅，再进行合并。",
       "cannotMergeConflicting": "无法合并 - 冲突分支",
       "mergeReadinessPending": "合并准备情况仍在确定中...",
       "resizePrBody": "调整 PR 主体大小",

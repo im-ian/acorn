@@ -53,6 +53,7 @@
     "pullRequests": {
       "mergeFailed": "Pull request를 병합하지 못했습니다:",
       "closeFailed": "Pull request를 닫지 못했습니다:",
+      "stateChangeFailed": "Pull request 상태를 변경하지 못했습니다:",
       "bodyUpdateFailed": "Pull request를 업데이트하지 못했습니다:"
     }
   },
@@ -2438,6 +2439,10 @@
       "tabChecks": "검사",
       "tabFiles": "파일",
       "merge": "병합",
+      "readyForReview": "리뷰 준비 완료",
+      "convertToDraft": "초안으로 전환",
+      "reopen": "다시 열기",
+      "draftMustBeReadyToMerge": "병합하려면 먼저 리뷰 준비 완료 상태로 전환하세요.",
       "cannotMergeConflicting": "병합할 수 없음 - 브랜치 충돌",
       "mergeReadinessPending": "병합 가능 여부 확인 중...",
       "resizePrBody": "PR 본문 크기 조절",

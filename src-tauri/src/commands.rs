@@ -17,7 +17,7 @@ use crate::project_settings::{self, ProjectSettings, ProjectSettingsRecord};
 use crate::pull_requests::{
     self, GeneratedCommitMessage, IssueDetailListing, IssueListing, IssueStateFilter, MergeMethod,
     PrStateFilter, PullRequestDetailListing, PullRequestDiffListing, PullRequestListing,
-    WorkflowRunDetailListing, WorkflowRunsListing,
+    PullRequestStateChange, WorkflowRunDetailListing, WorkflowRunsListing,
 };
 use crate::state::{AppState, PendingSessionRemoval};
 use crate::todos::{self, TodoItem};
@@ -10875,6 +10875,15 @@ pub async fn merge_pull_request(
 #[tauri::command]
 pub async fn close_pull_request(repo_path: String, number: u64) -> AppResult<()> {
     pull_requests::close_pull_request(&PathBuf::from(repo_path), number)
+}
+
+#[tauri::command]
+pub async fn change_pull_request_state(
+    repo_path: String,
+    number: u64,
+    change: PullRequestStateChange,
+) -> AppResult<()> {
+    pull_requests::change_pull_request_state(&PathBuf::from(repo_path), number, change)
 }
 
 #[tauri::command]
