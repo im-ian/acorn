@@ -2479,7 +2479,12 @@ function ProjectGroupView({
         </button>
         <span className="flex min-w-0 flex-1 items-center gap-1.5 leading-none">
           {hoverDetails ? (
-            <Tooltip label={hoverDetails} side="right" multiline>
+            <Tooltip
+              label={hoverDetails}
+              side="right"
+              multiline
+              className="min-w-0 max-w-full"
+            >
               <span className="truncate text-sm font-medium leading-5 text-fg">
                 {project.name}
               </span>

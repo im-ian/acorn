@@ -2613,7 +2613,7 @@ test.describe("sidebar: project lifecycle", () => {
     ).toBeVisible();
   });
 
-  test("hidden project header actions do not reserve title width", async ({
+  test("project header uses full title width until hover actions need ellipsis", async ({
     page,
     tauri,
   }) => {
@@ -2664,6 +2664,19 @@ test.describe("sidebar: project lifecycle", () => {
         newSessionButton.evaluate((el) => (el as HTMLElement).offsetWidth),
       )
       .toBeGreaterThan(0);
+
+    const hoveredTitleMetrics = await title.evaluate((el) => {
+      const titleEl = el as HTMLElement;
+      return {
+        clientWidth: titleEl.clientWidth,
+        scrollWidth: titleEl.scrollWidth,
+        textOverflow: getComputedStyle(titleEl).textOverflow,
+      };
+    });
+    expect(hoveredTitleMetrics.textOverflow).toBe("ellipsis");
+    expect(hoveredTitleMetrics.scrollWidth).toBeGreaterThan(
+      hoveredTitleMetrics.clientWidth + 1,
+    );
   });
 
   test("project header exposes regular and worktree session buttons outside the menu", async ({
