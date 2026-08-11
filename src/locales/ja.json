@@ -53,6 +53,7 @@
     "pullRequests": {
       "mergeFailed": "プル リクエストのマージに失敗しました:",
       "closeFailed": "プルリクエストをクローズできませんでした:",
+      "stateChangeFailed": "プルリクエストの状態を変更できませんでした:",
       "bodyUpdateFailed": "プル リクエストの更新に失敗しました:"
     }
   },
@@ -2438,6 +2439,10 @@
       "tabChecks": "小切手",
       "tabFiles": "ファイル",
       "merge": "マージ",
+      "readyForReview": "レビューの準備完了",
+      "convertToDraft": "ドラフトに変換",
+      "reopen": "再オープン",
+      "draftMustBeReadyToMerge": "マージする前にレビュー可能な状態にしてください。",
       "cannotMergeConflicting": "マージできません - ブランチが競合しています",
       "mergeReadinessPending": "マージの準備がまだ決定中です...",
       "resizePrBody": "PR 本文のサイズを変更する",

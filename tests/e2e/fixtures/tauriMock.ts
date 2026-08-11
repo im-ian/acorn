@@ -485,6 +485,9 @@ export const tauriMockSource = `
     if (cmd === 'add_pull_request_comment') {
       return Promise.resolve(undefined);
     }
+    if (cmd === 'change_pull_request_state') {
+      return Promise.resolve(undefined);
+    }
     if (cmd === 'get_pull_request_diff') {
       return Promise.resolve({ kind: 'ok', account: 'test', diff: { files: [] } });
     }

@@ -750,6 +750,7 @@ export interface TodoItem {
 }
 
 export type PrStateFilter = "open" | "closed" | "merged" | "all";
+export type PullRequestStateChange = "ready" | "draft" | "reopen";
 export type IssueStateFilter = "open" | "closed" | "all";
 
 export interface PullRequestLabel {

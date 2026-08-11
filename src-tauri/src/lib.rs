@@ -824,6 +824,7 @@ pub fn run() {
             commands::resolve_commit_logins,
             commands::merge_pull_request,
             commands::close_pull_request,
+            commands::change_pull_request_state,
             commands::update_pull_request_body,
             commands::generate_pr_commit_message,
             commands::list_workflow_runs,
