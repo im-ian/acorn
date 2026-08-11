@@ -778,6 +778,157 @@ test.describe("right panel: tab switching", () => {
     ).toBeVisible();
   });
 
+  test("changes draft, ready, and closed states from the pull request detail modal", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 92,
+          title: "Manage PR lifecycle",
+          state: "CLOSED",
+          author: "im-ian",
+          head_branch: "feature/lifecycle-actions",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/92",
+          updated_at: "2026-05-19T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.handle("get_pull_request_detail", () => {
+      const w = window as unknown as {
+        __prLifecycle?: { state: string; isDraft: boolean };
+        __prDetailCalls?: number;
+        __releaseStalePrDetail?: boolean;
+      };
+      const lifecycle = w.__prLifecycle ?? {
+        state: "CLOSED",
+        isDraft: false,
+      };
+      w.__prLifecycle = lifecycle;
+      w.__prDetailCalls = (w.__prDetailCalls ?? 0) + 1;
+      const result = {
+        kind: "ok",
+        account: "test-account",
+        detail: {
+          number: 92,
+          title: "Manage PR lifecycle",
+          body: "Move this PR through its review states.",
+          state: lifecycle.state,
+          is_draft: lifecycle.isDraft,
+          author: "im-ian",
+          head_branch: "feature/lifecycle-actions",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/92",
+          created_at: "2026-05-18T00:00:00Z",
+          updated_at: "2026-05-19T00:00:00Z",
+          merged_at: null,
+          additions: 12,
+          deletions: 3,
+          changed_files: 2,
+          mergeable: "MERGEABLE",
+          labels: [],
+          comments: [],
+          reviews: [],
+          checks: [],
+          commits: [],
+        },
+      };
+      if (w.__prDetailCalls !== 2) return result;
+      return new Promise((resolve) => {
+        const tick = () => {
+          if (w.__releaseStalePrDetail) {
+            resolve(result);
+            return;
+          }
+          setTimeout(tick, 20);
+        };
+        tick();
+      });
+    });
+    await tauri.handle("change_pull_request_state", (args) => {
+      const w = window as unknown as {
+        __prLifecycle?: { state: string; isDraft: boolean };
+        __prStateChangeArgs?: unknown[];
+      };
+      w.__prLifecycle = w.__prLifecycle ?? {
+        state: "CLOSED",
+        isDraft: false,
+      };
+      w.__prStateChangeArgs = w.__prStateChangeArgs ?? [];
+      w.__prStateChangeArgs.push(args);
+      const change = (args as { change?: string }).change;
+      if (change === "reopen") w.__prLifecycle.state = "OPEN";
+      if (change === "draft") w.__prLifecycle.isDraft = true;
+      if (change === "ready") w.__prLifecycle.isDraft = false;
+      return undefined;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "PRs" }).click();
+    const prRow = page
+      .getByText("Manage PR lifecycle")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await dblclickRowRightSide(page, prRow);
+
+    const dialog = page.locator('[role="dialog"]').filter({
+      has: page.getByRole("heading", { name: "Manage PR lifecycle" }),
+    });
+    await dialog.getByRole("button", { name: "Refresh" }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __prDetailCalls?: number })
+              .__prDetailCalls ?? 0,
+        ),
+      )
+      .toBe(2);
+    await dialog.getByRole("button", { name: "Reopen" }).click();
+    await expect(
+      dialog.getByRole("button", { name: "Convert to draft" }),
+    ).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Merge" })).toBeEnabled();
+    await page.evaluate(() => {
+      (window as unknown as { __releaseStalePrDetail?: boolean })
+        .__releaseStalePrDetail = true;
+    });
+    await expect(
+      dialog.getByRole("button", { name: "Convert to draft" }),
+    ).toBeVisible();
+
+    await dialog.getByRole("button", { name: "Convert to draft" }).click();
+    await expect(
+      dialog.getByRole("button", { name: "Ready for review" }),
+    ).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Merge" })).toBeDisabled();
+
+    await dialog.getByRole("button", { name: "Ready for review" }).click();
+    await expect(
+      dialog.getByRole("button", { name: "Convert to draft" }),
+    ).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Merge" })).toBeEnabled();
+
+    const calls = await page.evaluate(
+      () =>
+        (window as unknown as { __prStateChangeArgs?: unknown[] })
+          .__prStateChangeArgs,
+    );
+    expect(calls).toEqual([
+      { repoPath: "/tmp/demo", number: 92, change: "reopen" },
+      { repoPath: "/tmp/demo", number: 92, change: "draft" },
+      { repoPath: "/tmp/demo", number: 92, change: "ready" },
+    ]);
+  });
+
   test("PR files render before a selected image preview finishes loading", async ({
     page,
     tauri,

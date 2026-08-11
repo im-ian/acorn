@@ -13,6 +13,7 @@ import {
   GitPullRequest,
   GitPullRequestClosed,
   GitPullRequestDraft,
+  Loader2,
   MessagesSquare,
   Minus,
   PencilLine,
@@ -41,6 +42,7 @@ import type {
   PullRequestDetail,
   PullRequestDetailListing,
   PullRequestReview,
+  PullRequestStateChange,
 } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { AuthorTag, buildProfileMenuItems } from "./AuthorTag";
@@ -105,8 +107,8 @@ interface PullRequestDetailModalProps {
   cwd?: string;
   onClose: () => void;
   /**
-   * Notifies the parent that the PR's lifecycle changed (merged/closed) so
-   * the surrounding list can refetch.
+   * Notifies the parent that the PR's lifecycle changed so the surrounding
+   * list can refetch.
    */
   onMutated?: () => void;
 }
@@ -131,6 +133,8 @@ export function PullRequestDetailModal({
   const [refreshing, setRefreshing] = useState(false);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const [stateChanging, setStateChanging] =
+    useState<PullRequestStateChange | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
   const [discardCommentDialogOpen, setDiscardCommentDialogOpen] =
     useState(false);
@@ -144,6 +148,8 @@ export function PullRequestDetailModal({
   } | null>(null);
   const [bodySaveError, setBodySaveError] = useState<string | null>(null);
   const bodyWriteSeqRef = useRef(0);
+  const stateWriteSeqRef = useRef(0);
+  const detailFetchGenerationRef = useRef(0);
   const detailFetchInFlightRef = useRef<{
     key: string;
     promise: Promise<PullRequestDetailListing>;
@@ -166,12 +172,13 @@ export function PullRequestDetailModal({
   }, []);
 
   const requestClose = useCallback(() => {
+    if (stateChanging !== null) return;
     if (commentDraft.trim().length > 0) {
       setDiscardCommentDialogOpen(true);
       return;
     }
     onClose();
-  }, [commentDraft, onClose]);
+  }, [commentDraft, onClose, stateChanging]);
 
   const discardAndClose = useCallback(() => {
     setCommentDraft("");
@@ -193,6 +200,9 @@ export function PullRequestDetailModal({
 
   // Hard-clear stale data whenever the modal closes or switches PR.
   useEffect(() => {
+    stateWriteSeqRef.current += 1;
+    detailFetchGenerationRef.current += 1;
+    detailFetchInFlightRef.current = null;
     if (!open) {
       setListing(null);
       setError(null);
@@ -201,6 +211,7 @@ export function PullRequestDetailModal({
       setReloadKey(0);
       setMergeDialogOpen(false);
       setCloseDialogOpen(false);
+      setStateChanging(null);
       setCommentDraft("");
       setDiscardCommentDialogOpen(false);
       setDeleteCommentId(null);
@@ -213,6 +224,7 @@ export function PullRequestDetailModal({
     setCommentDraft("");
     setDiscardCommentDialogOpen(false);
     setDeleteCommentId(null);
+    setStateChanging(null);
     setBodyOverride(null);
     setBodySaveError(null);
   }, [open]);
@@ -221,16 +233,27 @@ export function PullRequestDetailModal({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    const generation = detailFetchGenerationRef.current;
     setRefreshing(true);
     fetchDetail(open.repoPath, open.number)
       .then((result) => {
-        if (cancelled) return;
+        if (
+          cancelled ||
+          generation !== detailFetchGenerationRef.current
+        ) {
+          return;
+        }
         setListing(result);
         setError(null);
         setRefreshing(false);
       })
       .catch((e) => {
-        if (cancelled) return;
+        if (
+          cancelled ||
+          generation !== detailFetchGenerationRef.current
+        ) {
+          return;
+        }
         setError(String(e));
         setRefreshing(false);
       });
@@ -248,15 +271,22 @@ export function PullRequestDetailModal({
     if (!open || !hasRunningChecks) return;
     let cancelled = false;
     const handle = window.setInterval(() => {
+      const generation = detailFetchGenerationRef.current;
       void fetchDetail(open.repoPath, open.number)
         .then((result) => {
-          if (!cancelled) {
+          if (
+            !cancelled &&
+            generation === detailFetchGenerationRef.current
+          ) {
             setListing(result);
             setError(null);
           }
         })
         .catch((e) => {
-          if (!cancelled) {
+          if (
+            !cancelled &&
+            generation === detailFetchGenerationRef.current
+          ) {
             console.debug("[PullRequestDetailModal] polling failed", e);
           }
         });
@@ -275,6 +305,59 @@ export function PullRequestDetailModal({
     setReloadKey((k) => k + 1);
     onMutated?.();
   }, [onMutated]);
+
+  const handleStateChange = useCallback(
+    async (change: PullRequestStateChange) => {
+      if (!open || !detail || stateChanging) return;
+      const seq = ++stateWriteSeqRef.current;
+      setStateChanging(change);
+      try {
+        await api.changePullRequestState(open.repoPath, open.number, change);
+        if (seq !== stateWriteSeqRef.current) return;
+
+        detailFetchGenerationRef.current += 1;
+        detailFetchInFlightRef.current = null;
+        const nextIsDraft =
+          change === "draft"
+            ? true
+            : change === "ready"
+              ? false
+              : detail.is_draft;
+        setListing((current) =>
+          current?.kind === "ok"
+            ? {
+                ...current,
+                detail: {
+                  ...current.detail,
+                  state: change === "reopen" ? "OPEN" : current.detail.state,
+                  is_draft: nextIsDraft,
+                },
+              }
+            : current,
+        );
+        emitPullRequestMutation({
+          kind: change === "reopen" ? "reopened" : "draft_changed",
+          repoPath: open.repoPath,
+          number: open.number,
+          headBranch: detail.head_branch,
+          baseBranch: detail.base_branch,
+          title: detail.title,
+          isDraft: nextIsDraft,
+        });
+        handleMutated();
+      } catch (e) {
+        if (seq !== stateWriteSeqRef.current) return;
+        showToast(
+          `${t("toasts.pullRequests.stateChangeFailed")} ${String(e)}`,
+        );
+      } finally {
+        if (seq === stateWriteSeqRef.current) {
+          setStateChanging(null);
+        }
+      }
+    },
+    [detail, handleMutated, open, showToast, stateChanging, t],
+  );
 
   const handleSubmitComment = useCallback(
     async (body: string) => {
@@ -430,6 +513,8 @@ export function PullRequestDetailModal({
             diffReloadKey={reloadKey}
             onOpenMerge={() => setMergeDialogOpen(true)}
             onOpenClose={() => setCloseDialogOpen(true)}
+            stateChanging={stateChanging}
+            onChangeState={handleStateChange}
             onSubmitComment={handleSubmitComment}
             onUpdateComment={handleUpdateComment}
             onRequestDeleteComment={setDeleteCommentId}
@@ -514,6 +599,8 @@ function DetailBody({
   diffReloadKey,
   onOpenMerge,
   onOpenClose,
+  stateChanging,
+  onChangeState,
   onSubmitComment,
   onUpdateComment,
   onRequestDeleteComment,
@@ -536,6 +623,8 @@ function DetailBody({
   diffReloadKey: number;
   onOpenMerge: () => void;
   onOpenClose: () => void;
+  stateChanging: PullRequestStateChange | null;
+  onChangeState: (change: PullRequestStateChange) => void;
   onSubmitComment: (body: string) => Promise<void>;
   onUpdateComment: (commentId: number, body: string) => Promise<void>;
   onRequestDeleteComment: (commentId: number) => void;
@@ -704,17 +793,36 @@ function DetailBody({
         <div className="flex shrink-0 items-center gap-1">
           {detail.state.toUpperCase() === "OPEN" ? (
             <>
+              <PullRequestStateButton
+                change={detail.is_draft ? "ready" : "draft"}
+                busy={stateChanging !== null}
+                loading={stateChanging === (detail.is_draft ? "ready" : "draft")}
+                onClick={onChangeState}
+              />
               <MergeActionButton
                 mergeable={detail.mergeable}
+                isDraft={detail.is_draft}
+                busy={stateChanging !== null}
                 onClick={onOpenMerge}
               />
               <button
                 type="button"
                 onClick={onOpenClose}
-                className="rounded-md bg-rose-500/15 px-2.5 py-1 text-[11px] font-medium text-rose-300 transition hover:bg-rose-500/25"
+                disabled={stateChanging !== null}
+                className="rounded-md bg-rose-500/15 px-2.5 py-1 text-[11px] font-medium text-rose-300 transition hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {dt(t, "dialogs.common.close")}
               </button>
+              <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+            </>
+          ) : detail.state.toUpperCase() === "CLOSED" ? (
+            <>
+              <PullRequestStateButton
+                change="reopen"
+                busy={stateChanging !== null}
+                loading={stateChanging === "reopen"}
+                onClick={onChangeState}
+              />
               <span className="mx-1 h-4 w-px bg-border" aria-hidden />
             </>
           ) : null}
@@ -736,7 +844,8 @@ function DetailBody({
               type="button"
               aria-label={dt(t, "dialogs.common.close")}
               onClick={onClose}
-              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+              disabled={stateChanging !== null}
+              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
               <X size={16} />
             </button>
@@ -921,6 +1030,7 @@ function DetailSkeleton({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <SkeletonBlock className="h-6 w-20 rounded-md bg-fg-muted/10" />
           <SkeletonBlock className="h-6 w-14 rounded-md bg-fg-muted/10" />
           <SkeletonBlock className="h-6 w-12 rounded-md bg-fg-muted/10" />
           <span className="mx-1 h-4 w-px bg-border" aria-hidden />
@@ -1080,16 +1190,64 @@ function summarizeChecks(checks: PullRequestCheck[]): CheckCounts {
   return { passed, failed, pending };
 }
 
+function PullRequestStateButton({
+  change,
+  busy,
+  loading,
+  onClick,
+}: {
+  change: PullRequestStateChange;
+  busy: boolean;
+  loading: boolean;
+  onClick: (change: PullRequestStateChange) => void;
+}) {
+  const t = useTranslation();
+  const label =
+    change === "ready"
+      ? dt(t, "dialogs.pullRequestDetail.readyForReview")
+      : change === "draft"
+        ? dt(t, "dialogs.pullRequestDetail.convertToDraft")
+        : dt(t, "dialogs.pullRequestDetail.reopen");
+  const icon =
+    change === "draft" ? (
+      <GitPullRequestDraft size={12} />
+    ) : (
+      <GitPullRequest size={12} />
+    );
+
+  return (
+    <button
+      type="button"
+      aria-busy={loading}
+      disabled={busy}
+      onClick={() => onClick(change)}
+      className={cn(
+        "flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-50",
+        change === "draft"
+          ? "bg-bg-elevated text-fg-muted hover:text-fg"
+          : "bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25",
+      )}
+    >
+      {loading ? <Loader2 size={12} className="animate-spin" /> : icon}
+      {label}
+    </button>
+  );
+}
+
 function MergeActionButton({
   mergeable,
+  isDraft,
+  busy,
   onClick,
 }: {
   mergeable: string | null;
+  isDraft: boolean;
+  busy: boolean;
   onClick: () => void;
 }) {
   const t = useTranslation();
   const upper = mergeable?.toUpperCase() ?? null;
-  const ready = upper === "MERGEABLE";
+  const ready = upper === "MERGEABLE" && !isDraft && !busy;
   const conflicting = upper === "CONFLICTING";
   const button = (
     <button
@@ -1109,9 +1267,11 @@ function MergeActionButton({
   if (ready) {
     return button;
   }
-  const title = conflicting
-    ? dt(t, "dialogs.pullRequestDetail.cannotMergeConflicting")
-    : dt(t, "dialogs.pullRequestDetail.mergeReadinessPending");
+  const title = isDraft
+    ? dt(t, "dialogs.pullRequestDetail.draftMustBeReadyToMerge")
+    : conflicting
+      ? dt(t, "dialogs.pullRequestDetail.cannotMergeConflicting")
+      : dt(t, "dialogs.pullRequestDetail.mergeReadinessPending");
   return (
     <Tooltip label={title} side="bottom">
       {button}

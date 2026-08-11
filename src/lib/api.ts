@@ -33,6 +33,7 @@ import type {
   PullRequestDetailListing,
   PullRequestDiffListing,
   PullRequestListing,
+  PullRequestStateChange,
   Session,
   SessionAgentDetection,
   SessionAgentProvider,
@@ -662,6 +663,17 @@ export const api = {
   },
   closePullRequest(repoPath: string, number: number): Promise<void> {
     return invoke<void>("close_pull_request", { repoPath, number });
+  },
+  changePullRequestState(
+    repoPath: string,
+    number: number,
+    change: PullRequestStateChange,
+  ): Promise<void> {
+    return invoke<void>("change_pull_request_state", {
+      repoPath,
+      number,
+      change,
+    });
   },
   updatePullRequestBody(
     repoPath: string,

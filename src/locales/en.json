@@ -53,6 +53,7 @@
     "pullRequests": {
       "mergeFailed": "Failed to merge pull request:",
       "closeFailed": "Failed to close pull request:",
+      "stateChangeFailed": "Failed to change pull request state:",
       "bodyUpdateFailed": "Failed to update pull request:"
     }
   },
@@ -2438,6 +2439,10 @@
       "tabChecks": "Checks",
       "tabFiles": "Files",
       "merge": "Merge",
+      "readyForReview": "Ready for review",
+      "convertToDraft": "Convert to draft",
+      "reopen": "Reopen",
+      "draftMustBeReadyToMerge": "Mark as ready for review before merging.",
       "cannotMergeConflicting": "Cannot merge - conflicting branch",
       "mergeReadinessPending": "Merge readiness still being determined...",
       "resizePrBody": "Resize PR body",
