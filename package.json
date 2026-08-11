@@ -1,14 +1,16 @@
 {
   "name": "acorn",
   "private": true,
-  "version": "1.30.0",
+  "version": "1.31.0",
   "packageManager": "pnpm@9.15.0",
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
     ],
     "overrides": {
-      "brace-expansion": ">=5.0.8"
+      "brace-expansion": ">=5.0.8",
+      "js-yaml@>=4.0.0 <4.3.1": "4.3.1",
+      "nanoid@<3.3.17": "3.3.17"
     }
   },
   "type": "module",
@@ -35,10 +37,10 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@shikijs/core": "^4.3.1",
-    "@shikijs/engine-javascript": "^4.3.1",
-    "@shikijs/langs": "^4.3.1",
-    "@shikijs/themes": "^4.3.1",
+    "@shikijs/core": "^4.4.2",
+    "@shikijs/engine-javascript": "^4.4.2",
+    "@shikijs/langs": "^4.4.2",
+    "@shikijs/themes": "^4.4.2",
     "@tanstack/react-virtual": "^3.14.9",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
@@ -57,7 +59,7 @@
     "@xyflow/react": "12.11.2",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "lucide-react": "^1.27.0",
+    "lucide-react": "^1.29.0",
     "react": "^19.2.8",
     "react-diff-viewer-continued": "^4.4.0",
     "react-dom": "^19.2.8",
@@ -71,22 +73,22 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.0",
-    "@storybook/addon-docs": "10.5.5",
-    "@storybook/react-vite": "10.5.5",
+    "@playwright/test": "^1.62.1",
+    "@storybook/addon-docs": "10.5.7",
+    "@storybook/react-vite": "10.5.7",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.11.4",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^6.0.4",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
     "@vitest/ui": "^4.1.10",
     "esbuild": "^0.28.1",
     "jsdom": "^30.0.1",
-    "postcss": "^8.5.25",
-    "storybook": "10.5.5",
+    "postcss": "^8.5.26",
+    "storybook": "10.5.7",
     "tailwindcss": "^4.3.3",
     "typescript": "~7.0.2",
-    "vite": "^8.1.5",
+    "vite": "^8.2.1",
     "vite-console-forward-plugin": "^2.0.1",
     "vitest": "^4.1.10"
   }
