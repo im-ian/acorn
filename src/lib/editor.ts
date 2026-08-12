@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { showTranslatedErrorToast } from "./operationToasts";
 import { useSettings } from "./settings";
 
 /**
@@ -35,6 +36,32 @@ export async function openInConfiguredEditor(
   const args = parts.slice(1);
   await api.openInEditor(program, args, absolutePath);
   return true;
+}
+
+async function openEditorWithFeedback(
+  open: () => Promise<boolean | void>,
+): Promise<boolean> {
+  try {
+    const opened = await open();
+    return opened !== false;
+  } catch (error) {
+    showTranslatedErrorToast("toasts.files.editorOpenFailed", error);
+    return false;
+  }
+}
+
+/** Open through the configured/default editor and surface launch failures. */
+export function openFileInEditorWithFeedback(
+  absolutePath: string,
+): Promise<boolean> {
+  return openEditorWithFeedback(() => openFileInEditor(absolutePath));
+}
+
+/** Open only through the configured editor and surface launch failures. */
+export function openInConfiguredEditorWithFeedback(
+  absolutePath: string,
+): Promise<boolean> {
+  return openEditorWithFeedback(() => openInConfiguredEditor(absolutePath));
 }
 
 /** True when the user has configured an editor command in settings. */

@@ -727,6 +727,67 @@ test.describe("sidebar: project lifecycle", () => {
       .toBe(transcriptPath);
   });
 
+  test("session context menu surfaces configured editor launch errors", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ editor: { command: "code --wait" } }),
+      );
+    });
+    await tauri.handle("open_in_editor", () =>
+      Promise.reject("editor executable permission denied"),
+    );
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "editor-session",
+        name: "editor-session",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "waiting_for_input",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+        agent_provider: null,
+        agent_transcript_id: null,
+      },
+    ]);
+
+    await page.goto("/");
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /editor-session/ })
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Open Worktree in Editor" })
+      .click();
+
+    await expect(
+      page.getByText(
+        "Failed to open the path in the editor: editor executable permission denied",
+      ),
+    ).toBeVisible();
+  });
+
   test("session rows surface open PR and active process context", async ({
     page,
     tauri,
