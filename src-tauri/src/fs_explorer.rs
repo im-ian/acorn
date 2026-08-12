@@ -447,7 +447,7 @@ pub(crate) fn authorize_existing_path(state: &AppState, path: &Path) -> AppResul
         .map(|_| ())
 }
 
-fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+fn nearest_existing_ancestor(path: &Path) -> std::io::Result<Option<PathBuf>> {
     let mut current = Some(path);
     while let Some(candidate) = current {
         match std::fs::metadata(candidate) {

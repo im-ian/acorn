@@ -2858,7 +2858,7 @@ test.describe("terminal: spawn", () => {
 
     await expect(
       page.getByText(
-        "Failed to open file: permission denied while checking file",
+        "Failed to open terminal file link: permission denied while checking file",
       ),
     ).toBeVisible();
   });

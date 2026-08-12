@@ -978,7 +978,7 @@ export function Terminal({
             }
           } catch (err: unknown) {
             console.debug("[Terminal] fs_file_exists before open failed", err);
-            showTranslatedErrorToast("toasts.files.openFailed", err);
+            showTranslatedErrorToast("toasts.files.terminalLinkOpenFailed", err);
             return;
           }
         } else {
@@ -1014,7 +1014,7 @@ export function Terminal({
           }
           if (!path) {
             if (accessError) {
-              showTranslatedErrorToast("toasts.files.openFailed", accessError);
+              showTranslatedErrorToast("toasts.files.terminalLinkOpenFailed", accessError);
             }
             return;
           }
