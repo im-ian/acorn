@@ -1637,13 +1637,21 @@ export function AutonomousGoalDialog({
                   <Notice
                     tone={
                       selectedAgentCapabilities?.installed === false ||
-                      selectedAgentCapabilities?.source === "fallback"
+                      selectedAgentCapabilities?.source === "fallback" ||
+                      selectedAgentCapabilities?.warning
                         ? "neutral"
                         : "info"
                     }
                     density="compact"
                   >
-                    {capabilityStatusText()}
+                    <span className="flex flex-col gap-1">
+                      <span>{capabilityStatusText()}</span>
+                      {selectedAgentCapabilities?.warning ? (
+                        <span data-goal-capability-warning>
+                          {selectedAgentCapabilities.warning}
+                        </span>
+                      ) : null}
+                    </span>
                   </Notice>
 
                   {modelConfig.single_model ? (
