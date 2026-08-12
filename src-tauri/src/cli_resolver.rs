@@ -131,7 +131,7 @@ fn shell_resolve(name: &str) -> AppResult<PathBuf> {
     }
     #[cfg(not(windows))]
     {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let shell = crate::shell_runtime::interactive_shell().program;
         // `command -v` reports aliases in interactive zsh, which is exactly the
         // shell mode we need for rc-loaded PATH. Prefer shell-specific external
         // command lookup first, then fall back to POSIX `command -v`.
@@ -156,7 +156,8 @@ printf '<<<ACORN_CLI_PATH>>>%s<<<END>>>' \"$_acorn_path\"",
             .output()
             .map_err(|e| {
                 AppError::Other(format!(
-                    "failed to invoke shell {shell} to resolve {name}: {e}"
+                    "failed to invoke shell {} to resolve {name}: {e}",
+                    shell.display()
                 ))
             })?;
         let stdout = String::from_utf8_lossy(&out.stdout);
