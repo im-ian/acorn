@@ -209,7 +209,7 @@ pub fn attach<R: Runtime>(
 
     let registry_for_thread = Arc::clone(&registry);
     let handle_for_thread = Arc::clone(&handle);
-    std::thread::Builder::new()
+    let spawn_result = std::thread::Builder::new()
         .name(format!("acorn-daemon-stream-{session_id}"))
         .spawn(move || {
             pump_loop(
@@ -221,8 +221,28 @@ pub fn attach<R: Runtime>(
                 stop,
                 handle_for_thread,
             );
-        })?;
-    Ok(())
+        });
+    complete_attachment_spawn(&registry, session_id, &handle, spawn_result)
+}
+
+/// Finish publishing an attachment only when its pump thread exists. The
+/// registry entry is inserted before spawning so a concurrent attach can
+/// supersede it safely; if the OS refuses the worker thread, remove only this
+/// generation instead of leaving a handle that makes later calls believe the
+/// dead attachment is live.
+fn complete_attachment_spawn(
+    registry: &StreamRegistry,
+    session_id: Uuid,
+    handle: &Arc<StreamAttachment>,
+    spawn_result: std::io::Result<std::thread::JoinHandle<()>>,
+) -> std::io::Result<()> {
+    match spawn_result {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            registry.drop_attachment_if_current(&session_id, handle);
+            Err(err)
+        }
+    }
 }
 
 fn pump_loop<R: Runtime>(
@@ -387,6 +407,28 @@ mod tests {
         assert!(registry.attachment_matches_output_token(&id, Some(7)));
         assert!(!registry.attachment_matches_output_token(&id, Some(8)));
         assert!(registry.attachment_matches_output_token(&id, None));
+    }
+
+    #[test]
+    fn failed_pump_spawn_removes_the_unstarted_attachment() {
+        let registry = StreamRegistry::new();
+        let id = Uuid::new_v4();
+        let handle = test_attachment();
+        registry.insert(id, Arc::clone(&handle));
+
+        let result = complete_attachment_spawn(
+            &registry,
+            id,
+            &handle,
+            Err(std::io::Error::other("forced pump spawn failure")),
+        );
+
+        assert_eq!(
+            result.expect_err("spawn failure is returned").kind(),
+            std::io::ErrorKind::Other
+        );
+        assert!(!registry.contains(&id));
+        assert!(handle.stop.load(Ordering::SeqCst));
     }
 
     #[test]
