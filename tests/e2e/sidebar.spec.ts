@@ -4644,10 +4644,15 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(projectMenuButton).toBeVisible();
     await projectMenuButton.click();
 
+    const revealLabel = await page.evaluate(() =>
+      navigator.platform.startsWith("Mac")
+        ? "Reveal in Finder"
+        : "Reveal in File Manager",
+    );
     const expectedProjectActions = [
       "Add source folder",
       "Project Settings",
-      "Reveal in File Manager",
+      revealLabel,
       "Copy path",
       "Close project",
     ];

@@ -6,6 +6,7 @@ const apiMocks = vi.hoisted(() => ({
   fsGitStatus: vi.fn(),
   fsGitDiffStats: vi.fn(),
   fsListDir: vi.fn(),
+  fsRename: vi.fn(),
   fsShellEditor: vi.fn(),
   fsOpenDefault: vi.fn(),
   ptyWrite: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock("../lib/api", () => ({
     fsGitStatus: apiMocks.fsGitStatus,
     fsGitDiffStats: apiMocks.fsGitDiffStats,
     fsListDir: apiMocks.fsListDir,
+    fsRename: apiMocks.fsRename,
     fsShellEditor: apiMocks.fsShellEditor,
     fsOpenDefault: apiMocks.fsOpenDefault,
     ptyWrite: apiMocks.ptyWrite,
@@ -90,6 +92,7 @@ describe("FileExplorer filesystem listener", () => {
     storeMocks.activeSessionId = null;
 
     apiMocks.fsShellEditor.mockResolvedValue("");
+    apiMocks.fsRename.mockResolvedValue(undefined);
     apiMocks.fsOpenDefault.mockResolvedValue(undefined);
     apiMocks.ptyWrite.mockResolvedValue(undefined);
     apiMocks.detectSessionAgent.mockResolvedValue({
@@ -256,6 +259,76 @@ describe("FileExplorer filesystem listener", () => {
     expect(editorMocks.openFileInEditor).toHaveBeenCalledWith(filePath);
     expect(apiMocks.fsShellEditor).not.toHaveBeenCalled();
     expect(apiMocks.ptyWrite).not.toHaveBeenCalled();
+  });
+
+  it("preserves literal backslashes when renaming a POSIX file", async () => {
+    const filePath = "/tmp/acorn/old\\name.md";
+    apiMocks.fsListDir.mockResolvedValue({
+      entries: [
+        {
+          name: "old\\name.md",
+          path: filePath,
+          is_dir: false,
+          is_symlink: false,
+          size: 1,
+          modified_ms: 1,
+          gitignored: false,
+        },
+      ],
+      repo_root: "/tmp/acorn",
+    });
+
+    await act(async () => {
+      root?.render(<FileExplorer rootPath="/tmp/acorn" />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const fileButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("old\\name.md"),
+    );
+    expect(fileButton).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      fileButton?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 20,
+          clientY: 20,
+        }),
+      );
+    });
+    const renameButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((button) => button.textContent?.includes("fileExplorer.menu.rename"));
+    expect(renameButton).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => renameButton?.click());
+    const input = document.querySelector<HTMLInputElement>(
+      'input[aria-label="fileExplorer.tree.renameInput"]',
+    );
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    expect(valueSetter).toBeTypeOf("function");
+    act(() => {
+      valueSetter?.call(input, "new\\name.md");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      input?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.fsRename).toHaveBeenCalledWith(
+      filePath,
+      "/tmp/acorn/new\\name.md",
+    );
   });
 
   it("queues one follow-up diff-stat refresh instead of overlapping a slow request", async () => {

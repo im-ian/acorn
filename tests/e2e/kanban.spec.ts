@@ -1043,6 +1043,11 @@ test.describe("workspace kanban mode", () => {
       clientY: shellMenuTargetBox.y + shellMenuTargetBox.height / 2,
     });
     const cardMenu = page.getByRole("menu");
+    const revealLabel = await page.evaluate(() =>
+      navigator.platform.startsWith("Mac")
+        ? "Reveal in Finder"
+        : "Reveal in File Manager",
+    );
     await expect(cardMenu.getByRole("menuitem")).toHaveText([
       "Rename",
       "Regenerate Name",
@@ -1050,7 +1055,7 @@ test.describe("workspace kanban mode", () => {
       "Silence Notifications",
       "Open Work Summary",
       "Open Worktree in Editor",
-      "Reveal in File Manager",
+      revealLabel,
       "Copy",
       "Remove Session",
     ]);
@@ -1118,7 +1123,7 @@ test.describe("workspace kanban mode", () => {
       page.getByRole("menuitem", { name: "Silence Notifications" }),
     ).toBeVisible();
     await expect(
-      page.getByRole("menuitem", { name: "Reveal in File Manager" }),
+      page.getByRole("menuitem", { name: revealLabel }),
     ).toBeVisible();
     await page.getByRole("menuitem", { name: "Rename" }).click();
     const titleInput = page.getByTestId(
