@@ -922,7 +922,8 @@
       "multiInputOff": "다중 입력을 껐습니다.",
       "shellEnvironmentReloaded": "셸 환경을 다시 불러왔습니다. 적용하려면 새 세션을 여세요.",
       "shellEnvironmentReloadFailed": "셸 환경을 다시 불러오지 못했습니다.",
-      "preventSleepSyncFailedPrefix": "잠자기 방지 설정을 적용하지 못했습니다:"
+      "preventSleepSyncFailedPrefix": "잠자기 방지 설정을 적용하지 못했습니다:",
+      "controlGuidePreferenceSaveFailed": "제어 세션 안내 설정을 저장하지 못했습니다."
     }
   },
   "statusBar": {

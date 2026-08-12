@@ -3805,6 +3805,42 @@ describe("createSession", () => {
     }
   });
 
+  it("keeps a created control session when the guide preference is inaccessible", async () => {
+    const events: Event[] = [];
+    const listener = (event: Event) => events.push(event);
+    const originalGetItem = Storage.prototype.getItem;
+    const storageError = new DOMException("storage blocked", "SecurityError");
+    const getItem = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(function (this: Storage, key: string) {
+        if (key === guideKey) throw storageError;
+        return originalGetItem.call(this, key);
+      });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    window.addEventListener("acorn:show-control-guide", listener);
+    try {
+      mockApi.createSession.mockResolvedValueOnce(
+        session("ctl", REPO_A, { kind: "control" }),
+      );
+
+      const created = await useAppStore
+        .getState()
+        .createSession("ctl", REPO_A, false, "control");
+
+      expect(created?.id).toBe("ctl");
+      expect(useAppStore.getState().error).toBeNull();
+      expect(events).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith(
+        "[store] control guide preference read failed",
+        storageError,
+      );
+    } finally {
+      window.removeEventListener("acorn:show-control-guide", listener);
+      getItem.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
   it("suppresses the guide event when the dismissed flag is set", async () => {
     window.localStorage.setItem(guideKey, "1");
     const events: Event[] = [];

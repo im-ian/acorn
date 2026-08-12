@@ -922,7 +922,8 @@
       "multiInputOff": "Multi-input disabled.",
       "shellEnvironmentReloaded": "Shell environment reloaded. Open a new session to apply.",
       "shellEnvironmentReloadFailed": "Failed to reload shell environment.",
-      "preventSleepSyncFailedPrefix": "Could not apply the keep-awake setting:"
+      "preventSleepSyncFailedPrefix": "Could not apply the keep-awake setting:",
+      "controlGuidePreferenceSaveFailed": "Couldn't save the control-session guide preference."
     }
   },
   "statusBar": {
