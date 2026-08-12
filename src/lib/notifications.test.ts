@@ -72,6 +72,9 @@ describe("notifications", () => {
     vi.clearAllMocks();
     mocks.isPermissionGranted.mockResolvedValue(true);
     mocks.requestPermission.mockResolvedValue("granted");
+    mocks.show.mockResolvedValue(undefined);
+    mocks.unminimize.mockResolvedValue(undefined);
+    mocks.setFocus.mockResolvedValue(undefined);
     Object.defineProperty(document, "hasFocus", {
       configurable: true,
       value: () => true,
@@ -186,7 +189,22 @@ describe("notifications", () => {
     const unregister = vi.fn();
     mocks.onAction.mockResolvedValue({ unregister });
     const openSessionSurface = vi.fn(() => true);
-    useAppStore.setState({ openSessionSurface });
+    useAppStore.setState({
+      openSessionSurface,
+      sessionNotifications: [
+        {
+          id: "notification-1",
+          sessionId: "session-1",
+          kind: "waiting_for_input",
+          status: "waiting_for_input",
+          previousStatus: "working",
+          sessionName: "Agent",
+          projectName: "acorn",
+          repoPath: "/repo/acorn",
+          createdAt: "2026-01-01T00:01:00Z",
+        },
+      ],
+    });
 
     const dispose = await startNotificationClickHandler();
     const handleAction = mocks.onAction.mock.calls[0]?.[0] as
@@ -196,6 +214,7 @@ describe("notifications", () => {
     if (!handleAction) throw new Error("notification action handler missing");
 
     handleAction({ extra: { sessionId: "session-1" } });
+    await flushPromises();
 
     expect(openSessionSurface).toHaveBeenCalledWith("session-1", {
       centerInCanvas: true,
@@ -203,9 +222,67 @@ describe("notifications", () => {
     expect(mocks.show).toHaveBeenCalled();
     expect(mocks.unminimize).toHaveBeenCalled();
     expect(mocks.setFocus).toHaveBeenCalled();
+    expect(useAppStore.getState().sessionNotifications).toEqual([]);
 
     dispose();
     expect(unregister).toHaveBeenCalled();
+  });
+
+  it("reports click-listener registration failures without rejecting", async () => {
+    mocks.onAction.mockRejectedValueOnce(new Error("listener denied"));
+    const onFailure = vi.fn();
+
+    const dispose = await startNotificationClickHandler(onFailure);
+
+    expect(onFailure).toHaveBeenCalledWith(
+      "registration",
+      expect.objectContaining({ message: "listener denied" }),
+    );
+    expect(() => dispose()).not.toThrow();
+  });
+
+  it("keeps activity unread when the clicked notification cannot activate the window", async () => {
+    mocks.onAction.mockResolvedValue({ unregister: vi.fn() });
+    mocks.show.mockRejectedValueOnce(new Error("window access denied"));
+    const onFailure = vi.fn();
+    const openSessionSurface = vi.fn(() => true);
+    useAppStore.setState({
+      openSessionSurface,
+      sessionNotifications: [
+        {
+          id: "notification-1",
+          sessionId: "session-1",
+          kind: "waiting_for_input",
+          status: "waiting_for_input",
+          previousStatus: "working",
+          sessionName: "Agent",
+          projectName: "acorn",
+          repoPath: "/repo/acorn",
+          createdAt: "2026-01-01T00:01:00Z",
+        },
+      ],
+    });
+    const dispose = await startNotificationClickHandler(onFailure);
+    const handleAction = mocks.onAction.mock.calls[0]?.[0] as
+      | ((notification: { extra?: Record<string, unknown> }) => void)
+      | undefined;
+    if (!handleAction) throw new Error("notification action handler missing");
+
+    handleAction({ extra: { sessionId: "session-1" } });
+    await flushPromises();
+
+    expect(openSessionSurface).toHaveBeenCalledWith("session-1", {
+      centerInCanvas: true,
+    });
+    expect(mocks.show).toHaveBeenCalled();
+    expect(mocks.unminimize).toHaveBeenCalled();
+    expect(mocks.setFocus).toHaveBeenCalled();
+    expect(onFailure).toHaveBeenCalledWith(
+      "activation",
+      expect.objectContaining({ message: "window access denied" }),
+    );
+    expect(useAppStore.getState().sessionNotifications).toHaveLength(1);
+    dispose();
   });
 
   it("marks a focused session transition read instead of sending a system notification", async () => {
