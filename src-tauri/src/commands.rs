@@ -6945,12 +6945,63 @@ fn sessions_using_linked_worktree(
         .collect()
 }
 
+fn process_tree_uses_worktree_path(sys: &System, root: Pid, worktree_path: &Path) -> bool {
+    let mut frontier = vec![root];
+    let mut visited = HashSet::new();
+    while let Some(pid) = frontier.pop() {
+        if !visited.insert(pid) {
+            continue;
+        }
+        let Some(process) = sys.process(pid) else {
+            continue;
+        };
+        let uses_worktree = process
+            .cwd()
+            .and_then(|cwd| {
+                let repo = git2::Repository::discover(cwd).ok()?;
+                repo.workdir().map(Path::to_path_buf)
+            })
+            .is_some_and(|root| worktree::same_path(&root, worktree_path));
+        if uses_worktree {
+            return true;
+        }
+        for (child_pid, child) in sys.processes() {
+            if child.parent() == Some(pid) && !visited.contains(child_pid) {
+                frontier.push(*child_pid);
+            }
+        }
+    }
+    false
+}
+
 fn sessions_using_worktree_path(state: &AppState, worktree_path: &Path) -> Vec<Session> {
-    state
-        .sessions
-        .list()
+    let sessions = state.sessions.list();
+    let root_pids: HashMap<Uuid, u32> = sessions
+        .iter()
+        .filter_map(|session| session_root_pid(state, &session.id).map(|pid| (session.id, pid)))
+        .collect();
+    let mut sys = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+    );
+    if !root_pids.is_empty() {
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
+        );
+    }
+
+    sessions
         .into_iter()
-        .filter(|session| worktree::same_path(&session.worktree_path, worktree_path))
+        .filter(|session| {
+            if worktree::same_path(&session.worktree_path, worktree_path) {
+                return true;
+            }
+            let Some(root_pid) = root_pids.get(&session.id) else {
+                return false;
+            };
+            process_tree_uses_worktree_path(&sys, Pid::from_u32(*root_pid), worktree_path)
+        })
         .collect()
 }
 
@@ -15865,6 +15916,61 @@ mod tests {
 
         assert_eq!(err.to_string(), super::WORKTREE_IN_USE_BY_OTHER_SESSIONS);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worktree_delete_guard_rejects_peer_session_with_live_cwd_on_worktree() {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::new())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("build mock app");
+        let state = app.state::<AppState>();
+        state.daemon_bridge.set_enabled(false);
+
+        let repo_dir = unique_repo_dir("live-worktree-guard");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let worktree_path =
+            crate::worktree::create_worktree(&repo_dir, "shared").expect("create linked worktree");
+        let active = state.sessions.insert(worktree_session(
+            "active",
+            &repo_dir.display().to_string(),
+            &worktree_path.display().to_string(),
+        ));
+        let peer = state.sessions.insert(scoped_session(
+            "peer",
+            &repo_dir.display().to_string(),
+            true,
+        ));
+        state
+            .pty
+            .spawn(
+                app.handle().clone(),
+                Arc::new(|_, _, _| {}),
+                peer.id,
+                worktree_path.clone(),
+                "/bin/cat".to_string(),
+                Vec::new(),
+                |_| {},
+                80,
+                24,
+            )
+            .expect("spawn peer PTY in linked worktree");
+
+        let err = super::ensure_no_sessions_using_worktree_path_except(
+            &state,
+            &worktree_path,
+            Some(&active.id),
+        )
+        .expect_err("peer live cwd should block worktree deletion");
+
+        let message = err.to_string();
+        state.pty.kill(&peer.id).expect("kill peer PTY");
+        crate::worktree::remove_worktree_at_path(&repo_dir, &worktree_path)
+            .expect("remove linked worktree");
+        std::fs::remove_dir_all(&repo_dir).ok();
+        assert_eq!(message, super::WORKTREE_IN_USE_BY_OTHER_SESSIONS);
     }
 
     #[test]
