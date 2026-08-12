@@ -55,10 +55,20 @@ pub fn ensure_shell_init_dir() -> io::Result<PathBuf> {
 fn ensure_shell_init_dir_at(base: &Path) -> io::Result<PathBuf> {
     let dir = base.join(SHELL_INIT_DIR_NAME);
     fs::create_dir_all(&dir)?;
-    fs::write(dir.join(ZSHENV_NAME), ZSHENV_BODY)?;
-    fs::write(dir.join(ZPROFILE_NAME), ZPROFILE_BODY)?;
-    fs::write(dir.join(ZSHRC_NAME), ZSHRC_BODY)?;
-    fs::write(dir.join(ZLOGIN_NAME), ZLOGIN_BODY)?;
+    let metadata = fs::symlink_metadata(&dir)?;
+    if !metadata.file_type().is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "shell init path is not a plain directory: {}",
+                dir.display()
+            ),
+        ));
+    }
+    acorn_platform::fs::write_atomic(&dir.join(ZSHENV_NAME), ZSHENV_BODY.as_bytes())?;
+    acorn_platform::fs::write_atomic(&dir.join(ZPROFILE_NAME), ZPROFILE_BODY.as_bytes())?;
+    acorn_platform::fs::write_atomic(&dir.join(ZSHRC_NAME), ZSHRC_BODY.as_bytes())?;
+    acorn_platform::fs::write_atomic(&dir.join(ZLOGIN_NAME), ZLOGIN_BODY.as_bytes())?;
     Ok(dir)
 }
 
@@ -233,6 +243,49 @@ mod tests {
         symlink("/dev/zero", &zshenv).unwrap();
 
         assert!(!is_shell_init_dir(&dir));
+    }
+
+    #[test]
+    fn shell_init_replaces_linked_leaves_without_touching_peers() {
+        use std::os::unix::fs::symlink;
+
+        let base = ScratchDir::new("replace-links");
+        let dir = ensure_shell_init_dir_at(base.path()).unwrap();
+        let sentinel = base.path().join("sentinel");
+        fs::write(&sentinel, b"keep me").unwrap();
+
+        let zshenv = dir.join(ZSHENV_NAME);
+        fs::remove_file(&zshenv).unwrap();
+        symlink(&sentinel, &zshenv).unwrap();
+        ensure_shell_init_dir_at(base.path()).unwrap();
+
+        assert_eq!(fs::read(&sentinel).unwrap(), b"keep me");
+        assert!(fs::symlink_metadata(&zshenv).unwrap().file_type().is_file());
+        assert_eq!(fs::read_to_string(&zshenv).unwrap(), ZSHENV_BODY);
+
+        let zshrc = dir.join(ZSHRC_NAME);
+        fs::remove_file(&zshrc).unwrap();
+        fs::hard_link(&sentinel, &zshrc).unwrap();
+        ensure_shell_init_dir_at(base.path()).unwrap();
+
+        assert_eq!(fs::read(&sentinel).unwrap(), b"keep me");
+        assert_eq!(fs::read_to_string(&zshrc).unwrap(), ZSHRC_BODY);
+    }
+
+    #[test]
+    fn shell_init_rejects_a_linked_managed_directory() {
+        use std::os::unix::fs::symlink;
+
+        let base = ScratchDir::new("linked-directory");
+        let outside = base.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, base.path().join(SHELL_INIT_DIR_NAME)).unwrap();
+
+        let error = ensure_shell_init_dir_at(base.path())
+            .expect_err("a linked managed directory must not be populated");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
     }
 
     #[test]
