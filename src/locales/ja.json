@@ -54,6 +54,9 @@
       "restarted": "IPCサーバーが再起動されました。",
       "restartFailed": "IPC サーバーの再起動に失敗しました:"
     },
+    "clipboard": {
+      "writeFailed": "クリップボードに書き込めませんでした:"
+    },
     "files": {
       "renameFailed": "ファイル名の変更に失敗しました:",
       "trashFailed": "ゴミ箱に移動できませんでした:",

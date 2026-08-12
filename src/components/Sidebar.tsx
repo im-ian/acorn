@@ -76,7 +76,7 @@ import {
   createEmptySessionAgentDetection,
 } from "../lib/agentContextMenu";
 import { api, type SessionRemoval } from "../lib/api";
-import { writeClipboardText } from "../lib/clipboardText";
+import { copyTextWithFeedback } from "../lib/clipboardActions";
 import {
   EDIT_AUTONOMOUS_GOAL_SESSION_EVENT,
   NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
@@ -2344,11 +2344,7 @@ function ProjectGroupView({
   }
 
   async function copyText(text: string) {
-    try {
-      await writeClipboardText(text);
-    } catch {
-      // ignore
-    }
+    await copyTextWithFeedback(text);
   }
 
   async function openInFinder(path: string) {
@@ -3199,7 +3195,7 @@ function ProjectFolderView({
             label: sidebarText(t, "sidebar.actions.copyPath"),
             icon: <Copy size={12} />,
             onClick: () => {
-              void copyToClipboard(folder.cwdPath);
+              void copyTextWithFeedback(folder.cwdPath);
             },
           },
           contextMenuGroupTitle(t, "danger"),
@@ -3599,32 +3595,33 @@ function SessionRow({
         {
           label: sidebarText(t, "sidebar.actions.worktreePath"),
           icon: <Copy size={12} />,
-          onClick: () => void copyToClipboard(session.worktree_path),
+          onClick: () => void copyTextWithFeedback(session.worktree_path),
         },
         ...(transcriptPath
           ? [
               {
                 label: sidebarText(t, "sidebar.actions.transcriptPath"),
                 icon: <Copy size={12} />,
-                onClick: () => void copyToClipboard(transcriptPath),
+                onClick: () => void copyTextWithFeedback(transcriptPath),
               } satisfies ContextMenuItem,
             ]
           : []),
         {
           label: sidebarText(t, "sidebar.actions.worktreeName"),
           icon: <Copy size={12} />,
-          onClick: () => void copyToClipboard(basename(session.worktree_path)),
+          onClick: () =>
+            void copyTextWithFeedback(basename(session.worktree_path)),
         },
         {
           label: sidebarText(t, "sidebar.actions.branchName"),
           icon: <Copy size={12} />,
-          onClick: () => void copyToClipboard(session.branch),
+          onClick: () => void copyTextWithFeedback(session.branch),
           disabled: !session.branch,
         },
         {
           label: sidebarText(t, "sidebar.actions.sessionId"),
           icon: <Copy size={12} />,
-          onClick: () => void copyToClipboard(session.id),
+          onClick: () => void copyTextWithFeedback(session.id),
         },
       ],
     },
@@ -3934,14 +3931,6 @@ function SessionStatusMarker({
       )}
     </span>
   );
-}
-
-async function copyToClipboard(text: string): Promise<void> {
-  try {
-    await writeClipboardText(text);
-  } catch (err) {
-    console.warn("[Sidebar] clipboard write failed", err);
-  }
 }
 
 interface RenameInputProps {
@@ -4636,7 +4625,7 @@ function LocalWorkspaceView({
       label: sidebarText(t, "sidebar.actions.copyPath"),
       icon: <Copy size={12} />,
       onClick: () => {
-        void copyToClipboard(folder.cwdPath);
+        void copyTextWithFeedback(folder.cwdPath);
       },
     },
     contextMenuGroupTitle(t, "danger"),
@@ -4970,14 +4959,14 @@ function LocalSessionRow({
     {
       label: sidebarText(t, "sidebar.actions.copyWorktreePath"),
       icon: <Copy size={12} />,
-      onClick: () => void copyToClipboard(session.worktree_path),
+      onClick: () => void copyTextWithFeedback(session.worktree_path),
     },
     ...(transcriptPath
       ? [
           {
             label: sidebarText(t, "sidebar.actions.copyTranscriptPath"),
             icon: <Copy size={12} />,
-            onClick: () => void copyToClipboard(transcriptPath),
+            onClick: () => void copyTextWithFeedback(transcriptPath),
           } satisfies ContextMenuItem,
         ]
       : []),

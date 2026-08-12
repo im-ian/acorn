@@ -666,7 +666,7 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(tooltip.locator("svg")).toHaveCount(6);
   });
 
-  test("session context menu copies the paired transcript path", async ({
+  test("session context menu copies transcript paths and surfaces clipboard denial", async ({
     page,
     tauri,
   }) => {
@@ -725,6 +725,23 @@ test.describe("sidebar: project lifecycle", () => {
         ),
       )
       .toBe(transcriptPath);
+
+    await page.evaluate(() => {
+      window.__ACORN_MOCK_HANDLERS__["plugin:clipboard-manager|write_text"] =
+        () => Promise.reject("clipboard permission denied");
+    });
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /copyable-session/ })
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Copy" }).hover();
+    await page.getByRole("menuitem", { name: "Transcript Path" }).click();
+
+    await expect(
+      page.getByText(
+        "Failed to write to the clipboard: clipboard permission denied",
+      ),
+    ).toBeVisible();
   });
 
   test("session rows surface open PR and active process context", async ({

@@ -25,7 +25,7 @@ import {
 import { Panel } from "react-resizable-panels";
 import { PersistentGroup } from "./PersistentGroup";
 import { api } from "../lib/api";
-import { writeClipboardText } from "../lib/clipboardText";
+import { copyTextWithFeedback } from "../lib/clipboardActions";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -1762,7 +1762,7 @@ function CommitListItem({
     {
       label: dt(t, "dialogs.pullRequestDetail.copySha"),
       icon: <Copy size={12} />,
-      onClick: () => void writeClipboardText(commit.oid),
+      onClick: () => void copyTextWithFeedback(commit.oid),
     },
   ];
 
@@ -1927,7 +1927,7 @@ function CommitDetailView({
         <button
           type="button"
           onClick={() => {
-            void writeClipboardText(commit.oid);
+            void copyTextWithFeedback(commit.oid);
           }}
           className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
