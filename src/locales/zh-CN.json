@@ -1193,6 +1193,8 @@
   },
   "ui": {
     "openGitHubProfile": "打开 GitHub 配置文件",
+    "revealInFinder": "在 Finder 中显示",
+    "revealInFileManager": "在文件管理器中显示",
     "stepper": {
       "decrease": "减少",
       "increase": "增加",
@@ -1251,7 +1253,6 @@
       "moveToProjectRoot": "项目根目录",
       "projectSettings": "项目设置",
       "closeProject": "关闭项目",
-      "revealInFinder": "在文件管理器中显示",
       "copy": "复制",
       "copyPath": "复制路径",
       "rename": "重命名",
@@ -1608,7 +1609,6 @@
       "equalizePaneSizes": "均衡窗格大小",
       "openWorktreeInEditor": "在编辑器中打开工作树",
       "openFileInEditor": "在编辑器中打开文件",
-      "revealInFinder": "在文件管理器中显示",
       "copy": "复制",
       "worktreePath": "工作树路径",
       "filePath": "文件路径",
@@ -1933,8 +1933,7 @@
       "openIn": "打开方式",
       "openInNewTab": "在新标签页中打开",
       "openWithDefaultProgram": "使用默认程序打开",
-      "rename": "重命名",
-      "revealInFileManager": "在文件管理器中显示"
+      "rename": "重命名"
     },
     "search": {
       "close": "关闭 (Esc)",

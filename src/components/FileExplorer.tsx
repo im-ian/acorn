@@ -38,6 +38,7 @@ import {
 import { cn } from "../lib/cn";
 import { writeClipboardText } from "../lib/clipboardText";
 import { openFileInEditor } from "../lib/editor";
+import { revealInFileManagerText } from "../lib/fileManager";
 import { retainRecentGitStatPaths } from "../lib/fileExplorerGitStats";
 import { matchesHotkeyEvent } from "../lib/hotkeys";
 import {
@@ -1281,7 +1282,7 @@ export function FileExplorer({
     }
     if (entry) {
       items.push({
-        label: fileExplorerText(t, "fileExplorer.menu.revealInFileManager"),
+        label: revealInFileManagerText(t),
         icon: <ExternalLink size={13} />,
         onClick: () => {
           void api.fsReveal(entry.path).catch((e) => {

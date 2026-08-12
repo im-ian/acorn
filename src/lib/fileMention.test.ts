@@ -79,4 +79,13 @@ describe("formatTerminalFileMention", () => {
       ),
     ).toBe("docs/guide.md ");
   });
+
+  it("escapes rather than rewrites literal backslashes in POSIX filenames", () => {
+    expect(
+      formatTerminalFileMention(
+        "/Users/me/repo/docs/back\\slash.md",
+        "/Users/me/repo",
+      ),
+    ).toBe("docs/back\\\\slash.md ");
+  });
 });

@@ -88,6 +88,7 @@ import {
   type NewGraphSessionEventDetail,
 } from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
+import { revealInFileManagerText } from "../lib/fileManager";
 import { openInConfiguredEditor } from "../lib/editor";
 import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -2368,7 +2369,7 @@ function ProjectGroupView({
       onClick: onOpenSettings,
     },
     {
-      label: sidebarText(t, "sidebar.actions.revealInFinder"),
+      label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
       onClick: () => {
         void openInFinder(project.repoPath);
@@ -3176,7 +3177,7 @@ function ProjectFolderView({
             onClick: () => setEditing(true),
           },
           {
-            label: sidebarText(t, "sidebar.actions.revealInFinder"),
+            label: revealInFileManagerText(t),
             icon: <FolderOpen size={12} />,
             onClick: () => {
               void api.fsReveal(folder.cwdPath);
@@ -3567,7 +3568,7 @@ function SessionRow({
       },
     },
     {
-      label: sidebarText(t, "sidebar.actions.revealInFinder"),
+      label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
       onClick: () => {
         void api.fsReveal(session.worktree_path).catch((err: unknown) => {
@@ -4611,7 +4612,7 @@ function LocalWorkspaceView({
       onClick: () => setEditing(true),
     },
     {
-      label: sidebarText(t, "sidebar.actions.revealInFinder"),
+      label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
       onClick: () => {
         void api.fsReveal(folder.cwdPath);
@@ -4946,7 +4947,7 @@ function LocalSessionRow({
       : []),
     { type: "separator" },
     {
-      label: sidebarText(t, "sidebar.actions.revealInFinder"),
+      label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
       onClick: () => {
         void api.fsReveal(session.worktree_path).catch((err: unknown) => {

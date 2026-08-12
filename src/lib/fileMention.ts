@@ -1,10 +1,15 @@
 import { getAgentMentionPrefix } from "./agentProviderRegistry";
-import { normalizePath, pathsEqual, relativePath } from "./pathUtils";
+import {
+  inferPathFlavor,
+  normalizePath,
+  pathsEqual,
+  relativePath,
+} from "./pathUtils";
 import type { SessionAgentProvider } from "./types";
 
 export function pathRelativeToCwd(filePath: string, cwd: string): string {
   if (pathsEqual(filePath, cwd)) return ".";
-  return normalizePath(relativePath(cwd, filePath));
+  return normalizePath(relativePath(cwd, filePath), inferPathFlavor(cwd));
 }
 
 function escapeMentionPath(path: string): string {
