@@ -77,17 +77,13 @@ fn bind_platform(endpoint: &Path) -> io::Result<Listener> {
     if let Some(parent) = endpoint.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    if endpoint.exists() {
-        let _ = std::fs::remove_file(endpoint);
-    }
+    remove_stale_endpoint(endpoint)?;
 
     // Keep the staging name deterministic and shorter than the canonical
     // socket. The listener's reclaim guard is disabled because the bound
     // pathname is renamed before the listener is dropped.
     let staging = endpoint.with_extension("tmp");
-    if staging.exists() {
-        let _ = std::fs::remove_file(&staging);
-    }
+    remove_stale_endpoint(&staging)?;
     let name = endpoint_name(&staging)?;
     let listener = ListenerOptions::new()
         .name(name)
@@ -104,6 +100,50 @@ fn bind_platform(endpoint: &Path) -> io::Result<Listener> {
         return Err(err);
     }
     Ok(listener)
+}
+
+#[cfg(unix)]
+fn remove_stale_endpoint(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::FileTypeExt;
+
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(endpoint_inspection_error(path, error)),
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() || (!file_type.is_file() && !file_type.is_socket()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "local IPC endpoint is not a regular file or Unix socket: {}",
+                path.display()
+            ),
+        ));
+    }
+    std::fs::remove_file(path).map_err(|error| endpoint_removal_error(path, error))
+}
+
+#[cfg(unix)]
+fn endpoint_inspection_error(path: &Path, error: io::Error) -> io::Error {
+    io::Error::new(
+        error.kind(),
+        format!(
+            "failed to inspect stale local IPC endpoint {}: {error}",
+            path.display()
+        ),
+    )
+}
+
+#[cfg(unix)]
+fn endpoint_removal_error(path: &Path, error: io::Error) -> io::Error {
+    io::Error::new(
+        error.kind(),
+        format!(
+            "failed to remove stale local IPC endpoint {}: {error}",
+            path.display()
+        ),
+    )
 }
 
 #[cfg(windows)]
@@ -310,6 +350,102 @@ mod tests {
         drop((server, listener));
         cleanup(&endpoint);
         assert!(!endpoint.exists());
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bind_rejects_symlinked_canonical_endpoint_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let scratch = tempfile_dir();
+        let target = scratch.join("keep.txt");
+        let endpoint = scratch.join("linked.sock");
+        std::fs::write(&target, b"keep").expect("write target");
+        symlink(&target, &endpoint).expect("create endpoint symlink");
+
+        let error = bind(&endpoint).expect_err("a linked endpoint must not be reclaimed");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+        assert!(std::fs::symlink_metadata(&endpoint)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bind_rejects_symlinked_staging_endpoint_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let scratch = tempfile_dir();
+        let target = scratch.join("keep.txt");
+        let endpoint = scratch.join("canonical.sock");
+        let staging = endpoint.with_extension("tmp");
+        std::fs::write(&target, b"keep").expect("write target");
+        symlink(&target, &staging).expect("create staging symlink");
+
+        let error = bind(&endpoint).expect_err("a linked staging endpoint must not be reclaimed");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+        assert!(std::fs::symlink_metadata(&staging)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_endpoint_probe_preserves_parent_access_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = tempfile_dir();
+        let blocked = scratch.join("blocked");
+        let endpoint = blocked.join("endpoint.sock");
+        std::fs::create_dir(&blocked).expect("create blocked parent");
+        let original = std::fs::metadata(&blocked).unwrap().permissions();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))
+            .expect("deny parent access");
+
+        let result = remove_stale_endpoint(&endpoint);
+        let permission_denied = matches!(
+            std::fs::symlink_metadata(&endpoint),
+            Err(ref error) if error.kind() == io::ErrorKind::PermissionDenied
+        );
+
+        std::fs::set_permissions(&blocked, original).expect("restore parent access");
+        if permission_denied {
+            let error = result.expect_err("access failure must remain an error");
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(error.to_string().contains(&endpoint.display().to_string()));
+        }
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_endpoint_removal_preserves_permission_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = tempfile_dir();
+        let endpoint = scratch.join("endpoint.sock");
+        std::fs::write(&endpoint, b"stale").expect("write stale marker");
+        let original = std::fs::metadata(&scratch).unwrap().permissions();
+        std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o500))
+            .expect("deny marker removal");
+
+        let result = remove_stale_endpoint(&endpoint);
+
+        std::fs::set_permissions(&scratch, original).expect("restore parent access");
+        if endpoint.exists() {
+            let error = result.expect_err("removal failure must remain an error");
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(error.to_string().contains(&endpoint.display().to_string()));
+        }
         let _ = std::fs::remove_dir_all(scratch);
     }
 
