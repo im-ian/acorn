@@ -20,7 +20,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{File, Metadata};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -99,20 +99,25 @@ fn locate_transcript_in(
     session_id: &str,
     limits: ReplayLimits,
 ) -> AppResult<Option<PathBuf>> {
-    if !root.exists() {
-        return Ok(None);
+    match root.try_exists() {
+        Ok(true) => {}
+        Ok(false) => return Ok(None),
+        Err(error) => return Err(error.into()),
     }
     let target = transcript_file_name(session_id)?;
     // The configured root itself may intentionally be a symlink (for example,
     // to another volume). Resolve it once, then reject links below that root.
     let canonical_root = match root.canonicalize() {
         Ok(root) => root,
-        Err(_) => return Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
     };
     let entries = match std::fs::read_dir(&canonical_root) {
         Ok(e) => e,
-        Err(_) => return Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
     };
+    let mut first_error = None;
     for (index, entry) in entries.enumerate() {
         if index >= limits.max_project_dir_entries {
             return Err(limit_error(
@@ -120,28 +125,53 @@ fn locate_transcript_in(
                 limits.max_project_dir_entries,
             ));
         }
-        let Ok(entry) = entry else { continue };
-        let Ok(entry_type) = entry.file_type() else {
-            continue;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                first_error.get_or_insert(error);
+                continue;
+            }
+        };
+        let entry_type = match entry.file_type() {
+            Ok(entry_type) => entry_type,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                first_error.get_or_insert(error);
+                continue;
+            }
         };
         if !entry_type.is_dir() {
             continue;
         }
         let candidate = entry.path().join(&target);
-        let Ok(candidate_meta) = std::fs::symlink_metadata(&candidate) else {
-            continue;
+        let candidate_meta = match std::fs::symlink_metadata(&candidate) {
+            Ok(candidate_meta) => candidate_meta,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                first_error.get_or_insert(error);
+                continue;
+            }
         };
         if candidate_meta.file_type().is_symlink() || !candidate_meta.is_file() {
             continue;
         }
-        let Ok(resolved) = candidate.canonicalize() else {
-            continue;
+        let resolved = match candidate.canonicalize() {
+            Ok(resolved) => resolved,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                first_error.get_or_insert(error);
+                continue;
+            }
         };
         if resolved.starts_with(&canonical_root) {
             return Ok(Some(resolved));
         }
     }
-    Ok(None)
+    match first_error {
+        Some(error) => Err(error.into()),
+        None => Ok(None),
+    }
 }
 
 fn transcript_file_name(session_id: &str) -> AppResult<String> {
@@ -790,6 +820,40 @@ mod tests {
             .unwrap();
 
         assert_eq!(located, path.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn missing_projects_root_remains_an_empty_lookup() {
+        let parent = tempfile::tempdir().unwrap();
+        let missing = parent.path().join("missing-projects");
+
+        assert!(locate_transcript_in(&missing, SESSION_ID, small_limits())
+            .unwrap()
+            .is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transcript_lookup_propagates_unreadable_project_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let unreadable = root.path().join("unreadable-project");
+        std::fs::create_dir(&unreadable).unwrap();
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_dir(&unreadable).is_ok() {
+            std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        let result = locate_transcript_in(root.path(), SESSION_ID, small_limits());
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let error = result.expect_err("access failure must not look like a missing transcript");
+        assert!(matches!(
+            error,
+            AppError::Io(ref error) if error.kind() == io::ErrorKind::PermissionDenied
+        ));
     }
 
     #[cfg(unix)]
