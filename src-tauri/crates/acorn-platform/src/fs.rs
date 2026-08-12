@@ -6,6 +6,26 @@ use std::path::Path;
 
 use tempfile::NamedTempFile;
 
+/// Read an optional file without collapsing filesystem errors into absence.
+///
+/// `None` means no directory entry exists at `path`. In particular, a
+/// dangling symlink remains an error even though following it produces
+/// `NotFound`; callers must not treat an occupied but unreadable state-file
+/// path as a fresh file that is safe to replace.
+pub fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(read_error) if read_error.kind() == io::ErrorKind::NotFound => {
+            match fs::symlink_metadata(path) {
+                Ok(_) => Err(read_error),
+                Err(metadata_error) if metadata_error.kind() == io::ErrorKind::NotFound => Ok(None),
+                Err(metadata_error) => Err(metadata_error),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Atomically replace `path` with `contents` after flushing it to disk.
 pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     write_atomic_with_mode(path, contents, false)
@@ -73,6 +93,50 @@ fn set_private(_path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_read_distinguishes_missing_from_existing_files() {
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("state.json");
+
+        assert_eq!(read_optional(&path).unwrap(), None);
+        fs::write(&path, b"state").unwrap();
+        assert_eq!(read_optional(&path).unwrap(), Some(b"state".to_vec()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn optional_read_rejects_a_dangling_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("state.json");
+        symlink(scratch.path().join("missing-target"), &path).unwrap();
+
+        let error = read_optional(&path).expect_err("dangling symlink occupies the path");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn optional_read_propagates_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("state.json");
+        fs::write(&path, b"state").unwrap();
+        let original_permissions = fs::metadata(&path).unwrap().permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        fs::set_permissions(&path, denied_permissions).unwrap();
+
+        let result = read_optional(&path);
+
+        fs::set_permissions(&path, original_permissions).unwrap();
+        let error = result.expect_err("permission failure must not look missing");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
 
     #[test]
     fn replaces_an_existing_destination_repeatedly() {

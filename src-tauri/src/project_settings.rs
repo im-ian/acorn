@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -73,10 +72,9 @@ fn settings_path() -> AppResult<PathBuf> {
 
 fn load_all() -> AppResult<SettingsMap> {
     let path = settings_path()?;
-    if !path.exists() {
+    let Some(bytes) = acorn_platform::fs::read_optional(&path)? else {
         return Ok(SettingsMap::new());
-    }
-    let bytes = fs::read(&path)?;
+    };
     serde_json::from_slice::<SettingsMap>(&bytes)
         .map_err(|err| AppError::Other(format!("failed to parse project settings: {err}")))
 }
@@ -162,6 +160,7 @@ fn normalize_settings(mut settings: ProjectSettings) -> ProjectSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -221,6 +220,26 @@ mod tests {
                 .as_deref()
                 .unwrap_or("")
                 .contains("GitHub-style pull request"));
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_does_not_replace_a_dangling_settings_symlink() {
+        use std::os::unix::fs::symlink;
+
+        with_data_dir(|data_dir| {
+            let path = data_dir.join(PROJECT_SETTINGS_FILE);
+            symlink(data_dir.join("missing-settings.json"), &path).unwrap();
+            let repo = PathBuf::from("/tmp/acorn-protected-settings-repo");
+
+            let error = update(&repo, ProjectSettings::default())
+                .expect_err("update must stop before replacing an occupied settings path");
+
+            assert!(
+                matches!(error, AppError::Io(ref error) if error.kind() == std::io::ErrorKind::NotFound)
+            );
+            assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
         });
     }
 
