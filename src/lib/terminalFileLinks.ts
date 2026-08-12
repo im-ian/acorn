@@ -4,7 +4,13 @@ import type {
   ILinkProvider,
   Terminal as XTerm,
 } from "@xterm/xterm";
-import { isAbsolutePath, normalizePath, pathsEqual } from "./pathUtils";
+import {
+  inferPathFlavor,
+  isAbsolutePath,
+  normalizePath,
+  pathsEqual,
+  type PathFlavor,
+} from "./pathUtils";
 
 export interface TerminalFileReference {
   path: string;
@@ -262,23 +268,32 @@ export function resolveTerminalFilePathCandidates(
   options: { home?: string | null; basePaths?: string[] } = {},
 ): string[] {
   if (isAbsolutePath(referencePath)) {
-    return [normalizeTerminalPath(referencePath)];
+    return [
+      normalizeTerminalPath(referencePath, inferPathFlavor(referencePath)),
+    ];
   }
   if (/^~[\\/]/u.test(referencePath)) {
     const { home } = options;
     if (!home) return [referencePath];
+    const flavor = inferPathFlavor(home);
     return [
       normalizeTerminalPath(
-        `${normalizePath(home)}/${normalizePath(referencePath.slice(2))}`,
+        `${normalizePath(home, flavor)}/${normalizePath(referencePath.slice(2), flavor)}`,
+        flavor,
       ),
     ];
   }
-  const normalizedReference = normalizePath(referencePath);
   const candidates = [cwd, ...(options.basePaths ?? [])].flatMap((base) => {
-    const basePath = normalizeTerminalPath(base);
+    const flavor = inferPathFlavor(base);
+    const normalizedReference = normalizePath(referencePath, flavor);
+    const basePath = normalizeTerminalPath(base, flavor);
     return [
-      normalizeTerminalPath(`${basePath}/${normalizedReference}`),
-      ...resolveAncestorPrefixedPathCandidates(basePath, normalizedReference),
+      normalizeTerminalPath(`${basePath}/${normalizedReference}`, flavor),
+      ...resolveAncestorPrefixedPathCandidates(
+        basePath,
+        normalizedReference,
+        flavor,
+      ),
     ];
   });
   return candidates.filter(
@@ -290,13 +305,19 @@ export function resolveTerminalFilePathCandidates(
 function resolveAncestorPrefixedPathCandidates(
   base: string,
   referencePath: string,
+  flavor: PathFlavor,
 ): string[] {
-  if (/^\.{1,2}[\\/]/u.test(referencePath)) {
+  const explicitRelativePrefix =
+    flavor === "windows" ? /^\.{1,2}[\\/]/u : /^\.{1,2}\//u;
+  if (explicitRelativePrefix.test(referencePath)) {
     return [];
   }
-  const parsedBase = parseTerminalPath(normalizeTerminalPath(base));
+  const parsedBase = parseTerminalPath(
+    normalizeTerminalPath(base, flavor),
+    flavor,
+  );
   const baseParts = parsedBase.parts;
-  const referenceParts = parseTerminalPath(referencePath).parts;
+  const referenceParts = parseTerminalPath(referencePath, flavor).parts;
   const maxMatchLength = Math.min(baseParts.length, referenceParts.length - 1);
   const candidates: string[] = [];
   for (let matchLength = maxMatchLength; matchLength >= 1; matchLength -= 1) {
@@ -344,9 +365,13 @@ interface ParsedTerminalPath {
   caseInsensitive: boolean;
 }
 
-function parseTerminalPath(path: string): ParsedTerminalPath {
-  const normalized = path.replace(/\\/gu, "/");
-  const drive = /^([a-zA-Z]:)\/(.*)$/u.exec(normalized);
+function parseTerminalPath(
+  path: string,
+  flavor: PathFlavor,
+): ParsedTerminalPath {
+  const normalized = flavor === "windows" ? path.replace(/\\/gu, "/") : path;
+  const drive =
+    flavor === "windows" ? /^([a-zA-Z]:)\/(.*)$/u.exec(normalized) : null;
   if (drive) {
     return {
       root: `${drive[1]}/`,
@@ -354,7 +379,7 @@ function parseTerminalPath(path: string): ParsedTerminalPath {
       caseInsensitive: true,
     };
   }
-  if (normalized.startsWith("//")) {
+  if (flavor === "windows" && normalized.startsWith("//")) {
     const parts = normalized.slice(2).split("/").filter(Boolean);
     const shareParts = parts.slice(0, 2);
     return {
@@ -373,7 +398,7 @@ function parseTerminalPath(path: string): ParsedTerminalPath {
   return {
     root: "",
     parts: normalized.split("/").filter(Boolean),
-    caseInsensitive: false,
+    caseInsensitive: flavor === "windows",
   };
 }
 
@@ -384,8 +409,11 @@ function formatTerminalPath(path: ParsedTerminalPath): string {
   return suffix ? `${path.root}/${suffix}` : path.root;
 }
 
-function normalizeTerminalPath(path: string): string {
-  const parsed = parseTerminalPath(path);
+function normalizeTerminalPath(
+  path: string,
+  flavor: PathFlavor = inferPathFlavor(path),
+): string {
+  const parsed = parseTerminalPath(path, flavor);
   const parts: string[] = [];
   for (const part of parsed.parts) {
     if (part === "" || part === ".") continue;

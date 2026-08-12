@@ -56,6 +56,7 @@ import {
 import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
 import { requestNewGraphSession } from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
+import { revealInFileManagerText } from "../lib/fileManager";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
   hasConfiguredEditor,
@@ -1357,7 +1358,7 @@ function TabItem({
       },
     },
     {
-      label: paneT(t, "pane.menu.revealInFinder"),
+      label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
       onClick: () => {
         void api.fsReveal(tabPath).catch((err: unknown) => {
@@ -1884,7 +1885,7 @@ function buildPaneMenuItems({
           },
         },
         {
-          label: paneT(t, "pane.menu.revealInFinder"),
+          label: revealInFileManagerText(t),
           icon: <FolderOpen size={12} />,
           onClick: () => {
             void api.fsReveal(activeSession.worktree_path).catch(

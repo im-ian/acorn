@@ -84,7 +84,7 @@ fn bind_platform(endpoint: &Path) -> io::Result<Listener> {
     // Keep the staging name deterministic and shorter than the canonical
     // socket. The listener's reclaim guard is disabled because the bound
     // pathname is renamed before the listener is dropped.
-    let staging = endpoint.with_extension("ipc-staging");
+    let staging = endpoint.with_extension("tmp");
     if staging.exists() {
         let _ = std::fs::remove_file(&staging);
     }
@@ -308,6 +308,51 @@ mod tests {
         client.join().unwrap();
 
         drop((server, listener));
+        cleanup(&endpoint);
+        assert!(!endpoint.exists());
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn private_endpoint_binds_near_sun_path_limit() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        // Darwin's sun_path holds 104 bytes. Keep the canonical endpoint
+        // valid near that boundary so any staging name longer than the
+        // canonical socket breaks this test.
+        const DATA_DIR_BYTES: usize = 79;
+        let unique = format!(
+            "acorn-ipc-limit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let padding = DATA_DIR_BYTES
+            .checked_sub("/tmp/".len() + unique.len())
+            .expect("unique test directory should fit below the target length");
+        let scratch =
+            std::path::PathBuf::from("/tmp").join(format!("{unique}{}", "x".repeat(padding)));
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        let endpoint = scratch.join("daemon-stream.sock");
+        assert_eq!(endpoint.as_os_str().as_bytes().len(), 98);
+        assert_eq!(
+            endpoint.with_extension("tmp").as_os_str().as_bytes().len(),
+            97
+        );
+
+        let listener = bind(&endpoint).expect("bind near macOS sun_path limit");
+        assert_eq!(
+            std::fs::metadata(&endpoint).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!endpoint.with_extension("tmp").exists());
+
+        drop(listener);
         cleanup(&endpoint);
         assert!(!endpoint.exists());
         let _ = std::fs::remove_dir_all(scratch);

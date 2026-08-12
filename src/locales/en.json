@@ -1193,6 +1193,8 @@
   },
   "ui": {
     "openGitHubProfile": "Open GitHub profile",
+    "revealInFinder": "Reveal in Finder",
+    "revealInFileManager": "Reveal in File Manager",
     "stepper": {
       "decrease": "Decrease",
       "increase": "Increase",
@@ -1251,7 +1253,6 @@
       "moveToProjectRoot": "Project root",
       "projectSettings": "Project Settings",
       "closeProject": "Close project",
-      "revealInFinder": "Reveal in File Manager",
       "copy": "Copy",
       "copyPath": "Copy path",
       "rename": "Rename",
@@ -1608,7 +1609,6 @@
       "equalizePaneSizes": "Equalize Pane Sizes",
       "openWorktreeInEditor": "Open Worktree in Editor",
       "openFileInEditor": "Open File in Editor",
-      "revealInFinder": "Reveal in File Manager",
       "copy": "Copy",
       "worktreePath": "Worktree Path",
       "filePath": "File Path",
@@ -1933,8 +1933,7 @@
       "openIn": "Open in",
       "openInNewTab": "Open in New Tab",
       "openWithDefaultProgram": "Open with Default Program",
-      "rename": "Rename",
-      "revealInFileManager": "Reveal in File Manager"
+      "rename": "Rename"
     },
     "search": {
       "close": "Close (Esc)",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   basename,
+  inferPathFlavor,
   isAbsolutePath,
   isPathInsideOrEqual,
   joinPath,
@@ -21,6 +22,21 @@ describe("path utils", () => {
     expect(normalizePath("\\\\server\\share\\repo\\")).toBe(
       "//server/share/repo",
     );
+    expect(normalizePath("src\\components\\App.tsx")).toBe(
+      "src/components/App.tsx",
+    );
+  });
+
+  it("uses an absolute POSIX root to preserve literal backslashes", () => {
+    expect(inferPathFlavor("/repo/docs/back\\slash.md")).toBe("posix");
+    expect(normalizePath("/repo/docs/back\\slash.md/")).toBe(
+      "/repo/docs/back\\slash.md",
+    );
+    expect(basename("/repo/docs/back\\slash.md")).toBe("back\\slash.md");
+    expect(parentPath("/repo/docs/back\\slash.md")).toBe("/repo/docs");
+    expect(pathsEqual("/repo/docs/back\\slash.md", "/repo/docs/back/slash.md")).toBe(
+      false,
+    );
   });
 
   it("extracts a basename from POSIX and Windows paths", () => {
@@ -36,6 +52,9 @@ describe("path utils", () => {
     );
     expect(relativePath("C:\\Repo", "C:\\Repo-other\\App.tsx")).toBe(
       "C:\\Repo-other\\App.tsx",
+    );
+    expect(relativePath("/repo", "/repo/docs/back\\slash.md")).toBe(
+      "docs/back\\slash.md",
     );
   });
 
@@ -72,11 +91,20 @@ describe("path utils", () => {
     expect(parentPath("C:\\repo\\src")).toBe("C:\\repo");
     expect(parentPath("C:\\repo")).toBe("C:\\");
     expect(parentPath("\\\\server\\share")).toBe("\\\\server\\share");
-    expect(joinPath("/repo", "src\\App.tsx")).toBe("/repo/src/App.tsx");
+    expect(joinPath("/repo", "src\\App.tsx")).toBe(
+      "/repo/src\\App.tsx",
+    );
     expect(joinPath("C:\\repo", "src/App.tsx")).toBe(
       "C:\\repo\\src\\App.tsx",
     );
     expect(joinPath("C:\\", "src")).toBe("C:\\src");
+  });
+
+  it("keeps a POSIX backslash filename intact through the rename path flow", () => {
+    const path = "/repo/docs/old\\name.md";
+    expect(joinPath(parentPath(path), "new\\name.md")).toBe(
+      "/repo/docs/new\\name.md",
+    );
   });
 
   it("recognizes POSIX, drive, and UNC absolute paths", () => {

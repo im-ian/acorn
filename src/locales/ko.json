@@ -1193,6 +1193,8 @@
   },
   "ui": {
     "openGitHubProfile": "GitHub 프로필 열기",
+    "revealInFinder": "Finder에서 보기",
+    "revealInFileManager": "파일 관리자에서 보기",
     "stepper": {
       "decrease": "감소",
       "increase": "증가",
@@ -1251,7 +1253,6 @@
       "moveToProjectRoot": "프로젝트 루트",
       "projectSettings": "프로젝트 설정",
       "closeProject": "프로젝트 닫기",
-      "revealInFinder": "파일 관리자에서 보기",
       "copy": "복사",
       "copyPath": "경로 복사",
       "rename": "이름 변경",
@@ -1608,7 +1609,6 @@
       "equalizePaneSizes": "패널 크기 균등화",
       "openWorktreeInEditor": "편집기에서 워크트리 열기",
       "openFileInEditor": "편집기에서 파일 열기",
-      "revealInFinder": "파일 관리자에서 보기",
       "copy": "복사",
       "worktreePath": "워크트리 경로",
       "filePath": "파일 경로",
@@ -1933,8 +1933,7 @@
       "openIn": "다음으로 열기:",
       "openInNewTab": "새 탭에서 열기",
       "openWithDefaultProgram": "기본 프로그램으로 열기",
-      "rename": "이름 변경",
-      "revealInFileManager": "파일 관리자에서 보기"
+      "rename": "이름 변경"
     },
     "search": {
       "close": "닫기 (Esc)",

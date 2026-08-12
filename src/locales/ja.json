@@ -1193,6 +1193,8 @@
   },
   "ui": {
     "openGitHubProfile": "GitHub プロファイルを開く",
+    "revealInFinder": "ファインダーで表示",
+    "revealInFileManager": "ファイルマネージャーで表示",
     "stepper": {
       "decrease": "減少",
       "increase": "増やす",
@@ -1251,7 +1253,6 @@
       "moveToProjectRoot": "プロジェクトルート",
       "projectSettings": "プロジェクト設定",
       "closeProject": "プロジェクトを閉じる",
-      "revealInFinder": "ファイルマネージャーで表示",
       "copy": "コピー",
       "copyPath": "パスをコピーする",
       "rename": "名前の変更",
@@ -1608,7 +1609,6 @@
       "equalizePaneSizes": "ペインのサイズを均等化する",
       "openWorktreeInEditor": "エディタでワークツリーを開く",
       "openFileInEditor": "エディタでファイルを開く",
-      "revealInFinder": "ファイルマネージャーで表示",
       "copy": "コピー",
       "worktreePath": "ワークツリーのパス",
       "filePath": "ファイルパス",
@@ -1933,8 +1933,7 @@
       "openIn": "で開く",
       "openInNewTab": "新しいタブで開く",
       "openWithDefaultProgram": "デフォルトのプログラムで開く",
-      "rename": "名前の変更",
-      "revealInFileManager": "ファイルマネージャーで表示"
+      "rename": "名前の変更"
     },
     "search": {
       "close": "閉じる (Esc)",

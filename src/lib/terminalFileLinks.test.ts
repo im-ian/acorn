@@ -306,6 +306,18 @@ describe("terminal file links", () => {
     );
   });
 
+  it("preserves literal backslashes while resolving POSIX file paths", () => {
+    expect(resolveTerminalFilePath("/repo/app", "src\\App.tsx")).toBe(
+      "/repo/app/src\\App.tsx",
+    );
+    expect(resolveTerminalFilePath("/repo/app/src", "../back\\slash.md")).toBe(
+      "/repo/app/back\\slash.md",
+    );
+    expect(resolveTerminalFilePath("/repo/app", "/tmp/back\\slash.ts")).toBe(
+      "/tmp/back\\slash.ts",
+    );
+  });
+
   it("resolves Windows drive paths without treating the drive colon as a line", () => {
     expect(resolveTerminalFilePath("C:\\repo\\app", "src\\App.tsx")).toBe(
       "C:/repo/app/src/App.tsx",
