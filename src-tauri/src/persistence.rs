@@ -407,28 +407,31 @@ pub fn load_sessions() -> AppResult<Vec<Session>> {
 /// as authoritative. A missing file is considered clean (legitimate empty).
 pub fn load_sessions_with_status() -> AppResult<(Vec<Session>, bool)> {
     let path = sessions_path()?;
-    if !path.exists() {
-        tracing::info!(path = %path.display(), "sessions file missing, starting empty");
-        return Ok((Vec::new(), true));
-    }
+    Ok(load_sessions_from_path_with_status(&path))
+}
 
-    let bytes = match fs::read(&path) {
-        Ok(b) => b,
+fn load_sessions_from_path_with_status(path: &Path) -> (Vec<Session>, bool) {
+    let bytes = match acorn_platform::fs::read_optional(path) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            tracing::info!(path = %path.display(), "sessions file missing, starting empty");
+            return (Vec::new(), true);
+        }
         Err(err) => {
             tracing::warn!(path = %path.display(), error = %err, "failed to read sessions file");
-            return Ok((Vec::new(), false));
+            return (Vec::new(), false);
         }
     };
 
     match serde_json::from_slice::<Vec<Session>>(&bytes) {
         Ok(sessions) => {
             tracing::info!(count = sessions.len(), "loaded sessions from disk");
-            Ok((sessions, true))
+            (sessions, true)
         }
         Err(err) => {
             tracing::warn!(path = %path.display(), error = %err, "failed to parse sessions file");
-            backup_corrupt_file(&path);
-            Ok((Vec::new(), false))
+            backup_corrupt_file(path);
+            (Vec::new(), false)
         }
     }
 }
@@ -475,26 +478,30 @@ pub fn load_projects() -> AppResult<Vec<Project>> {
 
 pub fn load_projects_with_status() -> AppResult<(Vec<Project>, bool)> {
     let path = projects_path()?;
-    if !path.exists() {
-        tracing::info!(path = %path.display(), "projects file missing, starting empty");
-        return Ok((Vec::new(), true));
-    }
-    let bytes = match fs::read(&path) {
-        Ok(b) => b,
+    Ok(load_projects_from_path_with_status(&path))
+}
+
+fn load_projects_from_path_with_status(path: &Path) -> (Vec<Project>, bool) {
+    let bytes = match acorn_platform::fs::read_optional(path) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            tracing::info!(path = %path.display(), "projects file missing, starting empty");
+            return (Vec::new(), true);
+        }
         Err(err) => {
             tracing::warn!(path = %path.display(), error = %err, "failed to read projects file");
-            return Ok((Vec::new(), false));
+            return (Vec::new(), false);
         }
     };
     match serde_json::from_slice::<Vec<Project>>(&bytes) {
         Ok(projects) => {
             tracing::info!(count = projects.len(), "loaded projects from disk");
-            Ok((projects, true))
+            (projects, true)
         }
         Err(err) => {
             tracing::warn!(path = %path.display(), error = %err, "failed to parse projects file");
-            backup_corrupt_file(&path);
-            Ok((Vec::new(), false))
+            backup_corrupt_file(path);
+            (Vec::new(), false)
         }
     }
 }
@@ -761,11 +768,10 @@ fn load_chat_session_state_from_dir(
 ) -> AppResult<ChatSessionState> {
     let session_id = parse_chat_session_id(session_id)?;
     let path = chat_session_path_for_data_dir(base_dir, &session_id);
-    if !path.exists() {
+    let Some(bytes) = acorn_platform::fs::read_optional(&path)? else {
         return Ok(ChatSessionState::empty(session_id));
-    }
+    };
 
-    let bytes = fs::read(&path)?;
     let state = serde_json::from_slice::<ChatSessionState>(&bytes).map_err(|err| {
         backup_corrupt_file(&path);
         AppError::Other(format!("failed to parse chat session state: {err}"))
@@ -962,10 +968,9 @@ fn load_graph_run_state_from_dir(
 ) -> AppResult<Option<GraphRunState>> {
     let session_id = parse_chat_session_id(session_id)?;
     let path = graph_run_path_for_data_dir(base_dir, &session_id);
-    if !path.exists() {
+    let Some(bytes) = acorn_platform::fs::read_optional(&path)? else {
         return Ok(None);
-    }
-    let bytes = fs::read(&path)?;
+    };
     let state = serde_json::from_slice::<GraphRunState>(&bytes).map_err(|err| {
         backup_corrupt_file(&path);
         AppError::Other(format!("failed to parse Graph run state: {err}"))
@@ -1191,6 +1196,27 @@ mod tests {
             .exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn graph_run_load_rejects_a_dangling_state_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let session_id = Uuid::new_v4();
+        let graph_dir = graph_runs_dir_for_data_dir(dir.path());
+        fs::create_dir_all(&graph_dir).unwrap();
+        let path = graph_run_path_for_data_dir(dir.path(), &session_id);
+        symlink(graph_dir.join("missing-target.json"), &path).unwrap();
+
+        let error = load_graph_run_state_from_dir(dir.path(), &session_id.to_string())
+            .expect_err("occupied state path must not look absent");
+
+        assert!(
+            matches!(error, AppError::Io(ref error) if error.kind() == std::io::ErrorKind::NotFound)
+        );
+        assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
+    }
+
     #[test]
     fn graph_run_update_rejects_a_stale_human_revision() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -1334,6 +1360,56 @@ mod tests {
         let sessions = load_sessions().expect("load should not error on missing file");
         // Cannot assert empty without test isolation — at least confirm it returns.
         let _ = sessions;
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inaccessible_session_and_project_files_are_not_clean_empty_state() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state_dir = tmp.path().join("state");
+        fs::create_dir(&state_dir).unwrap();
+        let sessions = state_dir.join(SESSIONS_FILE);
+        let projects = state_dir.join(PROJECTS_FILE);
+        fs::write(&sessions, b"[]").unwrap();
+        fs::write(&projects, b"[]").unwrap();
+        let original_permissions = fs::metadata(&state_dir).unwrap().permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        fs::set_permissions(&state_dir, denied_permissions).unwrap();
+
+        let session_result = load_sessions_from_path_with_status(&sessions);
+        let project_result = load_projects_from_path_with_status(&projects);
+
+        fs::set_permissions(&state_dir, original_permissions).unwrap();
+        assert!(session_result.0.is_empty());
+        assert!(!session_result.1, "session load must be marked unclean");
+        assert!(project_result.0.is_empty());
+        assert!(!project_result.1, "project load must be marked unclean");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_session_and_project_symlinks_are_not_clean_empty_state() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join(SESSIONS_FILE);
+        let projects = tmp.path().join(PROJECTS_FILE);
+        symlink(tmp.path().join("missing-sessions.json"), &sessions).unwrap();
+        symlink(tmp.path().join("missing-projects.json"), &projects).unwrap();
+
+        assert!(!load_sessions_from_path_with_status(&sessions).1);
+        assert!(!load_projects_from_path_with_status(&projects).1);
+        assert!(fs::symlink_metadata(sessions)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(fs::symlink_metadata(projects)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     #[test]
@@ -1518,6 +1594,38 @@ mod tests {
 
         message.session_id = Some(session_id);
         assert_eq!(reloaded.messages, vec![message]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn append_chat_message_does_not_replace_a_dangling_state_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let session_id = Uuid::new_v4();
+        let chat_dir = chat_sessions_dir_for_data_dir(tmp.path());
+        fs::create_dir_all(&chat_dir).unwrap();
+        let path = chat_session_path_for_data_dir(tmp.path(), &session_id);
+        symlink(chat_dir.join("missing-target.json"), &path).unwrap();
+        let message = ChatMessage {
+            id: "msg-protected".to_string(),
+            session_id: None,
+            turn_id: None,
+            role: ChatRole::User,
+            content: "do not replace unread state".to_string(),
+            graph_prompt_plan: None,
+            created_at: Utc::now(),
+            status: Some(ChatMessageStatus::Complete),
+            metadata: None,
+        };
+
+        let error = append_chat_message_in_dir(tmp.path(), &session_id.to_string(), message)
+            .expect_err("append must stop before replacing an occupied state path");
+
+        assert!(
+            matches!(error, AppError::Io(ref error) if error.kind() == std::io::ErrorKind::NotFound)
+        );
+        assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
     }
 
     #[test]
