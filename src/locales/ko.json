@@ -2404,6 +2404,7 @@
       "generateVia": "다음으로 생성:",
       "generateWithAi": "AI로 생성",
       "goToProjectSettings": "프로젝트 설정으로 이동",
+      "projectSettingsLoadFailed": "프로젝트 설정을 불러오지 못했습니다:",
       "subjectPlaceholder": "제목",
       "bodyPlaceholder": "본문(선택 사항)",
       "rebaseMessageLocked": "Rebase는 원래 커밋을 기본 브랜치 위에 다시 적용하므로 여기서 커밋 메시지를 변경할 수 없습니다.",

@@ -73,6 +73,11 @@ function defaultPromptForMethod(method: MergeMethod): string {
   }
 }
 
+function projectSettingsLoadError(t: Translator, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `${dt(t, "dialogs.mergePullRequest.projectSettingsLoadFailed")} ${message}`;
+}
+
 function projectNameFromRepoPath(repoPath: string): string {
   const trimmed = repoPath.replace(/[\\/]+$/, "");
   return trimmed.split(/[\\/]/).pop() || repoPath;
@@ -168,6 +173,7 @@ export function MergePullRequestDialog({
   const [submitting, setSubmitting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [adminMerge, setAdminMerge] = useState(false);
 
   const checksBlock = useMemo<ChecksBlock>(
@@ -196,6 +202,7 @@ export function MergePullRequestDialog({
     setPrompt(defaultPromptForMethod(nextMethod));
     setProjectSettingsOpen(false);
     setError(null);
+    setSettingsError(null);
     setSubmitting(false);
     setGenerating(false);
     setAdminMerge(false);
@@ -208,13 +215,14 @@ export function MergePullRequestDialog({
           setPrompt(savedPrompt);
         }
       })
-      .catch(() => {
-        // Project settings are optional; generation still works with defaults.
+      .catch((loadError) => {
+        if (cancelled) return;
+        setSettingsError(projectSettingsLoadError(t, loadError));
       });
     return () => {
       cancelled = true;
     };
-  }, [open, detail, repoPath]);
+  }, [open, detail, repoPath, t]);
 
   // Close also bumps the epoch — a generate kicked off right before the
   // user dismissed the dialog must be invalidated even if they never
@@ -317,8 +325,9 @@ export function MergePullRequestDialog({
         record.settings.pull_requests.generation_prompt ??
           defaultPromptForMethod(method),
       );
-    } catch {
-      // Project settings are optional; keep the current prompt fallback.
+      setSettingsError(null);
+    } catch (loadError) {
+      setSettingsError(projectSettingsLoadError(t, loadError));
     }
   }
 
@@ -511,6 +520,12 @@ export function MergePullRequestDialog({
                     </span>
                   </label>
                 </div>
+              </Notice>
+            ) : null}
+
+            {settingsError ? (
+              <Notice tone="danger" density="compact">
+                {settingsError}
               </Notice>
             ) : null}
 

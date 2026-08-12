@@ -2404,6 +2404,7 @@
       "generateVia": "経由で生成",
       "generateWithAi": "AIで生成",
       "goToProjectSettings": "プロジェクト設定に移動します",
+      "projectSettingsLoadFailed": "プロジェクト設定の読み込みに失敗しました:",
       "subjectPlaceholder": "件名",
       "bodyPlaceholder": "本体（オプション）",
       "rebaseMessageLocked": "Rebase は元のコミットをベース ブランチに再実行します。ここではコミット メッセージをカスタマイズできません。",

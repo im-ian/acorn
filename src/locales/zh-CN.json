@@ -2404,6 +2404,7 @@
       "generateVia": "生成方式",
       "generateWithAi": "使用 AI 生成",
       "goToProjectSettings": "转到项目设置",
+      "projectSettingsLoadFailed": "无法加载项目设置：",
       "subjectPlaceholder": "主题",
       "bodyPlaceholder": "正文（可选）",
       "rebaseMessageLocked": "Rebase 会将原始提交变基到基础分支，因此无法在此自定义提交消息。",
