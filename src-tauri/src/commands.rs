@@ -8463,7 +8463,7 @@ fn spawn_via_daemon<R: Runtime>(
             id,
             pid,
             output_token,
-            replay_scrollback,
+            daemon_attach_replay_scrollback(false, replay_scrollback),
         )
         .map_err(|e| {
             format!(
@@ -8525,13 +8525,25 @@ fn spawn_via_daemon<R: Runtime>(
         id,
         outcome.pid,
         output_token,
-        replay_scrollback,
+        daemon_attach_replay_scrollback(true, replay_scrollback),
     )
     .map_err(|e| {
         format!(
             "daemon stream attach failed: {e}; retry the attachment instead of starting a duplicate local PTY"
         )
     })
+}
+
+fn daemon_attach_replay_scrollback(freshly_spawned: bool, requested_replay: bool) -> bool {
+    if !freshly_spawned {
+        return requested_replay;
+    }
+
+    // A freshly spawned daemon PTY has a new ring, so replay cannot duplicate
+    // the frontend's restored disk snapshot. Replaying closes the spawn-to-
+    // attach gap where a shell or immediately resumed TUI can finish its
+    // initial draw before the daemon stream subscriber is registered.
+    true
 }
 
 fn daemon_spawn_name_for_session(session: Option<&Session>, id: Uuid) -> String {
@@ -11262,7 +11274,8 @@ mod tests {
     use super::{
         auto_title_enabled_for_new_session, can_store_generated_session_title,
         collect_memory_usage_from_roots, configured_git_identity, create_unique_worktree,
-        daemon_spawn_name_for_session, detach_requested_by_stale_renderer, font_name_from_path,
+        daemon_attach_replay_scrollback, daemon_spawn_name_for_session,
+        detach_requested_by_stale_renderer, font_name_from_path,
         infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
         normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
         remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
@@ -15264,6 +15277,18 @@ mod tests {
         assert!(should_route_session_to_daemon(true, None));
         assert!(should_route_session_to_daemon(false, Some(daemon_id)));
         assert!(!should_route_session_to_daemon(false, None));
+    }
+
+    #[test]
+    fn existing_daemon_attach_honors_frontend_replay_plan() {
+        assert!(daemon_attach_replay_scrollback(false, true));
+        assert!(!daemon_attach_replay_scrollback(false, false));
+    }
+
+    #[test]
+    fn fresh_daemon_attach_replays_output_emitted_during_spawn() {
+        assert!(daemon_attach_replay_scrollback(true, false));
+        assert!(daemon_attach_replay_scrollback(true, true));
     }
 
     #[test]
