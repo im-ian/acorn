@@ -73,10 +73,17 @@ fn settings_path() -> AppResult<PathBuf> {
 
 fn load_all() -> AppResult<SettingsMap> {
     let path = settings_path()?;
-    if !path.exists() {
-        return Ok(SettingsMap::new());
-    }
-    let bytes = fs::read(&path)?;
+    load_all_from(&path)
+}
+
+fn load_all_from(path: &Path) -> AppResult<SettingsMap> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SettingsMap::new());
+        }
+        Err(err) => return Err(err.into()),
+    };
     serde_json::from_slice::<SettingsMap>(&bytes)
         .map_err(|err| AppError::Other(format!("failed to parse project settings: {err}")))
 }
@@ -222,6 +229,28 @@ mod tests {
                 .unwrap_or("")
                 .contains("GitHub-style pull request"));
         });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn settings_load_surfaces_parent_access_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("blocked");
+        let path = blocked.join(PROJECT_SETTINGS_FILE);
+        fs::create_dir(&blocked).unwrap();
+        fs::write(&path, b"{}").unwrap();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = load_all_from(&path);
+
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).unwrap();
+        match result {
+            Err(AppError::Io(err)) => assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied),
+            other => panic!("expected permission error, got {other:?}"),
+        }
+        assert_eq!(fs::read(&path).unwrap(), b"{}");
     }
 
     #[test]
