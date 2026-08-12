@@ -347,7 +347,7 @@ fn copy_legacy_file_if_missing(
 }
 
 fn data_dir_override_is_set() -> bool {
-    std::env::var(acorn_paths::ENV_DATA_DIR_OVERRIDE)
+    std::env::var_os(acorn_paths::ENV_DATA_DIR_OVERRIDE)
         .map(|value| !value.is_empty())
         .unwrap_or(false)
 }
@@ -1399,6 +1399,26 @@ mod tests {
             std::env::set_var(
                 acorn_paths::ENV_DATA_DIR_OVERRIDE,
                 "/tmp/acorn-explicit-data-dir",
+            );
+            std::env::remove_var(acorn_paths::ENV_PROFILE);
+        }
+
+        assert!(!should_migrate_legacy_prod_files().unwrap());
+
+        unsafe { std::env::remove_var(acorn_paths::ENV_DATA_DIR_OVERRIDE) };
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_migration_skips_non_unicode_data_dir_override() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var(
+                acorn_paths::ENV_DATA_DIR_OVERRIDE,
+                OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff]),
             );
             std::env::remove_var(acorn_paths::ENV_PROFILE);
         }
