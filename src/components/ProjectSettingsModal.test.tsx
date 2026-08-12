@@ -311,6 +311,187 @@ describe("ProjectSettingsModal", () => {
     expect(document.body.textContent).toContain("feature-beta");
   });
 
+  it("removes every unused worktree across project roots and keeps used ones", async () => {
+    const project: Project = {
+      repo_path: "/repo/acorn",
+      name: "acorn",
+      created_at: "2026-01-01T00:00:00Z",
+      position: 0,
+      source_paths: ["/repo/backoffice"],
+    };
+    const usedSession = session({
+      id: "s-beta",
+      name: "beta terminal",
+      worktree_path: "/repo/acorn/.acorn/worktrees/feature-beta",
+      in_worktree: true,
+    });
+    mockApi.getProjectSettings.mockResolvedValue({
+      key: "github:im-ian/acorn",
+      settings: {
+        remember_after_close: true,
+        pull_requests: { generation_prompt: null },
+        worktrees: { base_branch: null },
+      },
+    });
+    mockApi.listProjectWorktrees.mockImplementation(async (repoPath) =>
+      repoPath === "/repo/backoffice"
+        ? [
+            {
+              name: "backoffice-cleanup",
+              path: "/repo/backoffice/.acorn/worktrees/backoffice-cleanup",
+              modified_ms: null,
+            },
+          ]
+        : [
+            {
+              name: "feature-alpha",
+              path: "/repo/acorn/.acorn/worktrees/feature-alpha",
+              modified_ms: null,
+            },
+            {
+              name: "feature-beta",
+              path: "/repo/acorn/.acorn/worktrees/feature-beta",
+              modified_ms: null,
+            },
+          ],
+    );
+    mockApi.listProjects.mockResolvedValue([project]);
+    mockApi.listSessions.mockResolvedValue([usedSession]);
+    useAppStore.setState({
+      projects: [project],
+      sessions: [usedSession],
+      activeSessionId: "s-beta",
+    });
+
+    await act(async () => {
+      root.render(
+        <ProjectSettingsModal
+          project={{ name: "acorn", repoPath: "/repo/acorn" }}
+          initialTab="worktrees"
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    expect(document.body.textContent).toContain("2 unused worktrees");
+    const removeUnused = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Delete unused");
+    expect(removeUnused).toBeDefined();
+
+    await act(async () => {
+      removeUnused!.click();
+    });
+
+    const confirmDialog = Array.from(
+      document.body.querySelectorAll<HTMLElement>('[role="dialog"]'),
+    ).find(
+      (dialog) =>
+        dialog.getAttribute("aria-label") === "Delete unused worktrees",
+    );
+    expect(confirmDialog?.textContent).toContain("feature-alpha");
+    expect(confirmDialog?.textContent).toContain("backoffice-cleanup");
+    expect(confirmDialog?.textContent).not.toContain("feature-beta");
+    const confirm = Array.from(
+      confirmDialog!.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Delete 2 worktrees");
+    expect(confirm).toBeDefined();
+
+    await act(async () => {
+      confirm!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(mockApi.removeWorktree).toHaveBeenCalledTimes(2);
+    expect(mockApi.removeWorktree).toHaveBeenNthCalledWith(
+      1,
+      "/repo/acorn",
+      "/repo/acorn/.acorn/worktrees/feature-alpha",
+      false,
+    );
+    expect(mockApi.removeWorktree).toHaveBeenNthCalledWith(
+      2,
+      "/repo/backoffice",
+      "/repo/backoffice/.acorn/worktrees/backoffice-cleanup",
+      false,
+    );
+    expect(document.body.textContent).not.toContain("feature-alpha");
+    expect(document.body.textContent).not.toContain("backoffice-cleanup");
+    expect(document.body.textContent).toContain("feature-beta");
+    expect(document.body.textContent).toContain("0 unused worktrees");
+  });
+
+  it("continues removing unused worktrees after one target fails", async () => {
+    mockApi.getProjectSettings.mockResolvedValue({
+      key: "github:im-ian/acorn",
+      settings: {
+        remember_after_close: true,
+        pull_requests: { generation_prompt: null },
+        worktrees: { base_branch: null },
+      },
+    });
+    mockApi.listProjectWorktrees.mockResolvedValue([
+      {
+        name: "stale-alpha",
+        path: "/repo/acorn/.acorn/worktrees/stale-alpha",
+        modified_ms: null,
+      },
+      {
+        name: "feature-gamma",
+        path: "/repo/acorn/.acorn/worktrees/feature-gamma",
+        modified_ms: null,
+      },
+    ]);
+    mockApi.removeWorktree
+      .mockRejectedValueOnce(new Error("not a linked git worktree"))
+      .mockResolvedValueOnce(null);
+
+    await act(async () => {
+      root.render(
+        <ProjectSettingsModal
+          project={{ name: "acorn", repoPath: "/repo/acorn" }}
+          initialTab="worktrees"
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const removeUnused = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Delete unused");
+    await act(async () => {
+      removeUnused!.click();
+    });
+    const confirm = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Delete 2 worktrees");
+
+    await act(async () => {
+      confirm!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(mockApi.removeWorktree).toHaveBeenCalledTimes(2);
+    expect(document.body.textContent).toContain("stale-alpha");
+    expect(document.body.textContent).not.toContain("feature-gamma");
+    expect(document.body.textContent).toContain(
+      "Failed to remove some unused worktrees:",
+    );
+    expect(document.body.textContent).toContain(
+      "stale-alpha: Error: not a linked git worktree",
+    );
+  });
+
   it("does not reload project data for an equivalent project prop", async () => {
     mockApi.getProjectSettings.mockResolvedValue({
       key: "github:im-ian/acorn",
