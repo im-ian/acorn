@@ -28,6 +28,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 import {
   resetNotificationsForTests,
+  sendTestNotification,
   startFocusedSessionNotificationReadWatcher,
   startNotificationClickHandler,
   startSessionActivityInboxWatcher,
@@ -119,6 +120,66 @@ describe("notifications", () => {
       }),
     );
     dispose();
+  });
+
+  it("retries a transient permission probe failure on the next transition", async () => {
+    mocks.isPermissionGranted.mockRejectedValueOnce(
+      new Error("notification capability unavailable"),
+    );
+    const dispose = startSessionNotificationWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "waiting_for_input",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+    await flushPromises();
+
+    expect(mocks.isPermissionGranted).toHaveBeenCalledTimes(1);
+    expect(mocks.sendNotification).not.toHaveBeenCalled();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "working",
+          updated_at: "2026-01-01T00:02:00Z",
+        }),
+      ],
+    });
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "errored",
+          updated_at: "2026-01-01T00:03:00Z",
+        }),
+      ],
+    });
+    await flushPromises();
+
+    expect(mocks.isPermissionGranted).toHaveBeenCalledTimes(2);
+    expect(mocks.sendNotification).toHaveBeenCalledTimes(1);
+    dispose();
+  });
+
+  it("reports a permission probe failure as an error instead of a denial", async () => {
+    mocks.isPermissionGranted.mockRejectedValueOnce(
+      new Error("notification capability unavailable"),
+    );
+
+    await expect(sendTestNotification()).resolves.toBe("error");
+    expect(mocks.requestPermission).not.toHaveBeenCalled();
+    expect(mocks.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("keeps an explicit permission denial distinct from probe errors", async () => {
+    mocks.isPermissionGranted.mockResolvedValueOnce(false);
+    mocks.requestPermission.mockResolvedValueOnce("denied");
+
+    await expect(sendTestNotification()).resolves.toBe("denied");
+    expect(mocks.sendNotification).not.toHaveBeenCalled();
   });
 
   it("opens the destination session surface when a system notification is clicked", async () => {

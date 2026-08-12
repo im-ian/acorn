@@ -36,26 +36,32 @@ let cachedPermission: boolean | null = null;
 let inboxNotificationCounter = 0;
 
 async function checkPermission(): Promise<boolean> {
+  let granted = await isPermissionGranted();
+  if (!granted) {
+    const result = await requestPermission();
+    granted = result === "granted";
+  }
+  return granted;
+}
+
+async function ensurePermission(): Promise<boolean> {
+  if (cachedPermission !== null) return cachedPermission;
   try {
-    let granted = await isPermissionGranted();
-    if (!granted) {
-      const result = await requestPermission();
-      granted = result === "granted";
-    }
-    return granted;
+    cachedPermission = await checkPermission();
+    return cachedPermission;
   } catch (err) {
+    // A probe failure is not a permission denial. Leave the cache empty so a
+    // later transition can retry after a transient plugin/IPC failure.
     console.error("[notifications] permission check failed", err);
     return false;
   }
 }
 
-async function ensurePermission(): Promise<boolean> {
-  if (cachedPermission !== null) return cachedPermission;
-  cachedPermission = await checkPermission();
-  return cachedPermission;
-}
-
 async function refreshPermission(): Promise<boolean> {
+  // The explicit test action must not fall back to a previously cached result.
+  // Clearing first also lets normal notifications retry if this fresh probe
+  // fails instead of retaining stale permission state.
+  cachedPermission = null;
   cachedPermission = await checkPermission();
   return cachedPermission;
 }
@@ -311,19 +317,19 @@ export async function startNotificationClickHandler(): Promise<() => void> {
  *
  * - `"sent"`  — fire-and-forget succeeded
  * - `"denied"` — the OS rejected (or the user dismissed) the permission prompt
- * - `"error"` — `sendNotification` threw; details are logged to the console
+ * - `"error"` — the permission probe or notification send failed
  */
 export async function sendTestNotification(): Promise<"sent" | "denied" | "error"> {
-  const ok = await refreshPermission();
-  if (!ok) return "denied";
   try {
+    const ok = await refreshPermission();
+    if (!ok) return "denied";
     sendNotification({
       title: "Acorn — test notification",
       body: "If you can see this, system notifications are working.",
     });
     return "sent";
   } catch (err) {
-    console.error("[notifications] test sendNotification failed", err);
+    console.error("[notifications] test notification failed", err);
     return "error";
   }
 }
