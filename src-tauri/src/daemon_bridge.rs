@@ -655,22 +655,17 @@ fn stage_versioned_daemon_binary(
 ) -> io::Result<PathBuf> {
     let destination = versioned_daemon_path(source, data_dir, version)?;
 
-    if let Ok(destination_metadata) = fs::metadata(&destination) {
-        if destination_metadata.is_file() && destination_metadata.len() > 0 {
-            verify_cached_daemon(source, &destination)?;
-            return Ok(destination);
-        }
-        if destination_metadata.is_file() {
+    match fs::symlink_metadata(&destination) {
+        Ok(destination_metadata) => {
+            validate_cached_daemon_leaf(&destination, &destination_metadata)?;
+            if destination_metadata.len() > 0 {
+                verify_cached_daemon(source, &destination)?;
+                return Ok(destination);
+            }
             fs::remove_file(&destination)?;
-        } else {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!(
-                    "cached daemon destination is not a file: {}",
-                    destination.display()
-                ),
-            ));
         }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
 
     let parent = destination.parent().ok_or_else(|| {
@@ -709,6 +704,20 @@ fn stage_versioned_daemon_binary(
 }
 
 #[cfg(any(all(windows, not(debug_assertions)), test))]
+fn validate_cached_daemon_leaf(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.is_file() {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "cached daemon destination is not a regular file: {}",
+            path.display()
+        ),
+    ))
+}
+
+#[cfg(any(all(windows, not(debug_assertions)), test))]
 fn publish_staged_daemon(
     staged: tempfile::NamedTempFile,
     source: &Path,
@@ -729,6 +738,8 @@ fn publish_staged_daemon(
 
 #[cfg(any(all(windows, not(debug_assertions)), test))]
 fn verify_cached_daemon(source: &Path, destination: &Path) -> io::Result<()> {
+    let destination_metadata = fs::symlink_metadata(destination)?;
+    validate_cached_daemon_leaf(destination, &destination_metadata)?;
     if files_equal(source, destination)? {
         return Ok(());
     }
@@ -937,6 +948,31 @@ mod tests {
         assert_eq!(std::fs::read(destination).unwrap(), b"complete binary");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_version_cache_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("bundle").join("acornd.exe");
+        let sentinel = temp.path().join("sentinel.exe");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"expected daemon").unwrap();
+        std::fs::write(&sentinel, b"expected daemon").unwrap();
+        let destination = versioned_daemon_path(&source, temp.path(), "9.8.7").unwrap();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        symlink(&sentinel, &destination).unwrap();
+
+        let error = stage_versioned_daemon_binary(&source, temp.path(), "9.8.7").unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(std::fs::symlink_metadata(destination)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"expected daemon");
+    }
+
     #[test]
     fn file_verification_compares_bytes_across_chunk_boundaries() {
         let temp = tempfile::tempdir().unwrap();
@@ -967,6 +1003,31 @@ mod tests {
             publish_staged_daemon(staged, &source, &destination).unwrap(),
             destination
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_publish_race_rejects_symlinked_winner() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("acornd-source.exe");
+        let sentinel = temp.path().join("sentinel.exe");
+        let destination = temp.path().join("acornd.exe");
+        std::fs::write(&source, b"expected").unwrap();
+        std::fs::write(&sentinel, b"expected").unwrap();
+        symlink(&sentinel, &destination).unwrap();
+        let staged = tempfile::NamedTempFile::new_in(temp.path()).unwrap();
+        std::fs::write(staged.path(), b"expected").unwrap();
+
+        let error = publish_staged_daemon(staged, &source, &destination).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(std::fs::symlink_metadata(destination)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"expected");
     }
 
     #[test]
