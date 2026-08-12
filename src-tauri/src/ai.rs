@@ -367,11 +367,7 @@ fn run_oneshot_in_dir_cancellable_with_transport_and_environment(
     prompt_transport: PromptTransport,
     environment: CommandEnvironment,
 ) -> AppResult<String> {
-    let resolved = cli_resolver::resolve(command).map_err(|_| {
-        AppError::Other(format!(
-            "`{command}` not found. Install the configured AI CLI or change the provider in {settings_label}."
-        ))
-    })?;
+    let resolved = resolve_ai_cli(command, settings_label)?;
     let mut command_args = args.to_vec();
     if prompt_transport == PromptTransport::Argument {
         command_args.push(prompt.to_string());
@@ -456,11 +452,7 @@ fn run_streaming_in_dir_cancellable_with_transport<F>(
 where
     F: FnMut(AiProcessStreamEvent<'_>),
 {
-    let resolved = cli_resolver::resolve(command).map_err(|_| {
-        AppError::Other(format!(
-            "`{command}` not found. Install the configured AI CLI or change the provider in {settings_label}."
-        ))
-    })?;
+    let resolved = resolve_ai_cli(command, settings_label)?;
     let mut command_args = args.to_vec();
     if prompt_transport == PromptTransport::Argument {
         command_args.push(prompt.to_string());
@@ -521,6 +513,17 @@ where
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn resolve_ai_cli(command: &str, settings_label: &str) -> AppResult<std::path::PathBuf> {
+    cli_resolver::resolve(command)
+        .map_err(|error| ai_cli_resolution_error(command, settings_label, error))
+}
+
+fn ai_cli_resolution_error(command: &str, settings_label: &str, error: AppError) -> AppError {
+    AppError::Other(format!(
+        "AI CLI discovery failed for `{command}`: {error}; change the provider in {settings_label} if this command is unavailable."
+    ))
 }
 
 fn wait_with_timeout(
@@ -1222,6 +1225,23 @@ mod tests {
 
         assert_eq!(output, b"123456");
         assert!(err.to_string().contains("exceeded the 6 byte output limit"));
+    }
+
+    #[test]
+    fn ai_cli_resolution_error_preserves_the_original_diagnostic() {
+        let error = ai_cli_resolution_error(
+            "codex",
+            "Agent settings",
+            AppError::Other(
+                "failed to read login shell configuration: permission denied".to_string(),
+            ),
+        );
+        let message = error.to_string();
+
+        assert!(message.contains("AI CLI discovery failed for `codex`"));
+        assert!(message.contains("permission denied"));
+        assert!(message.contains("failed to read login shell configuration"));
+        assert!(message.contains("Agent settings"));
     }
 
     #[test]
