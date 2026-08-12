@@ -168,8 +168,8 @@ fn run_serve(detach: bool) -> io::Result<()> {
     init_tracing();
 
     // 4) Acquire the singleton lock.
-    let pid_path = match daemon::lifecycle::try_acquire_pid_lock()? {
-        daemon::lifecycle::PidLock::Acquired(path) => path,
+    let pid_lock = match daemon::lifecycle::try_acquire_pid_lock()? {
+        daemon::lifecycle::PidLock::Acquired(lock) => lock,
         daemon::lifecycle::PidLock::AlreadyHeld(pid) => {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -182,7 +182,7 @@ fn run_serve(detach: bool) -> io::Result<()> {
     let listeners = match daemon::socket::bind_both() {
         Ok(l) => l,
         Err(e) => {
-            daemon::lifecycle::release_pid_lock(&pid_path);
+            drop(pid_lock);
             return Err(e);
         }
     };
@@ -212,7 +212,7 @@ fn run_serve(detach: bool) -> io::Result<()> {
     //    on a panic the crash hook fires first, then unwinding hits
     //    these via destructors.
     daemon::socket::cleanup_paths(&control_path, &stream_path);
-    daemon::lifecycle::release_pid_lock(&pid_path);
+    drop(pid_lock);
     tracing::info!("acornd exited");
 
     serve_result

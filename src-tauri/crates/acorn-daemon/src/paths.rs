@@ -12,7 +12,7 @@
 //! ├── daemon.sock             (daemon control socket)
 //! ├── daemon-stream.sock      (daemon stream socket — split from control to
 //! │                            avoid head-of-line blocking under burst load)
-//! ├── daemon.pid              (lockfile; presence implies daemon claim)
+//! ├── daemon.pid              (reusable lockfile; OS lock implies live claim)
 //! ├── daemon.log              (current log; rotated to .1 / .2 on size)
 //! ├── daemon.log.1
 //! ├── daemon.log.2
@@ -67,8 +67,9 @@ pub fn stream_socket_path() -> std::io::Result<PathBuf> {
     acorn_paths::local_ipc_endpoint("daemon-stream")
 }
 
-/// PID lockfile path. The daemon writes its PID here on startup and
-/// inspects it on subsequent startups to detect a running peer.
+/// PID lockfile path. The daemon holds an OS lock and writes its PID here on
+/// startup. The inode is reused across runs; file presence alone is not a
+/// liveness signal.
 pub fn pid_file_path() -> std::io::Result<PathBuf> {
     Ok(data_dir()?.join("daemon.pid"))
 }
