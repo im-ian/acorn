@@ -105,9 +105,14 @@ fn push_provider_metrics(
     five_hour_fallback_error: &str,
     weekly_fallback_error: &str,
 ) {
-    let has_reported_window = rate_limits.five_hour.is_some() || rate_limits.weekly.is_some();
+    let ProviderRateLimits {
+        five_hour,
+        weekly,
+        discovery_error,
+    } = rate_limits;
+    let has_reported_window = five_hour.is_some() || weekly.is_some();
     if has_reported_window {
-        if let Some(five_hour) = rate_limits.five_hour {
+        if let Some(five_hour) = five_hour {
             push_metric(
                 metrics,
                 provider,
@@ -117,7 +122,7 @@ fn push_provider_metrics(
                 five_hour_fallback_error,
             );
         }
-        if let Some(weekly) = rate_limits.weekly {
+        if let Some(weekly) = weekly {
             push_metric(
                 metrics,
                 provider,
@@ -130,13 +135,18 @@ fn push_provider_metrics(
         return;
     }
 
+    let five_hour_error = discovery_error
+        .as_deref()
+        .unwrap_or(five_hour_fallback_error);
+    let weekly_error = discovery_error.as_deref().unwrap_or(weekly_fallback_error);
+
     push_metric(
         metrics,
         provider,
         AgentTokenWindow::FiveHour,
         None,
         fallback_source,
-        five_hour_fallback_error,
+        five_hour_error,
     );
     push_metric(
         metrics,
@@ -144,7 +154,7 @@ fn push_provider_metrics(
         AgentTokenWindow::Weekly,
         None,
         fallback_source,
-        weekly_fallback_error,
+        weekly_error,
     );
 }
 
@@ -185,34 +195,68 @@ fn push_metric(
 struct ProviderRateLimits {
     five_hour: Option<RateLimitWindow>,
     weekly: Option<RateLimitWindow>,
+    discovery_error: Option<String>,
 }
 
 fn read_codex_rate_limits() -> ProviderRateLimits {
-    read_codex_rate_limits_from_latest_sessions().unwrap_or_else(read_codex_rate_limits_from_sqlite)
+    let sessions = read_codex_rate_limits_from_latest_sessions();
+    if sessions.has_reported_window() {
+        return sessions;
+    }
+
+    let mut sqlite = read_codex_rate_limits_from_sqlite();
+    if !sqlite.has_reported_window() {
+        sqlite.discovery_error =
+            combine_discovery_errors(sessions.discovery_error, sqlite.discovery_error);
+    }
+    sqlite
 }
 
-fn read_codex_rate_limits_from_latest_sessions() -> Option<ProviderRateLimits> {
-    let home = home_dir()?;
+impl ProviderRateLimits {
+    fn has_reported_window(&self) -> bool {
+        self.five_hour.is_some() || self.weekly.is_some()
+    }
+}
+
+fn read_codex_rate_limits_from_latest_sessions() -> ProviderRateLimits {
+    let Some(home) = home_dir() else {
+        return ProviderRateLimits::default();
+    };
     let sessions = home.join(".codex").join("sessions");
-    let scan = latest_jsonl_files(&sessions, CODEX_SESSION_SCAN_LIMIT);
+    read_codex_rate_limits_from_sessions_root(&sessions)
+}
+
+fn read_codex_rate_limits_from_sessions_root(sessions: &Path) -> ProviderRateLimits {
+    let scan = latest_jsonl_files(sessions, CODEX_SESSION_SCAN_LIMIT);
+    let mut result = ProviderRateLimits {
+        discovery_error: scan.error,
+        ..ProviderRateLimits::default()
+    };
     if scan.truncated {
-        return None;
+        return result;
     }
 
     for file in scan.files {
-        if let Some(parsed) = read_codex_rate_limits_from_session_file(&file) {
-            return Some(parsed);
+        match read_codex_rate_limits_from_session_file(&file) {
+            Ok(Some(parsed)) => return parsed,
+            Ok(None) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                result.discovery_error.get_or_insert_with(|| {
+                    path_discovery_error("read Codex rate-limit session", &file, &err)
+                });
+            }
         }
     }
 
-    None
+    result
 }
 
-fn read_codex_rate_limits_from_session_file(file: &Path) -> Option<ProviderRateLimits> {
-    if !is_plain_regular_file(file) {
-        return None;
+fn read_codex_rate_limits_from_session_file(file: &Path) -> io::Result<Option<ProviderRateLimits>> {
+    if !is_plain_regular_file(file)? {
+        return Ok(None);
     }
-    let text = read_tail(file, CODEX_SESSION_TAIL_BYTES).ok()?.text;
+    let text = read_tail(file, CODEX_SESSION_TAIL_BYTES)?.text;
     for line in text.lines().rev() {
         if !line.contains("\"rate_limits\"") {
             continue;
@@ -227,11 +271,11 @@ fn read_codex_rate_limits_from_session_file(file: &Path) -> Option<ProviderRateL
             continue;
         };
         let parsed = parse_codex_rate_limits(rate_limits, "~/.codex/sessions rate_limits");
-        if parsed.five_hour.is_some() || parsed.weekly.is_some() {
-            return Some(parsed);
+        if parsed.has_reported_window() {
+            return Ok(Some(parsed));
         }
     }
-    None
+    Ok(None)
 }
 
 fn read_codex_rate_limits_from_sqlite() -> ProviderRateLimits {
@@ -239,8 +283,19 @@ fn read_codex_rate_limits_from_sqlite() -> ProviderRateLimits {
         return ProviderRateLimits::default();
     };
     let db = home.join(".codex").join("logs_2.sqlite");
-    if !is_plain_regular_file(&db) {
-        return ProviderRateLimits::default();
+    match is_plain_regular_file(&db) {
+        Ok(true) => {}
+        Ok(false) => return ProviderRateLimits::default(),
+        Err(err) => {
+            return ProviderRateLimits {
+                discovery_error: Some(path_discovery_error(
+                    "inspect Codex rate-limit database",
+                    &db,
+                    &err,
+                )),
+                ..ProviderRateLimits::default()
+            };
+        }
     }
 
     let query = r#"
@@ -252,12 +307,22 @@ fn read_codex_rate_limits_from_sqlite() -> ProviderRateLimits {
     "#;
     let mut command = Command::new("/usr/bin/sqlite3");
     command.arg(&db).arg(query);
-    let Ok(stdout) = command_stdout_bounded(
+    let stdout = match command_stdout_bounded(
         &mut command,
         CODEX_SQLITE_STDOUT_MAX_BYTES,
         CODEX_SQLITE_TIMEOUT,
-    ) else {
-        return ProviderRateLimits::default();
+    ) {
+        Ok(stdout) => stdout,
+        Err(err) => {
+            return ProviderRateLimits {
+                discovery_error: Some(path_discovery_error(
+                    "query Codex rate-limit database",
+                    &db,
+                    &err,
+                )),
+                ..ProviderRateLimits::default()
+            };
+        }
     };
     let text = String::from_utf8_lossy(&stdout);
     let Some(json_text) = extract_codex_event_json(&text) else {
@@ -304,9 +369,23 @@ fn parse_codex_rate_limits(value: &Value, source: &str) -> ProviderRateLimits {
 }
 
 fn read_claude_rate_limits() -> ProviderRateLimits {
-    for path in claude_rate_limit_paths() {
-        let Ok(data) = read_bounded_regular_file(&path, CLAUDE_RATE_LIMIT_MAX_BYTES) else {
-            continue;
+    read_claude_rate_limits_from_paths(claude_rate_limit_paths())
+}
+
+fn read_claude_rate_limits_from_paths(
+    paths: impl IntoIterator<Item = PathBuf>,
+) -> ProviderRateLimits {
+    let mut result = ProviderRateLimits::default();
+    for path in paths {
+        let data = match read_bounded_regular_file(&path, CLAUDE_RATE_LIMIT_MAX_BYTES) {
+            Ok(data) => data,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                result.discovery_error.get_or_insert_with(|| {
+                    path_discovery_error("read Claude rate-limit capture", &path, &err)
+                });
+                continue;
+            }
         };
         let Ok(value) = serde_json::from_slice::<Value>(&data) else {
             continue;
@@ -328,13 +407,14 @@ fn read_claude_rate_limits() -> ProviderRateLimits {
                 &["resets_at"],
                 &source,
             ),
+            discovery_error: None,
         };
-        if parsed.five_hour.is_some() || parsed.weekly.is_some() {
+        if parsed.has_reported_window() {
             return parsed;
         }
     }
 
-    ProviderRateLimits::default()
+    result
 }
 
 fn claude_rate_limit_paths() -> Vec<PathBuf> {
@@ -389,6 +469,7 @@ struct SessionScanResult {
     files: Vec<PathBuf>,
     visited_entries: usize,
     truncated: bool,
+    error: Option<String>,
 }
 
 fn latest_jsonl_files(root: &Path, limit: usize) -> SessionScanResult {
@@ -407,7 +488,20 @@ fn latest_jsonl_files_with_budget(
     max_depth: usize,
 ) -> SessionScanResult {
     let mut scan = SessionScanResult::default();
-    if file_limit == 0 || !is_plain_directory(root) {
+    if file_limit == 0 {
+        return scan;
+    }
+    match is_plain_directory(root) {
+        Ok(true) => {}
+        Ok(false) => return scan,
+        Err(err) => {
+            record_scan_error(&mut scan, "inspect Codex sessions root", root, err);
+            return scan;
+        }
+    }
+
+    if entry_limit == 0 {
+        scan.truncated = true;
         return scan;
     }
 
@@ -442,8 +536,8 @@ fn collect_jsonl_files(
 ) {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
-        Err(_) => {
-            scan.truncated = true;
+        Err(err) => {
+            record_scan_error(scan, "read Codex sessions directory", root, err);
             return;
         }
     };
@@ -457,16 +551,16 @@ fn collect_jsonl_files(
 
         let entry = match entry {
             Ok(entry) => entry,
-            Err(_) => {
-                scan.truncated = true;
+            Err(err) => {
+                record_scan_error(scan, "read Codex session directory entry", root, err);
                 return;
             }
         };
         let path = entry.path();
         let file_type = match entry.file_type() {
             Ok(file_type) => file_type,
-            Err(_) => {
-                scan.truncated = true;
+            Err(err) => {
+                record_scan_error(scan, "inspect Codex session entry", &path, err);
                 return;
             }
         };
@@ -497,18 +591,26 @@ fn collect_jsonl_files(
         }
         let metadata = match entry.metadata() {
             Ok(metadata) => metadata,
-            Err(_) => {
-                scan.truncated = true;
+            Err(err) => {
+                record_scan_error(scan, "inspect Codex session file", &path, err);
                 return;
             }
         };
-        retain_latest_file(
-            files,
-            path,
-            metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-            file_limit,
-        );
+        let modified = match metadata.modified() {
+            Ok(modified) => modified,
+            Err(err) => {
+                record_scan_error(scan, "read Codex session timestamp", &path, err);
+                return;
+            }
+        };
+        retain_latest_file(files, path, modified, file_limit);
     }
+}
+
+fn record_scan_error(scan: &mut SessionScanResult, action: &str, path: &Path, err: io::Error) {
+    scan.truncated = true;
+    scan.error
+        .get_or_insert_with(|| path_discovery_error(action, path, &err));
 }
 
 fn retain_latest_file(
@@ -522,16 +624,32 @@ fn retain_latest_file(
     files.truncate(limit);
 }
 
-fn is_plain_directory(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_dir())
-        .unwrap_or(false)
+fn is_plain_directory(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.file_type().is_dir()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
 }
 
-fn is_plain_regular_file(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_file())
-        .unwrap_or(false)
+fn is_plain_regular_file(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.file_type().is_file()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
+fn path_discovery_error(action: &str, path: &Path, err: &io::Error) -> String {
+    format!("{action} {}: {err}", path.display())
+}
+
+fn combine_discovery_errors(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(format!("{first}; fallback failed: {second}")),
+        (Some(error), None) | (None, Some(error)) => Some(error),
+        (None, None) => None,
+    }
 }
 
 fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
@@ -756,6 +874,7 @@ mod tests {
                 reset_at: Some(1785902976.0),
                 source: "codex".to_string(),
             }),
+            discovery_error: None,
         };
 
         push_provider_metrics(
@@ -771,6 +890,29 @@ mod tests {
         assert_eq!(metrics[0].window, AgentTokenWindow::Weekly);
         assert_eq!(metrics[0].remaining_percent, Some(64.0));
         assert_eq!(metrics[0].error, None);
+    }
+
+    #[test]
+    fn reports_provider_discovery_errors_instead_of_missing_data() {
+        let mut metrics = Vec::new();
+        let limits = ProviderRateLimits {
+            discovery_error: Some("permission denied while reading token usage".to_string()),
+            ..ProviderRateLimits::default()
+        };
+
+        push_provider_metrics(
+            &mut metrics,
+            AgentTokenProvider::Codex,
+            limits,
+            "codex",
+            "missing 5h",
+            "missing weekly",
+        );
+
+        assert_eq!(metrics.len(), 2);
+        assert!(metrics.iter().all(|metric| {
+            metric.error.as_deref() == Some("permission denied while reading token usage")
+        }));
     }
 
     #[test]
@@ -797,7 +939,9 @@ mod tests {
         .expect("write rate limit event");
         drop(file);
 
-        let parsed = read_codex_rate_limits_from_session_file(&path).expect("rate limits");
+        let parsed = read_codex_rate_limits_from_session_file(&path)
+            .expect("read session")
+            .expect("rate limits");
 
         assert_eq!(parsed.five_hour, None);
         assert_eq!(parsed.weekly.unwrap().used_percent, 42.0);
@@ -878,6 +1022,58 @@ mod tests {
         assert!(scan.files.is_empty());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn codex_session_access_errors_are_not_reported_as_missing_usage() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempdir().expect("session root");
+        let session = root.path().join("session.jsonl");
+        fs::write(
+            &session,
+            br#"{"payload":{"rate_limits":{"primary":{"used_percent":42}}}}"#,
+        )
+        .expect("write session");
+        let original_permissions = fs::metadata(root.path()).unwrap().permissions();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o000)).unwrap();
+
+        let limits = read_codex_rate_limits_from_sessions_root(root.path());
+
+        fs::set_permissions(root.path(), original_permissions).unwrap();
+        assert!(!limits.has_reported_window());
+        let error = limits
+            .discovery_error
+            .expect("permission error must be retained");
+        assert!(error.contains("read Codex sessions directory"));
+        assert!(error.contains("Permission denied") || error.contains("permission denied"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_capture_access_errors_are_not_reported_as_missing_usage() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempdir().expect("capture root");
+        let capture = root.path().join("claude-rate-limits.json");
+        fs::write(
+            &capture,
+            br#"{"rate_limits":{"five_hour":{"used_percentage":42}}}"#,
+        )
+        .expect("write capture");
+        let original_permissions = fs::metadata(&capture).unwrap().permissions();
+        fs::set_permissions(&capture, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let limits = read_claude_rate_limits_from_paths([capture.clone()]);
+
+        fs::set_permissions(&capture, original_permissions).unwrap();
+        assert!(!limits.has_reported_window());
+        let error = limits
+            .discovery_error
+            .expect("permission error must be retained");
+        assert!(error.contains("read Claude rate-limit capture"));
+        assert!(error.contains("Permission denied") || error.contains("permission denied"));
+    }
+
     #[test]
     fn bounded_regular_file_accepts_exact_limit_and_rejects_oversize() {
         let root = tempdir().expect("temp dir");
@@ -912,7 +1108,9 @@ mod tests {
 
         assert!(!scan.truncated);
         assert_eq!(scan.files, vec![root.path().join("regular.jsonl")]);
-        assert!(read_codex_rate_limits_from_session_file(&linked_file).is_none());
+        assert!(read_codex_rate_limits_from_session_file(&linked_file)
+            .unwrap()
+            .is_none());
         assert_eq!(
             read_bounded_regular_file(&linked_file, 1024)
                 .unwrap_err()
