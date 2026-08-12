@@ -48,12 +48,14 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { api } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboardText";
 import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
 import { requestNewGraphSession } from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
-import { revealInFileManagerText } from "../lib/fileManager";
+import {
+  revealInFileManagerText,
+  revealPathWithFeedback,
+} from "../lib/fileManager";
 import { openInConfiguredEditor } from "../lib/editor";
 import { isInAcornFloatingLayer } from "../lib/floatingLayer";
 import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
@@ -1453,9 +1455,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
         label: revealInFileManagerText(t),
         icon: <FolderOpen size={12} />,
         onClick: () => {
-          void api.fsReveal(session.worktree_path).catch((err: unknown) => {
-            console.error("[WorkspaceMain] reveal failed", err);
-          });
+          void revealPathWithFeedback(session.worktree_path);
         },
       },
       { type: "separator" },
@@ -2088,9 +2088,7 @@ function KanbanTerminalPopover({
         label: revealInFileManagerText(t),
         icon: <FolderOpen size={12} />,
         onClick: () => {
-          void api.fsReveal(session.worktree_path).catch((err: unknown) => {
-            console.error("[WorkspaceMain] reveal failed", err);
-          });
+          void revealPathWithFeedback(session.worktree_path);
         },
       },
       workspaceContextMenuGroupTitle(t, "copy"),

@@ -47,6 +47,7 @@
     "files": {
       "renameFailed": "파일 이름을 바꾸지 못했습니다:",
       "trashFailed": "휴지통으로 이동하지 못했습니다:",
+      "revealFailed": "파일 관리자에서 경로를 표시하지 못했습니다:",
       "pathsCopied": "파일 경로를 복사했습니다.",
       "copyFailed": "파일 경로를 복사하지 못했습니다."
     },

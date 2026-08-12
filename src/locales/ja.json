@@ -47,6 +47,7 @@
     "files": {
       "renameFailed": "ファイル名の変更に失敗しました:",
       "trashFailed": "ゴミ箱に移動できませんでした:",
+      "revealFailed": "ファイルマネージャーでパスを表示できませんでした:",
       "pathsCopied": "ファイルパスがコピーされました。",
       "copyFailed": "ファイルパスのコピーに失敗しました。"
     },

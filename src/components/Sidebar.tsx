@@ -88,7 +88,10 @@ import {
   type NewGraphSessionEventDetail,
 } from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
-import { revealInFileManagerText } from "../lib/fileManager";
+import {
+  revealInFileManagerText,
+  revealPathWithFeedback,
+} from "../lib/fileManager";
 import { openInConfiguredEditor } from "../lib/editor";
 import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -2336,11 +2339,7 @@ function ProjectGroupView({
   }
 
   async function openInFinder(path: string) {
-    try {
-      await api.fsReveal(path);
-    } catch {
-      // ignore
-    }
+    await revealPathWithFeedback(path);
   }
 
   const projectActionMenuItems: ContextMenuItem[] = [
@@ -3180,7 +3179,7 @@ function ProjectFolderView({
             label: revealInFileManagerText(t),
             icon: <FolderOpen size={12} />,
             onClick: () => {
-              void api.fsReveal(folder.cwdPath);
+              void revealPathWithFeedback(folder.cwdPath);
             },
           },
           {
@@ -3571,9 +3570,7 @@ function SessionRow({
       label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
       onClick: () => {
-        void api.fsReveal(session.worktree_path).catch((err: unknown) => {
-          console.error("[Sidebar] reveal failed", err);
-        });
+        void revealPathWithFeedback(session.worktree_path);
       },
     },
     contextMenuGroupTitle(t, "copy"),
@@ -4615,7 +4612,7 @@ function LocalWorkspaceView({
       label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
       onClick: () => {
-        void api.fsReveal(folder.cwdPath);
+        void revealPathWithFeedback(folder.cwdPath);
       },
     },
     {
@@ -4950,9 +4947,7 @@ function LocalSessionRow({
       label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
       onClick: () => {
-        void api.fsReveal(session.worktree_path).catch((err: unknown) => {
-          console.error("[Sidebar] reveal failed", err);
-        });
+        void revealPathWithFeedback(session.worktree_path);
       },
     },
     {

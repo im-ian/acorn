@@ -4610,10 +4610,13 @@ test.describe("sidebar: project lifecycle", () => {
     ).toContainText("demo-api");
   });
 
-  test("a multi-root project header keeps only project management actions", async ({
+  test("a multi-root project header keeps project actions and surfaces reveal errors", async ({
     page,
     tauri,
   }) => {
+    await tauri.handle("fs_reveal", () =>
+      Promise.reject("reveal permission denied"),
+    );
     await tauri.respond("list_projects", [
       {
         repo_path: "/tmp/demo",
@@ -4661,6 +4664,13 @@ test.describe("sidebar: project lifecycle", () => {
     await page.keyboard.press("Escape");
     await projectRow.click({ button: "right" });
     await expect(page.getByRole("menuitem")).toHaveText(expectedProjectActions);
+    await page.getByRole("menuitem", { name: revealLabel }).click();
+
+    await expect(
+      page.getByText(
+        "Failed to reveal the path in the file manager: reveal permission denied",
+      ),
+    ).toBeVisible();
   });
 
   test("primary and source root headers create worktree sessions in their repositories", async ({

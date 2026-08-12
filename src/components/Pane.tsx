@@ -56,7 +56,10 @@ import {
 import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
 import { requestNewGraphSession } from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
-import { revealInFileManagerText } from "../lib/fileManager";
+import {
+  revealInFileManagerText,
+  revealPathWithFeedback,
+} from "../lib/fileManager";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
   hasConfiguredEditor,
@@ -1361,9 +1364,7 @@ function TabItem({
       label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
       onClick: () => {
-        void api.fsReveal(tabPath).catch((err: unknown) => {
-          console.error("[Pane] reveal in finder failed", err);
-        });
+        void revealPathWithFeedback(tabPath);
       },
     },
     paneContextMenuGroupTitle(t, "copy"),
@@ -1888,11 +1889,7 @@ function buildPaneMenuItems({
           label: revealInFileManagerText(t),
           icon: <FolderOpen size={12} />,
           onClick: () => {
-            void api.fsReveal(activeSession.worktree_path).catch(
-              (err: unknown) => {
-                console.error("[Pane] reveal failed", err);
-              },
-            );
+            void revealPathWithFeedback(activeSession.worktree_path);
           },
         },
         { type: "separator" },
