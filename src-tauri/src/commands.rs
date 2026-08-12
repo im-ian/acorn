@@ -240,24 +240,63 @@ fn discard_pending_session_removal(
     worktree_path: &str,
     git_common_dir: &str,
 ) -> AppResult<()> {
+    let data_dir = persistence::data_dir()?;
+    discard_pending_session_removal_from_dir(
+        state,
+        token,
+        repo_path,
+        worktree_path,
+        git_common_dir,
+        &data_dir,
+    )
+}
+
+fn discard_pending_session_removal_from_dir(
+    state: &AppState,
+    token: &str,
+    repo_path: &str,
+    worktree_path: &str,
+    git_common_dir: &str,
+    data_dir: &Path,
+) -> AppResult<()> {
     let pending =
         take_pending_session_removal(state, token, repo_path, worktree_path, git_common_dir)?;
-    if let Err(error) = worktree::discard_removed_worktree(
-        Path::new(repo_path),
-        Path::new(worktree_path),
-        token,
-        Path::new(git_common_dir),
-    ) {
+    let result = (|| {
+        worktree::discard_removed_worktree(
+            Path::new(repo_path),
+            Path::new(worktree_path),
+            token,
+            Path::new(git_common_dir),
+        )?;
+        let mut first_error = None;
+        for session in &pending.sessions {
+            if let Err(error) = scrollback::delete(data_dir, &session.id.to_string()) {
+                first_error.get_or_insert_with(|| match error {
+                    scrollback::ScrollbackError::Io(source) => AppError::Io(io::Error::new(
+                        source.kind(),
+                        format!(
+                            "failed to delete scrollback for removed session '{}': {source}",
+                            session.id
+                        ),
+                    )),
+                    other => AppError::Other(format!(
+                        "failed to delete scrollback for removed session '{}': {other}",
+                        session.id
+                    )),
+                });
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    })();
+    if let Err(error) = result {
         state
             .pending_session_removals
             .lock()
             .insert(token.to_string(), pending);
         return Err(error);
-    }
-    if let Ok(dir) = persistence::data_dir() {
-        for session in pending.sessions {
-            scrollback::delete(&dir, &session.id.to_string()).ok();
-        }
     }
     Ok(())
 }
@@ -11326,9 +11365,9 @@ mod tests {
         auto_title_enabled_for_new_session, can_store_generated_session_title,
         collect_memory_usage_from_roots, configured_git_identity, create_unique_worktree,
         daemon_attach_replay_scrollback, daemon_spawn_name_for_session,
-        detach_requested_by_stale_renderer, font_name_from_path,
-        infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
-        normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
+        detach_requested_by_stale_renderer, discard_pending_session_removal_from_dir,
+        font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
+        memory_root_pids, normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
         remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
         should_remove_local_project_mirror, should_route_session_to_daemon,
         terminate_session_runtime, validate_editor_command, validate_new_project_name,
@@ -15843,6 +15882,76 @@ mod tests {
 
         assert!(state.sessions.get(&session_id).is_err());
         assert!(state.pending_session_removals.lock().contains_key(&token));
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn failed_session_cleanup_keeps_pending_removal_retryable() {
+        let repo_dir = unique_repo_dir("retry-session-cleanup");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let worktree_path =
+            crate::worktree::create_worktree(&repo_dir, "cleanup").expect("create linked worktree");
+        let removed = crate::worktree::stage_remove_worktree_at_path(&repo_dir, &worktree_path)
+            .expect("stage worktree removal")
+            .expect("removal token");
+
+        let state = AppState::new();
+        let session = worktree_session(
+            "cleanup",
+            repo_dir.to_str().expect("repo path"),
+            worktree_path.to_str().expect("worktree path"),
+        );
+        let session_id = session.id;
+        state.pending_session_removals.lock().insert(
+            removed.token.clone(),
+            PendingSessionRemoval {
+                worktree: removed.clone(),
+                sessions: vec![session],
+            },
+        );
+
+        let data_dir = repo_dir.join("test-data");
+        let blocking_path = data_dir
+            .join("scrollback")
+            .join(format!("{session_id}.txt"));
+        std::fs::create_dir_all(&blocking_path).expect("create blocking scrollback directory");
+
+        let error = discard_pending_session_removal_from_dir(
+            &state,
+            &removed.token,
+            &removed.repo_path,
+            &removed.worktree_path,
+            &removed.git_common_dir,
+            &data_dir,
+        )
+        .expect_err("scrollback cleanup must fail");
+
+        assert!(error.to_string().contains(&session_id.to_string()));
+        assert!(
+            state
+                .pending_session_removals
+                .lock()
+                .contains_key(&removed.token),
+            "failed cleanup must keep the removal token available for retry"
+        );
+        assert!(
+            !worktree_path.exists(),
+            "successful worktree cleanup should remain complete"
+        );
+
+        std::fs::remove_dir(&blocking_path).expect("remove blocking scrollback directory");
+        discard_pending_session_removal_from_dir(
+            &state,
+            &removed.token,
+            &removed.repo_path,
+            &removed.worktree_path,
+            &removed.git_common_dir,
+            &data_dir,
+        )
+        .expect("retry cleanup");
+
+        assert!(state.pending_session_removals.lock().is_empty());
         std::fs::remove_dir_all(&repo_dir).ok();
     }
 
