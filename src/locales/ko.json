@@ -48,7 +48,8 @@
       "renameFailed": "파일 이름을 바꾸지 못했습니다:",
       "trashFailed": "휴지통으로 이동하지 못했습니다:",
       "pathsCopied": "파일 경로를 복사했습니다.",
-      "copyFailed": "파일 경로를 복사하지 못했습니다."
+      "copyFailed": "파일 경로를 복사하지 못했습니다.",
+      "terminalLinkOpenFailed": "터미널 파일 링크를 열지 못했습니다:"
     },
     "pullRequests": {
       "mergeFailed": "Pull request를 병합하지 못했습니다:",

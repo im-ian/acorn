@@ -48,7 +48,8 @@
       "renameFailed": "Failed to rename file:",
       "trashFailed": "Failed to move to trash:",
       "pathsCopied": "File paths copied.",
-      "copyFailed": "Failed to copy file paths."
+      "copyFailed": "Failed to copy file paths.",
+      "terminalLinkOpenFailed": "Failed to open terminal file link:"
     },
     "pullRequests": {
       "mergeFailed": "Failed to merge pull request:",

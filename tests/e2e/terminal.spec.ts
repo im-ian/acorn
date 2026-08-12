@@ -2896,6 +2896,84 @@ test.describe("terminal: spawn", () => {
     await expect(page.locator('img[alt="preview image (1).png"]')).toBeVisible();
   });
 
+  test("surfaces terminal file URL grant failures", async ({ page, tauri }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __deniedFileUrlLinkChannelId?: number;
+      };
+      w.__deniedFileUrlLinkChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("fs_grant_external_file", () => {
+      throw new Error("filesystem access denied");
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __deniedFileUrlLinkChannelId?: number;
+              }
+            ).__deniedFileUrlLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const uri = "file:///Users/tester/Desktop/private.txt";
+    await emitSubscribedPtyOutput(
+      page,
+      "__deniedFileUrlLinkChannelId",
+      `Saved to: ${uri}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(uri);
+
+    const textRect = await terminalTextRect(page, uri);
+    expect(textRect).not.toBeNull();
+    await page.mouse.click(
+      textRect!.left + Math.min(12, textRect!.width / 2),
+      (textRect!.top + textRect!.bottom) / 2,
+    );
+
+    await expect(
+      page.getByRole("status").filter({
+        hasText: "Failed to open terminal file link: filesystem access denied",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /private\.txt Close tab/ }),
+    ).toHaveCount(0);
+  });
+
   test("keeps modifier-click link tooltip mounted while output streams", async ({
     page,
     tauri,
