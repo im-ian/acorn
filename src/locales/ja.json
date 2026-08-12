@@ -908,7 +908,8 @@
       "multiInputOn": "複数入力が可能です。",
       "multiInputOff": "マルチ入力が無効になっています。",
       "shellEnvironmentReloaded": "シェル環境がリロードされました。新しいセッションを開いて適用します。",
-      "shellEnvironmentReloadFailed": "シェル環境のリロードに失敗しました。"
+      "shellEnvironmentReloadFailed": "シェル環境のリロードに失敗しました。",
+      "preventSleepSyncFailedPrefix": "スリープ防止設定を適用できませんでした:"
     }
   },
   "statusBar": {

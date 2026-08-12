@@ -908,7 +908,8 @@
       "multiInputOn": "Multi-input enabled.",
       "multiInputOff": "Multi-input disabled.",
       "shellEnvironmentReloaded": "Shell environment reloaded. Open a new session to apply.",
-      "shellEnvironmentReloadFailed": "Failed to reload shell environment."
+      "shellEnvironmentReloadFailed": "Failed to reload shell environment.",
+      "preventSleepSyncFailedPrefix": "Could not apply the keep-awake setting:"
     }
   },
   "statusBar": {

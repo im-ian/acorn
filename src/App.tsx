@@ -850,8 +850,11 @@ function App() {
     void api.setPreventSleep(preventSleep).catch((err) => {
       lastPreventSleepSync = null;
       console.warn("[App] prevent-sleep sync failed", err);
+      showToast(
+        `${appText(t, "app.toast.preventSleepSyncFailedPrefix")} ${err instanceof Error ? err.message : String(err)}`,
+      );
     });
-  }, [preventSleep]);
+  }, [preventSleep, showToast, t]);
 
   // Auto-update: check once on startup, then every 24h. Both calls are
   // best-effort and non-blocking — surfaced via the App-level
