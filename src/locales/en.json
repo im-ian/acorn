@@ -948,6 +948,19 @@
       "turn_interrupted": "agent turn interrupted",
       "shell_prompt": "shell prompt detected"
     },
+    "errors": {
+      "ariaLabel": "Application errors",
+      "tooltip": "1 application error",
+      "title": "Application error",
+      "activeCount": "1 active error",
+      "messageLabel": "Error log",
+      "actions": {
+        "copy": "Copy error log",
+        "copied": "Error log copied",
+        "copyFailed": "Failed to copy error log.",
+        "dismiss": "Dismiss error"
+      }
+    },
     "notifications": {
       "ariaLabel": "Session notifications",
       "tooltipEmpty": "No unread session notifications",

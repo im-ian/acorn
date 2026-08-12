@@ -12,9 +12,11 @@ import {
   Activity,
   AlertCircle,
   Bell,
+  Check,
   CheckCheck,
   Clock,
   Columns3,
+  Copy,
   Gauge,
   Kanban,
   Loader2,
@@ -29,6 +31,7 @@ import {
   providerSupportsTokenUsage,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
+import { writeClipboardText } from "../lib/clipboardText";
 import { cn } from "../lib/cn";
 import { createInFlightCoalescer } from "../lib/inFlightCoalescer";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -50,7 +53,13 @@ import { useTranslation } from "../lib/useTranslation";
 import { useAppStore, type WorkspaceViewMode } from "../store";
 import { MemoryBreakdownModal } from "./MemoryBreakdownModal";
 import { Tooltip } from "./Tooltip";
-import { Select, StatusDot, type SelectOption, type StatusTone } from "./ui";
+import {
+  Button,
+  Select,
+  StatusDot,
+  type SelectOption,
+  type StatusTone,
+} from "./ui";
 
 const MEMORY_POLL_MS = 2000;
 const TOKEN_USAGE_POLL_MS = 60_000;
@@ -359,6 +368,7 @@ export function StatusBar() {
             the main view. */}
         <ServicesStatusButton />
         {showSessionActivity ? <SessionNotificationsButton /> : null}
+        {error ? <ErrorStatusButton error={error} /> : null}
         {showSessionCount ? (
           <span className="whitespace-nowrap">
             {statusBarFormat(t, "statusBar.sessionCount", {
@@ -427,13 +437,6 @@ export function StatusBar() {
             <span className="whitespace-nowrap">
               {statusBarText(t, "statusBar.working")}
             </span>
-          ) : null}
-          {error ? (
-            <Tooltip label={error} side="top" multiline>
-              <span className="truncate whitespace-nowrap text-danger">
-                {statusBarFormat(t, "statusBar.error", { error })}
-              </span>
-            </Tooltip>
           ) : null}
           {showGithubAccount && prAccount ? (
             <Tooltip
@@ -812,6 +815,177 @@ const NOTIFICATION_KIND_KEYS: Record<
   waiting_for_input: "statusBar.notifications.kind.waitingForInput",
   errored: "statusBar.notifications.kind.errored",
 };
+
+function ErrorStatusButton({ error }: { error: string }) {
+  const t = useTranslation();
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <Tooltip
+        label={statusBarText(t, "statusBar.errors.tooltip")}
+        side="top"
+      >
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-label={statusBarText(t, "statusBar.errors.ariaLabel")}
+          className="relative flex h-5 items-center gap-1.5 rounded px-1.5 text-danger transition hover:bg-danger/10"
+        >
+          <AlertCircle size={12} />
+          <span className="min-w-3 rounded-full bg-danger px-1 text-center text-[9px] leading-3 text-white">
+            1
+          </span>
+        </button>
+      </Tooltip>
+      {open ? (
+        <ErrorStatusDropdown
+          anchor={triggerRef.current}
+          error={error}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function ErrorStatusDropdown({
+  anchor,
+  error,
+  onClose,
+}: {
+  anchor: HTMLElement | null;
+  error: string;
+  onClose: () => void;
+}) {
+  const t = useTranslation();
+  const showToast = useToasts((state) => state.show);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [position, setPosition] = useState<{
+    left: number;
+    bottom: number;
+  } | null>(null);
+
+  useEffect(() => {
+    setCopied(false);
+  }, [error]);
+
+  useLayoutEffect(() => {
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    setPosition({
+      left: rect.left,
+      bottom: Math.max(8, window.innerHeight - rect.top + 6),
+    });
+  }, [anchor]);
+
+  useLayoutEffect(() => {
+    if (!ref.current || !position) return;
+    const rect = ref.current.getBoundingClientRect();
+    const overflowRight = position.left + rect.width - (window.innerWidth - 8);
+    if (overflowRight > 0) {
+      setPosition((current) =>
+        current
+          ? { ...current, left: Math.max(8, current.left - overflowRight) }
+          : current,
+      );
+    }
+  }, [position]);
+
+  useEffect(() => {
+    function onDown(event: MouseEvent) {
+      if (ref.current?.contains(event.target as Node)) return;
+      if (anchor?.contains(event.target as Node)) return;
+      onClose();
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onClose);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [anchor, onClose]);
+
+  if (!position) return null;
+
+  const copyError = async () => {
+    try {
+      await writeClipboardText(error);
+      setCopied(true);
+      showToast(statusBarText(t, "statusBar.errors.actions.copied"));
+    } catch (copyFailure) {
+      setCopied(false);
+      console.warn("[StatusBar] error log clipboard write failed", copyFailure);
+      showToast(statusBarText(t, "statusBar.errors.actions.copyFailed"));
+    }
+  };
+
+  const dismissError = () => {
+    useAppStore.getState().consumeError();
+    onClose();
+  };
+
+  return createPortal(
+    <div
+      ref={ref}
+      role="dialog"
+      aria-label={statusBarText(t, "statusBar.errors.title")}
+      style={{
+        position: "fixed",
+        left: position.left,
+        bottom: position.bottom,
+        zIndex: 60,
+      }}
+      className="flex max-h-[420px] w-[28rem] max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-md border border-danger/35 bg-bg-elevated shadow-2xl"
+    >
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <AlertCircle size={14} className="shrink-0 text-danger" />
+        <div className="min-w-0">
+          <div className="font-mono text-xs text-fg">
+            {statusBarText(t, "statusBar.errors.title")}
+          </div>
+          <div className="font-mono text-[10px] text-danger">
+            {statusBarText(t, "statusBar.errors.activeCount")}
+          </div>
+        </div>
+      </div>
+      <div className="min-h-0 overflow-auto p-3">
+        <div className="mb-1.5 font-mono text-[10px] uppercase tracking-wide text-fg-muted">
+          {statusBarText(t, "statusBar.errors.messageLabel")}
+        </div>
+        <pre className="whitespace-pre-wrap break-all rounded border border-border bg-bg-sidebar p-2.5 font-mono text-[11px] leading-relaxed text-danger select-text">
+          {error}
+        </pre>
+      </div>
+      <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-2">
+        <Button variant="dangerGhost" size="xs" onClick={dismissError}>
+          <X size={12} />
+          {statusBarText(t, "statusBar.errors.actions.dismiss")}
+        </Button>
+        <Button variant="dangerSoft" size="xs" onClick={() => void copyError()}>
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+          {statusBarText(
+            t,
+            copied
+              ? "statusBar.errors.actions.copied"
+              : "statusBar.errors.actions.copy",
+          )}
+        </Button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
 
 function SessionNotificationsButton() {
   const t = useTranslation();
