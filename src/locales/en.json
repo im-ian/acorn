@@ -2425,7 +2425,9 @@
       "bodyRestart": "Restart now to apply the new environment. Open agent conversations (Claude / Codex) will pick up where they left off on next focus.",
       "later": "Later",
       "restarting": "Restarting...",
-      "restartSessions": "Restart sessions"
+      "restartSessions": "Restart sessions",
+      "restartFailed": "Couldn't restart background sessions:",
+      "dismissFailed": "Couldn't dismiss this reminder:"
     },
     "memoryBreakdown": {
       "title": "Memory breakdown",

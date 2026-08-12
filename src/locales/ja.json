@@ -2425,7 +2425,9 @@
       "bodyRestart": "今すぐ再起動して新しい環境を適用します。オープン エージェントの会話 (クロード / コーデックス) は、次のフォーカスで中断したところから再開されます。",
       "later": "後で",
       "restarting": "再起動中...",
-      "restartSessions": "セッションを再開する"
+      "restartSessions": "セッションを再開する",
+      "restartFailed": "バックグラウンドセッションを再起動できませんでした:",
+      "dismissFailed": "この通知を閉じることができませんでした:"
     },
     "memoryBreakdown": {
       "title": "記憶力の低下",
