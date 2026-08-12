@@ -219,14 +219,21 @@ export function ProjectSettingsModal({
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [removingPath, setRemovingPath] = useState<string | null>(null);
+  const [removingUnused, setRemovingUnused] = useState(false);
   const [confirmRemove, setConfirmRemove] =
     useState<RootedWorktree | null>(null);
+  const [confirmRemoveUnused, setConfirmRemoveUnused] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [worktreeError, setWorktreeError] = useState<{
-    kind: "load" | "remove";
+    kind: "load" | "remove" | "removeUnused";
     message: string;
   } | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
+
+  const unusedWorktrees = worktrees.filter(
+    (worktree) =>
+      sessionsUsingWorktreePath(sessions, worktree.path).length === 0,
+  );
 
   const confirmRemoveSessions = confirmRemove
     ? sessionsUsingProjectWorktree(
@@ -245,10 +252,13 @@ export function ProjectSettingsModal({
     : [];
   const canShowConfirmRemove =
     confirmRemove !== null && confirmRemoveOtherSessions.length === 0;
+  const canShowConfirmRemoveUnused =
+    confirmRemoveUnused && unusedWorktrees.length > 0;
 
   useDialogShortcuts(
     project !== null &&
       confirmRemove === null &&
+      !confirmRemoveUnused &&
       pendingSourceMerge === null &&
       !sourceMenuOpen,
     {
@@ -264,9 +274,22 @@ export function ProjectSettingsModal({
     },
   });
 
+  useDialogShortcuts(canShowConfirmRemoveUnused, {
+    onCancel: () => setConfirmRemoveUnused(false),
+    onConfirm: () => {
+      void removeConfirmedUnusedWorktrees();
+    },
+  });
+
   useEffect(() => {
     if (confirmRemoveOtherSessions.length > 0) setConfirmRemove(null);
   }, [confirmRemoveOtherSessions.length]);
+
+  useEffect(() => {
+    if (confirmRemoveUnused && unusedWorktrees.length === 0) {
+      setConfirmRemoveUnused(false);
+    }
+  }, [confirmRemoveUnused, unusedWorktrees.length]);
 
   useEffect(() => {
     setTab(initialTab);
@@ -303,7 +326,9 @@ export function ProjectSettingsModal({
       setBranchesLoading(false);
       setSaving(false);
       setRemovingPath(null);
+      setRemovingUnused(false);
       setConfirmRemove(null);
+      setConfirmRemoveUnused(false);
       setError(null);
       setWorktreeError(null);
       setBranchError(null);
@@ -314,7 +339,9 @@ export function ProjectSettingsModal({
     setLoading(true);
     setWorktreesLoading(true);
     setRemovingPath(null);
+    setRemovingUnused(false);
     setConfirmRemove(null);
+    setConfirmRemoveUnused(false);
     setError(null);
     setWorktreeError(null);
     setBranchError(null);
@@ -570,7 +597,14 @@ export function ProjectSettingsModal({
   }
 
   async function removeConfirmedWorktree() {
-    if (!project || !confirmRemove || removingPath !== null) return;
+    if (
+      !project ||
+      !confirmRemove ||
+      removingPath !== null ||
+      removingUnused
+    ) {
+      return;
+    }
     const target = confirmRemove;
     const targetSessions = sessionsUsingProjectWorktree(
       sessions,
@@ -614,7 +648,7 @@ export function ProjectSettingsModal({
   }
 
   function requestRemoveWorktree(worktree: RootedWorktree) {
-    if (!project) return;
+    if (!project || removingUnused) return;
     const blockingSessions = blockingSessionsForProjectWorktree(
       sessions,
       worktree.rootPath,
@@ -623,6 +657,68 @@ export function ProjectSettingsModal({
     );
     if (blockingSessions.length > 0) return;
     setConfirmRemove(worktree);
+  }
+
+  async function removeConfirmedUnusedWorktrees() {
+    if (
+      !project ||
+      !confirmRemoveUnused ||
+      removingUnused ||
+      removingPath !== null
+    ) {
+      return;
+    }
+
+    const targets = worktrees.filter(
+      (worktree) =>
+        sessionsUsingWorktreePath(sessions, worktree.path).length === 0,
+    );
+    if (targets.length === 0) {
+      setConfirmRemoveUnused(false);
+      return;
+    }
+
+    setRemovingUnused(true);
+    setWorktreeError(null);
+    const removedKeys = new Set<string>();
+    const failures: string[] = [];
+    try {
+      for (const target of targets) {
+        const currentSessions = useAppStore.getState().sessions;
+        if (sessionsUsingWorktreePath(currentSessions, target.path).length > 0) {
+          continue;
+        }
+        try {
+          const removedWorktree = await removeProjectWorktree(
+            target.rootPath,
+            target.path,
+            false,
+          );
+          if (removedWorktree) {
+            await api.discardRemovedWorktree(removedWorktree);
+          }
+          removedKeys.add(`${target.rootPath}\u0000${target.path}`);
+        } catch (e) {
+          failures.push(`${target.name}: ${String(e)}`);
+        }
+      }
+
+      setWorktrees((current) =>
+        current.filter(
+          (worktree) =>
+            !removedKeys.has(`${worktree.rootPath}\u0000${worktree.path}`),
+        ),
+      );
+      setConfirmRemoveUnused(false);
+      if (failures.length > 0) {
+        setWorktreeError({
+          kind: "removeUnused",
+          message: failures.join("; "),
+        });
+      }
+    } finally {
+      setRemovingUnused(false);
+    }
   }
 
   return (
@@ -833,8 +929,10 @@ export function ProjectSettingsModal({
                     activeSessionId={activeSessionId}
                     loading={worktreesLoading}
                     removingPath={removingPath}
+                    removingUnused={removingUnused}
                     error={worktreeError}
                     onRequestRemove={requestRemoveWorktree}
+                    onRequestRemoveUnused={() => setConfirmRemoveUnused(true)}
                     t={t}
                   />
                 </ProjectSettingsGroup>
@@ -874,6 +972,14 @@ export function ProjectSettingsModal({
             removing={removingPath === confirmRemove?.path}
             onCancel={() => setConfirmRemove(null)}
             onConfirm={() => void removeConfirmedWorktree()}
+            t={t}
+          />
+          <RemoveUnusedWorktreesConfirmDialog
+            worktrees={canShowConfirmRemoveUnused ? unusedWorktrees : []}
+            showRoot={projectRoots.length > 1}
+            removing={removingUnused}
+            onCancel={() => setConfirmRemoveUnused(false)}
+            onConfirm={() => void removeConfirmedUnusedWorktrees()}
             t={t}
           />
         </>
@@ -1098,8 +1204,10 @@ function ProjectWorktreeList({
   activeSessionId,
   loading,
   removingPath,
+  removingUnused,
   error,
   onRequestRemove,
+  onRequestRemoveUnused,
   t,
 }: {
   showRoot: boolean;
@@ -1108,8 +1216,13 @@ function ProjectWorktreeList({
   activeSessionId: string | null;
   loading: boolean;
   removingPath: string | null;
-  error: { kind: "load" | "remove"; message: string } | null;
+  removingUnused: boolean;
+  error: {
+    kind: "load" | "remove" | "removeUnused";
+    message: string;
+  } | null;
   onRequestRemove: (worktree: RootedWorktree) => void;
+  onRequestRemoveUnused: () => void;
   t: Translator;
 }) {
   if (loading) {
@@ -1121,8 +1234,45 @@ function ProjectWorktreeList({
     );
   }
 
+  const unusedCount = worktrees.filter(
+    (worktree) =>
+      sessionsUsingWorktreePath(sessions, worktree.path).length === 0,
+  ).length;
+
   return (
     <div className="space-y-3">
+      {worktrees.length > 0 ? (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[11px] text-fg-muted">
+            {dtf(
+              t,
+              unusedCount === 1
+                ? "dialogs.projectSettings.unusedWorktreeSingular"
+                : "dialogs.projectSettings.unusedWorktreePlural",
+              { count: unusedCount },
+            )}
+          </p>
+          <Button
+            onClick={onRequestRemoveUnused}
+            disabled={
+              unusedCount === 0 || removingPath !== null || removingUnused
+            }
+            variant="outline"
+            size="xs"
+            className="h-7 gap-1 text-[11px] text-fg-muted hover:text-danger"
+          >
+            {removingUnused ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <Trash2 size={12} />
+            )}
+            {removingUnused
+              ? dt(t, "dialogs.projectSettings.deletingUnusedWorktrees")
+              : dt(t, "dialogs.projectSettings.removeUnusedWorktrees")}
+          </Button>
+        </div>
+      ) : null}
+
       {worktrees.length === 0 ? (
         <p className="rounded-md border border-border bg-bg px-3 py-2 text-[11px] text-fg-muted">
           {dt(t, "dialogs.projectSettings.noWorktrees")}
@@ -1206,7 +1356,9 @@ function ProjectWorktreeList({
                     }
                     onClick={() => onRequestRemove(worktree)}
                     disabled={
-                      removingPath !== null || removeBlockedByOtherSessions
+                      removingPath !== null ||
+                      removingUnused ||
+                      removeBlockedByOtherSessions
                     }
                     variant="outline"
                     size="xs"
@@ -1233,12 +1385,118 @@ function ProjectWorktreeList({
             t,
             error.kind === "load"
               ? "dialogs.projectSettings.loadWorktreesFailed"
-              : "dialogs.projectSettings.removeWorktreeFailed",
+              : error.kind === "removeUnused"
+                ? "dialogs.projectSettings.removeUnusedWorktreesFailed"
+                : "dialogs.projectSettings.removeWorktreeFailed",
           )}{" "}
           {error.message}
         </Notice>
       ) : null}
     </div>
+  );
+}
+
+function RemoveUnusedWorktreesConfirmDialog({
+  worktrees,
+  showRoot,
+  removing,
+  onCancel,
+  onConfirm,
+  t,
+}: {
+  worktrees: RootedWorktree[];
+  showRoot: boolean;
+  removing: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+  t: Translator;
+}) {
+  const count = worktrees.length;
+  return (
+    <Modal
+      open={count > 0}
+      onClose={onCancel}
+      variant="dialog"
+      size="md"
+      ariaLabel={dt(t, "dialogs.projectSettings.confirmRemoveUnusedDialog")}
+    >
+      {count > 0 ? (
+        <>
+          <ModalHeader
+            title={dtf(
+              t,
+              count === 1
+                ? "dialogs.projectSettings.confirmRemoveUnusedTitleSingular"
+                : "dialogs.projectSettings.confirmRemoveUnusedTitlePlural",
+              { count },
+            )}
+            icon={<AlertTriangle size={16} className="text-warning" />}
+            variant="dialog"
+            onClose={onCancel}
+          />
+          <div className="space-y-3 px-4 py-3 text-xs text-fg">
+            <p className="text-fg-muted">
+              {dt(t, "dialogs.projectSettings.confirmRemoveUnusedBody")}
+            </p>
+            <ul className="max-h-48 space-y-2 overflow-y-auto">
+              {worktrees.map((worktree) => (
+                <li
+                  key={`${worktree.rootPath}:${worktree.path}`}
+                  className="rounded-md border border-border bg-bg px-3 py-2"
+                >
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <GitBranch
+                      size={12}
+                      className="shrink-0 text-fg-muted"
+                    />
+                    <span className="truncate text-[11px] font-medium text-fg">
+                      {worktree.name}
+                    </span>
+                    {showRoot ? (
+                      <span className="shrink-0 rounded border border-border px-1 py-0.5 text-[10px] text-fg-muted">
+                        {basenamePath(worktree.rootPath)}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 break-all font-mono text-[10px] leading-relaxed text-fg-muted">
+                    {worktree.path}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <ModalFooter variant="sidebar">
+            <Button
+              onClick={onCancel}
+              disabled={removing}
+              size="md"
+              surface="dialog"
+            >
+              {dt(t, "dialogs.projectSettings.cancelRemove")}
+            </Button>
+            <Button
+              onClick={onConfirm}
+              disabled={removing}
+              variant="dangerSoft"
+              size="md"
+              surface="dialog"
+              className="gap-1"
+            >
+              {removing ? <Loader2 size={12} className="animate-spin" /> : null}
+              {removing
+                ? dt(t, "dialogs.projectSettings.deletingUnusedWorktrees")
+                : dtf(
+                    t,
+                    count === 1
+                      ? "dialogs.projectSettings.deleteUnusedWorktreeSingular"
+                      : "dialogs.projectSettings.deleteUnusedWorktreePlural",
+                    { count },
+                  )}
+            </Button>
+          </ModalFooter>
+        </>
+      ) : null}
+    </Modal>
   );
 }
 
