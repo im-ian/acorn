@@ -74,6 +74,11 @@
       "urlFailed": "Failed to open the external link:",
       "urlBlocked": "That link was blocked because it is not a safe external URL."
     },
+    "terminal": {
+      "clipboardReadFailed": "Failed to read the clipboard:",
+      "clipboardWriteFailed": "Failed to write to the clipboard:",
+      "clipboardImageSaveFailed": "Failed to save the clipboard image:"
+    },
     "pullRequests": {
       "mergeFailed": "Failed to merge pull request:",
       "closeFailed": "Failed to close pull request:",

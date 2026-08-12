@@ -74,6 +74,11 @@
       "urlFailed": "无法打开外部链接：",
       "urlBlocked": "该链接不是安全的外部 URL，已被阻止。"
     },
+    "terminal": {
+      "clipboardReadFailed": "无法读取剪贴板：",
+      "clipboardWriteFailed": "无法写入剪贴板：",
+      "clipboardImageSaveFailed": "无法保存剪贴板图像："
+    },
     "pullRequests": {
       "mergeFailed": "无法合并拉取请求：",
       "closeFailed": "无法关闭拉取请求：",
