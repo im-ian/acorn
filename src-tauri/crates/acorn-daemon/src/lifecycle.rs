@@ -40,8 +40,9 @@ pub enum PidLock {
     /// We hold the lock. The guard keeps the OS lock alive until it is
     /// dropped; the reusable PID file itself remains on disk.
     Acquired(PidLockGuard),
-    /// Another daemon is already running. Field is its PID.
-    AlreadyHeld(u32),
+    /// Another daemon is already running. The PID is diagnostic-only and may
+    /// be unavailable when the platform denies reads through a contended lock.
+    AlreadyHeld { pid: Option<u32> },
 }
 
 /// Process-lifetime ownership of the daemon PID file.
@@ -63,27 +64,21 @@ impl PidLockGuard {
 pub fn try_acquire_pid_lock() -> io::Result<PidLock> {
     let path = paths::pid_file_path()?;
     let mut file = open_pid_file(&path)?;
-    // Windows denies reads through every handle while another process holds
-    // an exclusive file lock. Capture the published claim before attempting
-    // the lock so the contended path never has to read a locked range.
-    let published_pid = read_pid_file(&mut file)?;
     match file.try_lock() {
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => {
-            let pid = published_pid.ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "daemon PID lock is held before a valid PID claim was published",
-                )
-            })?;
-            return Ok(PidLock::AlreadyHeld(pid));
+            // The lock is the authoritative ownership signal. Unix normally
+            // still permits the diagnostic PID read, while Windows rejects
+            // every read through a second handle until the lock is released.
+            let pid = read_pid_file(&mut file).ok().flatten();
+            return Ok(PidLock::AlreadyHeld { pid });
         }
         Err(TryLockError::Error(err)) => return Err(err),
     }
 
     if let Some(pid) = read_pid_file(&mut file)? {
         if is_our_daemon(pid) {
-            return Ok(PidLock::AlreadyHeld(pid));
+            return Ok(PidLock::AlreadyHeld { pid: Some(pid) });
         }
         // Stale claim (process gone or PID was recycled by an unrelated
         // binary). The exclusive OS lock makes replacement atomic with
@@ -357,7 +352,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(pid, std::process::id());
             }
-            PidLock::AlreadyHeld(_) => panic!("expected acquire on fresh dir"),
+            PidLock::AlreadyHeld { .. } => panic!("expected acquire on fresh dir"),
         }
         unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
         let _ = std::fs::remove_dir_all(&tmp);
@@ -370,13 +365,17 @@ mod tests {
         unsafe { std::env::set_var(paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
         let first = match try_acquire_pid_lock().unwrap() {
             PidLock::Acquired(lock) => lock,
-            PidLock::AlreadyHeld(pid) => panic!("fresh lock already held by {pid}"),
+            PidLock::AlreadyHeld { pid } => panic!("fresh lock already held by {pid:?}"),
         };
 
-        assert!(matches!(
-            try_acquire_pid_lock().unwrap(),
-            PidLock::AlreadyHeld(pid) if pid == std::process::id()
-        ));
+        let second_pid = match try_acquire_pid_lock().unwrap() {
+            PidLock::AlreadyHeld { pid } => pid,
+            PidLock::Acquired(_) => panic!("a second lock must not be acquired"),
+        };
+        #[cfg(unix)]
+        assert_eq!(second_pid, Some(std::process::id()));
+        #[cfg(windows)]
+        assert_eq!(second_pid, None);
 
         let path = first.path().to_path_buf();
         drop(first);
@@ -396,7 +395,9 @@ mod tests {
         std::fs::write(&pidfile, u32::MAX.to_string()).unwrap();
         match try_acquire_pid_lock().unwrap() {
             PidLock::Acquired(_) => {}
-            PidLock::AlreadyHeld(pid) => panic!("reclaim should have happened, got {pid}"),
+            PidLock::AlreadyHeld { pid } => {
+                panic!("reclaim should have happened, got {pid:?}")
+            }
         }
         unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
         let _ = std::fs::remove_dir_all(&tmp);
@@ -416,8 +417,8 @@ mod tests {
         std::fs::write(&pidfile, std::process::id().to_string()).unwrap();
         match try_acquire_pid_lock().unwrap() {
             PidLock::Acquired(_) => {}
-            PidLock::AlreadyHeld(pid) => {
-                panic!("recycled PID should have been reclaimed, got {pid}")
+            PidLock::AlreadyHeld { pid } => {
+                panic!("recycled PID should have been reclaimed, got {pid:?}")
             }
         }
         unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
