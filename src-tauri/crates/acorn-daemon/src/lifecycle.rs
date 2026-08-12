@@ -22,8 +22,9 @@
 //!    a short timeout; on success the daemon is alive, on EOF / refused
 //!    the slot is free.
 
-use std::io;
-use std::path::PathBuf;
+use std::fs::{File, Metadata, OpenOptions, TryLockError};
+use std::io::{self, Read, Seek, Write};
+use std::path::{Path, PathBuf};
 
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
@@ -36,10 +37,24 @@ const DAEMON_EXECUTABLE: &str = "acornd";
 /// Outcome of attempting to acquire the daemon singleton lock.
 #[derive(Debug)]
 pub enum PidLock {
-    /// We hold the lock. The file now contains our PID.
-    Acquired(PathBuf),
+    /// We hold the lock. The guard keeps the OS lock alive until it is
+    /// dropped; the reusable PID file itself remains on disk.
+    Acquired(PidLockGuard),
     /// Another daemon is already running. Field is its PID.
     AlreadyHeld(u32),
+}
+
+/// Process-lifetime ownership of the daemon PID file.
+#[derive(Debug)]
+pub struct PidLockGuard {
+    path: PathBuf,
+    _file: File,
+}
+
+impl PidLockGuard {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 /// Attempt to acquire the singleton lock. Returns immediately — no
@@ -47,26 +62,127 @@ pub enum PidLock {
 /// to make a policy decision (refuse-to-start vs. wait-and-replace).
 pub fn try_acquire_pid_lock() -> io::Result<PidLock> {
     let path = paths::pid_file_path()?;
-    if path.exists() {
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            if let Ok(pid) = contents.trim().parse::<u32>() {
-                if is_our_daemon(pid) {
-                    return Ok(PidLock::AlreadyHeld(pid));
-                }
-            }
+    let mut file = open_pid_file(&path)?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            let pid = read_pid_file(&mut file)?.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "daemon PID lock is held before a valid PID claim was published",
+                )
+            })?;
+            return Ok(PidLock::AlreadyHeld(pid));
         }
-        // Stale file (process gone, unparseable, or PID was recycled
-        // by an unrelated binary). Reclaim it.
+        Err(TryLockError::Error(err)) => return Err(err),
+    }
+
+    if let Some(pid) = read_pid_file(&mut file)? {
+        if is_our_daemon(pid) {
+            return Ok(PidLock::AlreadyHeld(pid));
+        }
+        // Stale claim (process gone or PID was recycled by an unrelated
+        // binary). The exclusive OS lock makes replacement atomic with
+        // respect to every current daemon contender.
     }
     let me = std::process::id();
-    std::fs::write(&path, me.to_string())?;
-    Ok(PidLock::Acquired(path))
+    #[cfg(unix)]
+    file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    file.set_len(0)?;
+    file.rewind()?;
+    file.write_all(me.to_string().as_bytes())?;
+    file.flush()?;
+    Ok(PidLock::Acquired(PidLockGuard { path, _file: file }))
 }
 
-/// Best-effort removal of the PID file. Called on graceful shutdown.
-/// Non-fatal if the file is already gone or owned by someone else.
-pub fn release_pid_lock(path: &PathBuf) {
-    let _ = std::fs::remove_file(path);
+fn open_pid_file(path: &Path) -> io::Result<File> {
+    loop {
+        match std::fs::symlink_metadata(path) {
+            Ok(before) => {
+                validate_pid_file_metadata(path, &before)?;
+                let file = match OpenOptions::new().read(true).write(true).open(path) {
+                    Ok(file) => file,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                    Err(err) => return Err(err),
+                };
+                let opened = file.metadata()?;
+                validate_pid_file_metadata(path, &opened)?;
+                validate_same_pid_file(path, &before, &opened)?;
+                return Ok(file);
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                let mut options = OpenOptions::new();
+                options.read(true).write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                match options.open(path) {
+                    Ok(file) => return Ok(file),
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(err) => return Err(err),
+                }
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn validate_pid_file_metadata(path: &Path, metadata: &Metadata) -> io::Result<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("daemon PID lock is not a regular file: {}", path.display()),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() > 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "daemon PID lock must not be hard-linked: {}",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_same_pid_file(path: &Path, before: &Metadata, opened: &Metadata) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    if before.dev() != opened.dev() || before.ino() != opened.ino() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("daemon PID lock changed while opening: {}", path.display()),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_same_pid_file(_path: &Path, _before: &Metadata, _opened: &Metadata) -> io::Result<()> {
+    Ok(())
+}
+
+fn read_pid_file(file: &mut File) -> io::Result<Option<u32>> {
+    const MAX_PID_BYTES: u64 = 32;
+
+    file.rewind()?;
+    let mut bytes = Vec::with_capacity(MAX_PID_BYTES as usize + 1);
+    file.take(MAX_PID_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PID_BYTES {
+        return Ok(None);
+    }
+    let Ok(contents) = std::str::from_utf8(&bytes) else {
+        return Ok(None);
+    };
+    Ok(contents.trim().parse::<u32>().ok())
 }
 
 /// A PID claim is valid only while that process exists and its executable
@@ -217,7 +333,8 @@ mod tests {
         let tmp = short_tmp_root().join(format!("acn-pid-{}", uuid::Uuid::new_v4().simple()));
         unsafe { std::env::set_var(paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
         match try_acquire_pid_lock().unwrap() {
-            PidLock::Acquired(path) => {
+            PidLock::Acquired(lock) => {
+                let path = lock.path().to_path_buf();
                 assert!(path.exists());
                 let pid: u32 = std::fs::read_to_string(&path)
                     .unwrap()
@@ -225,11 +342,41 @@ mod tests {
                     .parse()
                     .unwrap();
                 assert_eq!(pid, std::process::id());
-                release_pid_lock(&path);
-                assert!(!path.exists());
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    assert_eq!(
+                        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                        0o600
+                    );
+                }
+                drop(lock);
+                assert!(path.exists(), "the reusable lock inode stays on disk");
             }
             PidLock::AlreadyHeld(_) => panic!("expected acquire on fresh dir"),
         }
+        unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn pid_lock_stays_exclusive_for_the_guard_lifetime() {
+        let _g = ENV_LOCK.lock();
+        let tmp = short_tmp_root().join(format!("acn-pid-held-{}", uuid::Uuid::new_v4().simple()));
+        unsafe { std::env::set_var(paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
+        let first = match try_acquire_pid_lock().unwrap() {
+            PidLock::Acquired(lock) => lock,
+            PidLock::AlreadyHeld(pid) => panic!("fresh lock already held by {pid}"),
+        };
+
+        assert!(matches!(
+            try_acquire_pid_lock().unwrap(),
+            PidLock::AlreadyHeld(pid) if pid == std::process::id()
+        ));
+
+        let path = first.path().to_path_buf();
+        drop(first);
+        assert!(path.exists());
         unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -269,6 +416,76 @@ mod tests {
                 panic!("recycled PID should have been reclaimed, got {pid}")
             }
         }
+        unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_lock_does_not_overwrite_an_inaccessible_claim() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _g = ENV_LOCK.lock();
+        let tmp =
+            short_tmp_root().join(format!("acn-pid-denied-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        unsafe { std::env::set_var(paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
+        let pidfile = paths::pid_file_path().unwrap();
+        std::fs::write(&pidfile, "stale-but-private").unwrap();
+        let original_permissions = std::fs::metadata(&pidfile).unwrap().permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        std::fs::set_permissions(&pidfile, denied_permissions).unwrap();
+
+        let result = try_acquire_pid_lock();
+
+        std::fs::set_permissions(&pidfile, original_permissions).unwrap();
+        assert!(matches!(
+            result,
+            Err(ref err) if err.kind() == io::ErrorKind::PermissionDenied
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&pidfile).unwrap(),
+            "stale-but-private"
+        );
+        unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_lock_rejects_symlinks_and_hard_links_without_clobbering_peers() {
+        use std::os::unix::fs::symlink;
+
+        let _g = ENV_LOCK.lock();
+        let tmp = short_tmp_root().join(format!("acn-pid-link-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        unsafe { std::env::set_var(paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
+        let pidfile = paths::pid_file_path().unwrap();
+        let sentinel = tmp.join("sentinel");
+        std::fs::write(&sentinel, "do-not-replace").unwrap();
+
+        symlink(&sentinel, &pidfile).unwrap();
+        assert_eq!(
+            try_acquire_pid_lock().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sentinel).unwrap(),
+            "do-not-replace"
+        );
+
+        std::fs::remove_file(&pidfile).unwrap();
+        std::fs::hard_link(&sentinel, &pidfile).unwrap();
+        assert_eq!(
+            try_acquire_pid_lock().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sentinel).unwrap(),
+            "do-not-replace"
+        );
+
         unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
         let _ = std::fs::remove_dir_all(&tmp);
     }

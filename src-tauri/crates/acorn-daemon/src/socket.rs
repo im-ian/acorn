@@ -56,7 +56,7 @@ fn bind_one(path: &Path) -> io::Result<acorn_local_ipc::Listener> {
 }
 
 /// Clean up socket files. Called on graceful shutdown. Non-fatal on
-/// failure — best-effort symmetric with `release_pid_lock`.
+/// failure — endpoint cleanup is independent of the reusable PID lockfile.
 pub fn cleanup_paths(control: &PathBuf, stream: &PathBuf) {
     acorn_local_ipc::cleanup(control);
     acorn_local_ipc::cleanup(stream);
