@@ -61,7 +61,10 @@
       "revealFailed": "无法在文件管理器中显示该路径：",
       "pathsCopied": "已复制文件路径。",
       "copyFailed": "无法复制文件路径。",
-      "terminalLinkOpenFailed": "无法打开终端文件链接："
+      "terminalLinkOpenFailed": "无法打开终端文件链接：",
+      "dropListenerFailed": "桌面文件拖放不可用：",
+      "dropOpenFailed": "无法打开拖放的文件：",
+      "dropInputFailed": "无法将拖放的文件路径输入终端："
     },
     "pullRequests": {
       "mergeFailed": "无法合并拉取请求：",

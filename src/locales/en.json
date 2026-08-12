@@ -61,7 +61,10 @@
       "revealFailed": "Failed to reveal the path in the file manager:",
       "pathsCopied": "File paths copied.",
       "copyFailed": "Failed to copy file paths.",
-      "terminalLinkOpenFailed": "Failed to open terminal file link:"
+      "terminalLinkOpenFailed": "Failed to open terminal file link:",
+      "dropListenerFailed": "Desktop file drop is unavailable:",
+      "dropOpenFailed": "Failed to open dropped file:",
+      "dropInputFailed": "Failed to insert dropped file path into the terminal:"
     },
     "pullRequests": {
       "mergeFailed": "Failed to merge pull request:",
