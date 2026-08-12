@@ -3703,4 +3703,82 @@ test.describe("terminal: spawn", () => {
       "stale disk snapshot",
     );
   });
+
+  test("keeps scrollback saves disabled when the persisted snapshot is inaccessible", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+    await tauri.handle("scrollback_load", () => {
+      throw new Error("permission denied");
+    });
+    await tauri.handle("scrollback_save", (args) => {
+      const w = window as unknown as { __scrollbackSaveCalls?: unknown[] };
+      w.__scrollbackSaveCalls = w.__scrollbackSaveCalls ?? [];
+      w.__scrollbackSaveCalls.push(args);
+      return null;
+    });
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __deniedScrollbackOutputChannelId?: number;
+      };
+      w.__deniedScrollbackOutputChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("pty_spawn", (args) => {
+      const w = window as unknown as { __ptySpawnCalls?: unknown[] };
+      w.__ptySpawnCalls = w.__ptySpawnCalls ?? [];
+      w.__ptySpawnCalls.push(args);
+      return null;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as {
+              __deniedScrollbackOutputChannelId?: number;
+            }).__deniedScrollbackOutputChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __ptySpawnCalls?: unknown[] })
+              .__ptySpawnCalls?.length ?? 0,
+        ),
+      )
+      .toBeGreaterThanOrEqual(1);
+    await expect(page.locator(".xterm")).toContainText(
+      "Failed to restore scrollback; saving is disabled to protect existing data",
+    );
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__deniedScrollbackOutputChannelId",
+      "live output after denied load",
+    );
+    await expect(page.locator(".xterm")).toContainText(
+      "live output after denied load",
+    );
+
+    // A successful load schedules this output for persistence after one
+    // second. Wait past that boundary to prove the failed load keeps the
+    // replacement gate closed while the terminal itself remains usable.
+    await page.waitForTimeout(1_200);
+    const saveCalls = await page.evaluate(
+      () =>
+        (window as unknown as { __scrollbackSaveCalls?: unknown[] })
+          .__scrollbackSaveCalls?.length ?? 0,
+    );
+    expect(saveCalls).toBe(0);
+  });
 });

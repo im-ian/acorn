@@ -1291,9 +1291,9 @@ export function Terminal({
     // cleanup serialises the still-empty xterm buffer and writes 0
     // bytes to disk, wiping the previously persisted scrollback. By the
     // time mount B's load runs, the disk content is already gone. The
-    // flag flips to `true` only after the initial load step settles, so
-    // earlier serialise calls (whether from the debounced output trigger
-    // or from `flushAllScrollbacks` on app close) become no-ops.
+    // flag flips to `true` only after the initial load step succeeds. If
+    // the snapshot is inaccessible, keeping saves disabled preserves it
+    // for a later launch after the permission problem is resolved.
     let savesAllowed = false;
 
     // Debounced "save scrollback to disk" trigger. Reset on every chunk
@@ -2969,15 +2969,18 @@ export function Terminal({
           await writeAndDrain("\r\n");
           if (disposed) return;
         }
+        // The persisted state has now been read (including the legitimate
+        // NotFound -> null case) and fully applied. Only this successful path
+        // may enable replacements of the on-disk snapshot.
+        savesAllowed = true;
       } catch (err) {
         console.warn("[Terminal] scrollback_load failed", err);
+        if (!disposed) {
+          term.write(
+            `\r\n${ANSI_RED}[acorn] Failed to restore scrollback; saving is disabled to protect existing data: ${formatError(err)}${ANSI_RESET}\r\n`,
+          );
+        }
       }
-
-      // Now safe to persist: the buffer either holds the prior session's
-      // restored content or starts genuinely empty. Either state is the
-      // legitimate post-load baseline, so future saves cannot accidentally
-      // overwrite still-on-disk content with a never-loaded empty buffer.
-      savesAllowed = true;
 
       if (disposed) return;
       await spawnPty();
@@ -3005,8 +3008,8 @@ export function Terminal({
       skipOutputDrain?: boolean;
     }) => {
       // `savesAllowed` flips true only after the initial scrollback_load
-      // settles. Skipping the save until then prevents a still-empty
-      // buffer from clobbering the persisted scrollback during the
+      // succeeds. Skipping the save while loading or after an error prevents
+      // a still-empty buffer from clobbering an unread snapshot during the
       // StrictMode mount → cleanup → mount cycle.
       if ((!options?.force && disposed) || !savesAllowed) return;
       try {
