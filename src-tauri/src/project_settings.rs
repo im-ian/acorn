@@ -183,6 +183,7 @@ fn normalize_settings(mut settings: ProjectSettings) -> ProjectSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn with_data_dir(test: impl FnOnce(&Path)) {
         let dir = tempfile::tempdir().unwrap();
