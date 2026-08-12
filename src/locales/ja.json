@@ -948,6 +948,19 @@
       "turn_interrupted": "エージェントのターンが中断されました",
       "shell_prompt": "シェルプロンプトが検出されました"
     },
+    "errors": {
+      "ariaLabel": "アプリケーションエラー",
+      "tooltip": "アプリケーションエラー1件",
+      "title": "アプリケーションエラー",
+      "activeCount": "有効なエラー1件",
+      "messageLabel": "エラーログ",
+      "actions": {
+        "copy": "エラーログをコピー",
+        "copied": "エラーログをコピーしました",
+        "copyFailed": "エラーログをコピーできませんでした。",
+        "dismiss": "エラーを閉じる"
+      }
+    },
     "notifications": {
       "ariaLabel": "セッション通知",
       "tooltipEmpty": "未読のセッション通知はありません",
