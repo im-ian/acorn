@@ -248,6 +248,128 @@ test.describe("project settings", () => {
     ]);
   });
 
+  test("deletes all worktrees not used by a session", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/acorn",
+        name: "acorn",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-beta",
+        name: "beta terminal",
+        repo_path: "/tmp/acorn",
+        worktree_path: "/tmp/acorn/.acorn/worktrees/feature-beta",
+        branch: "feature-beta",
+        isolated: true,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        title_source: "default",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: true,
+      },
+    ]);
+    await tauri.handle("list_project_worktrees", () => {
+      const w = window as unknown as {
+        __worktrees?: Array<{
+          name: string;
+          path: string;
+          modified_ms: number | null;
+        }>;
+      };
+      w.__worktrees = w.__worktrees ?? [
+        {
+          name: "feature-alpha",
+          path: "/tmp/acorn/.acorn/worktrees/feature-alpha",
+          modified_ms: null,
+        },
+        {
+          name: "feature-beta",
+          path: "/tmp/acorn/.acorn/worktrees/feature-beta",
+          modified_ms: null,
+        },
+        {
+          name: "feature-gamma",
+          path: "/tmp/acorn/.acorn/worktrees/feature-gamma",
+          modified_ms: null,
+        },
+      ];
+      return w.__worktrees;
+    });
+    await tauri.handle("remove_worktree", (args) => {
+      const w = window as unknown as {
+        __removeWorktreeCalls?: unknown[];
+        __worktrees?: Array<{ path: string }>;
+      };
+      w.__removeWorktreeCalls = [...(w.__removeWorktreeCalls ?? []), args];
+      const worktreePath = (args as { worktreePath: string }).worktreePath;
+      w.__worktrees = (w.__worktrees ?? []).filter(
+        (worktree) => worktree.path !== worktreePath,
+      );
+      return null;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: "Project acorn" })
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Project Settings" }).click();
+
+    const modal = page.getByRole("dialog", { name: "Project Settings" });
+    await modal.getByRole("button", { name: "Worktrees" }).click();
+    await expect(modal).toContainText("2 unused worktrees");
+    await expect(
+      modal.getByRole("listitem").filter({ hasText: "feature-beta" }),
+    ).toContainText("Used by 1 session");
+
+    await modal.getByRole("button", { name: "Delete unused" }).click();
+    const confirm = page.getByRole("dialog", {
+      name: "Delete unused worktrees",
+    });
+    await expect(confirm).toContainText("feature-alpha");
+    await expect(confirm).toContainText("feature-gamma");
+    await expect(confirm).not.toContainText("feature-beta");
+    await confirm.getByRole("button", { name: "Delete 2 worktrees" }).click();
+
+    await expect(
+      modal.getByRole("listitem").filter({ hasText: "feature-alpha" }),
+    ).toHaveCount(0);
+    await expect(
+      modal.getByRole("listitem").filter({ hasText: "feature-gamma" }),
+    ).toHaveCount(0);
+    await expect(
+      modal.getByRole("listitem").filter({ hasText: "feature-beta" }),
+    ).toBeVisible();
+    await expect(modal).toContainText("0 unused worktrees");
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __removeWorktreeCalls?: unknown[] })
+          .__removeWorktreeCalls,
+    )) as Array<{ repoPath: string; worktreePath: string }>;
+    expect(calls).toEqual([
+      {
+        repoPath: "/tmp/acorn",
+        worktreePath: "/tmp/acorn/.acorn/worktrees/feature-alpha",
+      },
+      {
+        repoPath: "/tmp/acorn",
+        worktreePath: "/tmp/acorn/.acorn/worktrees/feature-gamma",
+      },
+    ]);
+  });
+
   test("selects a detected base branch for new project worktrees", async ({
     page,
     tauri,
