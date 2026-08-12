@@ -602,6 +602,11 @@ interface AppStateModel {
   ) => void;
   /** Atomically read and remove the queued command for `sessionId`. */
   consumePendingTerminalInput: (sessionId: string) => PendingTerminalInput | null;
+  /** Restore a failed claim without replacing a command queued in the meantime. */
+  restorePendingTerminalInput: (
+    sessionId: string,
+    input: PendingTerminalInput,
+  ) => boolean;
   addSessionNotification: (notification: SessionNotification) => void;
   markSessionNotificationRead: (id: string) => void;
   markSessionNotificationsReadForSession: (sessionId: string) => void;
@@ -3899,6 +3904,21 @@ export const useAppStore = create<AppStateModel>()(
       return { pendingTerminalInput: rest };
     });
     return consumed;
+  },
+
+  restorePendingTerminalInput(sessionId, input) {
+    let restored = false;
+    set((s) => {
+      if (s.pendingTerminalInput[sessionId]) return s;
+      restored = true;
+      return {
+        pendingTerminalInput: {
+          ...s.pendingTerminalInput,
+          [sessionId]: input,
+        },
+      };
+    });
+    return restored;
   },
 
   addSessionNotification(notification) {
