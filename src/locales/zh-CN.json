@@ -948,6 +948,19 @@
       "turn_interrupted": "智能体轮次已中断",
       "shell_prompt": "检测到 shell 提示"
     },
+    "errors": {
+      "ariaLabel": "应用错误",
+      "tooltip": "1 个应用错误",
+      "title": "应用错误",
+      "activeCount": "1 个当前错误",
+      "messageLabel": "错误日志",
+      "actions": {
+        "copy": "复制错误日志",
+        "copied": "已复制错误日志",
+        "copyFailed": "无法复制错误日志。",
+        "dismiss": "关闭错误"
+      }
+    },
     "notifications": {
       "ariaLabel": "会话通知",
       "tooltipEmpty": "没有未读会话通知",

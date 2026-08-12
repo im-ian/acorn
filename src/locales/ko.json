@@ -948,6 +948,19 @@
       "turn_interrupted": "에이전트 작업 중단",
       "shell_prompt": "셸 프롬프트 감지"
     },
+    "errors": {
+      "ariaLabel": "애플리케이션 오류",
+      "tooltip": "애플리케이션 오류 1개",
+      "title": "애플리케이션 오류",
+      "activeCount": "활성 오류 1개",
+      "messageLabel": "오류 로그",
+      "actions": {
+        "copy": "오류 로그 복사",
+        "copied": "오류 로그 복사됨",
+        "copyFailed": "오류 로그를 복사하지 못했습니다.",
+        "dismiss": "오류 닫기"
+      }
+    },
     "notifications": {
       "ariaLabel": "세션 알림",
       "tooltipEmpty": "읽지 않은 세션 알림 없음",

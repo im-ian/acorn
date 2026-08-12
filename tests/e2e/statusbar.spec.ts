@@ -76,6 +76,59 @@ async function enableAgentTokenUsage(
 }
 
 test.describe("status bar", () => {
+  test("shows application errors as a badge with copy and dismiss actions", async ({
+    page,
+    tauri,
+  }) => {
+    const errorLog =
+      "invalid path: not a linked git worktree: /private/tmp/acorn/scratchpad/dev-tree";
+    await tauri.handle("list_projects", () => {
+      throw new Error(
+        "invalid path: not a linked git worktree: /private/tmp/acorn/scratchpad/dev-tree",
+      );
+    });
+    await tauri.handle("plugin:clipboard-manager|write_text", (args) => {
+      const target = window as unknown as { __errorLogCopies?: string[] };
+      target.__errorLogCopies = target.__errorLogCopies ?? [];
+      target.__errorLogCopies.push((args as { text?: string })?.text ?? "");
+      return undefined;
+    });
+
+    await page.goto("/");
+
+    const footer = page.locator("footer");
+    const errorButton = footer.getByRole("button", {
+      name: "Application errors",
+    });
+    await expect(errorButton).toBeVisible();
+    await expect(errorButton).toContainText("1");
+    await expect(footer.getByText(errorLog, { exact: true })).toHaveCount(0);
+
+    await errorButton.click();
+
+    const dialog = page.getByRole("dialog", { name: "Application error" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText(errorLog);
+    await dialog.getByRole("button", { name: "Copy error log" }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __errorLogCopies?: string[] })
+              .__errorLogCopies?.at(-1) ?? null,
+        ),
+      )
+      .toBe(errorLog);
+    await expect(
+      dialog.getByRole("button", { name: "Error log copied" }),
+    ).toBeVisible();
+
+    await dialog.getByRole("button", { name: "Dismiss error" }).click();
+
+    await expect(errorButton).toHaveCount(0);
+    await expect(dialog).toHaveCount(0);
+  });
+
   test("service status tooltip renders service rows with icons", async ({
     page,
     tauri,
