@@ -4092,6 +4092,39 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(page.getByLabel("Project location")).toHaveValue("");
   });
 
+  test("New project reports a remembered-folder permission error and still allows recovery", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("get_last_project_parent_folder", () => {
+      throw new Error("permission denied while reading remembered folder");
+    });
+    await tauri.handle(
+      "select_project_parent_folder",
+      () => "/tmp/recovered-parent",
+    );
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "New project" }).click();
+
+    await expect(page.getByLabel("Project location")).toHaveValue("");
+    await expect(
+      page.getByRole("alert").filter({
+        hasText: "permission denied while reading remembered folder",
+      }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Choose" }).click();
+    await expect(page.getByLabel("Project location")).toHaveValue(
+      "/tmp/recovered-parent",
+    );
+    await expect(
+      page.getByRole("alert").filter({
+        hasText: "permission denied while reading remembered folder",
+      }),
+    ).toHaveCount(0);
+  });
+
   test("New project can override long-name safe warnings", async ({
     page,
     tauri,

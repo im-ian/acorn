@@ -68,9 +68,10 @@ export function NewProjectDialog({
           setParentPath(path ?? "");
         }
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled && !locationPickedRef.current) {
           setParentPath("");
+          setError(errorMessage(err));
         }
       });
     void api
