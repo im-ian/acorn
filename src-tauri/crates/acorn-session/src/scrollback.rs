@@ -6,8 +6,9 @@
 //! mount it loads via `scrollback_load` and `term.write`s the bytes back into
 //! xterm before spawning the PTY.
 //!
-//! Atomic writes use same-directory replace semantics. Files are best-effort: read errors
-//! return `None` so the UI can proceed with an empty buffer.
+//! Atomic writes use same-directory replace semantics. A missing file is an
+//! empty buffer, but other read failures remain errors so callers cannot
+//! mistake an inaccessible snapshot for an empty one and overwrite it.
 //!
 //! Callers pass the application's data directory in explicitly so this crate
 //! does not depend on the main `acorn` crate's `persistence::data_dir()`
@@ -78,24 +79,23 @@ fn trailing_utf8_slice(value: &str, max_bytes: usize) -> &str {
 
 pub fn load(data_dir: &Path, session_id: &str) -> ScrollbackResult<Option<String>> {
     let path = session_file(data_dir, session_id)?;
-    if !path.exists() {
-        return Ok(None);
-    }
     match fs::read_to_string(&path) {
         Ok(s) => Ok(Some(s)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(err) => {
             tracing::warn!(path = %path.display(), error = %err, "failed to read scrollback");
-            Ok(None)
+            Err(err.into())
         }
     }
 }
 
 pub fn delete(data_dir: &Path, session_id: &str) -> ScrollbackResult<()> {
     let path = session_file(data_dir, session_id)?;
-    if path.exists() {
-        fs::remove_file(&path)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
     }
-    Ok(())
 }
 
 /// Remove scrollback files for any session id not present in `keep`.
@@ -220,6 +220,83 @@ mod tests {
         let id = "550e8400-e29b-41d4-a716-446655440001";
         let got = load(&tmp, id).expect("load");
         assert!(got.is_none());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn delete_is_idempotent_for_missing_scrollback() {
+        let tmp = tempdir_path();
+        let id = "550e8400-e29b-41d4-a716-446655440004";
+        delete(&tmp, id).expect("missing scrollback is already deleted");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_propagates_non_missing_read_errors() {
+        let tmp = tempdir_path();
+        let id = "550e8400-e29b-41d4-a716-446655440002";
+        let path = session_file(&tmp, id).expect("session file");
+        fs::create_dir(&path).expect("create directory at scrollback file path");
+
+        let err = load(&tmp, id).expect_err("directory must not look like missing scrollback");
+        assert!(matches!(err, ScrollbackError::Io(_)));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_propagates_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir_path();
+        let id = "550e8400-e29b-41d4-a716-446655440003";
+        save(&tmp, id, "must survive an unreadable mount").expect("save");
+        let path = session_file(&tmp, id).expect("session file");
+        let original_permissions = fs::metadata(&path).expect("metadata").permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        fs::set_permissions(&path, denied_permissions).expect("deny read access");
+
+        let result = load(&tmp, id);
+
+        fs::set_permissions(&path, original_permissions).expect("restore permissions");
+        let err = result.expect_err("permission error must reach the caller");
+        match err {
+            ScrollbackError::Io(err) => {
+                assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_propagates_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir_path();
+        let id = "550e8400-e29b-41d4-a716-446655440005";
+        save(&tmp, id, "keep until deletion is authorized").expect("save");
+        let dir = scrollback_dir(&tmp).expect("scrollback directory");
+        let original_permissions = fs::metadata(&dir).expect("metadata").permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        fs::set_permissions(&dir, denied_permissions).expect("deny directory access");
+
+        let result = delete(&tmp, id);
+
+        fs::set_permissions(&dir, original_permissions).expect("restore permissions");
+        let err = result.expect_err("permission error must reach the caller");
+        match err {
+            ScrollbackError::Io(err) => {
+                assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
         let _ = fs::remove_dir_all(&tmp);
     }
 
