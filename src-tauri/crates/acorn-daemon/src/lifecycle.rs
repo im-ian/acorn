@@ -63,10 +63,14 @@ impl PidLockGuard {
 pub fn try_acquire_pid_lock() -> io::Result<PidLock> {
     let path = paths::pid_file_path()?;
     let mut file = open_pid_file(&path)?;
+    // Windows denies reads through every handle while another process holds
+    // an exclusive file lock. Capture the published claim before attempting
+    // the lock so the contended path never has to read a locked range.
+    let published_pid = read_pid_file(&mut file)?;
     match file.try_lock() {
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => {
-            let pid = read_pid_file(&mut file)?.ok_or_else(|| {
+            let pid = published_pid.ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::WouldBlock,
                     "daemon PID lock is held before a valid PID claim was published",
@@ -336,12 +340,6 @@ mod tests {
             PidLock::Acquired(lock) => {
                 let path = lock.path().to_path_buf();
                 assert!(path.exists());
-                let pid: u32 = std::fs::read_to_string(&path)
-                    .unwrap()
-                    .trim()
-                    .parse()
-                    .unwrap();
-                assert_eq!(pid, std::process::id());
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
@@ -352,6 +350,12 @@ mod tests {
                 }
                 drop(lock);
                 assert!(path.exists(), "the reusable lock inode stays on disk");
+                let pid: u32 = std::fs::read_to_string(&path)
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                assert_eq!(pid, std::process::id());
             }
             PidLock::AlreadyHeld(_) => panic!("expected acquire on fresh dir"),
         }
