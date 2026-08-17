@@ -127,6 +127,30 @@ export interface SessionRemoval extends WorktreeRemoval {
   sessionIds: string[];
 }
 
+export type RemovalIssueKind =
+  | "worktree"
+  | "scrollback"
+  | "settings"
+  | "persistence";
+
+export interface RemovalIssue {
+  kind: RemovalIssueKind;
+  target: string;
+  message: string;
+  retryable: boolean;
+}
+
+export interface RemovalOutcome<T> {
+  result: T;
+  removedSessionIds: string[];
+  issues: RemovalIssue[];
+  retryToken: string | null;
+}
+
+export type SessionRemovalOutcome = RemovalOutcome<SessionRemoval | null>;
+export type WorktreeRemovalOutcome = RemovalOutcome<WorktreeRemoval | null>;
+export type ProjectRemovalOutcome = RemovalOutcome<WorktreeRemoval[]>;
+
 export interface ChatSessionStateChangedPayload {
   session_id: string;
   state: ChatSessionState;
@@ -201,8 +225,8 @@ export const api = {
   removeSession(
     id: string,
     removeWorktree = false,
-  ): Promise<SessionRemoval | null> {
-    return invoke<SessionRemoval | null>("remove_session", { id, removeWorktree });
+  ): Promise<SessionRemovalOutcome> {
+    return invoke<SessionRemovalOutcome>("remove_session", { id, removeWorktree });
   },
   setSessionStatus(id: string, status: SessionStatus): Promise<Session> {
     return invoke<Session>("set_session_status", { id, status });
@@ -447,8 +471,8 @@ export const api = {
     removeSessions = true,
     removeWorktrees = false,
     removeSettings = false,
-  ): Promise<WorktreeRemoval[]> {
-    return invoke<WorktreeRemoval[]>("remove_project", {
+  ): Promise<ProjectRemovalOutcome> {
+    return invoke<ProjectRemovalOutcome>("remove_project", {
       repoPath,
       removeSessions,
       removeWorktrees,
@@ -972,8 +996,8 @@ export const api = {
     repoPath: string,
     worktreePath: string,
     removeSessions = false,
-  ): Promise<WorktreeRemoval | null> {
-    return invoke<WorktreeRemoval | null>(
+  ): Promise<WorktreeRemovalOutcome> {
+    return invoke<WorktreeRemovalOutcome>(
       "remove_worktree",
       removeSessions
         ? { repoPath, worktreePath, removeSessions }

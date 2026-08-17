@@ -574,7 +574,7 @@ export function Sidebar() {
       const removedSessions: SessionRemoval[] = [];
       for (const session of folderGroup.sessions) {
         const currentState = useAppStore.getState();
-        const removal = await removeSession(
+        const outcome = await removeSession(
           session.id,
           deleteIsolatedWorktreesWithoutPrompt &&
             shouldAutoDeleteSessionWorktree(
@@ -583,8 +583,8 @@ export function Sidebar() {
               currentState.sessions,
             ),
         );
-        if (removal) {
-          removedSessions.push(removal);
+        if (outcome?.result) {
+          removedSessions.push(outcome.result);
         }
         const error = useAppStore.getState().consumeError();
         if (error) {
@@ -610,13 +610,13 @@ export function Sidebar() {
 
   async function removeProjectFolderAndWorktree(folder: ProjectFolder) {
     try {
-      const removedWorktree = await api.removeWorktree(
+      const outcome = await api.removeWorktree(
         folder.repoPath,
         folder.cwdPath,
       );
       removeProjectFolder(folder.id);
       showWorktreeRemovalToast(
-        removedWorktree,
+        outcome.result,
         "toasts.session.worktreeRemoved",
         "toasts.session.worktreeRemovedUndo",
         "toasts.session.worktreeRestored",

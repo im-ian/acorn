@@ -1261,9 +1261,9 @@ function App() {
       !pendingRemoveHasOwnedSessions
     ) {
       clearPendingRemove();
-      void removeSession(pendingRemove.id, true).then((removal) =>
+      void removeSession(pendingRemove.id, true).then((outcome) =>
         showStoreSessionRemovalToast(
-          removal,
+          outcome?.result,
           "toasts.session.sessionWorktreeRemoved",
           "toasts.session.sessionWorktreeRemovedUndo",
           "toasts.session.sessionWorktreeRemoveFailed",
@@ -1951,10 +1951,10 @@ function App() {
           clearPendingRemove();
           if (!target || choice === "cancel") return;
           void removeSession(target.id, choice === "session_and_worktree").then(
-            (removal) => {
+            (outcome) => {
               if (choice === "session_and_worktree") {
                 showStoreSessionRemovalToast(
-                  removal,
+                  outcome?.result,
                   "toasts.session.sessionWorktreeRemoved",
                   "toasts.session.sessionWorktreeRemovedUndo",
                   "toasts.session.sessionWorktreeRemoveFailed",
@@ -1978,10 +1978,10 @@ function App() {
           void removeProject(
             target.repo_path,
             choice === "project_and_worktrees",
-          ).then((removedWorktrees) => {
+          ).then((outcome) => {
             if (choice === "project_and_worktrees") {
               showStoreWorktreeRemovalToast(
-                removedWorktrees,
+                outcome?.result,
                 "toasts.project.worktreesRemoved",
                 "toasts.project.worktreesRemovedUndo",
                 "toasts.project.worktreesRemoveFailed",

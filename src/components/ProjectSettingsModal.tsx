@@ -625,7 +625,7 @@ export function ProjectSettingsModal({
     setRemovingPath(target.path);
     setWorktreeError(null);
     try {
-      const removedWorktree = await removeProjectWorktree(
+      const outcome = await removeProjectWorktree(
         target.rootPath,
         target.path,
         targetSessions.length > 0,
@@ -638,7 +638,7 @@ export function ProjectSettingsModal({
             worktree.path !== target.path,
         ),
       );
-      await discardRemovedWorktreesWithRetry(removedWorktree);
+      await discardRemovedWorktreesWithRetry(outcome.result);
     } catch (e) {
       setWorktreeError({ kind: "remove", message: String(e) });
     } finally {
@@ -689,13 +689,13 @@ export function ProjectSettingsModal({
           continue;
         }
         try {
-          const removedWorktree = await removeProjectWorktree(
+          const outcome = await removeProjectWorktree(
             target.rootPath,
             target.path,
             false,
           );
-          if (removedWorktree) {
-            removals.push(removedWorktree);
+          if (outcome.result) {
+            removals.push(outcome.result);
           }
           removedKeys.add(`${target.rootPath}\u0000${target.path}`);
         } catch (e) {

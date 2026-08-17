@@ -172,7 +172,12 @@ test.describe("session lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__sessionRemoved = true;
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [String(args?.id ?? "")],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -255,7 +260,12 @@ test.describe("session lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__sessionRemoved = true;
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [String(args?.id ?? "")],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -357,7 +367,12 @@ test.describe("session lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__sessionRemoved = true;
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [String(args?.id ?? "")],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -430,11 +445,16 @@ test.describe("session lifecycle", () => {
       const w = window as unknown as { __sessionRemoved?: boolean };
       w.__sessionRemoved = true;
       return {
-        token: "session-undo-token",
-        repoPath: "/tmp/demo",
-        worktreePath: "/tmp/demo/.acorn/worktrees/alpha",
-        gitCommonDir: "/tmp/demo/.git",
-        sessionIds: ["s-1"],
+        result: {
+          token: "session-undo-token",
+          repoPath: "/tmp/demo",
+          worktreePath: "/tmp/demo/.acorn/worktrees/alpha",
+          gitCommonDir: "/tmp/demo/.git",
+          sessionIds: ["s-1"],
+        },
+        removedSessionIds: ["s-1"],
+        issues: [],
+        retryToken: null,
       };
     });
     await tauri.handle("restore_removed_session", (args) => {
@@ -542,7 +562,12 @@ test.describe("session lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__sessionRemoved = true;
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [String(args?.id ?? "")],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -676,7 +701,12 @@ test.describe("session lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__sessionRemoved = true;
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [String(args?.id ?? "")],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");

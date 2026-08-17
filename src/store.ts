@@ -3,8 +3,9 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import {
   api,
   type AiExecutionRequest,
-  type SessionRemoval,
-  type WorktreeRemoval,
+  type ProjectRemovalOutcome,
+  type SessionRemovalOutcome,
+  type WorktreeRemovalOutcome,
 } from "./lib/api";
 import type {
   AgentTranscriptSummary,
@@ -525,7 +526,7 @@ interface AppStateModel {
   removeSession: (
     id: string,
     removeWorktree?: boolean,
-  ) => Promise<SessionRemoval | null>;
+  ) => Promise<SessionRemovalOutcome | null>;
   renameSession: (id: string, name: string) => Promise<void>;
   generateSessionTitle: (
     id: string,
@@ -549,7 +550,7 @@ interface AppStateModel {
     repoPath: string,
     removeWorktrees?: boolean,
     removeSettings?: boolean,
-  ) => Promise<WorktreeRemoval[]>;
+  ) => Promise<ProjectRemovalOutcome | null>;
   /** Register an existing project spanning `roots` and open its first session. */
   addProjectAt: (name: string, roots: string[]) => Promise<Project>;
   renameProject: (repoPath: string, name: string) => Promise<boolean>;
@@ -581,7 +582,7 @@ interface AppStateModel {
     repoPath: string,
     worktreePath: string,
     removeSessions?: boolean,
-  ) => Promise<WorktreeRemoval | null>;
+  ) => Promise<WorktreeRemovalOutcome>;
   reorderProjects: (orderedRepoPaths: string[]) => Promise<void>;
   reorderProjectFolders: (
     repoPath: string,
@@ -3232,10 +3233,10 @@ export const useAppStore = create<AppStateModel>()(
     }
 
     try {
-      const removal = await api.removeSession(id, removeWorktree);
+      const outcome = await api.removeSession(id, removeWorktree);
       await get().refreshAll();
       set({ error: null });
-      return removal ?? null;
+      return outcome;
     } catch (e) {
       const message = errorMessage(e);
       await get().refreshAll();
@@ -3500,7 +3501,7 @@ export const useAppStore = create<AppStateModel>()(
 
   async removeProject(repoPath, removeWorktrees = false, removeSettings = false) {
     try {
-      const removedWorktrees = await api.removeProject(
+      const outcome = await api.removeProject(
         repoPath,
         true,
         removeWorktrees,
@@ -3568,10 +3569,10 @@ export const useAppStore = create<AppStateModel>()(
       });
       await get().refreshAll();
       set({ error: null });
-      return removedWorktrees ?? [];
+      return outcome;
     } catch (e) {
       set({ error: errorMessage(e) });
-      return [];
+      return null;
     }
   },
 
@@ -3604,7 +3605,7 @@ export const useAppStore = create<AppStateModel>()(
         set({ error: WORKTREE_IN_USE_BY_OTHER_SESSIONS });
         throw new Error(WORKTREE_IN_USE_BY_OTHER_SESSIONS);
       }
-      const removedWorktree = await api.removeWorktree(
+      const outcome = await api.removeWorktree(
         repoPath,
         worktreePath,
         removeSessions,
@@ -3703,7 +3704,7 @@ export const useAppStore = create<AppStateModel>()(
       });
       await get().refreshAll();
       set({ error: null });
-      return removedWorktree ?? null;
+      return outcome;
     } catch (e) {
       set({ error: errorMessage(e) });
       throw e;

@@ -83,6 +83,35 @@ impl SessionRemoval {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovalIssue {
+    pub kind: String,
+    pub target: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovalOutcome<T> {
+    pub result: T,
+    pub removed_session_ids: Vec<String>,
+    pub issues: Vec<RemovalIssue>,
+    pub retry_token: Option<String>,
+}
+
+impl<T> RemovalOutcome<T> {
+    fn complete(result: T, removed_session_ids: Vec<String>) -> Self {
+        Self {
+            result,
+            removed_session_ids,
+            issues: Vec::new(),
+            retry_token: None,
+        }
+    }
+}
+
 async fn run_blocking<T, F>(label: &'static str, f: F) -> AppResult<T>
 where
     T: Send + 'static,
@@ -7095,12 +7124,13 @@ pub async fn remove_project(
     remove_sessions: Option<bool>,
     remove_worktrees: Option<bool>,
     remove_settings: Option<bool>,
-) -> AppResult<Vec<worktree::RemovedWorktree>> {
+) -> AppResult<RemovalOutcome<Vec<worktree::RemovedWorktree>>> {
     let app_state = state.inner().clone();
     let path = PathBuf::from(&repo_path);
     let cascade = remove_sessions.unwrap_or(true);
     let drop_worktrees = remove_worktrees.unwrap_or(false);
     let mut removed_worktrees = Vec::new();
+    let mut removed_session_ids = Vec::new();
     let mut staged_worktree_paths = HashSet::new();
     // Closing a project closes every root it spans, not just the primary one.
     let roots = app_state
@@ -7119,6 +7149,7 @@ pub async fn remove_project(
             terminate_session_runtime_blocking(app_state.clone(), session.id).await?;
         }
         for session in sessions_to_remove {
+            removed_session_ids.push(session.id.to_string());
             if drop_worktrees && staged_worktree_paths.insert(session.worktree_path.clone()) {
                 if worktree_path_used_outside_project(&app_state, &path, &session.worktree_path) {
                     tracing::warn!(
@@ -7165,7 +7196,10 @@ pub async fn remove_project(
         }
     }
     persist(&app_state);
-    Ok(removed_worktrees)
+    Ok(RemovalOutcome::complete(
+        removed_worktrees,
+        removed_session_ids,
+    ))
 }
 
 #[tauri::command]
@@ -7173,11 +7207,15 @@ pub async fn remove_session(
     state: State<'_, AppState>,
     id: String,
     remove_worktree: Option<bool>,
-) -> AppResult<Option<SessionRemoval>> {
+) -> AppResult<RemovalOutcome<Option<SessionRemoval>>> {
     let app_state = state.inner().clone();
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = app_state.sessions.get(&id)?;
     let sessions_to_remove = session_removal_cascade(&app_state, &session);
+    let removed_session_ids = sessions_to_remove
+        .iter()
+        .map(|session| session.id.to_string())
+        .collect::<Vec<_>>();
     let removal_ids: HashSet<_> = sessions_to_remove
         .iter()
         .map(|session| session.id)
@@ -7230,7 +7268,7 @@ pub async fn remove_session(
                 scrollback::delete(&dir, &session.id.to_string()).ok();
             }
         }
-        return Ok(None);
+        return Ok(RemovalOutcome::complete(None, removed_session_ids));
     };
     let removal = SessionRemoval::new(&removed_worktree, &sessions_to_remove);
     app_state.pending_session_removals.lock().insert(
@@ -7240,7 +7278,7 @@ pub async fn remove_session(
             sessions: sessions_to_remove,
         },
     );
-    Ok(Some(removal))
+    Ok(RemovalOutcome::complete(Some(removal), removed_session_ids))
 }
 
 #[tauri::command]
@@ -8046,7 +8084,7 @@ pub async fn remove_worktree(
     repo_path: String,
     worktree_path: String,
     remove_sessions: Option<bool>,
-) -> AppResult<Option<worktree::RemovedWorktree>> {
+) -> AppResult<RemovalOutcome<Option<worktree::RemovedWorktree>>> {
     let app_state = state.inner().clone();
     let repo_path = PathBuf::from(repo_path);
     let worktree_path = PathBuf::from(worktree_path);
@@ -8062,15 +8100,18 @@ pub async fn remove_worktree(
                 WORKTREE_IN_USE_BY_OTHER_SESSIONS.to_string(),
             ));
         }
-        return stage_remove_linked_worktree_and_sessions_blocking(
-            app_state,
-            repo_path,
-            worktree_path,
-        )
-        .await;
+        let removed_session_ids = matching_sessions
+            .iter()
+            .map(|session| session.id.to_string())
+            .collect();
+        let removed =
+            stage_remove_linked_worktree_and_sessions_blocking(app_state, repo_path, worktree_path)
+                .await?;
+        return Ok(RemovalOutcome::complete(removed, removed_session_ids));
     }
     ensure_no_sessions_using_worktree_path_except(&app_state, &worktree_path, None)?;
-    stage_remove_linked_worktree_blocking(repo_path, worktree_path).await
+    let removed = stage_remove_linked_worktree_blocking(repo_path, worktree_path).await?;
+    Ok(RemovalOutcome::complete(removed, Vec::new()))
 }
 
 #[tauri::command]

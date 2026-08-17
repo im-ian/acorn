@@ -126,7 +126,12 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     });
     mockApi.listProjectWorktrees.mockResolvedValue([]);
     mockApi.listProjectBranches.mockResolvedValue([]);
-    mockApi.removeWorktree.mockResolvedValue(null);
+    mockApi.removeWorktree.mockResolvedValue({
+      result: null,
+      removedSessionIds: [],
+      issues: [],
+      retryToken: null,
+    });
     window.localStorage.clear();
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
   });
