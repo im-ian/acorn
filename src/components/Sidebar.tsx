@@ -116,7 +116,9 @@ import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import { useCurrentPullRequest } from "../lib/useCurrentPullRequest";
 import {
+  showRemovalOutcomeIssues,
   showSessionRemovalToast,
+  showStoreResultToast,
   showWorktreeRemovalToast,
 } from "../lib/operationToasts";
 import {
@@ -591,6 +593,7 @@ export function Sidebar() {
           showToast(`${t("toasts.session.removeFailed")} ${error}`);
           return;
         }
+        showRemovalOutcomeIssues(outcome);
       }
       removeProjectFolder(folderGroup.folder.id);
       if (removedSessions.length > 0) {
@@ -634,6 +637,7 @@ export function Sidebar() {
           },
         },
       );
+      showRemovalOutcomeIssues(outcome);
     } catch (e) {
       console.error("remove project folder worktree failed", e);
       showToast(`${t("toasts.session.worktreeRemoveFailed")} ${String(e)}`);
@@ -1522,9 +1526,18 @@ export function Sidebar() {
                         onRenameFolder={renameProjectFolder}
                         onRemoveFolder={requestRemoveProjectFolder}
                         onMoveSessionToFolder={moveSessionToProjectFolder}
-                        onRemoveProject={() =>
-                          requestRemoveProject(project.repoPath)
-                        }
+                        onRemoveProject={() => {
+                          const removal = requestRemoveProject(project.repoPath);
+                          if (removal) {
+                            void removal.then((outcome) =>
+                              showStoreResultToast(
+                                null,
+                                "toasts.project.removeFailed",
+                                outcome,
+                              ),
+                            );
+                          }
+                        }}
                         onOpenSettings={() =>
                           setSettingsProject({
                             name: project.name,

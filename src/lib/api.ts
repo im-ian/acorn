@@ -150,6 +150,7 @@ export interface RemovalOutcome<T> {
 export type SessionRemovalOutcome = RemovalOutcome<SessionRemoval | null>;
 export type WorktreeRemovalOutcome = RemovalOutcome<WorktreeRemoval | null>;
 export type ProjectRemovalOutcome = RemovalOutcome<WorktreeRemoval[]>;
+export type RemovalCleanupRetryOutcome = RemovalOutcome<WorktreeRemoval[]>;
 
 export interface ChatSessionStateChangedPayload {
   session_id: string;
@@ -1003,6 +1004,16 @@ export const api = {
         ? { repoPath, worktreePath, removeSessions }
         : { repoPath, worktreePath },
     );
+  },
+  retryRemovalCleanup(
+    retryToken: string,
+  ): Promise<RemovalCleanupRetryOutcome> {
+    return invoke<RemovalCleanupRetryOutcome>("retry_removal_cleanup", {
+      retryToken,
+    });
+  },
+  discardRemovalRetry(retryToken: string): Promise<void> {
+    return invoke<void>("discard_removal_retry", { retryToken });
   },
   restoreRemovedWorktree(removal: WorktreeRemoval): Promise<void> {
     return invoke<void>("restore_removed_worktree", { ...removal });

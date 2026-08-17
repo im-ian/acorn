@@ -121,6 +121,7 @@ import type { TranslationKey, Translator } from "./lib/i18n";
 import type { Session } from "./lib/types";
 import { useTranslation } from "./lib/useTranslation";
 import {
+  showRemovalOutcomeIssues,
   showStoreSessionRemovalToast,
   showStoreWorktreeRemovalToast,
 } from "./lib/operationToasts";
@@ -1242,12 +1243,10 @@ function App() {
     );
     if (recordedWorktree && !canDeleteWorktree) {
       clearPendingRemove();
-      void removeSession(pendingRemove.id, false).then(() =>
-        showStoreOperationToast(
-          null,
-          "toasts.session.removeFailed",
-        ),
-      );
+      void removeSession(pendingRemove.id, false).then((outcome) => {
+        showStoreOperationToast(null, "toasts.session.removeFailed");
+        showRemovalOutcomeIssues(outcome);
+      });
       return;
     }
     const autoDeleteWorktree = shouldAutoDeleteSessionWorktree(
@@ -1263,7 +1262,7 @@ function App() {
       clearPendingRemove();
       void removeSession(pendingRemove.id, true).then((outcome) =>
         showStoreSessionRemovalToast(
-          outcome?.result,
+          outcome,
           "toasts.session.sessionWorktreeRemoved",
           "toasts.session.sessionWorktreeRemovedUndo",
           "toasts.session.sessionWorktreeRemoveFailed",
@@ -1277,12 +1276,10 @@ function App() {
       return;
     }
     clearPendingRemove();
-    void removeSession(pendingRemove.id, false).then(() =>
-      showStoreOperationToast(
-        null,
-        "toasts.session.removeFailed",
-      ),
-    );
+    void removeSession(pendingRemove.id, false).then((outcome) => {
+      showStoreOperationToast(null, "toasts.session.removeFailed");
+      showRemovalOutcomeIssues(outcome);
+    });
   }, [
     pendingRemove,
     pendingRemoveHasOwnedSessions,
@@ -1954,7 +1951,7 @@ function App() {
             (outcome) => {
               if (choice === "session_and_worktree") {
                 showStoreSessionRemovalToast(
-                  outcome?.result,
+                  outcome,
                   "toasts.session.sessionWorktreeRemoved",
                   "toasts.session.sessionWorktreeRemovedUndo",
                   "toasts.session.sessionWorktreeRemoveFailed",
@@ -1964,6 +1961,7 @@ function App() {
                 return;
               }
               showStoreOperationToast(null, "toasts.session.removeFailed");
+              showRemovalOutcomeIssues(outcome);
             },
           );
         }}
@@ -1981,7 +1979,7 @@ function App() {
           ).then((outcome) => {
             if (choice === "project_and_worktrees") {
               showStoreWorktreeRemovalToast(
-                outcome?.result,
+                outcome,
                 "toasts.project.worktreesRemoved",
                 "toasts.project.worktreesRemovedUndo",
                 "toasts.project.worktreesRemoveFailed",
@@ -1991,6 +1989,7 @@ function App() {
               return;
             }
             showStoreOperationToast(null, "toasts.project.removeFailed");
+            showRemovalOutcomeIssues(outcome);
           });
         }}
       />

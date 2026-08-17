@@ -1,5 +1,11 @@
 {
   "toasts": {
+    "removal": {
+      "partialFailure": "删除已完成，但后续清理需要处理：{error}。",
+      "partialFailureRetry": "删除已完成，但后续清理需要处理：{error}。重试",
+      "cleanupCompleted": "删除后的清理已完成。",
+      "cleanupRetryFailed": "无法重试删除后的清理："
+    },
     "session": {
       "createFailed": "无法创建会话：",
       "removeFailed": "无法删除会话：",

@@ -13,7 +13,10 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type WorktreeRemoval } from "../lib/api";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
-import { discardRemovedWorktreesWithRetry } from "../lib/operationToasts";
+import {
+  discardRemovedWorktreesWithRetry,
+  showRemovalOutcomeIssues,
+} from "../lib/operationToasts";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
 import { basenamePath, projectRootPaths } from "../lib/projectFolders";
 import {
@@ -638,6 +641,7 @@ export function ProjectSettingsModal({
             worktree.path !== target.path,
         ),
       );
+      showRemovalOutcomeIssues(outcome);
       await discardRemovedWorktreesWithRetry(outcome.result);
     } catch (e) {
       setWorktreeError({ kind: "remove", message: String(e) });
@@ -697,6 +701,7 @@ export function ProjectSettingsModal({
           if (outcome.result) {
             removals.push(outcome.result);
           }
+          showRemovalOutcomeIssues(outcome);
           removedKeys.add(`${target.rootPath}\u0000${target.path}`);
         } catch (e) {
           failures.push(`${target.name}: ${String(e)}`);

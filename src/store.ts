@@ -589,7 +589,9 @@ interface AppStateModel {
     orderedFolderIds: string[],
   ) => void;
   reorderSessions: (repoPath: string, orderedIds: string[]) => Promise<void>;
-  requestRemoveProject: (repoPath: string) => void;
+  requestRemoveProject: (
+    repoPath: string,
+  ) => Promise<ProjectRemovalOutcome | null> | null;
   clearPendingRemoveProject: () => void;
   setRightTab: (tab: RightTab) => void;
   /** Switch to `group` and restore that group's last sub-tab. */
@@ -3796,10 +3798,10 @@ export const useAppStore = create<AppStateModel>()(
   requestRemoveProject(repoPath) {
     const hasSessions = get().sessions.some((s) => s.repo_path === repoPath);
     if (!hasSessions) {
-      void get().removeProject(repoPath, false);
-      return;
+      return get().removeProject(repoPath, false);
     }
     set({ pendingRemoveProject: repoPath });
+    return null;
   },
 
   clearPendingRemoveProject() {

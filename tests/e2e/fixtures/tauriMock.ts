@@ -564,6 +564,15 @@ export const tauriMockSource = `
         retryToken: null,
       });
     }
+    if (cmd === 'retry_removal_cleanup') {
+      return Promise.resolve({
+        result: [],
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      });
+    }
+    if (cmd === 'discard_removal_retry') return Promise.resolve(undefined);
     if (cmd === 'restore_removed_worktree') return Promise.resolve(undefined);
     if (cmd === 'discard_removed_worktree') return Promise.resolve(undefined);
     if (cmd === 'restore_removed_session') return Promise.resolve(undefined);

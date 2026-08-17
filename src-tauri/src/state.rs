@@ -23,6 +23,23 @@ pub struct PendingSessionRemoval {
     pub sessions: Vec<Session>,
 }
 
+#[derive(Debug, Clone)]
+pub enum PendingRemovalStep {
+    DeleteScrollbacks {
+        session_ids: Vec<String>,
+    },
+    StageWorktree {
+        repo_path: PathBuf,
+        worktree_path: PathBuf,
+    },
+    RemoveProjectSettings {
+        repo_path: PathBuf,
+        respect_preference: bool,
+    },
+    PersistSessions,
+    PersistProjects,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub sessions: Arc<SessionStore>,
@@ -43,6 +60,10 @@ pub struct AppState {
     /// restore/discard commands, so the renderer never sends session records
     /// back into the backend.
     pub pending_session_removals: Arc<Mutex<HashMap<String, PendingSessionRemoval>>>,
+    /// Failed cleanup steps from otherwise-completed removal operations. The
+    /// renderer receives only the opaque map key and cannot supply filesystem
+    /// paths or choose which backend operation is retried.
+    pub pending_removal_retries: Arc<Mutex<HashMap<String, Vec<PendingRemovalStep>>>>,
     /// Shutdown handle for the currently running IPC listener thread.
     /// `None` when bind failed at boot. `ipc_restart` swaps in a new handle
     /// after signaling the previous listener to exit.
@@ -103,6 +124,7 @@ impl AppState {
             sessions_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             projects_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             pending_session_removals: Arc::new(Mutex::new(HashMap::new())),
+            pending_removal_retries: Arc::new(Mutex::new(HashMap::new())),
             ipc_handle: Arc::new(Mutex::new(None)),
             ipc_workspace_requests: Arc::new(Mutex::new(Default::default())),
             daemon_bridge: DaemonBridge::new(),

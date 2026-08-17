@@ -4,6 +4,8 @@ vi.mock("./api", () => ({
   api: {
     discardRemovedSession: vi.fn(),
     discardRemovedWorktree: vi.fn(),
+    discardRemovalRetry: vi.fn(),
+    retryRemovalCleanup: vi.fn(),
     restoreRemovedSession: vi.fn(),
     restoreRemovedWorktree: vi.fn(),
   },
@@ -11,6 +13,7 @@ vi.mock("./api", () => ({
 
 import { api, type SessionRemoval, type WorktreeRemoval } from "./api";
 import {
+  showRemovalOutcomeIssues,
   showSessionRemovalToast,
   showWorktreeRemovalToast,
 } from "./operationToasts";
@@ -108,5 +111,60 @@ describe("removal cleanup toasts", () => {
 
     expect(mockApi.discardRemovedSession).toHaveBeenCalledTimes(2);
     expect(mockApi.discardRemovedSession).toHaveBeenLastCalledWith(removal);
+  });
+
+  it("shows exact partial-removal failures and retries by opaque token", async () => {
+    const retriedRemoval = worktreeRemoval("retried-worktree");
+    mockApi.retryRemovalCleanup.mockResolvedValue({
+      result: [retriedRemoval],
+      removedSessionIds: [],
+      issues: [],
+      retryToken: null,
+    });
+
+    showRemovalOutcomeIssues({
+      result: null,
+      removedSessionIds: ["session-1"],
+      issues: [
+        {
+          kind: "scrollback",
+          target: "session-1",
+          message: "Permission denied",
+          retryable: true,
+        },
+      ],
+      retryToken: "opaque-retry-token",
+    });
+
+    const issueToast = useToasts.getState().toasts[0];
+    expect(issueToast.message).toContain("session-1: Permission denied");
+    await issueToast.action?.();
+
+    expect(mockApi.retryRemovalCleanup).toHaveBeenCalledWith(
+      "opaque-retry-token",
+    );
+    expect(useToasts.getState().toasts[1]?.message).toContain(
+      "retried-worktree",
+    );
+  });
+
+  it("forgets an ignored removal retry token without exposing cleanup inputs", async () => {
+    showRemovalOutcomeIssues({
+      result: [],
+      removedSessionIds: [],
+      issues: [
+        {
+          kind: "persistence",
+          target: "sessions",
+          message: "read-only file system",
+          retryable: true,
+        },
+      ],
+      retryToken: "ignored-token",
+    });
+
+    await useToasts.getState().toasts[0]?.onDismiss?.();
+
+    expect(mockApi.discardRemovalRetry).toHaveBeenCalledWith("ignored-token");
   });
 });
