@@ -24,6 +24,7 @@
       "refreshFailed": "无法刷新会话：",
       "renameFailed": "无法重命名会话：",
       "agentDetectionFailed": "无法检查正在运行的代理对话记录：",
+      "scrollbackLoadFailed": "无法加载已保存的终端回滚记录；为保护现有数据，已暂停保存：",
       "titleNotReady": "尚无可用于此会话的对话记录。",
       "titleRegenerateSkipped": "会话名称未重新生成。",
       "worktreeAdopted": "已采用工作树：{name}",
@@ -748,7 +749,7 @@
         "clearedSingular": "已清除 {count} 缓存的文件。",
         "clearedPlural": "已清除 {count} 缓存的文件。",
         "nothingToClear": "没有什么需要清除的。",
-        "clearFailed": "无法清除缓存。有关详细信息，请参阅控制台。"
+        "clearFailed": "无法清除缓存："
       },
       "confirm": {
         "message": "这将永久删除上面列出的缓存数据 ({size})。继续？",

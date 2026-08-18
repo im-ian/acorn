@@ -138,6 +138,37 @@ test.describe("settings modal: tab content", () => {
     }
   });
 
+  test("storage cache clear reports backend access failures", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("scrollback_orphan_size", () => 1024);
+    await tauri.handle("scrollback_orphan_clear", () => {
+      throw new Error("permission denied: /data/scrollback");
+    });
+
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^Storage$/ }).click();
+    await expect(modal.getByText("1.0 KB", { exact: true })).toBeVisible();
+    await modal.getByRole("button", { name: "Clear cache" }).click();
+    await expect(
+      modal.getByText(/permanently delete.*1\.0 KB/i),
+    ).toBeVisible();
+    await modal.getByRole("button", { name: "Clear cache" }).click();
+
+    await expect(
+      page
+        .getByText(
+          /Failed to clear cache:.*permission denied: \/data\/scrollback/,
+        )
+        .first(),
+    ).toBeVisible();
+    await expect(page.getByText("Nothing to clear.")).toHaveCount(0);
+  });
+
   test("Korean mode localizes tab buttons and representative Settings markers", async ({
     page,
   }) => {

@@ -3577,11 +3577,11 @@ function StorageSettings() {
     setBusy(true);
     setStatus(null);
     try {
-      const results = await Promise.allSettled(
+      const results = await Promise.all(
         CACHE_CATEGORIES.map((c) => c.clear()),
       );
       const totalRemoved = results.reduce<number>(
-        (sum, r) => sum + (r.status === "fulfilled" ? r.value : 0),
+        (sum, removed) => sum + removed,
         0,
       );
       const message =
@@ -3598,10 +3598,14 @@ function StorageSettings() {
       showToast(message);
       await refreshSizes();
     } catch (err) {
-      console.error("[Settings] cache clear failed", err);
-      const message = st(t, "settings.storage.status.clearFailed");
+      console.warn("[Settings] cache clear failed", err);
+      const message = `${st(
+        t,
+        "settings.storage.status.clearFailed",
+      )} ${messageFromUnknownError(err)}`;
       setStatus(message);
       showToast(message);
+      await refreshSizes();
     } finally {
       setBusy(false);
       setConfirming(false);
