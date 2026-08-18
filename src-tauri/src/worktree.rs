@@ -451,11 +451,26 @@ fn system_time_millis(time: SystemTime) -> Option<i64> {
     i64::try_from(millis).ok()
 }
 
+/// `Path::exists()` reports a metadata access failure as `false`. Every caller
+/// below acts destructively on that answer — pruning a Git registration or
+/// reporting "already gone" to a caller that then drops the session record — so
+/// an inaccessible path has to be an error, not an absent one.
+fn path_entry_exists(path: &Path) -> AppResult<bool> {
+    match std::fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(AppError::Io(std::io::Error::new(
+            error.kind(),
+            format!("failed to inspect worktree path {}: {error}", path.display()),
+        ))),
+    }
+}
+
 pub fn stage_remove_worktree_at_path(
     repo_path: &Path,
     worktree_path: &Path,
 ) -> AppResult<Option<RemovedWorktree>> {
-    if worktree_path.exists() && !is_linked_worktree_root(worktree_path) {
+    if path_entry_exists(worktree_path)? && !is_linked_worktree_root(worktree_path) {
         return Err(AppError::InvalidPath(format!(
             "not a linked git worktree: {}",
             worktree_path.display()
@@ -467,7 +482,7 @@ pub fn stage_remove_worktree_at_path(
     for name in names.iter().filter_map(|name| name.ok().flatten()) {
         let wt = repo.find_worktree(name)?;
         if same_path(wt.path(), worktree_path) {
-            if !worktree_path.exists() {
+            if !path_entry_exists(worktree_path)? {
                 if has_staged_worktree_backup(worktree_path)? {
                     return Ok(None);
                 }
@@ -493,16 +508,16 @@ pub fn stage_remove_worktree_at_path(
     }
 
     if is_acorn_managed_worktree_path(repo_path, worktree_path)? {
-        if worktree_path.exists() && is_linked_worktree_root(worktree_path) {
+        if path_entry_exists(worktree_path)? && is_linked_worktree_root(worktree_path) {
             std::fs::remove_dir_all(worktree_path)?;
             return Ok(None);
         }
-        if !worktree_path.exists() {
+        if !path_entry_exists(worktree_path)? {
             return Ok(None);
         }
     }
 
-    if !worktree_path.exists() {
+    if !path_entry_exists(worktree_path)? {
         return Ok(None);
     }
 
@@ -1234,6 +1249,47 @@ mod tests {
         std::fs::remove_file(root.join(ACORN_DIR).join("worktrees")).ok();
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&external).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_remove_worktree_reports_an_inaccessible_checkout_as_an_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("stage-remove-denied");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "denied").expect("create worktree");
+        let parent = worktree_path
+            .parent()
+            .expect("worktree parent")
+            .to_path_buf();
+        let original = std::fs::metadata(&parent).unwrap().permissions();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = stage_remove_worktree_at_path(&root, &worktree_path);
+
+        let denied = matches!(
+            std::fs::metadata(&worktree_path),
+            Err(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        );
+        std::fs::set_permissions(&parent, original).unwrap();
+        if denied {
+            match result {
+                Err(AppError::Io(error)) => {
+                    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+                    assert!(error
+                        .to_string()
+                        .contains("failed to inspect worktree path"));
+                }
+                other => panic!("an inaccessible checkout must not look absent: {other:?}"),
+            }
+            assert!(
+                worktree_path.exists(),
+                "the checkout must survive a failed staging attempt"
+            );
+        }
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
