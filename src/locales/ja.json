@@ -58,7 +58,8 @@
       "renameFailed": "ファイル名の変更に失敗しました:",
       "trashFailed": "ゴミ箱に移動できませんでした:",
       "pathsCopied": "ファイルパスがコピーされました。",
-      "copyFailed": "ファイルパスのコピーに失敗しました。"
+      "copyFailed": "ファイルパスのコピーに失敗しました。",
+      "terminalLinkOpenFailed": "ターミナルのファイルリンクを開けませんでした:"
     },
     "pullRequests": {
       "mergeFailed": "プル リクエストのマージに失敗しました:",

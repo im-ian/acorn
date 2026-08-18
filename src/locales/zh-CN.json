@@ -58,7 +58,8 @@
       "renameFailed": "无法重命名文件：",
       "trashFailed": "无法移至垃圾箱：",
       "pathsCopied": "已复制文件路径。",
-      "copyFailed": "无法复制文件路径。"
+      "copyFailed": "无法复制文件路径。",
+      "terminalLinkOpenFailed": "无法打开终端文件链接："
     },
     "pullRequests": {
       "mergeFailed": "无法合并拉取请求：",
