@@ -1230,6 +1230,7 @@
     "loadingImage": "画像プレビューを読み込んでいます...",
     "imageLoadFailed": "画像プレビューの読み込みに失敗しました",
     "binaryImageNoPreview": "バイナリ イメージの変更 (プレビューは利用できません)",
+    "imagePreviewFailed": "プレビューを表示できません:",
     "none": "(なし)",
     "imageLabels": {
       "added": "追加されました",

@@ -119,6 +119,11 @@ pub struct DiffFile {
     pub old_image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_image: Option<String>,
+    /// Why this file's preview is missing, when the reason was an access
+    /// failure rather than policy or the file simply being gone. Absent in the
+    /// normal case, so existing consumers are unaffected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_error: Option<String>,
     pub is_image: bool,
 }
 
@@ -934,25 +939,24 @@ fn collect_diff_with_image_target_and_limits(
                 && image_target.is_some_and(|target| {
                     target_matches(target, old_path.as_deref(), new_path.as_deref())
                 });
-            let (old_image, new_image) = if should_load_images {
-                (
-                    image_data_uri_bounded(
-                        repo,
-                        delta.old_file().id(),
-                        old_path.as_deref(),
-                        limits.max_image_bytes,
-                        &mut image_bytes_remaining,
-                    ),
-                    image_data_uri_workdir_bounded(
-                        repo,
-                        delta.new_file().id(),
-                        new_path.as_deref(),
-                        limits.max_image_bytes,
-                        &mut image_bytes_remaining,
-                    ),
-                )
+            let (old_image, new_image, image_error) = if should_load_images {
+                let old_image = image_data_uri_bounded(
+                    repo,
+                    delta.old_file().id(),
+                    old_path.as_deref(),
+                    limits.max_image_bytes,
+                    &mut image_bytes_remaining,
+                );
+                let (new_image, image_error) = image_data_uri_workdir_bounded(
+                    repo,
+                    delta.new_file().id(),
+                    new_path.as_deref(),
+                    limits.max_image_bytes,
+                    &mut image_bytes_remaining,
+                );
+                (old_image, new_image, image_error)
             } else {
-                (None, None)
+                (None, None, None)
             };
             *current.borrow_mut() = Some(DiffFile {
                 old_path,
@@ -960,6 +964,7 @@ fn collect_diff_with_image_target_and_limits(
                 patch: String::new(),
                 old_image,
                 new_image,
+                image_error,
                 is_image,
             });
             true
@@ -1097,63 +1102,121 @@ fn image_data_uri_bounded(
 /// Resolve image bytes for the "new" side of a diff.
 /// Falls back to reading the workdir file when the diff has no oid (untracked
 /// or staged-but-unwritten cases).
+/// Resolve image bytes for the "new" side of a diff.
+/// Falls back to reading the workdir file when the diff has no oid (untracked
+/// or staged-but-unwritten cases). Returns the preview and, separately, an
+/// access error worth showing the user.
 fn image_data_uri_workdir_bounded(
     repo: &Repository,
     oid: git2::Oid,
     path: Option<&str>,
     max_image_bytes: usize,
     image_bytes_remaining: &mut usize,
-) -> Option<String> {
-    let path = path?;
+) -> (Option<String>, Option<String>) {
+    let Some(path) = path else {
+        return (None, None);
+    };
     if !oid.is_zero() {
-        return image_data_uri_bounded(
-            repo,
-            oid,
-            Some(path),
-            max_image_bytes,
-            image_bytes_remaining,
+        return (
+            image_data_uri_bounded(
+                repo,
+                oid,
+                Some(path),
+                max_image_bytes,
+                image_bytes_remaining,
+            ),
+            None,
         );
     }
     let allowed_bytes = max_image_bytes.min(*image_bytes_remaining);
-    let bytes = read_workdir_image(repo, path, allowed_bytes)?;
-    let preview = encode_data_uri(&bytes, path);
-    *image_bytes_remaining -= bytes.len();
-    Some(preview)
+    match read_workdir_image(repo, path, allowed_bytes) {
+        Ok(Some(bytes)) => {
+            let preview = encode_data_uri(&bytes, path);
+            *image_bytes_remaining -= bytes.len();
+            (Some(preview), None)
+        }
+        Ok(None) => (None, None),
+        Err(error) => (None, Some(error)),
+    }
 }
 
-fn read_workdir_image(repo: &Repository, path: &str, max_bytes: usize) -> Option<Vec<u8>> {
-    validate_relative_git_path(path).ok()?;
-    let workdir = repo.workdir()?.canonicalize().ok()?;
+/// Read an untracked/unstaged working-tree image for a diff preview.
+///
+/// `Ok(None)` means "no preview, and that is fine": the path failed the policy
+/// checks, exceeded the size budget, or is simply gone. A file vanishing between
+/// the diff being computed and this read is the common case here — a build or a
+/// `git clean` racing the preview — and it must stay silent.
+///
+/// `Err` is reserved for a file that is there but unreadable, which the user
+/// cannot otherwise explain and should be told about.
+fn read_workdir_image(
+    repo: &Repository,
+    path: &str,
+    max_bytes: usize,
+) -> Result<Option<Vec<u8>>, String> {
+    if validate_relative_git_path(path).is_err() {
+        return Ok(None);
+    }
+    let Some(workdir) = repo.workdir() else {
+        return Ok(None);
+    };
+    let Ok(workdir) = workdir.canonicalize() else {
+        return Ok(None);
+    };
     let candidate = workdir.join(path);
-    let metadata = std::fs::symlink_metadata(&candidate).ok()?;
+    let metadata = match std::fs::symlink_metadata(&candidate) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(workdir_image_error(path, error)),
+    };
     let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max_bytes_u64 {
-        return None;
+        return Ok(None);
     }
-    let resolved = candidate.canonicalize().ok()?;
+    let resolved = match candidate.canonicalize() {
+        Ok(resolved) => resolved,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(workdir_image_error(path, error)),
+    };
     if !resolved.starts_with(&workdir) {
-        return None;
+        return Ok(None);
     }
-    let file = File::open(resolved).ok()?;
-    let open_meta = file.metadata().ok()?;
+    let file = match File::open(resolved) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(workdir_image_error(path, error)),
+    };
+    let open_meta = match file.metadata() {
+        Ok(open_meta) => open_meta,
+        Err(error) => return Err(workdir_image_error(path, error)),
+    };
     if !open_meta.is_file()
         || open_meta.len() > max_bytes_u64
         || !same_workdir_file(&metadata, &open_meta)
     {
-        return None;
+        return Ok(None);
     }
 
     // Re-check while reading because a regular file may grow after metadata
     // inspection. `take` also bounds unusual virtual files reporting size 0.
-    let capacity = usize::try_from(open_meta.len()).ok()?;
+    let Ok(capacity) = usize::try_from(open_meta.len()) else {
+        return Ok(None);
+    };
     let mut bytes = Vec::with_capacity(capacity);
-    file.take(max_bytes_u64.saturating_add(1))
+    if let Err(error) = file
+        .take(max_bytes_u64.saturating_add(1))
         .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() > max_bytes {
-        return None;
+    {
+        return Err(workdir_image_error(path, error));
     }
-    Some(bytes)
+    if bytes.len() > max_bytes {
+        return Ok(None);
+    }
+    Ok(Some(bytes))
+}
+
+fn workdir_image_error(path: &str, error: std::io::Error) -> String {
+    format!("could not read {path} for its diff preview: {error}")
 }
 
 #[cfg(unix)]
@@ -1901,15 +1964,60 @@ mod tests {
 
         assert_eq!(
             read_workdir_image(&repo, "inside.png", MAX_DIFF_IMAGE_BYTES),
-            Some(b"inside".to_vec())
+            Ok(Some(b"inside".to_vec()))
         );
         assert_eq!(
             read_workdir_image(&repo, "../outside.png", MAX_DIFF_IMAGE_BYTES),
-            None
+            Ok(None)
         );
 
         drop(repo);
         std::fs::remove_dir_all(&parent).ok();
+    }
+
+    #[test]
+    fn workdir_image_read_stays_silent_when_the_file_is_gone() {
+        let root = unique_temp_dir("image-missing");
+        let repo = git2::Repository::init(&root).expect("init repo");
+
+        // A file listed by the diff and deleted before the preview is read —
+        // a build or `git clean` racing the read. Absence is not an error.
+        assert_eq!(
+            read_workdir_image(&repo, "vanished.png", MAX_DIFF_IMAGE_BYTES),
+            Ok(None)
+        );
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workdir_image_read_reports_an_unreadable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("image-unreadable");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let image = root.join("blocked.png");
+        fs::write(&image, b"blocked").expect("write image");
+        let original = fs::metadata(&image).unwrap().permissions();
+        fs::set_permissions(&image, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = read_workdir_image(&repo, "blocked.png", MAX_DIFF_IMAGE_BYTES);
+
+        let denied = matches!(
+            fs::File::open(&image),
+            Err(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        );
+        fs::set_permissions(&image, original).unwrap();
+        if denied {
+            let error = result.expect_err("an unreadable image must not look absent");
+            assert!(error.contains("blocked.png"));
+            assert!(error.contains("diff preview"));
+        }
+
+        drop(repo);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -1918,10 +2026,10 @@ mod tests {
         let repo = git2::Repository::init(&root).expect("init repo");
         fs::write(root.join("large.png"), b"12345").expect("write image");
 
-        assert_eq!(read_workdir_image(&repo, "large.png", 4), None);
+        assert_eq!(read_workdir_image(&repo, "large.png", 4), Ok(None));
         assert_eq!(
             read_workdir_image(&repo, "large.png", 5),
-            Some(b"12345".to_vec())
+            Ok(Some(b"12345".to_vec()))
         );
 
         drop(repo);
@@ -2002,7 +2110,7 @@ mod tests {
 
         assert_eq!(
             read_workdir_image(&repo, "linked.png", MAX_DIFF_IMAGE_BYTES),
-            None
+            Ok(None)
         );
 
         drop(repo);
