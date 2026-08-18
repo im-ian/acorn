@@ -49,7 +49,7 @@ pub fn data_dir() -> std::io::Result<PathBuf> {
 
 /// Daemon control socket path. Honors `ACORN_DAEMON_SOCKET` override.
 pub fn control_socket_path() -> std::io::Result<PathBuf> {
-    if let Ok(over) = std::env::var(ENV_DAEMON_SOCKET_OVERRIDE) {
+    if let Some(over) = std::env::var_os(ENV_DAEMON_SOCKET_OVERRIDE) {
         if !over.is_empty() {
             return Ok(PathBuf::from(over));
         }
@@ -59,7 +59,7 @@ pub fn control_socket_path() -> std::io::Result<PathBuf> {
 
 /// Daemon stream socket path. Honors `ACORN_DAEMON_STREAM_SOCKET` override.
 pub fn stream_socket_path() -> std::io::Result<PathBuf> {
-    if let Ok(over) = std::env::var(ENV_DAEMON_STREAM_OVERRIDE) {
+    if let Some(over) = std::env::var_os(ENV_DAEMON_STREAM_OVERRIDE) {
         if !over.is_empty() {
             return Ok(PathBuf::from(over));
         }
@@ -198,6 +198,29 @@ mod tests {
         std::fs::remove_file(tmp.join("crashes")).ok();
         std::fs::remove_dir_all(&tmp).ok();
         std::fs::remove_dir_all(&external).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_overrides_preserve_non_unicode_os_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let _g = ENV_LOCK.lock();
+        let control = PathBuf::from(OsString::from_vec(b"/tmp/acorn-control-\xff.sock".to_vec()));
+        let stream = PathBuf::from(OsString::from_vec(b"/tmp/acorn-stream-\xff.sock".to_vec()));
+        unsafe {
+            std::env::set_var(ENV_DAEMON_SOCKET_OVERRIDE, &control);
+            std::env::set_var(ENV_DAEMON_STREAM_OVERRIDE, &stream);
+        }
+
+        assert_eq!(control_socket_path().unwrap(), control);
+        assert_eq!(stream_socket_path().unwrap(), stream);
+
+        unsafe {
+            std::env::remove_var(ENV_DAEMON_SOCKET_OVERRIDE);
+            std::env::remove_var(ENV_DAEMON_STREAM_OVERRIDE);
+        }
     }
 
     #[test]
