@@ -375,14 +375,58 @@ fn configured_worktree_base_commit<'repo>(
 /// excluded; libgit2's `worktrees()` only reports `.git/worktrees/<name>`
 /// entries. That matches what we want — `claude -w` always adds a linked
 /// worktree, never modifies the main one.
+/// List every registered linked worktree path.
+///
+/// Callers treat the result as authoritative — `authorize_registered_worktree`
+/// denies anything missing from it — so a registration that cannot be read has
+/// to be an error rather than an omission.
+///
+/// libgit2's own `git_worktree_list` silently drops a registration directory it
+/// cannot read, and the name never reaches us, so propagating its errors is not
+/// enough. Enumerate `<commondir>/worktrees` ourselves and resolve each entry
+/// through libgit2, failing the whole batch if any step fails.
+///
+/// A *stale* registration (the checkout was deleted, the registration remains)
+/// still resolves here and yields its recorded path — that is the case
+/// `stage_remove_worktree_at_path` prunes — so only a genuinely unreadable
+/// registration fails the listing.
 pub fn list_worktree_paths(repo_path: &Path) -> AppResult<Vec<std::path::PathBuf>> {
     let repo = ensure_repo(repo_path)?;
-    let names = repo.worktrees()?;
-    let mut paths = Vec::new();
-    for name in names.iter().filter_map(|name| name.ok().flatten()) {
-        if let Ok(wt) = repo.find_worktree(name) {
-            paths.push(wt.path().to_path_buf());
+    let registrations = repo.commondir().join("worktrees");
+    let entries = match std::fs::read_dir(&registrations) {
+        Ok(entries) => entries,
+        // No linked worktree has ever been created for this repository.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(AppError::Io(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "failed to read linked worktree registrations in {}: {error}",
+                    registrations.display()
+                ),
+            )))
         }
+    };
+
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            AppError::Io(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "failed to read a linked worktree registration in {}: {error}",
+                    registrations.display()
+                ),
+            ))
+        })?;
+        let name = entry.file_name();
+        let name = name.to_str().ok_or_else(|| {
+            AppError::InvalidPath(format!(
+                "linked worktree registration name is not valid UTF-8: {}",
+                entry.path().display()
+            ))
+        })?;
+        paths.push(repo.find_worktree(name)?.path().to_path_buf());
     }
     Ok(paths)
 }
@@ -1287,6 +1331,61 @@ mod tests {
             assert!(
                 worktree_path.exists(),
                 "the checkout must survive a failed staging attempt"
+            );
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_worktree_paths_still_reports_a_stale_registration() {
+        let root = unique_temp_dir("list-stale-registration");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "stale").expect("create worktree");
+        std::fs::remove_dir_all(&worktree_path).expect("delete the checkout");
+
+        let paths = list_worktree_paths(&root).expect("a stale registration must still list");
+
+        // Compare by file name: the checkout is gone, so neither side
+        // canonicalises and the recorded path may differ in form (on macOS
+        // `/var/...` vs `/private/var/...`).
+        let expected = worktree_path.file_name().expect("worktree name");
+        assert!(
+            paths.iter().any(|path| path.file_name() == Some(expected)),
+            "the registration outlives its checkout, which is what prune handles; got {paths:?}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_worktree_paths_fails_on_an_unreadable_registration() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("list-unreadable-registration");
+        let repo = init_repo_with_tracked_file(&root);
+        let registrations = repo.path().join("worktrees");
+        drop(repo);
+        create_worktree(&root, "blocked").expect("create worktree");
+        // Block one registration, not the whole directory: `repo.worktrees()`
+        // still enumerates the name, so this exercises the `find_worktree`
+        // lookup that used to be skipped rather than the enumeration that
+        // already propagated.
+        let entry = registrations.join("blocked");
+        let original = std::fs::metadata(&entry).unwrap().permissions();
+        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = list_worktree_paths(&root);
+
+        let denied = matches!(
+            std::fs::read_dir(&entry),
+            Err(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        );
+        std::fs::set_permissions(&entry, original).unwrap();
+        if denied {
+            assert!(
+                result.is_err(),
+                "an unreadable registration must not silently drop out of the listing; got {result:?}"
             );
         }
         std::fs::remove_dir_all(&root).ok();
