@@ -1,6 +1,40 @@
 import { test, expect } from "./support";
 
 test.describe("app recovery", () => {
+  test("keeps an emergency message when the entry module cannot load", async ({
+    page,
+    errorTracker,
+  }) => {
+    errorTracker.allow(/failed to load resource/i);
+    await page.route(/\/src\/main\.tsx(?:\?.*)?$/, (route) => route.abort());
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("heading", { name: "Acorn is starting" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/If this screen remains, the interface could not load/i),
+    ).toBeVisible();
+  });
+
+  test("keeps an emergency message when the application module cannot load", async ({
+    page,
+    errorTracker,
+  }) => {
+    errorTracker.allow(/failed to load resource/i);
+    await page.route(/\/src\/App\.tsx(?:\?.*)?$/, (route) => route.abort());
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("heading", { name: "Acorn is starting" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/If this screen remains, the interface could not load/i),
+    ).toBeVisible();
+  });
+
   test("recovers from incompatible persisted UI state instead of staying blank", async ({
     page,
     errorTracker,
