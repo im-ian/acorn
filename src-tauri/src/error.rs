@@ -46,6 +46,12 @@ impl From<acorn_session::scrollback::ScrollbackError> for AppError {
     }
 }
 
+impl From<acorn_transcript::ProviderScanError> for AppError {
+    fn from(value: acorn_transcript::ProviderScanError) -> Self {
+        AppError::Other(value.to_string())
+    }
+}
+
 impl Serialize for AppError {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())

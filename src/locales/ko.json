@@ -17,6 +17,7 @@
       "sessionWorktreeDiscardFailedRetry": "제거한 세션 데이터를 완전히 삭제하지 못했습니다: {error}. 다시 시도",
       "refreshFailed": "세션 목록을 새로 고치지 못했습니다:",
       "renameFailed": "세션 이름을 바꾸지 못했습니다:",
+      "agentDetectionFailed": "실행 중인 에이전트 transcript를 확인하지 못했습니다:",
       "titleNotReady": "아직 이 세션에서 사용할 transcript가 없습니다.",
       "titleRegenerateSkipped": "세션 이름을 다시 생성하지 않았습니다.",
       "worktreeAdopted": "새 워크트리를 가져왔습니다: {name}",
