@@ -235,6 +235,7 @@ jobs:
           $smokeDataDir = Join-Path $env:RUNNER_TEMP "acorn-daemon-smoke-$([guid]::NewGuid().ToString('N'))"
           $previousDataDir = [Environment]::GetEnvironmentVariable("ACORN_DATA_DIR", "Process")
           $daemonLaunched = $false
+          [int]$daemonPid = 0
 
           try {
             if (!(Test-Path -LiteralPath $acornd -PathType Leaf)) {
@@ -247,6 +248,13 @@ jobs:
             New-Item -ItemType Directory -Force -Path $smokeDataDir | Out-Null
             $env:ACORN_DATA_DIR = $smokeDataDir
             $expectedVersion = (Get-Content -LiteralPath src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+            $acorndPath = (Resolve-Path -LiteralPath $acornd).Path
+            $existingDaemonPids = @(
+              Get-Process -Name "acornd" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Path -eq $acorndPath } |
+                ForEach-Object { $_.Id }
+            )
+            $launchStartedAt = [DateTime]::UtcNow
 
             & $acornd serve --detach
             $serveExit = $LASTEXITCODE
@@ -289,21 +297,23 @@ jobs:
 
             # The public shutdown CLI is intentionally absent: a same-user
             # process must not be able to terminate the user's daemon. This
-            # isolated smoke owns the unique data directory and may stop only
-            # the PID it just launched after validating the executable name.
-            $pidFile = Join-Path $smokeDataDir "daemon.pid"
-            if (!(Test-Path -LiteralPath $pidFile -PathType Leaf)) {
-              throw "acornd pid file is missing: $pidFile"
+            # isolated smoke records the exact release binary's process set
+            # before launch and may stop only the single new matching process.
+            # Do not read daemon.pid here: Windows intentionally denies reads
+            # through a competing handle while the singleton lock is held.
+            $daemonCandidates = @(
+              Get-Process -Name "acornd" -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.Path -eq $acorndPath -and
+                  $existingDaemonPids -notcontains $_.Id -and
+                  $_.StartTime.ToUniversalTime() -ge $launchStartedAt.AddSeconds(-1)
+                }
+            )
+            if ($daemonCandidates.Count -ne 1) {
+              throw "expected exactly one newly launched acornd process, found $($daemonCandidates.Count)"
             }
-            [int]$daemonPid = 0
-            $pidText = (Get-Content -LiteralPath $pidFile -Raw).Trim()
-            if (![int]::TryParse($pidText, [ref]$daemonPid)) {
-              throw "acornd pid file is invalid: $pidText"
-            }
-            $daemonProcess = Get-Process -Id $daemonPid -ErrorAction SilentlyContinue
-            if ($null -eq $daemonProcess -or $daemonProcess.ProcessName -ne "acornd") {
-              throw "acornd pid $daemonPid does not identify the launched daemon"
-            }
+            $daemonProcess = $daemonCandidates[0]
+            $daemonPid = $daemonProcess.Id
             Stop-Process -Id $daemonPid -Force
             Wait-Process -Id $daemonPid -Timeout 5 -ErrorAction SilentlyContinue
 
@@ -328,16 +338,24 @@ jobs:
           }
           finally {
             if ($daemonLaunched -and (Test-Path -LiteralPath $acornd -PathType Leaf)) {
-              $pidFile = Join-Path $smokeDataDir "daemon.pid"
-              if (Test-Path -LiteralPath $pidFile -PathType Leaf) {
-                [int]$daemonPid = 0
-                $pidText = (Get-Content -LiteralPath $pidFile -Raw).Trim()
-                if ([int]::TryParse($pidText, [ref]$daemonPid)) {
-                  $daemonProcess = Get-Process -Id $daemonPid -ErrorAction SilentlyContinue
-                  if ($null -ne $daemonProcess -and $daemonProcess.ProcessName -eq "acornd") {
-                    Stop-Process -Id $daemonPid -Force -ErrorAction SilentlyContinue
-                    Wait-Process -Id $daemonPid -Timeout 5 -ErrorAction SilentlyContinue
-                  }
+              if ($daemonPid -eq 0 -and $null -ne $acorndPath) {
+                $cleanupCandidates = @(
+                  Get-Process -Name "acornd" -ErrorAction SilentlyContinue |
+                    Where-Object {
+                      $_.Path -eq $acorndPath -and
+                      $existingDaemonPids -notcontains $_.Id -and
+                      $_.StartTime.ToUniversalTime() -ge $launchStartedAt.AddSeconds(-1)
+                    }
+                )
+                if ($cleanupCandidates.Count -eq 1) {
+                  $daemonPid = $cleanupCandidates[0].Id
+                }
+              }
+              if ($daemonPid -gt 0) {
+                $daemonProcess = Get-Process -Id $daemonPid -ErrorAction SilentlyContinue
+                if ($null -ne $daemonProcess -and $daemonProcess.Path -eq $acorndPath) {
+                  Stop-Process -Id $daemonPid -Force -ErrorAction SilentlyContinue
+                  Wait-Process -Id $daemonPid -Timeout 5 -ErrorAction SilentlyContinue
                 }
               }
             }
