@@ -61,7 +61,7 @@ import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
 import type { LayoutNode } from "../lib/layout";
 import { basename } from "../lib/pathUtils";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
-import { openSafeUrl } from "../lib/safeOpenUrl";
+import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
   PROJECT_SESSION_CREATE_MENU,
@@ -1682,14 +1682,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
                   onKeyUp={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    void openSafeUrl(currentPullRequest.url).catch(
-                      (err: unknown) => {
-                        console.error(
-                          "[WorkspaceMain] open PR URL failed",
-                          err,
-                        );
-                      },
-                    );
+                    void openExternalUrlWithFeedback(currentPullRequest.url);
                   }}
                   className={cn(
                     "inline-flex min-w-0 shrink-0 items-center gap-0.5 rounded-sm underline-offset-2 transition hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60",
@@ -2671,9 +2664,7 @@ function KanbanTerminalPopoverPullRequestMetaItem({
         onKeyUp={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation();
-          void openSafeUrl(pullRequest.url).catch((err: unknown) => {
-            console.error("[WorkspaceMain] open PR URL failed", err);
-          });
+          void openExternalUrlWithFeedback(pullRequest.url);
         }}
         className={cn(
           "inline-flex min-w-0 max-w-[18rem] shrink items-center gap-1.5 rounded-sm underline-offset-2 transition hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60",

@@ -70,6 +70,10 @@
       "dropOpenFailed": "ドロップしたファイルを開けませんでした:",
       "dropInputFailed": "ドロップしたファイルパスをターミナルに入力できませんでした:"
     },
+    "opener": {
+      "urlFailed": "外部リンクを開けませんでした:",
+      "urlBlocked": "安全な外部 URL ではないため、このリンクはブロックされました。"
+    },
     "pullRequests": {
       "mergeFailed": "プル リクエストのマージに失敗しました:",
       "closeFailed": "プルリクエストをクローズできませんでした:",

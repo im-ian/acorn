@@ -64,7 +64,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useAppStore, type WorkspaceViewMode } from "../store";
-import { openSafeUrl } from "../lib/safeOpenUrl";
+import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import {
   AgentProviderIcon,
   buildAgentForkCommand,
@@ -3847,9 +3847,7 @@ function SessionRowLabel({
               onKeyUp={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                void openSafeUrl(currentPullRequest.url).catch((err: unknown) => {
-                  console.error("[Sidebar] open PR URL failed", err);
-                });
+                void openExternalUrlWithFeedback(currentPullRequest.url);
               }}
               className={cn(
                 "inline-flex shrink-0 items-center gap-0.5 rounded-sm underline-offset-2 transition hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60",

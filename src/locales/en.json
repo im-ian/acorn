@@ -70,6 +70,10 @@
       "dropOpenFailed": "Failed to open dropped file:",
       "dropInputFailed": "Failed to insert dropped file path into the terminal:"
     },
+    "opener": {
+      "urlFailed": "Failed to open the external link:",
+      "urlBlocked": "That link was blocked because it is not a safe external URL."
+    },
     "pullRequests": {
       "mergeFailed": "Failed to merge pull request:",
       "closeFailed": "Failed to close pull request:",

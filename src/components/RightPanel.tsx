@@ -60,6 +60,7 @@ import { joinPath } from "../lib/paths";
 import { trimTrailingPathSeparators } from "../lib/pathUtils";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import { openSafeUrl } from "../lib/safeOpenUrl";
+import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import { findSessionsForPullRequest } from "../lib/sessionContext";
 import { readSessionPullRequestBranchLinks } from "../lib/sessionPullRequestLinks";
 import {
@@ -2079,7 +2080,7 @@ function CommitsTab({
           <Tooltip label={rt(t, "rightPanel.tooltips.openOnGitHub")} side="bottom">
             <button
               type="button"
-              onClick={() => void openSafeUrl(webUrl)}
+              onClick={() => void openExternalUrlWithFeedback(webUrl)}
               className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
             >
               <ExternalLink size={12} />
@@ -4173,7 +4174,7 @@ function WorkflowRunDetailModal({
                 >
                   <button
                     type="button"
-                    onClick={() => void openSafeUrl(detail.url)}
+                    onClick={() => void openExternalUrlWithFeedback(detail.url)}
                     className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
                   >
                     <ExternalLink size={14} />
@@ -4448,13 +4449,13 @@ function WorkflowJobRow({ job, nowUnix }: { job: WorkflowJob; nowUnix: number })
               tabIndex={0}
               onClick={(e) => {
                 e.stopPropagation();
-                void openSafeUrl(job.url);
+                void openExternalUrlWithFeedback(job.url);
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   e.stopPropagation();
-                  void openSafeUrl(job.url);
+                  void openExternalUrlWithFeedback(job.url);
                 }
               }}
               className="shrink-0 cursor-pointer rounded p-0.5 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"

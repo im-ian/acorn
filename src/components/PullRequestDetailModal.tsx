@@ -30,7 +30,7 @@ import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { emitPullRequestMutation } from "../lib/pullRequestEvents";
-import { openSafeUrl } from "../lib/safeOpenUrl";
+import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import { useSettings } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
 import { ResizeHandle } from "./ResizeHandle";
@@ -830,7 +830,7 @@ function DetailBody({
           <Tooltip label={dt(t, "dialogs.pullRequestDetail.openOnGithub")} side="bottom">
             <button
               type="button"
-              onClick={() => void openSafeUrl(detail.url)}
+              onClick={() => void openExternalUrlWithFeedback(detail.url)}
               className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
             >
               <ExternalLink size={14} />
@@ -1509,7 +1509,7 @@ function CommentBlock({
               <button
                 type="button"
                 onClick={() => {
-                  if (comment.url) void openSafeUrl(comment.url);
+                  if (comment.url) void openExternalUrlWithFeedback(comment.url);
                 }}
                 className="rounded p-1 text-fg-muted transition hover:bg-bg hover:text-fg"
               >
@@ -1751,7 +1751,7 @@ function CommitListItem({
           {
             label: dt(t, "dialogs.pullRequestDetail.viewOnGithub"),
             icon: <ExternalLink size={12} />,
-            onClick: () => void openSafeUrl(commitUrl),
+            onClick: () => void openExternalUrlWithFeedback(commitUrl),
           },
         ]
       : []),
@@ -1941,7 +1941,7 @@ function CommitDetailView({
         >
           <button
             type="button"
-            onClick={() => void openSafeUrl(commitUrl)}
+            onClick={() => void openExternalUrlWithFeedback(commitUrl)}
             className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
           >
             <ExternalLink size={12} />
@@ -2071,7 +2071,7 @@ function CheckRow({
           <button
             type="button"
             onClick={() => {
-              if (check.url) void openSafeUrl(check.url);
+              if (check.url) void openExternalUrlWithFeedback(check.url);
             }}
             className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
           >

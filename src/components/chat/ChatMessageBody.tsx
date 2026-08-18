@@ -2,7 +2,8 @@ import { Children, isValidElement, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../lib/cn";
-import { isSafeOpenUrl, openSafeUrl } from "../../lib/safeOpenUrl";
+import { isSafeOpenUrl } from "../../lib/safeOpenUrl";
+import { openExternalUrlWithFeedback } from "../../lib/externalOpener";
 import {
   markdownImageUrlTransform,
   RemoteImage,
@@ -55,7 +56,7 @@ export function ChatMessageBody({
       return (
         <button
           type="button"
-          onClick={() => void openSafeUrl(safeHref)}
+          onClick={() => void openExternalUrlWithFeedback(safeHref)}
           className="inline cursor-pointer bg-transparent p-0 text-accent underline-offset-2 hover:underline"
         >
           {children}

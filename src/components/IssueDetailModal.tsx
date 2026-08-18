@@ -19,7 +19,7 @@ import type {
   IssueDetail,
   IssueDetailListing,
 } from "../lib/types";
-import { openSafeUrl } from "../lib/safeOpenUrl";
+import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import { useTranslation } from "../lib/useTranslation";
 import { AuthorTag } from "./AuthorTag";
 import { DeleteCommentDialog } from "./DeleteCommentDialog";
@@ -393,7 +393,7 @@ function IssueDetailBody({
           >
             <button
               type="button"
-              onClick={() => void openSafeUrl(detail.url)}
+              onClick={() => void openExternalUrlWithFeedback(detail.url)}
               className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
             >
               <ExternalLink size={14} />
@@ -591,7 +591,7 @@ function IssueCommentBlock({
             >
               <button
                 type="button"
-                onClick={() => void openSafeUrl(comment.url ?? "")}
+                onClick={() => void openExternalUrlWithFeedback(comment.url ?? "")}
                 className="rounded p-1 text-fg-muted transition hover:bg-bg hover:text-fg"
               >
                 <ExternalLink size={12} />

@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { ExternalLink, X } from "lucide-react";
-import { isSafeOpenUrl, openSafeUrl } from "../lib/safeOpenUrl";
+import { isSafeOpenUrl } from "../lib/safeOpenUrl";
+import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
 
@@ -69,7 +70,7 @@ export function ImageLightbox({ image, onClose }: ImageLightboxProps) {
               aria-label={t("imageLightbox.openInBrowser")}
               onClick={(e) => {
                 e.stopPropagation();
-                void openSafeUrl(image.src);
+                void openExternalUrlWithFeedback(image.src);
               }}
               className="rounded p-1.5 text-white/70 transition hover:bg-white/10 hover:text-white"
             >
