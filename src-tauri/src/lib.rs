@@ -704,7 +704,15 @@ pub fn run() {
             // listener thread; if bind fails it logs and the app keeps
             // running with IPC disabled. The returned handle lets
             // `ipc_restart` cycle the listener without process restart.
-            let handle = ipc::server::start(app.handle().clone(), state.inner().clone());
+            // Boot stays best-effort: a disabled IPC server must not stop the
+            // app from starting. `ipc_restart` surfaces the reason on demand.
+            let handle = match ipc::server::start(app.handle().clone(), state.inner().clone()) {
+                Ok(handle) => Some(handle),
+                Err(err) => {
+                    tracing::warn!(error = %err, "ipc: server disabled");
+                    None
+                }
+            };
             *state.ipc_handle.lock() = handle;
 
             // Resolve and cache the `acornd` binary location now so the
