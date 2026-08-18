@@ -1,5 +1,11 @@
 {
   "toasts": {
+    "removal": {
+      "partialFailure": "Removal completed, but cleanup needs attention: {error}.",
+      "partialFailureRetry": "Removal completed, but cleanup needs attention: {error}. Retry",
+      "cleanupCompleted": "Removal cleanup completed.",
+      "cleanupRetryFailed": "Failed to retry removal cleanup:"
+    },
     "session": {
       "createFailed": "Failed to create session:",
       "removeFailed": "Failed to remove session:",

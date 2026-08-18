@@ -167,10 +167,15 @@ test.describe("project settings", () => {
       w.__removeWorktreeCalls.push(args);
       const worktreePath = (args as { worktreePath?: string }).worktreePath;
       return {
-        token: "remove-feature-alpha",
-        repoPath: "/tmp/acorn",
-        worktreePath,
-        gitCommonDir: "/tmp/acorn/.git",
+        result: {
+          token: "remove-feature-alpha",
+          repoPath: "/tmp/acorn",
+          worktreePath,
+          gitCommonDir: "/tmp/acorn/.git",
+        },
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
       };
     });
     await tauri.handle("discard_removed_worktree", (args) => {
@@ -336,7 +341,12 @@ test.describe("project settings", () => {
       w.__worktrees = (w.__worktrees ?? []).filter(
         (worktree) => worktree.path !== worktreePath,
       );
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -713,7 +723,12 @@ test.describe("project settings", () => {
       w.__worktrees = (w.__worktrees ?? []).filter(
         (worktree) => worktree.path !== worktreePath,
       );
-      return undefined;
+      return {
+        result: null,
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -833,7 +848,12 @@ test.describe("project settings", () => {
       const w = window as unknown as { __removeWorktreeCalls?: unknown[] };
       w.__removeWorktreeCalls = w.__removeWorktreeCalls ?? [];
       w.__removeWorktreeCalls.push(args);
-      return undefined;
+      return {
+        result: null,
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");

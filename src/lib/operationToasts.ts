@@ -2,7 +2,12 @@ import { createTranslator, type TranslationKey } from "./i18n";
 import { useSettings } from "./settings";
 import { TOAST_TTL_MS, useToasts } from "./toasts";
 import { useAppStore } from "../store";
-import { api, type SessionRemoval, type WorktreeRemoval } from "./api";
+import {
+  api,
+  type RemovalOutcome,
+  type SessionRemoval,
+  type WorktreeRemoval,
+} from "./api";
 
 export function currentText(
   key: TranslationKey,
@@ -36,6 +41,7 @@ export function showTranslatedErrorToast(
 export function showStoreResultToast(
   successKey: TranslationKey | null,
   failureKey: TranslationKey,
+  outcome?: RemovalOutcome<unknown> | null,
 ): void {
   const error = useAppStore.getState().consumeError();
   if (error) {
@@ -45,6 +51,59 @@ export function showStoreResultToast(
   if (successKey) {
     showTranslatedToast(successKey);
   }
+  showRemovalOutcomeIssues(outcome);
+}
+
+function removalIssueDetails(outcome: RemovalOutcome<unknown>): string {
+  return outcome.issues
+    .map((issue) => `${issue.target}: ${issue.message}`)
+    .join("; ");
+}
+
+export function showRemovalOutcomeIssues(
+  outcome: RemovalOutcome<unknown> | null | undefined,
+): void {
+  if (!outcome || outcome.issues.length === 0) return;
+
+  const retryToken = outcome.retryToken;
+  const canRetry =
+    retryToken !== null && outcome.issues.some((issue) => issue.retryable);
+  const key = canRetry
+    ? "toasts.removal.partialFailureRetry"
+    : "toasts.removal.partialFailure";
+  useToasts
+    .getState()
+    .show(currentText(key, { error: removalIssueDetails(outcome) }), {
+      action: canRetry
+        ? async () => {
+            try {
+              const retryOutcome = await api.retryRemovalCleanup(retryToken);
+              if (retryOutcome.result.length > 0) {
+                showWorktreeRemovalToast(
+                  retryOutcome.result,
+                  "toasts.session.worktreeRemoved",
+                  "toasts.session.worktreeRemovedUndo",
+                  "toasts.session.worktreeRestored",
+                  "toasts.session.worktreeRestoreFailed",
+                );
+              } else if (retryOutcome.issues.length === 0) {
+                showTranslatedToast("toasts.removal.cleanupCompleted");
+              }
+              showRemovalOutcomeIssues(retryOutcome);
+            } catch (error) {
+              showTranslatedErrorToast(
+                "toasts.removal.cleanupRetryFailed",
+                error,
+              );
+            }
+          }
+        : undefined,
+      onDismiss: retryToken
+        ? async () => {
+            await api.discardRemovalRetry(retryToken);
+          }
+        : undefined,
+    });
 }
 
 function worktreeName(removal: WorktreeRemoval): string {
@@ -186,7 +245,10 @@ export function showWorktreeRemovalToast(
 }
 
 export function showStoreWorktreeRemovalToast(
-  removals: WorktreeRemoval | WorktreeRemoval[] | null | undefined,
+  outcome:
+    | RemovalOutcome<WorktreeRemoval | WorktreeRemoval[] | null>
+    | null
+    | undefined,
   successKey: TranslationKey,
   undoKey: TranslationKey,
   failureKey: TranslationKey,
@@ -199,12 +261,13 @@ export function showStoreWorktreeRemovalToast(
     return;
   }
   showWorktreeRemovalToast(
-    removals,
+    outcome?.result,
     successKey,
     undoKey,
     restoredKey,
     restoreFailedKey,
   );
+  showRemovalOutcomeIssues(outcome);
 }
 
 export function showSessionRemovalToast(
@@ -256,7 +319,10 @@ export function showSessionRemovalToast(
 }
 
 export function showStoreSessionRemovalToast(
-  removals: SessionRemoval | SessionRemoval[] | null | undefined,
+  outcome:
+    | RemovalOutcome<SessionRemoval | SessionRemoval[] | null>
+    | null
+    | undefined,
   successKey: TranslationKey,
   undoKey: TranslationKey,
   failureKey: TranslationKey,
@@ -269,10 +335,11 @@ export function showStoreSessionRemovalToast(
     return;
   }
   showSessionRemovalToast(
-    removals,
+    outcome?.result,
     successKey,
     undoKey,
     restoredKey,
     restoreFailedKey,
   );
+  showRemovalOutcomeIssues(outcome);
 }

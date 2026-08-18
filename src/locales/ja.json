@@ -1,5 +1,11 @@
 {
   "toasts": {
+    "removal": {
+      "partialFailure": "削除は完了しましたが、後処理の確認が必要です: {error}。",
+      "partialFailureRetry": "削除は完了しましたが、後処理の確認が必要です: {error}。再試行",
+      "cleanupCompleted": "削除後のクリーンアップが完了しました。",
+      "cleanupRetryFailed": "削除後のクリーンアップを再試行できませんでした:"
+    },
     "session": {
       "createFailed": "セッションの作成に失敗しました:",
       "removeFailed": "セッションを削除できませんでした:",

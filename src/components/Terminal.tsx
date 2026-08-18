@@ -2834,10 +2834,11 @@ export function Terminal({
               if (session && hasRecordedWorktree(session)) {
                 store.requestRemoveSession(sessionId);
               } else {
-                void store.removeSession(sessionId, false).then(() => {
+                void store.removeSession(sessionId, false).then((outcome) => {
                   showStoreResultToast(
                     null,
                     "toasts.session.removeFailed",
+                    outcome,
                   );
                 });
               }

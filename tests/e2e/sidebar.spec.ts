@@ -1485,7 +1485,12 @@ test.describe("sidebar: project lifecycle", () => {
       w.__removeCalls.push(args);
       const id = String(args?.id ?? "");
       w.__removedIds = Array.from(new Set([...(w.__removedIds ?? []), id]));
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [id],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -1636,7 +1641,12 @@ test.describe("sidebar: project lifecycle", () => {
       w.__removeCalls.push(args);
       const id = String(args?.id ?? "");
       w.__removedIds = Array.from(new Set([...(w.__removedIds ?? []), id]));
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [id],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -1718,7 +1728,12 @@ test.describe("sidebar: project lifecycle", () => {
       const w = window as unknown as { __removeWorktreeCalls?: unknown[] };
       w.__removeWorktreeCalls = w.__removeWorktreeCalls ?? [];
       w.__removeWorktreeCalls.push(args);
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      };
     });
     await page.addInitScript(() => {
       localStorage.setItem(
@@ -1810,10 +1825,15 @@ test.describe("sidebar: project lifecycle", () => {
     ]);
     await tauri.handle("list_sessions", () => []);
     await tauri.respond("remove_worktree", {
-      token: "undo-token",
-      repoPath: "/tmp/demo",
-      worktreePath: "/tmp/demo/.acorn/worktrees/feature-empty",
-      gitCommonDir: "/tmp/demo/.git",
+      result: {
+        token: "undo-token",
+        repoPath: "/tmp/demo",
+        worktreePath: "/tmp/demo/.acorn/worktrees/feature-empty",
+        gitCommonDir: "/tmp/demo/.git",
+      },
+      removedSessionIds: [],
+      issues: [],
+      retryToken: null,
     });
     await tauri.handle("restore_removed_worktree", (args) => {
       const w = window as unknown as { __restoreWorktreeCalls?: unknown[] };
@@ -1923,7 +1943,12 @@ test.describe("sidebar: project lifecycle", () => {
       const w = window as unknown as { __removeWorktreeCalls?: unknown[] };
       w.__removeWorktreeCalls = w.__removeWorktreeCalls ?? [];
       w.__removeWorktreeCalls.push(args);
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      };
     });
     await page.addInitScript(() => {
       localStorage.setItem(
@@ -4089,7 +4114,12 @@ test.describe("sidebar: project lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__projectRemoved = true;
-      return null;
+      return {
+        result: [],
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -4160,7 +4190,12 @@ test.describe("sidebar: project lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__projectRemoved = true;
-      return null;
+      return {
+        result: [],
+        removedSessionIds: ["sess-1"],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");

@@ -39,6 +39,7 @@ import { suggestDefaultSessionName } from "../lib/sessionName";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import type { SessionNotificationKind } from "../lib/types";
+import { showRemovalOutcomeIssues } from "../lib/operationToasts";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -242,9 +243,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   async function handleRemoveSession(id: string) {
     const show = useToasts.getState().show;
     try {
-      await useAppStore.getState().removeSession(id);
+      const outcome = await useAppStore.getState().removeSession(id);
       const error = useAppStore.getState().consumeError();
       if (error) show(`${t("toasts.session.removeFailed")} ${error}`);
+      showRemovalOutcomeIssues(outcome);
     } finally {
       close();
     }
