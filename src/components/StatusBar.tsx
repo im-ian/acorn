@@ -804,6 +804,7 @@ interface DaemonSnapshot {
   running: boolean;
   enabled: boolean;
   sessions: number | null;
+  lastError: string | null;
 }
 
 type DotState = "ok" | "down" | "muted";
@@ -1308,9 +1309,15 @@ function ServicesStatusButton() {
         running: snap.running,
         enabled: snap.enabled,
         sessions: snap.session_count_alive,
+        lastError: snap.last_error,
       });
-    } catch {
-      setDaemon({ running: false, enabled: true, sessions: null });
+    } catch (err) {
+      setDaemon({
+        running: false,
+        enabled: true,
+        sessions: null,
+        lastError: err instanceof Error ? err.message : String(err),
+      });
     }
   }, []);
 
@@ -1647,7 +1654,7 @@ function ServicesDropdown({
             actionIcon={<Settings size={11} />}
             actionDisabled={false}
             onAction={onOpenDaemonSettings}
-            error={null}
+            error={daemon?.lastError ?? null}
           />
         </li>
       </ul>

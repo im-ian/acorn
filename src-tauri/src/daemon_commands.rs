@@ -9,6 +9,7 @@
 //! sites do not have to know which side served them.
 
 use serde::Serialize;
+use std::io;
 use std::path::{Path, PathBuf};
 use tauri::State;
 use uuid::Uuid;
@@ -31,8 +32,8 @@ pub struct DaemonStatus {
     pub session_count_total: Option<u32>,
     pub session_count_alive: Option<u32>,
     /// Absolute path to the daemon log file (for "open log" buttons in
-    /// Settings). `None` when the data dir cannot be resolved on this
-    /// platform.
+    /// Settings). `None` when the data dir cannot be resolved; `last_error`
+    /// carries the reason.
     pub log_path: Option<String>,
     /// Last error message, if the most recent operation failed. Reset
     /// to `None` on a successful subsequent call.
@@ -42,9 +43,7 @@ pub struct DaemonStatus {
 #[tauri::command]
 pub fn daemon_status(state: State<'_, AppState>) -> DaemonStatus {
     let enabled = state.daemon_bridge.is_enabled();
-    let log_path = crate::daemon_bridge::data_dir_path()
-        .ok()
-        .map(|p| p.join("daemon.log").display().to_string());
+    let (log_path, log_path_error) = daemon_log_path(crate::daemon_bridge::data_dir_path());
 
     if !enabled {
         return DaemonStatus {
@@ -55,7 +54,7 @@ pub fn daemon_status(state: State<'_, AppState>) -> DaemonStatus {
             session_count_total: None,
             session_count_alive: None,
             log_path,
-            last_error: None,
+            last_error: log_path_error,
         };
     }
 
@@ -68,7 +67,7 @@ pub fn daemon_status(state: State<'_, AppState>) -> DaemonStatus {
             session_count_total: Some(snap.session_count_total),
             session_count_alive: Some(snap.session_count_alive),
             log_path,
-            last_error: None,
+            last_error: log_path_error,
         },
         Err(BridgeError::Disabled) => DaemonStatus {
             running: false,
@@ -78,7 +77,7 @@ pub fn daemon_status(state: State<'_, AppState>) -> DaemonStatus {
             session_count_total: None,
             session_count_alive: None,
             log_path,
-            last_error: None,
+            last_error: log_path_error,
         },
         Err(err) => DaemonStatus {
             running: false,
@@ -88,8 +87,26 @@ pub fn daemon_status(state: State<'_, AppState>) -> DaemonStatus {
             session_count_total: None,
             session_count_alive: None,
             log_path,
-            last_error: Some(err.to_string()),
+            last_error: combine_status_errors(Some(err.to_string()), log_path_error),
         },
+    }
+}
+
+fn daemon_log_path(data_dir: io::Result<PathBuf>) -> (Option<String>, Option<String>) {
+    match data_dir {
+        Ok(path) => (Some(path.join("daemon.log").display().to_string()), None),
+        Err(err) => (
+            None,
+            Some(format!("failed to resolve daemon log path: {err}")),
+        ),
+    }
+}
+
+fn combine_status_errors(primary: Option<String>, secondary: Option<String>) -> Option<String> {
+    match (primary, secondary) {
+        (Some(primary), Some(secondary)) => Some(format!("{primary}; {secondary}")),
+        (Some(error), None) | (None, Some(error)) => Some(error),
+        (None, None) => None,
     }
 }
 
@@ -343,7 +360,7 @@ fn agent_kind_to_str(k: AgentKind) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_daemon_adoption_paths;
+    use super::*;
     use crate::state::AppState;
 
     #[test]
@@ -390,5 +407,30 @@ mod tests {
         );
 
         assert!(validate_daemon_adoption_paths(&state, registered.path(), &linked).is_err());
+    }
+
+    #[test]
+    fn daemon_log_path_preserves_access_errors() {
+        let error = io::Error::new(io::ErrorKind::PermissionDenied, "permission denied");
+
+        let (path, last_error) = daemon_log_path(Err(error));
+
+        assert_eq!(path, None);
+        assert_eq!(
+            last_error.as_deref(),
+            Some("failed to resolve daemon log path: permission denied")
+        );
+    }
+
+    #[test]
+    fn daemon_status_preserves_bridge_and_log_path_errors() {
+        assert_eq!(
+            combine_status_errors(
+                Some("daemon connection failed".into()),
+                Some("failed to resolve daemon log path: permission denied".into()),
+            )
+            .as_deref(),
+            Some("daemon connection failed; failed to resolve daemon log path: permission denied")
+        );
     }
 }

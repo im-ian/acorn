@@ -59,7 +59,7 @@ export function BackgroundSessionsSettings() {
     try {
       const snap = await api.daemonStatus();
       setStatus(snap);
-      setStatusError(null);
+      setStatusError(snap.last_error);
       if (snap.running) {
         try {
           const list = await api.daemonListSessions();

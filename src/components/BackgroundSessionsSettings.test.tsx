@@ -104,4 +104,26 @@ describe("BackgroundSessionsSettings polling", () => {
 
     expect(apiMocks.daemonStatus).toHaveBeenCalledTimes(2);
   });
+
+  it("renders operational errors returned with the daemon status", async () => {
+    apiMocks.daemonStatus.mockResolvedValue({
+      enabled: true,
+      running: false,
+      daemon_version: null,
+      uptime_seconds: null,
+      session_count_total: null,
+      session_count_alive: null,
+      log_path: null,
+      last_error: "failed to resolve daemon log path: permission denied",
+    } satisfies DaemonStatus);
+
+    await act(async () => {
+      root.render(<BackgroundSessionsSettings />);
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain(
+      "failed to resolve daemon log path: permission denied",
+    );
+  });
 });
