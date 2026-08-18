@@ -70,6 +70,10 @@
       "dropOpenFailed": "无法打开拖放的文件：",
       "dropInputFailed": "无法将拖放的文件路径输入终端："
     },
+    "opener": {
+      "urlFailed": "无法打开外部链接：",
+      "urlBlocked": "该链接不是安全的外部 URL，已被阻止。"
+    },
     "pullRequests": {
       "mergeFailed": "无法合并拉取请求：",
       "closeFailed": "无法关闭拉取请求：",

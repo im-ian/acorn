@@ -26,7 +26,7 @@ import {
 } from "../lib/fileDrop";
 import { formatTerminalFileMention } from "../lib/fileMention";
 import { writeClipboardText } from "../lib/clipboardText";
-import { openSafeUrl } from "../lib/safeOpenUrl";
+import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import {
   AGENT_PROVIDER_ORDER,
   providerSupportsImagePasteFallback,
@@ -873,9 +873,7 @@ export function Terminal({
         return;
       }
       if (/^file:/iu.test(uri)) return;
-      void openSafeUrl(uri).catch((err: unknown) => {
-        console.error("failed to open terminal link", uri, err);
-      });
+      void openExternalUrlWithFeedback(uri);
     };
     const hoverExternalLink = (uri: string, range: IViewportRange) => {
       if (linkActivation !== "modifier-click") return;

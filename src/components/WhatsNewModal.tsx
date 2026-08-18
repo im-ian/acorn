@@ -1,7 +1,8 @@
 import { ExternalLink, Sparkles } from "lucide-react";
 import type { ReactElement } from "react";
 import type { TranslationKey, Translator } from "../lib/i18n";
-import { isSafeOpenUrl, openSafeUrl } from "../lib/safeOpenUrl";
+import { isSafeOpenUrl } from "../lib/safeOpenUrl";
+import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import { useTranslation } from "../lib/useTranslation";
 import {
   Button,
@@ -154,7 +155,7 @@ export function WhatsNewModal({
       <ModalFooter>
         {htmlUrl && isSafeOpenUrl(htmlUrl) ? (
           <Button
-            onClick={() => void openSafeUrl(htmlUrl)}
+            onClick={() => void openExternalUrlWithFeedback(htmlUrl)}
           >
             <ExternalLink size={12} />
             {dt(t, "dialogs.whatsNew.viewOnGithub")}
