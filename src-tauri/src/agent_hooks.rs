@@ -1987,6 +1987,17 @@ where
                 replayed += 1;
             }
             Ok(None) => {}
+            Err(SpoolFileError::Io(err)) => {
+                // The contents were never read, so this says nothing about the
+                // event. Leave it spooled for the next replay instead of
+                // discarding a hook the user's agent actually emitted.
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "spooled agent hook event is inaccessible; keeping it for retry",
+                );
+                continue;
+            }
             Err(err) => {
                 tracing::warn!(
                     path = %path.display(),
@@ -2016,40 +2027,81 @@ fn spool_replay_order_key(path: &std::path::Path) -> (u64, u64, std::path::PathB
     )
 }
 
-fn parse_spooled_hook_event(path: &std::path::Path) -> Result<Option<AgentHookEvent>, String> {
-    let link_metadata = std::fs::symlink_metadata(path).map_err(|err| err.to_string())?;
+/// Why a spooled file could not be replayed.
+///
+/// The distinction drives whether the file is consumed: a malformed or
+/// oversized event is permanently rejected and must be removed so it cannot
+/// wedge later replays, while an access failure says nothing about the
+/// event's contents and must leave it on disk for the next attempt.
+enum SpoolFileError {
+    Io(std::io::Error),
+    Invalid(String),
+}
+
+impl std::fmt::Display for SpoolFileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SpoolFileError::Io(error) => write!(f, "{error}"),
+            SpoolFileError::Invalid(reason) => write!(f, "{reason}"),
+        }
+    }
+}
+
+impl From<String> for SpoolFileError {
+    fn from(reason: String) -> Self {
+        SpoolFileError::Invalid(reason)
+    }
+}
+
+fn parse_spooled_hook_event(
+    path: &std::path::Path,
+) -> Result<Option<AgentHookEvent>, SpoolFileError> {
+    let link_metadata = std::fs::symlink_metadata(path).map_err(SpoolFileError::Io)?;
     if !link_metadata.file_type().is_file() {
-        return Err("spooled event is not a regular file".to_string());
+        return Err(SpoolFileError::Invalid(
+            "spooled event is not a regular file".to_string(),
+        ));
     }
     if link_metadata.len() > MAX_BODY_BYTES as u64 {
-        return Err("spooled event exceeds size limit".to_string());
+        return Err(SpoolFileError::Invalid(
+            "spooled event exceeds size limit".to_string(),
+        ));
     }
-    let file = std::fs::File::open(path).map_err(|err| err.to_string())?;
-    let open_metadata = file.metadata().map_err(|err| err.to_string())?;
+    let file = std::fs::File::open(path).map_err(SpoolFileError::Io)?;
+    let open_metadata = file.metadata().map_err(SpoolFileError::Io)?;
     if !open_metadata.is_file() {
-        return Err("spooled event is not a regular file".to_string());
+        return Err(SpoolFileError::Invalid(
+            "spooled event is not a regular file".to_string(),
+        ));
     }
     if !same_spooled_file(&link_metadata, &open_metadata) {
-        return Err("spooled event changed while opening".to_string());
+        return Err(SpoolFileError::Invalid(
+            "spooled event changed while opening".to_string(),
+        ));
     }
     if open_metadata.len() > MAX_BODY_BYTES as u64 {
-        return Err("spooled event exceeds size limit".to_string());
+        return Err(SpoolFileError::Invalid(
+            "spooled event exceeds size limit".to_string(),
+        ));
     }
     let mut raw = Vec::with_capacity(open_metadata.len() as usize);
     file.take((MAX_BODY_BYTES as u64).saturating_add(1))
         .read_to_end(&mut raw)
-        .map_err(|err| err.to_string())?;
+        .map_err(SpoolFileError::Io)?;
     if raw.len() > MAX_BODY_BYTES {
-        return Err("spooled event exceeds size limit".to_string());
+        return Err(SpoolFileError::Invalid(
+            "spooled event exceeds size limit".to_string(),
+        ));
     }
     let meta_end = raw
         .iter()
         .position(|byte| *byte == b'\n')
-        .ok_or_else(|| "missing transport metadata line".to_string())?;
+        .ok_or_else(|| SpoolFileError::Invalid("missing transport metadata line".to_string()))?;
     let meta: SpooledTransportMeta =
-        serde_json::from_slice(&raw[..meta_end]).map_err(|err| err.to_string())?;
+        serde_json::from_slice(&raw[..meta_end])
+            .map_err(|err| SpoolFileError::Invalid(err.to_string()))?;
     let head = synthetic_request_head(&meta)?;
-    parse_agent_hook_request(&head, &raw[meta_end + 1..])
+    parse_agent_hook_request(&head, &raw[meta_end + 1..]).map_err(SpoolFileError::Invalid)
 }
 
 #[cfg(unix)]
@@ -3145,6 +3197,42 @@ mod tests {
         assert_eq!(reducer.lanes.len(), 1);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn replay_keeps_an_unreadable_spooled_event_and_drops_a_malformed_one() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("acorn-spool-{}", Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let unreadable = dir.join("1700000001-100.json");
+        std::fs::write(&unreadable, "{}\n{}").unwrap();
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let malformed = dir.join("1700000002-101.json");
+        std::fs::write(&malformed, "not json and no newline").unwrap();
+
+        let denied = std::fs::File::open(&unreadable).is_err();
+
+        let replayed =
+            super::replay_spooled_hook_events(&dir, |_| AgentHookHandlerOutcome::Applied);
+
+        assert_eq!(replayed, 0);
+        if denied {
+            assert!(
+                unreadable.exists(),
+                "an unreadable spooled event must survive for the next replay"
+            );
+        }
+        assert!(
+            !malformed.exists(),
+            "a permanently rejected event must still be consumed"
+        );
+
+        let _ = std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn replay_spooled_hook_events_drains_in_order_and_consumes_files() {
         let dir = std::env::temp_dir().join(format!("acorn-spool-{}", Uuid::new_v4().simple()));
@@ -3252,7 +3340,7 @@ mod tests {
 
         let error = super::parse_spooled_hook_event(&link)
             .expect_err("spool symlinks must not be followed");
-        assert!(error.contains("not a regular file"));
+        assert!(error.to_string().contains("not a regular file"));
 
         std::fs::remove_file(&link).unwrap();
         std::fs::remove_file(&outside).unwrap();
