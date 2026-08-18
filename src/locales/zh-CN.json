@@ -763,7 +763,8 @@
         "clearedSingular": "已清除 {count} 缓存的文件。",
         "clearedPlural": "已清除 {count} 缓存的文件。",
         "nothingToClear": "没有什么需要清除的。",
-        "clearFailed": "无法清除缓存："
+        "clearFailed": "无法清除缓存：",
+        "loadFailed": "无法计算缓存大小。请检查文件夹访问权限，然后重新打开此标签页再试。"
       },
       "confirm": {
         "message": "这将永久删除上面列出的缓存数据 ({size})。继续？",
