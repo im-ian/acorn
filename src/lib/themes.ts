@@ -10,7 +10,7 @@ import {
 } from "@tauri-apps/plugin-fs";
 import { create } from "zustand";
 import { ensureRealDirectory } from "./safeAppLocalFs";
-import { openSafeUrl } from "./safeOpenUrl";
+import { openExternalUrlWithFeedback } from "./externalOpener";
 
 import acornDarkCss from "../assets/themes/acorn-dark.css?raw";
 import acornLightCss from "../assets/themes/acorn-light.css?raw";
@@ -724,7 +724,7 @@ export async function revealThemesFolder(): Promise<void> {
 }
 
 export async function openThemePreview(): Promise<void> {
-  await openSafeUrl(THEME_PREVIEW_URL);
+  await openExternalUrlWithFeedback(THEME_PREVIEW_URL);
 }
 
 export function mergeThemes(

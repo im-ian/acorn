@@ -4,7 +4,8 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../lib/cn";
-import { isSafeOpenUrl, openSafeUrl } from "../../lib/safeOpenUrl";
+import { isSafeOpenUrl } from "../../lib/safeOpenUrl";
+import { openExternalUrlWithFeedback } from "../../lib/externalOpener";
 import { ImageLightbox } from "../ImageLightbox";
 import { Tooltip } from "../Tooltip";
 import { markdownImageUrlTransform, RemoteImage } from "./RemoteImage";
@@ -139,7 +140,7 @@ const baseComponents: Components = {
     const link = (
       <button
         type="button"
-        onClick={() => void openSafeUrl(safeHref)}
+        onClick={() => void openExternalUrlWithFeedback(safeHref)}
         className="inline cursor-pointer bg-transparent p-0 text-accent underline-offset-2 hover:underline"
       >
         {children}
