@@ -18,20 +18,17 @@
 //! correlation table on the app side.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
 #[cfg(any(all(windows, not(debug_assertions)), test))]
 use std::fs::{self, File};
 #[cfg(any(all(windows, not(debug_assertions)), test))]
 use std::io::Read;
-#[cfg(any(all(windows, not(debug_assertions)), test))]
-use std::path::Path;
-
-use parking_lot::Mutex;
 use uuid::Uuid;
 
 use acorn_daemon::client::ControlConn;
@@ -126,7 +123,17 @@ pub struct DaemonBridge {
     incompatible_daemon: AtomicBool,
     /// Path to the `acornd` binary discovered at app startup. Cached so
     /// we do not re-resolve it on every reconnect.
-    binary_path: Mutex<Option<PathBuf>>,
+    binary_path: Mutex<DaemonBinaryPath>,
+}
+
+#[derive(Debug, Clone)]
+enum DaemonBinaryPath {
+    Unresolved,
+    Ready(PathBuf),
+    Failed {
+        kind: io::ErrorKind,
+        message: String,
+    },
 }
 
 impl DaemonBridge {
@@ -138,7 +145,7 @@ impl DaemonBridge {
             enabled: AtomicBool::new(true),
             conn: Mutex::new(None),
             incompatible_daemon: AtomicBool::new(false),
-            binary_path: Mutex::new(None),
+            binary_path: Mutex::new(DaemonBinaryPath::Unresolved),
         })
     }
 
@@ -167,34 +174,63 @@ impl DaemonBridge {
     /// below the data directory. Running the cached copy keeps NSIS free to
     /// replace the installed sidecar during an update. Debug builds continue
     /// to run the sibling binary directly so rebuilds are visible immediately.
-    pub fn cache_binary_path(&self, hint: Option<PathBuf>) -> Option<PathBuf> {
-        let source = hint.or_else(|| acorn_platform::executable::sibling_executable("acornd").ok());
-
-        #[cfg(all(windows, not(debug_assertions)))]
-        let resolved = source.and_then(|source| {
-            let data_dir = match paths::data_dir() {
-                Ok(path) => path,
-                Err(error) => {
-                    tracing::warn!(
-                        source = %source.display(),
-                        %error,
-                        "failed to resolve data directory for cached acornd binary"
-                    );
-                    return None;
-                }
-            };
-            cache_versioned_daemon_binary(&source, &data_dir, env!("CARGO_PKG_VERSION"))
-        });
-
-        #[cfg(any(not(windows), debug_assertions))]
-        let resolved = source;
-
-        *self.binary_path.lock() = resolved.clone();
-        resolved
+    pub fn cache_binary_path(&self) -> BridgeResult<PathBuf> {
+        self.cache_binary_path_from(acorn_platform::executable::sibling_executable("acornd"))
     }
 
-    fn binary_path(&self) -> Option<PathBuf> {
-        self.binary_path.lock().clone()
+    fn cache_binary_path_from(&self, source: io::Result<PathBuf>) -> BridgeResult<PathBuf> {
+        let resolved: io::Result<PathBuf> = (|| {
+            let source = source.map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("failed to locate bundled acornd binary: {error}"),
+                )
+            })?;
+
+            #[cfg(all(windows, not(debug_assertions)))]
+            {
+                let data_dir = paths::data_dir().map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "failed to resolve data directory for cached acornd binary {}: {error}",
+                            source.display()
+                        ),
+                    )
+                })?;
+                cache_versioned_daemon_binary(&source, &data_dir, env!("CARGO_PKG_VERSION"))
+            }
+
+            #[cfg(any(not(windows), debug_assertions))]
+            Ok(source)
+        })();
+
+        let mut cached = self.binary_path.lock();
+        match resolved {
+            Ok(path) => {
+                *cached = DaemonBinaryPath::Ready(path.clone());
+                Ok(path)
+            }
+            Err(error) => {
+                *cached = DaemonBinaryPath::Failed {
+                    kind: error.kind(),
+                    message: error.to_string(),
+                };
+                Err(BridgeError::Io(error))
+            }
+        }
+    }
+
+    fn binary_path(&self) -> BridgeResult<PathBuf> {
+        match &*self.binary_path.lock() {
+            DaemonBinaryPath::Unresolved => {
+                Err(BridgeError::BinaryNotFound(PathBuf::from("acornd")))
+            }
+            DaemonBinaryPath::Ready(path) => Ok(path.clone()),
+            DaemonBinaryPath::Failed { kind, message } => {
+                Err(BridgeError::Io(io::Error::new(*kind, message.clone())))
+            }
+        }
     }
 
     /// Ensure a daemon is running and we have a live `ControlConn` to
@@ -353,12 +389,8 @@ impl DaemonBridge {
     }
 
     fn spawn_daemon_once(&self) -> BridgeResult<()> {
-        let Some(path) = self.binary_path() else {
-            return Err(BridgeError::BinaryNotFound(PathBuf::from("acornd")));
-        };
-        if !path.exists() {
-            return Err(BridgeError::BinaryNotFound(path));
-        }
+        let path = self.binary_path()?;
+        require_daemon_binary(&path)?;
         // `--detach` so the daemon survives the app's exit. Spawn returns
         // immediately; acornd forks on Unix and re-execs on Windows.
         let data_dir = paths::data_dir()?;
@@ -600,6 +632,20 @@ fn daemon_version_action(snapshot: &StatusSnapshot, expected: &str) -> DaemonVer
     }
 }
 
+fn require_daemon_binary(path: &Path) -> BridgeResult<()> {
+    match path.try_exists() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(BridgeError::BinaryNotFound(path.to_path_buf())),
+        Err(error) => Err(BridgeError::Io(io::Error::new(
+            error.kind(),
+            format!(
+                "failed to inspect acornd binary at {}: {error}",
+                path.display()
+            ),
+        ))),
+    }
+}
+
 #[cfg(any(all(windows, not(debug_assertions)), test))]
 fn versioned_daemon_path(source: &Path, data_dir: &Path, version: &str) -> io::Result<PathBuf> {
     let file_name = source.file_name().ok_or_else(|| {
@@ -615,33 +661,25 @@ fn versioned_daemon_path(source: &Path, data_dir: &Path, version: &str) -> io::R
 }
 
 #[cfg(any(all(windows, not(debug_assertions)), test))]
-fn cache_versioned_daemon_binary(source: &Path, data_dir: &Path, version: &str) -> Option<PathBuf> {
-    let destination = match versioned_daemon_path(source, data_dir, version) {
-        Ok(path) => path,
-        Err(error) => {
-            tracing::warn!(
-                source = %source.display(),
-                %error,
-                "failed to resolve cached acornd binary path"
-            );
-            return None;
-        }
-    };
-    match stage_versioned_daemon_binary(source, data_dir, version) {
-        Ok(path) => Some(path),
-        Err(error) => {
-            // Never fall back to running the installed executable: doing so
-            // would bring back the NSIS file-lock failure this cache exists to
-            // prevent. An invalid existing destination must not run either.
-            tracing::warn!(
-                source = %source.display(),
-                destination = %destination.display(),
-                %error,
-                "failed to stage cached acornd binary"
-            );
-            None
-        }
-    }
+fn cache_versioned_daemon_binary(
+    source: &Path,
+    data_dir: &Path,
+    version: &str,
+) -> io::Result<PathBuf> {
+    let destination = versioned_daemon_path(source, data_dir, version)?;
+    stage_versioned_daemon_binary(source, data_dir, version).map_err(|error| {
+        // Never fall back to running the installed executable: doing so would
+        // bring back the NSIS file-lock failure this cache exists to prevent.
+        // An invalid existing destination must not run either.
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to stage cached acornd binary from {} to {}: {error}",
+                source.display(),
+                destination.display()
+            ),
+        )
+    })
 }
 
 /// Copy the bundled daemon to its immutable, package-versioned launch path.
@@ -655,22 +693,17 @@ fn stage_versioned_daemon_binary(
 ) -> io::Result<PathBuf> {
     let destination = versioned_daemon_path(source, data_dir, version)?;
 
-    if let Ok(destination_metadata) = fs::metadata(&destination) {
-        if destination_metadata.is_file() && destination_metadata.len() > 0 {
-            verify_cached_daemon(source, &destination)?;
-            return Ok(destination);
-        }
-        if destination_metadata.is_file() {
+    match fs::symlink_metadata(&destination) {
+        Ok(destination_metadata) => {
+            validate_cached_daemon_leaf(&destination, &destination_metadata)?;
+            if destination_metadata.len() > 0 {
+                verify_cached_daemon(source, &destination)?;
+                return Ok(destination);
+            }
             fs::remove_file(&destination)?;
-        } else {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!(
-                    "cached daemon destination is not a file: {}",
-                    destination.display()
-                ),
-            ));
         }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
 
     let parent = destination.parent().ok_or_else(|| {
@@ -709,6 +742,20 @@ fn stage_versioned_daemon_binary(
 }
 
 #[cfg(any(all(windows, not(debug_assertions)), test))]
+fn validate_cached_daemon_leaf(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.is_file() {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "cached daemon destination is not a regular file: {}",
+            path.display()
+        ),
+    ))
+}
+
+#[cfg(any(all(windows, not(debug_assertions)), test))]
 fn publish_staged_daemon(
     staged: tempfile::NamedTempFile,
     source: &Path,
@@ -729,6 +776,8 @@ fn publish_staged_daemon(
 
 #[cfg(any(all(windows, not(debug_assertions)), test))]
 fn verify_cached_daemon(source: &Path, destination: &Path) -> io::Result<()> {
+    let destination_metadata = fs::symlink_metadata(destination)?;
+    validate_cached_daemon_leaf(destination, &destination_metadata)?;
     if files_equal(source, destination)? {
         return Ok(());
     }
@@ -845,6 +894,70 @@ mod tests {
     }
 
     #[test]
+    fn binary_resolution_access_error_is_retained_for_later_spawns() {
+        let bridge = DaemonBridge::new();
+        let first = bridge.cache_binary_path_from(Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "current executable is inaccessible",
+        )));
+
+        match first {
+            Err(BridgeError::Io(error)) => {
+                assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+                assert!(error
+                    .to_string()
+                    .contains("failed to locate bundled acornd binary"));
+            }
+            other => panic!("expected retained access error, got {other:?}"),
+        }
+
+        match bridge.binary_path() {
+            Err(BridgeError::Io(error)) => {
+                assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+                assert!(error
+                    .to_string()
+                    .contains("current executable is inaccessible"));
+            }
+            other => panic!("expected cached access error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_daemon_binary_remains_not_found() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("missing-acornd");
+
+        match require_daemon_binary(&path) {
+            Err(BridgeError::BinaryNotFound(error_path)) => assert_eq!(error_path, path),
+            other => panic!("expected BinaryNotFound, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_binary_probe_preserves_parent_access_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let blocked = temp.path().join("blocked");
+        let path = blocked.join("acornd");
+        std::fs::create_dir(&blocked).unwrap();
+        let original_permissions = std::fs::metadata(&blocked).unwrap().permissions();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = require_daemon_binary(&path);
+
+        std::fs::set_permissions(&blocked, original_permissions).unwrap();
+        match result {
+            Err(BridgeError::Io(error)) => {
+                assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+                assert!(error.to_string().contains(&path.display().to_string()));
+            }
+            other => panic!("expected permission error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn daemon_version_policy_reuses_current_restarts_idle_and_preserves_live() {
         assert_eq!(
             daemon_version_action(&status("2.0.0", 0), "2.0.0"),
@@ -915,9 +1028,12 @@ mod tests {
         // treating metadata alone as sufficient. The cache helper must fail
         // closed so spawn_daemon_once cannot execute the stale destination.
         std::fs::write(&source, b"modified").unwrap();
-        let cached = cache_versioned_daemon_binary(&source, temp.path(), "9.8.7");
+        let error = cache_versioned_daemon_binary(&source, temp.path(), "9.8.7").unwrap_err();
 
-        assert!(cached.is_none());
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error
+            .to_string()
+            .contains("failed to stage cached acornd binary"));
         assert_eq!(std::fs::read(destination).unwrap(), b"original");
     }
 
@@ -935,6 +1051,31 @@ mod tests {
 
         assert_eq!(staged, destination);
         assert_eq!(std::fs::read(destination).unwrap(), b"complete binary");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_version_cache_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("bundle").join("acornd.exe");
+        let sentinel = temp.path().join("sentinel.exe");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"expected daemon").unwrap();
+        std::fs::write(&sentinel, b"expected daemon").unwrap();
+        let destination = versioned_daemon_path(&source, temp.path(), "9.8.7").unwrap();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        symlink(&sentinel, &destination).unwrap();
+
+        let error = stage_versioned_daemon_binary(&source, temp.path(), "9.8.7").unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(std::fs::symlink_metadata(destination)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"expected daemon");
     }
 
     #[test]
@@ -967,6 +1108,31 @@ mod tests {
             publish_staged_daemon(staged, &source, &destination).unwrap(),
             destination
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_publish_race_rejects_symlinked_winner() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("acornd-source.exe");
+        let sentinel = temp.path().join("sentinel.exe");
+        let destination = temp.path().join("acornd.exe");
+        std::fs::write(&source, b"expected").unwrap();
+        std::fs::write(&sentinel, b"expected").unwrap();
+        symlink(&sentinel, &destination).unwrap();
+        let staged = tempfile::NamedTempFile::new_in(temp.path()).unwrap();
+        std::fs::write(staged.path(), b"expected").unwrap();
+
+        let error = publish_staged_daemon(staged, &source, &destination).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(std::fs::symlink_metadata(destination)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"expected");
     }
 
     #[test]
