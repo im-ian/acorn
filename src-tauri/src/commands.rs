@@ -661,12 +661,27 @@ pub(crate) fn authorize_project_session_cwd(repo: &Path, cwd: &Path) -> AppResul
     if path_is_inside(cwd, repo) {
         return Ok(());
     }
-    if worktree::list_worktree_paths(repo)?
-        .into_iter()
-        .filter_map(|path| path.canonicalize().ok())
-        .any(|worktree| path_is_inside(cwd, &worktree))
-    {
-        return Ok(());
+    for worktree_path in worktree::list_worktree_paths(repo)? {
+        // A worktree whose checkout is gone cannot contain `cwd`, so skipping it
+        // is correct. Any other failure is not evidence of absence, and letting
+        // it through would deny a cwd that really is inside a registered
+        // worktree.
+        let canonical = match worktree_path.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(AppError::Io(std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "failed to inspect registered worktree {}: {error}",
+                        worktree_path.display()
+                    ),
+                )))
+            }
+        };
+        if path_is_inside(cwd, &canonical) {
+            return Ok(());
+        }
     }
     Err(AppError::InvalidPath(format!(
         "cwd is outside the registered project and its worktrees: {}",
