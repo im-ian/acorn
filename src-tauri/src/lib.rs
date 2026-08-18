@@ -711,12 +711,13 @@ pub fn run() {
             // bridge does not pay the lookup cost on every spawn. In
             // bundled mode the binary lives at
             // `Contents/MacOS/acornd`; in `pnpm run tauri dev` it sits
-            // at `target/debug/acornd`. Cache failure (binary missing)
-            // is non-fatal — the bridge will surface a `BinaryNotFound`
-            // error on the first daemon-routed call so the user sees
-            // exactly which path was searched.
-            let acornd_hint = acorn_platform::executable::sibling_executable("acornd").ok();
-            state.daemon_bridge.cache_binary_path(acornd_hint);
+            // at `target/debug/acornd`. Cache failure is non-fatal. The bridge
+            // retains the original I/O kind and message so the first
+            // daemon-routed call can distinguish a missing sidecar from an
+            // inaccessible executable or cache.
+            if let Err(err) = state.daemon_bridge.cache_binary_path() {
+                tracing::warn!(error = %err, "failed to cache acornd binary path");
+            }
             // Eagerly spawn the daemon on a background thread so the
             // StatusBar indicator goes green within the first poll
             // cycle. The status probe alone is passive (it never
