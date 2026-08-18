@@ -7382,6 +7382,9 @@ pub async fn remove_project(
             app_state.sessions.remove(&session.id).ok();
         }
     }
+    if !removed_session_ids.is_empty() {
+        cleanup_removed_scrollbacks(&removed_session_ids, &mut progress);
+    }
     app_state.projects.remove(roots.first().unwrap_or(&path));
     // Settings are keyed per repository, so a multi-root project has one record
     // per root. Closing it has to clear all of them or the source folders keep
