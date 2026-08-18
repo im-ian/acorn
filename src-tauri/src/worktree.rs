@@ -61,14 +61,60 @@ pub fn ensure_repo(path: &Path) -> AppResult<Repository> {
 }
 
 pub fn project_root_for_path(path: &Path) -> AppResult<PathBuf> {
-    if let Ok(repo) = Repository::discover(path) {
-        if let Some(workdir) = repo.workdir() {
-            return Ok(workdir
-                .canonicalize()
-                .unwrap_or_else(|_| workdir.to_path_buf()));
+    let path = path.canonicalize()?;
+    match Repository::discover(&path) {
+        Ok(repo) => {
+            let Some(workdir) = repo.workdir() else {
+                return Ok(path);
+            };
+            workdir.canonicalize().map_err(|err| {
+                AppError::Io(std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to resolve repository workdir '{}': {err}",
+                        workdir.display()
+                    ),
+                ))
+            })
         }
+        Err(err)
+            if err.code() == git2::ErrorCode::NotFound
+                && !repository_marker_in_ancestry(&path)? =>
+        {
+            Ok(path)
+        }
+        Err(err) => Err(AppError::Git(err)),
     }
-    path.canonicalize().map_err(AppError::from)
+}
+
+/// Libgit2 can report a broken or inaccessible `.git` entry as `NotFound`.
+/// Before treating that code as proof a picked folder is not a repository,
+/// verify that no repository marker exists anywhere in its ancestry.
+fn repository_marker_in_ancestry(path: &Path) -> AppResult<bool> {
+    let metadata = std::fs::metadata(path)?;
+    let mut directory = if metadata.is_dir() {
+        Some(path)
+    } else {
+        path.parent()
+    };
+    while let Some(current) = directory {
+        let marker = current.join(".git");
+        match std::fs::symlink_metadata(&marker) {
+            Ok(_) => return Ok(true),
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(AppError::Io(std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to inspect repository marker '{}': {err}",
+                        marker.display()
+                    ),
+                )));
+            }
+        }
+        directory = current.parent();
+    }
+    Ok(false)
 }
 
 fn walk_to_existing_ancestor(path: &Path) -> PathBuf {
@@ -1524,6 +1570,53 @@ mod tests {
             resolved.canonicalize().unwrap(),
             root.canonicalize().unwrap(),
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn project_root_for_path_preserves_broken_repository_marker_error() {
+        let root = unique_temp_dir("project-root-broken-marker");
+        let subdir = root.join("packages").join("web");
+        std::fs::create_dir_all(&subdir).expect("nested dirs");
+        std::fs::write(root.join(".git"), "gitdir: missing-admin-dir\n")
+            .expect("write broken git marker");
+
+        let error = project_root_for_path(&subdir)
+            .expect_err("a broken repository marker must not look like a non-Git folder");
+
+        assert!(matches!(error, AppError::Git(_)));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_marker_probe_preserves_directory_access_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("project-root-marker-permission");
+        let original_permissions = std::fs::metadata(&root)
+            .expect("read original permissions")
+            .permissions();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o000))
+            .expect("deny directory access");
+        let permission_denied = matches!(
+            std::fs::symlink_metadata(root.join(".git")),
+            Err(error) if error.kind() == ErrorKind::PermissionDenied
+        );
+        if !permission_denied {
+            std::fs::set_permissions(&root, original_permissions).unwrap();
+            std::fs::remove_dir_all(&root).ok();
+            return;
+        }
+
+        let result = repository_marker_in_ancestry(&root);
+
+        std::fs::set_permissions(&root, original_permissions).expect("restore directory access");
+        let error = result.expect_err("marker access failure must be preserved");
+        assert!(matches!(
+            error,
+            AppError::Io(ref error) if error.kind() == ErrorKind::PermissionDenied
+        ));
         std::fs::remove_dir_all(&root).ok();
     }
 
