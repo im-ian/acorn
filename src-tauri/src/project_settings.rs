@@ -98,24 +98,36 @@ fn save_all(settings: &SettingsMap) -> AppResult<()> {
     Ok(())
 }
 
-pub fn key_for_repo(repo_path: &Path) -> String {
-    if let Ok(Some(slug)) = git_ops::github_owner_repo(repo_path) {
-        return format!("github:{}", slug.to_ascii_lowercase());
+pub fn key_for_repo(repo_path: &Path) -> AppResult<String> {
+    if git_ops::is_git_repository(repo_path)? {
+        if let Some(slug) = git_ops::github_owner_repo(repo_path)? {
+            return Ok(format!("github:{}", slug.to_ascii_lowercase()));
+        }
     }
-    let path = repo_path
-        .canonicalize()
-        .unwrap_or_else(|_| repo_path.to_path_buf());
-    format!("path:{}", path.display())
+    let path = match repo_path.canonicalize() {
+        Ok(path) => path,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => repo_path.to_path_buf(),
+        Err(err) => {
+            return Err(AppError::Io(std::io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to resolve project settings key for {}: {err}",
+                    repo_path.display()
+                ),
+            )));
+        }
+    };
+    Ok(format!("path:{}", path.display()))
 }
 
 pub fn get(repo_path: &Path) -> AppResult<ProjectSettingsRecord> {
-    let key = key_for_repo(repo_path);
+    let key = key_for_repo(repo_path)?;
     let settings = load_all()?.get(&key).cloned().unwrap_or_default();
     Ok(ProjectSettingsRecord { key, settings })
 }
 
 pub fn update(repo_path: &Path, settings: ProjectSettings) -> AppResult<ProjectSettingsRecord> {
-    let key = key_for_repo(repo_path);
+    let key = key_for_repo(repo_path)?;
     let settings = normalize_settings(settings);
     let mut all = load_all()?;
     all.insert(key.clone(), settings.clone());
@@ -124,7 +136,7 @@ pub fn update(repo_path: &Path, settings: ProjectSettings) -> AppResult<ProjectS
 }
 
 pub fn remove(repo_path: &Path) -> AppResult<()> {
-    let key = key_for_repo(repo_path);
+    let key = key_for_repo(repo_path)?;
     let mut all = load_all()?;
     if all.remove(&key).is_some() {
         save_all(&all)?;
@@ -171,6 +183,7 @@ fn normalize_settings(mut settings: ProjectSettings) -> ProjectSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn with_data_dir(test: impl FnOnce(&Path)) {
         let dir = tempfile::tempdir().unwrap();
@@ -221,6 +234,31 @@ mod tests {
                 .unwrap_or("")
                 .contains("GitHub-style pull request"));
         });
+    }
+
+    #[test]
+    fn github_repo_key_uses_normalized_origin_slug() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://github.com/Acme/Widgets.git")
+            .unwrap();
+
+        assert_eq!(key_for_repo(dir.path()).unwrap(), "github:acme/widgets");
+    }
+
+    #[test]
+    fn project_key_does_not_fall_back_after_remote_url_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let config_path = repo.path().join("config");
+        drop(repo);
+        let mut config = fs::read(&config_path).unwrap();
+        config.extend_from_slice(b"\n[remote \"origin\"]\n\turl = git@github.com:acme/");
+        config.push(0xff);
+        config.extend_from_slice(b".git\n");
+        fs::write(config_path, config).unwrap();
+
+        assert!(matches!(key_for_repo(dir.path()), Err(AppError::Git(_))));
     }
 
     #[test]

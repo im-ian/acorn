@@ -1,9 +1,9 @@
-use git2::{DiffOptions, Repository};
+use git2::{DiffOptions, ErrorCode, Repository};
 use serde::Serialize;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -141,18 +141,48 @@ pub fn web_url_for_commit(repo_path: &Path, sha: &str) -> AppResult<Option<Strin
 /// layer (commit URLs, PR listing).
 pub fn github_owner_repo(repo_path: &Path) -> AppResult<Option<String>> {
     let repo = ensure_repo(repo_path)?;
+    // libgit2 may report an unreadable repository config as a missing remote.
+    // Open the repository-local config explicitly so access and parse failures
+    // stay distinguishable from a repository that genuinely has no `origin`.
+    let config_path = repo.commondir().join("config");
+    drop(File::open(&config_path).map_err(|err| {
+        AppError::Io(io::Error::new(
+            err.kind(),
+            format!(
+                "failed to open repository config at {}: {err}",
+                config_path.display()
+            ),
+        ))
+    })?);
+    drop(git2::Config::open(&config_path)?);
     let remote = match repo.find_remote("origin") {
         Ok(r) => r,
-        Err(_) => return Ok(None),
+        Err(err) if err.code() == ErrorCode::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
     };
-    let Ok(url) = remote.url() else {
-        return Ok(None);
-    };
+    let url = remote.url()?;
     Ok(parse_github_owner_repo(url))
 }
 
-pub fn is_git_repository(repo_path: &Path) -> bool {
-    Repository::discover(repo_path).is_ok()
+pub fn is_git_repository(repo_path: &Path) -> AppResult<bool> {
+    let start = match repo_path.canonicalize() {
+        Ok(path) => path,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => repo_path.to_path_buf(),
+        Err(err) => {
+            return Err(AppError::Io(io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to inspect repository path at {}: {err}",
+                    repo_path.display()
+                ),
+            )));
+        }
+    };
+    match Repository::discover(&start) {
+        Ok(_) => Ok(true),
+        Err(err) if err.code() == ErrorCode::NotFound => Ok(false),
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn parse_github_owner_repo(remote: &str) -> Option<String> {
@@ -1155,6 +1185,115 @@ mod tests {
         ));
         fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    #[test]
+    fn repository_probe_distinguishes_non_repo_from_repo() {
+        let root = unique_temp_dir("repository-probe");
+
+        assert!(!is_git_repository(&root).expect("inspect non-repository"));
+        let repo = Repository::init(&root).expect("init repository");
+        assert!(is_git_repository(&root).expect("inspect repository"));
+
+        drop(repo);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_probe_surfaces_path_access_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("repository-probe-permission");
+        let blocked = root.join("blocked");
+        let candidate = blocked.join("candidate");
+        fs::create_dir_all(&candidate).expect("create candidate");
+        let original_permissions = fs::metadata(&blocked).unwrap().permissions();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000))
+            .expect("deny repository parent access");
+
+        let result = is_git_repository(&candidate);
+
+        fs::set_permissions(&blocked, original_permissions).expect("restore repository access");
+        match result {
+            Err(AppError::Io(error)) => {
+                assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+                assert!(error
+                    .to_string()
+                    .contains("failed to inspect repository path"));
+            }
+            other => panic!("expected permission error, got {other:?}"),
+        }
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn github_origin_distinguishes_missing_remote_from_valid_remote() {
+        let root = unique_temp_dir("github-origin");
+        let repo = Repository::init(&root).expect("init repository");
+
+        assert_eq!(github_owner_repo(&root).unwrap(), None);
+        repo.remote("origin", "git@github.com:Acme/Widgets.git")
+            .expect("create origin");
+        assert_eq!(
+            github_owner_repo(&root).unwrap().as_deref(),
+            Some("Acme/Widgets")
+        );
+
+        drop(repo);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn github_origin_surfaces_non_utf8_remote_url() {
+        let root = unique_temp_dir("github-origin-non-utf8");
+        let repo = Repository::init(&root).expect("init repository");
+        let config_path = repo.path().join("config");
+        drop(repo);
+        let mut config = fs::read(&config_path).expect("read repository config");
+        config.extend_from_slice(b"\n[remote \"origin\"]\n\turl = git@github.com:acme/");
+        config.push(0xff);
+        config.extend_from_slice(b".git\n");
+        fs::write(&config_path, config).expect("write non-UTF-8 origin");
+
+        match github_owner_repo(&root) {
+            Err(AppError::Git(error)) => {
+                assert!(error.to_string().to_ascii_lowercase().contains("utf-8"));
+            }
+            other => panic!("expected remote URL error, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn github_origin_surfaces_repository_config_access_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("github-origin-permission");
+        let repo = Repository::init(&root).expect("init repository");
+        repo.remote("origin", "git@github.com:acme/widgets.git")
+            .expect("create origin");
+        let config_path = repo.path().join("config");
+        drop(repo);
+        let original_permissions = fs::metadata(&config_path).unwrap().permissions();
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o000))
+            .expect("deny repository config access");
+
+        let result = github_owner_repo(&root);
+
+        fs::set_permissions(&config_path, original_permissions).expect("restore config access");
+        match result {
+            Err(AppError::Io(error)) => {
+                assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+                assert!(error
+                    .to_string()
+                    .contains(&config_path.display().to_string()));
+            }
+            other => panic!("expected config access error, got {other:?}"),
+        }
+        fs::remove_dir_all(&root).ok();
     }
 
     fn commit_file(

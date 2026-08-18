@@ -11463,7 +11463,7 @@ pub async fn github_origin_slug(
 pub async fn is_git_repository(state: State<'_, AppState>, repo_path: String) -> AppResult<bool> {
     let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("is_git_repository", move || {
-        Ok(git_ops::is_git_repository(&repo_path))
+        git_ops::is_git_repository(&repo_path)
     })
     .await
 }
