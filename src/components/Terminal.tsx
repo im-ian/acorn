@@ -928,7 +928,7 @@ export function Terminal({
       ]);
       const resolveExistingFilePath = async (
         reference: TerminalFileReference,
-      ): Promise<string | null> => {
+      ): Promise<{ path: string | null; accessError: unknown | null }> => {
         const basePaths = usesExplicitRelativePath(reference.path)
           ? []
           : [cwd, repoPath];
@@ -940,22 +940,28 @@ export function Terminal({
             basePaths,
           },
         );
+        let accessError: unknown | null = null;
         for (const candidate of candidates) {
           try {
             if (await api.fsFileExists(candidate)) {
-              return candidate;
+              return { path: candidate, accessError: null };
             }
           } catch (err: unknown) {
             console.debug("[Terminal] fs_file_exists for file link failed", err);
+            accessError ??= err;
           }
         }
-        return null;
+        return { path: null, accessError };
       };
       const resolved: Array<TerminalFileReference | null> = await Promise.all(
         references.map(async (reference) => {
-          const absolutePath = await resolveExistingFilePath(reference);
-          if (!absolutePath) return null;
-          return { ...reference, absolutePath };
+          const { path: absolutePath, accessError } =
+            await resolveExistingFilePath(reference);
+          if (absolutePath) return { ...reference, absolutePath };
+          // A failed access check is not evidence that the file is missing.
+          // Keep the link actionable so a click can retry and report the
+          // underlying error instead of silently erasing the reference.
+          return accessError ? reference : null;
         }),
       );
       return resolved.filter(
@@ -972,6 +978,7 @@ export function Terminal({
             }
           } catch (err: unknown) {
             console.debug("[Terminal] fs_file_exists before open failed", err);
+            showTranslatedErrorToast("toasts.files.terminalLinkOpenFailed", err);
             return;
           }
         } else {
@@ -993,6 +1000,7 @@ export function Terminal({
             },
           );
           path = null;
+          let accessError: unknown | null = null;
           for (const candidate of candidates) {
             try {
               if (await api.fsFileExists(candidate)) {
@@ -1001,9 +1009,13 @@ export function Terminal({
               }
             } catch (err: unknown) {
               console.debug("[Terminal] fs_file_exists before open failed", err);
+              accessError ??= err;
             }
           }
           if (!path) {
+            if (accessError) {
+              showTranslatedErrorToast("toasts.files.terminalLinkOpenFailed", accessError);
+            }
             return;
           }
         }

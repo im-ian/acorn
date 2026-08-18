@@ -98,6 +98,54 @@ async function dragCenterTo(
 }
 
 test.describe("file explorer", () => {
+  test("shows repository permission errors in the file tree", async ({
+    page,
+    tauri,
+  }) => {
+    const repo = "/tmp/permission-repo";
+    await tauri.respond("list_projects", [
+      {
+        repo_path: repo,
+        name: "permission repo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "permission-session",
+        name: "permission agent",
+        repo_path: repo,
+        worktree_path: repo,
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_repo_root", () => repo);
+    await tauri.handle("fs_list_dir", () => ({
+      repo_root: repo,
+      entries: [],
+    }));
+    await tauri.handle("fs_git_status", () => {
+      throw new Error("permission denied while reading repository status");
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^permission agent main · Ready$/ })
+      .click();
+    await page.getByRole("button", { name: "Code" }).click();
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+
+    await expect(
+      page.getByText("permission denied while reading repository status"),
+    ).toBeVisible();
+  });
+
   test("shows a tab drop affordance when dragging a file onto the tab strip", async ({
     page,
     tauri,

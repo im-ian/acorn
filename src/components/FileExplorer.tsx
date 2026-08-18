@@ -369,6 +369,8 @@ export function FileExplorer({
   );
   const [activePath, setActivePath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [gitStatusError, setGitStatusError] = useState<string | null>(null);
+  const [gitStatsError, setGitStatsError] = useState<string | null>(null);
   // macOS/Linux preserve the existing shell-derived $EDITOR behavior. Windows
   // uses the configured editor command (or the OS default association) because
   // injecting POSIX shell syntax into a PowerShell/cmd PTY is not portable.
@@ -479,13 +481,12 @@ export function FileExplorer({
           return next;
         });
         lastStatusSuccessRef.current = Date.now();
+        setGitStatusError(null);
       } catch (err) {
-        // Surface the failure so a broken backend (Tauri invoke error,
-        // serialization mismatch) does not silently leave the file tree
-        // without status decorations.
         console.warn("[FileExplorer] fsGitStatus failed", err);
         gitStatusRef.current = {};
         setGitStatus({});
+        setGitStatusError(err instanceof Error ? err.message : String(err));
       }
     };
 
@@ -598,6 +599,7 @@ export function FileExplorer({
       const promise = api
         .fsGitDiffStats(rootPath, entries)
         .then((stats) => {
+          setGitStatsError(null);
           const requestedKinds = new Map(entries.map((e) => [e.path, e.kind]));
           setGitStatus((prev) => {
             let changed = false;
@@ -618,7 +620,10 @@ export function FileExplorer({
             return changed ? next : prev;
           });
         })
-        .catch(() => {})
+        .catch((err) => {
+          console.warn("[FileExplorer] fsGitDiffStats failed", err);
+          setGitStatsError(err instanceof Error ? err.message : String(err));
+        })
         .finally(() => {
           if (gitStatsInFlightRef.current !== promise) return;
           gitStatsInFlightRef.current = null;
@@ -786,6 +791,8 @@ export function FileExplorer({
       setExpanded(rightPanelCache.getFileExplorerExpanded(rootPath));
       setDraftRename(null);
       setActivePath(null);
+      setGitStatusError(null);
+      setGitStatsError(null);
     }
   }, [rootPath]);
 
@@ -1489,14 +1496,20 @@ export function FileExplorer({
         />
         </div>
       </div>
-      {error ? (
+      {error ?? gitStatusError ?? gitStatsError ? (
         <div className="flex items-start gap-2 border-t border-border bg-bg-error/20 px-3 py-1.5 text-[11px] text-fg">
-          <span className="flex-1 break-all">{error}</span>
+          <span className="flex-1 break-all">
+            {error ?? gitStatusError ?? gitStatsError}
+          </span>
           <button
             type="button"
             className="text-fg-muted hover:text-fg"
             aria-label={fileExplorerText(t, "fileExplorer.errorBanner.dismiss")}
-            onClick={() => setError(null)}
+            onClick={() => {
+              setError(null);
+              setGitStatusError(null);
+              setGitStatsError(null);
+            }}
           >
             ×
           </button>

@@ -191,6 +191,41 @@ describe("virtualized code and diff rendering", () => {
     expect(highlightCode).toHaveBeenCalledWith(content, "rust", "light");
   });
 
+  it("keeps source visible while surfacing and recovering from Git diff access errors", async () => {
+    const content = "const visible = true;";
+    vi.mocked(api.fsReadFile).mockResolvedValue({
+      content,
+      size: content.length,
+      truncated: false,
+      binary: false,
+    });
+    vi.mocked(api.fsGitDiffLines)
+      .mockRejectedValueOnce(new Error("permission denied reading Git metadata"))
+      .mockResolvedValueOnce([{ line: 1, kind: "modified" }]);
+
+    await act(async () => {
+      root.render(<CodeViewer path="/repo/src/private.ts" isActive />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain(content);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "permission denied reading Git metadata",
+    );
+
+    await act(async () => {
+      emitFsChanged({
+        root: "/repo",
+        paths: [],
+        dotgit_changed: true,
+      });
+    });
+    await flushPromises();
+
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(api.fsGitDiffLines).toHaveBeenCalledTimes(2);
+  });
+
   it("marks a requested code viewer target line", async () => {
     const content = "one\ntwo\nthree";
     vi.mocked(api.fsReadFile).mockResolvedValueOnce({

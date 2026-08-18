@@ -152,6 +152,70 @@ describe("FileExplorer filesystem listener", () => {
     expect(unlisten).toHaveBeenCalledOnce();
   });
 
+  it("shows git status access failures instead of silently clearing decorations", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    apiMocks.fsGitStatus.mockRejectedValueOnce(
+      new Error("permission denied while reading repository status"),
+    );
+
+    await act(async () => {
+      root?.render(<FileExplorer rootPath="/tmp/acorn" />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain(
+      "permission denied while reading repository status",
+    );
+    consoleWarn.mockRestore();
+  });
+
+  it("shows git diff-stat access failures", async () => {
+    vi.useFakeTimers();
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const path = "/tmp/acorn/changed.ts";
+    apiMocks.fsListDir.mockResolvedValue({
+      entries: [
+        {
+          name: "changed.ts",
+          path,
+          is_dir: false,
+          is_symlink: false,
+          size: 1,
+          modified_ms: 1,
+          gitignored: false,
+        },
+      ],
+      repo_root: "/tmp/acorn",
+    });
+    apiMocks.fsGitStatus.mockResolvedValue({
+      statuses: {
+        [path]: { kind: "modified", additions: 0, deletions: 0 },
+      },
+      huge: false,
+      limit: 5_000,
+    });
+    apiMocks.fsGitDiffStats.mockRejectedValueOnce(
+      new Error("permission denied while reading diff metadata"),
+    );
+
+    await act(async () => {
+      root?.render(<FileExplorer rootPath="/tmp/acorn" />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(1_200);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain(
+      "permission denied while reading diff metadata",
+    );
+    consoleWarn.mockRestore();
+  });
+
   it("preserves the active-PTY $EDITOR flow on Unix", async () => {
     setNavigatorPlatform("Linux x86_64");
     storeMocks.activeSessionId = "session-1";
