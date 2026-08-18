@@ -1518,6 +1518,108 @@ test.describe("right panel: tab switching", () => {
     ).toHaveCount(0);
   });
 
+  test("surfaces project settings access errors without blocking the merge dialog", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 19,
+          title: "Settings access PR",
+          state: "OPEN",
+          author: "im-ian",
+          head_branch: "fix/settings-access",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/19",
+          updated_at: "2026-05-19T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.respond("get_pull_request_detail", {
+      kind: "ok",
+      account: "test-account",
+      detail: {
+        number: 19,
+        title: "Settings access PR",
+        body: "Merge body",
+        state: "OPEN",
+        is_draft: false,
+        author: "im-ian",
+        head_branch: "fix/settings-access",
+        base_branch: "main",
+        url: "https://github.com/im-ian/acorn/pull/19",
+        created_at: "2026-05-18T00:00:00Z",
+        updated_at: "2026-05-19T00:00:00Z",
+        merged_at: null,
+        additions: 4,
+        deletions: 1,
+        changed_files: 2,
+        mergeable: "MERGEABLE",
+        labels: [],
+        comments: [],
+        reviews: [],
+        checks: [],
+        commits: [],
+      },
+    });
+    await tauri.handle("get_project_settings", () => {
+      const w = window as unknown as { __projectSettingsCalls?: number };
+      w.__projectSettingsCalls = (w.__projectSettingsCalls ?? 0) + 1;
+      if (w.__projectSettingsCalls === 1) {
+        throw new Error("permission denied reading project-settings.json");
+      }
+      if (w.__projectSettingsCalls === 2) {
+        return {
+          key: "path:/tmp/demo",
+          settings: {
+            remember_after_close: true,
+            pull_requests: { generation_prompt: null },
+            worktrees: { base_branch: null },
+          },
+        };
+      }
+      throw new Error("permission denied reloading project-settings.json");
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await expect(page.getByText("Settings access PR")).toBeVisible();
+    await page.getByText("Settings access PR").click({ button: "right" });
+    await page.getByRole("menuitem", { name: /^Merge…$/ }).click();
+
+    const dialog = page.locator('[role="dialog"]').filter({
+      has: page.getByRole("heading", { name: "Merge #19" }),
+    });
+    await expect(dialog.locator("input")).toHaveValue("Settings access PR");
+    await expect(dialog).toContainText("Failed to load project settings:");
+    await expect(dialog).toContainText(
+      "permission denied reading project-settings.json",
+    );
+    await expect(
+      dialog.getByRole("button", { name: "Merge", exact: true }),
+    ).toBeEnabled();
+
+    await dialog
+      .getByRole("button", { name: "Go to project settings" })
+      .click();
+    const projectSettings = page.getByRole("dialog", {
+      name: "Project Settings",
+    });
+    await expect(projectSettings).toBeVisible();
+    await projectSettings.getByRole("button", { name: "Close" }).click();
+    await expect(projectSettings).toHaveCount(0);
+    await expect(dialog).toContainText(
+      "permission denied reloading project-settings.json",
+    );
+  });
+
   test("opening PR close from the context menu shows a skeleton before details load", async ({
     page,
     tauri,

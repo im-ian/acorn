@@ -2417,6 +2417,7 @@
       "generateVia": "Generate via",
       "generateWithAi": "Generate with AI",
       "goToProjectSettings": "Go to project settings",
+      "projectSettingsLoadFailed": "Failed to load project settings:",
       "subjectPlaceholder": "Subject",
       "bodyPlaceholder": "Body (optional)",
       "rebaseMessageLocked": "Rebase replays the original commits onto the base branch - the commit messages are not customizable here.",
