@@ -126,7 +126,10 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Option<IpcServer
             return None;
         }
     };
-    if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Accept) {
+    // Keep accepted streams nonblocking too. On Windows, `Accept` makes
+    // interprocess toggle each connected named pipe back to blocking inside
+    // `accept()`, which can race a newly connected client with ERROR_NO_DATA.
+    if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Both) {
         // Required for the shutdown poll. Bail rather than fall back to
         // blocking accept — a blocking listener could never honour a stop
         // signal and would leak its thread on every restart.

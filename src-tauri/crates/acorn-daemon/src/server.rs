@@ -145,7 +145,11 @@ impl Daemon {
     where
         F: Fn(Arc<Self>, Stream) + Send + Sync + 'static,
     {
-        if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Accept) {
+        // Keep accepted streams nonblocking too. On Windows, `Accept` makes
+        // interprocess toggle each connected named pipe back to blocking
+        // inside `accept()`, which can fail with ERROR_NO_DATA before Acorn
+        // immediately switches the stream to nonblocking again below.
+        if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Both) {
             tracing::warn!(error = %err, kind, "failed to set listener non-blocking; falling back to blocking accept");
         }
         let handle = Arc::new(handle);

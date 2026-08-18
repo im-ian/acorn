@@ -442,6 +442,56 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn fully_nonblocking_named_pipe_accepts_a_usable_stream() {
+        let endpoint = unique_pipe("nonblocking");
+        let listener = bind(&endpoint).expect("bind named pipe");
+        listener
+            .set_nonblocking(ListenerNonblockingMode::Both)
+            .expect("set listener and accepted streams nonblocking");
+        let client = std::thread::spawn({
+            let endpoint = endpoint.clone();
+            move || {
+                let mut stream = connect(&endpoint).expect("connect named pipe");
+                stream.write_all(b"ping").unwrap();
+            }
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut server = loop {
+            match listener.accept() {
+                Ok(stream) => break stream,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "named-pipe listener did not accept before timeout"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("nonblocking named-pipe accept failed: {error}"),
+            }
+        };
+        let mut bytes = [0; 4];
+        let mut offset = 0;
+        while offset < bytes.len() {
+            match server.read(&mut bytes[offset..]) {
+                Ok(0) => panic!("named-pipe client closed before sending the test payload"),
+                Ok(read) => offset += read,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "accepted named-pipe stream did not receive before timeout"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("accepted named-pipe stream read failed: {error}"),
+            }
+        }
+        assert_eq!(&bytes, b"ping");
+        client.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn current_process_matches_its_windows_user() {
         assert!(process_runs_as_current_user(std::process::id()).unwrap());
     }
