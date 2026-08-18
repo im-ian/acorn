@@ -25,12 +25,16 @@ pub fn interactive_shell() -> InteractiveShell {
     }
     #[cfg(not(windows))]
     {
-        let program = std::env::var_os("SHELL")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/bin/sh"));
-        shell_from_program(program)
+        shell_from_program(unix_shell_program(std::env::var_os("SHELL")))
     }
+}
+
+#[cfg(any(not(windows), test))]
+fn unix_shell_program(value: Option<std::ffi::OsString>) -> PathBuf {
+    value
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/bin/sh"))
 }
 
 fn shell_from_program(program: PathBuf) -> InteractiveShell {
@@ -176,5 +180,24 @@ mod tests {
             shell_from_program(PathBuf::from("/bin/zsh")).args,
             vec!["-l"]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserves_non_unicode_shell_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let expected = PathBuf::from(OsString::from_vec(b"/opt/shell-\xff".to_vec()));
+
+        assert_eq!(
+            unix_shell_program(Some(expected.clone().into_os_string())),
+            expected
+        );
+        assert_eq!(
+            unix_shell_program(Some(OsString::new())),
+            Path::new("/bin/sh")
+        );
+        assert_eq!(unix_shell_program(None), Path::new("/bin/sh"));
     }
 }
