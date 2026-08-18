@@ -7,8 +7,7 @@
 //! acornd serve              # daemon mode (foreground)
 //! acornd serve --detach     # daemon mode, detach into the background
 //! acornd status             # CLI: probe a running daemon, print version + counts
-//! acornd list-sessions      # CLI: enumerate sessions
-//! acornd shutdown           # CLI: ask daemon to quit gracefully
+//! acornd list-sessions      # CLI: enumerate same-project sessions
 //! ```
 //!
 //! The CLI subcommands cover the operations the daemon protocol exposes
@@ -102,8 +101,6 @@ enum Command {
         #[arg(short = 't', long = "target")]
         target: String,
     },
-    /// Ask the daemon to shut down gracefully (kills every PTY, exits).
-    Shutdown,
 }
 
 fn main() -> ExitCode {
@@ -127,7 +124,6 @@ fn main() -> ExitCode {
         Command::ReadBuffer { target, max_bytes } => run_read_buffer(&target, max_bytes),
         Command::KillSession { target } => run_kill_session(&target),
         Command::ForgetSession { target } => run_forget_session(&target),
-        Command::Shutdown => run_shutdown(),
     }
 }
 
@@ -168,24 +164,20 @@ fn run_serve(detach: bool) -> io::Result<()> {
     init_tracing();
 
     // 4) Acquire the singleton lock.
-    let pid_path = match daemon::lifecycle::try_acquire_pid_lock()? {
-        daemon::lifecycle::PidLock::Acquired(path) => path,
+    let pid_lock = match daemon::lifecycle::try_acquire_pid_lock()? {
+        daemon::lifecycle::PidLock::Acquired(guard) => guard,
         daemon::lifecycle::PidLock::AlreadyHeld(pid) => {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("daemon already running (pid {pid})"),
-            ));
+            let message = pid.map_or_else(
+                || "daemon already running".to_owned(),
+                |pid| format!("daemon already running (pid {pid})"),
+            );
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, message));
         }
     };
+    let auth_token = daemon::auth::load_or_create()?;
 
     // 5) Bind sockets.
-    let listeners = match daemon::socket::bind_both() {
-        Ok(l) => l,
-        Err(e) => {
-            daemon::lifecycle::release_pid_lock(&pid_path);
-            return Err(e);
-        }
-    };
+    let listeners = daemon::socket::bind_both()?;
     let control_path = listeners.control_path.clone();
     let stream_path = listeners.stream_path.clone();
 
@@ -203,16 +195,16 @@ fn run_serve(detach: bool) -> io::Result<()> {
     // through the daemon receive identical TERM/LANG/PATH layering.
     // Keeping the closure in this binary (host crate) avoids pulling
     // host-only modules into the `acorn-daemon` leaf crate.
-    let env_applier: daemon::pty::EnvApplier =
-        Arc::new(|cmd, env| pty_env::apply_layered_env(cmd, env));
-    let daemon_handle = daemon::server::Daemon::new(env!("CARGO_PKG_VERSION"), env_applier);
+    let env_applier: daemon::pty::EnvApplier = Arc::new(pty_env::apply_layered_env);
+    let daemon_handle =
+        daemon::server::Daemon::new(env!("CARGO_PKG_VERSION"), auth_token, env_applier);
     let serve_result = daemon_handle.serve(listeners);
 
     // 7) Cleanup on the way out. Always reached on graceful shutdown;
     //    on a panic the crash hook fires first, then unwinding hits
     //    these via destructors.
     daemon::socket::cleanup_paths(&control_path, &stream_path);
-    daemon::lifecycle::release_pid_lock(&pid_path);
+    drop(pid_lock);
     tracing::info!("acornd exited");
 
     serve_result
@@ -253,7 +245,7 @@ fn run_status() -> ExitCode {
         Ok(Some(snap)) => {
             println!(
                 "running\nversion={}\nuptime={}s\nsessions={}/{}",
-                snap.daemon_version,
+                terminal_safe_field(&snap.daemon_version),
                 snap.uptime_seconds,
                 snap.session_count_alive,
                 snap.session_count_total
@@ -272,13 +264,15 @@ fn run_status() -> ExitCode {
 }
 
 fn run_list_sessions() -> ExitCode {
-    let resp = match daemon::client::one_shot(daemon::protocol::ControlPayload::ListSessions) {
-        Ok(r) => r,
-        Err(err) => {
-            eprintln!("acornd list-sessions: {err}");
-            return ExitCode::from(1);
-        }
-    };
+    let resp =
+        match daemon::client::one_shot_from_session(daemon::protocol::ControlPayload::ListSessions)
+        {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("acornd list-sessions: {err}");
+                return ExitCode::from(1);
+            }
+        };
     match resp.payload {
         daemon::protocol::ControlResult::Sessions { sessions } => {
             if sessions.is_empty() {
@@ -292,16 +286,25 @@ fn run_list_sessions() -> ExitCode {
                     daemon::protocol::SessionKind::Control => "ctrl",
                 };
                 let state = if s.alive { "alive" } else { "dead" };
-                println!("{:36}  {:6}  {:6}  {}", s.id, kind, state, s.name);
+                println!(
+                    "{:36}  {:6}  {:6}  {}",
+                    s.id,
+                    kind,
+                    state,
+                    terminal_safe_field(&s.name)
+                );
             }
             ExitCode::SUCCESS
         }
         daemon::protocol::ControlResult::Error { code, message } => {
-            eprintln!("daemon error ({code:?}): {message}");
+            eprintln!("daemon error ({code:?}): {}", terminal_safe_field(&message));
             ExitCode::from(1)
         }
         other => {
-            eprintln!("unexpected response: {other:?}");
+            eprintln!(
+                "unexpected response: {}",
+                terminal_safe_field(&format!("{other:?}"))
+            );
             ExitCode::from(1)
         }
     }
@@ -340,24 +343,28 @@ fn run_send_keys(
         bytes.push(b'\r');
     }
     let data_b64 = base64_encode(&bytes);
-    let resp = match daemon::client::one_shot(daemon::protocol::ControlPayload::SendInput {
-        target_session_id: target_id,
-        data_b64,
-    }) {
-        Ok(r) => r,
-        Err(err) => {
-            eprintln!("acornd send-keys: {err}");
-            return ExitCode::from(1);
-        }
-    };
+    let resp =
+        match daemon::client::one_shot_from_session(daemon::protocol::ControlPayload::SendInput {
+            target_session_id: target_id,
+            data_b64,
+        }) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("acornd send-keys: {err}");
+                return ExitCode::from(1);
+            }
+        };
     match resp.payload {
         daemon::protocol::ControlResult::Ack => ExitCode::SUCCESS,
         daemon::protocol::ControlResult::Error { code, message } => {
-            eprintln!("daemon error ({code:?}): {message}");
+            eprintln!("daemon error ({code:?}): {}", terminal_safe_field(&message));
             error_code_to_exit(code)
         }
         other => {
-            eprintln!("unexpected response: {other:?}");
+            eprintln!(
+                "unexpected response: {}",
+                terminal_safe_field(&format!("{other:?}"))
+            );
             ExitCode::from(1)
         }
     }
@@ -371,16 +378,17 @@ fn run_read_buffer(target: &str, max_bytes: usize) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let resp = match daemon::client::one_shot(daemon::protocol::ControlPayload::ReadBuffer {
-        target_session_id: target_id,
-        max_bytes: Some(max_bytes),
-    }) {
-        Ok(r) => r,
-        Err(err) => {
-            eprintln!("acornd read-buffer: {err}");
-            return ExitCode::from(1);
-        }
-    };
+    let resp =
+        match daemon::client::one_shot_from_session(daemon::protocol::ControlPayload::ReadBuffer {
+            target_session_id: target_id,
+            max_bytes: Some(max_bytes),
+        }) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("acornd read-buffer: {err}");
+                return ExitCode::from(1);
+            }
+        };
     match resp.payload {
         daemon::protocol::ControlResult::Buffer { data_b64, .. } => {
             match base64_decode(&data_b64) {
@@ -396,11 +404,14 @@ fn run_read_buffer(target: &str, max_bytes: usize) -> ExitCode {
             }
         }
         daemon::protocol::ControlResult::Error { code, message } => {
-            eprintln!("daemon error ({code:?}): {message}");
+            eprintln!("daemon error ({code:?}): {}", terminal_safe_field(&message));
             error_code_to_exit(code)
         }
         other => {
-            eprintln!("unexpected response: {other:?}");
+            eprintln!(
+                "unexpected response: {}",
+                terminal_safe_field(&format!("{other:?}"))
+            );
             ExitCode::from(1)
         }
     }
@@ -414,26 +425,30 @@ fn run_kill_session(target: &str) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let resp = match daemon::client::one_shot(daemon::protocol::ControlPayload::KillSession {
-        target_session_id: target_id,
-    }) {
-        Ok(r) => r,
-        Err(err) => {
-            eprintln!("acornd kill-session: {err}");
-            return ExitCode::from(1);
-        }
-    };
+    let resp =
+        match daemon::client::one_shot_from_session(daemon::protocol::ControlPayload::KillSession {
+            target_session_id: target_id,
+        }) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("acornd kill-session: {err}");
+                return ExitCode::from(1);
+            }
+        };
     match resp.payload {
         daemon::protocol::ControlResult::Ack => {
             println!("killed");
             ExitCode::SUCCESS
         }
         daemon::protocol::ControlResult::Error { code, message } => {
-            eprintln!("daemon error ({code:?}): {message}");
+            eprintln!("daemon error ({code:?}): {}", terminal_safe_field(&message));
             error_code_to_exit(code)
         }
         other => {
-            eprintln!("unexpected response: {other:?}");
+            eprintln!(
+                "unexpected response: {}",
+                terminal_safe_field(&format!("{other:?}"))
+            );
             ExitCode::from(1)
         }
     }
@@ -447,9 +462,11 @@ fn run_forget_session(target: &str) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let resp = match daemon::client::one_shot(daemon::protocol::ControlPayload::ForgetSession {
-        target_session_id: target_id,
-    }) {
+    let resp = match daemon::client::one_shot_from_session(
+        daemon::protocol::ControlPayload::ForgetSession {
+            target_session_id: target_id,
+        },
+    ) {
         Ok(r) => r,
         Err(err) => {
             eprintln!("acornd forget-session: {err}");
@@ -462,11 +479,14 @@ fn run_forget_session(target: &str) -> ExitCode {
             ExitCode::SUCCESS
         }
         daemon::protocol::ControlResult::Error { code, message } => {
-            eprintln!("daemon error ({code:?}): {message}");
+            eprintln!("daemon error ({code:?}): {}", terminal_safe_field(&message));
             error_code_to_exit(code)
         }
         other => {
-            eprintln!("unexpected response: {other:?}");
+            eprintln!(
+                "unexpected response: {}",
+                terminal_safe_field(&format!("{other:?}"))
+            );
             ExitCode::from(1)
         }
     }
@@ -485,6 +505,28 @@ fn error_code_to_exit(code: daemon::protocol::ErrorCode) -> ExitCode {
         ErrorCode::ProtocolMismatch => ExitCode::from(6),
         ErrorCode::Internal => ExitCode::from(1),
     }
+}
+
+fn terminal_safe_field(value: &str) -> String {
+    let mut safe = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control()
+            || matches!(
+                character,
+                '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+            )
+        {
+            match character {
+                '\n' => safe.push_str("\\n"),
+                '\r' => safe.push_str("\\r"),
+                '\t' => safe.push_str("\\t"),
+                _ => safe.push_str(&format!("\\u{{{:x}}}", u32::from(character))),
+            }
+        } else {
+            safe.push(character);
+        }
+    }
+    safe
 }
 
 fn base64_encode(input: &[u8]) -> String {
@@ -536,8 +578,7 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         return Ok(Vec::new());
     }
     let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    let mut chunks = bytes.chunks(4);
-    while let Some(chunk) = chunks.next() {
+    for chunk in bytes.chunks(4) {
         if chunk.len() != 4 {
             return Err("bad base64 length".into());
         }
@@ -557,29 +598,6 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         }
     }
     Ok(out)
-}
-
-fn run_shutdown() -> ExitCode {
-    match daemon::client::one_shot(daemon::protocol::ControlPayload::Shutdown) {
-        Ok(resp) => match resp.payload {
-            daemon::protocol::ControlResult::Ack => {
-                println!("shutdown acknowledged");
-                ExitCode::SUCCESS
-            }
-            daemon::protocol::ControlResult::Error { code, message } => {
-                eprintln!("daemon error ({code:?}): {message}");
-                ExitCode::from(1)
-            }
-            other => {
-                eprintln!("unexpected response: {other:?}");
-                ExitCode::from(1)
-            }
-        },
-        Err(err) => {
-            eprintln!("acornd shutdown: {err}");
-            ExitCode::from(1)
-        }
-    }
 }
 
 fn init_tracing() {
@@ -607,6 +625,20 @@ fn init_tracing() {
                 .with_ansi(false)
                 .init();
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_output_tests {
+    use super::terminal_safe_field;
+
+    #[test]
+    fn terminal_fields_escape_controls_and_bidi_overrides() {
+        assert_eq!(
+            terminal_safe_field("session\n\u{1b}[2J\u{202e}"),
+            "session\\n\\u{1b}[2J\\u{202e}"
+        );
+        assert_eq!(terminal_safe_field("한글 이름"), "한글 이름");
     }
 }
 

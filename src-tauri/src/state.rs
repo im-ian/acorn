@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 
 use crate::daemon_bridge::DaemonBridge;
 use crate::daemon_stream::StreamRegistry;
-use crate::fs_explorer::WatcherState;
+use crate::fs_explorer::{AssetSnapshotStore, WatcherState};
 use crate::ipc::server::IpcServerHandle;
 use crate::ipc::workspaces::PendingWorkspaceRequests;
 use crate::power_assertion::PowerAssertionState;
@@ -16,6 +16,7 @@ use crate::staged_rev_reconcile::StagedRevMismatch;
 use crate::worktree::RemovedWorktree;
 use acorn_pty::PtyManager;
 use acorn_session::{ProjectStore, Session, SessionStore};
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct PendingSessionRemoval {
@@ -72,6 +73,10 @@ pub struct AppState {
     /// in-process socket server owns the request and the renderer answers via
     /// a Tauri command after reading frontend workspace state.
     pub ipc_workspace_requests: Arc<Mutex<PendingWorkspaceRequests>>,
+    /// Per-PTY random capabilities for the in-process IPC protocol. A missing
+    /// entry can be rebound only by a kernel-verified descendant of the live
+    /// PTY root, which preserves daemon sessions across app restarts.
+    pub ipc_session_capabilities: Arc<Mutex<HashMap<Uuid, Uuid>>>,
     /// Bridge to the out-of-process `acornd` daemon. Owns the cached
     /// persistent control connection + the killswitch toggle. Always
     /// constructed; calls short-circuit cleanly when the user has the
@@ -105,6 +110,10 @@ pub struct AppState {
     /// during this app run. The readonly viewer may read these exact files even
     /// when they live outside registered project roots.
     pub external_file_grants: Arc<Mutex<Vec<PathBuf>>>,
+    /// Descriptor-derived, bounded media snapshots currently exposed through
+    /// Tauri's asset protocol. The renderer receives a random capability and
+    /// never reopens the original repository path after validation.
+    pub asset_snapshots: Arc<Mutex<AssetSnapshotStore>>,
     /// Running native AI work, keyed by Acorn session id. Chat turns own one
     /// provider child; Graph runs own a bounded set of independently
     /// cancellable node children under the same atomic session claim.
@@ -127,6 +136,7 @@ impl AppState {
             pending_removal_retries: Arc::new(Mutex::new(HashMap::new())),
             ipc_handle: Arc::new(Mutex::new(None)),
             ipc_workspace_requests: Arc::new(Mutex::new(Default::default())),
+            ipc_session_capabilities: Arc::new(Mutex::new(HashMap::new())),
             daemon_bridge: DaemonBridge::new(),
             stream_registry: StreamRegistry::new(),
             staged_rev_mismatch: Arc::new(Mutex::new(None)),
@@ -134,6 +144,7 @@ impl AppState {
             agent_hooks: Arc::new(Mutex::new(None)),
             folder_grants: Arc::new(Mutex::new(Vec::new())),
             external_file_grants: Arc::new(Mutex::new(Vec::new())),
+            asset_snapshots: Arc::new(Mutex::new(AssetSnapshotStore::default())),
             chat_runs: crate::chat_runs::ChatRunRegistry::new(),
             power_assertion: Arc::new(Mutex::new(PowerAssertionState::new())),
         }

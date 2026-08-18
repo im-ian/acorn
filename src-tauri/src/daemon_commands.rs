@@ -9,6 +9,7 @@
 //! sites do not have to know which side served them.
 
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 use tauri::State;
 use uuid::Uuid;
 
@@ -102,7 +103,7 @@ pub fn daemon_set_enabled(enabled: bool, state: State<'_, AppState>) {
 
 /// Cause the bridge to attempt a fresh connection (and spawn the daemon
 /// if necessary). Useful for the Settings "restart daemon" button after
-/// a manual `acornd shutdown`.
+/// an authenticated shutdown request from the Acorn app.
 #[tauri::command]
 pub fn daemon_restart(state: State<'_, AppState>) -> Result<(), String> {
     // Drop only the app-side channel so `ensure_connection` probes and
@@ -231,15 +232,22 @@ pub fn daemon_adopt_session(
         .into_iter()
         .find(|s| s.id == id)
         .ok_or_else(|| format!("daemon does not know session {id}"))?;
+    if !summary.alive {
+        return Err(format!("daemon session {id} is not alive"));
+    }
 
-    let repo_path = summary
+    let reported_repo_path = summary
         .repo_path
         .clone()
         .ok_or_else(|| "daemon session has no repo_path — cannot adopt".to_string())?;
-    let worktree_path = summary.cwd.clone().unwrap_or_else(|| repo_path.clone());
+    let reported_cwd = summary.cwd.as_deref().unwrap_or(&reported_repo_path);
+    let (repo_path, worktree_path) =
+        validate_daemon_adoption_paths(state.inner(), &reported_repo_path, reported_cwd)?;
     // Branch is informational — leave empty when the daemon never knew
     // it. Synthesizing "main" would silently lie for repos on master /
     // trunk / detached HEAD; UI tolerates the empty string.
+    let name = crate::commands::validate_display_name(&summary.name, "daemon session name")
+        .map_err(|error| error.to_string())?;
     let branch = summary.branch.clone().unwrap_or_default();
 
     let kind = match summary.kind {
@@ -247,12 +255,10 @@ pub fn daemon_adopt_session(
         acorn_daemon::protocol::SessionKind::Control => acorn_session::SessionKind::Control,
     };
 
-    crate::commands::ensure_project_for_root(state.inner(), &repo_path);
-
     let now = chrono::Utc::now();
     let session = acorn_session::Session {
         id,
-        name: summary.name.clone(),
+        name,
         repo_path: repo_path.clone(),
         worktree_path,
         branch,
@@ -290,6 +296,38 @@ pub fn daemon_adopt_session(
     Ok(())
 }
 
+fn validate_daemon_adoption_paths(
+    state: &AppState,
+    reported_repo_path: &Path,
+    reported_cwd: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
+    let repo_path = crate::commands::authorize_registered_project_root(state, reported_repo_path)
+        .map_err(|error| format!("invalid daemon repo_path: {error}"))?;
+    if !repo_path.is_dir() {
+        return Err(format!(
+            "daemon repo_path is not a directory: {}",
+            repo_path.display()
+        ));
+    }
+
+    if !reported_cwd.is_absolute() {
+        return Err("daemon cwd must be absolute".to_string());
+    }
+    let worktree_path = reported_cwd
+        .canonicalize()
+        .map_err(|error| format!("invalid daemon cwd '{}': {error}", reported_cwd.display()))?;
+    if !worktree_path.is_dir() {
+        return Err(format!(
+            "daemon cwd is not a directory: {}",
+            worktree_path.display()
+        ));
+    }
+    crate::commands::authorize_project_session_cwd(&repo_path, &worktree_path)
+        .map_err(|error| format!("invalid daemon cwd: {error}"))?;
+
+    Ok((repo_path, worktree_path))
+}
+
 fn agent_kind_to_str(k: AgentKind) -> String {
     match k {
         AgentKind::ClaudeCode => "claude-code".into(),
@@ -300,5 +338,57 @@ fn agent_kind_to_str(k: AgentKind) -> String {
         AgentKind::Antigravity => "antigravity".into(),
         AgentKind::Grok => "grok".into(),
         AgentKind::Unknown => "unknown".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_daemon_adoption_paths;
+    use crate::state::AppState;
+
+    #[test]
+    fn daemon_adoption_requires_registered_project_and_scoped_cwd() {
+        let state = AppState::new();
+        let registered = tempfile::tempdir().expect("registered project");
+        let nested = registered.path().join("nested");
+        std::fs::create_dir(&nested).expect("nested cwd");
+        let outside = tempfile::tempdir().expect("outside cwd");
+        state.projects.ensure(
+            registered.path().canonicalize().unwrap(),
+            "registered".to_string(),
+        );
+
+        let (repo, cwd) = validate_daemon_adoption_paths(&state, registered.path(), &nested)
+            .expect("registered nested cwd should be accepted");
+        assert_eq!(repo, registered.path().canonicalize().unwrap());
+        assert_eq!(cwd, nested.canonicalize().unwrap());
+
+        assert!(
+            validate_daemon_adoption_paths(&state, registered.path(), outside.path(),).is_err()
+        );
+        assert!(validate_daemon_adoption_paths(
+            &AppState::new(),
+            registered.path(),
+            registered.path(),
+        )
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_adoption_rejects_cwd_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let state = AppState::new();
+        let registered = tempfile::tempdir().expect("registered project");
+        let outside = tempfile::tempdir().expect("outside cwd");
+        let linked = registered.path().join("linked-outside");
+        symlink(outside.path(), &linked).expect("cwd symlink");
+        state.projects.ensure(
+            registered.path().canonicalize().unwrap(),
+            "registered".to_string(),
+        );
+
+        assert!(validate_daemon_adoption_paths(&state, registered.path(), &linked).is_err());
     }
 }

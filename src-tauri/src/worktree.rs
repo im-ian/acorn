@@ -121,12 +121,16 @@ fn ensure_git_excluded(repo: &Repository) -> AppResult<()> {
 }
 
 fn ensure_real_directory(path: &Path) -> AppResult<()> {
+    ensure_real_directory_named(path, "Git metadata path")
+}
+
+fn ensure_real_directory_named(path: &Path, label: &str) -> AppResult<()> {
     loop {
         match std::fs::symlink_metadata(path) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink() || !metadata.is_dir() {
                     return Err(AppError::InvalidPath(format!(
-                        "Git metadata path must be a real directory: {}",
+                        "{label} must be a real directory: {}",
                         path.display()
                     )));
                 }
@@ -418,18 +422,21 @@ pub fn stage_remove_worktree_at_path(
         let wt = repo.find_worktree(name)?;
         if same_path(wt.path(), worktree_path) {
             if !worktree_path.exists() {
-                if has_staged_worktree_backup(worktree_path) {
+                if has_staged_worktree_backup(worktree_path)? {
                     return Ok(None);
                 }
                 prune_missing_registered_worktree(&wt, worktree_path)?;
                 return Ok(None);
             }
+            validate_real_directory_entry(worktree_path, "linked worktree path")?;
             let token = Uuid::new_v4().to_string();
-            let backup = removed_worktree_backup_path(worktree_path, &token)?;
-            if let Some(parent) = backup.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
+            let backup_root = ensure_removed_worktree_backup_root(worktree_path)?;
+            let backup = backup_root.join(&token);
             std::fs::rename(worktree_path, &backup)?;
+            if let Err(error) = validate_real_directory_entry(&backup, "removed worktree backup") {
+                let _ = std::fs::rename(&backup, worktree_path);
+                return Err(error);
+            }
             return Ok(Some(RemovedWorktree {
                 token,
                 repo_path: repo_path.to_string_lossy().into_owned(),
@@ -473,29 +480,47 @@ pub fn remove_worktree_at_path(repo_path: &Path, worktree_path: &Path) -> AppRes
 }
 
 pub fn restore_removed_worktree(
-    _repo_path: &Path,
+    repo_path: &Path,
     worktree_path: &Path,
     token: &str,
-    _git_common_dir: &Path,
+    git_common_dir: &Path,
 ) -> AppResult<()> {
     validate_removal_token(token)?;
-    let backup = removed_worktree_backup_path(worktree_path, token)?;
-    if !backup.exists() {
+    let backup = existing_removed_worktree_backup_root(worktree_path)?
+        .map(|root| root.join(token))
+        .ok_or_else(|| {
+            AppError::InvalidPath(format!(
+                "removed worktree backup is not available for: {}",
+                worktree_path.display()
+            ))
+        })?;
+    if matches!(
+        std::fs::symlink_metadata(&backup),
+        Err(error) if error.kind() == ErrorKind::NotFound
+    ) {
         return Err(AppError::InvalidPath(format!(
             "removed worktree backup is not available: {}",
             backup.display()
         )));
     }
-    if worktree_path.exists() {
-        return Err(AppError::InvalidPath(format!(
-            "worktree path already exists: {}",
-            worktree_path.display()
-        )));
-    }
-    if let Some(parent) = worktree_path.parent() {
-        std::fs::create_dir_all(parent)?;
+    validate_real_directory_entry(&backup, "removed worktree backup")?;
+    let repo = validate_removal_repository(repo_path, git_common_dir)?;
+    validate_removed_worktree_backup(&repo, worktree_path, &backup)?;
+    match std::fs::symlink_metadata(worktree_path) {
+        Ok(_) => {
+            return Err(AppError::InvalidPath(format!(
+                "worktree path already exists: {}",
+                worktree_path.display()
+            )));
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     std::fs::rename(&backup, worktree_path)?;
+    if let Err(error) = validate_real_directory_entry(worktree_path, "restored worktree path") {
+        let _ = std::fs::rename(worktree_path, &backup);
+        return Err(error);
+    }
     remove_empty_backup_root(worktree_path);
     Ok(())
 }
@@ -507,20 +532,97 @@ pub fn discard_removed_worktree(
     git_common_dir: &Path,
 ) -> AppResult<()> {
     validate_removal_token(token)?;
-    let backup = removed_worktree_backup_path(worktree_path, token)?;
-    if backup.exists() {
-        std::fs::remove_dir_all(&backup)?;
+    let repo = validate_removal_repository(repo_path, git_common_dir)?;
+    if let Some(root) = existing_removed_worktree_backup_root(worktree_path)? {
+        let backup = root.join(token);
+        match std::fs::symlink_metadata(&backup) {
+            Ok(_) => {
+                validate_real_directory_entry(&backup, "removed worktree backup")?;
+                validate_removed_worktree_backup(&repo, worktree_path, &backup)?;
+                std::fs::remove_dir_all(&backup)?;
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     remove_empty_backup_root(worktree_path);
     if worktree_path.exists() {
         return Ok(());
     }
-    let repo = match Repository::open(git_common_dir) {
-        Ok(repo) => repo,
-        Err(_) => ensure_repo(repo_path)?,
-    };
     prune_registered_worktree_at_path(&repo, worktree_path)?;
     Ok(())
+}
+
+fn validate_removal_repository(repo_path: &Path, git_common_dir: &Path) -> AppResult<Repository> {
+    let repo = ensure_repo(repo_path)?;
+    let expected = repo.commondir().canonicalize()?;
+    let supplied = git_common_dir.canonicalize().map_err(|_| {
+        AppError::InvalidPath(format!(
+            "Git common directory is missing: {}",
+            git_common_dir.display()
+        ))
+    })?;
+    if supplied != expected {
+        return Err(AppError::InvalidPath(format!(
+            "Git common directory does not match the repository: {}",
+            git_common_dir.display()
+        )));
+    }
+    Ok(repo)
+}
+
+fn validate_removed_worktree_backup(
+    repo: &Repository,
+    worktree_path: &Path,
+    backup_path: &Path,
+) -> AppResult<()> {
+    validate_real_directory_entry(backup_path, "removed worktree backup")?;
+    let worktree_name = repo
+        .worktrees()?
+        .iter()
+        .filter_map(|name| name.ok().flatten())
+        .find_map(|name| {
+            let worktree = repo.find_worktree(name).ok()?;
+            same_path_with_resolved_parent(worktree.path(), worktree_path).then(|| name.to_string())
+        })
+        .ok_or_else(|| {
+            AppError::InvalidPath(format!(
+                "removed worktree is not registered: {}",
+                worktree_path.display()
+            ))
+        })?;
+    let expected_git_dir = repo
+        .commondir()
+        .join("worktrees")
+        .join(worktree_name)
+        .canonicalize()?;
+    let backup_repo = Repository::open(backup_path).map_err(|_| {
+        AppError::InvalidPath(format!(
+            "removed worktree backup is not a valid repository: {}",
+            backup_path.display()
+        ))
+    })?;
+    let backup_git_dir = backup_repo.path().canonicalize()?;
+    if backup_git_dir != expected_git_dir {
+        return Err(AppError::InvalidPath(format!(
+            "removed worktree backup does not match its registered path: {}",
+            worktree_path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn same_path_with_resolved_parent(left: &Path, right: &Path) -> bool {
+    fn resolve(path: &Path) -> PathBuf {
+        path.canonicalize().unwrap_or_else(|_| {
+            path.parent()
+                .and_then(|parent| parent.canonicalize().ok())
+                .and_then(|parent| path.file_name().map(|name| parent.join(name)))
+                .unwrap_or_else(|| path.to_path_buf())
+        })
+    }
+
+    resolve(left) == resolve(right)
 }
 
 fn prune_registered_worktree_at_path(repo: &Repository, worktree_path: &Path) -> AppResult<bool> {
@@ -544,15 +646,63 @@ fn prune_missing_registered_worktree(wt: &git2::Worktree, worktree_path: &Path) 
     Ok(())
 }
 
-fn removed_worktree_backup_path(worktree_path: &Path, token: &str) -> AppResult<PathBuf> {
-    validate_removal_token(token)?;
+fn removed_worktree_backup_root_path(worktree_path: &Path) -> AppResult<PathBuf> {
     let parent = worktree_path.parent().ok_or_else(|| {
         AppError::InvalidPath(format!(
             "worktree path has no parent directory: {}",
             worktree_path.display()
         ))
     })?;
-    Ok(parent.join(DELETED_WORKTREES_DIR).join(token))
+    Ok(parent.join(DELETED_WORKTREES_DIR))
+}
+
+fn ensure_removed_worktree_backup_root(worktree_path: &Path) -> AppResult<PathBuf> {
+    let root = removed_worktree_backup_root_path(worktree_path)?;
+    ensure_real_directory_named(&root, "removed worktree backup root")?;
+    validate_removed_worktree_backup_root(worktree_path, &root)?;
+    Ok(root)
+}
+
+fn existing_removed_worktree_backup_root(worktree_path: &Path) -> AppResult<Option<PathBuf>> {
+    let root = removed_worktree_backup_root_path(worktree_path)?;
+    match std::fs::symlink_metadata(&root) {
+        Ok(_) => {
+            validate_real_directory_entry(&root, "removed worktree backup root")?;
+            validate_removed_worktree_backup_root(worktree_path, &root)?;
+            Ok(Some(root))
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn validate_removed_worktree_backup_root(worktree_path: &Path, root: &Path) -> AppResult<()> {
+    let parent = worktree_path.parent().ok_or_else(|| {
+        AppError::InvalidPath(format!(
+            "worktree path has no parent directory: {}",
+            worktree_path.display()
+        ))
+    })?;
+    let canonical_parent = parent.canonicalize()?;
+    let canonical_root = root.canonicalize()?;
+    if canonical_root.parent() != Some(canonical_parent.as_path()) {
+        return Err(AppError::InvalidPath(format!(
+            "removed worktree backup root escapes its parent: {}",
+            root.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_real_directory_entry(path: &Path, label: &str) -> AppResult<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(AppError::InvalidPath(format!(
+            "{label} must be a real directory: {}",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 fn validate_removal_token(token: &str) -> AppResult<()> {
@@ -569,21 +719,22 @@ fn validate_removal_token(token: &str) -> AppResult<()> {
 }
 
 fn remove_empty_backup_root(worktree_path: &Path) {
-    let Some(parent) = worktree_path.parent() else {
+    let Ok(root) = removed_worktree_backup_root_path(worktree_path) else {
         return;
     };
-    let root = parent.join(DELETED_WORKTREES_DIR);
-    let _ = std::fs::remove_dir(&root);
+    if std::fs::symlink_metadata(&root)
+        .map(|metadata| !metadata.file_type().is_symlink() && metadata.is_dir())
+        .unwrap_or(false)
+    {
+        let _ = std::fs::remove_dir(&root);
+    }
 }
 
-fn has_staged_worktree_backup(worktree_path: &Path) -> bool {
-    let Some(parent) = worktree_path.parent() else {
-        return false;
+fn has_staged_worktree_backup(worktree_path: &Path) -> AppResult<bool> {
+    let Some(root) = existing_removed_worktree_backup_root(worktree_path)? else {
+        return Ok(false);
     };
-    let root = parent.join(DELETED_WORKTREES_DIR);
-    root.read_dir()
-        .map(|mut entries| entries.next().is_some())
-        .unwrap_or(false)
+    Ok(root.read_dir()?.next().is_some())
 }
 
 pub(crate) fn same_path(left: &Path, right: &Path) -> bool {
@@ -671,8 +822,8 @@ fn checked_directory_component(path: &Path, create: bool) -> AppResult<bool> {
 /// (Acorn's "new isolated session" button, `claude -w` adoption, or a
 /// repo that was already a worktree when added as a project).
 pub fn is_linked_worktree_root(path: &Path) -> bool {
-    std::fs::metadata(path.join(".git"))
-        .map(|m| m.is_file())
+    std::fs::symlink_metadata(path.join(".git"))
+        .map(|m| m.file_type().is_file())
         .unwrap_or(false)
 }
 
@@ -1071,6 +1222,133 @@ mod tests {
             "new"
         );
         assert!(is_linked_worktree_root(&worktree_path));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_worktree_detection_rejects_symlinked_git_marker() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("linked-marker-symlink");
+        let external = unique_temp_dir("linked-marker-symlink-external");
+        let marker = external.join("gitdir");
+        std::fs::write(&marker, "gitdir: /tmp/elsewhere").expect("write marker target");
+        symlink(&marker, root.join(".git")).expect("symlink git marker");
+
+        assert!(!is_linked_worktree_root(&root));
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&external).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_remove_rejects_symlinked_backup_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("remove-symlinked-backup-root");
+        let external = unique_temp_dir("remove-symlinked-backup-root-external");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "feature").expect("create worktree");
+        let backup_root = removed_worktree_backup_root_path(&worktree_path).expect("backup root");
+        symlink(&external, &backup_root).expect("symlink backup root");
+
+        let error = stage_remove_worktree_at_path(&root, &worktree_path)
+            .expect_err("symlinked backup root must be rejected");
+
+        assert!(matches!(error, AppError::InvalidPath(_)));
+        assert!(worktree_path.is_dir());
+        assert!(external.read_dir().expect("read external").next().is_none());
+
+        std::fs::remove_file(&backup_root).ok();
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&external).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_removed_worktree_rejects_symlinked_backup_entry() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("restore-symlinked-backup");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "feature").expect("create worktree");
+        let removed = stage_remove_worktree_at_path(&root, &worktree_path)
+            .expect("stage remove")
+            .expect("removal token");
+        let backup = removed_worktree_backup_root_path(&worktree_path)
+            .expect("backup root")
+            .join(&removed.token);
+        let relocated = backup.with_extension("relocated");
+        std::fs::rename(&backup, &relocated).expect("relocate backup");
+        symlink(&relocated, &backup).expect("symlink backup entry");
+
+        let error = restore_removed_worktree(
+            Path::new(&removed.repo_path),
+            Path::new(&removed.worktree_path),
+            &removed.token,
+            Path::new(&removed.git_common_dir),
+        )
+        .expect_err("symlinked backup entry must be rejected");
+
+        assert!(matches!(error, AppError::InvalidPath(_)));
+        assert!(!worktree_path.exists());
+
+        std::fs::remove_file(&backup).expect("remove backup symlink");
+        std::fs::rename(&relocated, &backup).expect("restore real backup entry");
+        restore_removed_worktree(
+            Path::new(&removed.repo_path),
+            Path::new(&removed.worktree_path),
+            &removed.token,
+            Path::new(&removed.git_common_dir),
+        )
+        .expect("restore worktree for cleanup");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn restore_removed_worktree_rejects_a_token_from_another_worktree() {
+        let root = unique_temp_dir("restore-token-binding");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let first_path = create_worktree(&root, "first-removed").expect("create first worktree");
+        let second_path = create_worktree(&root, "second-removed").expect("create second worktree");
+        let first = stage_remove_worktree_at_path(&root, &first_path)
+            .expect("stage first removal")
+            .expect("first removal token");
+        let second = stage_remove_worktree_at_path(&root, &second_path)
+            .expect("stage second removal")
+            .expect("second removal token");
+
+        let error = restore_removed_worktree(
+            Path::new(&first.repo_path),
+            Path::new(&second.worktree_path),
+            &first.token,
+            Path::new(&first.git_common_dir),
+        )
+        .expect_err("mismatched token and path must be rejected");
+
+        assert!(matches!(error, AppError::InvalidPath(_)));
+        assert!(!first_path.exists());
+        assert!(!second_path.exists());
+        restore_removed_worktree(
+            Path::new(&first.repo_path),
+            Path::new(&first.worktree_path),
+            &first.token,
+            Path::new(&first.git_common_dir),
+        )
+        .expect("restore first worktree");
+        restore_removed_worktree(
+            Path::new(&second.repo_path),
+            Path::new(&second.worktree_path),
+            &second.token,
+            Path::new(&second.git_common_dir),
+        )
+        .expect("restore second worktree");
 
         std::fs::remove_dir_all(&root).ok();
     }

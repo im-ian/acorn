@@ -53,8 +53,7 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          package-manager-cache: false
 
       - name: Validate release version
         id: release_source
@@ -96,7 +95,7 @@ jobs:
           retention-days: 1
 
   build:
-    name: Build & sign macOS bundles
+    name: Build macOS bundles + updater signatures
     runs-on: macos-latest
     needs: frontend
     timeout-minutes: 60
@@ -122,57 +121,13 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          package-manager-cache: false
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
-        with:
-          workspaces: src-tauri
-          # Per-target shared key (default key already factors in
-          # Cargo.lock + rustc version). `cache-on-failure` lets the
-          # next run pick up partial progress when a non-tag build dies
-          # late. Release tag refs cannot restore caches created for
-          # sibling tags, so tag pushes restore only and avoid saving
-          # one-off caches that churn the repository's cache quota.
-          shared-key: ${{ matrix.target }}
-          save-if: ${{ github.ref_type != 'tag' }}
-          cache-on-failure: true
-
-      # sccache backed by GitHub Actions cache. Speeds up COLD cargo
-      # builds (when Swatinem/rust-cache misses, e.g. after Cargo.lock
-      # bumps). Wraps rustc to memoize per-crate compilation outputs.
-      - name: Setup sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-
-      # Probe the GHA cache backend before trusting sccache. When the
-      # Azure Edge layer behind `artifactcache.actions.githubusercontent.com`
-      # has a regional incident (seen 2026-05-11), sccache exits 2 on its
-      # very first `rustc -vV` probe and aborts the whole build. Run that
-      # probe ourselves with `continue-on-error: true` so a backend outage
-      # leaves the build slower (no cache) but still successful instead of
-      # red.
-      - name: Probe sccache GHA backend
-        id: sccache_probe
-        continue-on-error: true
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-        run: |
-          sccache --start-server
-          echo "ok=1" >> "$GITHUB_OUTPUT"
-
-      - name: Enable sccache for this job
-        if: steps.sccache_probe.outputs.ok == '1'
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
 
       - name: Install JS deps
         run: pnpm install --frozen-lockfile
@@ -191,14 +146,13 @@ jobs:
           name: frontend-dist
           path: dist/
 
-      - name: Build & sign tauri bundle
+      - name: Build bundle + updater signature
         env:
+          BUILD_TARGET: ${{ matrix.target }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # CARGO_INCREMENTAL must be off — incremental compilation is
-          # incompatible with sccache and silently disables caching.
-          # RUSTC_WRAPPER / SCCACHE_GHA_ENABLED are set above when the
-          # GHA cache backend is reachable (see "Probe sccache GHA backend").
+          # Keep release compilation deterministic and avoid persistent
+          # incremental state at this privileged artifact boundary.
           CARGO_INCREMENTAL: "0"
         # `--profile release-ci` swaps fat LTO + codegen-units=1 for
         # no LTO + codegen-units=32 (defined in src-tauri/Cargo.toml).
@@ -215,15 +169,23 @@ jobs:
         # `frontend` job's artifact one step ago. The sidecar staging
         # script still runs per-target because it cross-compiles for each
         # apple triple.
-        run: pnpm run tauri build --target ${{ matrix.target }} --bundles app dmg --config '{"build":{"beforeBuildCommand":"pnpm run build:sidecar:release-ci"}}' -- --profile release-ci --locked
+        run: |
+          set -euo pipefail
+          if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is required for macOS updater artifacts" >&2
+            exit 1
+          fi
+          pnpm run tauri build --target "$BUILD_TARGET" --bundles app dmg --config '{"build":{"beforeBuildCommand":"pnpm run build:sidecar:release-ci"}}' -- --profile release-ci --locked
 
       - name: Stage release artifacts
         id: stage
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           out=staged
           mkdir -p "$out"
-          target="${{ matrix.target }}"
+          target="$BUILD_TARGET"
           # Custom profile name = target subdir name. Build step uses
           # `--profile release-ci`, so artifacts live under release-ci/.
           bundle_dir="src-tauri/target/${target}/release-ci/bundle"
@@ -285,22 +247,13 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          package-manager-cache: false
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
-        with:
-          workspaces: src-tauri
-          shared-key: windows-x86_64
-          save-if: ${{ github.ref_type != 'tag' }}
-          cache-on-failure: true
 
       - name: Install JS deps
         run: pnpm install --frozen-lockfile
@@ -379,8 +332,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          package-manager-cache: false
 
       - run: pnpm install --frozen-lockfile
 
@@ -395,13 +347,6 @@ jobs:
           toolchain: nightly
           targets: aarch64-apple-darwin
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
-        with:
-          workspaces: src-tauri
-          shared-key: nightly-aarch64
-          cache-on-failure: true
-
       - name: Build with share-generics + parallel rustc
         env:
           RUSTFLAGS: "-Z share-generics=y -Z threads=8"
@@ -414,7 +359,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write
+      contents: write # Creates the GitHub Release and uploads its signed artifacts.
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -447,6 +392,10 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          # This publish job installs no JS dependencies. Disable setup-node's
+          # package-manager auto-cache so the contents:write boundary restores
+          # no mutable build cache at all.
+          package-manager-cache: false
 
       - name: Download all bundles
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -454,6 +403,23 @@ jobs:
           path: bundles
           pattern: bundles-*
           merge-multiple: true
+
+      - name: Verify updater artifact signatures
+        run: |
+          set -euo pipefail
+          node scripts/release-artifacts.mjs inspect bundles > artifact-set.json
+          arm_tar=$(jq -r .armTar artifact-set.json)
+          arm_sig=$(jq -r .armSignature artifact-set.json)
+          x64_tar=$(jq -r .x64Tar artifact-set.json)
+          x64_sig=$(jq -r .x64Signature artifact-set.json)
+          windows_installer=$(jq -r .windowsX64Installer artifact-set.json)
+          windows_sig=$(jq -r .windowsX64Signature artifact-set.json)
+          cargo run --locked --manifest-path src-tauri/Cargo.toml \
+            --package acorn-updater-verify -- \
+            src-tauri/tauri.conf.json \
+            "$arm_tar" "$arm_sig" \
+            "$x64_tar" "$x64_sig" \
+            "$windows_installer" "$windows_sig"
 
       - name: List downloaded artifacts
         run: ls -la bundles/
@@ -525,6 +491,14 @@ jobs:
           # major.minor line, so an updater jump such as 1.8.0 -> 1.8.2
           # shows the 1.8.0, 1.8.1, and 1.8.2 entries in "What's new".
           node scripts/release-notes.mjs
+          unsigned_notice=$(mktemp)
+          {
+            echo '> [!WARNING]'
+            echo '> These artifacts carry Acorn updater signatures but are not yet signed with an Apple Developer ID or Windows Authenticode publisher certificate. Confirm this official release page and verify the attached `.sig` before running a download.'
+            echo
+            cat release_notes.md
+          } > "$unsigned_notice"
+          mv "$unsigned_notice" release_notes.md
           echo "Notes preview (first 400 chars):"
           head -c 400 release_notes.md || true
           echo
@@ -536,16 +510,15 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
-          # Build the per-platform manifest the Tauri updater plugin
-          # consumes. Each platform entry needs:
+          # Build the per-platform compatibility manifest consumed by older
+          # Acorn releases. New releases use notification-only checks until OS
+          # publisher certificates are configured. Each platform entry needs:
           #   - signature: contents of the generated updater .sig file
           #   - url:       direct download URL for that updater artifact
           # The download URLs use `releases/download/<tag>/<asset>` so
-          # they are stable per release; the endpoint configured in
-          # tauri.conf.json points at `releases/latest/download/latest.json`
-          # which always resolves to the newest tag.
+          # they are stable per release. `latest.json` remains available to
+          # already-installed older Acorn updater clients.
 
-          node scripts/release-artifacts.mjs inspect bundles > artifact-set.json
           arm_tar=$(jq -r .armTar artifact-set.json)
           arm_sig=$(jq -r .armSignature artifact-set.json)
           x64_tar=$(jq -r .x64Tar artifact-set.json)
@@ -635,9 +608,9 @@ jobs:
             latest.json
           fail_on_unmatched_files: true
           overwrite_files: false
-          # Stable releases must update GitHub's "Latest" pointer because the
-          # app updater resolves latest.json through /releases/latest/download.
-          # Keep prerelease tags out of that pointer.
+          # Stable releases update GitHub's "Latest" pointer for the app's
+          # bounded release notification and for older updater clients. Keep
+          # prerelease tags out of that pointer.
           make_latest: ${{ steps.latest.outputs.value }}
           prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
         env:

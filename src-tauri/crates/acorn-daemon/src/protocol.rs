@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION_MAJOR: u32 = 1;
 /// Minor version of the protocol. Bumped when adding optional fields or
 /// non-breaking new variants. Reported in the handshake purely for telemetry
 /// and feature detection — not used for compatibility gating.
-pub const PROTOCOL_VERSION_MINOR: u32 = 0;
+pub const PROTOCOL_VERSION_MINOR: u32 = 1;
 
 /// First frame on every fresh connection. Both daemon and client send their
 /// own `Hello`; either side may close the connection if the major version
@@ -45,6 +45,13 @@ pub struct Hello {
     /// connections.
     #[serde(default)]
     pub source_session_id: Option<Uuid>,
+    /// Owner-private daemon bearer token. The server also validates the
+    /// kernel peer process, so this is not accepted as identity on its own.
+    #[serde(default)]
+    pub auth_token: Option<String>,
+    /// Per-PTY capability paired with `source_session_id` for CLI calls.
+    #[serde(default)]
+    pub session_capability: Option<String>,
     /// Free-form identifier the client emits for log lines and the
     /// daemon's "currently attached clients" status panel. Examples:
     /// `"acorn-app/1.0.10"`, `"acornd-cli/1.0.10"`.
@@ -59,6 +66,8 @@ impl Hello {
             protocol_version_minor: PROTOCOL_VERSION_MINOR,
             role,
             source_session_id: None,
+            auth_token: None,
+            session_capability: None,
             client_name: None,
         }
     }
@@ -146,9 +155,8 @@ pub enum ControlPayload {
     /// settings panel.
     Status,
     /// Request graceful daemon shutdown. The daemon kills every running
-    /// PTY and exits. Used by Settings → "Quit daemon" button and by
-    /// `acornd quit` from the CLI. Destructive — caller is responsible
-    /// for confirming with the user.
+    /// PTY and exits. App-authority only; session CLI callers cannot mutate
+    /// daemon-global lifecycle state. Used by Settings → "Quit daemon".
     Shutdown,
 }
 
@@ -543,6 +551,8 @@ mod tests {
         let parsed: Hello = serde_json::from_str(s).unwrap();
         assert_eq!(parsed.protocol_version_major, 1);
         assert!(parsed.source_session_id.is_none());
+        assert!(parsed.auth_token.is_none());
+        assert!(parsed.session_capability.is_none());
         assert!(parsed.client_name.is_none());
     }
 }

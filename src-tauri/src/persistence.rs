@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,6 +18,11 @@ const LAST_PROJECT_PARENT_FOLDER_FILE: &str = "last-project-parent-folder.json";
 const LAST_PROJECT_PARENT_FOLDER_TMP_FILE: &str = "last-project-parent-folder.json.tmp";
 const CHAT_SESSIONS_DIR: &str = "chat-sessions";
 const GRAPH_RUNS_DIR: &str = "graph-runs";
+const MAX_SESSIONS_FILE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_PROJECTS_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_LAST_PROJECT_PARENT_FILE_BYTES: u64 = 64 * 1024;
+const MAX_CHAT_SESSION_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_GRAPH_RUN_FILE_BYTES: u64 = 64 * 1024 * 1024;
 pub const CHAT_SESSION_SCHEMA_VERSION: u32 = 1;
 static SESSION_SAVE_LOCK: Mutex<()> = Mutex::new(());
 static GRAPH_RUN_SAVE_LOCK: Mutex<()> = Mutex::new(());
@@ -306,10 +312,10 @@ pub struct ChatMessagePatch {
 /// in-memory store. Without this the only evidence of a parse failure is a
 /// log line that scrolls away. The backup name embeds a unix timestamp so
 /// repeated boots do not overwrite earlier evidence.
-fn backup_corrupt_file(path: &Path) {
+fn backup_corrupt_file(path: &Path, contents: &[u8]) {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos())
         .unwrap_or_default();
     let mut name = path
         .file_name()
@@ -318,7 +324,7 @@ fn backup_corrupt_file(path: &Path) {
         .to_string();
     name.push_str(&format!(".broken-{ts}"));
     let backup = path.with_file_name(name);
-    if let Err(err) = fs::copy(path, &backup) {
+    if let Err(err) = acorn_platform::fs::write_atomic_private(&backup, contents) {
         tracing::warn!(
             error = %err,
             path = %path.display(),
@@ -332,17 +338,97 @@ fn backup_corrupt_file(path: &Path) {
     }
 }
 
+/// Read an app-owned state file without following a final symlink and without
+/// ever allocating beyond its declared byte budget. The second metadata check
+/// catches replacement/growth between the path inspection and `File::open`.
+pub(crate) fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> AppResult<Vec<u8>> {
+    let before = fs::symlink_metadata(path)?;
+    if !before.file_type().is_file() {
+        return Err(AppError::InvalidPath(format!(
+            "expected a regular file without symlinks: {}",
+            path.display()
+        )));
+    }
+    if before.len() > max_bytes {
+        return Err(AppError::Other(format!(
+            "state file exceeds its {max_bytes}-byte limit: {}",
+            path.display()
+        )));
+    }
+
+    let file = fs::File::open(path)?;
+    let opened = file.metadata()?;
+    if !opened.is_file() || opened.len() > max_bytes || !same_opened_file(&before, &opened) {
+        return Err(AppError::Other(format!(
+            "state file changed or exceeded its limit while opening: {}",
+            path.display()
+        )));
+    }
+
+    let capacity = opened.len().min(max_bytes).min(usize::MAX as u64) as usize;
+    let mut contents = Vec::with_capacity(capacity);
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut contents)?;
+    if contents.len() as u64 > max_bytes {
+        return Err(AppError::Other(format!(
+            "state file grew beyond its {max_bytes}-byte limit while reading: {}",
+            path.display()
+        )));
+    }
+    Ok(contents)
+}
+
+#[cfg(unix)]
+fn same_opened_file(before: &fs::Metadata, opened: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    before.dev() == opened.dev() && before.ino() == opened.ino()
+}
+
+#[cfg(not(unix))]
+fn same_opened_file(_before: &fs::Metadata, _opened: &fs::Metadata) -> bool {
+    true
+}
+
+pub(crate) fn ensure_payload_within_limit(
+    payload: &[u8],
+    max_bytes: u64,
+    label: &str,
+) -> AppResult<()> {
+    if payload.len() as u64 > max_bytes {
+        return Err(AppError::Other(format!(
+            "{label} exceeds its {max_bytes}-byte persistence limit"
+        )));
+    }
+    Ok(())
+}
+
 fn copy_legacy_file_if_missing(
     legacy_base: &Path,
     profile_dir: &Path,
     file_name: &str,
-) -> std::io::Result<()> {
+    max_bytes: u64,
+) -> AppResult<()> {
     let source = legacy_base.join(file_name);
     let target = profile_dir.join(file_name);
-    if target.exists() || !source.is_file() {
-        return Ok(());
+    match fs::symlink_metadata(&target) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(AppError::Io(error)),
     }
-    fs::copy(source, target)?;
+    let contents = match read_bounded_regular_file(&source, max_bytes) {
+        Ok(contents) => contents,
+        Err(AppError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            tracing::warn!(
+                path = %source.display(),
+                error = %error,
+                "skipping unsafe or oversized legacy persistence file"
+            );
+            return Ok(());
+        }
+    };
+    acorn_platform::fs::write_atomic_private(&target, &contents)?;
     Ok(())
 }
 
@@ -367,8 +453,18 @@ fn migrate_legacy_prod_files(profile_dir: &Path) -> AppResult<()> {
     if legacy_base == profile_dir {
         return Ok(());
     }
-    copy_legacy_file_if_missing(&legacy_base, profile_dir, SESSIONS_FILE)?;
-    copy_legacy_file_if_missing(&legacy_base, profile_dir, PROJECTS_FILE)?;
+    copy_legacy_file_if_missing(
+        &legacy_base,
+        profile_dir,
+        SESSIONS_FILE,
+        MAX_SESSIONS_FILE_BYTES,
+    )?;
+    copy_legacy_file_if_missing(
+        &legacy_base,
+        profile_dir,
+        PROJECTS_FILE,
+        MAX_PROJECTS_FILE_BYTES,
+    )?;
     Ok(())
 }
 
@@ -407,13 +503,12 @@ pub fn load_sessions() -> AppResult<Vec<Session>> {
 /// as authoritative. A missing file is considered clean (legitimate empty).
 pub fn load_sessions_with_status() -> AppResult<(Vec<Session>, bool)> {
     let path = sessions_path()?;
-    if !path.exists() {
-        tracing::info!(path = %path.display(), "sessions file missing, starting empty");
-        return Ok((Vec::new(), true));
-    }
-
-    let bytes = match fs::read(&path) {
+    let bytes = match read_bounded_regular_file(&path, MAX_SESSIONS_FILE_BYTES) {
         Ok(b) => b,
+        Err(AppError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!(path = %path.display(), "sessions file missing, starting empty");
+            return Ok((Vec::new(), true));
+        }
         Err(err) => {
             tracing::warn!(path = %path.display(), error = %err, "failed to read sessions file");
             return Ok((Vec::new(), false));
@@ -427,7 +522,7 @@ pub fn load_sessions_with_status() -> AppResult<(Vec<Session>, bool)> {
         }
         Err(err) => {
             tracing::warn!(path = %path.display(), error = %err, "failed to parse sessions file");
-            backup_corrupt_file(&path);
+            backup_corrupt_file(&path, &bytes);
             Ok((Vec::new(), false))
         }
     }
@@ -453,6 +548,7 @@ fn save_session_store_to_paths(
     let sessions = sessions.list();
     let payload = serde_json::to_vec_pretty(&sessions)
         .map_err(|err| AppError::Other(format!("failed to serialize sessions: {err}")))?;
+    ensure_payload_within_limit(&payload, MAX_SESSIONS_FILE_BYTES, "sessions state")?;
 
     let _ = tmp_path;
     acorn_platform::fs::write_atomic(final_path, &payload)?;
@@ -475,12 +571,12 @@ pub fn load_projects() -> AppResult<Vec<Project>> {
 
 pub fn load_projects_with_status() -> AppResult<(Vec<Project>, bool)> {
     let path = projects_path()?;
-    if !path.exists() {
-        tracing::info!(path = %path.display(), "projects file missing, starting empty");
-        return Ok((Vec::new(), true));
-    }
-    let bytes = match fs::read(&path) {
+    let bytes = match read_bounded_regular_file(&path, MAX_PROJECTS_FILE_BYTES) {
         Ok(b) => b,
+        Err(AppError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!(path = %path.display(), "projects file missing, starting empty");
+            return Ok((Vec::new(), true));
+        }
         Err(err) => {
             tracing::warn!(path = %path.display(), error = %err, "failed to read projects file");
             return Ok((Vec::new(), false));
@@ -493,7 +589,7 @@ pub fn load_projects_with_status() -> AppResult<(Vec<Project>, bool)> {
         }
         Err(err) => {
             tracing::warn!(path = %path.display(), error = %err, "failed to parse projects file");
-            backup_corrupt_file(&path);
+            backup_corrupt_file(&path, &bytes);
             Ok((Vec::new(), false))
         }
     }
@@ -503,6 +599,7 @@ pub fn save_projects(projects: &[Project]) -> AppResult<()> {
     let final_path = projects_path()?;
     let payload = serde_json::to_vec_pretty(projects)
         .map_err(|err| AppError::Other(format!("failed to serialize projects: {err}")))?;
+    ensure_payload_within_limit(&payload, MAX_PROJECTS_FILE_BYTES, "projects state")?;
     acorn_platform::fs::write_atomic(&final_path, &payload)?;
     tracing::info!(
         count = projects.len(),
@@ -524,10 +621,11 @@ pub(crate) fn load_last_project_parent_folder_from_dir(
     base_dir: &Path,
 ) -> AppResult<Option<PathBuf>> {
     let path = last_project_parent_folder_path(base_dir);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = fs::read(path)?;
+    let bytes = match read_bounded_regular_file(&path, MAX_LAST_PROJECT_PARENT_FILE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(AppError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
     let value = serde_json::from_slice::<String>(&bytes).map_err(|err| {
         AppError::Other(format!(
             "failed to parse remembered project parent folder: {err}"
@@ -550,6 +648,11 @@ pub(crate) fn save_last_project_parent_folder_to_dir(
             "failed to serialize remembered project parent folder: {err}"
         ))
     })?;
+    ensure_payload_within_limit(
+        &payload,
+        MAX_LAST_PROJECT_PARENT_FILE_BYTES,
+        "remembered project parent folder",
+    )?;
     acorn_platform::fs::write_atomic(&final_path, &payload)?;
     Ok(())
 }
@@ -761,13 +864,15 @@ fn load_chat_session_state_from_dir(
 ) -> AppResult<ChatSessionState> {
     let session_id = parse_chat_session_id(session_id)?;
     let path = chat_session_path_for_data_dir(base_dir, &session_id);
-    if !path.exists() {
-        return Ok(ChatSessionState::empty(session_id));
-    }
-
-    let bytes = fs::read(&path)?;
+    let bytes = match read_bounded_regular_file(&path, MAX_CHAT_SESSION_FILE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(AppError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ChatSessionState::empty(session_id));
+        }
+        Err(err) => return Err(err),
+    };
     let state = serde_json::from_slice::<ChatSessionState>(&bytes).map_err(|err| {
-        backup_corrupt_file(&path);
+        backup_corrupt_file(&path, &bytes);
         AppError::Other(format!("failed to parse chat session state: {err}"))
     })?;
     let (stored_session_id, state) = validate_chat_session_state(state)?;
@@ -793,6 +898,7 @@ fn save_chat_session_state_to_dir(
     let final_path = chat_session_path_for_data_dir(base_dir, &session_id);
     let payload = serde_json::to_vec_pretty(&state)
         .map_err(|err| AppError::Other(format!("failed to serialize chat session: {err}")))?;
+    ensure_payload_within_limit(&payload, MAX_CHAT_SESSION_FILE_BYTES, "chat session state")?;
     acorn_platform::fs::write_atomic(&final_path, &payload)?;
     tracing::info!(
         session_id = %session_id,
@@ -962,12 +1068,13 @@ fn load_graph_run_state_from_dir(
 ) -> AppResult<Option<GraphRunState>> {
     let session_id = parse_chat_session_id(session_id)?;
     let path = graph_run_path_for_data_dir(base_dir, &session_id);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = fs::read(&path)?;
+    let bytes = match read_bounded_regular_file(&path, MAX_GRAPH_RUN_FILE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(AppError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
     let state = serde_json::from_slice::<GraphRunState>(&bytes).map_err(|err| {
-        backup_corrupt_file(&path);
+        backup_corrupt_file(&path, &bytes);
         AppError::Other(format!("failed to parse Graph run state: {err}"))
     })?;
     let (stored_session_id, state) = validate_graph_run_state(state)?;
@@ -986,6 +1093,7 @@ fn save_graph_run_state_to_dir(base_dir: &Path, state: GraphRunState) -> AppResu
     let final_path = graph_run_path_for_data_dir(base_dir, &session_id);
     let payload = serde_json::to_vec_pretty(&state)
         .map_err(|err| AppError::Other(format!("failed to serialize Graph run: {err}")))?;
+    ensure_payload_within_limit(&payload, MAX_GRAPH_RUN_FILE_BYTES, "Graph run state")?;
     acorn_platform::fs::write_atomic(&final_path, &payload)?;
     tracing::info!(
         session_id = %session_id,
@@ -1348,7 +1456,7 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("sessions.json");
         fs::write(&path, b"not json").unwrap();
-        backup_corrupt_file(&path);
+        backup_corrupt_file(&path, b"not json");
         let entries: Vec<_> = fs::read_dir(&tmp)
             .unwrap()
             .filter_map(Result::ok)
@@ -1361,6 +1469,45 @@ mod tests {
             "expected a sessions.json.broken-* file, got {entries:?}"
         );
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn bounded_state_reader_accepts_exact_limit_and_rejects_oversize() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.json");
+        fs::write(&path, b"1234").unwrap();
+
+        assert_eq!(read_bounded_regular_file(&path, 4).unwrap(), b"1234");
+
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(5)
+            .unwrap();
+        let error = read_bounded_regular_file(&path, 4).unwrap_err();
+        assert!(error.to_string().contains("exceeds its 4-byte limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_state_reader_rejects_symlinks_and_special_files() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside.json");
+        let link = tmp.path().join("linked.json");
+        fs::write(&outside, b"{}").unwrap();
+        symlink(&outside, &link).unwrap();
+
+        assert!(matches!(
+            read_bounded_regular_file(&link, 1024),
+            Err(AppError::InvalidPath(_))
+        ));
+        assert!(matches!(
+            read_bounded_regular_file(Path::new("/dev/zero"), 1024),
+            Err(AppError::InvalidPath(_))
+        ));
     }
 
     #[test]
@@ -1378,12 +1525,14 @@ mod tests {
         fs::create_dir_all(&profile).unwrap();
 
         fs::write(legacy.join(SESSIONS_FILE), b"legacy").unwrap();
-        copy_legacy_file_if_missing(&legacy, &profile, SESSIONS_FILE).unwrap();
+        copy_legacy_file_if_missing(&legacy, &profile, SESSIONS_FILE, MAX_SESSIONS_FILE_BYTES)
+            .unwrap();
         assert_eq!(fs::read(profile.join(SESSIONS_FILE)).unwrap(), b"legacy");
 
         fs::write(legacy.join(PROJECTS_FILE), b"legacy-projects").unwrap();
         fs::write(profile.join(PROJECTS_FILE), b"profile-projects").unwrap();
-        copy_legacy_file_if_missing(&legacy, &profile, PROJECTS_FILE).unwrap();
+        copy_legacy_file_if_missing(&legacy, &profile, PROJECTS_FILE, MAX_PROJECTS_FILE_BYTES)
+            .unwrap();
         assert_eq!(
             fs::read(profile.join(PROJECTS_FILE)).unwrap(),
             b"profile-projects"

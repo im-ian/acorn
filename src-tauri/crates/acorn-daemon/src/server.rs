@@ -19,9 +19,9 @@
 //!   closes the connection.
 
 use std::io::{self, BufReader, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use acorn_local_ipc::{
     Listener, ListenerNonblockingMode, ListenerTrait as _, Stream, StreamTrait as _, TryClone,
@@ -34,7 +34,12 @@ use super::protocol::{
 use super::pty::PtyManager;
 use super::session::SessionRegistry;
 use super::socket::DaemonListeners;
-use super::wire::read_request_frame_line;
+use super::wire::{read_request_frame_line, MAX_REQUEST_FRAME_BYTES};
+
+const MAX_CONTROL_CONNECTIONS: usize = 32;
+const MAX_STREAM_CONNECTIONS: usize = 128;
+const CONNECTION_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
+const CONNECTION_IO_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 /// Wraps all the per-process state a connection handler needs.
 pub struct Daemon {
@@ -44,6 +49,14 @@ pub struct Daemon {
     started_at: Instant,
     shutdown_flag: Arc<AtomicBool>,
     next_seq: AtomicU64,
+    auth_token: uuid::Uuid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallerAuthority {
+    App,
+    Session(uuid::Uuid),
+    StatusCli,
 }
 
 impl Daemon {
@@ -51,10 +64,13 @@ impl Daemon {
     /// leaf crate's independent Cargo version. `env_applier` is threaded into
     /// [`PtyManager`] and called once per spawned PTY to layer login-shell env
     /// + caller overrides; see [`crate::pty::EnvApplier`]. The host binary
-    /// provides the same closure that wires `pty_env::apply_layered_env`,
-    /// keeping daemon and in-process spawn paths byte-identical.
+    ///
+    /// The host binary provides the same closure that wires
+    /// `pty_env::apply_layered_env`, keeping daemon and in-process spawn paths
+    /// byte-identical.
     pub fn new(
         daemon_version: impl Into<String>,
+        auth_token: uuid::Uuid,
         env_applier: crate::pty::EnvApplier,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -64,6 +80,7 @@ impl Daemon {
             started_at: Instant::now(),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             next_seq: AtomicU64::new(1),
+            auth_token,
         })
     }
 
@@ -121,41 +138,62 @@ impl Daemon {
     /// daemon honor the shutdown flag: a blocking `incoming()` does not
     /// return until the next connection arrives, so a `Shutdown` RPC
     /// would leave the accept threads parked forever after their last
-    /// client closed. 50 ms is short enough that `acornd shutdown`
+    /// client closed. 50 ms is short enough that an app shutdown request
     /// feels instant and long enough that the loop is not a busy-spin
     /// (~20 syscalls per second per socket).
     fn accept_loop<F>(self: Arc<Self>, listener: Listener, kind: &'static str, handle: F)
     where
         F: Fn(Arc<Self>, Stream) + Send + Sync + 'static,
     {
-        if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Accept) {
+        // Keep accepted streams nonblocking too. On Windows, `Accept` makes
+        // interprocess toggle each connected named pipe back to blocking
+        // inside `accept()`, which can fail with ERROR_NO_DATA before Acorn
+        // immediately switches the stream to nonblocking again below.
+        if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Both) {
             tracing::warn!(error = %err, kind, "failed to set listener non-blocking; falling back to blocking accept");
         }
         let handle = Arc::new(handle);
+        let active_connections = Arc::new(AtomicUsize::new(0));
+        let connection_limit = if kind == "control" {
+            MAX_CONTROL_CONNECTIONS
+        } else {
+            MAX_STREAM_CONNECTIONS
+        };
         loop {
             if self.shutdown_flag.load(Ordering::SeqCst) {
                 break;
             }
             match listener.accept() {
                 Ok(conn) => {
-                    // `ListenerNonblockingMode::Accept` only nominally
-                    // splits "non-blocking accept, blocking stream",
-                    // but interprocess's macOS impl propagates the
-                    // listener's non-blocking flag onto accepted
-                    // streams (kqueue inherits it on accept). Reset
-                    // here so the BufReader in `handle_control_conn`
-                    // does not return `WouldBlock` on the first read.
-                    if let Err(err) = conn.set_nonblocking(false) {
-                        tracing::warn!(error = %err, kind, "failed to clear stream non-blocking flag");
+                    let Some(permit) =
+                        ConnectionPermit::try_acquire(active_connections.clone(), connection_limit)
+                    else {
+                        tracing::warn!(
+                            kind,
+                            limit = connection_limit,
+                            "dropping daemon connection because the handler limit is full"
+                        );
+                        continue;
+                    };
+                    // Authenticate the first frame under a portable deadline.
+                    // Windows named pipes do not implement socket timeouts,
+                    // so handlers use non-blocking polling until the peer has
+                    // passed capability and process-identity checks.
+                    if let Err(err) = conn.set_nonblocking(true) {
+                        tracing::warn!(error = %err, kind, "failed to set stream non-blocking");
+                        continue;
                     }
                     let me = Arc::clone(&self);
                     let h = handle.clone();
                     std::thread::Builder::new()
                         .name(format!("acornd-{kind}-{}", me.alloc_seq()))
-                        .spawn(move || h(me, conn))
+                        .spawn(move || {
+                            let _permit = permit;
+                            h(me, conn);
+                        })
                         .ok();
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(err) if retryable_accept_error(&err) => {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
                 Err(err) => {
@@ -171,40 +209,89 @@ impl Daemon {
         self.next_seq.fetch_add(1, Ordering::Relaxed)
     }
 
-    fn handle_control_conn(&self, conn: Stream) -> io::Result<()> {
-        // BufRead pair: NDJSON in, NDJSON out.
-        let mut reader = BufReader::new(conn);
-
-        // Handshake: client `Hello` must arrive first.
-        let mut line = String::new();
-        if read_request_frame_line(&mut reader, &mut line)? == 0 {
+    fn handle_control_conn(&self, mut conn: Stream) -> io::Result<()> {
+        let peer_pid = acorn_local_ipc::peer_process_id(&conn)?;
+        let Some(mut line) =
+            read_request_line_with_deadline(&mut conn, CONNECTION_HANDSHAKE_TIMEOUT)?
+        else {
             return Ok(()); // immediate close
-        }
+        };
         let hello: Hello = match serde_json::from_str(line.trim()) {
             Ok(h) => h,
             Err(e) => {
-                return write_line(
-                    reader.get_mut(),
+                return write_line_with_deadline(
+                    &mut conn,
                     &Self::protocol_error_envelope(format!("invalid hello: {e}")),
+                    CONNECTION_HANDSHAKE_TIMEOUT,
                 );
             }
         };
         if hello.protocol_version_major != PROTOCOL_VERSION_MAJOR {
-            return write_line(
-                reader.get_mut(),
+            return write_line_with_deadline(
+                &mut conn,
                 &Self::protocol_error_envelope(format!(
                     "protocol major mismatch: daemon={}, client={}",
                     PROTOCOL_VERSION_MAJOR, hello.protocol_version_major
                 )),
+                CONNECTION_HANDSHAKE_TIMEOUT,
             );
         }
+        if !matches!(
+            hello.role,
+            ClientRole::ControlOneShot | ClientRole::ControlPersistent
+        ) {
+            return write_line_with_deadline(
+                &mut conn,
+                &Self::protocol_error_envelope(
+                    "control socket received non-control role hello".into(),
+                ),
+                CONNECTION_HANDSHAKE_TIMEOUT,
+            );
+        }
+        let authority = match self.authenticate_hello(&hello, peer_pid) {
+            Ok(authority) => authority,
+            Err(message) => {
+                return write_line_with_deadline(
+                    &mut conn,
+                    &Self::protocol_error_envelope(message),
+                    CONNECTION_HANDSHAKE_TIMEOUT,
+                )
+            }
+        };
         let persistent = matches!(hello.role, ClientRole::ControlPersistent);
 
         // Respond with our own hello (telemetry / version exchange).
-        write_line(
-            reader.get_mut(),
+        write_line_with_deadline(
+            &mut conn,
             &serde_json::to_string(&Hello::current(ClientRole::ControlPersistent)).unwrap(),
+            CONNECTION_HANDSHAKE_TIMEOUT,
         )?;
+
+        if !persistent {
+            let Some(request_line) =
+                read_request_line_with_deadline(&mut conn, CONNECTION_HANDSHAKE_TIMEOUT)?
+            else {
+                return Ok(());
+            };
+            let response = match serde_json::from_str::<ControlRequest>(request_line.trim()) {
+                Ok(request) => self.dispatch(request, authority),
+                Err(error) => ControlResponse {
+                    seq: 0,
+                    payload: ControlResult::Error {
+                        code: ErrorCode::Invalid,
+                        message: format!("bad request: {error}"),
+                    },
+                },
+            };
+            return write_line_with_deadline(
+                &mut conn,
+                &serde_json::to_string(&response).unwrap(),
+                CONNECTION_HANDSHAKE_TIMEOUT,
+            );
+        }
+
+        conn.set_nonblocking(false)?;
+        let mut reader = BufReader::new(conn);
 
         loop {
             let n = read_request_frame_line(&mut reader, &mut line)?;
@@ -222,17 +309,11 @@ impl Daemon {
                         },
                     };
                     write_line(reader.get_mut(), &serde_json::to_string(&resp).unwrap())?;
-                    if !persistent {
-                        return Ok(());
-                    }
                     continue;
                 }
             };
-            let resp = self.dispatch(req, hello.source_session_id);
+            let resp = self.dispatch(req, authority);
             write_line(reader.get_mut(), &serde_json::to_string(&resp).unwrap())?;
-            if matches!(resp.payload, ControlResult::Error { .. }) && !persistent {
-                return Ok(());
-            }
             // `Shutdown` is the one payload that sets the global flag
             // inside `dispatch` AND closes this connection so the
             // client knows the daemon will not accept further requests.
@@ -240,17 +321,20 @@ impl Daemon {
             if self.shutdown_flag.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            if !persistent {
-                return Ok(());
-            }
         }
     }
 
-    fn dispatch(
-        &self,
-        req: ControlRequest,
-        source_session_id: Option<uuid::Uuid>,
-    ) -> ControlResponse {
+    fn dispatch(&self, req: ControlRequest, authority: CallerAuthority) -> ControlResponse {
+        if let Some(error) = self.authorization_error(authority, &req.payload) {
+            return ControlResponse {
+                seq: req.seq,
+                payload: error,
+            };
+        }
+        let source_session_id = match authority {
+            CallerAuthority::Session(id) => Some(id),
+            CallerAuthority::App | CallerAuthority::StatusCli => None,
+        };
         let payload = match req.payload {
             ControlPayload::Ping => ControlResult::Pong {
                 daemon_version: self.daemon_version.clone(),
@@ -261,6 +345,7 @@ impl Daemon {
                     .registry
                     .list()
                     .into_iter()
+                    .filter(|session| self.session_visible_to(authority, session))
                     .map(|s| SessionSummary {
                         is_source: source_session_id == Some(s.id),
                         id: s.id,
@@ -388,57 +473,75 @@ impl Daemon {
         }
     }
 
-    fn handle_stream_conn(&self, conn: Stream) -> io::Result<()> {
-        let mut reader = BufReader::new(conn);
-
-        // Hello → StreamAttach → live frames loop.
-        let mut line = String::new();
-        if read_request_frame_line(&mut reader, &mut line)? == 0 {
+    fn handle_stream_conn(&self, mut conn: Stream) -> io::Result<()> {
+        let peer_pid = acorn_local_ipc::peer_process_id(&conn)?;
+        let Some(line) = read_request_line_with_deadline(&mut conn, CONNECTION_HANDSHAKE_TIMEOUT)?
+        else {
             return Ok(());
-        }
+        };
         let hello: Hello = match serde_json::from_str(line.trim()) {
             Ok(h) => h,
             Err(e) => {
-                return write_line(
-                    reader.get_mut(),
+                return write_line_with_deadline(
+                    &mut conn,
                     &Self::protocol_error_envelope(format!("invalid hello: {e}")),
+                    CONNECTION_HANDSHAKE_TIMEOUT,
                 );
             }
         };
         if hello.protocol_version_major != PROTOCOL_VERSION_MAJOR {
-            return write_line(
-                reader.get_mut(),
+            return write_line_with_deadline(
+                &mut conn,
                 &Self::protocol_error_envelope(format!(
                     "protocol major mismatch: daemon={}, client={}",
                     PROTOCOL_VERSION_MAJOR, hello.protocol_version_major
                 )),
+                CONNECTION_HANDSHAKE_TIMEOUT,
             );
         }
         if !matches!(hello.role, ClientRole::Stream) {
-            return write_line(
-                reader.get_mut(),
+            return write_line_with_deadline(
+                &mut conn,
                 &Self::protocol_error_envelope(
                     "stream socket received non-stream role hello".into(),
                 ),
+                CONNECTION_HANDSHAKE_TIMEOUT,
             );
         }
-        write_line(
-            reader.get_mut(),
+        if !matches!(
+            self.authenticate_hello(&hello, peer_pid),
+            Ok(CallerAuthority::App)
+        ) {
+            return write_line_with_deadline(
+                &mut conn,
+                &Self::protocol_error_envelope(
+                    "stream connection failed app authentication".into(),
+                ),
+                CONNECTION_HANDSHAKE_TIMEOUT,
+            );
+        }
+        write_line_with_deadline(
+            &mut conn,
             &serde_json::to_string(&Hello::current(ClientRole::Stream)).unwrap(),
+            CONNECTION_HANDSHAKE_TIMEOUT,
         )?;
 
-        if read_request_frame_line(&mut reader, &mut line)? == 0 {
+        let Some(line) = read_request_line_with_deadline(&mut conn, CONNECTION_HANDSHAKE_TIMEOUT)?
+        else {
             return Ok(());
-        }
+        };
         let attach: StreamAttach = match serde_json::from_str(line.trim()) {
             Ok(a) => a,
             Err(e) => {
-                return write_line(
-                    reader.get_mut(),
+                return write_line_with_deadline(
+                    &mut conn,
                     &Self::protocol_error_envelope(format!("invalid stream-attach: {e}")),
+                    CONNECTION_HANDSHAKE_TIMEOUT,
                 );
             }
         };
+        conn.set_nonblocking(false)?;
+        let mut reader = BufReader::new(conn);
 
         let Some(mut subscription) = self.pty.subscribe(&attach.session_id) else {
             let frame = StreamFrame::Exit { code: None };
@@ -542,6 +645,178 @@ impl Daemon {
         };
         serde_json::to_string(&env).unwrap()
     }
+
+    fn authenticate_hello(&self, hello: &Hello, peer_pid: u32) -> Result<CallerAuthority, String> {
+        let presented = hello
+            .auth_token
+            .as_deref()
+            .and_then(|value| uuid::Uuid::parse_str(value).ok())
+            .ok_or_else(|| "daemon authentication token is missing or invalid".to_string())?;
+        if presented != self.auth_token {
+            return Err("daemon authentication token does not match".into());
+        }
+
+        if let Some(source_id) = hello.source_session_id {
+            if !matches!(hello.role, ClientRole::ControlOneShot) {
+                return Err("session authority is valid only for one-shot control calls".into());
+            }
+            if !acorn_platform::process::pid_executable_name_matches(peer_pid, "acornd") {
+                return Err("session IPC peer is not the Acorn daemon CLI".into());
+            }
+            let source = self
+                .registry
+                .get(&source_id)
+                .ok_or_else(|| "source daemon session is not live".to_string())?;
+            if !source.alive || source.kind != super::protocol::SessionKind::Control {
+                return Err("source daemon session is not a live control session".into());
+            }
+            let capability = hello
+                .session_capability
+                .as_deref()
+                .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                .ok_or_else(|| "source session capability is missing or invalid".to_string())?;
+            if source.ipc_capability != Some(capability) {
+                return Err("source session capability does not match".into());
+            }
+            let root_pid = source
+                .pid
+                .ok_or_else(|| "source session has no process id".to_string())?;
+            if !acorn_platform::process::is_descendant_or_same(root_pid, peer_pid) {
+                return Err("daemon CLI peer is outside the source PTY process tree".into());
+            }
+            return Ok(CallerAuthority::Session(source_id));
+        }
+
+        if acorn_platform::process::pid_executable_name_matches(peer_pid, "acorn") {
+            return Ok(CallerAuthority::App);
+        }
+        if matches!(hello.role, ClientRole::ControlOneShot)
+            && acorn_platform::process::pid_executable_name_matches(peer_pid, "acornd")
+        {
+            return Ok(CallerAuthority::StatusCli);
+        }
+        Err("daemon IPC peer executable is not authorized for this role".into())
+    }
+
+    fn authorization_error(
+        &self,
+        authority: CallerAuthority,
+        payload: &ControlPayload,
+    ) -> Option<ControlResult> {
+        let unauthorized = |message: &str| ControlResult::Error {
+            code: ErrorCode::Unauthorized,
+            message: message.to_string(),
+        };
+        match authority {
+            CallerAuthority::App => None,
+            CallerAuthority::StatusCli => {
+                (!matches!(payload, ControlPayload::Ping | ControlPayload::Status))
+                    .then(|| unauthorized("an unscoped daemon CLI may only query status"))
+            }
+            CallerAuthority::Session(source_id) => {
+                if matches!(payload, ControlPayload::SpawnSession { .. }) {
+                    return Some(unauthorized("only the Acorn app may spawn daemon sessions"));
+                }
+                if matches!(payload, ControlPayload::Status | ControlPayload::Shutdown) {
+                    return Some(unauthorized(
+                        "a control session cannot query or mutate daemon-global state",
+                    ));
+                }
+                let target_id = match payload {
+                    ControlPayload::SendInput {
+                        target_session_id, ..
+                    }
+                    | ControlPayload::Resize {
+                        target_session_id, ..
+                    }
+                    | ControlPayload::ReadBuffer {
+                        target_session_id, ..
+                    }
+                    | ControlPayload::KillSession { target_session_id }
+                    | ControlPayload::ForgetSession { target_session_id } => {
+                        Some(*target_session_id)
+                    }
+                    _ => None,
+                };
+                let target_id = target_id?;
+                if matches!(
+                    payload,
+                    ControlPayload::KillSession { .. } | ControlPayload::ForgetSession { .. }
+                ) && target_id == source_id
+                {
+                    return Some(unauthorized(
+                        "refusing to destroy the source control session",
+                    ));
+                }
+                let Some(source) = self.registry.get(&source_id) else {
+                    return Some(unauthorized("source daemon session disappeared"));
+                };
+                let target = self.registry.get(&target_id)?;
+                if source.repo_path.is_none() || source.repo_path != target.repo_path {
+                    return Some(unauthorized(
+                        "target daemon session is outside the source project",
+                    ));
+                }
+                None
+            }
+        }
+    }
+
+    fn session_visible_to(
+        &self,
+        authority: CallerAuthority,
+        session: &super::session::DaemonSession,
+    ) -> bool {
+        match authority {
+            CallerAuthority::App => true,
+            CallerAuthority::StatusCli => false,
+            CallerAuthority::Session(source_id) => {
+                self.registry.get(&source_id).is_some_and(|source| {
+                    source.repo_path.is_some() && source.repo_path == session.repo_path
+                })
+            }
+        }
+    }
+}
+
+fn retryable_accept_error(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::WouldBlock {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        // A Windows named-pipe client can disconnect after ConnectNamedPipe
+        // succeeds but before interprocess finishes configuring the accepted
+        // stream. The listener has already staged its next pipe instance, so
+        // ERROR_NO_DATA / ERROR_PIPE_NOT_CONNECTED are transient accept
+        // outcomes rather than reasons to stop the daemon's accept loop.
+        matches!(error.raw_os_error(), Some(232 | 233))
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+struct ConnectionPermit {
+    active: Arc<AtomicUsize>,
+}
+
+impl ConnectionPermit {
+    fn try_acquire(active: Arc<AtomicUsize>, limit: usize) -> Option<Self> {
+        active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < limit).then_some(current + 1)
+            })
+            .ok()?;
+        Some(Self { active })
+    }
+}
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 fn live_chunk_after_replay(chunk: &super::pty::OutputChunk, replayed_until: u64) -> &[u8] {
@@ -555,6 +830,97 @@ fn live_chunk_after_replay(chunk: &super::pty::OutputChunk, replayed_until: u64)
         return &chunk.bytes[offset..];
     }
     &chunk.bytes
+}
+
+fn read_request_line_with_deadline(
+    stream: &mut Stream,
+    timeout: Duration,
+) -> io::Result<Option<String>> {
+    let deadline = Instant::now() + timeout;
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 8 * 1024];
+    loop {
+        match acorn_local_ipc::read_nonblocking(stream, &mut chunk) {
+            Ok(0) if bytes.is_empty() => return Ok(None),
+            Ok(0) => break,
+            Ok(read) => {
+                let newline = chunk[..read].iter().position(|byte| *byte == b'\n');
+                let take = newline.map_or(read, |index| index + 1);
+                bytes.extend_from_slice(&chunk[..take]);
+                if bytes.len() > MAX_REQUEST_FRAME_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "daemon protocol frame exceeds {MAX_REQUEST_FRAME_BYTES}-byte limit"
+                        ),
+                    ));
+                }
+                if newline.is_some() {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "daemon handshake/request timed out",
+                    ));
+                }
+                std::thread::sleep(CONNECTION_IO_POLL_INTERVAL);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+fn write_line_with_deadline(stream: &mut Stream, line: &str, timeout: Duration) -> io::Result<()> {
+    let mut bytes = Vec::with_capacity(line.len() + 1);
+    bytes.extend_from_slice(line.as_bytes());
+    bytes.push(b'\n');
+    let deadline = Instant::now() + timeout;
+    let mut offset = 0;
+    while offset < bytes.len() {
+        match stream.write(&bytes[offset..]) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "daemon peer closed while writing",
+                ))
+            }
+            Ok(written) => offset += written,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "daemon response write timed out",
+                    ));
+                }
+                std::thread::sleep(CONNECTION_IO_POLL_INTERVAL);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    loop {
+        match stream.flush() {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "daemon response flush timed out",
+                    ));
+                }
+                std::thread::sleep(CONNECTION_IO_POLL_INTERVAL);
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn write_line<W: Write>(w: &mut W, line: &str) -> io::Result<()> {
@@ -623,8 +989,7 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         return Ok(Vec::new());
     }
     let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    let mut chunks = bytes.chunks(4);
-    while let Some(chunk) = chunks.next() {
+    for chunk in bytes.chunks(4) {
         if chunk.len() != 4 {
             return Err("bad base64 length".into());
         }
@@ -674,6 +1039,30 @@ mod tests {
     }
 
     #[test]
+    fn connection_permit_caps_and_releases_handlers() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let first = ConnectionPermit::try_acquire(active.clone(), 1).expect("first permit");
+        assert!(ConnectionPermit::try_acquire(active.clone(), 1).is_none());
+        drop(first);
+        assert!(ConnectionPermit::try_acquire(active.clone(), 1).is_some());
+    }
+
+    #[test]
+    fn would_block_accept_errors_are_retryable() {
+        let error = io::Error::from(io::ErrorKind::WouldBlock);
+        assert!(retryable_accept_error(&error));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn disconnected_windows_pipe_accept_errors_are_retryable() {
+        for code in [232, 233] {
+            assert!(retryable_accept_error(&io::Error::from_raw_os_error(code)));
+        }
+        assert!(!retryable_accept_error(&io::Error::from_raw_os_error(5)));
+    }
+
+    #[test]
     fn live_chunk_filter_skips_bytes_already_sent_by_replay() {
         let chunk = super::super::pty::OutputChunk {
             bytes: b"abcdef".to_vec(),
@@ -690,12 +1079,12 @@ mod tests {
 
     #[test]
     fn ping_returns_pong() {
-        let d = Daemon::new("test-version", noop_env_applier());
+        let d = Daemon::new("test-version", uuid::Uuid::nil(), noop_env_applier());
         let req = ControlRequest {
             seq: 1,
             payload: ControlPayload::Ping,
         };
-        let resp = d.dispatch(req, None);
+        let resp = d.dispatch(req, CallerAuthority::App);
         assert_eq!(resp.seq, 1);
         match resp.payload {
             ControlResult::Pong { daemon_version, .. } => {
@@ -707,13 +1096,13 @@ mod tests {
 
     #[test]
     fn status_reports_the_host_binary_version() {
-        let d = Daemon::new("1.32.0-host", noop_env_applier());
+        let d = Daemon::new("1.32.0-host", uuid::Uuid::nil(), noop_env_applier());
         let resp = d.dispatch(
             ControlRequest {
                 seq: 4,
                 payload: ControlPayload::Status,
             },
-            None,
+            CallerAuthority::App,
         );
 
         match resp.payload {
@@ -725,8 +1114,78 @@ mod tests {
     }
 
     #[test]
+    fn control_session_authority_is_project_scoped_and_not_daemon_global() {
+        let d = Daemon::new("test-version", uuid::Uuid::nil(), noop_env_applier());
+        let source_id = uuid::Uuid::new_v4();
+        let same_project_id = uuid::Uuid::new_v4();
+        let other_project_id = uuid::Uuid::new_v4();
+        for (id, kind, repo) in [
+            (source_id, SessionKind::Control, "/tmp/project-a"),
+            (same_project_id, SessionKind::Regular, "/tmp/project-a"),
+            (other_project_id, SessionKind::Regular, "/tmp/project-b"),
+        ] {
+            let mut session = super::super::session::DaemonSession::new(
+                id,
+                "test".into(),
+                kind,
+                std::path::PathBuf::from(repo),
+            );
+            session.repo_path = Some(std::path::PathBuf::from(repo));
+            d.registry.insert(session);
+        }
+        let authority = CallerAuthority::Session(source_id);
+
+        for payload in [ControlPayload::Status, ControlPayload::Shutdown] {
+            assert!(matches!(
+                d.authorization_error(authority, &payload),
+                Some(ControlResult::Error {
+                    code: ErrorCode::Unauthorized,
+                    ..
+                })
+            ));
+        }
+        assert!(d
+            .authorization_error(authority, &ControlPayload::ListSessions)
+            .is_none());
+        assert!(d
+            .authorization_error(
+                authority,
+                &ControlPayload::ReadBuffer {
+                    target_session_id: same_project_id,
+                    max_bytes: Some(64),
+                },
+            )
+            .is_none());
+        assert!(matches!(
+            d.authorization_error(
+                authority,
+                &ControlPayload::ReadBuffer {
+                    target_session_id: other_project_id,
+                    max_bytes: Some(64),
+                },
+            ),
+            Some(ControlResult::Error {
+                code: ErrorCode::Unauthorized,
+                ..
+            })
+        ));
+        assert!(matches!(
+            d.authorization_error(
+                authority,
+                &ControlPayload::KillSession {
+                    target_session_id: source_id,
+                },
+            ),
+            Some(ControlResult::Error {
+                code: ErrorCode::Unauthorized,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn forget_alive_session_is_rejected() {
-        let d = Daemon::new("test-version", noop_env_applier());
+        let d = Daemon::new("test-version", uuid::Uuid::nil(), noop_env_applier());
         let id = uuid::Uuid::new_v4();
         d.registry.insert(super::super::session::DaemonSession::new(
             id,
@@ -740,7 +1199,7 @@ mod tests {
                 target_session_id: id,
             },
         };
-        let resp = d.dispatch(req, None);
+        let resp = d.dispatch(req, CallerAuthority::App);
         match resp.payload {
             ControlResult::Error { code, .. } => assert_eq!(code, ErrorCode::Invalid),
             other => panic!("expected Invalid error, got {other:?}"),
@@ -749,7 +1208,7 @@ mod tests {
 
     #[test]
     fn forget_dead_session_succeeds() {
-        let d = Daemon::new("test-version", noop_env_applier());
+        let d = Daemon::new("test-version", uuid::Uuid::nil(), noop_env_applier());
         let id = uuid::Uuid::new_v4();
         let mut session = super::super::session::DaemonSession::new(
             id,
@@ -765,7 +1224,7 @@ mod tests {
                 target_session_id: id,
             },
         };
-        let resp = d.dispatch(req, None);
+        let resp = d.dispatch(req, CallerAuthority::App);
         match resp.payload {
             ControlResult::Ack => {}
             other => panic!("expected Ack, got {other:?}"),

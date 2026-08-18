@@ -1,11 +1,240 @@
 //! Process-tree ownership across Unix process groups and Windows Job Objects.
 
-use std::io;
-use std::process::{Child, Command};
+use std::io::{self, Read, Write};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+
+/// Return whether `candidate_pid` is the same process as `root_pid` or a live
+/// descendant of it. The candidate must come from kernel peer credentials;
+/// a PID supplied inside a protocol message is not authentication evidence.
+pub fn is_descendant_or_same(root_pid: u32, candidate_pid: u32) -> bool {
+    if root_pid == 0 || candidate_pid == 0 {
+        return false;
+    }
+    if root_pid == candidate_pid {
+        return true;
+    }
+    let mut system = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+    );
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    let root = Pid::from_u32(root_pid);
+    let mut current = Pid::from_u32(candidate_pid);
+    let mut visited = std::collections::HashSet::new();
+    for _ in 0..128 {
+        if current == root {
+            return true;
+        }
+        if !visited.insert(current) {
+            return false;
+        }
+        let Some(parent) = system.process(current).and_then(|process| process.parent()) else {
+            return false;
+        };
+        current = parent;
+    }
+    false
+}
+
+/// Compare a live process's executable/name/argv[0] basename with an expected
+/// binary name. This is an additional local-IPC identity signal, not a code
+/// signature: writable unsigned binaries remain a documented residual risk.
+pub fn pid_executable_name_matches(pid: u32, expected: &str) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let system = System::new_all();
+    let Some(process) = system.process(Pid::from_u32(pid)) else {
+        return false;
+    };
+    process
+        .exe()
+        .and_then(|path| path.to_str())
+        .is_some_and(|value| crate::executable::executable_name_matches(value, expected))
+        || process
+            .name()
+            .to_str()
+            .is_some_and(|value| crate::executable::executable_name_matches(value, expected))
+        || process.cmd().first().is_some_and(|value| {
+            crate::executable::executable_name_matches(&value.to_string_lossy(), expected)
+        })
+}
 
 /// Configure a native child as the root of a separately terminable tree.
 pub fn configure_tree_root(command: &mut Command) {
     configure_tree_root_platform(command);
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BoundedOutputLimits {
+    pub timeout: Duration,
+    pub stdin_bytes: usize,
+    pub stdout_bytes: usize,
+    pub stderr_bytes: usize,
+}
+
+/// Run a child with bounded stdout/stderr capture, a wall-clock deadline, and
+/// whole-tree termination. Reader threads drain pipes concurrently so a child
+/// cannot deadlock the parent by filling one pipe while the other is read.
+pub fn run_bounded(
+    command: &mut Command,
+    stdin: Option<&[u8]>,
+    limits: BoundedOutputLimits,
+) -> io::Result<Output> {
+    if stdin.is_some_and(|bytes| bytes.len() > limits.stdin_bytes) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("child stdin exceeded its {} byte limit", limits.stdin_bytes),
+        ));
+    }
+    command
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_tree_root(command);
+    let mut child = command.spawn()?;
+    let process_tree = match ProcessTree::from_std_child(&child) {
+        Ok(tree) => tree,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+
+    let Some(stdout) = child.stdout.take() else {
+        let _ = process_tree.terminate();
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::other("bounded child stdout pipe is missing"));
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = process_tree.terminate();
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::other("bounded child stderr pipe is missing"));
+    };
+    let stdout_overflow = Arc::new(AtomicBool::new(false));
+    let stderr_overflow = Arc::new(AtomicBool::new(false));
+    let stdout_reader = spawn_bounded_reader(stdout, limits.stdout_bytes, stdout_overflow.clone());
+    let stderr_reader = spawn_bounded_reader(stderr, limits.stderr_bytes, stderr_overflow.clone());
+
+    let stdin_writer = stdin.map(|bytes| {
+        let mut pipe = child
+            .stdin
+            .take()
+            .expect("stdin pipe requested for bounded child");
+        let bytes = bytes.to_vec();
+        std::thread::spawn(move || pipe.write_all(&bytes))
+    });
+
+    let deadline = Instant::now() + limits.timeout;
+    let wait_result = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // A one-shot command must not leave descendants holding its
+                // pipes open after the root exits. Closing the whole owned
+                // tree also makes the reader joins below deadline-safe.
+                let _ = process_tree.terminate();
+                break Ok((status, None));
+            }
+            Err(error) => {
+                let _ = process_tree.terminate();
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(error);
+            }
+            Ok(None) => {}
+        }
+        let overflowed =
+            stdout_overflow.load(Ordering::Acquire) || stderr_overflow.load(Ordering::Acquire);
+        let timed_out = Instant::now() >= deadline;
+        if overflowed || timed_out {
+            let _ = process_tree.terminate();
+            let _ = child.kill();
+            let status = child.wait();
+            let error = if overflowed {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "child output exceeded limits (stdout {} bytes, stderr {} bytes)",
+                        limits.stdout_bytes, limits.stderr_bytes
+                    ),
+                )
+            } else {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("child exceeded its {:?} deadline", limits.timeout),
+                )
+            };
+            break status.map(|status| (status, Some(error)));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+
+    if let Some(writer) = stdin_writer {
+        let _ = writer.join();
+    }
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| io::Error::other("bounded stdout reader panicked"))??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| io::Error::other("bounded stderr reader panicked"))??;
+    let (status, terminal_error) = wait_result?;
+    if let Some(error) = terminal_error {
+        return Err(error);
+    }
+    if stdout_overflow.load(Ordering::Acquire) || stderr_overflow.load(Ordering::Acquire) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "child output exceeded limits (stdout {} bytes, stderr {} bytes)",
+                limits.stdout_bytes, limits.stderr_bytes
+            ),
+        ));
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn spawn_bounded_reader<R>(
+    mut reader: R,
+    limit: usize,
+    overflow: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut output = Vec::with_capacity(limit.min(64 * 1024));
+        let mut chunk = [0_u8; 16 * 1024];
+        loop {
+            let read = reader.read(&mut chunk)?;
+            if read == 0 {
+                break;
+            }
+            let remaining = limit.saturating_sub(output.len());
+            let keep = remaining.min(read);
+            output.extend_from_slice(&chunk[..keep]);
+            if keep < read {
+                overflow.store(true, Ordering::Release);
+                break;
+            }
+        }
+        Ok(output)
+    })
 }
 
 /// A handle that can terminate a root process and its descendants.
@@ -201,6 +430,58 @@ mod tests {
 
     const ROLE_ENV: &str = "ACORN_PROCESS_TREE_TEST_ROLE";
     const DIRECTORY_ENV: &str = "ACORN_PROCESS_TREE_TEST_DIRECTORY";
+
+    #[test]
+    fn ancestry_accepts_same_process_and_rejects_invalid_ids() {
+        let pid = std::process::id();
+        assert!(is_descendant_or_same(pid, pid));
+        assert!(!is_descendant_or_same(0, pid));
+        assert!(!is_descendant_or_same(pid, 0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_runner_captures_output_and_rejects_overflow() {
+        let limits = BoundedOutputLimits {
+            timeout: Duration::from_secs(2),
+            stdin_bytes: 16,
+            stdout_bytes: 16,
+            stderr_bytes: 16,
+        };
+        let output = run_bounded(
+            Command::new("/bin/sh").args(["-c", "printf hello"]),
+            None,
+            limits,
+        )
+        .unwrap();
+        assert_eq!(output.stdout, b"hello");
+
+        let error = run_bounded(
+            Command::new("/bin/sh").args(["-c", "printf 12345678901234567"]),
+            None,
+            limits,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+
+        let error = run_bounded(
+            Command::new("/bin/sh").args(["-c", "cat"]),
+            Some(b"12345678901234567"),
+            limits,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+        let started = Instant::now();
+        let output = run_bounded(
+            Command::new("/bin/sh").args(["-c", "(sleep 30) & printf done"]),
+            None,
+            limits,
+        )
+        .unwrap();
+        assert_eq!(output.stdout, b"done");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn process_tree_helper() {

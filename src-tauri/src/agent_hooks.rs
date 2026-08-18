@@ -2017,11 +2017,31 @@ fn spool_replay_order_key(path: &std::path::Path) -> (u64, u64, std::path::PathB
 }
 
 fn parse_spooled_hook_event(path: &std::path::Path) -> Result<Option<AgentHookEvent>, String> {
-    let metadata = std::fs::metadata(path).map_err(|err| err.to_string())?;
-    if metadata.len() > MAX_BODY_BYTES as u64 {
+    let link_metadata = std::fs::symlink_metadata(path).map_err(|err| err.to_string())?;
+    if !link_metadata.file_type().is_file() {
+        return Err("spooled event is not a regular file".to_string());
+    }
+    if link_metadata.len() > MAX_BODY_BYTES as u64 {
         return Err("spooled event exceeds size limit".to_string());
     }
-    let raw = std::fs::read(path).map_err(|err| err.to_string())?;
+    let file = std::fs::File::open(path).map_err(|err| err.to_string())?;
+    let open_metadata = file.metadata().map_err(|err| err.to_string())?;
+    if !open_metadata.is_file() {
+        return Err("spooled event is not a regular file".to_string());
+    }
+    if !same_spooled_file(&link_metadata, &open_metadata) {
+        return Err("spooled event changed while opening".to_string());
+    }
+    if open_metadata.len() > MAX_BODY_BYTES as u64 {
+        return Err("spooled event exceeds size limit".to_string());
+    }
+    let mut raw = Vec::with_capacity(open_metadata.len() as usize);
+    file.take((MAX_BODY_BYTES as u64).saturating_add(1))
+        .read_to_end(&mut raw)
+        .map_err(|err| err.to_string())?;
+    if raw.len() > MAX_BODY_BYTES {
+        return Err("spooled event exceeds size limit".to_string());
+    }
     let meta_end = raw
         .iter()
         .position(|byte| *byte == b'\n')
@@ -2030,6 +2050,18 @@ fn parse_spooled_hook_event(path: &std::path::Path) -> Result<Option<AgentHookEv
         serde_json::from_slice(&raw[..meta_end]).map_err(|err| err.to_string())?;
     let head = synthetic_request_head(&meta)?;
     parse_agent_hook_request(&head, &raw[meta_end + 1..])
+}
+
+#[cfg(unix)]
+fn same_spooled_file(before: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    before.dev() == opened.dev() && before.ino() == opened.ino()
+}
+
+#[cfg(not(unix))]
+fn same_spooled_file(_before: &std::fs::Metadata, _opened: &std::fs::Metadata) -> bool {
+    true
 }
 
 /// Rebuild the HTTP request head the spooled POST would have carried so a
@@ -3202,6 +3234,28 @@ mod tests {
             leftover.is_empty(),
             "all spooled events must be consumed: {leftover:?}"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spooled_hook_replay_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir =
+            std::env::temp_dir().join(format!("acorn-spool-symlink-{}", Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let outside = dir.with_extension("json");
+        std::fs::write(&outside, b"{}\n{}").unwrap();
+        let link = dir.join("1700000001-100.json");
+        symlink(&outside, &link).unwrap();
+
+        let error = super::parse_spooled_hook_event(&link)
+            .expect_err("spool symlinks must not be followed");
+        assert!(error.contains("not a regular file"));
+
+        std::fs::remove_file(&link).unwrap();
+        std::fs::remove_file(&outside).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

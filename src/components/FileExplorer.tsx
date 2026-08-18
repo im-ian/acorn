@@ -156,15 +156,48 @@ interface MatcherResult {
   invalidRegex: boolean;
 }
 
-function globToRegex(glob: string, flags: string): RegExp {
-  let re = "";
-  for (const ch of glob) {
-    if (ch === "*") re += ".*";
-    else if (ch === "?") re += ".";
-    else if ("^$.|+()[]{}\\".includes(ch)) re += "\\" + ch;
-    else re += ch;
+const MAX_SEARCH_PATTERN_CHARS = 256;
+const MAX_GLOB_LIST_CHARS = 2_048;
+const MAX_GLOB_PARTS = 64;
+
+/** Linear-time `*`/`?` glob matching without regex backtracking. */
+export function globMatches(
+  value: string,
+  glob: string,
+  caseSensitive: boolean,
+): boolean {
+  const candidate = caseSensitive ? value : value.toLowerCase();
+  const pattern = caseSensitive ? glob : glob.toLowerCase();
+  let candidateIndex = 0;
+  let patternIndex = 0;
+  let starIndex = -1;
+  let retryCandidateIndex = 0;
+
+  while (candidateIndex < candidate.length) {
+    if (
+      patternIndex < pattern.length &&
+      (pattern[patternIndex] === "?" ||
+        pattern[patternIndex] === candidate[candidateIndex])
+    ) {
+      candidateIndex += 1;
+      patternIndex += 1;
+    } else if (patternIndex < pattern.length && pattern[patternIndex] === "*") {
+      starIndex = patternIndex;
+      patternIndex += 1;
+      retryCandidateIndex = candidateIndex;
+    } else if (starIndex !== -1) {
+      patternIndex = starIndex + 1;
+      retryCandidateIndex += 1;
+      candidateIndex = retryCandidateIndex;
+    } else {
+      return false;
+    }
   }
-  return new RegExp(re, flags);
+
+  while (patternIndex < pattern.length && pattern[patternIndex] === "*") {
+    patternIndex += 1;
+  }
+  return patternIndex === pattern.length;
 }
 
 function buildQueryMatcher(
@@ -174,20 +207,25 @@ function buildQueryMatcher(
 ): MatcherResult {
   const q = query.trim();
   if (!q) return { matcher: null, invalidRegex: false };
+  if (q.length > MAX_SEARCH_PATTERN_CHARS) {
+    return { matcher: null, invalidRegex: regex };
+  }
   const flags = caseSensitive ? "" : "i";
   if (regex) {
     let re: RegExp | null = null;
     try {
-      re = new RegExp(q, flags);
+      // The regex mode is an explicit local-user feature: `q` is typed into
+      // this control, capped above, and is never populated from repository
+      // content. Repository-provided names are filesystem-length bounded.
+      re = new RegExp(q, flags); // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
     } catch {
       // Regex compile failed — fall through and try glob.
     }
     if (!re && (q.includes("*") || q.includes("?"))) {
-      try {
-        re = globToRegex(q, flags);
-      } catch {
-        re = null;
-      }
+      return {
+        matcher: (name) => globMatches(name, q, caseSensitive),
+        invalidRegex: false,
+      };
     }
     if (re) {
       const compiled = re;
@@ -213,20 +251,13 @@ function buildGlobListMatcher(
   list: string,
 ): ((name: string) => boolean) | null {
   const parts = list
+    .slice(0, MAX_GLOB_LIST_CHARS)
     .split(",")
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .slice(0, MAX_GLOB_PARTS);
   if (parts.length === 0) return null;
-  const compiled: RegExp[] = [];
-  for (const p of parts) {
-    try {
-      compiled.push(globToRegex(p, "i"));
-    } catch {
-      // Skip invalid entries silently — VSCode-style behavior.
-    }
-  }
-  if (compiled.length === 0) return null;
-  return (name) => compiled.some((re) => re.test(name));
+  return (name) => parts.some((glob) => globMatches(name, glob, false));
 }
 
 /**
@@ -1568,7 +1599,10 @@ function SearchBar(props: SearchBarProps) {
       <IconInput
         ref={props.queryInputRef}
         value={props.query}
-        onChange={(e) => props.onQueryChange(e.target.value)}
+        maxLength={MAX_SEARCH_PATTERN_CHARS}
+        onChange={(e) =>
+          props.onQueryChange(e.target.value.slice(0, MAX_SEARCH_PATTERN_CHARS))
+        }
         placeholder={
           props.useRegex
             ? fileExplorerText(t, "fileExplorer.search.regexPlaceholder")
@@ -1666,8 +1700,11 @@ function GlobInput({ label, placeholder, value, onChange }: GlobInputProps) {
       </span>
       <TextInput
         value={value}
+        maxLength={MAX_GLOB_LIST_CHARS}
         placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) =>
+          onChange(e.target.value.slice(0, MAX_GLOB_LIST_CHARS))
+        }
       />
     </label>
   );

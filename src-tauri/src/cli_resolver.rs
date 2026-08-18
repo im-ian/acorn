@@ -37,10 +37,26 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use crate::error::{AppError, AppResult};
 #[cfg(not(windows))]
 use crate::shell_util::shell_quote;
+
+const CLI_OUTPUT_LIMITS: acorn_platform::process::BoundedOutputLimits =
+    acorn_platform::process::BoundedOutputLimits {
+        timeout: Duration::from_secs(60),
+        stdin_bytes: 16 * 1024 * 1024,
+        stdout_bytes: 32 * 1024 * 1024,
+        stderr_bytes: 1024 * 1024,
+    };
+const RESOLVER_OUTPUT_LIMITS: acorn_platform::process::BoundedOutputLimits =
+    acorn_platform::process::BoundedOutputLimits {
+        timeout: Duration::from_secs(10),
+        stdin_bytes: 0,
+        stdout_bytes: 64 * 1024,
+        stderr_bytes: 64 * 1024,
+    };
 
 /// Per-name absolute-path cache. Keyed by the bare CLI name passed to
 /// [`resolve`]. Lazily initialized so we don't pay for the HashMap when no
@@ -91,10 +107,27 @@ pub fn run<F>(name: &str, mut configure: F) -> AppResult<Output>
 where
     F: FnMut(&mut Command),
 {
+    run_inner(name, None, &mut configure)
+}
+
+/// Bounded variant for CLIs whose JSON request body is supplied through
+/// stdin. This keeps the same path-cache retry and process-tree lifecycle as
+/// [`run`] instead of open-coding `spawn` + unbounded `wait_with_output`.
+pub fn run_with_input<F>(name: &str, input: &[u8], mut configure: F) -> AppResult<Output>
+where
+    F: FnMut(&mut Command),
+{
+    run_inner(name, Some(input), &mut configure)
+}
+
+fn run_inner<F>(name: &str, input: Option<&[u8]>, configure: &mut F) -> AppResult<Output>
+where
+    F: FnMut(&mut Command),
+{
     let path = resolve(name)?;
     let mut cmd = Command::new(&path);
     configure(&mut cmd);
-    match cmd.output() {
+    match acorn_platform::process::run_bounded(&mut cmd, input, CLI_OUTPUT_LIMITS) {
         Ok(out) => Ok(out),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Cache is stale — binary moved/uninstalled since last resolve.
@@ -103,7 +136,8 @@ where
             let path = resolve(name)?;
             let mut cmd = Command::new(&path);
             configure(&mut cmd);
-            cmd.output().map_err(|e| spawn_error(name, e))
+            acorn_platform::process::run_bounded(&mut cmd, input, CLI_OUTPUT_LIMITS)
+                .map_err(|e| spawn_error(name, e))
         }
         Err(e) => Err(spawn_error(name, e)),
     }
@@ -151,9 +185,9 @@ fi;
 printf '<<<ACORN_CLI_PATH>>>%s<<<END>>>' \"$_acorn_path\"",
             name = shell_quote(name)
         );
-        let out = Command::new(&shell)
-            .args(["-l", "-i", "-c", &script])
-            .output()
+        let mut command = Command::new(&shell);
+        command.args(["-l", "-i", "-c", &script]);
+        let out = acorn_platform::process::run_bounded(&mut command, None, RESOLVER_OUTPUT_LIMITS)
             .map_err(|e| {
                 AppError::Other(format!(
                     "failed to invoke shell {shell} to resolve {name}: {e}"
@@ -183,7 +217,10 @@ fn windows_resolve(name: &str) -> AppResult<PathBuf> {
         .map(|root| root.join("System32").join("where.exe"))
         .filter(|path| path.is_file())
         .unwrap_or_else(|| PathBuf::from("where.exe"));
-    let output = Command::new(&where_exe).arg(name).output().map_err(|err| {
+    let mut command = Command::new(&where_exe);
+    command.arg(name);
+    let output = acorn_platform::process::run_bounded(&mut command, None, RESOLVER_OUTPUT_LIMITS)
+        .map_err(|err| {
         AppError::Other(format!(
             "failed to invoke where.exe to resolve {name}: {err}"
         ))

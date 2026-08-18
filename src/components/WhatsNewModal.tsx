@@ -1,6 +1,7 @@
-import { Download, ExternalLink, Sparkles } from "lucide-react";
+import { ExternalLink, Sparkles } from "lucide-react";
 import type { ReactElement } from "react";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { isSafeOpenUrl, openSafeUrl } from "../lib/safeOpenUrl";
 import { useTranslation } from "../lib/useTranslation";
 import {
   Button,
@@ -10,7 +11,6 @@ import {
   ModalHeader,
   Notice,
   SkeletonBlock,
-  buttonClassName,
 } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
@@ -29,19 +29,19 @@ interface WhatsNewModalProps {
   /** Currently-running app version, rendered in the subtitle for context. */
   currentVersion: string | null;
   /**
-   * When true, the modal renders the "Install & relaunch" action — used
+   * When true, the modal renders the manual download-page action — used
    * by the update banner / settings update row. Omit (or set false) for
    * the "browse current version's notes" flow on the About tab.
    */
-  showInstall?: boolean;
-  /** Disables the install button while a download/install is running. */
+  showDownload?: boolean;
+  /** Disables the action while the release page is being opened. */
   busy?: boolean;
   /** Shows a skeleton while release notes are being fetched. */
   loading?: boolean;
   /** Error message shown above the footer. */
   error?: string | null;
-  /** Invoked when the install button is clicked. Required if showInstall. */
-  onInstall?: () => void;
+  /** Invoked when the download-page action is clicked. */
+  onOpenDownload?: () => void;
   /** Optional public release URL — renders a "View on GitHub" affordance. */
   htmlUrl?: string;
   /**
@@ -78,11 +78,11 @@ function ReleaseNotesSkeleton({ label }: { label: string }) {
  * Standalone release-notes dialog. Fed from two surfaces:
  *
  *   1. The pending-update flow (UpdateBanner + the inline button on the
- *      Settings → About update row) — passes the pending `Update` body
- *      and `showInstall=true` to expose the install action.
+ *      Settings → About update row) — passes validated release metadata
+ *      and `showDownload=true` to expose the manual download action.
  *   2. The browse-current-version flow on the Settings → About tab —
  *      passes notes fetched from GitHub Releases for the running
- *      version, with `showInstall=false`.
+ *      version, with `showDownload=false`.
  *
  * Keeping the modal fully prop-driven (no store reads) makes both flows
  * trivially testable in isolation and avoids the previous coupling
@@ -95,11 +95,11 @@ export function WhatsNewModal({
   version,
   body,
   currentVersion,
-  showInstall = false,
+  showDownload = false,
   busy = false,
   loading = false,
   error,
-  onInstall,
+  onOpenDownload,
   htmlUrl,
   isFallback = false,
 }: WhatsNewModalProps): ReactElement | null {
@@ -152,30 +152,27 @@ export function WhatsNewModal({
         </Notice>
       ) : null}
       <ModalFooter>
-        {htmlUrl ? (
-          <a
-            href={htmlUrl}
-            target="_blank"
-            rel="noreferrer noopener"
-            className={buttonClassName()}
+        {htmlUrl && isSafeOpenUrl(htmlUrl) ? (
+          <Button
+            onClick={() => void openSafeUrl(htmlUrl)}
           >
             <ExternalLink size={12} />
             {dt(t, "dialogs.whatsNew.viewOnGithub")}
-          </a>
+          </Button>
         ) : null}
         <Button
           onClick={onClose}
         >
           {dt(t, "dialogs.common.close")}
         </Button>
-        {showInstall && onInstall ? (
+        {showDownload && onOpenDownload ? (
           <Button
-            onClick={onInstall}
+            onClick={onOpenDownload}
             disabled={busy}
             variant="primary"
             className="disabled:opacity-50"
           >
-            <Download size={12} />
+            <ExternalLink size={12} />
             {busy
               ? dt(t, "dialogs.whatsNew.installing")
               : dt(t, "dialogs.whatsNew.installRelaunch")}

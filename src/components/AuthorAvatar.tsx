@@ -23,9 +23,8 @@ export function AuthorAvatar({
   const slug = login.replace(/\[bot\]$/, "");
   if (!/^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$/i.test(slug)) return null;
   const pixelSize = Math.max(40, size * 2);
-  const src = avatarUrl
-    ? withAvatarSize(avatarUrl, pixelSize)
-    : `https://github.com/${encodeURIComponent(slug)}.png?size=${pixelSize}`;
+  const fallback = `https://github.com/${encodeURIComponent(slug)}.png?size=${pixelSize}`;
+  const src = trustedAvatarUrl(avatarUrl, pixelSize) ?? fallback;
   return (
     <Tooltip label={login} side="top" className="shrink-0">
       <img
@@ -34,6 +33,7 @@ export function AuthorAvatar({
         width={size}
         height={size}
         loading="lazy"
+        referrerPolicy="no-referrer"
         style={{ width: size, height: size }}
         className={cn(
           "shrink-0 rounded-full bg-bg-elevated align-middle",
@@ -44,12 +44,22 @@ export function AuthorAvatar({
   );
 }
 
-function withAvatarSize(src: string, size: number): string {
+function trustedAvatarUrl(src: string | null | undefined, size: number): string | null {
+  if (!src) return null;
   try {
     const url = new URL(src);
+    if (
+      url.protocol !== "https:" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.port !== "" ||
+      url.hostname.toLowerCase() !== "avatars.githubusercontent.com"
+    ) {
+      return null;
+    }
     url.searchParams.set("s", String(size));
     return url.toString();
   } catch {
-    return src;
+    return null;
   }
 }

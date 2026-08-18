@@ -261,6 +261,10 @@ impl PtyManager {
         // app can detect, on boot, that this session was spawned by an
         // older build with different rc bodies and force-respawn it.
         session.staged_rev = spec.env.get("ACORN_STAGED_REV").cloned();
+        session.ipc_capability = spec
+            .env
+            .get("ACORN_IPC_CAPABILITY")
+            .and_then(|value| Uuid::parse_str(value).ok());
         let created_at = session.created_at;
         registry.insert(session);
 
@@ -664,10 +668,12 @@ mod tests {
         // before presenting the first prompt. xterm.js answers this DSR in the
         // app; this headless test must provide the same terminal response or
         // PSReadLine waits indefinitely before consuming typed input.
-        let startup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let startup_deadline = Instant::now() + Duration::from_secs(10);
         let mut answered_cursor_queries = 0;
-        while std::time::Instant::now() < startup_deadline {
-            let startup_output = manager
+        let mut startup_output = String::new();
+        let mut prompt_ready = false;
+        while Instant::now() < startup_deadline {
+            startup_output = manager
                 .scrollback_snapshot(&id)
                 .map(|snapshot| String::from_utf8_lossy(&snapshot.bytes).into_owned())
                 .unwrap_or_default();
@@ -676,11 +682,20 @@ mod tests {
                 manager.write(&id, b"\x1b[1;1R").unwrap();
                 answered_cursor_queries += 1;
             }
-            if cursor_queries > 0 {
+            // Seeing the cursor query only means PowerShell has started its
+            // terminal setup. Wait for the first prompt so input cannot race
+            // PSReadLine initialization on slower Windows runners.
+            if startup_output.contains("PS ") && startup_output.contains("> ") {
+                prompt_ready = true;
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(25));
+            std::thread::sleep(Duration::from_millis(25));
         }
+        if !prompt_ready {
+            manager.kill(&id).unwrap();
+            panic!("PowerShell prompt missing from ConPTY output: {startup_output:?}");
+        }
+        std::thread::sleep(Duration::from_millis(100));
 
         manager
             .write(
@@ -689,9 +704,9 @@ mod tests {
             )
             .unwrap();
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut output = String::new();
-        while std::time::Instant::now() < deadline {
+        while Instant::now() < deadline {
             output = manager
                 .scrollback_snapshot(&id)
                 .map(|snapshot| String::from_utf8_lossy(&snapshot.bytes).into_owned())
@@ -704,7 +719,7 @@ mod tests {
             if output.contains("ACORN_WINDOWS_PTY_OK") && output.contains("101") {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(50));
         }
 
         manager.kill(&id).unwrap();

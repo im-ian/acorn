@@ -73,6 +73,13 @@ pub fn pid_file_path() -> std::io::Result<PathBuf> {
     Ok(data_dir()?.join("daemon.pid"))
 }
 
+/// Owner-private bearer token shared by the app/CLI and daemon handshake.
+/// Process identity and PTY ancestry are verified separately; this file is a
+/// second factor and the restart bridge for a daemon that outlives the app.
+pub fn auth_token_path() -> std::io::Result<PathBuf> {
+    Ok(data_dir()?.join("daemon.auth-token"))
+}
+
 /// Current log file path. Older rotations live alongside as `.1`, `.2`.
 pub fn log_file_path() -> std::io::Result<PathBuf> {
     Ok(data_dir()?.join("daemon.log"))
@@ -89,7 +96,28 @@ pub fn daemon_sessions_path() -> std::io::Result<PathBuf> {
 /// Directory for crash dumps. Created on demand.
 pub fn crash_dir() -> std::io::Result<PathBuf> {
     let d = data_dir()?.join("crashes");
-    std::fs::create_dir_all(&d)?;
+    loop {
+        match std::fs::symlink_metadata(&d) {
+            Ok(metadata) if !metadata.file_type().is_symlink() && metadata.file_type().is_dir() => {
+                break;
+            }
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "daemon crash path is not a real directory",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::create_dir(&d) {
+                    Ok(()) => {}
+                    Err(create_error)
+                        if create_error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(create_error) => return Err(create_error),
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
     Ok(d)
 }
 
@@ -147,6 +175,29 @@ mod tests {
         let p = control_socket_path().unwrap();
         assert_eq!(p, custom);
         unsafe { std::env::remove_var(ENV_DAEMON_SOCKET_OVERRIDE) };
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn crash_dir_rejects_symlinked_directory() {
+        use std::os::unix::fs::symlink;
+
+        let _g = ENV_LOCK.lock();
+        let tmp = short_tmp_root().join(format!("acn-crash-{}", uuid::Uuid::new_v4().simple()));
+        let external =
+            short_tmp_root().join(format!("acn-crash-ext-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        symlink(&external, tmp.join("crashes")).unwrap();
+        unsafe { std::env::set_var(ENV_DATA_DIR_OVERRIDE, &tmp) };
+
+        let error = crash_dir().expect_err("symlinked crash directory must be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        unsafe { std::env::remove_var(ENV_DATA_DIR_OVERRIDE) };
+        std::fs::remove_file(tmp.join("crashes")).ok();
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::remove_dir_all(&external).ok();
     }
 
     #[test]

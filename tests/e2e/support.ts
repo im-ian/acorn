@@ -74,6 +74,23 @@ export const test = base.extend<{
   // activate the mock.
   _tauriBase: [
     async ({ page }, use) => {
+      // Every app boot performs a best-effort latest-release notification
+      // check. Keep the shared E2E harness off the live GitHub rate limit;
+      // update-specific tests register a later route with their own payload.
+      await page.route(
+        "https://api.github.com/repos/im-ian/acorn/releases/latest",
+        (route) =>
+          route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              tag_name: "v0.0.0",
+              body: "",
+              html_url: "https://github.com/im-ian/acorn/releases/tag/v0.0.0",
+              published_at: "2026-01-01T00:00:00Z",
+            }),
+          }),
+      );
       await page.addInitScript({ content: tauriMockSource });
       await use();
     },

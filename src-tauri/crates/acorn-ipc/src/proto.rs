@@ -17,16 +17,29 @@ use serde::{Deserialize, Serialize};
 /// Wire-version of the protocol. Bump when introducing breaking changes so
 /// older CLIs can refuse to speak to a newer server (and vice versa) instead
 /// of silently mis-routing requests.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Maximum encoded request frame, including its trailing newline.
+pub const MAX_REQUEST_FRAME_BYTES: usize = 1024 * 1024;
+
+/// Maximum encoded response frame, including its trailing newline. A 4 MiB
+/// scrollback payload expands to roughly 5.4 MiB in base64, so 8 MiB leaves
+/// room for the surrounding JSON envelope.
+pub const MAX_RESPONSE_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 /// Every request opens with the source session's UUID, captured by the CLI
 /// from the PTY environment. The server rejects ordinary requests from
 /// sessions that do not exist or whose `SessionKind` is not `Control`;
-/// `PromoteSelf` is the explicit bootstrap exception.
+/// `PromoteSelf` is retained as an idempotent compatibility probe for sessions
+/// Acorn already created with control authority; it cannot grant authority.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Envelope {
     pub protocol_version: u32,
     pub source_session_id: String,
+    /// Random capability injected into the source PTY. The server also binds
+    /// the kernel-reported peer PID to that PTY's process tree, so this value
+    /// is necessary but not sufficient on its own.
+    pub session_capability: String,
     pub request: Request,
 }
 
@@ -205,6 +218,7 @@ mod tests {
         let env = Envelope {
             protocol_version: PROTOCOL_VERSION,
             source_session_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            session_capability: "00000000000000000000000000000001".to_string(),
             request: Request::SendKeys {
                 target_session_id: "00000000-0000-0000-0000-000000000002".to_string(),
                 data_b64: "aGVsbG8=".to_string(),
@@ -231,8 +245,7 @@ mod tests {
 
     #[test]
     fn unknown_request_kind_rejected() {
-        let bad =
-            r#"{"protocol_version":1,"source_session_id":"x","request":{"kind":"frobnicate"}}"#;
+        let bad = r#"{"protocol_version":2,"source_session_id":"x","session_capability":"y","request":{"kind":"frobnicate"}}"#;
         let parsed: Result<Envelope, _> = serde_json::from_str(bad);
         assert!(parsed.is_err());
     }
@@ -242,6 +255,7 @@ mod tests {
         let env = Envelope {
             protocol_version: PROTOCOL_VERSION,
             source_session_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            session_capability: "00000000000000000000000000000001".to_string(),
             request: Request::PromoteSelf,
         };
         let encoded = serde_json::to_string(&env).expect("encode");
@@ -253,6 +267,7 @@ mod tests {
         let env = Envelope {
             protocol_version: PROTOCOL_VERSION,
             source_session_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            session_capability: "00000000000000000000000000000001".to_string(),
             request: Request::ListWorkspaces,
         };
         let encoded = serde_json::to_string(&env).expect("encode");
@@ -264,6 +279,7 @@ mod tests {
         let env = Envelope {
             protocol_version: PROTOCOL_VERSION,
             source_session_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            session_capability: "00000000000000000000000000000001".to_string(),
             request: Request::CloseSelf,
         };
         let encoded = serde_json::to_string(&env).expect("encode");

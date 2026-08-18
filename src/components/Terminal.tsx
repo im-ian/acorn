@@ -13,7 +13,6 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowDownToLine } from "lucide-react";
 import { createPortal } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
@@ -27,6 +26,7 @@ import {
 } from "../lib/fileDrop";
 import { formatTerminalFileMention } from "../lib/fileMention";
 import { writeClipboardText } from "../lib/clipboardText";
+import { openSafeUrl } from "../lib/safeOpenUrl";
 import {
   AGENT_PROVIDER_ORDER,
   providerSupportsImagePasteFallback,
@@ -79,7 +79,10 @@ import {
 } from "../lib/terminalPaste";
 import { normalizeShellCommandWhitespace } from "../lib/shellCommandWhitespace";
 import { fileUrlToPath } from "../lib/paths";
-import { saveClipboardImageAttachment } from "../lib/clipboardImageAttachment";
+import {
+  MAX_CLIPBOARD_IMAGE_BYTES,
+  saveClipboardImageAttachment,
+} from "../lib/clipboardImageAttachment";
 import {
   createTerminalFileLinkProvider,
   resolveTerminalFilePathCandidates,
@@ -598,10 +601,18 @@ function nativeClipboardImageFile(
   snapshot: ClipboardSnapshot,
 ): ClipboardImageFile | null {
   if (!snapshot.hasImage || !snapshot.dataB64) return null;
+  const padding = snapshot.dataB64.endsWith("==")
+    ? 2
+    : snapshot.dataB64.endsWith("=")
+      ? 1
+      : 0;
+  const size = Math.floor((snapshot.dataB64.length * 3) / 4) - padding;
+  if (size < 0 || size > MAX_CLIPBOARD_IMAGE_BYTES) return null;
   const extension = snapshot.extension || "png";
   return {
     name: `clipboard-native.${extension}`,
     type: snapshot.mimeType || "image/png",
+    size,
     arrayBuffer: async () => {
       const bytes = decodeBase64ToBytes(snapshot.dataB64 ?? "");
       const copy = new Uint8Array(bytes.byteLength);
@@ -862,7 +873,7 @@ export function Terminal({
         return;
       }
       if (/^file:/iu.test(uri)) return;
-      void openUrl(uri).catch((err: unknown) => {
+      void openSafeUrl(uri).catch((err: unknown) => {
         console.error("failed to open terminal link", uri, err);
       });
     };
@@ -1118,7 +1129,11 @@ export function Terminal({
           }
         })
         .catch((err: unknown) => {
-          console.debug(`[Terminal] ${source} linked-worktree probe failed`, err);
+          console.debug(
+            "[Terminal] %s linked-worktree probe failed",
+            source,
+            err,
+          );
         });
     };
 

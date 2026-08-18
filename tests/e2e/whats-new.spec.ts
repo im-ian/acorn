@@ -74,7 +74,14 @@ test.describe("about tab: what's new button", () => {
 
   test("clicking the button fetches release notes from GitHub and opens the modal", async ({
     page,
+    tauri,
   }) => {
+    await tauri.handle("open_external_url", (args) => {
+      const target = String((args as { url?: unknown })?.url ?? "");
+      (window as unknown as { __openedReleaseUrl?: string }).__openedReleaseUrl =
+        target;
+      return true;
+    });
     // Mock GitHub Releases API at the network layer so the fetch in
     // src/lib/releases.ts hits a deterministic payload.
     await page.route(
@@ -111,15 +118,19 @@ test.describe("about tab: what's new button", () => {
     await expect(dialog.getByText(/you're on this version/i)).toBeVisible();
     // No install action on the current-version flow.
     await expect(
-      dialog.getByRole("button", { name: /Install & relaunch/i }),
+      dialog.getByRole("button", { name: /View download/i }),
     ).toHaveCount(0);
-    // External link to the release page is available.
-    await expect(
-      dialog.getByRole("link", { name: /View on GitHub/i }),
-    ).toHaveAttribute(
-      "href",
-      "https://github.com/im-ian/acorn/releases/tag/v0.0.0-test",
-    );
+    // The validated external action delegates to the backend URL broker.
+    await dialog.getByRole("button", { name: /View on GitHub/i }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __openedReleaseUrl?: string })
+              .__openedReleaseUrl,
+        ),
+      )
+      .toBe("https://github.com/im-ian/acorn/releases/tag/v0.0.0-test");
   });
 
   test("falls back to the latest release when the running version has no public tag", async ({

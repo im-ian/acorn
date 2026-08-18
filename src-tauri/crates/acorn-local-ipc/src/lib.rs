@@ -7,7 +7,7 @@
 //! and clients verify the connected server process has the same TokenUser SID
 //! before any protocol bytes are exchanged.
 
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 
 use interprocess::local_socket::{GenericFilePath, ListenerOptions, Name, ToFsName};
@@ -36,6 +36,42 @@ pub fn connect(endpoint: &Path) -> io::Result<Stream> {
     Ok(stream)
 }
 
+/// Return the kernel-reported process id on the other end of a connected
+/// local stream. Callers use this to bind application capabilities to a PTY
+/// process tree instead of trusting forgeable JSON identity fields alone.
+pub fn peer_process_id(stream: &Stream) -> io::Result<u32> {
+    peer_process_id_platform(stream)
+}
+
+#[cfg(target_os = "macos")]
+fn peer_process_id_platform(stream: &Stream) -> io::Result<u32> {
+    use nix::sys::socket::{getsockopt, sockopt::LocalPeerPid};
+
+    let Stream::UdSocket(socket) = stream;
+    let pid = getsockopt(socket, LocalPeerPid).map_err(io::Error::other)?;
+    u32::try_from(pid)
+        .ok()
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid peer process id"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn peer_process_id_platform(stream: &Stream) -> io::Result<u32> {
+    use interprocess::local_socket::traits::StreamCommon;
+
+    stream
+        .peer_creds()?
+        .pid()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "platform did not expose the peer process id",
+            )
+        })
+}
+
 /// Remove filesystem-backed endpoint state after a graceful shutdown.
 /// Named pipes disappear when their last listener handle closes.
 pub fn cleanup(endpoint: &Path) {
@@ -60,6 +96,86 @@ pub fn marker_exists(endpoint: &Path) -> bool {
     {
         let _ = endpoint;
         false
+    }
+}
+
+/// Read a nonblocking local stream without mistaking an empty Windows named
+/// pipe for EOF. Unix transports already report this state as `WouldBlock`.
+pub fn read_nonblocking(stream: &mut Stream, buffer: &mut [u8]) -> io::Result<usize> {
+    #[cfg(windows)]
+    {
+        return match stream.read(buffer) {
+            Ok(0) if !buffer.is_empty() && windows_named_pipe_connected(stream)? => {
+                Err(io::Error::from(io::ErrorKind::WouldBlock))
+            }
+            Err(error) if error.raw_os_error() == Some(232) => {
+                if windows_named_pipe_connected(stream)? {
+                    Err(io::Error::from(io::ErrorKind::WouldBlock))
+                } else {
+                    Ok(0)
+                }
+            }
+            result => result,
+        };
+    }
+    #[cfg(not(windows))]
+    {
+        stream.read(buffer)
+    }
+}
+
+pub struct NonblockingStreamReader<'a> {
+    stream: &'a mut Stream,
+}
+
+impl<'a> NonblockingStreamReader<'a> {
+    pub fn new(stream: &'a mut Stream) -> Self {
+        Self { stream }
+    }
+}
+
+impl Read for NonblockingStreamReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        read_nonblocking(self.stream, buffer)
+    }
+}
+
+#[cfg(windows)]
+fn windows_named_pipe_connected(stream: &Stream) -> io::Result<bool> {
+    use std::os::windows::io::{AsHandle, AsRawHandle};
+    use std::ptr;
+    use windows_sys::Win32::Foundation::{
+        ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED,
+    };
+    use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+
+    const BROKEN_PIPE: i32 = ERROR_BROKEN_PIPE as i32;
+    const NO_DATA: i32 = ERROR_NO_DATA as i32;
+    const PIPE_NOT_CONNECTED: i32 = ERROR_PIPE_NOT_CONNECTED as i32;
+
+    let Stream::NamedPipe(pipe) = stream;
+    let mut available = 0_u32;
+    let succeeded = unsafe {
+        PeekNamedPipe(
+            pipe.as_handle().as_raw_handle(),
+            ptr::null_mut(),
+            0,
+            ptr::null_mut(),
+            &mut available,
+            ptr::null_mut(),
+        )
+    };
+    if succeeded != 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    if matches!(
+        error.raw_os_error(),
+        Some(BROKEN_PIPE | NO_DATA | PIPE_NOT_CONNECTED)
+    ) {
+        Ok(false)
+    } else {
+        Err(error)
     }
 }
 
@@ -401,6 +517,69 @@ mod tests {
         let mut bytes = [0; 4];
         server.read_exact(&mut bytes).unwrap();
         assert_eq!(&bytes, b"ping");
+        client.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fully_nonblocking_named_pipe_supports_a_delayed_round_trip() {
+        let endpoint = unique_pipe("nonblocking");
+        let listener = bind(&endpoint).expect("bind named pipe");
+        listener
+            .set_nonblocking(ListenerNonblockingMode::Both)
+            .expect("set listener and accepted streams nonblocking");
+        let (connected_tx, connected_rx) = std::sync::mpsc::channel();
+        let (write_tx, write_rx) = std::sync::mpsc::channel();
+        let client = std::thread::spawn({
+            let endpoint = endpoint.clone();
+            move || {
+                let mut stream = connect(&endpoint).expect("connect named pipe");
+                connected_tx.send(()).unwrap();
+                write_rx.recv().unwrap();
+                stream.write_all(b"ping").unwrap();
+                let mut reply = [0; 4];
+                stream.read_exact(&mut reply).unwrap();
+                assert_eq!(&reply, b"pong");
+            }
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut server = loop {
+            match listener.accept() {
+                Ok(stream) => break stream,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "named-pipe listener did not accept before timeout"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("nonblocking named-pipe accept failed: {error}"),
+            }
+        };
+        connected_rx.recv().unwrap();
+        let pending = read_nonblocking(&mut server, &mut [0; 1])
+            .expect_err("empty nonblocking named-pipe read must be pending");
+        assert_eq!(pending.kind(), io::ErrorKind::WouldBlock);
+        write_tx.send(()).unwrap();
+        let mut bytes = [0; 4];
+        let mut offset = 0;
+        while offset < bytes.len() {
+            match read_nonblocking(&mut server, &mut bytes[offset..]) {
+                Ok(0) => panic!("named-pipe client closed before sending the test payload"),
+                Ok(read) => offset += read,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "accepted named-pipe stream did not receive before timeout"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("accepted named-pipe stream read failed: {error}"),
+            }
+        }
+        assert_eq!(&bytes, b"ping");
+        server.write_all(b"pong").unwrap();
         client.join().unwrap();
     }
 

@@ -3,8 +3,8 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "../../lib/cn";
+import { isSafeOpenUrl, openSafeUrl } from "../../lib/safeOpenUrl";
 import { ImageLightbox } from "../ImageLightbox";
 import { Tooltip } from "../Tooltip";
 import { markdownImageUrlTransform, RemoteImage } from "./RemoteImage";
@@ -102,12 +102,6 @@ interface MarkdownProps {
   onTaskToggle?: (index: number, checked: boolean) => void;
 }
 
-// Markdown bodies come from untrusted sources (PR descriptions, comments).
-// rehype-sanitize already strips most schemes from href, but it still admits
-// xmpp/irc and the like — gate what we hand to the OS opener to web links
-// and mailto so a crafted body can't launch arbitrary scheme handlers.
-const SAFE_OPEN_URL_RE = /^(https?:|mailto:)/i;
-
 type MarkdownAstNode = {
   type?: string;
   value?: unknown;
@@ -139,19 +133,17 @@ function remarkSoftBreaks() {
 }
 
 const baseComponents: Components = {
-  a({ href, children, title, ...rest }) {
+  a({ href, children, title }) {
+    const safeHref = href && isSafeOpenUrl(href) ? href : null;
+    if (!safeHref) return <span>{children}</span>;
     const link = (
-      <a
-        {...rest}
-        href={href}
-        onClick={(e) => {
-          e.preventDefault();
-          if (href && SAFE_OPEN_URL_RE.test(href)) void openUrl(href);
-        }}
-        className="text-accent underline-offset-2 hover:underline"
+      <button
+        type="button"
+        onClick={() => void openSafeUrl(safeHref)}
+        className="inline cursor-pointer bg-transparent p-0 text-accent underline-offset-2 hover:underline"
       >
         {children}
-      </a>
+      </button>
     );
     return typeof title === "string" && title.length > 0 ? (
       <Tooltip label={title} side="top" multiline>

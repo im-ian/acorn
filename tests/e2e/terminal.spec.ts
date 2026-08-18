@@ -2831,7 +2831,11 @@ test.describe("terminal: spawn", () => {
       if (!w.__fileUrlGrants?.includes(path)) {
         throw new Error(`terminal file URL was not granted: ${path}`);
       }
-      return { size: 512 };
+      return {
+        size: 512,
+        asset_path: path,
+        capability: "e2e-terminal-image-capability",
+      };
     });
     await tauri.handle("fs_read_file", () => {
       throw new Error("terminal image file URLs should use the media viewer");

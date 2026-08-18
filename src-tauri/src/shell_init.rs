@@ -54,12 +54,35 @@ pub fn ensure_shell_init_dir() -> io::Result<PathBuf> {
 
 fn ensure_shell_init_dir_at(base: &Path) -> io::Result<PathBuf> {
     let dir = base.join(SHELL_INIT_DIR_NAME);
-    fs::create_dir_all(&dir)?;
-    fs::write(dir.join(ZSHENV_NAME), ZSHENV_BODY)?;
-    fs::write(dir.join(ZPROFILE_NAME), ZPROFILE_BODY)?;
-    fs::write(dir.join(ZSHRC_NAME), ZSHRC_BODY)?;
-    fs::write(dir.join(ZLOGIN_NAME), ZLOGIN_BODY)?;
+    ensure_plain_directory(&dir)?;
+    acorn_platform::fs::write_atomic_private(&dir.join(ZSHENV_NAME), ZSHENV_BODY.as_bytes())?;
+    acorn_platform::fs::write_atomic_private(&dir.join(ZPROFILE_NAME), ZPROFILE_BODY.as_bytes())?;
+    acorn_platform::fs::write_atomic_private(&dir.join(ZSHRC_NAME), ZSHRC_BODY.as_bytes())?;
+    acorn_platform::fs::write_atomic_private(&dir.join(ZLOGIN_NAME), ZLOGIN_BODY.as_bytes())?;
     Ok(dir)
+}
+
+fn ensure_plain_directory(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => return Ok(()),
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("expected a real shell-init directory: {}", path.display()),
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::create_dir_all(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("expected a real shell-init directory: {}", path.display()),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn is_shell_init_dir(path: &Path) -> bool {
@@ -233,6 +256,36 @@ mod tests {
         symlink("/dev/zero", &zshenv).unwrap();
 
         assert!(!is_shell_init_dir(&dir));
+    }
+
+    #[test]
+    fn shell_init_write_replaces_symlink_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let base = ScratchDir::new("write-special");
+        let dir = ensure_shell_init_dir_at(base.path()).unwrap();
+        let sentinel = base.path().join("sentinel");
+        fs::write(&sentinel, "do not overwrite").unwrap();
+        let zshrc = dir.join(ZSHRC_NAME);
+        fs::remove_file(&zshrc).unwrap();
+        symlink(&sentinel, &zshrc).unwrap();
+
+        ensure_shell_init_dir_at(base.path()).unwrap();
+
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "do not overwrite");
+        assert!(fs::symlink_metadata(&zshrc).unwrap().file_type().is_file());
+    }
+
+    #[test]
+    fn shell_init_rejects_symlinked_managed_directory() {
+        use std::os::unix::fs::symlink;
+
+        let base = ScratchDir::new("dir-special");
+        let outside = ScratchDir::new("dir-outside");
+        symlink(outside.path(), base.path().join(SHELL_INIT_DIR_NAME)).unwrap();
+
+        assert!(ensure_shell_init_dir_at(base.path()).is_err());
+        assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
     }
 
     #[test]

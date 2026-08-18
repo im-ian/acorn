@@ -1918,6 +1918,28 @@ describe("appearance settings migration", () => {
     expect(settings.appearance.toastPosition).toBe("top");
   });
 
+  it("drops persisted background paths outside the managed app-local namespace", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        appearance: {
+          background: {
+            relativePath: "../../Documents/report.txt",
+            fileName: "report.txt",
+            applyToApp: true,
+          },
+        },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+    const background = useSettings.getState().settings.appearance.background;
+
+    expect(background.relativePath).toBeNull();
+    expect(background.fileName).toBeNull();
+  });
+
   it("keeps terminal.fontFamily as the source of truth on load", async () => {
     localStorage.setItem(
       STORAGE_KEY,

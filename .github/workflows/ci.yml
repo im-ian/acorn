@@ -38,7 +38,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Audit dependencies
-        run: pnpm audit --audit-level=moderate
+        run: pnpm audit --audit-level=low
 
       - name: Type check
         run: pnpm run typecheck
@@ -92,11 +92,25 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
 
+      # GitHub's Ubuntu image already carries Chromium's runtime libraries,
+      # but Playwright's dependency refresh can add optional fonts. Keep that
+      # refresh bounded and best-effort so an unavailable apt mirror cannot
+      # consume the entire E2E job; the browser install and tests below remain
+      # required and will still fail if the runner image is actually missing
+      # a runtime dependency.
+      - name: Refresh Chromium system dependencies
+        continue-on-error: true
+        timeout-minutes: 3
+        run: pnpm exec playwright install-deps chromium
+
       - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 5
+        run: pnpm exec playwright install chromium
 
       - name: Run E2E tests
-        run: pnpm run test:e2e --shard=${{ matrix.shard }}/2
+        env:
+          PLAYWRIGHT_SHARD: ${{ matrix.shard }}
+        run: pnpm run test:e2e --shard="$PLAYWRIGHT_SHARD/2"
 
       - name: Upload report on failure
         if: failure()
@@ -221,6 +235,8 @@ jobs:
           $smokeDataDir = Join-Path $env:RUNNER_TEMP "acorn-daemon-smoke-$([guid]::NewGuid().ToString('N'))"
           $previousDataDir = [Environment]::GetEnvironmentVariable("ACORN_DATA_DIR", "Process")
           $daemonLaunched = $false
+          $smokeSucceeded = $false
+          [int]$daemonPid = 0
 
           try {
             if (!(Test-Path -LiteralPath $acornd -PathType Leaf)) {
@@ -233,6 +249,13 @@ jobs:
             New-Item -ItemType Directory -Force -Path $smokeDataDir | Out-Null
             $env:ACORN_DATA_DIR = $smokeDataDir
             $expectedVersion = (Get-Content -LiteralPath src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+            $acorndPath = (Resolve-Path -LiteralPath $acornd).Path
+            $existingDaemonPids = @(
+              Get-Process -Name "acornd" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Path -eq $acorndPath } |
+                ForEach-Object { $_.Id }
+            )
+            $launchStartedAt = [DateTime]::UtcNow
 
             & $acornd serve --detach
             $serveExit = $LASTEXITCODE
@@ -258,29 +281,36 @@ jobs:
             if (!$ready) {
               throw "acornd did not become ready: $($statusOutput -join [Environment]::NewLine)"
             }
-            if ($statusOutput -notcontains "running" -or $statusOutput -notcontains "version=$expectedVersion") {
-              throw "acornd status omitted the running state or expected version ${expectedVersion}: $($statusOutput -join [Environment]::NewLine)"
+            if (
+              $statusOutput -notcontains "running" -or
+              $statusOutput -notcontains "version=$expectedVersion" -or
+              $statusOutput -notcontains "sessions=0/0"
+            ) {
+              throw "acornd status omitted the expected fresh-daemon state: $($statusOutput -join [Environment]::NewLine)"
             }
             $statusOutput | Write-Host
 
-            $sessionsOutput = @(& $acornd list-sessions 2>&1)
-            $sessionsExit = $LASTEXITCODE
-            if ($sessionsExit -ne 0) {
-              throw "acornd list-sessions failed with exit code ${sessionsExit}: $($sessionsOutput -join [Environment]::NewLine)"
+            # The public shutdown CLI is intentionally absent: a same-user
+            # process must not be able to terminate the user's daemon. This
+            # isolated smoke records the exact release binary's process set
+            # before launch and may stop only the single new matching process.
+            # Do not read daemon.pid here: Windows intentionally denies reads
+            # through a competing handle while the singleton lock is held.
+            $daemonCandidates = @(
+              Get-Process -Name "acornd" -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.Path -eq $acorndPath -and
+                  $existingDaemonPids -notcontains $_.Id -and
+                  $_.StartTime.ToUniversalTime() -ge $launchStartedAt.AddSeconds(-1)
+                }
+            )
+            if ($daemonCandidates.Count -ne 1) {
+              throw "expected exactly one newly launched acornd process, found $($daemonCandidates.Count)"
             }
-            if ($sessionsOutput -notcontains "(no sessions)") {
-              throw "fresh acornd returned an unexpected session list: $($sessionsOutput -join [Environment]::NewLine)"
-            }
-            $sessionsOutput | Write-Host
-
-            $shutdownOutput = @(& $acornd shutdown 2>&1)
-            $shutdownExit = $LASTEXITCODE
-            if ($shutdownExit -ne 0) {
-              throw "acornd shutdown failed with exit code ${shutdownExit}: $($shutdownOutput -join [Environment]::NewLine)"
-            }
-            if ($shutdownOutput -notcontains "shutdown acknowledged") {
-              throw "acornd shutdown response was unexpected: $($shutdownOutput -join [Environment]::NewLine)"
-            }
+            $daemonProcess = $daemonCandidates[0]
+            $daemonPid = $daemonProcess.Id
+            Stop-Process -Id $daemonPid -Force
+            Wait-Process -Id $daemonPid -Timeout 5 -ErrorAction SilentlyContinue
 
             $stopped = $false
             $stoppedStatusOutput = @()
@@ -300,27 +330,37 @@ jobs:
               throw "acornd did not stop with the expected status exit 2: $($stoppedStatusOutput -join [Environment]::NewLine)"
             }
             $daemonLaunched = $false
+            $smokeSucceeded = $true
           }
           finally {
             if ($daemonLaunched -and (Test-Path -LiteralPath $acornd -PathType Leaf)) {
-              $cleanupOutput = @(& $acornd shutdown 2>&1)
-              $cleanupExit = $LASTEXITCODE
-              if ($cleanupExit -notin @(0, 1)) {
-                Write-Warning "cleanup shutdown returned exit code ${cleanupExit}: $($cleanupOutput -join [Environment]::NewLine)"
+              if ($daemonPid -eq 0 -and $null -ne $acorndPath) {
+                $cleanupCandidates = @(
+                  Get-Process -Name "acornd" -ErrorAction SilentlyContinue |
+                    Where-Object {
+                      $_.Path -eq $acorndPath -and
+                      $existingDaemonPids -notcontains $_.Id -and
+                      $_.StartTime.ToUniversalTime() -ge $launchStartedAt.AddSeconds(-1)
+                    }
+                )
+                if ($cleanupCandidates.Count -eq 1) {
+                  $daemonPid = $cleanupCandidates[0].Id
+                }
               }
-              Start-Sleep -Milliseconds 250
-            }
-
-            $pidFile = Join-Path $smokeDataDir "daemon.pid"
-            if (Test-Path -LiteralPath $pidFile -PathType Leaf) {
-              [int]$daemonPid = 0
-              $pidText = (Get-Content -LiteralPath $pidFile -Raw).Trim()
-              if ([int]::TryParse($pidText, [ref]$daemonPid)) {
+              if ($daemonPid -gt 0) {
                 $daemonProcess = Get-Process -Id $daemonPid -ErrorAction SilentlyContinue
-                if ($null -ne $daemonProcess -and $daemonProcess.ProcessName -eq "acornd") {
+                if ($null -ne $daemonProcess -and $daemonProcess.Path -eq $acorndPath) {
                   Stop-Process -Id $daemonPid -Force -ErrorAction SilentlyContinue
                   Wait-Process -Id $daemonPid -Timeout 5 -ErrorAction SilentlyContinue
                 }
+              }
+            }
+
+            if (!$smokeSucceeded) {
+              $daemonLog = Join-Path $smokeDataDir "daemon.log"
+              if (Test-Path -LiteralPath $daemonLog -PathType Leaf) {
+                Write-Host "--- daemon.log (last 200 lines) ---"
+                Get-Content -LiteralPath $daemonLog -Tail 200 -ErrorAction Continue | Write-Host
               }
             }
 
@@ -333,7 +373,7 @@ jobs:
             }
           }
 
-          # The successful shutdown probe intentionally leaves the native exit
+          # The successful stopped-status probe intentionally leaves the native exit
           # code at 2 ("not running"). Do not let pwsh report that expected
           # status as the workflow step's exit code.
           $global:LASTEXITCODE = 0

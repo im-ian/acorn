@@ -46,6 +46,7 @@
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use base64::Engine;
 
@@ -86,6 +87,20 @@ const CAPTURED_VARS: &[&str] = &[
 
 const ENV_BEGIN: &str = "<<<ACORN_ENV_BEGIN>>>";
 const ENV_END: &str = "<<<ACORN_ENV_END>>>";
+const SHELL_CAPTURE_LIMITS: acorn_platform::process::BoundedOutputLimits =
+    acorn_platform::process::BoundedOutputLimits {
+        timeout: Duration::from_secs(10),
+        stdin_bytes: 0,
+        stdout_bytes: 256 * 1024,
+        stderr_bytes: 64 * 1024,
+    };
+const SYSTEM_LOCALE_LIMITS: acorn_platform::process::BoundedOutputLimits =
+    acorn_platform::process::BoundedOutputLimits {
+        timeout: Duration::from_secs(2),
+        stdin_bytes: 0,
+        stdout_bytes: 16 * 1024,
+        stderr_bytes: 16 * 1024,
+    };
 
 fn cache() -> &'static Mutex<Option<HashMap<String, String>>> {
     static CACHE: OnceLock<Mutex<Option<HashMap<String, String>>>> = OnceLock::new();
@@ -138,10 +153,12 @@ pub fn system_locale_lang() -> Option<String> {
     if !cfg!(target_os = "macos") {
         return None;
     }
-    let out = Command::new("defaults")
-        .args(["read", "-g", "AppleLocale"])
-        .output()
-        .ok()?;
+    let out = acorn_platform::process::run_bounded(
+        Command::new("/usr/bin/defaults").args(["read", "-g", "AppleLocale"]),
+        None,
+        SYSTEM_LOCALE_LIMITS,
+    )
+    .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -173,10 +190,12 @@ fn shell_capture() -> Option<HashMap<String, String>> {
     {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let script = build_capture_script(CAPTURED_VARS);
-        let out = Command::new(&shell)
-            .args(["-l", "-i", "-c", &script])
-            .output()
-            .ok()?;
+        let out = acorn_platform::process::run_bounded(
+            Command::new(&shell).args(["-l", "-i", "-c", &script]),
+            None,
+            SHELL_CAPTURE_LIMITS,
+        )
+        .ok()?;
         let stdout = String::from_utf8_lossy(&out.stdout);
         parse_env_block(&stdout)
     }

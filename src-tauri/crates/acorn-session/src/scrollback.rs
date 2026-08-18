@@ -16,7 +16,7 @@
 //! threaded through.
 
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 const SCROLLBACK_DIR: &str = "scrollback";
@@ -50,7 +50,41 @@ fn path_io_error(operation: &str, path: &Path, error: io::Error) -> ScrollbackEr
 
 fn scrollback_dir(data_dir: &Path) -> ScrollbackResult<PathBuf> {
     let dir = data_dir.join(SCROLLBACK_DIR);
-    fs::create_dir_all(&dir).map_err(|error| path_io_error("create", &dir, error))?;
+    match fs::symlink_metadata(&dir) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => {
+            return Err(path_io_error(
+                "inspect",
+                &dir,
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "scrollback path is not a real directory",
+                ),
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir_all(data_dir)
+                .map_err(|error| path_io_error("create", data_dir, error))?;
+            match fs::create_dir(&dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(path_io_error("create", &dir, error)),
+            }
+            let metadata = fs::symlink_metadata(&dir)
+                .map_err(|error| path_io_error("inspect", &dir, error))?;
+            if !metadata.file_type().is_dir() {
+                return Err(path_io_error(
+                    "inspect",
+                    &dir,
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "scrollback path is not a real directory",
+                    ),
+                ));
+            }
+        }
+        Err(error) => return Err(path_io_error("inspect", &dir, error)),
+    }
     Ok(dir)
 }
 
@@ -89,11 +123,43 @@ fn trailing_utf8_slice(value: &str, max_bytes: usize) -> &str {
 
 pub fn load(data_dir: &Path, session_id: &str) -> ScrollbackResult<Option<String>> {
     let path = session_file(data_dir, session_id)?;
-    match fs::read_to_string(&path) {
-        Ok(s) => Ok(Some(s)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(path_io_error("read", &path, error)),
+    let (file, metadata) = match acorn_platform::fs::open_regular_nofollow(&path) {
+        Ok(opened) => opened,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(path_io_error("read", &path, error)),
+    };
+    if metadata.len() > MAX_PAYLOAD_BYTES as u64 {
+        return Err(path_io_error(
+            "read",
+            &path,
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("scrollback exceeds its {MAX_PAYLOAD_BYTES}-byte limit"),
+            ),
+        ));
     }
+
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_PAYLOAD_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| path_io_error("read", &path, error))?;
+    if bytes.len() > MAX_PAYLOAD_BYTES {
+        return Err(path_io_error(
+            "read",
+            &path,
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("scrollback exceeds its {MAX_PAYLOAD_BYTES}-byte limit"),
+            ),
+        ));
+    }
+    String::from_utf8(bytes).map(Some).map_err(|error| {
+        path_io_error(
+            "read",
+            &path,
+            io::Error::new(io::ErrorKind::InvalidData, error),
+        )
+    })
 }
 
 pub fn delete(data_dir: &Path, session_id: &str) -> ScrollbackResult<()> {
@@ -232,6 +298,50 @@ mod tests {
         let id = "550e8400-e29b-41d4-a716-446655440001";
         let got = load(&tmp, id).expect("load");
         assert!(got.is_none());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_reports_oversized_files() {
+        let tmp = tempdir_path();
+        let id = "550e8400-e29b-41d4-a716-446655440002";
+        let path = session_file(&tmp, id).expect("scrollback path");
+        fs::write(&path, vec![b'x'; MAX_PAYLOAD_BYTES + 1]).expect("oversized scrollback");
+
+        assert!(load(&tmp, id).is_err());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_reports_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempdir_path();
+        let id = "550e8400-e29b-41d4-a716-446655440003";
+        let target = tmp.join("outside.txt");
+        fs::write(&target, "do not read").expect("symlink target");
+        let path = session_file(&tmp, id).expect("scrollback path");
+        symlink(&target, &path).expect("scrollback symlink");
+
+        assert!(load(&tmp, id).is_err());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_rejects_symlinked_scrollback_directory() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempdir_path();
+        let outside = tmp.join("outside");
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, tmp.join(SCROLLBACK_DIR)).unwrap();
+
+        let result = save(&tmp, "550e8400-e29b-41d4-a716-446655440004", "secret");
+        assert!(result.is_err());
+        assert!(fs::read_dir(&outside).unwrap().next().is_none());
+
         let _ = fs::remove_dir_all(&tmp);
     }
 
