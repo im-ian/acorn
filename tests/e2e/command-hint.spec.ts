@@ -76,4 +76,75 @@ test.describe("CommandHint via NoAccessBanner", () => {
 
     await expect(page.getByText(/Run this command\?/i)).toHaveCount(0);
   });
+
+  test("a queued command write failure is visible to the user", async ({
+    page,
+    tauri,
+    errorTracker,
+  }) => {
+    await seedNoAccess(tauri);
+    errorTracker.allow(/\[Terminal\] pending pty_write failed/);
+
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __commandRunSessions?: Array<Record<string, unknown>>;
+      };
+      w.__commandRunSessions ??= [
+        {
+          id: "s-1",
+          name: "sess",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+        },
+      ];
+      return w.__commandRunSessions;
+    });
+    await tauri.handle("create_session", (args: unknown) => {
+      const w = window as unknown as {
+        __commandRunSessions?: Array<Record<string, unknown>>;
+      };
+      const request = args as { name: string; repoPath: string };
+      const created = {
+        id: "s-command",
+        name: request.name,
+        repo_path: request.repoPath,
+        worktree_path: request.repoPath,
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:01:00Z",
+        updated_at: "2026-01-01T00:01:00Z",
+        last_message: null,
+      };
+      w.__commandRunSessions = [...(w.__commandRunSessions ?? []), created];
+      return created;
+    });
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_write", () => {
+      throw new Error("Permission denied");
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "PRs" }).click();
+    await page.getByRole("button", { name: /gh auth login/ }).click();
+    await page.getByRole("button", { name: /^Run$/ }).click();
+
+    await expect(
+      page.getByText(
+        "Failed to run queued terminal command: Permission denied",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.locator(".xterm").filter({
+        hasText: "Failed to run queued command: Permission denied",
+      }),
+    ).toHaveCount(1);
+  });
 });

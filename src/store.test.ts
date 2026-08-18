@@ -4072,6 +4072,44 @@ describe("pendingTerminalInput", () => {
       agentProvider: "codex",
     });
   });
+
+  it("restores a consumed command when no newer command is queued", () => {
+    const store = useAppStore.getState();
+    store.setPendingTerminalInput("sess-1", "claude --worktree", {
+      agentProvider: "claude",
+    });
+    const consumed = store.consumePendingTerminalInput("sess-1");
+
+    expect(consumed).not.toBeNull();
+    expect(
+      useAppStore
+        .getState()
+        .restorePendingTerminalInput("sess-1", consumed!),
+    ).toBe(true);
+    expect(useAppStore.getState().pendingTerminalInput["sess-1"]).toEqual({
+      command: "claude --worktree",
+      adoptWorktreeOnExit: true,
+      agentProvider: "claude",
+    });
+  });
+
+  it("does not replace a newer command while restoring a failed claim", () => {
+    const store = useAppStore.getState();
+    store.setPendingTerminalInput("sess-1", "first");
+    const consumed = store.consumePendingTerminalInput("sess-1");
+    store.setPendingTerminalInput("sess-1", "newer");
+
+    expect(consumed).not.toBeNull();
+    expect(
+      useAppStore
+        .getState()
+        .restorePendingTerminalInput("sess-1", consumed!),
+    ).toBe(false);
+    expect(useAppStore.getState().pendingTerminalInput["sess-1"]).toEqual({
+      command: "newer",
+      adoptWorktreeOnExit: false,
+    });
+  });
 });
 
 describe("createSession returns the created session", () => {
