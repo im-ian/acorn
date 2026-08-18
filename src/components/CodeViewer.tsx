@@ -150,6 +150,7 @@ export function CodeViewer({
   const themes = useThemes((s) => s.themes);
   const [state, setState] = useState<ViewerState>(EMPTY_STATE);
   const [diffLines, setDiffLines] = useState<FsLineDiffEntry[]>([]);
+  const [diffError, setDiffError] = useState<string | null>(null);
   const [previewMarkdown, setPreviewMarkdown] = useState(
     () => viewState?.code?.previewMarkdown ?? false,
   );
@@ -161,6 +162,7 @@ export function CodeViewer({
   const previewRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const loadSeqRef = useRef(0);
+  const diffLoadSeqRef = useRef(0);
   const themeMode = useMemo(
     () => resolveThemeMode(themeId, themes),
     [themeId, themes],
@@ -209,11 +211,16 @@ export function CodeViewer({
   );
 
   const refreshDiff = useCallback(async () => {
+    const seq = ++diffLoadSeqRef.current;
     try {
       const lines = await api.fsGitDiffLines(path);
+      if (seq !== diffLoadSeqRef.current) return;
       setDiffLines(lines);
-    } catch {
+      setDiffError(null);
+    } catch (err: unknown) {
+      if (seq !== diffLoadSeqRef.current) return;
       setDiffLines([]);
+      setDiffError(err instanceof Error ? err.message : String(err));
     }
   }, [path]);
 
@@ -267,7 +274,12 @@ export function CodeViewer({
   }, [path, state.data, themeMode]);
 
   useEffect(() => {
+    setDiffLines([]);
+    setDiffError(null);
     void refreshDiff();
+    return () => {
+      diffLoadSeqRef.current += 1;
+    };
   }, [refreshDiff]);
 
   useEffect(() => {
@@ -463,6 +475,22 @@ export function CodeViewer({
       {state.data.truncated ? (
         <div className="shrink-0 border-b border-border bg-bg-warning/15 px-3 py-1 text-[11px] text-fg-muted">
           {t("codeViewer.truncated")}
+        </div>
+      ) : null}
+      {diffError ? (
+        <div
+          role="alert"
+          className="flex shrink-0 items-start gap-2 border-b border-border bg-bg-error/20 px-3 py-1.5 text-[11px] text-fg"
+        >
+          <span className="flex-1 break-all">{diffError}</span>
+          <button
+            type="button"
+            className="text-fg-muted hover:text-fg"
+            aria-label={t("fileExplorer.errorBanner.dismiss")}
+            onClick={() => setDiffError(null)}
+          >
+            ×
+          </button>
         </div>
       ) : null}
       {previewMarkdown && canPreviewMarkdown ? (

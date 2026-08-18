@@ -355,7 +355,7 @@ impl FsScope {
     }
 
     fn push_root(roots: &mut Vec<PathBuf>, root: PathBuf) -> Option<PathBuf> {
-        if root.as_os_str().is_empty() || !root.is_absolute() || !root.exists() {
+        if root.as_os_str().is_empty() || !root.is_absolute() {
             return None;
         }
         match root.canonicalize() {
@@ -387,12 +387,17 @@ impl FsScope {
 
     fn authorize_existing_or_missing(&self, path: &Path) -> AppResult<ScopedPath> {
         reject_dangerous(path)?;
-        if path.exists() {
-            return self.authorize_existing(path);
+        // Follow the final symlink here so a dangling link retains the same
+        // semantics as a missing target. Unlike `Path::exists`, metadata
+        // still preserves permission and other lookup errors.
+        match std::fs::metadata(path) {
+            Ok(_) => return self.authorize_existing(path),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
         }
         let requested = normalize_absolute_path(path)
             .ok_or_else(|| AppError::InvalidPath("absolute path required".into()))?;
-        let nearest = nearest_existing_ancestor(&requested).ok_or_else(|| {
+        let nearest = nearest_existing_ancestor(&requested)?.ok_or_else(|| {
             AppError::InvalidPath(format!("path outside allowed roots: {}", path.display()))
         })?;
         let nearest_resolved = nearest.canonicalize().map_err(AppError::from)?;
@@ -442,27 +447,31 @@ pub(crate) fn authorize_existing_path(state: &AppState, path: &Path) -> AppResul
         .map(|_| ())
 }
 
-fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+fn nearest_existing_ancestor(path: &Path) -> std::io::Result<Option<PathBuf>> {
     let mut current = Some(path);
     while let Some(candidate) = current {
-        if candidate.exists() {
-            return Some(candidate.to_path_buf());
+        match std::fs::metadata(candidate) {
+            Ok(_) => return Ok(Some(candidate.to_path_buf())),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
         }
         current = candidate.parent();
     }
-    None
+    Ok(None)
 }
 
-fn find_repo_root(start: &Path) -> Option<PathBuf> {
+fn find_repo_root(start: &Path) -> AppResult<Option<PathBuf>> {
     let mut cur: Option<&Path> = Some(start);
     while let Some(p) = cur {
         let dot_git = p.join(".git");
-        if dot_git.exists() {
-            return Some(p.to_path_buf());
+        match std::fs::symlink_metadata(&dot_git) {
+            Ok(_) => return Ok(Some(p.to_path_buf())),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
         }
         cur = p.parent();
     }
-    None
+    Ok(None)
 }
 
 fn build_gitignore(repo_root: &Path) -> Gitignore {
@@ -560,10 +569,10 @@ fn fs_list_dir_scoped_with_limit(
     max_entries: usize,
 ) -> AppResult<ListResult> {
     let dir = scope.authorize_existing(Path::new(&path))?.resolved;
-    if !dir.is_dir() {
+    if !std::fs::metadata(&dir)?.is_dir() {
         return Err(AppError::InvalidPath(format!("not a directory: {path}")));
     }
-    let repo_root = find_repo_root(&dir);
+    let repo_root = find_repo_root(&dir)?;
     let gi = repo_root.as_deref().map(build_gitignore);
 
     let mut entries: Vec<FileEntry> = Vec::new();
@@ -582,15 +591,20 @@ fn fs_list_dir_scoped_with_limit(
         if !show_hidden && is_hidden(&name) {
             continue;
         }
-        let meta = match item.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
+        let link_meta = match std::fs::symlink_metadata(&p) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
         };
         // `DirEntry::metadata` follows symlinks on macOS, so check the link
         // type via `symlink_metadata` to distinguish links from their targets.
-        let is_symlink = std::fs::symlink_metadata(&p)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
+        let is_symlink = link_meta.file_type().is_symlink();
+        let meta = match item.metadata() {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound && is_symlink => link_meta,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        };
         let is_dir = meta.is_dir();
         let gitignored = match (respect_gitignore, gi.as_ref(), repo_root.as_deref()) {
             (true, Some(g), Some(_)) => g.matched(&p, is_dir).is_ignore(),
@@ -684,11 +698,10 @@ fn fs_rename_scoped(scope: &FsScope, from: String, to: String) -> AppResult<()> 
             "rename destination must stay inside the same project root".into(),
         ));
     }
-    if !from_p.exists() {
-        return Err(AppError::InvalidPath(format!("source missing: {from}")));
-    }
-    if to_p.exists() || std::fs::symlink_metadata(&to_p).is_ok() {
-        return Err(AppError::InvalidPath(format!("destination exists: {to}")));
+    match std::fs::symlink_metadata(&to_p) {
+        Ok(_) => return Err(AppError::InvalidPath(format!("destination exists: {to}"))),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
     }
     std::fs::rename(&from_scoped.requested, &to_scoped.requested)?;
     Ok(())
@@ -703,9 +716,6 @@ pub fn fs_trash(state: State<'_, AppState>, path: String) -> AppResult<()> {
 fn fs_trash_scoped(scope: &FsScope, path: String) -> AppResult<()> {
     let p = PathBuf::from(&path);
     let scoped = scope.authorize_existing(&p)?;
-    if !p.exists() {
-        return Err(AppError::InvalidPath(format!("missing: {path}")));
-    }
     move_to_trash(&scoped.requested)?;
     Ok(())
 }
@@ -719,9 +729,6 @@ pub fn fs_reveal(state: State<'_, AppState>, path: String) -> AppResult<()> {
 fn fs_reveal_scoped(scope: &FsScope, path: String) -> AppResult<()> {
     let p = PathBuf::from(&path);
     let scoped = scope.authorize_existing(&p)?;
-    if !p.exists() {
-        return Err(AppError::InvalidPath(format!("missing: {path}")));
-    }
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
@@ -761,9 +768,6 @@ pub fn fs_open_default(state: State<'_, AppState>, path: String) -> AppResult<()
 fn fs_open_default_scoped(scope: &FsScope, path: String) -> AppResult<()> {
     let p = PathBuf::from(&path);
     let scoped = scope.authorize_existing(&p)?;
-    if !p.exists() {
-        return Err(AppError::InvalidPath(format!("missing: {path}")));
-    }
     tauri_plugin_opener::open_path(&scoped.resolved, None::<&str>)
         .map_err(|e| AppError::Other(format!("open failed: {e}")))?;
     Ok(())
@@ -796,6 +800,21 @@ pub struct GitStatusResult {
     pub limit: u32,
 }
 
+fn discover_repository(path: &Path) -> AppResult<Option<Repository>> {
+    let metadata = std::fs::metadata(path)?;
+    let start = if metadata.is_dir() {
+        path
+    } else {
+        path.parent().ok_or_else(|| {
+            AppError::InvalidPath(format!("path has no parent: {}", path.display()))
+        })?
+    };
+    let Some(root) = find_repo_root(start)? else {
+        return Ok(None);
+    };
+    Repository::open(root).map(Some).map_err(AppError::from)
+}
+
 #[tauri::command]
 pub fn fs_git_status(
     state: State<'_, AppState>,
@@ -815,19 +834,23 @@ pub fn fs_git_status_with_limit(
 ) -> AppResult<GitStatusResult> {
     let limit = status_limit.unwrap_or(DEFAULT_GIT_STATUS_LIMIT);
     let root = PathBuf::from(&repo_root);
-    if !root.exists() {
-        return Err(AppError::InvalidPath(format!("missing: {repo_root}")));
+    match std::fs::metadata(&root) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(AppError::InvalidPath(format!("missing: {repo_root}")));
+        }
+        Err(err) => return Err(err.into()),
     }
     let empty = || GitStatusResult {
         statuses: HashMap::new(),
         huge: false,
         limit,
     };
-    let repo = match Repository::discover(&root) {
-        Ok(r) => r,
-        // Not a git repo — return empty envelope, frontend treats this
-        // as "no status colors to apply".
-        Err(_) => return Ok(empty()),
+    let repo = match discover_repository(&root)? {
+        Some(repo) => repo,
+        // Not a git repo — return empty envelope, frontend treats this as
+        // "no status colors to apply". Other discovery errors stay visible.
+        None => return Ok(empty()),
     };
     let workdir = match repo.workdir() {
         Some(p) => p.to_path_buf(),
@@ -909,12 +932,9 @@ fn fs_git_diff_stats_scoped(
         )));
     }
     let root = scope.authorize_existing(Path::new(&repo_root))?.resolved;
-    if !root.exists() {
-        return Err(AppError::InvalidPath(format!("missing: {repo_root}")));
-    }
-    let repo = match Repository::discover(&root) {
-        Ok(r) => r,
-        Err(_) => return Ok(HashMap::new()),
+    let repo = match discover_repository(&root)? {
+        Some(repo) => repo,
+        None => return Ok(HashMap::new()),
     };
     let workdir = match repo.workdir() {
         Some(p) => p.to_path_buf(),
@@ -930,7 +950,7 @@ fn fs_git_diff_stats_scoped(
         let path = PathBuf::from(&entry.path);
         let scoped = match scope.authorize_existing_or_missing(&path) {
             Ok(path) => path,
-            Err(err) => {
+            Err(AppError::InvalidPath(err)) => {
                 tracing::debug!(
                     path = %entry.path,
                     error = %err,
@@ -938,6 +958,7 @@ fn fs_git_diff_stats_scoped(
                 );
                 continue;
             }
+            Err(err) => return Err(err),
         };
         let Ok(rel_path) = scoped.resolved.strip_prefix(&workdir) else {
             continue;
@@ -972,7 +993,18 @@ fn fs_git_diff_stats_scoped(
     }
 
     // Deleted: line count of the HEAD blob.
-    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+    let head_tree = match repo.head() {
+        Ok(head) => Some(head.peel_to_tree()?),
+        Err(err)
+            if matches!(
+                err.code(),
+                git2::ErrorCode::NotFound | git2::ErrorCode::UnbornBranch
+            ) =>
+        {
+            None
+        }
+        Err(err) => return Err(err.into()),
+    };
     for (abs, rel) in deleted {
         let deletions = head_tree
             .as_ref()
@@ -1384,7 +1416,7 @@ pub fn fs_grant_external_file(state: State<'_, AppState>, path: String) -> AppRe
     let p = PathBuf::from(&path);
     reject_dangerous(&p)?;
     let resolved = p.canonicalize().map_err(AppError::from)?;
-    if !resolved.is_file() {
+    if !std::fs::metadata(&resolved)?.is_file() {
         return Err(AppError::InvalidPath(format!("not a file: {path}")));
     }
     let mut grants = state.external_file_grants.lock();
@@ -1402,8 +1434,12 @@ pub fn fs_file_exists(state: State<'_, AppState>, path: String) -> AppResult<boo
 
 fn fs_file_exists_scoped(scope: &FsScope, path: String) -> AppResult<bool> {
     let p = PathBuf::from(&path);
-    scope.authorize_existing_or_missing(&p)?;
-    Ok(p.is_file())
+    let scoped = scope.authorize_existing_or_missing(&p)?;
+    match std::fs::metadata(&scoped.resolved) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err.into()),
+    }
 }
 
 #[tauri::command]
@@ -1435,7 +1471,8 @@ fn fs_prepare_asset_scoped<R: Runtime>(
 ) -> AppResult<PrepareAssetResult> {
     let p = PathBuf::from(&path);
     let scoped = scope.authorize_existing(&p)?;
-    if !scoped.resolved.is_file() {
+    let meta = std::fs::metadata(&scoped.resolved)?;
+    if !meta.is_file() {
         return Err(AppError::InvalidPath(format!("not a file: {path}")));
     }
     let (mut file, meta) = open_verified_regular_file(&scoped.resolved)?;
@@ -1494,7 +1531,8 @@ fn validate_embeddable_asset_file(requested_path: &Path, file: &mut File) -> App
 fn fs_read_file_scoped(scope: &FsScope, path: String) -> AppResult<ReadFileResult> {
     let p = PathBuf::from(&path);
     let scoped = scope.authorize_existing(&p)?;
-    if !scoped.resolved.is_file() {
+    let meta = std::fs::metadata(&scoped.resolved)?;
+    if !meta.is_file() {
         return Err(AppError::InvalidPath(format!("not a file: {path}")));
     }
     let (file, meta) = open_verified_regular_file(&scoped.resolved)?;
@@ -1556,10 +1594,9 @@ fn fs_git_diff_lines_scoped(scope: &FsScope, path: String) -> AppResult<Vec<Line
             target.display()
         )));
     }
-    let repo = match Repository::discover(&target) {
-        Ok(r) => r,
-        Err(err) if err.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err.into()),
+    let repo = match discover_repository(&target)? {
+        Some(repo) => repo,
+        None => return Ok(Vec::new()),
     };
     let workdir = match repo.workdir() {
         Some(p) => p.to_path_buf(),
@@ -1681,13 +1718,21 @@ fn fs_git_diff_lines_scoped(scope: &FsScope, path: String) -> AppResult<Vec<Line
 pub fn fs_git_branch(state: State<'_, AppState>, repo_root: String) -> AppResult<String> {
     let scope = FsScope::from_state(state.inner());
     let root = scope.authorize_existing(Path::new(&repo_root))?.resolved;
-    let repo = match Repository::discover(&root) {
-        Ok(r) => r,
-        Err(_) => return Ok(String::new()),
+    let repo = match discover_repository(&root)? {
+        Some(repo) => repo,
+        None => return Ok(String::new()),
     };
     let head = match repo.head() {
         Ok(h) => h,
-        Err(_) => return Ok(String::new()),
+        Err(err)
+            if matches!(
+                err.code(),
+                git2::ErrorCode::NotFound | git2::ErrorCode::UnbornBranch
+            ) =>
+        {
+            return Ok(String::new());
+        }
+        Err(err) => return Err(err.into()),
     };
     if head.is_branch() {
         if let Ok(name) = head.shorthand() {
@@ -1722,7 +1767,7 @@ pub fn fs_watch_set_root<R: Runtime>(
     if let Some(p) = path.as_deref() {
         let scope = FsScope::from_state(state.inner());
         let root = scope.authorize_existing(Path::new(p))?.resolved;
-        if !root.is_dir() {
+        if !std::fs::metadata(&root)?.is_dir() {
             return Err(AppError::InvalidPath(format!("not a directory: {p}")));
         }
         if let Some(existing) = guard.as_ref() {
@@ -2336,6 +2381,63 @@ mod tests {
         assert_eq!(names, vec!["Alpha", "middle", "apple.txt", "zebra.txt"]);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn directory_listing_reports_inaccessible_entry_metadata() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let d = tmpdir();
+        fs::write(d.path().join("visible-name.txt"), b"contents").unwrap();
+        let scope = scope_for(d.path());
+        let original_permissions = fs::metadata(d.path()).unwrap().permissions();
+        let mut read_only_permissions = original_permissions.clone();
+        // The directory can be enumerated, but entries cannot be looked up
+        // without its execute bit.
+        read_only_permissions.set_mode(0o400);
+        fs::set_permissions(d.path(), read_only_permissions).unwrap();
+
+        let result = fs_list_dir_scoped(
+            &scope,
+            d.path().to_string_lossy().into_owned(),
+            false,
+            false,
+        );
+
+        fs::set_permissions(d.path(), original_permissions).unwrap();
+        assert!(matches!(
+            result,
+            Err(AppError::Io(ref err))
+                if err.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_listing_keeps_dangling_symlinks_visible() {
+        use std::os::unix::fs::symlink;
+
+        let d = tmpdir();
+        symlink(
+            d.path().join("missing-target"),
+            d.path().join("dangling-link"),
+        )
+        .unwrap();
+        let scope = scope_for(d.path());
+
+        let result = fs_list_dir_scoped(
+            &scope,
+            d.path().to_string_lossy().into_owned(),
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].name, "dangling-link");
+        assert!(result.entries[0].is_symlink);
+        assert!(!result.entries[0].is_dir);
+    }
+
     #[test]
     fn rejects_directories_over_the_entry_budget() {
         let d = tmpdir();
@@ -2637,6 +2739,29 @@ mod tests {
             .contains_key(&repo_path.join("a.txt").to_string_lossy().into_owned()));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn fs_git_status_reports_repository_access_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        git2::Repository::init(&repo_path).unwrap();
+        let original_permissions = fs::metadata(&repo_path).unwrap().permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        fs::set_permissions(&repo_path, denied_permissions).unwrap();
+
+        let result =
+            fs_git_status_with_limit(repo_path.to_string_lossy().into_owned(), Some(10_000));
+
+        fs::set_permissions(&repo_path, original_permissions).unwrap();
+        assert!(
+            result.is_err(),
+            "an unreadable repository is not an empty one"
+        );
+    }
+
     #[test]
     fn rename_rejects_traversal_segments() {
         let scope = FsScope::from_roots([PathBuf::from("/tmp")]);
@@ -2784,6 +2909,68 @@ mod tests {
             d.path().join("missing.txt").to_string_lossy().into_owned()
         )
         .unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fs_file_exists_reports_inaccessible_paths() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let d = tmpdir();
+        let private = d.path().join("private");
+        fs::create_dir(&private).unwrap();
+        let file = private.join("exists.txt");
+        fs::write(&file, b"contents").unwrap();
+        let scope = scope_for(d.path());
+        let original_permissions = fs::metadata(&private).unwrap().permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        fs::set_permissions(&private, denied_permissions).unwrap();
+
+        let result = fs_file_exists_scoped(&scope, file.to_string_lossy().into_owned());
+
+        fs::set_permissions(&private, original_permissions).unwrap();
+        assert!(matches!(
+            result,
+            Err(AppError::Io(ref err))
+                if err.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fs_file_exists_treats_dangling_symlink_targets_as_missing() {
+        use std::os::unix::fs::symlink;
+
+        let d = tmpdir();
+        let link = d.path().join("dangling.txt");
+        symlink(d.path().join("missing.txt"), &link).unwrap();
+        let scope = scope_for(d.path());
+
+        assert!(!fs_file_exists_scoped(&scope, link.to_string_lossy().into_owned()).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_rejects_a_dangling_symlink_destination() {
+        use std::os::unix::fs::symlink;
+
+        let d = tmpdir();
+        let source = d.path().join("source.txt");
+        let destination = d.path().join("dangling.txt");
+        fs::write(&source, b"contents").unwrap();
+        symlink(d.path().join("missing.txt"), &destination).unwrap();
+        let scope = scope_for(d.path());
+
+        let result = fs_rename_scoped(
+            &scope,
+            source.to_string_lossy().into_owned(),
+            destination.to_string_lossy().into_owned(),
+        );
+
+        assert!(matches!(result, Err(AppError::InvalidPath(_))));
+        assert!(source.exists());
+        assert!(destination.symlink_metadata().is_ok());
     }
 
     #[test]
@@ -3190,6 +3377,79 @@ mod tests {
         .expect_err("oversized file should not look like a zero-line file");
 
         assert!(error.to_string().contains("diff stats unavailable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diff_stats_reports_inaccessible_entry_paths() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        Repository::init(&repo_path).unwrap();
+        let private = repo_path.join("private");
+        fs::create_dir(&private).unwrap();
+        let file = private.join("added.txt");
+        fs::write(&file, b"contents\n").unwrap();
+        let scope = scope_for(&repo_path);
+        let original_permissions = fs::metadata(&private).unwrap().permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        fs::set_permissions(&private, denied_permissions).unwrap();
+
+        let result = fs_git_diff_stats_scoped(
+            &scope,
+            repo_path.to_string_lossy().into_owned(),
+            vec![GitDiffStatsRequest {
+                path: file.to_string_lossy().into_owned(),
+                kind: "added".to_string(),
+            }],
+        );
+
+        fs::set_permissions(&private, original_permissions).unwrap();
+        assert!(matches!(
+            result,
+            Err(AppError::Io(ref err))
+                if err.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diff_stats_reports_inaccessible_head_refs() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        let repo = init_repo_with_tracked_file(&repo_path);
+        fs::write(repo_path.join("tracked.txt"), b"changed\n").unwrap();
+        let head_ref = repo
+            .head()
+            .unwrap()
+            .name()
+            .map(|name| repo.path().join(name))
+            .expect("symbolic test HEAD");
+        drop(repo);
+        let original_permissions = fs::metadata(&head_ref).unwrap().permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        fs::set_permissions(&head_ref, denied_permissions).unwrap();
+        let scope = scope_for(&repo_path);
+
+        let result = fs_git_diff_stats_scoped(
+            &scope,
+            repo_path.to_string_lossy().into_owned(),
+            vec![GitDiffStatsRequest {
+                path: repo_path.join("tracked.txt").to_string_lossy().into_owned(),
+                kind: "modified".to_string(),
+            }],
+        );
+
+        fs::set_permissions(&head_ref, original_permissions).unwrap();
+        assert!(
+            result.is_err(),
+            "an unreadable HEAD ref is not an empty tree"
+        );
     }
 
     #[test]

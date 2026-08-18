@@ -2784,6 +2784,85 @@ test.describe("terminal: spawn", () => {
     ).toHaveCount(0);
   });
 
+  test("reports permission errors when opening terminal file links", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_cwd", () => "/tmp/demo");
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __permissionFileLinkChannelId?: number;
+        [key: string]: unknown;
+      };
+      w.__permissionFileLinkChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("fs_file_exists", () => {
+      throw new Error("permission denied while checking file");
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __permissionFileLinkChannelId?: number;
+              }
+            ).__permissionFileLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "src/private.tsx:10";
+    await emitSubscribedPtyOutput(
+      page,
+      "__permissionFileLinkChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+
+    const screenBox = await page.locator(".xterm-screen").boundingBox();
+    expect(screenBox).not.toBeNull();
+    await page.mouse.move(screenBox!.x + 12, screenBox!.y + 10);
+    await page.waitForTimeout(30);
+    await page.mouse.click(screenBox!.x + 12, screenBox!.y + 10);
+
+    await expect(
+      page.getByText(
+        "Failed to open terminal file link: permission denied while checking file",
+      ),
+    ).toBeVisible();
+  });
+
   test("opens terminal file URLs in Acorn after click", async ({
     page,
     tauri,
