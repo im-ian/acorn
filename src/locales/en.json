@@ -57,6 +57,7 @@
     "files": {
       "renameFailed": "Failed to rename file:",
       "trashFailed": "Failed to move to trash:",
+      "revealFailed": "Failed to reveal the path in the file manager:",
       "pathsCopied": "File paths copied.",
       "copyFailed": "Failed to copy file paths.",
       "terminalLinkOpenFailed": "Failed to open terminal file link:"
