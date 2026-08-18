@@ -555,7 +555,7 @@ where
     F: Fn(&str) -> AppResult<T>,
 {
     if let Some(cached) = cached_login(repo_path) {
-        if let Some(token) = gh_token_for(&cached.login) {
+        if let Some(token) = gh_token_for(&cached.login)? {
             match op(&token) {
                 Ok(value) => {
                     return Ok(AccountOutcome::Ok {
@@ -930,6 +930,12 @@ struct AccountResolution {
     picked: Option<PickedAccount>,
 }
 
+struct AccountProbe {
+    login: String,
+    token: Option<String>,
+    has_access: bool,
+}
+
 /// Pick the gh account most likely to have access to `slug`. Preference
 /// order: only-accessible-account → email-match against the repo's git
 /// config → currently-active gh account → first accessible. Returns
@@ -947,49 +953,76 @@ fn resolve_account_for_repo(repo_path: &Path, slug: &str) -> AppResult<AccountRe
         ));
     }
 
-    struct Probe {
-        login: String,
-        token: Option<String>,
-        has_access: bool,
-    }
-
-    let probes: Vec<Probe> = std::thread::scope(|scope| {
+    let probes: Vec<AppResult<AccountProbe>> = std::thread::scope(|scope| {
         let handles: Vec<_> = logins
             .iter()
             .map(|login| {
                 let login = login.clone();
                 let slug = slug.to_string();
                 scope.spawn(move || {
-                    let token = gh_token_for(&login);
-                    let has_access = token
-                        .as_deref()
-                        .map(|t| account_can_access(&slug, t))
-                        .unwrap_or(false);
-                    Probe {
+                    let token = gh_token_for(&login).map_err(|error| {
+                        AppError::Other(format!("failed to inspect gh account {login}: {error}"))
+                    })?;
+                    let has_access = match token.as_deref() {
+                        Some(token) => account_can_access(&slug, token).map_err(|error| {
+                            AppError::Other(format!("failed to probe gh account {login}: {error}"))
+                        })?,
+                        None => false,
+                    };
+                    Ok(AccountProbe {
                         login,
                         token,
                         has_access,
-                    }
+                    })
                 })
             })
             .collect();
         handles
             .into_iter()
-            .map(|h| h.join().expect("probe thread panicked"))
+            .map(|handle| {
+                handle.join().unwrap_or_else(|_| {
+                    Err(AppError::Other(
+                        "GitHub account probe worker panicked".to_string(),
+                    ))
+                })
+            })
             .collect()
     });
 
+    finish_account_resolution(repo_path, probes)
+}
+
+fn finish_account_resolution(
+    repo_path: &Path,
+    probes: Vec<AppResult<AccountProbe>>,
+) -> AppResult<AccountResolution> {
     let mut candidates: Vec<AccountSummary> = Vec::with_capacity(probes.len());
     let mut accessible: Vec<(String, String)> = Vec::new();
-    for p in probes {
-        candidates.push(AccountSummary {
-            login: p.login.clone(),
-            has_access: p.has_access,
-        });
-        if p.has_access {
-            if let Some(tok) = p.token {
-                accessible.push((p.login, tok));
+    let mut first_error = None;
+    for probe in probes {
+        match probe {
+            Ok(probe) => {
+                candidates.push(AccountSummary {
+                    login: probe.login.clone(),
+                    has_access: probe.has_access,
+                });
+                if probe.has_access {
+                    if let Some(token) = probe.token {
+                        accessible.push((probe.login, token));
+                    }
+                }
             }
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+
+    if accessible.is_empty() {
+        if let Some(error) = first_error {
+            return Err(error);
         }
     }
 
@@ -1070,19 +1103,18 @@ fn enumerate_logins(host: &str) -> AppResult<Vec<String>> {
     Ok(logins)
 }
 
-fn gh_token_for(login: &str) -> Option<String> {
+fn gh_token_for(login: &str) -> AppResult<Option<String>> {
     let out = cli_resolver::run("gh", |cmd| {
         cmd.args(["auth", "token", "--user", login]);
-    })
-    .ok()?;
+    })?;
     if !out.status.success() {
-        return None;
+        return Ok(None);
     }
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if s.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(s)
+        Ok(Some(s))
     }
 }
 
@@ -1091,7 +1123,7 @@ fn gh_token_for_required(login: &str) -> AppResult<String> {
     if login.is_empty() {
         return Err(AppError::Other("GitHub account is required.".to_string()));
     }
-    gh_token_for(login)
+    gh_token_for(login)?
         .ok_or_else(|| AppError::Other(format!("No gh token found for account {login}.")))
 }
 
@@ -1111,19 +1143,87 @@ fn gh_active_token() -> Option<String> {
     }
 }
 
-/// Cheap repo-access probe via `gh api repos/<slug> --silent`. Exits
-/// non-zero on 403/404, success on 200 — exactly the signal we need.
-fn account_can_access(slug: &str, token: &str) -> bool {
+/// Cheap repo-access probe via `gh api repos/<slug> --silent`. A 401/403/404
+/// response means this token cannot see the repository. Process failures,
+/// rate limits, and server errors remain operational errors instead of being
+/// presented as an account-access problem.
+fn account_can_access(slug: &str, token: &str) -> AppResult<bool> {
     let endpoint = format!("repos/{slug}");
     let out = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token)
-            .env("GH_HOST", GH_HOST)
-            .args(["api", &endpoint, "--silent"]);
-    });
-    match out {
-        Ok(o) => o.status.success(),
-        Err(_) => false,
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "api",
+            &endpoint,
+            "--include",
+            "--silent",
+        ]);
+    })?;
+    classify_account_access(
+        slug,
+        out.status.success(),
+        &out.status.to_string(),
+        &out.stdout,
+        &out.stderr,
+    )
+}
+
+fn classify_account_access(
+    slug: &str,
+    process_succeeded: bool,
+    process_status: &str,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> AppResult<bool> {
+    if process_succeeded {
+        return Ok(true);
     }
+
+    let http_status = response_http_status(stdout);
+    let rate_limit_exhausted =
+        response_header(stdout, "x-ratelimit-remaining").is_some_and(|remaining| remaining == "0");
+    if matches!(http_status, Some(401 | 404))
+        || matches!(http_status, Some(403)) && !rate_limit_exhausted
+    {
+        return Ok(false);
+    }
+
+    let stderr = String::from_utf8_lossy(stderr);
+    let detail = stderr.trim();
+    if !detail.is_empty() {
+        return Err(AppError::Other(format!(
+            "GitHub access probe for {slug} failed: {detail}"
+        )));
+    }
+
+    let response = http_status
+        .map(|status| format!("HTTP {status}"))
+        .unwrap_or_else(|| "no HTTP response".to_string());
+    Err(AppError::Other(format!(
+        "GitHub access probe for {slug} failed with {response} ({process_status})"
+    )))
+}
+
+fn response_http_status(stdout: &[u8]) -> Option<u16> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            parts.next()?.starts_with("HTTP/").then_some(())?;
+            parts.next()?.parse().ok()
+        })
+        .next_back()
+}
+
+fn response_header<'a>(stdout: &'a [u8], expected_name: &str) -> Option<&'a str> {
+    std::str::from_utf8(stdout)
+        .ok()?
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case(expected_name)
+                .then(|| value.trim())
+        })
+        .next_back()
 }
 
 fn primary_email_for(token: &str) -> Option<String> {
@@ -3253,6 +3353,91 @@ mod tests {
         assert_eq!(
             cache.get(&third).map(|entry| entry.login),
             Some("carol".into())
+        );
+    }
+
+    #[test]
+    fn account_resolution_does_not_report_no_access_when_a_probe_failed() {
+        let result = finish_account_resolution(
+            Path::new("/tmp/repo"),
+            vec![
+                Ok(AccountProbe {
+                    login: "alice".to_string(),
+                    token: Some("alice-token".to_string()),
+                    has_access: false,
+                }),
+                Err(AppError::Other(
+                    "failed to invoke gh: Permission denied".to_string(),
+                )),
+            ],
+        );
+
+        match result {
+            Err(error) => assert!(error.to_string().contains("Permission denied")),
+            Ok(_) => panic!("a failed probe must not become a no-access result"),
+        }
+    }
+
+    #[test]
+    fn account_resolution_uses_an_accessible_sibling_when_another_probe_failed() {
+        let resolution = finish_account_resolution(
+            Path::new("/tmp/repo"),
+            vec![
+                Err(AppError::Other("account probe failed".to_string())),
+                Ok(AccountProbe {
+                    login: "bob".to_string(),
+                    token: Some("bob-token".to_string()),
+                    has_access: true,
+                }),
+            ],
+        )
+        .expect("an accessible account should still service the request");
+
+        let picked = resolution.picked.expect("accessible account");
+        assert_eq!(picked.login, "bob");
+        assert_eq!(picked.token, "bob-token");
+    }
+
+    #[test]
+    fn account_access_classification_separates_denial_from_operational_failure() {
+        let denied = classify_account_access(
+            "acme/widgets",
+            false,
+            "exit status: 1",
+            b"HTTP/2.0 404 Not Found\r\nX-Ratelimit-Remaining: 4999\r\n",
+            b"gh: Not Found (HTTP 404)",
+        )
+        .expect("404 is a normal inaccessible-account result");
+        assert!(!denied);
+
+        let network_error = classify_account_access(
+            "acme/widgets",
+            false,
+            "exit status: 1",
+            b"",
+            b"gh: network is unreachable",
+        )
+        .expect_err("missing HTTP response must remain an error");
+        assert!(network_error.to_string().contains("network is unreachable"));
+
+        let rate_limit_error = classify_account_access(
+            "acme/widgets",
+            false,
+            "exit status: 1",
+            b"HTTP/2.0 403 Forbidden\r\nX-Ratelimit-Remaining: 0\r\n",
+            b"gh: API rate limit exceeded (HTTP 403)",
+        )
+        .expect_err("rate-limit failures must not become access denial");
+        assert!(rate_limit_error.to_string().contains("rate limit exceeded"));
+    }
+
+    #[test]
+    fn account_access_uses_the_final_http_status() {
+        assert_eq!(
+            response_http_status(
+                b"HTTP/1.1 200 Connection established\r\n\r\nHTTP/2.0 404 Not Found\r\n"
+            ),
+            Some(404)
         );
     }
 
