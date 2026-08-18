@@ -7105,15 +7105,13 @@ fn get_last_project_parent_folder_from_dir(
 ) -> AppResult<Option<String>> {
     let remembered = match persistence::load_last_project_parent_folder_from_dir(data_dir) {
         Ok(value) => value,
+        Err(AppError::Io(err)) if err.kind() != io::ErrorKind::NotFound => {
+            tracing::warn!(error = %err, "remembered project parent marker is inaccessible");
+            return Err(AppError::Io(err));
+        }
         Err(err) => {
-            tracing::warn!(error = %err, "failed to load remembered project parent folder");
-            if let Err(clear_err) = persistence::clear_last_project_parent_folder_from_dir(data_dir)
-            {
-                tracing::warn!(
-                    error = %clear_err,
-                    "failed to clear invalid remembered project parent folder"
-                );
-            }
+            tracing::warn!(error = %err, "clearing invalid remembered project parent folder");
+            persistence::clear_last_project_parent_folder_from_dir(data_dir)?;
             return Ok(None);
         }
     };
@@ -7121,33 +7119,43 @@ fn get_last_project_parent_folder_from_dir(
         return Ok(None);
     };
 
-    if !path.is_dir() {
-        if let Err(err) = persistence::clear_last_project_parent_folder_from_dir(data_dir) {
-            tracing::warn!(
-                error = %err,
-                path = %path.display(),
-                "failed to clear missing remembered project parent folder"
-            );
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => {
+            tracing::warn!(path = %path.display(), "clearing remembered project parent because it is not a directory");
+            persistence::clear_last_project_parent_folder_from_dir(data_dir)?;
+            return Ok(None);
         }
-        return Ok(None);
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            tracing::warn!(path = %path.display(), "clearing missing remembered project parent folder");
+            persistence::clear_last_project_parent_folder_from_dir(data_dir)?;
+            return Ok(None);
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, path = %path.display(), "remembered project parent folder is inaccessible");
+            return Err(AppError::Io(err));
+        }
     }
 
     match remember_folder_grant(state, &path) {
         Ok(path) => Ok(Some(path.to_string_lossy().into_owned())),
+        Err(AppError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
+            tracing::warn!(path = %path.display(), "clearing remembered project parent folder that vanished during validation");
+            persistence::clear_last_project_parent_folder_from_dir(data_dir)?;
+            Ok(None)
+        }
+        Err(AppError::InvalidPath(err)) => {
+            tracing::warn!(error = %err, path = %path.display(), "clearing invalid remembered project parent folder");
+            persistence::clear_last_project_parent_folder_from_dir(data_dir)?;
+            Ok(None)
+        }
         Err(err) => {
             tracing::warn!(
                 error = %err,
                 path = %path.display(),
-                "remembered project parent folder is no longer accessible"
+                "remembered project parent folder is temporarily inaccessible"
             );
-            if let Err(clear_err) = persistence::clear_last_project_parent_folder_from_dir(data_dir)
-            {
-                tracing::warn!(
-                    error = %clear_err,
-                    "failed to clear inaccessible remembered project parent folder"
-                );
-            }
-            Ok(None)
+            Err(err)
         }
     }
 }
@@ -17858,6 +17866,151 @@ mod tests {
             crate::persistence::load_last_project_parent_folder_from_dir(app_data.path()).unwrap(),
             None
         );
+        assert!(state.folder_grants.lock().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_remembered_project_parent_marker_is_preserved() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let app_data = tempfile::tempdir().unwrap();
+        let parent_root = tempfile::tempdir().unwrap();
+        let parent = parent_root.path().join("projects");
+        std::fs::create_dir(&parent).unwrap();
+        crate::persistence::save_last_project_parent_folder_to_dir(app_data.path(), &parent)
+            .unwrap();
+        let marker = app_data.path().join("last-project-parent-folder.json");
+        let original_permissions = std::fs::metadata(&marker).unwrap().permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        std::fs::set_permissions(&marker, denied_permissions).unwrap();
+        let state = crate::state::AppState::default();
+
+        let result = super::get_last_project_parent_folder_from_dir(&state, app_data.path());
+
+        assert!(matches!(
+            result,
+            Err(AppError::Io(ref err))
+                if err.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+        assert!(
+            marker.exists(),
+            "permission errors must not delete the marker"
+        );
+        std::fs::set_permissions(&marker, original_permissions).unwrap();
+        assert_eq!(
+            crate::persistence::load_last_project_parent_folder_from_dir(app_data.path()).unwrap(),
+            Some(parent)
+        );
+        assert!(state.folder_grants.lock().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inaccessible_remembered_project_parent_marker_directory_is_not_reported_missing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app_data = app_root.path().join("state");
+        std::fs::create_dir(&app_data).unwrap();
+        let parent_root = tempfile::tempdir().unwrap();
+        let parent = parent_root.path().join("projects");
+        std::fs::create_dir(&parent).unwrap();
+        crate::persistence::save_last_project_parent_folder_to_dir(&app_data, &parent).unwrap();
+        let marker = app_data.join("last-project-parent-folder.json");
+        let original_permissions = std::fs::metadata(&app_data).unwrap().permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        std::fs::set_permissions(&app_data, denied_permissions).unwrap();
+        let state = crate::state::AppState::default();
+
+        let result = super::get_last_project_parent_folder_from_dir(&state, &app_data);
+
+        std::fs::set_permissions(&app_data, original_permissions).unwrap();
+        assert!(matches!(
+            result,
+            Err(AppError::Io(ref err))
+                if err.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+        assert!(marker.exists(), "inaccessible marker must remain on disk");
+        assert_eq!(
+            crate::persistence::load_last_project_parent_folder_from_dir(&app_data).unwrap(),
+            Some(parent)
+        );
+        assert!(state.folder_grants.lock().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inaccessible_remembered_project_parent_is_preserved() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let app_data = tempfile::tempdir().unwrap();
+        let parent_root = tempfile::tempdir().unwrap();
+        let parent = parent_root.path().join("projects");
+        std::fs::create_dir(&parent).unwrap();
+        crate::persistence::save_last_project_parent_folder_to_dir(app_data.path(), &parent)
+            .unwrap();
+        let original_permissions = std::fs::metadata(parent_root.path()).unwrap().permissions();
+        let mut denied_permissions = original_permissions.clone();
+        denied_permissions.set_mode(0o000);
+        std::fs::set_permissions(parent_root.path(), denied_permissions).unwrap();
+        let state = crate::state::AppState::default();
+
+        let result = super::get_last_project_parent_folder_from_dir(&state, app_data.path());
+
+        std::fs::set_permissions(parent_root.path(), original_permissions).unwrap();
+        assert!(matches!(
+            result,
+            Err(AppError::Io(ref err))
+                if err.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+        assert_eq!(
+            crate::persistence::load_last_project_parent_folder_from_dir(app_data.path()).unwrap(),
+            Some(parent)
+        );
+        assert!(state.folder_grants.lock().is_empty());
+    }
+
+    #[test]
+    fn malformed_remembered_project_parent_marker_is_cleared() {
+        let app_data = tempfile::tempdir().unwrap();
+        let marker = app_data.path().join("last-project-parent-folder.json");
+        std::fs::write(&marker, b"not-json").unwrap();
+        let state = crate::state::AppState::default();
+
+        let restored =
+            super::get_last_project_parent_folder_from_dir(&state, app_data.path()).unwrap();
+
+        assert_eq!(restored, None);
+        assert!(!marker.exists());
+        assert!(state.folder_grants.lock().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remembered_project_parent_cleanup_permission_error_is_returned() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let app_data = tempfile::tempdir().unwrap();
+        let marker = app_data.path().join("last-project-parent-folder.json");
+        std::fs::write(&marker, b"not-json").unwrap();
+        let original_permissions = std::fs::metadata(app_data.path()).unwrap().permissions();
+        let mut read_only_permissions = original_permissions.clone();
+        read_only_permissions.set_mode(0o500);
+        std::fs::set_permissions(app_data.path(), read_only_permissions).unwrap();
+        let state = crate::state::AppState::default();
+
+        let result = super::get_last_project_parent_folder_from_dir(&state, app_data.path());
+
+        std::fs::set_permissions(app_data.path(), original_permissions).unwrap();
+        assert!(matches!(
+            result,
+            Err(AppError::Io(ref err))
+                if err.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+        assert!(marker.exists(), "failed cleanup must not report success");
         assert!(state.folder_grants.lock().is_empty());
     }
 }
