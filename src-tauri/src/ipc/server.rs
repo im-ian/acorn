@@ -107,25 +107,31 @@ const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(5);
 /// shutdown handle on success, or `None` if bind failed (rest of the app
 /// remains usable). The listener is non-blocking and polls its `running`
 /// flag so `ipc_restart` can stop it without process-level signals.
-pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Option<IpcServerHandle> {
-    let path = match socket_path::resolve() {
-        Ok(p) => p,
-        Err(err) => {
-            tracing::warn!(error = %err, "ipc: could not resolve socket path; server disabled");
-            return None;
-        }
-    };
-    let listener = match acorn_local_ipc::bind(&path) {
-        Ok(l) => l,
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                path = %path.display(),
-                "ipc: bind failed; server disabled",
-            );
-            return None;
-        }
-    };
+/// Spawn the IPC server on a dedicated background thread. The listener is
+/// non-blocking and polls its `running` flag so `ipc_restart` can stop it
+/// without process-level signals.
+///
+/// The error is returned rather than only logged: boot can ignore it and leave
+/// the rest of the app usable, while `ipc_restart` — which the user triggered —
+/// can tell them which step failed instead of pointing at the log file.
+pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Result<IpcServerHandle, String> {
+    let path = socket_path::resolve()
+        .map_err(|err| format!("could not resolve the IPC socket path: {err}"))?;
+    let listener = bind_listener(&path)?;
+    tracing::info!(path = %path.display(), "ipc: listening");
+
+    let running = Arc::new(AtomicBool::new(true));
+    let running_for_thread = running.clone();
+    std::thread::Builder::new()
+        .name("acorn-ipc-listener".to_string())
+        .spawn(move || run_listener(listener, app, state, running_for_thread))
+        .map_err(|err| format!("could not start the IPC listener thread: {err}"))?;
+    Ok(IpcServerHandle { running })
+}
+
+fn bind_listener(path: &Path) -> Result<Listener, String> {
+    let listener = acorn_local_ipc::bind(path)
+        .map_err(|err| format!("could not bind the IPC socket {}: {err}", path.display()))?;
     // Keep accepted streams nonblocking too. On Windows, `Accept` makes
     // interprocess toggle each connected named pipe back to blocking inside
     // `accept()`, which can race a newly connected client with ERROR_NO_DATA.
@@ -133,26 +139,14 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Option<IpcServer
         // Required for the shutdown poll. Bail rather than fall back to
         // blocking accept — a blocking listener could never honour a stop
         // signal and would leak its thread on every restart.
-        tracing::warn!(
-            error = %err,
-            "ipc: set_nonblocking failed; server disabled",
-        );
-        return None;
+        drop(listener);
+        acorn_local_ipc::cleanup(path);
+        return Err(format!(
+            "could not set the IPC socket {} to non-blocking mode: {err}",
+            path.display()
+        ));
     }
-    tracing::info!(path = %path.display(), "ipc: listening");
-
-    let running = Arc::new(AtomicBool::new(true));
-    let running_for_thread = running.clone();
-    let spawn_result = std::thread::Builder::new()
-        .name("acorn-ipc-listener".to_string())
-        .spawn(move || run_listener(listener, app, state, running_for_thread));
-    match spawn_result {
-        Ok(_) => Some(IpcServerHandle { running }),
-        Err(err) => {
-            tracing::warn!(error = %err, "ipc: listener thread failed to start");
-            None
-        }
-    }
+    Ok(listener)
 }
 
 fn run_listener<R: Runtime>(
@@ -1149,6 +1143,32 @@ mod tests {
             std::env::temp_dir().join(format!("acorn-ipc-{label}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bind_listener_surfaces_socket_parent_access_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let blocked = root.path().join("blocked");
+        let socket = blocked.join("ipc.sock");
+        std::fs::create_dir(&blocked).unwrap();
+        let original = std::fs::metadata(&blocked).unwrap().permissions();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = bind_listener(&socket);
+
+        let denied = matches!(
+            std::fs::metadata(&socket),
+            Err(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        );
+        std::fs::set_permissions(&blocked, original).unwrap();
+        if denied {
+            let error = result.expect_err("a denied socket parent must fail");
+            assert!(error.contains("could not bind the IPC socket"));
+            assert!(error.contains(&socket.display().to_string()));
+        }
     }
 
     #[test]
