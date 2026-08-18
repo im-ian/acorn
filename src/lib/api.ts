@@ -1039,10 +1039,10 @@ export const api = {
   },
   /**
    * Probe the `acornd` daemon. Backs the StatusBar daemon indicator and
-   * the Settings → Background sessions panel. Always resolves — when no
-   * daemon is reachable, fields collapse to `null` and `running` is
-   * `false`; rejection only on serialization failure (which should never
-   * happen for this shape).
+   * the Settings → Background sessions panel. Always resolves — operational
+   * failures are returned in `last_error`, unavailable fields collapse to
+   * `null`, and `running` is `false`; rejection only on serialization failure
+   * (which should never happen for this shape).
    */
   daemonStatus(): Promise<DaemonStatus> {
     return invoke<DaemonStatus>("daemon_status");
