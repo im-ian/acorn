@@ -917,7 +917,7 @@ pub fn load_chat_session_state(session_id: &str) -> AppResult<ChatSessionState> 
     load_chat_session_state_from_dir(&data_dir()?, session_id)
 }
 
-fn load_chat_session_state_from_dir(
+pub(crate) fn load_chat_session_state_from_dir(
     base_dir: &Path,
     session_id: &str,
 ) -> AppResult<ChatSessionState> {
