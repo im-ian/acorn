@@ -15,6 +15,7 @@
       "sessionWorktreeRestoreFailed": "セッションとワークツリーの復元に失敗しました:",
       "refreshFailed": "セッションを更新できませんでした:",
       "renameFailed": "セッション名の変更に失敗しました:",
+      "agentDetectionFailed": "実行中のエージェントのトランスクリプトを確認できませんでした:",
       "titleNotReady": "このセッションのトランスクリプトはまだありません。",
       "titleRegenerateSkipped": "セッション名は再生成されませんでした。",
       "worktreeAdopted": "採用されたワークツリー: {name}",
