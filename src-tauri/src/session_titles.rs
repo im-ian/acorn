@@ -108,9 +108,29 @@ pub fn resolve_title_input(session_id: uuid::Uuid) -> Option<ResolvedTitleInput>
     })
 }
 
-pub fn resolve_chat_title_input(session_id: uuid::Uuid) -> Option<ResolvedTitleInput> {
-    let state = crate::persistence::load_chat_session_state(&session_id.to_string()).ok()?;
-    chat_title_input_from_state(&state)
+/// Resolve the title input for a chat session.
+///
+/// `Ok(None)` means the session genuinely has nothing to title yet —
+/// `load_chat_session_state` already maps a missing file to an empty state — so
+/// the only failures reaching here are real ones: the state file is unreadable,
+/// corrupt, or belongs to another session. Those must not be reported as "no
+/// input", because the caller turns that into a silent `Skipped` for a title
+/// the user explicitly asked to generate.
+pub fn resolve_chat_title_input(
+    session_id: uuid::Uuid,
+) -> AppResult<Option<ResolvedTitleInput>> {
+    let state = crate::persistence::load_chat_session_state(&session_id.to_string())?;
+    Ok(chat_title_input_from_state(&state))
+}
+
+#[cfg(test)]
+fn resolve_chat_title_input_from_dir(
+    base_dir: &std::path::Path,
+    session_id: uuid::Uuid,
+) -> AppResult<Option<ResolvedTitleInput>> {
+    let state =
+        crate::persistence::load_chat_session_state_from_dir(base_dir, &session_id.to_string())?;
+    Ok(chat_title_input_from_state(&state))
 }
 
 pub fn chat_title_input_from_state(
@@ -220,20 +240,55 @@ pub fn resolve_native_session(session_id: uuid::Uuid) -> Option<agent_resume::Li
         }
     }
 
-    todos::locate_transcript_for(&session_id.to_string())
-        .ok()
-        .flatten()
-        .map(|path| agent_resume::LiveTranscript {
+    match todos::locate_transcript_for(&session_id.to_string()) {
+        Ok(path) => path.map(|path| agent_resume::LiveTranscript {
             path,
             kind: acorn_agent::AgentKind::Claude,
             id: session_id.to_string(),
-        })
+        }),
+        Err(error) => {
+            // Same treatment as the `live_transcript_checked` arm above: a
+            // lookup that failed is not evidence there is no transcript.
+            tracing::debug!(
+                %session_id,
+                error = %error,
+                "session title: transcript path lookup failed"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use acorn_session::{Session, SessionKind};
+
+    #[test]
+    fn chat_title_input_reports_an_unreadable_state_file() {
+        let base = tempfile::tempdir().expect("temp data dir");
+        let session_id = uuid::Uuid::new_v4();
+
+        // A session with no state file yet has nothing to title — not an error.
+        assert!(
+            resolve_chat_title_input_from_dir(base.path(), session_id)
+                .expect("a missing state file is an empty session")
+                .is_none()
+        );
+
+        // A state file that exists but cannot be parsed is a real failure. It
+        // must not be reported as "nothing to title", which the command turns
+        // into a silent Skipped for a title the user asked to generate.
+        let chat_dir = base.path().join("chat-sessions");
+        std::fs::create_dir_all(&chat_dir).expect("create chat session dir");
+        std::fs::write(chat_dir.join(format!("{session_id}.json")), b"{ not json")
+            .expect("write corrupt state");
+
+        assert!(
+            resolve_chat_title_input_from_dir(base.path(), session_id).is_err(),
+            "an unreadable chat state must not look like an empty session"
+        );
+    }
 
     #[test]
     fn prompt_contains_transcript_context_and_rules() {

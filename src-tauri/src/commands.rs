@@ -7973,7 +7973,7 @@ fn session_title_readiness_inner(
 ) -> AppResult<SessionTitleReadinessResult> {
     let id = parse_id(&id)?;
     let session = state.sessions.get(&id)?;
-    let title_input = resolve_title_input_for_session(&session, id);
+    let title_input = resolve_title_input_for_session(&session, id)?;
     let transcript_id = title_input
         .as_ref()
         .map(|input| input.transcript_id.as_str());
@@ -8042,7 +8042,7 @@ fn generate_session_title_inner(
 ) -> AppResult<GenerateSessionTitleResult> {
     let id = parse_id(&id)?;
     let session = state.sessions.get(&id)?;
-    let title_input = resolve_title_input_for_session(&session, id);
+    let title_input = resolve_title_input_for_session(&session, id)?;
     let transcript_id = title_input
         .as_ref()
         .map(|input| input.transcript_id.as_str());
@@ -8067,7 +8067,7 @@ fn generate_session_title_inner(
     let generated =
         crate::session_titles::generate_title(&ai, prompt.as_deref(), &title_input.title_context)?;
     let latest = state.sessions.get(&id)?;
-    let current_title_input = resolve_title_input_for_session(&latest, id);
+    let current_title_input = resolve_title_input_for_session(&latest, id)?;
     let current_transcript_id = current_title_input
         .as_ref()
         .map(|input| input.transcript_id.as_str());
@@ -8120,11 +8120,11 @@ fn can_store_generated_session_title(
 fn resolve_title_input_for_session(
     session: &Session,
     id: Uuid,
-) -> Option<crate::session_titles::ResolvedTitleInput> {
+) -> AppResult<Option<crate::session_titles::ResolvedTitleInput>> {
     if session.mode == SessionMode::Chat {
         crate::session_titles::resolve_chat_title_input(id)
     } else {
-        crate::session_titles::resolve_title_input(id)
+        Ok(crate::session_titles::resolve_title_input(id))
     }
 }
 
