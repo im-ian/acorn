@@ -213,6 +213,7 @@ acorn-ipc new-session   <name> [--workspace current|PATH] [--workspace-id ID] [-
 acorn-ipc send-keys     -t <uuid> --data "ls" --enter [--allow-foreign]
 acorn-ipc read-buffer   -t <uuid> [--max-bytes N] [--allow-foreign]
 acorn-ipc select-session -t <uuid> [--allow-foreign]
+acorn-ipc close-self
 acorn-ipc kill-session  -t <uuid> [--allow-foreign]
 ```
 
@@ -270,6 +271,13 @@ control session itself. Passing `--allow-foreign` is the explicit escape
 hatch for a direct user request to touch a user-owned session or a session
 owned by another control session.
 
+`close-self` is the explicit self-closing path for a control session. The
+server first acknowledges the request, waits for the CLI to read the response
+and close its socket, then terminates the source session's complete runtime and
+removes its session record. The normal control-session removal cascade applies,
+so every session owned by that controller is closed too; unrelated and
+user-owned sessions are left running.
+
 ### Examples
 
 Send a command to every regular sibling and wait for output:
@@ -291,6 +299,12 @@ new_id=$(acorn-ipc new-session "patch-bot" --isolated)
 acorn-ipc select-session -t "$new_id"
 ```
 
+Close the current controller only after its work and final report are complete:
+
+```sh
+acorn-ipc close-self
+```
+
 ## Security model
 
 - Unix socket files are created with mode `0600`. Windows named pipes use an
@@ -306,8 +320,9 @@ acorn-ipc select-session -t "$new_id"
   The backend sends the source `repo_path` to the renderer and treats the
   response as project-scoped workspace metadata, not as permission to touch
   sessions in other projects.
-- `kill-session` refuses to kill the source control session itself, so a
-  badly-written agent can't accidentally remove the only seat it has.
+- `kill-session` refuses to kill the source control session itself. Self-close
+  requires the separate, explicit `close-self` request and can only target the
+  authenticated source session.
 
 There is currently no inter-process whitelist beyond the env-var handshake.
 If an Acorn terminal leaks its `ACORN_RESUME_TOKEN` or a control session leaks

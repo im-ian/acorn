@@ -6907,7 +6907,7 @@ pub(crate) fn terminate_session_pty(state: &AppState, id: &Uuid) {
     }
 }
 
-fn terminate_session_runtime(state: &AppState, id: &Uuid) -> AppResult<()> {
+pub(crate) fn terminate_session_runtime(state: &AppState, id: &Uuid) -> AppResult<()> {
     let run_was_active = state.chat_runs.cancel_active(id);
     terminate_session_pty(state, id);
     if !run_was_active {
