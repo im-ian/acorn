@@ -33,6 +33,11 @@ Two recurring traps in E2E:
 1. **Handler functions are serialized to source.** They cannot close over test-side variables, helpers, or imports. Inline the data inside each handler.
 2. **OS keyboard shortcuts (Cmd+P, Cmd+,) are intercepted by Chromium.** Use `pressHotkey()` from `tests/e2e/support.ts`, not `page.keyboard.press()`.
 
+Rust unit tests resolve persistence through a process-local temporary data
+directory and ignore inherited `ACORN_DATA_DIR`. Keep project source-grouping
+helpers free of `persist()` calls; the Tauri command boundary owns the durable
+write.
+
 ## Code conventions
 
 - **Custom window events use the `acorn:` prefix** (`acorn:new-session`, `acorn:add-project`, `acorn:terminal-clear`). When adding a global event, follow this convention so listener wiring stays greppable.
