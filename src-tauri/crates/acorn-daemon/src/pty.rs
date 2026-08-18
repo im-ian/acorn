@@ -511,6 +511,7 @@ fn wait_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     #[cfg(any(unix, windows))]
     fn long_running_test_spec(id: Uuid) -> SpawnSpec {
@@ -551,6 +552,99 @@ mod tests {
         assert_eq!(repeated.pid, first.pid);
         assert_eq!(registry.count_alive(), 1);
         manager.kill(&id).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repeated_targeted_kills_release_daemon_state_and_preserve_sibling() {
+        let manager = PtyManager::new(Arc::new(|_, _| {}));
+        let registry = SessionRegistry::new();
+        let scratch = std::env::temp_dir().join(format!(
+            "acorn-daemon-pty-kill-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&scratch).expect("create daemon PTY scratch directory");
+        let sibling_id = Uuid::new_v4();
+        let sibling = manager
+            .spawn(long_running_test_spec(sibling_id), registry.clone())
+            .expect("spawn unrelated daemon PTY");
+        let sibling_pid = sibling.pid.expect("unrelated daemon PTY pid");
+        let mut killed_pids = Vec::new();
+
+        for cycle in 0..12 {
+            let id = Uuid::new_v4();
+            let descendant_pid_path = scratch.join(format!("descendant-{cycle}.pid"));
+            let mut spec = long_running_test_spec(id);
+            spec.command = "/bin/sh".to_string();
+            spec.args = vec![
+                "-c".to_string(),
+                format!(
+                    "sleep 30 & echo $! > '{}' && wait",
+                    descendant_pid_path.display()
+                ),
+            ];
+            let spawned = manager
+                .spawn(spec, registry.clone())
+                .expect("spawn daemon PTY tree");
+            let root_pid = spawned.pid.expect("daemon PTY root pid");
+            wait_until(Duration::from_secs(5), || descendant_pid_path.exists());
+            let descendant_pid = std::fs::read_to_string(&descendant_pid_path)
+                .expect("read daemon descendant pid")
+                .trim()
+                .parse::<u32>()
+                .expect("parse daemon descendant pid");
+            assert!(pid_is_alive(root_pid));
+            assert!(pid_is_alive(descendant_pid));
+
+            manager.kill(&id).expect("kill daemon PTY tree");
+            wait_until(Duration::from_secs(5), || {
+                !manager.handles.contains_key(&id)
+                    && registry.get(&id).is_none()
+                    && !pid_is_alive(root_pid)
+                    && !pid_is_alive(descendant_pid)
+            });
+            assert!(manager.handles.contains_key(&sibling_id));
+            assert!(registry.get(&sibling_id).is_some());
+            assert!(pid_is_alive(sibling_pid));
+            killed_pids.extend([root_pid, descendant_pid]);
+        }
+
+        assert_eq!(manager.handles.len(), 1);
+        assert_eq!(registry.count_total(), 1);
+        assert!(killed_pids.iter().all(|pid| !pid_is_alive(*pid)));
+        assert!(pid_is_alive(sibling_pid));
+
+        manager
+            .kill(&sibling_id)
+            .expect("kill unrelated daemon test PTY");
+        wait_until(Duration::from_secs(5), || {
+            manager.handles.is_empty() && registry.count_total() == 0 && !pid_is_alive(sibling_pid)
+        });
+        std::fs::remove_dir_all(&scratch).expect("remove daemon PTY scratch directory");
+    }
+
+    #[cfg(unix)]
+    fn wait_until(timeout: Duration, condition: impl Fn() -> bool) {
+        let deadline = Instant::now() + timeout;
+        while !condition() {
+            assert!(
+                Instant::now() < deadline,
+                "condition did not become true before {timeout:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    fn pid_is_alive(pid: u32) -> bool {
+        let Ok(pid) = i32::try_from(pid) else {
+            return false;
+        };
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
     }
 
     #[cfg(windows)]

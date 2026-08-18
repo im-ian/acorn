@@ -92,6 +92,9 @@ pub fn primer_for(
          - Do not repurpose, send input to, read from, focus, or kill user-owned \
          sessions or sessions owned by another control session unless the user \
          made that direct request; then pass `--allow-foreign`.\n\
+         - Use `close-self` only as the final action after the requested work, \
+         verification, delivery, and completion report are all finished. It \
+         closes this controller and every session it owns.\n\
          \n\
          Available commands (project-scoped — other projects are not reachable):\n\
          \n\
@@ -103,6 +106,7 @@ pub fn primer_for(
            acorn-ipc send-keys     -t <uuid> --data '…' --enter [--allow-foreign]\n\
            acorn-ipc read-buffer   -t <uuid> [--max-bytes N] [--allow-foreign]\n\
            acorn-ipc select-session -t <uuid> [--allow-foreign]\n\
+           acorn-ipc close-self                         # final action; closes this controller\n\
            acorn-ipc kill-session  -t <uuid> [--allow-foreign]\n\
          \n\
          The newer `acornd` CLI talks to the same project graph via the\n\

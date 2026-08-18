@@ -86,6 +86,11 @@ pub enum Request {
         #[serde(default)]
         allow_foreign: bool,
     },
+    /// Tear down the authenticated source control session itself after the
+    /// response has been delivered. Kept separate from `KillSession` so an
+    /// agent must make an explicit self-closing request instead of accidentally
+    /// targeting its own UUID through the general destructive command.
+    CloseSelf,
     /// Tear down a target session (kill its PTY, remove it from state).
     /// Destructive — the server logs every invocation to the audit log.
     KillSession {
@@ -252,6 +257,17 @@ mod tests {
         };
         let encoded = serde_json::to_string(&env).expect("encode");
         assert!(encoded.contains("\"kind\":\"list-workspaces\""));
+    }
+
+    #[test]
+    fn close_self_request_uses_kebab_case_kind() {
+        let env = Envelope {
+            protocol_version: PROTOCOL_VERSION,
+            source_session_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            request: Request::CloseSelf,
+        };
+        let encoded = serde_json::to_string(&env).expect("encode");
+        assert!(encoded.contains("\"kind\":\"close-self\""));
     }
 
     #[test]

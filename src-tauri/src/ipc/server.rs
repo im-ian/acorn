@@ -23,7 +23,7 @@
 //! handler code linear and reuses the existing blocking PTY pool without
 //! a runtime hop.
 
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
@@ -46,7 +46,7 @@ use uuid::Uuid;
 
 use crate::commands::{
     create_unique_project_worktree, sanitize_worktree_name, session_removal_cascade,
-    terminate_session_pty,
+    terminate_session_runtime,
 };
 use crate::ipc::workspaces::{ListWorkspacesRequestPayload, LIST_WORKSPACES_REQUEST_EVENT};
 use crate::persistence;
@@ -59,7 +59,7 @@ use acorn_session::{Session, SessionKind, SessionOwner, SessionStore};
 /// wired up in `src/components/Sidebar.tsx`'s sibling for `acorn:*` events.
 const SELECT_SESSION_EVENT: &str = "acorn:ipc-select-session";
 /// Fired whenever an IPC handler mutates the persisted session list
-/// (`new-session`, `kill-session`). The frontend listens and re-fetches
+/// (`new-session`, `close-self`, `kill-session`). The frontend listens and re-fetches
 /// via `list_sessions` so a control-session-driven mutation surfaces in
 /// the sidebar without the user clicking anything. Payload is the
 /// affected session's id as a string, mostly for debugging — the
@@ -194,6 +194,17 @@ fn run_listener<R: Runtime>(
 /// buffer without limit, so a misbehaving client writing an endless unbroken
 /// line could exhaust memory. Generous compared to any real `Envelope`.
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
+const CLOSE_SELF_CLIENT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostResponseAction {
+    CloseSelf { source_id: Uuid },
+}
+
+struct DispatchOutcome {
+    response: Response,
+    post_response: Option<PostResponseAction>,
+}
 
 fn handle_connection<R: Runtime>(
     stream: Stream,
@@ -206,21 +217,95 @@ fn handle_connection<R: Runtime>(
     if n == 0 {
         return Ok(());
     }
-    let response = match serde_json::from_str::<Envelope>(line.trim_end()) {
-        Ok(envelope) => dispatch(envelope, app, state),
-        Err(err) => Response::Error {
-            code: ErrorCode::Invalid,
-            message: format!("malformed request: {err}"),
+    let outcome = match serde_json::from_str::<Envelope>(line.trim_end()) {
+        Ok(envelope) => dispatch_connection(envelope, app, state),
+        Err(err) => DispatchOutcome {
+            response: Response::Error {
+                code: ErrorCode::Invalid,
+                message: format!("malformed request: {err}"),
+            },
+            post_response: None,
         },
     };
-    let mut out = serde_json::to_vec(&response).unwrap_or_else(|_| {
+    let mut out = serde_json::to_vec(&outcome.response).unwrap_or_else(|_| {
         b"{\"kind\":\"error\",\"code\":\"internal\",\"message\":\"failed to serialize response\"}"
             .to_vec()
     });
     out.push(b'\n');
-    reader.get_mut().write_all(&out)?;
-    reader.get_mut().flush()?;
-    Ok(())
+    let write_result = reader
+        .get_mut()
+        .write_all(&out)
+        .and_then(|_| reader.get_mut().flush());
+    if write_result.is_ok() {
+        if outcome.post_response.is_some() {
+            wait_for_close_self_client_disconnect(reader.get_mut());
+        }
+        if let Some(action) = outcome.post_response {
+            execute_post_response(action, app, state);
+        }
+    }
+    write_result
+}
+
+fn dispatch_connection<R: Runtime>(
+    envelope: Envelope,
+    app: &AppHandle<R>,
+    state: &AppState,
+) -> DispatchOutcome {
+    let close_self_source = matches!(&envelope.request, Request::CloseSelf)
+        .then(|| Uuid::parse_str(&envelope.source_session_id).ok())
+        .flatten();
+    let response = dispatch(envelope, app, state);
+    let post_response = if matches!(response, Response::Ack) {
+        close_self_source.map(|source_id| PostResponseAction::CloseSelf { source_id })
+    } else {
+        None
+    };
+    DispatchOutcome {
+        response,
+        post_response,
+    }
+}
+
+fn wait_for_close_self_client_disconnect(stream: &mut Stream) {
+    if let Err(err) = stream.set_recv_timeout(Some(CLOSE_SELF_CLIENT_DISCONNECT_TIMEOUT)) {
+        tracing::warn!(error = %err, "ipc: close-self could not set client disconnect timeout");
+        return;
+    }
+    let mut unexpected = [0_u8; 1];
+    match stream.read(&mut unexpected) {
+        Ok(0) => {}
+        Ok(_) => tracing::warn!("ipc: close-self client sent data after the response"),
+        Err(err) if matches!(err.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+            tracing::warn!("ipc: close-self client did not disconnect after the response");
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "ipc: close-self client disconnect wait failed");
+        }
+    }
+}
+
+fn execute_post_response<R: Runtime>(
+    action: PostResponseAction,
+    app: &AppHandle<R>,
+    state: &AppState,
+) {
+    let result = match action {
+        PostResponseAction::CloseSelf { source_id } => {
+            let source = match state.sessions.get(&source_id) {
+                Ok(source) => source,
+                Err(err) => {
+                    tracing::warn!(%source_id, error = %err, "ipc: close-self source disappeared");
+                    return;
+                }
+            };
+            let sessions_to_remove = session_removal_cascade(state, &source);
+            remove_ipc_sessions(&sessions_to_remove, app, state)
+        }
+    };
+    if let Err(err) = result {
+        tracing::error!(error = %err, "ipc: post-response action failed");
+    }
 }
 
 /// Top-level request dispatch. Except for `promote-self`, resolves the source
@@ -285,6 +370,7 @@ fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState
             target_session_id,
             allow_foreign,
         } => handle_select_session(&source, &target_session_id, allow_foreign, app, state),
+        Request::CloseSelf => Response::Ack,
         Request::KillSession {
             target_session_id,
             allow_foreign,
@@ -302,6 +388,7 @@ fn request_label(req: &Request) -> &'static str {
         Request::ReadBuffer { .. } => "read-buffer",
         Request::NewSession { .. } => "new-session",
         Request::SelectSession { .. } => "select-session",
+        Request::CloseSelf => "close-self",
         Request::KillSession { .. } => "kill-session",
     }
 }
@@ -791,21 +878,34 @@ fn handle_kill_session<R: Runtime>(
         };
     }
     let sessions_to_remove = session_removal_cascade(state, &target);
-    for session in &sessions_to_remove {
-        terminate_session_pty(state, &session.id);
+    if let Err(message) = remove_ipc_sessions(&sessions_to_remove, app, state) {
+        return Response::Error {
+            code: ErrorCode::Internal,
+            message,
+        };
     }
-    for session in &sessions_to_remove {
-        if let Err(err) = state.sessions.remove(&session.id) {
-            return Response::Error {
-                code: ErrorCode::Internal,
-                message: format!("remove failed: {err}"),
-            };
-        }
+    Response::Ack
+}
+
+fn remove_ipc_sessions<R: Runtime>(
+    sessions_to_remove: &[Session],
+    app: &AppHandle<R>,
+    state: &AppState,
+) -> Result<(), String> {
+    for session in sessions_to_remove {
+        terminate_session_runtime(state, &session.id)
+            .map_err(|err| format!("terminate {} failed: {err}", session.id))?;
+    }
+    for session in sessions_to_remove {
+        state
+            .sessions
+            .remove(&session.id)
+            .map_err(|err| format!("remove {} failed: {err}", session.id))?;
     }
     if let Err(err) = persistence::save_sessions(&state.sessions) {
-        tracing::warn!(error = %err, "ipc: persist after kill-session failed");
+        tracing::warn!(error = %err, "ipc: persist after session removal failed");
     }
-    for session in &sessions_to_remove {
+    for session in sessions_to_remove {
         if let Err(err) = app.emit(
             SESSIONS_CHANGED_EVENT,
             SessionsChangedPayload {
@@ -823,7 +923,7 @@ fn handle_kill_session<R: Runtime>(
             );
         }
     }
-    Response::Ack
+    Ok(())
 }
 
 #[cfg(test)]
@@ -831,6 +931,12 @@ mod tests {
     use super::*;
     use acorn_session::SessionStatus;
     use std::path::PathBuf;
+    use tauri::Manager;
+
+    #[cfg(unix)]
+    const CLOSE_SELF_TEST_ROLE: &str = "ACORN_CLOSE_SELF_TEST_ROLE";
+    #[cfg(unix)]
+    const CLOSE_SELF_TEST_DIRECTORY: &str = "ACORN_CLOSE_SELF_TEST_DIRECTORY";
 
     fn make_session(repo: &str, name: &str, kind: SessionKind) -> Session {
         let mut s = Session::new(
@@ -876,6 +982,38 @@ mod tests {
         let ctl = store.insert(make_session("/tmp/repo", "ctl", SessionKind::Control));
         let result = resolve_source(&ctl.id.to_string(), &store);
         assert!(result.is_ok(), "control session should be allowed");
+    }
+
+    #[test]
+    fn close_self_requires_an_authorized_control_source() {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::new())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("build mock app");
+        let state = app.state::<AppState>().inner().clone();
+        let regular =
+            state
+                .sessions
+                .insert(make_session("/tmp/A", "regular", SessionKind::Regular));
+        let outcome = dispatch_connection(
+            Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                source_session_id: regular.id.to_string(),
+                request: Request::CloseSelf,
+            },
+            app.handle(),
+            &state,
+        );
+
+        assert!(matches!(
+            outcome.response,
+            Response::Error {
+                code: ErrorCode::Unauthorized,
+                ..
+            }
+        ));
+        assert_eq!(outcome.post_response, None);
+        assert!(state.sessions.get(&regular.id).is_ok());
     }
 
     #[test]
@@ -1073,6 +1211,228 @@ mod tests {
             std::collections::HashSet::from([controller.id, worker.id, nested.id])
         );
         assert!(!ids.contains(&user.id));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn close_self_runtime_helper() {
+        if std::env::var(CLOSE_SELF_TEST_ROLE).as_deref() != Ok("helper") {
+            return;
+        }
+        let scratch = PathBuf::from(
+            std::env::var_os(CLOSE_SELF_TEST_DIRECTORY).expect("helper scratch directory"),
+        );
+        let app = tauri::test::mock_builder()
+            .manage(AppState::new())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("build mock app");
+        let state = app.state::<AppState>().inner().clone();
+        state.daemon_bridge.set_enabled(false);
+
+        let sibling =
+            state
+                .sessions
+                .insert(make_session("/tmp/A", "unrelated", SessionKind::Regular));
+        state
+            .pty
+            .spawn(
+                app.handle().clone(),
+                std::sync::Arc::new(|_, _, _| {}),
+                sibling.id,
+                scratch.clone(),
+                "/bin/cat".to_string(),
+                Vec::new(),
+                |_| {},
+                80,
+                24,
+            )
+            .expect("spawn unrelated PTY");
+        let sibling_pid = state.pty.child_pid(&sibling.id).expect("unrelated pid");
+        let cycle_count = std::env::var("ACORN_CLOSE_SELF_TEST_CYCLES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(12);
+
+        let mut closed_ids = Vec::new();
+        let mut closed_pids = Vec::new();
+        for cycle in 0..cycle_count {
+            let source = state.sessions.insert(make_session(
+                "/tmp/A",
+                &format!("controller-{cycle}"),
+                SessionKind::Control,
+            ));
+            let worker = state.sessions.insert({
+                let mut session =
+                    make_session("/tmp/A", &format!("worker-{cycle}"), SessionKind::Regular);
+                session.owner = SessionOwner::control(source.id);
+                session
+            });
+            let descendant_pid_path = scratch.join(format!("descendant-{cycle}.pid"));
+            state
+                .pty
+                .spawn(
+                    app.handle().clone(),
+                    std::sync::Arc::new(|_, _, _| {}),
+                    source.id,
+                    scratch.clone(),
+                    "/bin/sh".to_string(),
+                    vec![
+                        "-c".to_string(),
+                        format!(
+                            "sleep 30 & echo $! > '{}' && wait",
+                            descendant_pid_path.display()
+                        ),
+                    ],
+                    |_| {},
+                    80,
+                    24,
+                )
+                .expect("spawn source PTY tree");
+            state
+                .pty
+                .spawn(
+                    app.handle().clone(),
+                    std::sync::Arc::new(|_, _, _| {}),
+                    worker.id,
+                    scratch.clone(),
+                    "/bin/cat".to_string(),
+                    Vec::new(),
+                    |_| {},
+                    80,
+                    24,
+                )
+                .expect("spawn owned worker PTY");
+
+            wait_until(Duration::from_secs(5), || descendant_pid_path.exists());
+            let descendant_pid = std::fs::read_to_string(&descendant_pid_path)
+                .expect("read descendant pid")
+                .trim()
+                .parse::<u32>()
+                .expect("parse descendant pid");
+            let source_pid = state.pty.child_pid(&source.id).expect("source pid");
+            let worker_pid = state.pty.child_pid(&worker.id).expect("worker pid");
+            assert!(pid_is_alive(source_pid));
+            assert!(pid_is_alive(descendant_pid));
+            assert!(pid_is_alive(worker_pid));
+
+            let endpoint = scratch.join(format!("close-self-{cycle}.sock"));
+            let listener = acorn_local_ipc::bind(&endpoint).expect("bind close-self endpoint");
+            let server = std::thread::spawn({
+                let app_handle = app.handle().clone();
+                let state = state.clone();
+                move || {
+                    let stream = listener.accept().expect("accept close-self client");
+                    handle_connection(stream, &app_handle, &state)
+                        .expect("handle close-self request");
+                }
+            });
+            let mut client =
+                acorn_local_ipc::connect(&endpoint).expect("connect close-self client");
+            let envelope = Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                source_session_id: source.id.to_string(),
+                request: Request::CloseSelf,
+            };
+            let mut request = serde_json::to_vec(&envelope).expect("encode close-self request");
+            request.push(b'\n');
+            client
+                .write_all(&request)
+                .expect("write close-self request");
+            client.flush().expect("flush close-self request");
+            let mut client = BufReader::new(client);
+            let mut response_line = String::new();
+            client
+                .read_line(&mut response_line)
+                .expect("read close-self response");
+            let response: Response =
+                serde_json::from_str(response_line.trim()).expect("decode close-self response");
+            assert_eq!(response, Response::Ack);
+
+            assert!(
+                state.pty.contains(&source.id),
+                "source PTY must stay alive until the client drops the acknowledged socket"
+            );
+            assert!(state.sessions.get(&source.id).is_ok());
+            drop(client);
+            server.join().expect("close-self server thread");
+            acorn_local_ipc::cleanup(&endpoint);
+
+            wait_until(Duration::from_secs(5), || {
+                !state.pty.contains(&source.id)
+                    && !state.pty.contains(&worker.id)
+                    && !pid_is_alive(source_pid)
+                    && !pid_is_alive(descendant_pid)
+                    && !pid_is_alive(worker_pid)
+            });
+            assert!(state.sessions.get(&source.id).is_err());
+            assert!(state.sessions.get(&worker.id).is_err());
+            assert!(state.sessions.get(&sibling.id).is_ok());
+            assert!(state.pty.contains(&sibling.id));
+            assert!(pid_is_alive(sibling_pid));
+
+            closed_ids.extend([source.id, worker.id]);
+            closed_pids.extend([source_pid, descendant_pid, worker_pid]);
+        }
+
+        assert_eq!(state.sessions.list().len(), 1);
+        assert!(closed_ids.iter().all(|id| !state.pty.contains(id)));
+        assert!(closed_pids.iter().all(|pid| !pid_is_alive(*pid)));
+        assert!(state.pty.contains(&sibling.id));
+        assert!(pid_is_alive(sibling_pid));
+
+        state
+            .pty
+            .kill(&sibling.id)
+            .expect("kill unrelated test PTY");
+        wait_until(Duration::from_secs(5), || {
+            !state.pty.contains(&sibling.id) && !pid_is_alive(sibling_pid)
+        });
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn close_self_repeatedly_releases_process_trees_and_preserves_unrelated_sessions() {
+        let scratch = tempfile::tempdir().expect("create close-self scratch directory");
+        let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "ipc::server::tests::close_self_runtime_helper",
+                "--nocapture",
+            ])
+            .env(CLOSE_SELF_TEST_ROLE, "helper")
+            .env(CLOSE_SELF_TEST_DIRECTORY, scratch.path())
+            .env(
+                acorn_paths::ENV_DATA_DIR_OVERRIDE,
+                scratch.path().join("data"),
+            )
+            .status()
+            .expect("run close-self helper");
+
+        assert!(
+            status.success(),
+            "close-self runtime helper failed: {status}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn wait_until(timeout: Duration, condition: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + timeout;
+        while !condition() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "condition did not become true before {timeout:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    fn pid_is_alive(pid: u32) -> bool {
+        let Ok(pid) = i32::try_from(pid) else {
+            return false;
+        };
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
     }
 
     #[test]
