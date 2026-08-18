@@ -57,8 +57,7 @@ impl RotatingFile {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let file = open_log_file(&path)?;
-        let written = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let (file, written) = open_log_file_sized(&path)?;
         Ok(Self {
             inner: Mutex::new(Inner {
                 path,
@@ -87,8 +86,8 @@ impl RotatingFile {
     }
 
     fn reopen(inner: &mut Inner) -> io::Result<()> {
-        let file = open_log_file(&inner.path)?;
-        inner.written = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        let (file, written) = open_log_file_sized(&inner.path)?;
+        inner.written = written;
         inner.file = Some(file);
         Ok(())
     }
@@ -123,6 +122,24 @@ impl Write for &RotatingFile {
         let mut inner = self.inner.lock().unwrap();
         RotatingFile::file_mut(&mut inner)?.flush()
     }
+}
+
+/// Open the log and report how much of the rotation budget it already uses.
+///
+/// The size has to be an error, not a default: treating an unreadable length as
+/// `0` tells the rotation accounting the file is empty, so an already-full log
+/// keeps growing past `MAX_FILE_BYTES` instead of rotating.
+fn open_log_file_sized(path: &Path) -> io::Result<(File, u64)> {
+    open_log_file_with(path, |file| file.metadata().map(|metadata| metadata.len()))
+}
+
+fn open_log_file_with<F>(path: &Path, file_len: F) -> io::Result<(File, u64)>
+where
+    F: FnOnce(&File) -> io::Result<u64>,
+{
+    let file = open_log_file(path)?;
+    let written = file_len(&file)?;
+    Ok((file, written))
 }
 
 fn open_log_file(path: &Path) -> io::Result<File> {
@@ -213,6 +230,41 @@ fn with_suffix(base: &Path, n: u32) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_probe_errors_are_preserved() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-log-metadata-error-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daemon.log");
+
+        let error = open_log_file_with(&path, |_| {
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        })
+        .expect_err("metadata access failure must reach the caller");
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_oversized_existing_log_rotates_on_the_next_write() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-log-size-overflow-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daemon.log");
+        let writer = RotatingFile::open(path.clone()).unwrap();
+        writer.inner.lock().unwrap().written = u64::MAX;
+
+        let mut output = &writer;
+        output.write_all(b"after-overflow").unwrap();
+        output.flush().unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"after-overflow");
+        assert!(with_suffix(&path, 1).exists());
+        drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn rotates_at_size_threshold() {
