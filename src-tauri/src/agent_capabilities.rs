@@ -115,8 +115,7 @@ pub fn discover(provider: SessionAgentProvider) -> GoalAgentCapabilities {
 
 fn discover_codex() -> GoalAgentCapabilities {
     let provider = SessionAgentProvider::Codex;
-    let installed = cli_resolver::resolve("codex").is_ok();
-    if !installed {
+    if let Err(error) = cli_resolver::resolve("codex") {
         return GoalAgentCapabilities {
             provider,
             installed: false,
@@ -124,17 +123,26 @@ fn discover_codex() -> GoalAgentCapabilities {
             source: GoalAgentCapabilitySource::Unavailable,
             models: Vec::new(),
             effort_options: Vec::new(),
-            warning: Some("`codex` CLI was not found in the login shell PATH".to_string()),
+            warning: Some(format!("Codex CLI discovery failed: {error}")),
         };
     }
 
-    let version = cli_version("codex").ok();
+    let (version, version_warning) = match cli_version("codex") {
+        Ok(version) => (Some(version), None),
+        Err(error) => (
+            None,
+            Some(format!("Codex version discovery failed: {error}")),
+        ),
+    };
     match codex_model_catalog() {
         Ok(catalog) => {
             let (models, effort_options) = convert_codex_catalog(catalog);
-            let warning = models
-                .is_empty()
-                .then(|| "Codex app-server returned an empty model catalog".to_string());
+            let warning = combine_warnings([
+                version_warning,
+                models
+                    .is_empty()
+                    .then(|| "Codex app-server returned an empty model catalog".to_string()),
+            ]);
             GoalAgentCapabilities {
                 provider,
                 installed: true,
@@ -145,27 +153,32 @@ fn discover_codex() -> GoalAgentCapabilities {
                 warning,
             }
         }
-        Err(error) => GoalAgentCapabilities {
-            provider,
-            installed: true,
-            version,
-            source: GoalAgentCapabilitySource::Fallback,
-            models: Vec::new(),
-            effort_options: Vec::new(),
-            warning: Some(format!("Codex model discovery failed: {error}")),
-        },
+        Err(error) => {
+            let warning = combine_warnings([
+                version_warning,
+                Some(format!("Codex model discovery failed: {error}")),
+            ]);
+            GoalAgentCapabilities {
+                provider,
+                installed: true,
+                version,
+                source: GoalAgentCapabilitySource::Fallback,
+                models: Vec::new(),
+                effort_options: Vec::new(),
+                warning,
+            }
+        }
     }
 }
 
 fn discover_claude() -> GoalAgentCapabilities {
     let provider = SessionAgentProvider::Claude;
-    let installed = cli_resolver::resolve("claude").is_ok();
     let fallback_efforts = fallback_claude_efforts();
     let fallback_models = claude_models_from_help("")
         .into_iter()
         .map(|alias| claude_model_capability(alias, fallback_efforts.clone()))
         .collect();
-    if !installed {
+    if let Err(error) = cli_resolver::resolve("claude") {
         return GoalAgentCapabilities {
             provider,
             installed: false,
@@ -173,14 +186,24 @@ fn discover_claude() -> GoalAgentCapabilities {
             source: GoalAgentCapabilitySource::Unavailable,
             models: fallback_models,
             effort_options: fallback_efforts,
-            warning: Some("`claude` CLI was not found in the login shell PATH".to_string()),
+            warning: Some(format!("Claude CLI discovery failed: {error}")),
         };
     }
 
-    let version = cli_version("claude").ok();
+    let (version, version_warning) = match cli_version("claude") {
+        Ok(version) => (Some(version), None),
+        Err(error) => (
+            None,
+            Some(format!("Claude version discovery failed: {error}")),
+        ),
+    };
     let help = match cli_output("claude", &["--help"]) {
         Ok(help) => help,
         Err(error) => {
+            let warning = combine_warnings([
+                version_warning,
+                Some(format!("Claude capability discovery failed: {error}")),
+            ]);
             return GoalAgentCapabilities {
                 provider,
                 installed: true,
@@ -188,7 +211,7 @@ fn discover_claude() -> GoalAgentCapabilities {
                 source: GoalAgentCapabilitySource::Fallback,
                 models: fallback_models,
                 effort_options: fallback_efforts,
-                warning: Some(format!("Claude capability discovery failed: {error}")),
+                warning,
             };
         }
     };
@@ -210,8 +233,13 @@ fn discover_claude() -> GoalAgentCapabilities {
         source: GoalAgentCapabilitySource::ClaudeCliHelp,
         models,
         effort_options: efforts,
-        warning: None,
+        warning: version_warning,
     }
+}
+
+fn combine_warnings(warnings: impl IntoIterator<Item = Option<String>>) -> Option<String> {
+    let combined = warnings.into_iter().flatten().collect::<Vec<_>>().join(" ");
+    (!combined.is_empty()).then_some(combined)
 }
 
 fn cli_version(name: &str) -> Result<String, String> {
@@ -653,5 +681,17 @@ mod tests {
         let mut oversized = std::io::Cursor::new(oversized);
         let error = read_bounded_utf8_line(&mut oversized, APP_SERVER_MAX_LINE_BYTES).unwrap_err();
         assert!(error.contains("exceeded"));
+    }
+
+    #[test]
+    fn combines_independent_discovery_failures_without_dropping_context() {
+        assert_eq!(
+            combine_warnings([
+                Some("version lookup: permission denied".to_string()),
+                Some("model lookup: access denied".to_string()),
+            ]),
+            Some("version lookup: permission denied model lookup: access denied".to_string())
+        );
+        assert_eq!(combine_warnings([None, None]), None);
     }
 }
