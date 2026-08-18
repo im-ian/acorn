@@ -74,6 +74,11 @@
       "urlFailed": "外部リンクを開けませんでした:",
       "urlBlocked": "安全な外部 URL ではないため、このリンクはブロックされました。"
     },
+    "terminal": {
+      "clipboardReadFailed": "クリップボードを読み取れませんでした:",
+      "clipboardWriteFailed": "クリップボードに書き込めませんでした:",
+      "clipboardImageSaveFailed": "クリップボード画像を保存できませんでした:"
+    },
     "pullRequests": {
       "mergeFailed": "プル リクエストのマージに失敗しました:",
       "closeFailed": "プルリクエストをクローズできませんでした:",

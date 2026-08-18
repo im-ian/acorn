@@ -1430,14 +1430,9 @@ export function Terminal({
     };
     const readNativeClipboardImageFile =
       async (): Promise<ClipboardImageFile | null> => {
-        try {
-          const snapshot = await api.clipboardSnapshot();
-          logNativeClipboardSnapshot(snapshot);
-          return nativeClipboardImageFile(snapshot);
-        } catch (err: unknown) {
-          console.debug("[Terminal] native clipboard image snapshot failed", err);
-          return null;
-        }
+        const snapshot = await api.clipboardSnapshot();
+        logNativeClipboardSnapshot(snapshot);
+        return nativeClipboardImageFile(snapshot);
       };
     const normalizeTerminalUnicodeSpaces = () =>
       useSettings.getState().settings.experiments.normalizeTerminalUnicodeSpaces;
@@ -1514,6 +1509,10 @@ export function Terminal({
         })().catch((err: unknown) => {
           if (fallbackHadAttachment) {
             console.warn("[Terminal] clipboard image attachment failed", err);
+            showTranslatedErrorToast(
+              "toasts.terminal.clipboardImageSaveFailed",
+              err,
+            );
           } else {
             console.debug("[Terminal] clipboard image fallback skipped", err);
           }
@@ -1887,6 +1886,10 @@ export function Terminal({
         if (text.length > 0) {
           void writeClipboardText(text).catch((err: unknown) => {
             console.warn("[Terminal] clipboard write failed", err);
+            showTranslatedErrorToast(
+              "toasts.terminal.clipboardWriteFailed",
+              err,
+            );
           });
         }
         ev.preventDefault();
@@ -2317,7 +2320,11 @@ export function Terminal({
       const detail = (e as CustomEvent<TerminalPasteEventDetail>).detail;
       if (detail?.sessionId !== sessionId) return;
       void pasteNativeClipboard().catch((err: unknown) => {
-        console.debug("[Terminal] native paste failed", err);
+        console.warn("[Terminal] native paste failed", err);
+        showTranslatedErrorToast(
+          "toasts.terminal.clipboardReadFailed",
+          err,
+        );
       });
     };
     window.addEventListener(TERMINAL_PASTE_EVENT, onTerminalPaste);

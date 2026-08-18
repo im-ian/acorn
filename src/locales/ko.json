@@ -74,6 +74,11 @@
       "urlFailed": "외부 링크를 열지 못했습니다:",
       "urlBlocked": "안전한 외부 URL이 아니어서 링크를 차단했습니다."
     },
+    "terminal": {
+      "clipboardReadFailed": "클립보드를 읽지 못했습니다:",
+      "clipboardWriteFailed": "클립보드에 쓰지 못했습니다:",
+      "clipboardImageSaveFailed": "클립보드 이미지를 저장하지 못했습니다:"
+    },
     "pullRequests": {
       "mergeFailed": "Pull request를 병합하지 못했습니다:",
       "closeFailed": "Pull request를 닫지 못했습니다:",
