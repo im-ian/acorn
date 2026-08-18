@@ -125,7 +125,7 @@ test.describe("project settings", () => {
     ]);
   });
 
-  test("manages project worktrees from the Worktrees settings tab", async ({
+  test("manages project worktrees and retries failed permanent cleanup", async ({
     page,
     tauri,
   }) => {
@@ -184,6 +184,9 @@ test.describe("project settings", () => {
       w.__worktrees = (w.__worktrees ?? []).filter(
         (worktree) => worktree.path !== worktreePath,
       );
+      if (w.__discardWorktreeCalls.length === 1) {
+        throw new Error("Permission denied");
+      }
       return undefined;
     });
 
@@ -232,20 +235,36 @@ test.describe("project settings", () => {
         worktreePath: "/tmp/acorn/.acorn/worktrees/feature-alpha",
       },
     ]);
+
+    const retryToast = page.getByText(
+      "Failed to finish deleting removed worktree data: Permission denied. Retry",
+    );
+    await expect(retryToast).toBeVisible({ timeout: 7_000 });
+    await retryToast.click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __discardWorktreeCalls?: unknown[] })
+              .__discardWorktreeCalls?.length ?? 0,
+        ),
+      )
+      .toBe(2);
     expect(
       await page.evaluate(
         () =>
           (window as unknown as { __discardWorktreeCalls?: unknown[] })
             .__discardWorktreeCalls,
       ),
-    ).toEqual([
-      {
+    ).toEqual(
+      Array.from({ length: 2 }, () => ({
         token: "remove-feature-alpha",
         repoPath: "/tmp/acorn",
         worktreePath: "/tmp/acorn/.acorn/worktrees/feature-alpha",
         gitCommonDir: "/tmp/acorn/.git",
-      },
-    ]);
+      })),
+    );
   });
 
   test("deletes all worktrees not used by a session", async ({

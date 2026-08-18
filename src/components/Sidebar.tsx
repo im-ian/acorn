@@ -3278,6 +3278,9 @@ function SessionRow({
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  const agentDetectionFailurePrefix = t(
+    "toasts.session.agentDetectionFailed",
+  );
   // A project group spans every source root it holds, but a session can only
   // move between workspaces of its own repository.
   const sessionProjectFolders = projectFolders.filter(
@@ -3357,18 +3360,19 @@ function SessionRow({
         if (!cancelled) setAgent(res);
       })
       .catch((err) => {
-        console.error("[Sidebar.Fork] detect failed", {
+        console.warn("[Sidebar.Fork] detect failed", {
           sessionId: session.id,
           err,
         });
         if (!cancelled) {
           setAgent(createEmptySessionAgentDetection());
+          showToast(`${agentDetectionFailurePrefix} ${String(err)}`);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [menu, session.id]);
+  }, [agentDetectionFailurePrefix, menu, session.id, showToast]);
 
   async function regenerateTitle() {
     const settings = useSettings.getState().settings;
