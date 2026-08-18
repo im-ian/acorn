@@ -262,7 +262,11 @@ fn handle_connection_from_peer<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
 ) -> std::io::Result<()> {
-    let Some(line) = read_request_line(&mut stream, CONNECTION_IO_TIMEOUT)? else {
+    let Some(line) = read_request_line(
+        &mut acorn_local_ipc::NonblockingStreamReader::new(&mut stream),
+        CONNECTION_IO_TIMEOUT,
+    )?
+    else {
         return Ok(());
     };
     let outcome = match serde_json::from_str::<Envelope>(line.trim_end()) {
@@ -386,7 +390,7 @@ fn read_request_line<R: Read>(
                 }
             }
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-            Err(err) if acorn_local_ipc::nonblocking_read_pending(&err) => {
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
                     return Err(std::io::Error::new(
                         ErrorKind::TimedOut,

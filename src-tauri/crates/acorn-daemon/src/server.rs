@@ -18,7 +18,7 @@
 //!   their next read after the flag is set, or sooner if the client
 //!   closes the connection.
 
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufReader, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -840,7 +840,7 @@ fn read_request_line_with_deadline(
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 8 * 1024];
     loop {
-        match stream.read(&mut chunk) {
+        match acorn_local_ipc::read_nonblocking(stream, &mut chunk) {
             Ok(0) if bytes.is_empty() => return Ok(None),
             Ok(0) => break,
             Ok(read) => {
@@ -860,7 +860,7 @@ fn read_request_line_with_deadline(
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) if acorn_local_ipc::nonblocking_read_pending(&error) => {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
