@@ -6891,7 +6891,9 @@ pub fn merge_project_source(
     repo_path: String,
     source_path: String,
 ) -> AppResult<Project> {
-    merge_project_source_inner(&state, repo_path, source_path)
+    let project = merge_project_source_inner(&state, repo_path, source_path)?;
+    persist(&state);
+    Ok(project)
 }
 
 fn merge_project_source_inner(
@@ -6937,7 +6939,6 @@ fn merge_project_source_inner(
         .projects
         .set_source_paths(&project.repo_path, source_paths)
         .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
-    persist(state);
     Ok(updated)
 }
 
@@ -6952,7 +6953,9 @@ pub fn split_project_source(
     repo_path: String,
     source_path: String,
 ) -> AppResult<Project> {
-    split_project_source_inner(&state, repo_path, source_path)
+    let project = split_project_source_inner(&state, repo_path, source_path)?;
+    persist(&state);
+    Ok(project)
 }
 
 fn split_project_source_inner(
@@ -6983,7 +6986,6 @@ fn split_project_source_inner(
     let split = state
         .projects
         .ensure(source.clone(), project_basename(&source));
-    persist(state);
     Ok(split)
 }
 
@@ -7041,7 +7043,9 @@ pub fn reorder_project_sources(
     repo_path: String,
     order: Vec<String>,
 ) -> AppResult<Project> {
-    reorder_project_sources_inner(state.inner(), repo_path, order)
+    let project = reorder_project_sources_inner(state.inner(), repo_path, order)?;
+    persist(&state);
+    Ok(project)
 }
 
 fn reorder_project_sources_inner(
@@ -7066,7 +7070,6 @@ fn reorder_project_sources_inner(
         .projects
         .set_source_paths(&project.repo_path, source_paths)
         .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
-    persist(state);
     Ok(updated)
 }
 

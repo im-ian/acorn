@@ -1,6 +1,10 @@
+#[cfg(test)]
+use std::cell::RefCell;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -26,6 +30,30 @@ const MAX_GRAPH_RUN_FILE_BYTES: u64 = 64 * 1024 * 1024;
 pub const CHAT_SESSION_SCHEMA_VERSION: u32 = 1;
 static SESSION_SAVE_LOCK: Mutex<()> = Mutex::new(());
 static GRAPH_RUN_SAVE_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+thread_local! {
+    static TEST_DATA_DIR_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+struct TestDataDirOverrideGuard(Option<PathBuf>);
+
+#[cfg(test)]
+impl Drop for TestDataDirOverrideGuard {
+    fn drop(&mut self) {
+        TEST_DATA_DIR_OVERRIDE.with(|slot| {
+            *slot.borrow_mut() = self.0.take();
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_data_dir<T>(dir: &Path, run: impl FnOnce() -> T) -> T {
+    let previous = TEST_DATA_DIR_OVERRIDE.with(|slot| slot.replace(Some(dir.to_path_buf())));
+    let _guard = TestDataDirOverrideGuard(previous);
+    run()
+}
 
 fn lock_session_save() -> MutexGuard<'static, ()> {
     SESSION_SAVE_LOCK
@@ -445,6 +473,7 @@ fn should_migrate_legacy_prod_files() -> AppResult<bool> {
     Ok(acorn_paths::effective_profile()? == acorn_paths::PROD_PROFILE)
 }
 
+#[cfg(not(test))]
 fn migrate_legacy_prod_files(profile_dir: &Path) -> AppResult<()> {
     if !should_migrate_legacy_prod_files()? {
         return Ok(());
@@ -472,10 +501,34 @@ fn migrate_legacy_prod_files(profile_dir: &Path) -> AppResult<()> {
 ///
 /// Runtime state lives under the stable `io.im-ian.acorn` app dir, split by
 /// `ACORN_PROFILE` or by the build default (`dev` for debug, `prod` for
-/// release). `ACORN_DATA_DIR` can still redirect the whole tree for tests.
+/// release). `ACORN_DATA_DIR` can redirect the whole tree at runtime. Unit
+/// tests always use a process-local temporary directory so a shell inherited
+/// from Acorn cannot route test writes back into the running app's profile.
 pub fn data_dir() -> AppResult<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Some(dir) = TEST_DATA_DIR_OVERRIDE.with(|slot| slot.borrow().clone()) {
+            fs::create_dir_all(&dir)?;
+            return Ok(dir);
+        }
+
+        static TEST_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+        let dir = TEST_DATA_DIR.get_or_init(|| {
+            std::env::temp_dir().join(format!(
+                "acorn-unit-tests-{}-{}",
+                std::process::id(),
+                Uuid::new_v4()
+            ))
+        });
+        fs::create_dir_all(dir)?;
+        return Ok(dir.clone());
+    }
+
+    #[cfg(not(test))]
     let dir = acorn_paths::data_dir()?;
+    #[cfg(not(test))]
     migrate_legacy_prod_files(&dir)?;
+    #[cfg(not(test))]
     Ok(dir)
 }
 
@@ -1432,15 +1485,24 @@ mod tests {
     }
 
     #[test]
-    fn data_dir_is_resolvable() {
+    fn unit_test_data_dir_is_isolated_from_runtime_profiles() {
         let dir = data_dir().expect("data dir resolves");
         assert!(dir.exists(), "data dir should be created");
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "unit test data must stay under the system temp directory: {}",
+            dir.display()
+        );
+        if let Some(runtime_dir) = std::env::var_os(acorn_paths::ENV_DATA_DIR_OVERRIDE) {
+            assert_ne!(dir, PathBuf::from(runtime_dir));
+        }
     }
 
     #[test]
     fn load_sessions_returns_empty_when_missing() {
         let sessions = load_sessions().expect("load should not error on missing file");
-        // Cannot assert empty without test isolation — at least confirm it returns.
+        // The shared test directory can be populated by another concurrently
+        // running persistence test, so this only verifies a clean read result.
         let _ = sessions;
     }
 
