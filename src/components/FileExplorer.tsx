@@ -333,6 +333,9 @@ export function FileExplorer({
   );
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [draftRename, setDraftRename] = useState<DraftRename | null>(null);
+  const agentDetectionFailurePrefix = t(
+    "toasts.session.agentDetectionFailed",
+  );
   const [activePath, setActivePath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // macOS/Linux preserve the existing shell-derived $EDITOR behavior. Windows
@@ -678,15 +681,16 @@ export function FileExplorer({
       .then((res) => {
         if (!cancelled) setAgent(res);
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
           setAgent(createEmptySessionAgentDetection());
+          showToast(`${agentDetectionFailurePrefix} ${String(err)}`);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, menu]);
+  }, [activeSessionId, agentDetectionFailurePrefix, menu, showToast]);
 
   useEffect(() => {
     setLocalBool(SHOW_HIDDEN_KEY, showHidden);

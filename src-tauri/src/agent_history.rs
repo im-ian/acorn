@@ -6,9 +6,11 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use acorn_agent::AgentKind;
+#[cfg(test)]
+use acorn_transcript::codex_rollout_lineage;
 use acorn_transcript::{
-    codex_rollout_lineage, collapse_preview, parse_transcript_line, parse_transcript_value,
-    CodexRolloutLineage, ParsedTranscriptLine, TranscriptRole,
+    collapse_preview, parse_transcript_line, parse_transcript_value, CodexRolloutLineage,
+    ParsedTranscriptLine, TranscriptRole,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -55,7 +57,15 @@ const TRANSCRIPT_SCAN_LIMITS: TranscriptScanLimits = TranscriptScanLimits {
     max_line_bytes: MAX_TRANSCRIPT_LINE_BYTES,
 };
 
+fn path_access_error(operation: &str, path: &Path, error: std::io::Error) -> AppError {
+    AppError::Other(format!(
+        "failed to {operation} agent transcript path {}: {error}",
+        path.display()
+    ))
+}
+
 struct TranscriptSnapshot {
+    path: PathBuf,
     file: fs::File,
     len: u64,
     modified: Option<SystemTime>,
@@ -181,10 +191,10 @@ pub fn list_agent_history(
 
     let mut items = Vec::new();
     let scope = HistoryScope::Project(&repo);
-    items.extend(scan_codex(scope, limit));
-    items.extend(scan_claude(scope, limit));
-    items.extend(scan_antigravity(scope, limit));
-    items.extend(scan_grok(scope, limit));
+    items.extend(scan_codex(scope, limit)?);
+    items.extend(scan_claude(scope, limit)?);
+    items.extend(scan_antigravity(scope, limit)?);
+    items.extend(scan_grok(scope, limit)?);
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items.truncate(limit);
     Ok(items)
@@ -198,8 +208,10 @@ pub fn agent_transcript_summary(
     if repo.as_os_str().is_empty() {
         return Err(AppError::InvalidPath(repo_path.display().to_string()));
     }
-    let item = find_agent_history_item_by_id(&repo, &transcript_id);
-    Ok(item.and_then(|item| summarize_agent_history_item(&item)))
+    let Some(item) = find_agent_history_item_by_id(&repo, &transcript_id)? else {
+        return Ok(None);
+    };
+    summarize_agent_history_item_checked(&item)
 }
 
 pub fn agent_transcript_summary_at_path(
@@ -216,14 +228,15 @@ pub fn agent_transcript_summary_at_path(
     validate_agent_transcript_identity(&provider, &id, &path)?;
     let scope = HistoryScope::Project(&repo);
     let item = match provider {
-        AgentHistoryProvider::Codex => parse_codex_file(&path, scope),
-        AgentHistoryProvider::Claude => parse_claude_file(&path, scope),
-        AgentHistoryProvider::Antigravity => parse_antigravity_file(&path, scope),
-        AgentHistoryProvider::Grok => parse_grok_file(&path, scope),
+        AgentHistoryProvider::Codex => parse_codex_file_checked(&path, scope)?,
+        AgentHistoryProvider::Claude => parse_claude_file_checked(&path, scope)?,
+        AgentHistoryProvider::Antigravity => parse_antigravity_file_checked(&path, scope)?,
+        AgentHistoryProvider::Grok => parse_grok_file_checked(&path, scope)?,
     };
-    Ok(item
-        .filter(|item| item.id == id)
-        .and_then(|item| summarize_agent_history_item(&item)))
+    let Some(item) = item.filter(|item| item.id == id) else {
+        return Ok(None);
+    };
+    summarize_agent_history_item_checked(&item)
 }
 
 pub fn list_unscoped_agent_history(
@@ -241,10 +254,10 @@ pub fn list_unscoped_agent_history(
     let scope = HistoryScope::Unscoped {
         projects: &projects,
     };
-    items.extend(scan_codex(scope, limit));
-    items.extend(scan_claude(scope, limit));
-    items.extend(scan_antigravity(scope, limit));
-    items.extend(scan_grok(scope, limit));
+    items.extend(scan_codex(scope, limit)?);
+    items.extend(scan_claude(scope, limit)?);
+    items.extend(scan_antigravity(scope, limit)?);
+    items.extend(scan_grok(scope, limit)?);
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items.truncate(limit);
     Ok(items)
@@ -272,16 +285,25 @@ pub fn trash_agent_history_transcript(
 }
 
 fn canonical_agent_transcript_path(transcript_path: PathBuf) -> AppResult<PathBuf> {
-    let path = transcript_path.canonicalize().map_err(|_| {
-        AppError::InvalidPath(format!("transcript missing: {}", transcript_path.display()))
-    })?;
+    let path = match transcript_path.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(AppError::InvalidPath(format!(
+                "transcript missing: {}",
+                transcript_path.display()
+            )));
+        }
+        Err(error) => return Err(path_access_error("resolve", &transcript_path, error)),
+    };
     if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
         return Err(AppError::InvalidPath(format!(
             "not a transcript jsonl: {}",
             path.display()
         )));
     }
-    if !path.is_file() {
+    let metadata =
+        fs::metadata(&path).map_err(|error| path_access_error("inspect", &path, error))?;
+    if !metadata.is_file() {
         return Err(AppError::InvalidPath(format!(
             "not a file: {}",
             path.display()
@@ -297,25 +319,21 @@ fn validate_agent_transcript_identity(
 ) -> AppResult<()> {
     match provider {
         AgentHistoryProvider::Codex => {
-            let root = codex_sessions_root()
-                .and_then(|p| p.canonicalize().ok())
-                .ok_or_else(|| AppError::InvalidPath("Codex sessions root missing".to_string()))?;
+            let root = canonical_provider_root(codex_sessions_root(), "Codex")?;
             if !is_codex_transcript_path(path, &root) {
                 return Err(AppError::InvalidPath(format!(
                     "transcript is outside Codex sessions: {}",
                     path.display()
                 )));
             }
-            if !codex_transcript_matches_id(path, id) {
+            if !codex_transcript_matches_id_checked(path, id)? {
                 return Err(AppError::InvalidPath(
                     "transcript id does not match selected Codex session".to_string(),
                 ));
             }
         }
         AgentHistoryProvider::Claude => {
-            let root = claude_projects_root()
-                .and_then(|p| p.canonicalize().ok())
-                .ok_or_else(|| AppError::InvalidPath("Claude projects root missing".to_string()))?;
+            let root = canonical_provider_root(claude_projects_root(), "Claude")?;
             if !is_claude_transcript_path(path, &root) {
                 return Err(AppError::InvalidPath(format!(
                     "transcript is outside Claude projects: {}",
@@ -330,10 +348,14 @@ fn validate_agent_transcript_identity(
             }
         }
         AgentHistoryProvider::Antigravity => {
-            let roots = antigravity_brain_roots()
-                .into_iter()
-                .filter_map(|root| root.canonicalize().ok())
-                .collect::<Vec<_>>();
+            let mut roots = Vec::new();
+            for root in antigravity_brain_root_candidates() {
+                match root.canonicalize() {
+                    Ok(root) => roots.push(root),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(path_access_error("resolve", &root, error)),
+                }
+            }
             if roots.is_empty() {
                 return Err(AppError::InvalidPath(
                     "Antigravity sessions root missing".to_string(),
@@ -358,18 +380,17 @@ fn validate_agent_transcript_identity(
             }
         }
         AgentHistoryProvider::Grok => {
-            let root = grok_sessions_root()
-                .and_then(|path| path.canonicalize().ok())
-                .ok_or_else(|| AppError::InvalidPath("Grok sessions root missing".to_string()))?;
+            let root = canonical_provider_root(grok_sessions_root(), "Grok")?;
             if !is_grok_transcript_path(path, &root) {
                 return Err(AppError::InvalidPath(format!(
                     "transcript is outside Grok sessions: {}",
                     path.display()
                 )));
             }
-            let summary = acorn_transcript::read_grok_session_summary(path).ok_or_else(|| {
-                AppError::InvalidPath("Grok session summary is missing or invalid".to_string())
-            })?;
+            let summary =
+                acorn_transcript::read_grok_session_summary_checked(path)?.ok_or_else(|| {
+                    AppError::InvalidPath("Grok session summary is missing or invalid".to_string())
+                })?;
             if summary.id != id {
                 return Err(AppError::InvalidPath(
                     "transcript id does not match selected Grok session".to_string(),
@@ -378,6 +399,18 @@ fn validate_agent_transcript_identity(
         }
     }
     Ok(())
+}
+
+fn canonical_provider_root(root: Option<PathBuf>, provider: &str) -> AppResult<PathBuf> {
+    let root =
+        root.ok_or_else(|| AppError::InvalidPath(format!("{provider} sessions root missing")))?;
+    match root.canonicalize() {
+        Ok(root) => Ok(root),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(AppError::InvalidPath(
+            format!("{provider} sessions root missing"),
+        )),
+        Err(error) => Err(path_access_error("resolve", &root, error)),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -406,14 +439,14 @@ impl HistoryScope<'_> {
     }
 }
 
-fn scan_codex(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
+fn scan_codex(scope: HistoryScope<'_>, limit: usize) -> AppResult<Vec<AgentHistoryItem>> {
     let Some(root) = codex_sessions_root() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let files = collect_files(&root, CODEX_SCAN_MAX_DIR_DEPTH, |path| {
+    let files = collect_files_checked(&root, CODEX_SCAN_MAX_DIR_DEPTH, |path| {
         is_codex_transcript_path(path, &root)
-    });
-    grouped_codex_history(files, scope, limit)
+    })?;
+    grouped_codex_history_checked(files, scope, limit)
 }
 
 #[derive(Default)]
@@ -423,11 +456,20 @@ struct CodexHistoryGroup {
     updated_at: u64,
 }
 
+#[cfg(test)]
 fn grouped_codex_history(
     files: Vec<PathBuf>,
     scope: HistoryScope<'_>,
     limit: usize,
 ) -> Vec<AgentHistoryItem> {
+    grouped_codex_history_checked(files, scope, limit).unwrap_or_default()
+}
+
+fn grouped_codex_history_checked(
+    files: Vec<PathBuf>,
+    scope: HistoryScope<'_>,
+    limit: usize,
+) -> AppResult<Vec<AgentHistoryItem>> {
     let files = files
         .into_iter()
         .filter_map(|path| codex_id_from_filename(&path).map(|id| (path, id)))
@@ -467,7 +509,7 @@ fn grouped_codex_history(
             selected_file_indexes.push(current_index);
 
             let Some(CodexRolloutLineage::Subagent { parent_thread_id }) =
-                codex_rollout_lineage(path)
+                acorn_transcript::codex_rollout_lineage_checked(path)?
             else {
                 break;
             };
@@ -494,7 +536,10 @@ fn grouped_codex_history(
             continue;
         };
         let group = groups.entry(root_id.clone()).or_default();
-        group.updated_at = group.updated_at.max(file_updated_at(path));
+        let Some(updated_at) = file_updated_at_checked(path)? else {
+            continue;
+        };
+        group.updated_at = group.updated_at.max(updated_at);
         if id == &root_id {
             group.root_path = Some(path.clone());
         } else {
@@ -513,7 +558,7 @@ fn grouped_codex_history(
         let Some(path) = group.root_path else {
             continue;
         };
-        let Some(mut item) = parse_codex_file(&path, scope) else {
+        let Some(mut item) = parse_codex_file_checked(&path, scope)? else {
             continue;
         };
         item.subagent_transcript_count = group.subagent_count;
@@ -525,7 +570,7 @@ fn grouped_codex_history(
             break;
         }
     }
-    items
+    Ok(items)
 }
 
 fn codex_history_root_id(
@@ -546,97 +591,124 @@ fn codex_history_root_id(
     (!parent_by_child.contains_key(current)).then(|| current.to_string())
 }
 
-fn scan_claude(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
+fn scan_claude(scope: HistoryScope<'_>, limit: usize) -> AppResult<Vec<AgentHistoryItem>> {
     let Some(root) = claude_projects_root() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let files = collect_files(&root, CLAUDE_SCAN_MAX_DIR_DEPTH, |path| {
+    let files = collect_files_checked(&root, CLAUDE_SCAN_MAX_DIR_DEPTH, |path| {
         is_claude_transcript_path(path, &root)
-    });
-    parse_recent_files(files, limit, |path| parse_claude_file(path, scope))
+    })?;
+    parse_recent_files_checked(files, limit, |path| parse_claude_file_checked(path, scope))
 }
 
-fn scan_antigravity(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
+fn scan_antigravity(scope: HistoryScope<'_>, limit: usize) -> AppResult<Vec<AgentHistoryItem>> {
     let roots = antigravity_brain_root_candidates();
-    let files = collect_files_across_roots_with_entry_limit(
+    let files = collect_files_across_roots_with_entry_limit_checked(
         &roots,
         ANTIGRAVITY_SCAN_MAX_DIR_DEPTH,
         is_antigravity_transcript_path,
         MAX_DISCOVERY_ENTRIES_PER_PROVIDER,
-    );
-    parse_recent_files(files, limit, |path| parse_antigravity_file(path, scope))
+    )?;
+    parse_recent_files_checked(files, limit, |path| {
+        parse_antigravity_file_checked(path, scope)
+    })
 }
 
-fn scan_grok(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
+fn scan_grok(scope: HistoryScope<'_>, limit: usize) -> AppResult<Vec<AgentHistoryItem>> {
     let Some(root) = grok_sessions_root() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let files = collect_files(&root, GROK_SCAN_MAX_DIR_DEPTH, |path| {
+    let files = collect_files_checked(&root, GROK_SCAN_MAX_DIR_DEPTH, |path| {
         is_grok_transcript_path(path, &root)
-    });
-    parse_recent_files(files, limit, |path| parse_grok_file(path, scope))
+    })?;
+    parse_recent_files_checked(files, limit, |path| parse_grok_file_checked(path, scope))
 }
 
-fn find_agent_history_item_by_id(repo: &Path, transcript_id: &str) -> Option<AgentHistoryItem> {
+fn find_agent_history_item_by_id(
+    repo: &Path,
+    transcript_id: &str,
+) -> AppResult<Option<AgentHistoryItem>> {
     let scope = HistoryScope::Project(repo);
-    find_codex_history_item_by_filename_id(scope, transcript_id)
-        .or_else(|| find_claude_history_item_by_stem_id(scope, transcript_id))
-        .or_else(|| find_antigravity_history_item_by_path_id(scope, transcript_id))
-        .or_else(|| find_grok_history_item_by_path_id(scope, transcript_id))
-        .or_else(|| find_codex_history_item_by_parsed_id(scope, transcript_id))
-        .or_else(|| find_claude_history_item_by_parsed_id(scope, transcript_id))
-        .or_else(|| find_antigravity_history_item_by_parsed_id(scope, transcript_id))
+    if let Some(item) = find_codex_history_item_by_filename_id(scope, transcript_id)? {
+        return Ok(Some(item));
+    }
+    if let Some(item) = find_claude_history_item_by_stem_id(scope, transcript_id)? {
+        return Ok(Some(item));
+    }
+    if let Some(item) = find_antigravity_history_item_by_path_id(scope, transcript_id)? {
+        return Ok(Some(item));
+    }
+    if let Some(item) = find_grok_history_item_by_path_id(scope, transcript_id)? {
+        return Ok(Some(item));
+    }
+    if let Some(item) = find_codex_history_item_by_parsed_id(scope, transcript_id)? {
+        return Ok(Some(item));
+    }
+    if let Some(item) = find_claude_history_item_by_parsed_id(scope, transcript_id)? {
+        return Ok(Some(item));
+    }
+    find_antigravity_history_item_by_parsed_id(scope, transcript_id)
 }
 
 fn find_grok_history_item_by_path_id(
     scope: HistoryScope<'_>,
     transcript_id: &str,
-) -> Option<AgentHistoryItem> {
-    let id = crate::agent_resume::normalize_provider_id(transcript_id).ok()?;
-    let path = acorn_transcript::locate_grok_transcript(&id)?;
-    parse_grok_file(&path, scope).filter(|item| item.id == id)
+) -> AppResult<Option<AgentHistoryItem>> {
+    let Some(id) = normalized_uuid(transcript_id) else {
+        return Ok(None);
+    };
+    let Some(path) = acorn_transcript::locate_grok_transcript_checked(&id)? else {
+        return Ok(None);
+    };
+    Ok(parse_grok_file_checked(&path, scope)?.filter(|item| item.id == id))
 }
 
 fn find_codex_history_item_by_filename_id(
     scope: HistoryScope<'_>,
     transcript_id: &str,
-) -> Option<AgentHistoryItem> {
-    let root = codex_sessions_root()?;
-    let files = collect_files(&root, CODEX_SCAN_MAX_DIR_DEPTH, |path| {
+) -> AppResult<Option<AgentHistoryItem>> {
+    let Some(root) = codex_sessions_root() else {
+        return Ok(None);
+    };
+    let files = collect_files_checked(&root, CODEX_SCAN_MAX_DIR_DEPTH, |path| {
         is_codex_transcript_path(path, &root)
-    });
-    find_history_item_in_files(
+    })?;
+    find_history_item_in_files_checked(
         files
             .iter()
             .filter(|path| codex_id_from_filename(path).as_deref() == Some(transcript_id))
             .cloned(),
         transcript_id,
-        |path| parse_codex_file(path, scope),
+        |path| parse_codex_file_checked(path, scope),
     )
 }
 
 fn find_claude_history_item_by_stem_id(
     scope: HistoryScope<'_>,
     transcript_id: &str,
-) -> Option<AgentHistoryItem> {
-    let root = claude_projects_root()?;
-    let files = collect_files(&root, CLAUDE_SCAN_MAX_DIR_DEPTH, |path| {
+) -> AppResult<Option<AgentHistoryItem>> {
+    let Some(root) = claude_projects_root() else {
+        return Ok(None);
+    };
+    let files = collect_files_checked(&root, CLAUDE_SCAN_MAX_DIR_DEPTH, |path| {
         is_claude_transcript_path(path, &root)
-    });
-    find_history_item_in_files(
+    })?;
+    find_history_item_in_files_checked(
         files
             .into_iter()
             .filter(|path| path.file_stem().and_then(|stem| stem.to_str()) == Some(transcript_id)),
         transcript_id,
-        |path| parse_claude_file(path, scope),
+        |path| parse_claude_file_checked(path, scope),
     )
 }
 
 fn find_antigravity_history_item_by_path_id(
     scope: HistoryScope<'_>,
     transcript_id: &str,
-) -> Option<AgentHistoryItem> {
-    let storage_root = google_agent_storage_root()?;
+) -> AppResult<Option<AgentHistoryItem>> {
+    let Some(storage_root) = google_agent_storage_root() else {
+        return Ok(None);
+    };
     find_antigravity_history_item_by_path_id_at(scope, transcript_id, &storage_root)
 }
 
@@ -644,57 +716,65 @@ fn find_antigravity_history_item_by_path_id_at(
     scope: HistoryScope<'_>,
     transcript_id: &str,
     storage_root: &Path,
-) -> Option<AgentHistoryItem> {
-    let id = crate::agent_resume::normalize_provider_id(transcript_id).ok()?;
-    for snapshot in crate::agent_resume::open_antigravity_transcript_snapshots_at(storage_root, &id)
+) -> AppResult<Option<AgentHistoryItem>> {
+    let Some(id) = normalized_uuid(transcript_id) else {
+        return Ok(None);
+    };
+    for snapshot in
+        crate::agent_resume::open_antigravity_transcript_snapshots_at_checked(storage_root, &id)?
     {
-        if let Some(item) = parse_antigravity_snapshot(snapshot, scope).filter(|item| item.id == id)
+        if let Some(item) =
+            parse_antigravity_snapshot_checked(snapshot, scope)?.filter(|item| item.id == id)
         {
-            return Some(item);
+            return Ok(Some(item));
         }
     }
-    None
+    Ok(None)
 }
 
 fn find_codex_history_item_by_parsed_id(
     scope: HistoryScope<'_>,
     transcript_id: &str,
-) -> Option<AgentHistoryItem> {
-    let root = codex_sessions_root()?;
-    let files = collect_files(&root, CODEX_SCAN_MAX_DIR_DEPTH, |path| {
+) -> AppResult<Option<AgentHistoryItem>> {
+    let Some(root) = codex_sessions_root() else {
+        return Ok(None);
+    };
+    let files = collect_files_checked(&root, CODEX_SCAN_MAX_DIR_DEPTH, |path| {
         is_codex_transcript_path(path, &root)
-    });
-    find_history_item_in_files(parse_budget_files(files), transcript_id, |path| {
-        parse_codex_file(path, scope)
+    })?;
+    find_history_item_in_files_checked(parse_budget_files(files), transcript_id, |path| {
+        parse_codex_file_checked(path, scope)
     })
 }
 
 fn find_claude_history_item_by_parsed_id(
     scope: HistoryScope<'_>,
     transcript_id: &str,
-) -> Option<AgentHistoryItem> {
-    let root = claude_projects_root()?;
-    let files = collect_files(&root, CLAUDE_SCAN_MAX_DIR_DEPTH, |path| {
+) -> AppResult<Option<AgentHistoryItem>> {
+    let Some(root) = claude_projects_root() else {
+        return Ok(None);
+    };
+    let files = collect_files_checked(&root, CLAUDE_SCAN_MAX_DIR_DEPTH, |path| {
         is_claude_transcript_path(path, &root)
-    });
-    find_history_item_in_files(parse_budget_files(files), transcript_id, |path| {
-        parse_claude_file(path, scope)
+    })?;
+    find_history_item_in_files_checked(parse_budget_files(files), transcript_id, |path| {
+        parse_claude_file_checked(path, scope)
     })
 }
 
 fn find_antigravity_history_item_by_parsed_id(
     scope: HistoryScope<'_>,
     transcript_id: &str,
-) -> Option<AgentHistoryItem> {
+) -> AppResult<Option<AgentHistoryItem>> {
     let roots = antigravity_brain_root_candidates();
-    let files = collect_files_across_roots_with_entry_limit(
+    let files = collect_files_across_roots_with_entry_limit_checked(
         &roots,
         ANTIGRAVITY_SCAN_MAX_DIR_DEPTH,
         is_antigravity_transcript_path,
         MAX_DISCOVERY_ENTRIES_PER_PROVIDER,
-    );
-    find_history_item_in_files(parse_budget_files(files), transcript_id, |path| {
-        parse_antigravity_file(path, scope)
+    )?;
+    find_history_item_in_files_checked(parse_budget_files(files), transcript_id, |path| {
+        parse_antigravity_file_checked(path, scope)
     })
 }
 
@@ -702,23 +782,36 @@ fn parse_budget_files(files: Vec<PathBuf>) -> impl Iterator<Item = PathBuf> {
     files.into_iter().take(parse_file_budget(DEFAULT_LIMIT))
 }
 
-fn find_history_item_in_files(
+fn find_history_item_in_files_checked(
     files: impl IntoIterator<Item = PathBuf>,
     transcript_id: &str,
-    mut parse: impl FnMut(&Path) -> Option<AgentHistoryItem>,
-) -> Option<AgentHistoryItem> {
-    files
-        .into_iter()
-        .filter_map(|path| parse(&path))
-        .find(|item| item.id == transcript_id)
+    mut parse: impl FnMut(&Path) -> AppResult<Option<AgentHistoryItem>>,
+) -> AppResult<Option<AgentHistoryItem>> {
+    for path in files {
+        if let Some(item) = parse(&path)? {
+            if item.id == transcript_id {
+                return Ok(Some(item));
+            }
+        }
+    }
+    Ok(None)
 }
 
+#[cfg(test)]
 fn collect_files(
     root: &Path,
     max_dir_depth: usize,
     accept: impl Fn(&Path) -> bool,
 ) -> Vec<PathBuf> {
-    collect_files_with_entry_limit(
+    collect_files_checked(root, max_dir_depth, accept).unwrap_or_default()
+}
+
+fn collect_files_checked(
+    root: &Path,
+    max_dir_depth: usize,
+    accept: impl Fn(&Path) -> bool,
+) -> AppResult<Vec<PathBuf>> {
+    collect_files_with_entry_limit_checked(
         root,
         max_dir_depth,
         accept,
@@ -726,13 +819,24 @@ fn collect_files(
     )
 }
 
+#[cfg(test)]
 fn collect_files_with_entry_limit(
     root: &Path,
     max_dir_depth: usize,
     accept: impl Fn(&Path) -> bool,
     max_entries: usize,
 ) -> Vec<PathBuf> {
-    collect_files_across_roots_with_entry_limit(
+    collect_files_with_entry_limit_checked(root, max_dir_depth, accept, max_entries)
+        .unwrap_or_default()
+}
+
+fn collect_files_with_entry_limit_checked(
+    root: &Path,
+    max_dir_depth: usize,
+    accept: impl Fn(&Path) -> bool,
+    max_entries: usize,
+) -> AppResult<Vec<PathBuf>> {
+    collect_files_across_roots_with_entry_limit_checked(
         &[root.to_path_buf()],
         max_dir_depth,
         accept,
@@ -740,64 +844,81 @@ fn collect_files_with_entry_limit(
     )
 }
 
+#[cfg(test)]
 fn collect_files_across_roots_with_entry_limit(
     roots: &[PathBuf],
     max_dir_depth: usize,
     accept: impl Fn(&Path) -> bool,
     max_entries: usize,
 ) -> Vec<PathBuf> {
+    collect_files_across_roots_with_entry_limit_checked(roots, max_dir_depth, accept, max_entries)
+        .unwrap_or_default()
+}
+
+fn collect_files_across_roots_with_entry_limit_checked(
+    roots: &[PathBuf],
+    max_dir_depth: usize,
+    accept: impl Fn(&Path) -> bool,
+    max_entries: usize,
+) -> AppResult<Vec<PathBuf>> {
     let mut out = Vec::new();
     let mut remaining_entries = max_entries;
     for root in roots {
-        if !collect_files_from_root(
+        collect_files_from_root_checked(
             root,
             max_dir_depth,
             &accept,
             &mut remaining_entries,
             &mut out,
-        ) {
-            return Vec::new();
-        }
+        )?;
     }
 
-    out.sort_by(|a, b| file_updated_at(b).cmp(&file_updated_at(a)));
-    out.truncate(MAX_DISCOVERED_FILES_PER_PROVIDER);
-    out
+    let mut dated = Vec::with_capacity(out.len());
+    for path in out {
+        if let Some(updated_at) = file_updated_at_checked(&path)? {
+            dated.push((path, updated_at));
+        }
+    }
+    dated.sort_by(|a, b| b.1.cmp(&a.1));
+    dated.truncate(MAX_DISCOVERED_FILES_PER_PROVIDER);
+    Ok(dated.into_iter().map(|(path, _)| path).collect())
 }
 
-fn collect_files_from_root(
+fn collect_files_from_root_checked(
     root: &Path,
     max_dir_depth: usize,
     accept: &impl Fn(&Path) -> bool,
     remaining_entries: &mut usize,
     out: &mut Vec<PathBuf>,
-) -> bool {
+) -> AppResult<()> {
     match fs::symlink_metadata(root) {
         Ok(metadata) if metadata.file_type().is_dir() => {}
-        Ok(_) => return true,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return true,
-        Err(_) => return false,
+        Ok(_) => {
+            return Err(AppError::InvalidPath(format!(
+                "provider transcript root is not a regular directory: {}",
+                root.display()
+            )));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(path_access_error("inspect", root, err)),
     }
     let mut stack = vec![(root.to_path_buf(), 0_usize)];
 
     while let Some((dir, depth)) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            return false;
-        };
+        let entries = fs::read_dir(&dir).map_err(|error| path_access_error("read", &dir, error))?;
         for entry in entries {
             if *remaining_entries == 0 {
-                // An incomplete traversal can select the wrong "newest" files,
-                // so discard it instead of returning a plausible partial list.
-                return false;
+                return Err(AppError::Other(format!(
+                    "agent transcript discovery entry limit exceeded below {}",
+                    root.display()
+                )));
             }
             *remaining_entries -= 1;
-            let Ok(entry) = entry else {
-                return false;
-            };
+            let entry = entry.map_err(|error| path_access_error("read", &dir, error))?;
             let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                return false;
-            };
+            let file_type = entry
+                .file_type()
+                .map_err(|error| path_access_error("inspect", &path, error))?;
             if file_type.is_dir() {
                 if depth < max_dir_depth {
                     stack.push((path, depth + 1));
@@ -807,9 +928,10 @@ fn collect_files_from_root(
             }
         }
     }
-    true
+    Ok(())
 }
 
+#[cfg(test)]
 fn parse_recent_files<T>(
     files: Vec<PathBuf>,
     limit: usize,
@@ -827,6 +949,23 @@ fn parse_recent_files<T>(
     out
 }
 
+fn parse_recent_files_checked<T>(
+    files: Vec<PathBuf>,
+    limit: usize,
+    mut parse: impl FnMut(&Path) -> AppResult<Option<T>>,
+) -> AppResult<Vec<T>> {
+    let mut out = Vec::new();
+    for path in files.into_iter().take(parse_file_budget(limit)) {
+        if let Some(item) = parse(&path)? {
+            out.push(item);
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn parse_file_budget(limit: usize) -> usize {
     if limit == 0 {
         return 0;
@@ -836,22 +975,39 @@ fn parse_file_budget(limit: usize) -> usize {
         .clamp(MIN_PARSED_FILES_PER_PROVIDER, MAX_PARSED_FILES_PER_PROVIDER)
 }
 
+#[cfg(test)]
 fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
-    let state = parse_agent_state(AgentKind::Codex, path)?;
+    parse_codex_file_checked(path, scope).ok().flatten()
+}
+
+fn parse_codex_file_checked(
+    path: &Path,
+    scope: HistoryScope<'_>,
+) -> AppResult<Option<AgentHistoryItem>> {
+    let Some(state) = parse_agent_state_checked(AgentKind::Codex, path)? else {
+        return Ok(None);
+    };
     if state.internal_title_generation {
-        return None;
+        return Ok(None);
     }
-    let cwd = state.cwd.clone()?;
+    let Some(cwd) = state.cwd.clone() else {
+        return Ok(None);
+    };
     if !scope.accepts_cwd(&cwd) {
-        return None;
+        return Ok(None);
     }
     let worktree = scope.worktree_for_cwd(&cwd);
-    let id = state.id.or_else(|| codex_id_from_filename(path))?;
+    let Some(id) = state.id.or_else(|| codex_id_from_filename(path)) else {
+        return Ok(None);
+    };
+    let Some(updated_at) = file_updated_at_checked(path)? else {
+        return Ok(None);
+    };
     let title = state
         .title
         .or_else(|| state.preview.clone())
         .unwrap_or_else(|| "Codex session".to_string());
-    Some(AgentHistoryItem {
+    Ok(Some(AgentHistoryItem {
         provider: AgentHistoryProvider::Codex,
         resume_command: Some(format!("codex resume {id}")),
         id,
@@ -866,36 +1022,53 @@ fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistory
         cwd: Some(cwd),
         worktree,
         transcript_path: path.display().to_string(),
-        updated_at: file_updated_at(path),
-    })
+        updated_at,
+    }))
 }
 
+#[cfg(test)]
 fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
-    let state = parse_agent_state(AgentKind::Claude, path)?;
+    parse_claude_file_checked(path, scope).ok().flatten()
+}
+
+fn parse_claude_file_checked(
+    path: &Path,
+    scope: HistoryScope<'_>,
+) -> AppResult<Option<AgentHistoryItem>> {
+    let Some(state) = parse_agent_state_checked(AgentKind::Claude, path)? else {
+        return Ok(None);
+    };
     if state.internal_title_generation {
-        return None;
+        return Ok(None);
     }
     if state.conversation_message_count == 0
         && state.queued_message_count == 0
         && state.subagent_transcript_count == 0
     {
-        return None;
+        return Ok(None);
     }
-    let cwd = state.cwd.clone()?;
+    let Some(cwd) = state.cwd.clone() else {
+        return Ok(None);
+    };
     if !scope.accepts_cwd(&cwd) {
-        return None;
+        return Ok(None);
     }
     let worktree = scope.worktree_for_cwd(&cwd);
-    let id = state.id.or_else(|| {
+    let Some(id) = state.id.or_else(|| {
         path.file_stem()
             .and_then(|s| s.to_str())
             .map(str::to_string)
-    })?;
+    }) else {
+        return Ok(None);
+    };
+    let Some(updated_at) = file_updated_at_checked(path)? else {
+        return Ok(None);
+    };
     let title = state
         .title
         .or_else(|| state.preview.clone())
         .unwrap_or_else(|| "Claude session".to_string());
-    Some(AgentHistoryItem {
+    Ok(Some(AgentHistoryItem {
         provider: AgentHistoryProvider::Claude,
         resume_command: Some(format!("claude --resume {id}")),
         id,
@@ -910,52 +1083,85 @@ fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistor
         cwd: Some(cwd),
         worktree,
         transcript_path: path.display().to_string(),
-        updated_at: file_updated_at(path),
-    })
+        updated_at,
+    }))
 }
 
+#[cfg(test)]
 fn parse_antigravity_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
-    let state = parse_agent_state(AgentKind::Antigravity, path)?;
-    build_antigravity_item(path, state, file_updated_at(path), scope)
+    parse_antigravity_file_checked(path, scope).ok().flatten()
 }
 
+fn parse_antigravity_file_checked(
+    path: &Path,
+    scope: HistoryScope<'_>,
+) -> AppResult<Option<AgentHistoryItem>> {
+    let Some(state) = parse_agent_state_checked(AgentKind::Antigravity, path)? else {
+        return Ok(None);
+    };
+    let Some(updated_at) = file_updated_at_checked(path)? else {
+        return Ok(None);
+    };
+    build_antigravity_item_checked(path, state, updated_at, scope)
+}
+
+#[cfg(test)]
 fn parse_antigravity_snapshot(
     snapshot: crate::agent_resume::AntigravityTranscriptSnapshot,
     scope: HistoryScope<'_>,
 ) -> Option<AgentHistoryItem> {
+    parse_antigravity_snapshot_checked(snapshot, scope)
+        .ok()
+        .flatten()
+}
+
+fn parse_antigravity_snapshot_checked(
+    snapshot: crate::agent_resume::AntigravityTranscriptSnapshot,
+    scope: HistoryScope<'_>,
+) -> AppResult<Option<AgentHistoryItem>> {
     let crate::agent_resume::AntigravityTranscriptSnapshot {
         path,
         file,
         len,
         modified,
     } = snapshot;
-    let state = parse_agent_state_from_opened(AgentKind::Antigravity, &path, file, len)?;
-    build_antigravity_item(&path, state, updated_at_from_modified(modified), scope)
+    let Some(state) =
+        parse_agent_state_from_opened_checked(AgentKind::Antigravity, &path, file, len)?
+    else {
+        return Ok(None);
+    };
+    build_antigravity_item_checked(&path, state, updated_at_from_modified(modified), scope)
 }
 
-fn build_antigravity_item(
+fn build_antigravity_item_checked(
     path: &Path,
     state: ParsedAgentFile,
     updated_at: u64,
     scope: HistoryScope<'_>,
-) -> Option<AgentHistoryItem> {
+) -> AppResult<Option<AgentHistoryItem>> {
     if state.internal_title_generation {
-        return None;
+        return Ok(None);
     }
-    let id = state.id.or_else(|| antigravity_id_from_path(path))?;
+    let Some(id) = state
+        .id
+        .or_else(|| antigravity_id_from_path(path))
+        .and_then(|id| normalized_uuid(&id))
+    else {
+        return Ok(None);
+    };
     let mut cwd_candidates = Vec::new();
     if let Some(cwd) = state.cwd.clone() {
         cwd_candidates.push(cwd);
     } else {
-        cwd_candidates.extend(antigravity_cwds_from_agent_state(&id));
+        cwd_candidates.extend(antigravity_cwds_from_agent_state_checked(&id)?);
     }
     let saw_cwd_candidate = !cwd_candidates.is_empty();
     let cwd = cwd_candidates
         .into_iter()
         .find(|cwd| scope.accepts_cwd(cwd));
     match (scope, cwd.as_deref(), saw_cwd_candidate) {
-        (HistoryScope::Project(_), None, _) => return None,
-        (HistoryScope::Unscoped { .. }, None, true) => return None,
+        (HistoryScope::Project(_), None, _) => return Ok(None),
+        (HistoryScope::Unscoped { .. }, None, true) => return Ok(None),
         _ => {}
     }
     let worktree = cwd.as_deref().and_then(|cwd| scope.worktree_for_cwd(cwd));
@@ -963,7 +1169,7 @@ fn build_antigravity_item(
         .title
         .or_else(|| state.preview.clone())
         .unwrap_or_else(|| "Antigravity session".to_string());
-    Some(AgentHistoryItem {
+    Ok(Some(AgentHistoryItem {
         provider: AgentHistoryProvider::Antigravity,
         resume_command: Some(format!("agy --conversation {id}")),
         id,
@@ -979,21 +1185,33 @@ fn build_antigravity_item(
         worktree,
         transcript_path: path.display().to_string(),
         updated_at,
-    })
+    }))
 }
 
+#[cfg(test)]
 fn parse_grok_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
-    let summary = acorn_transcript::read_grok_session_summary(path)?;
+    parse_grok_file_checked(path, scope).ok().flatten()
+}
+
+fn parse_grok_file_checked(
+    path: &Path,
+    scope: HistoryScope<'_>,
+) -> AppResult<Option<AgentHistoryItem>> {
+    let Some(summary) = acorn_transcript::read_grok_session_summary_checked(path)? else {
+        return Ok(None);
+    };
     if summary.hidden || summary.is_subagent {
-        return None;
+        return Ok(None);
     }
-    let state = parse_agent_state(AgentKind::Grok, path)?;
+    let Some(state) = parse_agent_state_checked(AgentKind::Grok, path)? else {
+        return Ok(None);
+    };
     if state.internal_title_generation {
-        return None;
+        return Ok(None);
     }
     let cwd = summary.cwd.display().to_string();
     if !scope.accepts_cwd(&cwd) {
-        return None;
+        return Ok(None);
     }
     let worktree = scope.worktree_for_cwd(&cwd);
     let title = summary
@@ -1002,7 +1220,10 @@ fn parse_grok_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryI
         .or(summary.session_summary)
         .or_else(|| state.preview.clone())
         .unwrap_or_else(|| "Grok session".to_string());
-    Some(AgentHistoryItem {
+    let Some(updated_at) = file_updated_at_checked(path)? else {
+        return Ok(None);
+    };
+    Ok(Some(AgentHistoryItem {
         provider: AgentHistoryProvider::Grok,
         resume_command: Some(format!("grok --resume {}", summary.id)),
         id: summary.id,
@@ -1017,8 +1238,8 @@ fn parse_grok_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryI
         cwd: Some(cwd),
         worktree,
         transcript_path: path.display().to_string(),
-        updated_at: file_updated_at(path),
-    })
+        updated_at,
+    }))
 }
 
 #[cfg(test)]
@@ -1094,20 +1315,40 @@ fn flush_pending_title_context_entry(
     });
 }
 
+#[cfg(test)]
 fn summarize_agent_history_item(item: &AgentHistoryItem) -> Option<AgentTranscriptSummary> {
-    summarize_agent_transcript(
+    summarize_agent_history_item_checked(item).ok().flatten()
+}
+
+fn summarize_agent_history_item_checked(
+    item: &AgentHistoryItem,
+) -> AppResult<Option<AgentTranscriptSummary>> {
+    summarize_agent_transcript_checked(
         item.provider.clone(),
         item.id.clone(),
         Path::new(&item.transcript_path),
     )
 }
 
+#[cfg(test)]
 fn summarize_agent_transcript(
     provider: AgentHistoryProvider,
     id: String,
     path: &Path,
 ) -> Option<AgentTranscriptSummary> {
-    let snapshot = open_transcript_snapshot(path, TRANSCRIPT_SCAN_LIMITS)?;
+    summarize_agent_transcript_checked(provider, id, path)
+        .ok()
+        .flatten()
+}
+
+fn summarize_agent_transcript_checked(
+    provider: AgentHistoryProvider,
+    id: String,
+    path: &Path,
+) -> AppResult<Option<AgentTranscriptSummary>> {
+    let Some(snapshot) = open_transcript_snapshot_checked(path, TRANSCRIPT_SCAN_LIMITS)? else {
+        return Ok(None);
+    };
     let len = snapshot.len;
     let modified = snapshot.modified;
     let cache_key = TranscriptSummaryCacheKey {
@@ -1116,7 +1357,7 @@ fn summarize_agent_transcript(
         path: path.to_path_buf(),
     };
     if let Some(summary) = cached_transcript_summary(&cache_key, len, modified) {
-        return Some(summary);
+        return Ok(Some(summary));
     }
 
     let mut message_count = 0_u64;
@@ -1130,7 +1371,7 @@ fn summarize_agent_transcript(
     let mut grok_completed_turns = 0_u64;
     let kind = provider.kind();
 
-    scan_transcript_json_lines(snapshot, TRANSCRIPT_SCAN_LIMITS, |line| {
+    let complete = scan_transcript_json_lines_checked(snapshot, TRANSCRIPT_SCAN_LIMITS, |line| {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             return;
         };
@@ -1195,6 +1436,9 @@ fn summarize_agent_transcript(
             }
         }
     })?;
+    if !complete {
+        return Ok(None);
+    }
     flush_pending_summary_message(
         &mut grok_pending_role,
         &mut grok_pending_text,
@@ -1230,7 +1474,7 @@ fn summarize_agent_transcript(
         token_usage,
     };
     store_transcript_summary_cache(cache_key, len, modified, summary.clone());
-    Some(summary)
+    Ok(Some(summary))
 }
 
 fn flush_pending_summary_message(
@@ -1285,46 +1529,86 @@ fn open_transcript_snapshot(
     path: &Path,
     limits: TranscriptScanLimits,
 ) -> Option<TranscriptSnapshot> {
-    let path_metadata = fs::symlink_metadata(path).ok()?;
+    open_transcript_snapshot_checked(path, limits)
+        .ok()
+        .flatten()
+}
+
+fn open_transcript_snapshot_checked(
+    path: &Path,
+    limits: TranscriptScanLimits,
+) -> AppResult<Option<TranscriptSnapshot>> {
+    let path_metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(path_access_error("inspect", path, error)),
+    };
     if !path_metadata.file_type().is_file() {
-        return None;
+        return Ok(None);
     }
-    let file = fs::File::open(path).ok()?;
-    let metadata = file.metadata().ok()?;
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(path_access_error("open", path, error)),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|error| path_access_error("inspect opened", path, error))?;
     if !metadata.is_file() || metadata.len() > limits.max_bytes {
-        return None;
+        return Ok(None);
     }
-    Some(TranscriptSnapshot {
+    let modified = metadata
+        .modified()
+        .map_err(|error| path_access_error("read timestamp from", path, error))?;
+    Ok(Some(TranscriptSnapshot {
+        path: path.to_path_buf(),
         file,
         len: metadata.len(),
-        modified: metadata.modified().ok(),
-    })
+        modified: Some(modified),
+    }))
 }
 
 fn scan_transcript_json_lines(
     snapshot: TranscriptSnapshot,
     limits: TranscriptScanLimits,
-    mut visit: impl FnMut(&str),
+    visit: impl FnMut(&str),
 ) -> Option<()> {
+    scan_transcript_json_lines_checked(snapshot, limits, visit)
+        .ok()
+        .filter(|complete| *complete)
+        .map(|_| ())
+}
+
+fn scan_transcript_json_lines_checked(
+    snapshot: TranscriptSnapshot,
+    limits: TranscriptScanLimits,
+    mut visit: impl FnMut(&str),
+) -> AppResult<bool> {
+    let path = snapshot.path.clone();
     let mut reader = BufReader::new(snapshot.file.take(snapshot.len));
     let mut line = Vec::new();
     let mut line_count = 0_usize;
     loop {
         line.clear();
-        let read_limit = limits.max_line_bytes.checked_add(1)?;
+        let Some(read_limit) = limits.max_line_bytes.checked_add(1) else {
+            return Ok(false);
+        };
         let read = reader
             .by_ref()
             .take(read_limit as u64)
             .read_until(b'\n', &mut line)
-            .ok()?;
+            .map_err(|error| path_access_error("read", &path, error))?;
         if read == 0 {
-            return Some(());
+            return Ok(true);
         }
         if line.len() > limits.max_line_bytes || line_count >= limits.max_lines {
-            return None;
+            return Ok(false);
         }
         line_count += 1;
-        let text = std::str::from_utf8(&line).ok()?.trim();
+        let Ok(text) = std::str::from_utf8(&line) else {
+            return Ok(false);
+        };
+        let text = text.trim();
         if text.starts_with('{') {
             visit(text);
         }
@@ -1555,18 +1839,30 @@ fn max_token_usage(
     }
 }
 
+#[cfg(test)]
 fn parse_agent_state(kind: AgentKind, path: &Path) -> Option<ParsedAgentFile> {
-    let file = fs::File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
-    parse_agent_state_from_opened(kind, path, file, len)
+    parse_agent_state_checked(kind, path).ok().flatten()
 }
 
-fn parse_agent_state_from_opened(
+fn parse_agent_state_checked(kind: AgentKind, path: &Path) -> AppResult<Option<ParsedAgentFile>> {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(path_access_error("open", path, error)),
+    };
+    let len = file
+        .metadata()
+        .map_err(|error| path_access_error("inspect opened", path, error))?
+        .len();
+    parse_agent_state_from_opened_checked(kind, path, file, len)
+}
+
+fn parse_agent_state_from_opened_checked(
     kind: AgentKind,
     path: &Path,
     file: fs::File,
     len: u64,
-) -> Option<ParsedAgentFile> {
+) -> AppResult<Option<ParsedAgentFile>> {
     let mut state = ParsedAgentFile {
         id: if kind == AgentKind::Antigravity {
             antigravity_id_from_path(path)
@@ -1577,7 +1873,9 @@ fn parse_agent_state_from_opened(
     };
     let mut grok_last_role = None;
     let mut grok_title_open = true;
-    for line in sample_lines_from_opened(file, len).ok()? {
+    for line in sample_lines_from_opened(file, len)
+        .map_err(|error| path_access_error("read", path, error))?
+    {
         let value = if kind == AgentKind::Claude {
             serde_json::from_str::<Value>(&line).ok()
         } else {
@@ -1653,7 +1951,12 @@ fn parse_agent_state_from_opened(
         }
     }
     if kind == AgentKind::Claude && state.conversation_message_count == 0 {
-        state.subagent_transcript_count = count_claude_subagent_transcripts(path)?;
+        let Some(count) =
+            count_claude_subagent_transcripts_checked(path, MAX_DISCOVERY_ENTRIES_PER_PROVIDER)?
+        else {
+            return Ok(None);
+        };
+        state.subagent_transcript_count = count;
     }
     if kind == AgentKind::Grok
         && state
@@ -1664,7 +1967,7 @@ fn parse_agent_state_from_opened(
         state.internal_title_generation = true;
     }
 
-    Some(state)
+    Ok(Some(state))
 }
 
 fn update_claude_recoverable_signals(state: &mut ParsedAgentFile, value: &Value) {
@@ -1710,42 +2013,60 @@ fn has_recoverable_json_text(value: &Value) -> bool {
     }
 }
 
-fn count_claude_subagent_transcripts(path: &Path) -> Option<u64> {
-    count_claude_subagent_transcripts_with_limit(path, MAX_DISCOVERY_ENTRIES_PER_PROVIDER)
+#[cfg(test)]
+fn count_claude_subagent_transcripts_with_limit(path: &Path, max_entries: usize) -> Option<u64> {
+    count_claude_subagent_transcripts_checked(path, max_entries)
+        .ok()
+        .flatten()
 }
 
-fn count_claude_subagent_transcripts_with_limit(path: &Path, max_entries: usize) -> Option<u64> {
+fn count_claude_subagent_transcripts_checked(
+    path: &Path,
+    max_entries: usize,
+) -> AppResult<Option<u64>> {
     let Some(dir) = claude_subagent_transcripts_dir(path) else {
-        return Some(0);
+        return Ok(Some(0));
     };
     let metadata = match fs::symlink_metadata(&dir) {
         Ok(metadata) => metadata,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Some(0),
-        Err(_) => return None,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Some(0)),
+        Err(error) => return Err(path_access_error("inspect", &dir, error)),
     };
     if !metadata.file_type().is_dir() {
-        return None;
+        return Err(AppError::InvalidPath(format!(
+            "Claude subagent transcript path is not a regular directory: {}",
+            dir.display()
+        )));
     }
-    let entries = fs::read_dir(dir).ok()?;
+    let entries = fs::read_dir(&dir).map_err(|error| path_access_error("read", &dir, error))?;
     let mut scanned_entries = 0_usize;
     let mut transcripts = 0_u64;
     for entry in entries {
         if scanned_entries >= max_entries {
-            return None;
+            return Err(AppError::Other(format!(
+                "Claude subagent transcript entry limit exceeded ({max_entries}) below {}",
+                dir.display()
+            )));
         }
         scanned_entries += 1;
-        let entry = entry.ok()?;
-        if entry.file_type().ok()?.is_file()
+        let entry = entry.map_err(|error| path_access_error("read", &dir, error))?;
+        let entry_path = entry.path();
+        if entry
+            .file_type()
+            .map_err(|error| path_access_error("inspect", &entry_path, error))?
+            .is_file()
             && entry
                 .path()
                 .extension()
                 .and_then(|extension| extension.to_str())
                 == Some("jsonl")
         {
-            transcripts = transcripts.checked_add(1)?;
+            transcripts = transcripts.checked_add(1).ok_or_else(|| {
+                AppError::Other("Claude subagent transcript count overflow".to_string())
+            })?;
         }
     }
-    Some(transcripts)
+    Ok(Some(transcripts))
 }
 
 fn claude_subagent_transcripts_dir(path: &Path) -> Option<PathBuf> {
@@ -1913,21 +2234,28 @@ fn codex_id_from_filename(path: &Path) -> Option<String> {
     uuid_suffix(stem)
 }
 
-fn codex_id_from_transcript(path: &Path) -> Option<String> {
-    for line in sample_lines(path).ok()? {
+fn codex_id_from_transcript_checked(path: &Path) -> AppResult<Option<String>> {
+    for line in sample_lines(path).map_err(|error| path_access_error("read", path, error))? {
         let Some(parsed) = parse_transcript_line(AgentKind::Codex, line.trim()) else {
             continue;
         };
         if parsed.session_id.is_some() {
-            return parsed.session_id;
+            return Ok(parsed.session_id);
         }
     }
-    None
+    Ok(None)
 }
 
+#[cfg(test)]
 fn codex_transcript_matches_id(path: &Path, id: &str) -> bool {
-    codex_id_from_filename(path).as_deref() == Some(id)
-        || codex_id_from_transcript(path).as_deref() == Some(id)
+    codex_transcript_matches_id_checked(path, id).unwrap_or(false)
+}
+
+fn codex_transcript_matches_id_checked(path: &Path, id: &str) -> AppResult<bool> {
+    if codex_id_from_filename(path).as_deref() == Some(id) {
+        return Ok(true);
+    }
+    Ok(codex_id_from_transcript_checked(path)?.as_deref() == Some(id))
 }
 
 fn is_codex_transcript_path(path: &Path, sessions_root: &Path) -> bool {
@@ -2140,13 +2468,22 @@ fn normalize_path(path: &Path) -> PathBuf {
     })
 }
 
-fn file_updated_at(path: &Path) -> u64 {
-    fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+fn file_updated_at_checked(path: &Path) -> AppResult<Option<u64>> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(path_access_error("inspect", path, error)),
+    };
+    let modified = metadata
+        .modified()
+        .map_err(|error| path_access_error("read timestamp from", path, error))?;
+    Ok(Some(
+        modified
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0),
+    ))
 }
 
 fn codex_sessions_root() -> Option<PathBuf> {
@@ -2172,13 +2509,6 @@ fn google_agent_storage_root() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("GEMINI_DIR").map(PathBuf::from))
         .or_else(|| home_dir().map(|home| home.join(".gemini")))
-}
-
-fn antigravity_brain_roots() -> Vec<PathBuf> {
-    antigravity_brain_root_candidates()
-        .into_iter()
-        .filter(|path| path.is_dir())
-        .collect()
 }
 
 fn antigravity_brain_root_candidates() -> Vec<PathBuf> {
@@ -2225,6 +2555,10 @@ fn antigravity_transcript_matches_id(path: &Path, id: &str) -> bool {
     antigravity_id_from_path(path).as_deref() == Some(id)
 }
 
+fn normalized_uuid(value: &str) -> Option<String> {
+    Uuid::parse_str(value.trim()).ok().map(|id| id.to_string())
+}
+
 fn is_grok_transcript_path(path: &Path, sessions_root: &Path) -> bool {
     if path.file_name().and_then(|name| name.to_str()) != Some("updates.jsonl") {
         return false;
@@ -2268,59 +2602,75 @@ const AGENT_STATE_LOOKUP_LIMITS: AgentStateLookupLimits = AgentStateLookupLimits
     max_cwd_bytes: crate::agent_resume::AGENT_CWD_MAX_BYTES,
 };
 
-fn antigravity_cwds_from_agent_state(id: &str) -> Vec<String> {
-    let Some(data_dir) = acorn_daemon::paths::data_dir().ok() else {
-        return Vec::new();
-    };
-    antigravity_cwds_from_agent_state_at(&data_dir, id)
+fn antigravity_cwds_from_agent_state_checked(id: &str) -> AppResult<Vec<String>> {
+    let data_dir = acorn_daemon::paths::data_dir()?;
+    Ok(antigravity_cwds_from_agent_state_at_checked(&data_dir, id)?
         .into_iter()
         .map(|entry| entry.cwd)
-        .collect()
+        .collect())
 }
 
+#[cfg(test)]
 fn antigravity_cwds_from_agent_state_at(data_dir: &Path, id: &str) -> Vec<AgentStateCwd> {
-    antigravity_cwds_from_agent_state_with_limits(data_dir, id, AGENT_STATE_LOOKUP_LIMITS)
+    antigravity_cwds_from_agent_state_at_checked(data_dir, id).unwrap_or_default()
 }
 
+fn antigravity_cwds_from_agent_state_at_checked(
+    data_dir: &Path,
+    id: &str,
+) -> AppResult<Vec<AgentStateCwd>> {
+    antigravity_cwds_from_agent_state_with_limits_checked(data_dir, id, AGENT_STATE_LOOKUP_LIMITS)
+}
+
+#[cfg(test)]
 fn antigravity_cwds_from_agent_state_with_limits(
     data_dir: &Path,
     id: &str,
     limits: AgentStateLookupLimits,
 ) -> Vec<AgentStateCwd> {
-    let Ok(id) = crate::agent_resume::normalize_provider_id(id) else {
-        return Vec::new();
-    };
+    antigravity_cwds_from_agent_state_with_limits_checked(data_dir, id, limits).unwrap_or_default()
+}
+
+fn antigravity_cwds_from_agent_state_with_limits_checked(
+    data_dir: &Path,
+    id: &str,
+    limits: AgentStateLookupLimits,
+) -> AppResult<Vec<AgentStateCwd>> {
+    let id = crate::agent_resume::normalize_provider_id(id)?;
     let root = data_dir.join("agent-state");
-    let Ok(root_metadata) = fs::symlink_metadata(&root) else {
-        return Vec::new();
+    let root_metadata = match fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(path_access_error("inspect", &root, error)),
     };
     if !root_metadata.file_type().is_dir() {
-        return Vec::new();
+        return Err(AppError::InvalidPath(format!(
+            "agent state root is not a regular directory: {}",
+            root.display()
+        )));
     }
-    let Ok(entries) = fs::read_dir(&root) else {
-        return Vec::new();
-    };
+    let entries = fs::read_dir(&root).map_err(|error| path_access_error("read", &root, error))?;
     let mut out = Vec::new();
     let mut scanned_entries = 0_usize;
     for entry in entries {
         if scanned_entries >= limits.max_entries {
-            // Returning a subset would make a partial scan look authoritative.
-            return Vec::new();
+            return Err(AppError::Other(format!(
+                "agent state discovery entry limit exceeded ({}) below {}",
+                limits.max_entries,
+                root.display()
+            )));
         }
         scanned_entries += 1;
-        let Ok(entry) = entry else {
-            return Vec::new();
-        };
-        let Ok(entry_type) = entry.file_type() else {
-            return Vec::new();
-        };
+        let entry = entry.map_err(|error| path_access_error("read", &root, error))?;
+        let dir = entry.path();
+        let entry_type = entry
+            .file_type()
+            .map_err(|error| path_access_error("inspect", &dir, error))?;
         if !entry_type.is_dir() {
             continue;
         }
-        let dir = entry.path();
-        let Ok(dir_metadata) = fs::symlink_metadata(&dir) else {
-            return Vec::new();
-        };
+        let dir_metadata = fs::symlink_metadata(&dir)
+            .map_err(|error| path_access_error("inspect", &dir, error))?;
         if !dir_metadata.file_type().is_dir() {
             continue;
         }
@@ -2331,7 +2681,7 @@ fn antigravity_cwds_from_agent_state_with_limits(
         let marker = match crate::agent_resume::read_provider_marker(&dir.join("antigravity.id")) {
             Ok(Some(marker)) => marker,
             Ok(None) => continue,
-            Err(_) => return Vec::new(),
+            Err(error) => return Err(error.into()),
         };
         if marker.text != id {
             continue;
@@ -2342,7 +2692,7 @@ fn antigravity_cwds_from_agent_state_with_limits(
         ) {
             Ok(Some(snapshot)) => snapshot,
             Ok(None) => continue,
-            Err(_) => return Vec::new(),
+            Err(error) => return Err(error.into()),
         };
         let cwd = cwd_snapshot.text.trim().to_string();
         if cwd.is_empty() {
@@ -2359,7 +2709,7 @@ fn antigravity_cwds_from_agent_state_with_limits(
     }
     out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     out.dedup_by(|a, b| a.cwd == b.cwd);
-    out
+    Ok(out)
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -2657,7 +3007,7 @@ mod tests {
 
         let hidden_id = "0198c151-f3ee-7991-9768-741923bb6b51";
         write_grok_history_transcript(&grok_home, hidden_id, &repo, true);
-        let history = scan_grok(HistoryScope::Project(&repo), 10);
+        let history = scan_grok(HistoryScope::Project(&repo), 10).unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].id, id);
     }
@@ -2697,6 +3047,7 @@ mod tests {
             "17F38E8C-3A7E-408B-8C79-AEF7432C0FD2",
             storage.path(),
         )
+        .unwrap()
         .unwrap();
 
         assert_eq!(item.id, id);
@@ -2731,7 +3082,7 @@ mod tests {
             id,
             linked_root.path(),
         )
-        .is_none());
+        .is_err());
 
         let linked_session = tempfile::tempdir().unwrap();
         let brain = linked_session.path().join("antigravity/brain");
@@ -2746,7 +3097,7 @@ mod tests {
             id,
             linked_session.path(),
         )
-        .is_none());
+        .is_err());
 
         let linked_leaf = tempfile::tempdir().unwrap();
         let leaf = linked_leaf
@@ -2761,7 +3112,7 @@ mod tests {
             id,
             linked_leaf.path(),
         )
-        .is_none());
+        .is_err());
         assert!(sentinel.is_file());
     }
 
@@ -3636,6 +3987,12 @@ mod tests {
             return;
         }
 
+        let checked = collect_files_with_entry_limit_checked(
+            dir.path(),
+            1,
+            |path| path.extension().and_then(|extension| extension.to_str()) == Some("jsonl"),
+            10,
+        );
         let files = collect_files_with_entry_limit(
             dir.path(),
             1,
@@ -3645,9 +4002,75 @@ mod tests {
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o700)).unwrap();
 
         assert!(
+            checked.is_err(),
+            "the checked traversal must report the error"
+        );
+        assert!(
             files.is_empty(),
             "a traversal error must discard already collected history"
         );
+    }
+
+    #[test]
+    fn checked_collect_files_treats_missing_root_as_empty() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-missing-history-root-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+
+        assert!(collect_files_checked(&root, 1, |_| true)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_history_parsers_report_unreadable_transcripts_and_summaries() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let codex = root
+            .path()
+            .join("rollout-2026-08-18T00-00-00-019e4818-7c15-7e60-9b3b-898a1c7803d6.jsonl");
+        fs::write(&codex, "{}\n").unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o000)).unwrap();
+        let codex_permissions_enforced = fs::File::open(&codex).is_err();
+        let codex_result = parse_codex_file_checked(&codex, HistoryScope::Project(&repo));
+        let summary_result = summarize_agent_transcript_checked(
+            AgentHistoryProvider::Codex,
+            "019e4818-7c15-7e60-9b3b-898a1c7803d6".to_string(),
+            &codex,
+        );
+        let identity_result =
+            codex_transcript_matches_id_checked(&codex, "019e4818-7c15-7e60-9b3b-898a1c7803d7");
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let grok_id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let grok_dir = root.path().join("sessions/cwd").join(grok_id);
+        fs::create_dir_all(&grok_dir).unwrap();
+        let grok = grok_dir.join("updates.jsonl");
+        let grok_summary = grok_dir.join("summary.json");
+        fs::write(&grok, "{}\n").unwrap();
+        fs::write(
+            &grok_summary,
+            serde_json::json!({"info": {"id": grok_id, "cwd": repo}}).to_string(),
+        )
+        .unwrap();
+        fs::set_permissions(&grok_summary, fs::Permissions::from_mode(0o000)).unwrap();
+        let grok_permissions_enforced = fs::File::open(&grok_summary).is_err();
+        let grok_result = parse_grok_file_checked(&grok, HistoryScope::Project(&repo));
+        fs::set_permissions(&grok_summary, fs::Permissions::from_mode(0o600)).unwrap();
+
+        if codex_permissions_enforced {
+            assert!(codex_result.is_err());
+            assert!(summary_result.is_err());
+            assert!(identity_result.is_err());
+        }
+        if grok_permissions_enforced {
+            assert!(grok_result.is_err());
+        }
     }
 
     #[test]

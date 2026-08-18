@@ -231,8 +231,17 @@ fn title_generation_command(mut resolved: ResolvedAiCommand) -> ResolvedAiComman
 }
 
 pub fn resolve_native_session(session_id: uuid::Uuid) -> Option<agent_resume::LiveTranscript> {
-    if let Some(live) = agent_resume::live_transcript(session_id) {
-        return Some(live);
+    match agent_resume::live_transcript_checked(session_id) {
+        Ok(Some(live)) => return Some(live),
+        Ok(None) => {}
+        Err(error) => {
+            tracing::debug!(
+                %session_id,
+                error = %error,
+                "session title: transcript lookup failed"
+            );
+            return None;
+        }
     }
 
     todos::locate_transcript_for(&session_id.to_string())

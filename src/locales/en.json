@@ -17,6 +17,7 @@
       "sessionWorktreeDiscardFailedRetry": "Failed to finish deleting removed session data: {error}. Retry",
       "refreshFailed": "Failed to refresh sessions:",
       "renameFailed": "Failed to rename session:",
+      "agentDetectionFailed": "Failed to inspect live agent transcripts:",
       "titleNotReady": "No transcript is available for this session yet.",
       "titleRegenerateSkipped": "Session name was not regenerated.",
       "worktreeAdopted": "Worktree adopted: {name}",

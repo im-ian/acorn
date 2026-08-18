@@ -17,6 +17,7 @@
       "sessionWorktreeDiscardFailedRetry": "削除したセッションデータを完全に消去できませんでした: {error}。再試行",
       "refreshFailed": "セッションを更新できませんでした:",
       "renameFailed": "セッション名の変更に失敗しました:",
+      "agentDetectionFailed": "実行中のエージェントのトランスクリプトを確認できませんでした:",
       "titleNotReady": "このセッションのトランスクリプトはまだありません。",
       "titleRegenerateSkipped": "セッション名は再生成されませんでした。",
       "worktreeAdopted": "採用されたワークツリー: {name}",

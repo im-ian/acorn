@@ -25,6 +25,10 @@ const eventMocks = vi.hoisted(() => ({
   listen: vi.fn(),
 }));
 
+const toastMocks = vi.hoisted(() => ({
+  show: vi.fn(),
+}));
+
 vi.mock("../lib/api", () => ({
   FS_CHANGED_EVENT: "acorn:fs-changed",
   api: {
@@ -56,7 +60,7 @@ vi.mock("../store", () => ({
 
 vi.mock("../lib/toasts", () => ({
   useToasts: (selector: (state: { show: () => void }) => unknown) =>
-    selector({ show: vi.fn() }),
+    selector({ show: toastMocks.show }),
 }));
 
 vi.mock("../lib/useTranslation", () => ({

@@ -145,6 +145,70 @@ function createLinkedWorktreeFixture(): {
 }
 
 test.describe("sidebar: project lifecycle", () => {
+  test("session context menu surfaces transcript detection failures", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "permission-session",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "waiting_for_input",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+        agent_provider: null,
+        agent_transcript_id: null,
+      },
+    ]);
+    await tauri.handle("detect_session_agent", () => {
+      const w = window as unknown as { __detectCalls?: number };
+      w.__detectCalls = (w.__detectCalls ?? 0) + 1;
+      throw new Error("permission denied: /Users/me/.codex/sessions");
+    });
+
+    await page.goto("/");
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /permission-session/ })
+      .click({ button: "right" });
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __detectCalls?: number }).__detectCalls ??
+            0,
+        ),
+      )
+      .toBe(1);
+    await expect(
+      page.getByText(
+        /Failed to inspect live agent transcripts:.*permission denied: \/Users\/me\/\.codex\/sessions/,
+      ),
+    ).toBeVisible();
+  });
+
   test("session context menu can regenerate a session name", async ({
     page,
     tauri,

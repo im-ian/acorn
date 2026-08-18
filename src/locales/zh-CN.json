@@ -17,6 +17,7 @@
       "sessionWorktreeDiscardFailedRetry": "无法彻底删除已移除的会话数据：{error}。重试",
       "refreshFailed": "无法刷新会话：",
       "renameFailed": "无法重命名会话：",
+      "agentDetectionFailed": "无法检查正在运行的代理对话记录：",
       "titleNotReady": "尚无可用于此会话的对话记录。",
       "titleRegenerateSkipped": "会话名称未重新生成。",
       "worktreeAdopted": "已采用工作树：{name}",

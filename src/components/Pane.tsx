@@ -1106,6 +1106,9 @@ function TabItem({
   // menu opens. Null while loading; the menu rebuilds when this resolves
   // so the Fork item gets the right label / enabled state.
   const [agent, setAgent] = useState<SessionAgentDetection | null>(null);
+  const agentDetectionFailurePrefix = t(
+    "toasts.session.agentDetectionFailed",
+  );
 
   useEffect(() => {
     if (!menu || !session) return;
@@ -1117,18 +1120,19 @@ function TabItem({
         if (!cancelled) setAgent(res);
       })
       .catch((err) => {
-        console.error("[Pane.Fork] detect failed", {
+        console.warn("[Pane.Fork] detect failed", {
           sessionId: session.id,
           err,
         });
         if (!cancelled) {
           setAgent(createEmptySessionAgentDetection());
+          showToast(`${agentDetectionFailurePrefix} ${String(err)}`);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [menu, session]);
+  }, [agentDetectionFailurePrefix, menu, session, showToast]);
 
   useEffect(() => {
     if (isGeneratingTitle && editing) setEditing(false);

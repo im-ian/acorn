@@ -99,19 +99,23 @@ fn locate_transcript_in(
     session_id: &str,
     limits: ReplayLimits,
 ) -> AppResult<Option<PathBuf>> {
-    if !root.exists() {
-        return Ok(None);
-    }
     let target = transcript_file_name(session_id)?;
+    match std::fs::symlink_metadata(root) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(path_access_error("inspect", root, error)),
+    }
     // The configured root itself may intentionally be a symlink (for example,
     // to another volume). Resolve it once, then reject links below that root.
     let canonical_root = match root.canonicalize() {
         Ok(root) => root,
-        Err(_) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(path_access_error("resolve", root, error)),
     };
     let entries = match std::fs::read_dir(&canonical_root) {
         Ok(e) => e,
-        Err(_) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(path_access_error("read", &canonical_root, error)),
     };
     for (index, entry) in entries.enumerate() {
         if index >= limits.max_project_dir_entries {
@@ -120,28 +124,40 @@ fn locate_transcript_in(
                 limits.max_project_dir_entries,
             ));
         }
-        let Ok(entry) = entry else { continue };
-        let Ok(entry_type) = entry.file_type() else {
-            continue;
-        };
+        let entry = entry.map_err(|error| path_access_error("read", &canonical_root, error))?;
+        let entry_path = entry.path();
+        let entry_type = entry
+            .file_type()
+            .map_err(|error| path_access_error("inspect", &entry_path, error))?;
         if !entry_type.is_dir() {
             continue;
         }
-        let candidate = entry.path().join(&target);
-        let Ok(candidate_meta) = std::fs::symlink_metadata(&candidate) else {
-            continue;
+        let candidate = entry_path.join(&target);
+        let candidate_meta = match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(path_access_error("inspect", &candidate, error)),
         };
         if candidate_meta.file_type().is_symlink() || !candidate_meta.is_file() {
             continue;
         }
-        let Ok(resolved) = candidate.canonicalize() else {
-            continue;
+        let resolved = match candidate.canonicalize() {
+            Ok(resolved) => resolved,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(path_access_error("resolve", &candidate, error)),
         };
         if resolved.starts_with(&canonical_root) {
             return Ok(Some(resolved));
         }
     }
     Ok(None)
+}
+
+fn path_access_error(operation: &str, path: &Path, error: std::io::Error) -> AppError {
+    AppError::Other(format!(
+        "failed to {operation} transcript path {}: {error}",
+        path.display()
+    ))
 }
 
 fn transcript_file_name(session_id: &str) -> AppResult<String> {
@@ -790,6 +806,37 @@ mod tests {
             .unwrap();
 
         assert_eq!(located, path.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn missing_project_root_is_not_an_access_error() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-missing-claude-projects-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+
+        assert_eq!(
+            locate_transcript_in(&root, SESSION_ID, small_limits()).unwrap(),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inaccessible_project_root_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let permission_bits_enforced = std::fs::read_dir(root.path()).is_err();
+        let result = locate_transcript_in(root.path(), SESSION_ID, small_limits());
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        if permission_bits_enforced {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("failed to read transcript path"));
+            assert!(error.contains(&root.path().display().to_string()));
+        }
     }
 
     #[cfg(unix)]

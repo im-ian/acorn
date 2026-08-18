@@ -90,6 +90,7 @@ fn daemon_session_pids(state: &AppState) -> HashMap<Uuid, u32> {
 /// process scan inside `collect_session_owner_mappings` does not show up on any
 /// idle-CPU graph.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const ERROR_WARNING_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Spawn the persister on a dedicated OS thread. The poller is process-
 /// scoped: one task per Acorn run, walks every session each tick. The
@@ -105,10 +106,22 @@ pub fn spawn(state: AppState) {
 }
 
 fn run(state: AppState) {
+    let mut last_warning_at = None;
     loop {
         std::thread::sleep(POLL_INTERVAL);
-        if let Err(err) = tick(&state) {
-            tracing::warn!(error = %err, "agent_resume_persister: tick failed");
+        match tick(&state) {
+            Ok(()) => last_warning_at = None,
+            Err(err) => {
+                let warning_is_due = last_warning_at
+                    .map(|last: Instant| last.elapsed() >= ERROR_WARNING_INTERVAL)
+                    .unwrap_or(true);
+                if warning_is_due {
+                    tracing::warn!(error = %err, "agent_resume_persister: tick failed");
+                    last_warning_at = Some(Instant::now());
+                } else {
+                    tracing::debug!(error = %err, "agent_resume_persister: tick still failing");
+                }
+            }
         }
     }
 }
@@ -126,17 +139,21 @@ fn tick(state: &AppState) -> io::Result<()> {
         |id| state.pty.child_pid(id),
         |id| daemon_pids.get(id).copied(),
     );
-    let mappings = transcript_watcher::collect_session_owner_mappings(&sessions);
+    let mappings = transcript_watcher::collect_session_owner_mappings_checked(&sessions)?;
     if mappings.is_empty() {
         return Ok(());
     }
+    let mut first_error = None;
     for (session_id, kind, uuid) in mappings {
         let state_dir = match agent_resume::ensure_session_state_dir(session_id) {
             Ok(p) => p,
             Err(err) => {
-                tracing::warn!(
-                    %session_id, error = %err,
-                    "agent_resume_persister: failed to ensure state dir"
+                remember_first_error(
+                    &mut first_error,
+                    contextual_io_error(
+                        format!("ensure resume state for session {session_id}"),
+                        err,
+                    ),
                 );
                 continue;
             }
@@ -148,21 +165,40 @@ fn tick(state: &AppState) -> io::Result<()> {
                     &format!("{}\n", cwd.display()),
                     agent_resume::AGENT_CWD_MAX_BYTES,
                 ) {
-                    tracing::warn!(
-                        %session_id, ?kind, error = %err,
-                        "agent_resume_persister: cwd write failed"
+                    remember_first_error(
+                        &mut first_error,
+                        contextual_io_error(
+                            format!("write {kind:?} cwd for session {session_id}"),
+                            err,
+                        ),
                     );
                 }
             }
         }
         if let Err(err) = bind_marker_in_state_dir(&state_dir, kind, &uuid) {
-            tracing::warn!(
-                %session_id, ?kind, %uuid, error = %err,
-                "agent_resume_persister: write failed"
+            remember_first_error(
+                &mut first_error,
+                contextual_io_error(
+                    format!("bind {kind:?} resume marker {uuid} for session {session_id}"),
+                    err,
+                ),
             );
         }
     }
-    Ok(())
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn contextual_io_error(context: impl std::fmt::Display, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("failed to {context}: {error}"))
+}
+
+fn remember_first_error(slot: &mut Option<io::Error>, error: io::Error) {
+    if slot.is_none() {
+        *slot = Some(error);
+    }
 }
 
 /// Bind `uuid` as `session_id`'s durable resume marker for `kind`, under
@@ -289,7 +325,7 @@ fn bind_marker_in_state_dir_with_policy(
         &uuid,
         provider_binding_is_settling,
         |prev, next| marker_rollback_is_dormant_echo(kind, prev, next),
-    ) {
+    )? {
         return Ok(());
     }
     agent_resume::replace_provider_marker(&id_file, &uuid)?;
@@ -305,13 +341,20 @@ fn marker_update_is_blocked<F>(
     next: &str,
     provider_binding_is_settling: bool,
     dormant_echo: F,
-) -> bool
+) -> io::Result<bool>
 where
-    F: FnOnce(&str, &str) -> bool,
+    F: FnOnce(&str, &str) -> io::Result<bool>,
 {
-    policy == MarkerBindPolicy::Inferred
-        && previous
-            .is_some_and(|previous| provider_binding_is_settling || dormant_echo(previous, next))
+    if policy != MarkerBindPolicy::Inferred {
+        return Ok(false);
+    }
+    let Some(previous) = previous else {
+        return Ok(false);
+    };
+    if provider_binding_is_settling {
+        return Ok(true);
+    }
+    dormant_echo(previous, next)
 }
 
 fn id_filename(kind: AgentKind) -> &'static str {
@@ -337,12 +380,16 @@ fn cwd_filename(kind: AgentKind) -> Option<&'static str> {
 /// writing it would oscillate the marker old → new → old. A real
 /// `claude --resume` of an older conversation also moves backwards, but
 /// its transcript is being appended right now (hot), so it passes.
-fn marker_rollback_is_dormant_echo(kind: AgentKind, prev_uuid: &str, next_uuid: &str) -> bool {
-    let Some(prev_path) = agent_resume::locate_transcript(kind, prev_uuid) else {
-        return false;
+fn marker_rollback_is_dormant_echo(
+    kind: AgentKind,
+    prev_uuid: &str,
+    next_uuid: &str,
+) -> io::Result<bool> {
+    let Some(prev_path) = agent_resume::locate_transcript_checked(kind, prev_uuid)? else {
+        return Ok(false);
     };
-    let Some(next_path) = agent_resume::locate_transcript(kind, next_uuid) else {
-        return false;
+    let Some(next_path) = agent_resume::locate_transcript_checked(kind, next_uuid)? else {
+        return Ok(false);
     };
     rollback_is_dormant_echo_for_kind(kind, &prev_path, &next_path, next_uuid, SystemTime::now())
 }
@@ -353,10 +400,10 @@ fn rollback_is_dormant_echo_for_kind(
     next: &Path,
     next_uuid: &str,
     now: SystemTime,
-) -> bool {
-    let dormant_echo = rollback_is_dormant_echo(prev, next, now);
+) -> io::Result<bool> {
+    let dormant_echo = rollback_is_dormant_echo(prev, next, now)?;
     if !dormant_echo {
-        return false;
+        return Ok(false);
     }
     // A Codex marker can point to a child rollout. If that child names the
     // newly resolved transcript in its bounded parent chain, allow the owner
@@ -364,58 +411,81 @@ fn rollback_is_dormant_echo_for_kind(
     // Other backwards moves retain the oscillation guard.
     if kind == AgentKind::Codex
         && codex_rollout_declares_ancestor(prev, next_uuid, |thread_id| {
-            agent_resume::locate_transcript(AgentKind::Codex, thread_id)
-        })
+            agent_resume::locate_transcript_checked(AgentKind::Codex, thread_id)
+        })?
     {
-        return false;
+        return Ok(false);
     }
-    true
+    Ok(true)
 }
 
-fn codex_rollout_declares_ancestor<F>(rollout: &Path, ancestor_uuid: &str, mut locate: F) -> bool
+fn codex_rollout_declares_ancestor<F>(
+    rollout: &Path,
+    ancestor_uuid: &str,
+    mut locate: F,
+) -> io::Result<bool>
 where
-    F: FnMut(&str) -> Option<PathBuf>,
+    F: FnMut(&str) -> io::Result<Option<PathBuf>>,
 {
     const MAX_ANCESTOR_DEPTH: usize = 16;
 
     let mut current = rollout.to_path_buf();
     let mut seen = std::collections::HashSet::new();
     for _ in 0..MAX_ANCESTOR_DEPTH {
-        let Some(parent_uuid) = acorn_transcript::codex_rollout_parent_thread_id(&current) else {
-            return false;
+        let Some(parent_uuid) = acorn_transcript::codex_rollout_parent_thread_id_checked(&current)?
+        else {
+            return Ok(false);
         };
         if !seen.insert(parent_uuid.clone()) {
-            return false;
+            return Ok(false);
         }
         if parent_uuid == ancestor_uuid {
-            return true;
+            return Ok(true);
         }
-        let Some(parent_path) = locate(&parent_uuid) else {
-            return false;
+        let Some(parent_path) = locate(&parent_uuid)? else {
+            return Ok(false);
         };
         current = parent_path;
     }
-    false
+    Ok(false)
 }
 
-fn rollback_is_dormant_echo(prev: &Path, next: &Path, now: SystemTime) -> bool {
-    let (Ok(prev_meta), Ok(next_meta)) = (fs::metadata(prev), fs::metadata(next)) else {
-        return false;
+fn rollback_is_dormant_echo(prev: &Path, next: &Path, now: SystemTime) -> io::Result<bool> {
+    let Some(prev_meta) = transcript_metadata_if_present(prev)? else {
+        return Ok(false);
     };
-    let (Ok(prev_mtime), Ok(next_mtime)) = (prev_meta.modified(), next_meta.modified()) else {
-        return false;
+    let Some(next_meta) = transcript_metadata_if_present(next)? else {
+        return Ok(false);
     };
+    let prev_mtime = prev_meta.modified().map_err(|error| {
+        contextual_io_error(format!("read mtime for {}", prev.display()), error)
+    })?;
+    let next_mtime = next_meta.modified().map_err(|error| {
+        contextual_io_error(format!("read mtime for {}", next.display()), error)
+    })?;
     let prev_birth = prev_meta.created().unwrap_or(prev_mtime);
     let next_birth = next_meta.created().unwrap_or(next_mtime);
     if next_birth >= prev_birth {
         // Moving forward in birth order — always allowed.
-        return false;
+        return Ok(false);
     }
     // Backwards move: a dormant target is the echo; a hot one is a
     // genuine resume of the older conversation.
-    now.duration_since(next_mtime)
+    Ok(now
+        .duration_since(next_mtime)
         .map(|d| d.as_secs() > acorn_transcript::DORMANT_TRANSCRIPT_SECS)
-        .unwrap_or(false)
+        .unwrap_or(false))
+}
+
+fn transcript_metadata_if_present(path: &Path) -> io::Result<Option<fs::Metadata>> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(contextual_io_error(
+            format!("inspect transcript {}", path.display()),
+            error,
+        )),
+    }
 }
 
 fn write_if_changed(path: &Path, content: &str, max_bytes: usize) -> io::Result<()> {
@@ -685,15 +755,17 @@ mod tests {
             Some(previous),
             resumed,
             false,
-            |_, _| true,
-        ));
+            |_, _| Ok(true),
+        )
+        .unwrap());
         assert!(!marker_update_is_blocked(
             MarkerBindPolicy::ProviderDeclared,
             Some(previous),
             resumed,
             true,
-            |_, _| true,
-        ));
+            |_, _| Ok(true),
+        )
+        .unwrap());
 
         for kind in [AgentKind::Claude, AgentKind::Codex] {
             let marker = dir.join(id_filename(kind));
@@ -703,6 +775,24 @@ mod tests {
             assert_eq!(read_marker(&marker).as_deref(), Some(resumed));
         }
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn inferred_marker_gate_propagates_transcript_lookup_errors() {
+        let result = marker_update_is_blocked(
+            MarkerBindPolicy::Inferred,
+            Some("019f2001-bbbb-76b0-8410-2e073b38a2c2"),
+            "019e2001-aaaa-76b0-8410-2e073b38a2c1",
+            false,
+            |_, _| {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "unreadable",
+                ))
+            },
+        );
+
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
     }
 
     /// Two writers race the same marker (background tick vs status-poll
@@ -759,20 +849,44 @@ mod tests {
         let now = fs::metadata(&newer).unwrap().modified().unwrap();
 
         // Forward move (older → newer): never an echo.
-        assert!(!rollback_is_dormant_echo(&older, &newer, now));
+        assert!(!rollback_is_dormant_echo(&older, &newer, now).unwrap());
 
         // Backwards move onto a dormant older transcript: echo → skip.
         set_mtime(
             &older,
             now - Duration::from_secs(acorn_transcript::DORMANT_TRANSCRIPT_SECS + 60),
         );
-        assert!(rollback_is_dormant_echo(&newer, &older, now));
+        assert!(rollback_is_dormant_echo(&newer, &older, now).unwrap());
 
         // Backwards move onto a hot older transcript: a real resume.
         set_mtime(&older, now);
-        assert!(!rollback_is_dormant_echo(&newer, &older, now));
+        assert!(!rollback_is_dormant_echo(&newer, &older, now).unwrap());
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rollback_gate_reports_transcript_access_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir =
+            std::env::temp_dir().join(format!("acorn-rollback-access-{}", Uuid::new_v4().simple()));
+        let locked = dir.join("locked");
+        fs::create_dir_all(&locked).unwrap();
+        let previous = locked.join("previous.jsonl");
+        let next = dir.join("next.jsonl");
+        fs::write(&previous, "{}\n").unwrap();
+        fs::write(&next, "{}\n").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let permission_bits_enforced = fs::metadata(&previous).is_err();
+        let result = rollback_is_dormant_echo(&previous, &next, SystemTime::now());
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+
+        if permission_bits_enforced {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        }
     }
 
     #[test]
@@ -808,15 +922,17 @@ mod tests {
         );
 
         assert!(
-            rollback_is_dormant_echo(&child, &parent, now),
+            rollback_is_dormant_echo(&child, &parent, now).unwrap(),
             "generic rollback detection sees a dormant backwards move"
         );
         assert!(
-            !rollback_is_dormant_echo_for_kind(AgentKind::Codex, &child, &parent, parent_id, now,),
+            !rollback_is_dormant_echo_for_kind(AgentKind::Codex, &child, &parent, parent_id, now,)
+                .unwrap(),
             "a child marker must be allowed to self-heal to its declared parent"
         );
         assert!(
-            rollback_is_dormant_echo_for_kind(AgentKind::Claude, &child, &parent, parent_id, now,),
+            rollback_is_dormant_echo_for_kind(AgentKind::Claude, &child, &parent, parent_id, now,)
+                .unwrap(),
             "the Codex ownership repair must not weaken other providers' rollback guard"
         );
 
@@ -830,12 +946,13 @@ mod tests {
         .unwrap();
         assert!(
             codex_rollout_declares_ancestor(&grandchild, parent_id, |thread_id| {
-                (thread_id == child_id).then(|| child.clone())
-            }),
+                Ok((thread_id == child_id).then(|| child.clone()))
+            })
+            .unwrap(),
             "a marker corrupted to a deeper descendant must self-heal to the top-level owner"
         );
         assert!(
-            !codex_rollout_declares_ancestor(&grandchild, parent_id, |_| None),
+            !codex_rollout_declares_ancestor(&grandchild, parent_id, |_| Ok(None)).unwrap(),
             "a missing intermediate rollout must fail closed"
         );
 
@@ -853,11 +970,14 @@ mod tests {
             .unwrap();
         }
         assert!(
-            !codex_rollout_declares_ancestor(&cycle_a, parent_id, |thread_id| match thread_id {
-                id if id == cycle_a_id => Some(cycle_a.clone()),
-                id if id == cycle_b_id => Some(cycle_b.clone()),
-                _ => None,
-            }),
+            !codex_rollout_declares_ancestor(&cycle_a, parent_id, |thread_id| {
+                Ok(match thread_id {
+                    id if id == cycle_a_id => Some(cycle_a.clone()),
+                    id if id == cycle_b_id => Some(cycle_b.clone()),
+                    _ => None,
+                })
+            })
+            .unwrap(),
             "a malformed ancestry cycle must fail closed"
         );
 

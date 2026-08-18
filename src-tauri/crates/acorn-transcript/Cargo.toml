@@ -13,6 +13,7 @@ acorn-platform = { path = "../acorn-platform" }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
 uuid = { workspace = true }
 directories = { workspace = true }
 parking_lot = { workspace = true }

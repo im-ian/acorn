@@ -165,6 +165,7 @@ dependencies = [
  "parking_lot",
  "serde_json",
  "sysinfo",
+ "thiserror 2.0.20",
  "tracing",
  "uuid",
 ]

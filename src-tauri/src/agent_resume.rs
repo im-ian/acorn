@@ -39,6 +39,8 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use acorn_agent::AgentKind;
 use acorn_transcript::{collapse_preview, parse_transcript_line, read_tail, TranscriptRole};
 
+use crate::error::AppError;
+
 const AGENT_STATE_DIR_NAME: &str = "agent-state";
 
 const CLAUDE_ID_FILE: &str = "claude.id";
@@ -67,6 +69,20 @@ pub(crate) struct AntigravityTranscriptSnapshot {
 
 fn invalid_state(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+fn path_io_error(operation: &str, path: &Path, error: io::Error) -> io::Error {
+    io::Error::new(
+        error.kind(),
+        format!("failed to {operation} {}: {error}", path.display()),
+    )
+}
+
+fn app_io_error(error: AppError) -> io::Error {
+    match error {
+        AppError::Io(error) => error,
+        error => io::Error::other(error.to_string()),
+    }
 }
 
 pub(crate) fn normalize_provider_id(value: &str) -> io::Result<String> {
@@ -165,9 +181,12 @@ pub(crate) fn read_state_text_with_limit(
     }
     let text = String::from_utf8(bytes)
         .map_err(|_| invalid_state(format!("agent state leaf is not UTF-8: {}", path.display())))?;
+    let modified = metadata
+        .modified()
+        .map_err(|error| path_io_error("read timestamp from", path, error))?;
     Ok(Some(StateFileSnapshot {
         text,
-        modified: metadata.modified().ok(),
+        modified: Some(modified),
     }))
 }
 
@@ -318,64 +337,100 @@ pub struct LiveTranscript {
 
 /// Resolve `session_id` to the live transcript its in-flight agent is
 /// writing, by reading the on-disk resume markers and looking up the
-/// matching transcript. Returns `None` when no marker is present, all markers
-/// point to UUIDs whose transcript files have not (or no longer) exist on
-/// disk, or `data_dir()` fails to resolve.
+/// matching transcript. Returns `Ok(None)` when no marker is present or every
+/// marker points to a transcript that no longer exists.
 ///
 /// When multiple provider markers exist, the marker file with the
 /// newer mtime wins — that matches the persister's behaviour of only
 /// touching a marker when the live UUID rotates, so "most recently
 /// written marker" is "the agent the session was last paired with".
-pub fn live_transcript(session_id: uuid::Uuid) -> Option<LiveTranscript> {
-    let base = acorn_daemon::paths::data_dir().ok()?;
-    live_transcript_at(&base, session_id)
+pub fn live_transcript_checked(session_id: uuid::Uuid) -> io::Result<Option<LiveTranscript>> {
+    let base = acorn_daemon::paths::data_dir()?;
+    live_transcript_at_checked(&base, session_id)
 }
 
 /// Resolve only the marker for `kind`. Status polling uses this when the
 /// current PTY tree already tells us which live provider owns the tab, so a
 /// nested peer agent from another provider cannot steal the session status.
-pub fn live_transcript_for_kind(session_id: uuid::Uuid, kind: AgentKind) -> Option<LiveTranscript> {
-    let base = acorn_daemon::paths::data_dir().ok()?;
-    live_transcript_for_kind_at(&base, session_id, kind)
+pub fn live_transcript_for_kind_checked(
+    session_id: uuid::Uuid,
+    kind: AgentKind,
+) -> io::Result<Option<LiveTranscript>> {
+    let base = acorn_daemon::paths::data_dir()?;
+    live_transcript_for_kind_at_checked(&base, session_id, kind)
 }
 
+#[cfg(test)]
 fn live_transcript_at(base: &Path, session_id: uuid::Uuid) -> Option<LiveTranscript> {
-    let dir = session_state_dir_if_exists_at(base, session_id)
-        .ok()
-        .flatten()?;
-    let mut markers = [
+    live_transcript_at_checked(base, session_id).ok().flatten()
+}
+
+fn live_transcript_at_checked(
+    base: &Path,
+    session_id: uuid::Uuid,
+) -> io::Result<Option<LiveTranscript>> {
+    let Some(dir) = session_state_dir_if_exists_at(base, session_id)? else {
+        return Ok(None);
+    };
+    let mut markers = Vec::new();
+    for (kind, file) in [
         (AgentKind::Claude, CLAUDE_ID_FILE),
         (AgentKind::Codex, CODEX_ID_FILE),
         (AgentKind::Antigravity, ANTIGRAVITY_ID_FILE),
         (AgentKind::Grok, GROK_ID_FILE),
-    ]
-    .into_iter()
-    .filter_map(|(kind, file)| {
-        let marker = read_provider_marker(&dir.join(file)).ok().flatten()?;
-        Some((kind, marker))
-    })
-    .collect::<Vec<_>>();
+    ] {
+        if let Some(marker) = read_provider_marker(&dir.join(file))? {
+            markers.push((kind, marker));
+        }
+    }
     markers.sort_by(|a, b| b.1.modified.cmp(&a.1.modified));
-    markers.into_iter().find_map(|(kind, marker)| {
-        live_transcript_for_id_with_locator(kind, marker.text, &locate_transcript)
-    })
+    for (kind, marker) in markers {
+        if let Some(path) = locate_transcript_checked(kind, &marker.text)? {
+            return Ok(Some(LiveTranscript {
+                id: marker.text,
+                path,
+                kind,
+            }));
+        }
+    }
+    Ok(None)
 }
 
-fn live_transcript_for_kind_at(
+fn live_transcript_for_kind_at_checked(
     base: &Path,
     session_id: uuid::Uuid,
     kind: AgentKind,
-) -> Option<LiveTranscript> {
-    let dir = session_state_dir_if_exists_at(base, session_id)
-        .ok()
-        .flatten()?;
-    live_transcript_for_kind_in_dir(&dir, kind)
+) -> io::Result<Option<LiveTranscript>> {
+    let Some(dir) = session_state_dir_if_exists_at(base, session_id)? else {
+        return Ok(None);
+    };
+    live_transcript_for_kind_in_dir_checked(&dir, kind)
 }
 
-fn live_transcript_for_kind_in_dir(dir: &Path, kind: AgentKind) -> Option<LiveTranscript> {
-    live_transcript_for_kind_in_dir_with_locator(dir, kind, &locate_transcript)
+fn live_transcript_for_kind_in_dir_checked(
+    dir: &Path,
+    kind: AgentKind,
+) -> io::Result<Option<LiveTranscript>> {
+    let file = match kind {
+        AgentKind::Claude => CLAUDE_ID_FILE,
+        AgentKind::Codex => CODEX_ID_FILE,
+        AgentKind::Antigravity => ANTIGRAVITY_ID_FILE,
+        AgentKind::Grok => GROK_ID_FILE,
+    };
+    let Some(marker) = read_provider_marker(&dir.join(file))? else {
+        return Ok(None);
+    };
+    let Some(path) = locate_transcript_checked(kind, &marker.text)? else {
+        return Ok(None);
+    };
+    Ok(Some(LiveTranscript {
+        id: marker.text,
+        path,
+        kind,
+    }))
 }
 
+#[cfg(test)]
 fn live_transcript_for_kind_in_dir_with_locator(
     dir: &Path,
     kind: AgentKind,
@@ -391,6 +446,7 @@ fn live_transcript_for_kind_in_dir_with_locator(
     live_transcript_for_id_with_locator(kind, marker.text, locate)
 }
 
+#[cfg(test)]
 fn live_transcript_for_id_with_locator(
     kind: AgentKind,
     id: String,
@@ -432,30 +488,49 @@ fn candidate_at(
     }
 
     let (last_activity_unix, conversation_preview) = if kind == AgentKind::Antigravity {
-        match open_antigravity_transcript_snapshot(&uuid) {
+        match open_antigravity_transcript_snapshot_checked(&uuid)? {
             Some(snapshot) => {
                 let last_activity = snapshot
                     .modified
                     .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|duration| duration.as_secs())
                     .unwrap_or(0);
-                let preview = extract_conversation_preview_from_snapshot(kind, snapshot).ok();
+                let path = snapshot.path.clone();
+                let preview = Some(
+                    extract_conversation_preview_from_snapshot(kind, snapshot).map_err(
+                        |error| path_io_error("read transcript preview from", &path, error),
+                    )?,
+                );
                 (last_activity, preview)
             }
             None => (0, None),
         }
     } else {
-        let transcript = locate_transcript(kind, &uuid);
-        let last_activity = transcript
-            .as_ref()
-            .and_then(|path| fs::metadata(path).ok())
-            .and_then(|metadata| metadata.modified().ok())
-            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
-        let preview = transcript
-            .as_ref()
-            .and_then(|path| extract_conversation_preview(kind, path).ok());
+        let transcript = locate_transcript_checked(kind, &uuid)?;
+        let last_activity = match transcript.as_ref() {
+            Some(path) => match fs::metadata(path) {
+                Ok(metadata) => metadata
+                    .modified()
+                    .map_err(|error| path_io_error("read transcript timestamp from", path, error))?
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| duration.as_secs())
+                    .unwrap_or(0),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
+                Err(error) => return Err(path_io_error("inspect transcript", path, error)),
+            },
+            None => 0,
+        };
+        let preview = match transcript.as_ref() {
+            Some(path) => match extract_conversation_preview(kind, path) {
+                Ok(preview) => Some(preview),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => {
+                    return Err(path_io_error("read transcript preview from", path, error));
+                }
+            },
+            None => None,
+        };
         (last_activity, preview)
     };
     let last_user_message = conversation_preview
@@ -500,24 +575,27 @@ fn acknowledge_at(
     replace_provider_marker(&state_dir.join(ack_file), &id).map(drop)
 }
 
+#[cfg(test)]
 pub(crate) fn locate_transcript(kind: AgentKind, uuid: &str) -> Option<PathBuf> {
-    let uuid = normalize_provider_id(uuid).ok()?;
+    locate_transcript_checked(kind, uuid).ok().flatten()
+}
+
+pub(crate) fn locate_transcript_checked(
+    kind: AgentKind,
+    uuid: &str,
+) -> io::Result<Option<PathBuf>> {
+    let uuid = normalize_provider_id(uuid)?;
     match kind {
-        AgentKind::Claude => crate::todos::locate_transcript_for(&uuid).ok().flatten(),
-        AgentKind::Codex => locate_codex_transcript(&uuid),
-        AgentKind::Antigravity => locate_antigravity_transcript(&uuid),
-        AgentKind::Grok => acorn_transcript::locate_grok_transcript(&uuid),
+        AgentKind::Claude => crate::todos::locate_transcript_for(&uuid).map_err(app_io_error),
+        AgentKind::Codex => {
+            acorn_transcript::locate_codex_transcript_checked(&uuid).map_err(io::Error::from)
+        }
+        AgentKind::Antigravity => open_antigravity_transcript_snapshot_checked(&uuid)
+            .map(|snapshot| snapshot.map(|snapshot| snapshot.path)),
+        AgentKind::Grok => {
+            acorn_transcript::locate_grok_transcript_checked(&uuid).map_err(io::Error::from)
+        }
     }
-}
-
-/// Walk the codex sessions root and find the rollout whose filename ends
-/// in `<uuid>`.
-fn locate_codex_transcript(uuid: &str) -> Option<PathBuf> {
-    acorn_transcript::locate_codex_transcript(uuid)
-}
-
-fn locate_antigravity_transcript(id: &str) -> Option<PathBuf> {
-    open_antigravity_transcript_snapshot(id).map(|snapshot| snapshot.path)
 }
 
 fn google_agent_storage_root() -> Option<PathBuf> {
@@ -527,108 +605,168 @@ fn google_agent_storage_root() -> Option<PathBuf> {
         .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".gemini")))
 }
 
-fn open_antigravity_transcript_snapshot(id: &str) -> Option<AntigravityTranscriptSnapshot> {
-    let root = google_agent_storage_root()?;
-    open_antigravity_transcript_snapshots_at(&root, id)
+fn open_antigravity_transcript_snapshot_checked(
+    id: &str,
+) -> io::Result<Option<AntigravityTranscriptSnapshot>> {
+    let Some(root) = google_agent_storage_root() else {
+        return Ok(None);
+    };
+    Ok(open_antigravity_transcript_snapshots_at_checked(&root, id)?
         .into_iter()
-        .next()
+        .next())
 }
 
+#[cfg(test)]
 pub(crate) fn open_antigravity_transcript_snapshots_at(
     storage_root: &Path,
     id: &str,
 ) -> Vec<AntigravityTranscriptSnapshot> {
-    let Ok(id) = normalize_provider_id(id) else {
-        return Vec::new();
-    };
-    let Ok(storage_metadata) = fs::symlink_metadata(storage_root) else {
-        return Vec::new();
-    };
-    if !storage_metadata.file_type().is_dir() {
-        return Vec::new();
+    open_antigravity_transcript_snapshots_at_checked(storage_root, id).unwrap_or_default()
+}
+
+pub(crate) fn open_antigravity_transcript_snapshots_at_checked(
+    storage_root: &Path,
+    id: &str,
+) -> io::Result<Vec<AntigravityTranscriptSnapshot>> {
+    let id = normalize_provider_id(id)?;
+    if !plain_provider_directory_exists(storage_root)? {
+        return Ok(Vec::new());
     }
-    let Ok(canonical_storage_root) = storage_root.canonicalize() else {
-        return Vec::new();
+    let canonical_storage_root = match storage_root.canonicalize() {
+        Ok(root) => root,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(path_io_error(
+                "resolve provider directory",
+                storage_root,
+                error,
+            ))
+        }
     };
 
     let mut snapshots = Vec::new();
-    ["antigravity", "antigravity-ide", "antigravity-cli"]
-        .into_iter()
-        .filter_map(|profile| {
-            let profile_dir = storage_root.join(profile);
-            if !plain_directory(&profile_dir) {
-                return None;
-            }
-            let brain_root = profile_dir.join("brain");
-            if !plain_directory(&brain_root) {
-                return None;
-            }
-            open_antigravity_transcript_in_brain_root(&brain_root, &canonical_storage_root, &id)
-        })
-        .for_each(|snapshot| snapshots.push(snapshot));
-    snapshots
+    for profile in ["antigravity", "antigravity-ide", "antigravity-cli"] {
+        let profile_dir = storage_root.join(profile);
+        if !plain_provider_directory_exists(&profile_dir)? {
+            continue;
+        }
+        let brain_root = profile_dir.join("brain");
+        if !plain_provider_directory_exists(&brain_root)? {
+            continue;
+        }
+        if let Some(snapshot) = open_antigravity_transcript_in_brain_root_checked(
+            &brain_root,
+            &canonical_storage_root,
+            &id,
+        )? {
+            snapshots.push(snapshot);
+        }
+    }
+    Ok(snapshots)
 }
 
-fn plain_directory(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_dir())
-        .unwrap_or(false)
+fn plain_provider_directory_exists(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(true),
+        Ok(_) => Err(invalid_state(format!(
+            "provider transcript path is not a regular directory: {}",
+            path.display()
+        ))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(path_io_error("inspect provider directory", path, error)),
+    }
 }
 
-fn open_antigravity_transcript_in_brain_root(
+fn open_antigravity_transcript_in_brain_root_checked(
     brain_root: &Path,
     canonical_storage_root: &Path,
     id: &str,
-) -> Option<AntigravityTranscriptSnapshot> {
-    let canonical_brain_root = brain_root.canonicalize().ok()?;
+) -> io::Result<Option<AntigravityTranscriptSnapshot>> {
+    let canonical_brain_root = match brain_root.canonicalize() {
+        Ok(root) => root,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(path_io_error(
+                "resolve provider directory",
+                brain_root,
+                error,
+            ))
+        }
+    };
     if !canonical_brain_root.starts_with(canonical_storage_root) {
-        return None;
+        return Err(invalid_state(format!(
+            "provider transcript directory escapes storage root: {}",
+            brain_root.display()
+        )));
     }
 
     let session_dir = brain_root.join(id);
     let generated_dir = session_dir.join(".system_generated");
     let logs_dir = generated_dir.join("logs");
-    if ![
-        session_dir.as_path(),
-        generated_dir.as_path(),
-        logs_dir.as_path(),
-    ]
-    .into_iter()
-    .all(plain_directory)
-    {
-        return None;
+    for directory in [&session_dir, &generated_dir, &logs_dir] {
+        if !plain_provider_directory_exists(directory)? {
+            return Ok(None);
+        }
     }
 
     let path = logs_dir.join("transcript.jsonl");
-    let path_metadata = fs::symlink_metadata(&path).ok()?;
+    let path_metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(path_io_error("inspect provider transcript", &path, error)),
+    };
     if !path_metadata.file_type().is_file() {
-        return None;
+        return Err(invalid_state(format!(
+            "provider transcript path is not a regular file: {}",
+            path.display()
+        )));
     }
-    let canonical_path = path.canonicalize().ok()?;
+    let canonical_path = match path.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(path_io_error("resolve provider transcript", &path, error)),
+    };
     if !canonical_path.starts_with(&canonical_brain_root) {
-        return None;
+        return Err(invalid_state(format!(
+            "provider transcript escapes brain root: {}",
+            path.display()
+        )));
     }
 
-    let file = fs::File::open(&path).ok()?;
-    let opened_metadata = file.metadata().ok()?;
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(path_io_error("open provider transcript", &path, error)),
+    };
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| path_io_error("inspect opened provider transcript", &path, error))?;
     if !opened_metadata.file_type().is_file() {
-        return None;
+        return Err(invalid_state(format!(
+            "opened provider transcript is not a regular file: {}",
+            path.display()
+        )));
     }
     #[cfg(unix)]
     if path_metadata.dev() != opened_metadata.dev() || path_metadata.ino() != opened_metadata.ino()
     {
-        return None;
+        return Err(invalid_state(format!(
+            "provider transcript changed while opening: {}",
+            path.display()
+        )));
     }
 
     // Stable links and special components are rejected before opening, and the
     // opened leaf is identity-checked. Parent replacement between pathname
     // operations remains the RES-006 dirfd/handle-relative TOCTOU follow-up.
-    Some(AntigravityTranscriptSnapshot {
+    Ok(Some(AntigravityTranscriptSnapshot {
         path: canonical_path,
         file,
         len: opened_metadata.len(),
-        modified: opened_metadata.modified().ok(),
-    })
+        modified: Some(opened_metadata.modified().map_err(|error| {
+            path_io_error("read provider transcript timestamp from", &path, error)
+        })?),
+    }))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -838,6 +976,66 @@ mod tests {
             preview.last_agent_message.as_deref(),
             Some("The opened snapshot is bounded.")
         );
+    }
+
+    #[test]
+    fn checked_antigravity_snapshot_treats_missing_storage_as_absence() {
+        let storage = std::env::temp_dir().join(format!(
+            "acorn-missing-antigravity-storage-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+
+        assert!(
+            open_antigravity_transcript_snapshots_at_checked(&storage, id)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_antigravity_snapshot_reports_inaccessible_storage() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let storage = ScratchDir::new("antigravity-inaccessible-storage");
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        fs::set_permissions(storage.path(), fs::Permissions::from_mode(0o000)).unwrap();
+        let permission_bits_enforced = fs::read_dir(storage.path()).is_err();
+        let checked = open_antigravity_transcript_snapshots_at_checked(storage.path(), id);
+        let legacy = open_antigravity_transcript_snapshots_at(storage.path(), id);
+        fs::set_permissions(storage.path(), fs::Permissions::from_mode(0o700)).unwrap();
+
+        if permission_bits_enforced {
+            assert!(matches!(
+                checked,
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied
+            ));
+            assert!(legacy.is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_antigravity_snapshot_reports_unreadable_transcript() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let storage = ScratchDir::new("antigravity-unreadable-transcript");
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let transcript = write_antigravity_transcript(storage.path(), id, "{}\n");
+        fs::set_permissions(&transcript, fs::Permissions::from_mode(0o000)).unwrap();
+        let permission_bits_enforced = fs::File::open(&transcript).is_err();
+        let checked = open_antigravity_transcript_snapshots_at_checked(storage.path(), id);
+        let legacy = open_antigravity_transcript_snapshots_at(storage.path(), id);
+        fs::set_permissions(&transcript, fs::Permissions::from_mode(0o600)).unwrap();
+
+        if permission_bits_enforced {
+            assert!(matches!(
+                checked,
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied
+            ));
+            assert!(legacy.is_empty());
+        }
     }
 
     #[cfg(unix)]
@@ -1440,7 +1638,40 @@ mod tests {
     fn live_transcript_returns_none_when_no_marker_dir() {
         let base = ScratchDir::new("live-empty");
         let sid = uuid::Uuid::new_v4();
+        assert!(live_transcript_at_checked(base.path(), sid)
+            .unwrap()
+            .is_none());
         assert!(live_transcript_at(base.path(), sid).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_live_transcript_reports_unreadable_marker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = ScratchDir::new("live-unreadable-marker");
+        let sid = uuid::Uuid::new_v4();
+        write_id(
+            base.path(),
+            sid,
+            CODEX_ID_FILE,
+            "22222222-2222-2222-2222-222222222222",
+        );
+        let marker = base
+            .path()
+            .join(AGENT_STATE_DIR_NAME)
+            .join(sid.to_string())
+            .join(CODEX_ID_FILE);
+        fs::set_permissions(&marker, fs::Permissions::from_mode(0o000)).unwrap();
+        let permission_bits_enforced = fs::File::open(&marker).is_err();
+        let checked = live_transcript_at_checked(base.path(), sid);
+        let legacy = live_transcript_at(base.path(), sid);
+        fs::set_permissions(&marker, fs::Permissions::from_mode(0o600)).unwrap();
+
+        if permission_bits_enforced {
+            assert_eq!(checked.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+            assert!(legacy.is_none());
+        }
     }
 
     #[test]
