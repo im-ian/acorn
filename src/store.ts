@@ -112,6 +112,16 @@ let activeStatusPollIds = new Set<string>();
 let refreshSessionsSeq = 0;
 let sessionPlacementSeq = 0;
 
+function shouldShowControlSessionGuide(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return !window.localStorage.getItem(CONTROL_GUIDE_DISMISSED_KEY);
+  } catch (error) {
+    console.warn("[store] control guide preference read failed", error);
+    return true;
+  }
+}
+
 function sessionProcessSummariesEqual(
   a: readonly SessionProcessSummary[],
   b: readonly SessionProcessSummary[],
@@ -3109,11 +3119,7 @@ export const useAppStore = create<AppStateModel>()(
       }
       // First-run guidance for control sessions. Gated on a localStorage
       // flag so power users only see it once. App.tsx hosts the modal.
-      if (
-        kind === "control" &&
-        typeof window !== "undefined" &&
-        !window.localStorage.getItem(CONTROL_GUIDE_DISMISSED_KEY)
-      ) {
+      if (kind === "control" && shouldShowControlSessionGuide()) {
         window.dispatchEvent(new CustomEvent("acorn:show-control-guide"));
       }
       return created;
