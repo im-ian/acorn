@@ -154,6 +154,9 @@ enum Command {
         #[arg(long = "allow-foreign")]
         allow_foreign: bool,
     },
+    /// Close this control session and every session it owns. The server
+    /// acknowledges the request before terminating the caller's PTY tree.
+    CloseSelf,
     /// Kill a session (close the PTY, drop the session from state).
     KillSession {
         /// UUID of the target session.
@@ -323,6 +326,7 @@ fn build_request_with_workspace_env(
             target_session_id: target.clone(),
             allow_foreign: *allow_foreign,
         },
+        Command::CloseSelf => Request::CloseSelf,
         Command::KillSession {
             target,
             allow_foreign,
@@ -1010,6 +1014,12 @@ mod tests {
     fn promote_self_command_builds_request() {
         let req = build_request(&Command::PromoteSelf).expect("build");
         assert!(matches!(req, Request::PromoteSelf));
+    }
+
+    #[test]
+    fn close_self_command_builds_request() {
+        let req = build_request(&Command::CloseSelf).expect("build");
+        assert!(matches!(req, Request::CloseSelf));
     }
 
     #[test]
