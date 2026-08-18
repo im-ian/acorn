@@ -74,9 +74,15 @@ impl Drop for PidLockGuard {
 /// to make a policy decision (refuse-to-start vs. wait-and-replace).
 pub fn try_acquire_pid_lock() -> io::Result<PidLock> {
     let path = paths::pid_file_path()?;
-    let mut file = open_pid_lock_file(&path)?;
+    let mut file = match open_pid_lock_file(&path) {
+        Ok(file) => file,
+        Err(error) if pid_file_lock_conflict(&error) => {
+            return Ok(PidLock::AlreadyHeld(None));
+        }
+        Err(error) => return Err(error),
+    };
     if let Err(error) = fs2::FileExt::try_lock_exclusive(&file) {
-        if error.kind() == io::ErrorKind::WouldBlock {
+        if error.kind() == io::ErrorKind::WouldBlock || pid_file_lock_conflict(&error) {
             return Ok(PidLock::AlreadyHeld(read_pid_file_at(&path)?));
         }
         return Err(error);
@@ -134,12 +140,12 @@ fn read_pid_file_at(path: &Path) -> io::Result<Option<u32>> {
         Ok(opened) => opened,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) if error.kind() == io::ErrorKind::InvalidInput => return Ok(None),
-        Err(error) if pid_file_read_blocked_by_lock(&error) => return Ok(None),
+        Err(error) if pid_file_lock_conflict(&error) => return Ok(None),
         Err(error) => return Err(error),
     };
     match read_pid_from_open_file(&mut file, opened.len()) {
         Ok(pid) => Ok(pid),
-        Err(error) if pid_file_read_blocked_by_lock(&error) => Ok(None),
+        Err(error) if pid_file_lock_conflict(&error) => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -161,7 +167,7 @@ fn read_pid_from_open_file(file: &mut File, length: u64) -> io::Result<Option<u3
 }
 
 #[cfg(windows)]
-fn pid_file_read_blocked_by_lock(error: &io::Error) -> bool {
+fn pid_file_lock_conflict(error: &io::Error) -> bool {
     // ERROR_SHARING_VIOLATION (32) may be returned while opening the file;
     // ERROR_LOCK_VIOLATION (33) is returned when a read overlaps the range
     // held by LockFileEx. Both mean the singleton lock is doing its job and
@@ -170,7 +176,7 @@ fn pid_file_read_blocked_by_lock(error: &io::Error) -> bool {
 }
 
 #[cfg(not(windows))]
-fn pid_file_read_blocked_by_lock(_error: &io::Error) -> bool {
+fn pid_file_lock_conflict(_error: &io::Error) -> bool {
     false
 }
 
