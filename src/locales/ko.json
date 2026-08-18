@@ -24,6 +24,7 @@
       "refreshFailed": "세션 목록을 새로 고치지 못했습니다:",
       "renameFailed": "세션 이름을 바꾸지 못했습니다:",
       "agentDetectionFailed": "실행 중인 에이전트 transcript를 확인하지 못했습니다:",
+      "scrollbackLoadFailed": "저장된 터미널 scrollback을 불러오지 못해 기존 데이터를 보호하도록 저장을 일시 중지했습니다:",
       "titleNotReady": "아직 이 세션에서 사용할 transcript가 없습니다.",
       "titleRegenerateSkipped": "세션 이름을 다시 생성하지 않았습니다.",
       "worktreeAdopted": "새 워크트리를 가져왔습니다: {name}",
@@ -748,7 +749,7 @@
         "clearedSingular": "캐시 파일 {count}개를 지웠습니다.",
         "clearedPlural": "캐시 파일 {count}개를 지웠습니다.",
         "nothingToClear": "지울 항목이 없습니다.",
-        "clearFailed": "캐시를 지우지 못했습니다. 자세한 내용은 콘솔을 확인하세요."
+        "clearFailed": "캐시를 지우지 못했습니다:"
       },
       "confirm": {
         "message": "위에 표시된 캐시 데이터({size})를 영구적으로 삭제합니다. 계속할까요?",
