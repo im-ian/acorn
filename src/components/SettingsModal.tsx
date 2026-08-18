@@ -3548,12 +3548,17 @@ function StorageSettings() {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [sizesFailed, setSizesFailed] = useState(false);
   const showToast = useToasts((s) => s.show);
 
   const refreshSizes = useCallback(async () => {
     const results = await Promise.allSettled(
       CACHE_CATEGORIES.map((c) => c.loadSize()),
     );
+    // A rejected probe renders as "—", which is indistinguishable from an
+    // empty cache. Flag it so an unreadable cache is not reported as nothing
+    // to clear.
+    setSizesFailed(results.some((r) => r.status === "rejected"));
     setSizes(
       Object.fromEntries(
         CACHE_CATEGORIES.map((c, i) => {
@@ -3643,6 +3648,12 @@ function StorageSettings() {
           );
         })}
       </ul>
+
+      {sizesFailed ? (
+        <Notice tone="danger" density="compact">
+          {st(t, "settings.storage.status.loadFailed")}
+        </Notice>
+      ) : null}
 
       {confirming ? (
         <Notice tone="warning" className="space-y-2">
