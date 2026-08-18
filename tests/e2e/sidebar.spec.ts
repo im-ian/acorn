@@ -4039,6 +4039,31 @@ test.describe("sidebar: project lifecycle", () => {
     ]);
   });
 
+  test("New project shows Git config access errors instead of calling identity missing", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("has_git_identity", () => {
+      throw new Error(
+        "git error: failed to read /Users/tester/.gitconfig: Permission denied",
+      );
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "New project" }).click();
+
+    await expect(
+      page.getByText(
+        "git error: failed to read /Users/tester/.gitconfig: Permission denied",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        "An initial commit is unavailable because Git user.name and user.email are not configured. The repository will be created without a commit.",
+      ),
+    ).toHaveCount(0);
+  });
+
   test("New project remembers the most recently selected parent folder", async ({
     page,
     tauri,
