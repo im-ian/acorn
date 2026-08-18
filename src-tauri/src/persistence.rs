@@ -447,7 +447,9 @@ fn copy_legacy_file_if_missing(
     let contents = match read_bounded_regular_file(&source, max_bytes) {
         Ok(contents) => contents,
         Err(AppError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
+        // A symlinked or oversized legacy file is a deliberate skip: there is
+        // nothing safe to copy and it must not block startup.
+        Err(error @ (AppError::InvalidPath(_) | AppError::Other(_))) => {
             tracing::warn!(
                 path = %source.display(),
                 error = %error,
@@ -455,6 +457,10 @@ fn copy_legacy_file_if_missing(
             );
             return Ok(());
         }
+        // An access failure is not "nothing to migrate". Migration only runs
+        // while the profile file is absent, so skipping here would drop the
+        // user's legacy state permanently once the profile directory fills in.
+        Err(error) => return Err(error),
     };
     acorn_platform::fs::write_atomic_private(&target, &contents)?;
     Ok(())
@@ -1637,6 +1643,59 @@ mod tests {
         assert!(!should_migrate_legacy_prod_files().unwrap());
 
         unsafe { std::env::remove_var(acorn_paths::ENV_DATA_DIR_OVERRIDE) };
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_migration_preserves_unreadable_source_for_retry() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let legacy = tmp.path().join("legacy");
+        let profile = tmp.path().join("profile");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::create_dir_all(&profile).unwrap();
+        let source = legacy.join(SESSIONS_FILE);
+        fs::write(&source, b"legacy").unwrap();
+        let original = fs::metadata(&legacy).unwrap().permissions();
+        fs::set_permissions(&legacy, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result =
+            copy_legacy_file_if_missing(&legacy, &profile, SESSIONS_FILE, MAX_SESSIONS_FILE_BYTES);
+
+        let denied = matches!(
+            fs::symlink_metadata(&source),
+            Err(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        );
+        fs::set_permissions(&legacy, original).unwrap();
+        if denied {
+            match result {
+                Err(AppError::Io(error)) => {
+                    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied)
+                }
+                other => panic!("an unreadable legacy file must not be skipped: {other:?}"),
+            }
+            assert!(
+                !profile.join(SESSIONS_FILE).exists(),
+                "a failed migration must stay retryable"
+            );
+            assert_eq!(fs::read(&source).unwrap(), b"legacy");
+        }
+    }
+
+    #[test]
+    fn legacy_migration_skips_an_oversized_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let legacy = tmp.path().join("legacy");
+        let profile = tmp.path().join("profile");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::create_dir_all(&profile).unwrap();
+        fs::write(legacy.join(SESSIONS_FILE), b"too large for the limit").unwrap();
+
+        copy_legacy_file_if_missing(&legacy, &profile, SESSIONS_FILE, 4)
+            .expect("an oversized legacy file is skipped, not fatal");
+
+        assert!(!profile.join(SESSIONS_FILE).exists());
     }
 
     #[test]
