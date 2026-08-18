@@ -180,9 +180,22 @@ pub fn run_bounded(
         std::thread::sleep(Duration::from_millis(5));
     };
 
-    if let Some(writer) = stdin_writer {
-        let _ = writer.join();
-    }
+    let stdin_error = stdin_writer.and_then(|writer| match writer.join() {
+        Ok(Ok(())) => None,
+        // The child stopped reading before the payload was fully written. That
+        // is the normal shape for a command that already decided its answer
+        // (`gh pr merge` skipping its confirmation prompt), so the child's own
+        // exit status stays the authority.
+        Ok(Err(error)) if error.kind() == io::ErrorKind::BrokenPipe => None,
+        // Any other write failure means the child ran on a payload we know is
+        // incomplete. Surface it instead of trusting output produced from a
+        // truncated request body.
+        Ok(Err(error)) => Some(io::Error::new(
+            error.kind(),
+            format!("failed writing child stdin: {error}"),
+        )),
+        Err(_) => Some(io::Error::other("bounded child stdin writer panicked")),
+    });
     let stdout = stdout_reader
         .join()
         .map_err(|_| io::Error::other("bounded stdout reader panicked"))??;
@@ -191,6 +204,9 @@ pub fn run_bounded(
         .map_err(|_| io::Error::other("bounded stderr reader panicked"))??;
     let (status, terminal_error) = wait_result?;
     if let Some(error) = terminal_error {
+        return Err(error);
+    }
+    if let Some(error) = stdin_error {
         return Err(error);
     }
     if stdout_overflow.load(Ordering::Acquire) || stderr_overflow.load(Ordering::Acquire) {
@@ -481,6 +497,39 @@ mod tests {
         .unwrap();
         assert_eq!(output.stdout, b"done");
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_runner_tolerates_a_child_that_never_reads_stdin() {
+        let limits = BoundedOutputLimits {
+            timeout: Duration::from_secs(5),
+            stdin_bytes: 512 * 1024,
+            stdout_bytes: 1024,
+            stderr_bytes: 1024,
+        };
+
+        // `gh pr merge` skips its confirmation prompt when it already knows the
+        // answer, closing stdin before the payload lands. That broken pipe must
+        // not turn a successful command into an error. The payload is larger
+        // than any pipe buffer so the write cannot quietly succeed instead.
+        let output = run_bounded(
+            Command::new("/bin/sh").args(["-c", "exec 0<&-; printf merged"]),
+            Some(&vec![b'y'; 256 * 1024]),
+            limits,
+        )
+        .expect("a child that ignores stdin still succeeds");
+        assert_eq!(output.stdout, b"merged");
+        assert!(output.status.success());
+
+        // A child that does consume stdin still sees the whole payload.
+        let output = run_bounded(
+            Command::new("/bin/sh").args(["-c", "cat"]),
+            Some(b"confirm\n"),
+            limits,
+        )
+        .expect("piped stdin is delivered");
+        assert_eq!(output.stdout, b"confirm\n");
     }
 
     #[test]
