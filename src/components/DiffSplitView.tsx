@@ -312,9 +312,18 @@ function ImageDiffPane({ file }: { file: DiffFile }) {
   const hasOld = !!file.old_image;
   const hasNew = !!file.new_image;
   if (!hasOld && !hasNew) {
+    // A preview can be missing because the file is binary/oversized/gone — the
+    // ordinary case — or because it could not be read. Only the latter is worth
+    // explaining, and the backend only sets `image_error` for that.
     return (
-      <div className="flex h-full items-center justify-center p-6 text-xs text-fg-muted">
-        {t("diffView.binaryImageNoPreview")}
+      <div className="flex h-full items-center justify-center p-6 text-center text-xs text-fg-muted">
+        {file.image_error ? (
+          <span role="alert" className="break-all text-fg">
+            {t("diffView.imagePreviewFailed")} {file.image_error}
+          </span>
+        ) : (
+          t("diffView.binaryImageNoPreview")
+        )}
       </div>
     );
   }

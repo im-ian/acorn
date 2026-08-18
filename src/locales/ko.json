@@ -1230,6 +1230,7 @@
     "loadingImage": "이미지 미리보기 불러오는 중...",
     "imageLoadFailed": "이미지 미리보기를 불러오지 못했습니다",
     "binaryImageNoPreview": "바이너리 이미지 변경(미리보기 없음)",
+    "imagePreviewFailed": "미리보기를 표시할 수 없습니다:",
     "none": "(없음)",
     "imageLabels": {
       "added": "추가됨",

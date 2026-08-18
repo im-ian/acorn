@@ -1230,6 +1230,7 @@
     "loadingImage": "Loading image preview...",
     "imageLoadFailed": "Failed to load image preview",
     "binaryImageNoPreview": "Binary image change (no preview available)",
+    "imagePreviewFailed": "Preview unavailable:",
     "none": "(none)",
     "imageLabels": {
       "added": "Added",

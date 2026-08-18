@@ -671,6 +671,8 @@ export interface DiffFile {
   is_image: boolean;
   old_image?: string | null;
   new_image?: string | null;
+  /** Set only when the preview is missing because the file could not be read. */
+  image_error?: string | null;
 }
 
 export interface DiffPayload {

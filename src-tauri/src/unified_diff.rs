@@ -88,6 +88,7 @@ pub fn parse_unified_diff(text: &str) -> DiffPayload {
                 patch: String::new(),
                 old_image: None,
                 new_image: None,
+                image_error: None,
                 is_image,
             });
             continue;

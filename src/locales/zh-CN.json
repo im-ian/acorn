@@ -1230,6 +1230,7 @@
     "loadingImage": "正在加载图像预览...",
     "imageLoadFailed": "无法加载图像预览",
     "binaryImageNoPreview": "二进制图像更改（无法预览）",
+    "imagePreviewFailed": "无法显示预览：",
     "none": "（无）",
     "imageLabels": {
       "added": "已添加",
