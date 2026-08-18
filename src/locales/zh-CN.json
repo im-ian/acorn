@@ -929,7 +929,8 @@
       "multiInputOff": "禁用多输入。",
       "shellEnvironmentReloaded": "shell 环境已重新加载。请打开新会话以应用更改。",
       "shellEnvironmentReloadFailed": "无法重新加载 shell 环境。",
-      "preventSleepSyncFailedPrefix": "无法应用防止睡眠设置："
+      "preventSleepSyncFailedPrefix": "无法应用防止睡眠设置：",
+      "controlGuidePreferenceSaveFailed": "无法保存控制会话指南偏好设置。"
     }
   },
   "statusBar": {

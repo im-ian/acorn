@@ -91,6 +91,40 @@ test.describe("control session: creation flow", () => {
     expect(dismissed).toBe("1");
   });
 
+  test("reports when the control-session guide preference cannot be saved", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.evaluate(() => {
+      const originalSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (key === "acorn:control-guide-dismissed-v1") {
+          throw new DOMException("storage blocked", "SecurityError");
+        }
+        return originalSetItem.call(this, key, value);
+      };
+      window.dispatchEvent(new CustomEvent("acorn:show-control-guide"));
+    });
+
+    await expect(
+      page.getByRole("heading", { name: "Control session" }),
+    ).toBeVisible();
+    await page
+      .getByRole("checkbox", { name: /Don't show this again/i })
+      .check();
+    await page.getByRole("button", { name: "Got it" }).click();
+
+    await expect(
+      page.getByText(
+        "Couldn't save the control-session guide preference.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Control session" }),
+    ).toBeHidden();
+  });
+
   test("command palette exposes a 'New control session' entry", async ({
     page,
     tauri,

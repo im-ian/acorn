@@ -1897,7 +1897,14 @@ function App() {
         onClose={(dontShowAgain) => {
           setControlGuideOpen(false);
           if (dontShowAgain && typeof window !== "undefined") {
-            window.localStorage.setItem(CONTROL_GUIDE_DISMISSED_KEY, "1");
+            try {
+              window.localStorage.setItem(CONTROL_GUIDE_DISMISSED_KEY, "1");
+            } catch (error) {
+              console.warn("[App] control guide preference write failed", error);
+              showToast(
+                appText(t, "app.toast.controlGuidePreferenceSaveFailed"),
+              );
+            }
           }
         }}
       />
