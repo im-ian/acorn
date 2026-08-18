@@ -1072,7 +1072,16 @@ function App() {
   useEffect(() => {
     let dispose: (() => void) | null = null;
     let cancelled = false;
-    void startNotificationClickHandler().then((d) => {
+    void startNotificationClickHandler((stage, error) => {
+      if (cancelled) return;
+      const prefix =
+        stage === "registration"
+          ? appText(t, "app.toast.notificationClickRegistrationFailedPrefix")
+          : appText(t, "app.toast.notificationClickActivationFailedPrefix");
+      showToast(
+        `${prefix} ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }).then((d) => {
       if (cancelled) {
         d();
         return;
@@ -1083,7 +1092,7 @@ function App() {
       cancelled = true;
       dispose?.();
     };
-  }, []);
+  }, [showToast, t]);
 
   // Probe session status adaptively: active tabs stay fresh, volatile sessions
   // get a moderate cadence, and stable sessions fall back to a slow safety

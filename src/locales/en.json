@@ -930,7 +930,9 @@
       "shellEnvironmentReloaded": "Shell environment reloaded. Open a new session to apply.",
       "shellEnvironmentReloadFailed": "Failed to reload shell environment.",
       "preventSleepSyncFailedPrefix": "Could not apply the keep-awake setting:",
-      "controlGuidePreferenceSaveFailed": "Couldn't save the control-session guide preference."
+      "controlGuidePreferenceSaveFailed": "Couldn't save the control-session guide preference.",
+      "notificationClickRegistrationFailedPrefix": "Could not enable notification click handling:",
+      "notificationClickActivationFailedPrefix": "Could not bring Acorn to the clicked notification:"
     }
   },
   "statusBar": {
