@@ -868,7 +868,7 @@ export function Terminal({
             useAppStore.getState().openCodeViewerTab(filePath, cwd);
           })
           .catch((err: unknown) => {
-            console.error("failed to open terminal file link", uri, err);
+            showTranslatedErrorToast("toasts.files.terminalLinkOpenFailed", err);
           });
         return;
       }
