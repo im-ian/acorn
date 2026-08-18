@@ -55,6 +55,9 @@
       "restarted": "IPC server restarted.",
       "restartFailed": "Failed to restart IPC server:"
     },
+    "clipboard": {
+      "writeFailed": "Failed to write to the clipboard:"
+    },
     "files": {
       "renameFailed": "Failed to rename file:",
       "trashFailed": "Failed to move to trash:",

@@ -1,6 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useToasts } from "../lib/toasts";
 import type { ChatSessionState, Session } from "../lib/types";
 import { makeWorkSummaryWorkspaceTab } from "../lib/workspaceTabs";
 
@@ -231,6 +232,7 @@ describe("WorkSummaryView", () => {
     root = createRoot(container);
     eventMocks.listeners.clear();
     eventMocks.listen.mockClear();
+    useToasts.getState().hide(undefined, { skipDismiss: true });
     mocks.fsGitStatus.mockResolvedValue({
       statuses: {
         [`${REPO}/src/App.tsx`]: {
@@ -261,6 +263,7 @@ describe("WorkSummaryView", () => {
     container.remove();
     restoreClipboard?.();
     restoreClipboard = null;
+    useToasts.getState().hide(undefined, { skipDismiss: true });
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -864,7 +867,6 @@ describe("WorkSummaryView", () => {
       )?.textContent,
     ).toContain("/Users/me/.codex/sessions/transcript-1.jsonl");
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     clipboardWriteText.mockRejectedValueOnce(new Error("denied"));
     await act(async () => {
       container
@@ -874,12 +876,8 @@ describe("WorkSummaryView", () => {
         .click();
       await Promise.resolve();
     });
-    expect(warn).toHaveBeenCalledWith(
-      "[WorkSummaryView] clipboard write failed",
-      expect.any(Error),
-    );
-    expect(container.textContent).not.toContain("denied");
-    warn.mockRestore();
+    const toasts = useToasts.getState().toasts;
+    expect(toasts[toasts.length - 1]?.message).toContain("denied");
 
     const copyButton = container.querySelector<HTMLButtonElement>(
       'button[aria-label="Copy transcript path"]',

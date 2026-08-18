@@ -47,7 +47,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { writeClipboardText } from "../lib/clipboardText";
+import { copyTextWithFeedback } from "../lib/clipboardActions";
 import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
 import { requestNewGraphSession } from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
@@ -1464,32 +1464,32 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
           {
             label: sidebarText(t, "sidebar.actions.worktreePath"),
             icon: <Copy size={12} />,
-            onClick: () => void copyToClipboard(session.worktree_path),
+            onClick: () => void copyTextWithFeedback(session.worktree_path),
           },
           ...(transcriptPath
             ? [
                 {
                   label: sidebarText(t, "sidebar.actions.transcriptPath"),
                   icon: <Copy size={12} />,
-                  onClick: () => void copyToClipboard(transcriptPath),
+                  onClick: () => void copyTextWithFeedback(transcriptPath),
                 } satisfies ContextMenuItem,
               ]
             : []),
           {
             label: sidebarText(t, "sidebar.actions.worktreeName"),
             icon: <Copy size={12} />,
-            onClick: () => void copyToClipboard(worktreeName),
+            onClick: () => void copyTextWithFeedback(worktreeName),
           },
           {
             label: sidebarText(t, "sidebar.actions.branchName"),
             icon: <Copy size={12} />,
-            onClick: () => void copyToClipboard(session.branch),
+            onClick: () => void copyTextWithFeedback(session.branch),
             disabled: !session.branch,
           },
           {
             label: sidebarText(t, "sidebar.actions.sessionId"),
             icon: <Copy size={12} />,
-            onClick: () => void copyToClipboard(session.id),
+            onClick: () => void copyTextWithFeedback(session.id),
           },
         ],
       },
@@ -2092,32 +2092,32 @@ function KanbanTerminalPopover({
           {
             label: sidebarText(t, "sidebar.actions.worktreePath"),
             icon: <Copy size={12} />,
-            onClick: () => void copyToClipboard(session.worktree_path),
+            onClick: () => void copyTextWithFeedback(session.worktree_path),
           },
           ...(transcriptPath
             ? [
                 {
                   label: sidebarText(t, "sidebar.actions.transcriptPath"),
                   icon: <Copy size={12} />,
-                  onClick: () => void copyToClipboard(transcriptPath),
+                  onClick: () => void copyTextWithFeedback(transcriptPath),
                 } satisfies ContextMenuItem,
               ]
             : []),
           {
             label: sidebarText(t, "sidebar.actions.worktreeName"),
             icon: <Copy size={12} />,
-            onClick: () => void copyToClipboard(worktreeName),
+            onClick: () => void copyTextWithFeedback(worktreeName),
           },
           {
             label: sidebarText(t, "sidebar.actions.branchName"),
             icon: <Copy size={12} />,
-            onClick: () => void copyToClipboard(session.branch),
+            onClick: () => void copyTextWithFeedback(session.branch),
             disabled: !session.branch,
           },
           {
             label: sidebarText(t, "sidebar.actions.sessionId"),
             icon: <Copy size={12} />,
-            onClick: () => void copyToClipboard(session.id),
+            onClick: () => void copyTextWithFeedback(session.id),
           },
         ],
       },
@@ -3087,12 +3087,4 @@ function cssAttributeEscape(value: string): string {
     return CSS.escape(value);
   }
   return value.replace(/(["\\\]\[])/g, "\\$1");
-}
-
-async function copyToClipboard(text: string): Promise<void> {
-  try {
-    await writeClipboardText(text);
-  } catch (err) {
-    console.warn("[WorkspaceMain] clipboard write failed", err);
-  }
 }

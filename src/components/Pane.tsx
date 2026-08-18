@@ -39,7 +39,7 @@ import { createPortal } from "react-dom";
 import { selectSessionsById, useAppStore } from "../store";
 import { FileViewer } from "./FileViewer";
 import { mediaKindFromPath } from "../lib/mediaFiles";
-import { writeClipboardText } from "../lib/clipboardText";
+import { copyTextWithFeedback } from "../lib/clipboardActions";
 import { ChatPane } from "./ChatPane";
 import { WorkSummaryView } from "./WorkSummaryView";
 import { api } from "../lib/api";
@@ -1381,7 +1381,7 @@ function TabItem({
               : paneT(t, "pane.menu.worktreePath"),
           icon: <Copy size={12} />,
           onClick: () => {
-            void copyToClipboard(tabPath);
+            void copyTextWithFeedback(tabPath);
           },
         },
         {
@@ -1392,7 +1392,7 @@ function TabItem({
               : paneT(t, "pane.menu.worktreeName"),
           icon: <Copy size={12} />,
           onClick: () => {
-            void copyToClipboard(basename(tabPath));
+            void copyTextWithFeedback(basename(tabPath));
           },
         },
         ...(session
@@ -1401,7 +1401,7 @@ function TabItem({
                 label: paneT(t, "pane.menu.branchName"),
                 icon: <Copy size={12} />,
                 onClick: () => {
-                  void copyToClipboard(session.branch);
+                  void copyTextWithFeedback(session.branch);
                 },
                 disabled: !session.branch,
               },
@@ -1409,7 +1409,7 @@ function TabItem({
                 label: paneT(t, "pane.menu.sessionId"),
                 icon: <Copy size={12} />,
                 onClick: () => {
-                  void copyToClipboard(session.id);
+                  void copyTextWithFeedback(session.id);
                 },
               },
             ]
@@ -1894,13 +1894,14 @@ function buildPaneMenuItems({
         {
           label: paneT(t, "pane.menu.copyWorktreePath"),
           icon: <Copy size={12} />,
-          onClick: () => void copyToClipboard(activeSession.worktree_path),
+          onClick: () =>
+            void copyTextWithFeedback(activeSession.worktree_path),
         },
         {
           label: paneT(t, "pane.menu.copyWorktreeName"),
           icon: <Copy size={12} />,
           onClick: () =>
-            void copyToClipboard(basename(activeSession.worktree_path)),
+            void copyTextWithFeedback(basename(activeSession.worktree_path)),
         },
       ]
     : [];
@@ -1963,12 +1964,4 @@ function buildPaneMenuItems({
       disabled: totalPanes <= 1,
     },
   ];
-}
-
-async function copyToClipboard(text: string): Promise<void> {
-  try {
-    await writeClipboardText(text);
-  } catch (err) {
-    console.warn("[Pane] clipboard write failed", err);
-  }
 }
