@@ -8,7 +8,7 @@ import type {
   ProjectWorktree,
   Session,
 } from "../lib/types";
-import type { WorktreeRemoval } from "../lib/api";
+import type { WorktreeRemoval, WorktreeRemovalOutcome } from "../lib/api";
 
 vi.mock("../lib/api", () => ({
   api: {
@@ -26,7 +26,7 @@ vi.mock("../lib/api", () => ({
         repoPath: string,
         worktreePath: string,
         removeSessions?: boolean,
-      ) => Promise<WorktreeRemoval | null>
+      ) => Promise<WorktreeRemovalOutcome>
     >(),
     discardRemovedWorktree: vi.fn<
       (removal: WorktreeRemoval) => Promise<void>
@@ -45,6 +45,17 @@ import { useAppStore } from "../store";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 
 const mockApi = vi.mocked(api);
+
+function worktreeRemovalOutcome(
+  result: WorktreeRemoval | null,
+): WorktreeRemovalOutcome {
+  return {
+    result,
+    removedSessionIds: [],
+    issues: [],
+    retryToken: null,
+  };
+}
 
 async function flushPromises() {
   await act(async () => {
@@ -113,7 +124,7 @@ describe("ProjectSettingsModal", () => {
     mockApi.listProjectBranches.mockResolvedValue([]);
     mockApi.listProjects.mockResolvedValue([]);
     mockApi.listSessions.mockResolvedValue([]);
-    mockApi.removeWorktree.mockResolvedValue(null);
+    mockApi.removeWorktree.mockResolvedValue(worktreeRemovalOutcome(null));
     mockApi.discardRemovedWorktree.mockResolvedValue();
   });
 
@@ -250,7 +261,9 @@ describe("ProjectSettingsModal", () => {
         modified_ms: null,
       },
     ]);
-    mockApi.removeWorktree.mockResolvedValueOnce(removal);
+    mockApi.removeWorktree.mockResolvedValueOnce(
+      worktreeRemovalOutcome(removal),
+    );
     const onClose = vi.fn();
 
     await act(async () => {
@@ -449,7 +462,7 @@ describe("ProjectSettingsModal", () => {
     ]);
     mockApi.removeWorktree
       .mockRejectedValueOnce(new Error("not a linked git worktree"))
-      .mockResolvedValueOnce(null);
+      .mockResolvedValueOnce(worktreeRemovalOutcome(null));
 
     await act(async () => {
       root.render(

@@ -1,5 +1,11 @@
 {
   "toasts": {
+    "removal": {
+      "partialFailure": "제거는 완료했지만 후처리를 확인해야 합니다: {error}.",
+      "partialFailureRetry": "제거는 완료했지만 후처리를 확인해야 합니다: {error}. 다시 시도",
+      "cleanupCompleted": "제거 후처리를 완료했습니다.",
+      "cleanupRetryFailed": "제거 후처리를 다시 시도하지 못했습니다:"
+    },
     "session": {
       "createFailed": "세션을 만들지 못했습니다:",
       "removeFailed": "세션을 제거하지 못했습니다:",

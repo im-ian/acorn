@@ -490,7 +490,12 @@ test.describe("workspace canvas mode", () => {
       const id = (args as { id: string }).id;
       w.__canvasRemoveCalls = [...(w.__canvasRemoveCalls ?? []), args];
       w.__canvasRemovedIds = [...(w.__canvasRemovedIds ?? []), id];
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [id],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -1076,7 +1081,12 @@ test.describe("workspace canvas mode", () => {
         ...(w.__canvasRemovedIds ?? []),
         (args as { id: string }).id,
       ];
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [(args as { id: string }).id],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");

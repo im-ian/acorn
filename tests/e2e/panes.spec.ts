@@ -769,7 +769,12 @@ test.describe("pane / sidebar shortcuts", () => {
     await tauri.handle("remove_session", () => {
       const w = window as unknown as { __removed?: boolean };
       w.__removed = true;
-      return null;
+      return {
+        result: null,
+        removedSessionIds: ["s-1"],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");

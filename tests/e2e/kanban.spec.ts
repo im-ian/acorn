@@ -227,11 +227,16 @@ test.describe("workspace kanban mode", () => {
       const w = window as unknown as { __kanbanSessionRemoved?: boolean };
       w.__kanbanSessionRemoved = true;
       return {
-        token: "kanban-removal-token",
-        repoPath: "/tmp/demo",
-        worktreePath: "/tmp/demo/.worktrees/completed",
-        gitCommonDir: "/tmp/demo/.git",
-        sessionIds: ["completed"],
+        result: {
+          token: "kanban-removal-token",
+          repoPath: "/tmp/demo",
+          worktreePath: "/tmp/demo/.worktrees/completed",
+          gitCommonDir: "/tmp/demo/.git",
+          sessionIds: ["completed"],
+        },
+        removedSessionIds: ["completed"],
+        issues: [],
+        retryToken: null,
       };
     });
 
