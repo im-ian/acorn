@@ -7160,23 +7160,36 @@ fn get_last_project_parent_folder_from_dir(
     }
 }
 
-fn configured_git_identity(config: &git2::Config) -> Option<(String, String)> {
-    let name = config.get_string("user.name").ok()?;
-    let email = config.get_string("user.email").ok()?;
+fn optional_git_config_string(
+    config: &git2::Config,
+    key: &str,
+) -> Result<Option<String>, git2::Error> {
+    match config.get_string(key) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn configured_git_identity(config: &git2::Config) -> Result<Option<(String, String)>, git2::Error> {
+    let Some(name) = optional_git_config_string(config, "user.name")? else {
+        return Ok(None);
+    };
+    let Some(email) = optional_git_config_string(config, "user.email")? else {
+        return Ok(None);
+    };
     let name = name.trim();
     let email = email.trim();
     if name.is_empty() || email.is_empty() {
-        return None;
+        return Ok(None);
     }
-    Some((name.to_string(), email.to_string()))
+    Ok(Some((name.to_string(), email.to_string())))
 }
 
 #[tauri::command]
-pub fn has_git_identity() -> bool {
-    git2::Config::open_default()
-        .ok()
-        .and_then(|config| configured_git_identity(&config))
-        .is_some()
+pub fn has_git_identity() -> AppResult<bool> {
+    let config = git2::Config::open_default()?;
+    Ok(configured_git_identity(&config)?.is_some())
 }
 
 #[tauri::command]
@@ -7189,24 +7202,34 @@ pub fn create_new_project(
 ) -> AppResult<Project> {
     let name = validate_new_project_name(&name, ignore_safe_name.unwrap_or(false))?;
     let parent = PathBuf::from(&parent_path);
-    if !parent.is_dir() {
+    let parent = folder_granted(state.inner(), &parent).map_err(|error| match error {
+        AppError::Io(io_error) => AppError::Other(format!(
+            "failed to access project parent {}: {io_error}",
+            parent.display()
+        )),
+        other => other,
+    })?;
+    let parent_metadata = std::fs::metadata(&parent).map_err(|error| {
+        AppError::Other(format!(
+            "failed to inspect project parent {}: {error}",
+            parent.display()
+        ))
+    })?;
+    if !parent_metadata.is_dir() {
         return Err(AppError::InvalidPath(parent_path));
     }
-    let parent = folder_granted(state.inner(), &parent)?;
     let target = parent.join(name);
-    if target.exists() {
-        return Err(AppError::Other(format!(
-            "project directory already exists: {}",
-            target.display()
-        )));
-    }
+    ensure_new_project_destination_available(&target)?;
 
     std::fs::create_dir(&target)?;
     let repo = match git2::Repository::init(&target) {
         Ok(repo) => repo,
         Err(err) => {
-            let _ = std::fs::remove_dir(&target);
-            return Err(AppError::Git(err));
+            return Err(project_creation_git_error(
+                &target,
+                err,
+                std::fs::remove_dir(&target),
+            ));
         }
     };
     // `Repository::init` leaves HEAD unborn (no commit), so `refs/heads/<default>`
@@ -7217,8 +7240,11 @@ pub fn create_new_project(
     if init_commit.unwrap_or(true) {
         if let Err(err) = seed_initial_commit(&repo) {
             drop(repo);
-            let _ = std::fs::remove_dir_all(&target);
-            return Err(AppError::Git(err));
+            return Err(project_creation_git_error(
+                &target,
+                err,
+                std::fs::remove_dir_all(&target),
+            ));
         }
     }
 
@@ -7229,13 +7255,42 @@ pub fn create_new_project(
     Ok(project)
 }
 
+fn ensure_new_project_destination_available(target: &Path) -> AppResult<()> {
+    match std::fs::symlink_metadata(target) {
+        Ok(_) => Err(AppError::Other(format!(
+            "project directory already exists: {}",
+            target.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AppError::Other(format!(
+            "failed to inspect project destination {}: {error}",
+            target.display()
+        ))),
+    }
+}
+
+fn project_creation_git_error(
+    target: &Path,
+    git_error: git2::Error,
+    cleanup: std::io::Result<()>,
+) -> AppError {
+    match cleanup {
+        Ok(()) => AppError::Git(git_error),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => AppError::Git(git_error),
+        Err(cleanup_error) => AppError::Other(format!(
+            "git error: {git_error}; failed to clean up project directory {}: {cleanup_error}",
+            target.display()
+        )),
+    }
+}
+
 /// Create the empty initial commit that makes a freshly `init`-ed repo usable.
 /// Committing to the unborn `HEAD` symref creates whatever default branch git
 /// resolved (`main`/`master`). A configured Git identity is required so Acorn
 /// never authors a commit under a synthetic identity.
 fn seed_initial_commit(repo: &git2::Repository) -> Result<(), git2::Error> {
     let config = repo.config()?;
-    let (name, email) = configured_git_identity(&config).ok_or_else(|| {
+    let (name, email) = configured_git_identity(&config)?.ok_or_else(|| {
         git2::Error::from_str(
             "Git user.name and user.email must be configured to create an initial commit",
         )
@@ -12117,15 +12172,7 @@ mod tests {
         can_store_generated_session_title, cleanup_removed_scrollbacks_from_dir,
         collect_memory_usage_from_roots, configured_git_identity, create_unique_worktree,
         daemon_attach_replay_scrollback, daemon_spawn_name_for_session,
-        detach_requested_by_stale_renderer, discard_pending_session_removal_from_dir,
-        font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
-        linked_worktree_root_for_registered_path, memory_root_pids, normalize_session_goal,
-        normalize_session_graph, poll_defers_to_hook, remove_linked_worktree_at_path,
-        restore_pending_session_removal, retry_removal_cleanup_inner, seed_initial_commit,
-        should_remove_local_project_mirror, should_route_session_to_daemon,
-        terminate_session_runtime, validate_display_name, validate_editor_command,
-        validate_new_project_name, validate_pty_caller_env, ChatProviderAdapter,
-        ProcessMemorySnapshot, RemovalProgress, MAX_PTY_WORKSPACE_NAME_BYTES,
+        detach_requested_by_stale_renderer, discard_pending_session_removal_from_dir, ensure_new_project_destination_available, font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env, linked_worktree_root_for_registered_path, memory_root_pids, normalize_session_goal, normalize_session_graph, poll_defers_to_hook, project_creation_git_error, remove_linked_worktree_at_path, restore_pending_session_removal, retry_removal_cleanup_inner, seed_initial_commit, should_remove_local_project_mirror, should_route_session_to_daemon, terminate_session_runtime, validate_display_name, validate_editor_command, validate_new_project_name, validate_pty_caller_env, ChatProviderAdapter, MAX_PTY_WORKSPACE_NAME_BYTES, ProcessMemorySnapshot, RemovalProgress,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingRemovalStep, PendingSessionRemoval};
@@ -16144,23 +16191,82 @@ mod tests {
         let config_path = config_dir.join("config");
         std::fs::write(&config_path, "").expect("create config file");
         let mut config = git2::Config::open(&config_path).expect("open config");
-        assert!(configured_git_identity(&config).is_none());
+        assert!(configured_git_identity(&config).unwrap().is_none());
 
         config
             .set_str("user.name", "Acorn Tester")
             .expect("set name");
-        assert!(configured_git_identity(&config).is_none());
+        assert!(configured_git_identity(&config).unwrap().is_none());
 
         config.set_str("user.email", "   ").expect("set email");
-        assert!(configured_git_identity(&config).is_none());
+        assert!(configured_git_identity(&config).unwrap().is_none());
 
         config
             .set_str("user.email", "tester@example.com")
             .expect("set email");
         assert_eq!(
-            configured_git_identity(&config),
+            configured_git_identity(&config).unwrap(),
             Some(("Acorn Tester".to_string(), "tester@example.com".to_string()))
         );
+    }
+
+    #[test]
+    fn project_creation_cleanup_error_retains_git_and_io_causes() {
+        let target = Path::new("/tmp/acorn-project-cleanup-test");
+        let error = project_creation_git_error(
+            target,
+            git2::Error::from_str("repository initialization failed"),
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+        );
+        let message = error.to_string();
+
+        assert!(message.contains("repository initialization failed"));
+        assert!(message.contains("failed to clean up project directory"));
+        assert!(message.to_ascii_lowercase().contains("permission denied"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_destination_probe_preserves_parent_access_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let locked = directory.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let target = locked.join("new-project");
+        let permission_denied = matches!(
+            std::fs::symlink_metadata(&target),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        );
+        if !permission_denied {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        let result = ensure_new_project_destination_available(&target);
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = result.expect_err("inaccessible destination must remain an error");
+        assert!(error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("permission denied"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_destination_probe_rejects_dangling_symlinks_as_existing() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("new-project");
+        symlink(directory.path().join("missing-target"), &target).unwrap();
+
+        let error = ensure_new_project_destination_available(&target)
+            .expect_err("a dangling link still occupies the destination name");
+
+        assert!(error.to_string().contains("already exists"));
     }
 
     #[test]

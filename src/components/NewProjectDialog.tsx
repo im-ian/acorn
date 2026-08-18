@@ -47,6 +47,7 @@ export function NewProjectDialog({
   const [gitIdentityConfigured, setGitIdentityConfigured] = useState<
     boolean | null
   >(null);
+  const [gitIdentityError, setGitIdentityError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const locationPickedRef = useRef(false);
 
@@ -60,6 +61,7 @@ export function NewProjectDialog({
     setIgnoreSafeName(false);
     setInitCommit(false);
     setGitIdentityConfigured(null);
+    setGitIdentityError(null);
     setPending(false);
     void api
       .getLastProjectParentFolder()
@@ -79,12 +81,14 @@ export function NewProjectDialog({
       .then((configured) => {
         if (!cancelled) {
           setGitIdentityConfigured(configured);
+          setGitIdentityError(null);
           setInitCommit(configured);
         }
       })
-      .catch(() => {
+      .catch((identityError: unknown) => {
         if (!cancelled) {
           setGitIdentityConfigured(false);
+          setGitIdentityError(errorMessage(identityError));
           setInitCommit(false);
         }
       });
@@ -248,10 +252,15 @@ export function NewProjectDialog({
               />
               <span>{dt(t, "dialogs.newProject.initCommit")}</span>
             </label>
-          ) : gitIdentityConfigured === false ? (
+          ) : gitIdentityConfigured === false && !gitIdentityError ? (
             <p className="text-xs text-fg-muted">
               {dt(t, "dialogs.newProject.initCommitUnavailable")}
             </p>
+          ) : null}
+          {gitIdentityError ? (
+            <div role="alert" className="text-xs text-danger">
+              {gitIdentityError}
+            </div>
           ) : null}
           {finalPath ? (
             <div className="space-y-1 text-xs">
