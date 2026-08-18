@@ -63,7 +63,7 @@ import {
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
   hasConfiguredEditor,
-  openInConfiguredEditor,
+  openInConfiguredEditorWithFeedback,
 } from "../lib/editor";
 import {
   formatHotkey,
@@ -1357,11 +1357,7 @@ function TabItem({
       icon: <PencilLine size={12} />,
       disabled: !editorConfigured,
       onClick: () => {
-        void openInConfiguredEditor(tabPath).catch(
-          (err: unknown) => {
-            console.error("[Pane] open in editor failed", err);
-          },
-        );
+        void openInConfiguredEditorWithFeedback(tabPath);
       },
     },
     {
@@ -1882,10 +1878,8 @@ function buildPaneMenuItems({
           icon: <PencilLine size={12} />,
           disabled: !editorReady,
           onClick: () => {
-            void openInConfiguredEditor(activeSession.worktree_path).catch(
-              (err: unknown) => {
-                console.error("[Pane] open in editor failed", err);
-              },
+            void openInConfiguredEditorWithFeedback(
+              activeSession.worktree_path,
             );
           },
         },

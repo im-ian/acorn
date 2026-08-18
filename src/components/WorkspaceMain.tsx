@@ -55,7 +55,7 @@ import {
   revealInFileManagerText,
   revealPathWithFeedback,
 } from "../lib/fileManager";
-import { openInConfiguredEditor } from "../lib/editor";
+import { openInConfiguredEditorWithFeedback } from "../lib/editor";
 import { isInAcornFloatingLayer } from "../lib/floatingLayer";
 import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
 import type { LayoutNode } from "../lib/layout";
@@ -1444,11 +1444,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
         icon: <PencilLine size={12} />,
         disabled: !editorConfigured,
         onClick: () => {
-          void openInConfiguredEditor(session.worktree_path).catch(
-            (err: unknown) => {
-              console.error("[WorkspaceMain] open in editor failed", err);
-            },
-          );
+          void openInConfiguredEditorWithFeedback(session.worktree_path);
         },
       },
       {
@@ -2077,11 +2073,7 @@ function KanbanTerminalPopover({
         icon: <PencilLine size={12} />,
         disabled: !editorConfigured,
         onClick: () => {
-          void openInConfiguredEditor(session.worktree_path).catch(
-            (err: unknown) => {
-              console.error("[WorkspaceMain] open in editor failed", err);
-            },
-          );
+          void openInConfiguredEditorWithFeedback(session.worktree_path);
         },
       },
       {

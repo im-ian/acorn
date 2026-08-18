@@ -59,6 +59,7 @@
       "renameFailed": "Failed to rename file:",
       "trashFailed": "Failed to move to trash:",
       "revealFailed": "Failed to reveal the path in the file manager:",
+      "editorOpenFailed": "Failed to open the path in the editor:",
       "pathsCopied": "File paths copied.",
       "copyFailed": "Failed to copy file paths.",
       "terminalLinkOpenFailed": "Failed to open terminal file link:"

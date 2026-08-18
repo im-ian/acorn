@@ -4,7 +4,7 @@ import { PersistentGroup } from "./PersistentGroup";
 import { ExternalLink } from "lucide-react";
 import { cn } from "../lib/cn";
 import { countStats, parseDiff } from "../lib/diff";
-import { openFileInEditor } from "../lib/editor";
+import { openFileInEditorWithFeedback } from "../lib/editor";
 import type { DiffFile, DiffImageContext, DiffPayload } from "../lib/types";
 import { useDiffImages, type ResolvedDiffImage } from "../lib/useDiffImages";
 import { Tooltip } from "./Tooltip";
@@ -111,11 +111,7 @@ export function DiffSplitView({ payload, cwd, imageContext }: DiffSplitViewProps
   async function openInEditor(entry: FileEntry) {
     const rel = entry.file.new_path ?? entry.file.old_path;
     if (!rel || !cwd) return;
-    try {
-      await openFileInEditor(joinPath(cwd, rel));
-    } catch (err) {
-      console.error("[DiffSplitView] open in editor failed", err);
-    }
+    await openFileInEditorWithFeedback(joinPath(cwd, rel));
   }
 
   function selectEntry(entry: FileEntry) {

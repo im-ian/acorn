@@ -92,7 +92,7 @@ import {
   revealInFileManagerText,
   revealPathWithFeedback,
 } from "../lib/fileManager";
-import { openInConfiguredEditor } from "../lib/editor";
+import { openInConfiguredEditorWithFeedback } from "../lib/editor";
 import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
@@ -3576,11 +3576,7 @@ function SessionRow({
       icon: <PencilLine size={12} />,
       disabled: !editorConfigured,
       onClick: () => {
-        void openInConfiguredEditor(session.worktree_path).catch(
-          (err: unknown) => {
-            console.error("[Sidebar] open in editor failed", err);
-          },
-        );
+        void openInConfiguredEditorWithFeedback(session.worktree_path);
       },
     },
     {
