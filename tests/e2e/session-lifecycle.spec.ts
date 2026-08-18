@@ -172,7 +172,12 @@ test.describe("session lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__sessionRemoved = true;
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [String(args?.id ?? "")],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -210,6 +215,103 @@ test.describe("session lifecycle", () => {
     // Non-isolated session: primary button is "Remove" → session_only path,
     // which the store passes as removeWorktree = false.
     expect(calls[0].removeWorktree).toBe(false);
+  });
+
+  test("partial session removal reports the exact cleanup failure and retries by token", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __sessionRemoved?: boolean };
+      return w.__sessionRemoved
+        ? []
+        : [
+            {
+              id: "s-1",
+              name: "alpha",
+              repo_path: "/tmp/demo",
+              worktree_path: "/tmp/demo",
+              branch: "main",
+              isolated: false,
+              status: "ready",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:05Z",
+              last_message: null,
+            },
+          ];
+    });
+    await tauri.handle("remove_session", () => {
+      const w = window as unknown as { __sessionRemoved?: boolean };
+      w.__sessionRemoved = true;
+      return {
+        result: null,
+        removedSessionIds: ["s-1"],
+        issues: [
+          {
+            kind: "scrollback",
+            target: "s-1",
+            message: "Permission denied",
+            retryable: true,
+          },
+        ],
+        retryToken: "opaque-cleanup-token",
+      };
+    });
+    await tauri.handle("retry_removal_cleanup", (args) => {
+      const w = window as unknown as { __cleanupRetryCalls?: unknown[] };
+      w.__cleanupRetryCalls = w.__cleanupRetryCalls ?? [];
+      w.__cleanupRetryCalls.push(args);
+      return {
+        result: [],
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      };
+    });
+    await tauri.handle("discard_removal_retry", (args) => {
+      const w = window as unknown as { __discardRetryCalls?: unknown[] };
+      w.__discardRetryCalls = w.__discardRetryCalls ?? [];
+      w.__discardRetryCalls.push(args);
+      return null;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator('[data-testid="sidebar"]');
+    const row = sidebar
+      .getByRole("button", { name: /^alpha main · Ready/ })
+      .first();
+    await row.hover();
+    await sidebar
+      .getByRole("button", { name: "Remove session", exact: true })
+      .click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /^Remove$/ })
+      .click();
+
+    const issueToast = page.getByText(
+      "Removal completed, but cleanup needs attention: s-1: Permission denied. Retry",
+    );
+    await expect(issueToast).toBeVisible();
+    await issueToast.click();
+    await expect(page.getByText("Removal cleanup completed.")).toBeVisible();
+
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __cleanupRetryCalls?: unknown[] })
+            .__cleanupRetryCalls,
+      ),
+    ).toEqual([{ retryToken: "opaque-cleanup-token" }]);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __discardRetryCalls?: unknown[] })
+            .__discardRetryCalls ?? [],
+      ),
+    ).toEqual([]);
   });
 
   test("closing a working session shows a warning before removal", async ({
@@ -255,7 +357,12 @@ test.describe("session lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__sessionRemoved = true;
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [String(args?.id ?? "")],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -357,7 +464,12 @@ test.describe("session lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__sessionRemoved = true;
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [String(args?.id ?? "")],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -430,11 +542,16 @@ test.describe("session lifecycle", () => {
       const w = window as unknown as { __sessionRemoved?: boolean };
       w.__sessionRemoved = true;
       return {
-        token: "session-undo-token",
-        repoPath: "/tmp/demo",
-        worktreePath: "/tmp/demo/.acorn/worktrees/alpha",
-        gitCommonDir: "/tmp/demo/.git",
-        sessionIds: ["s-1"],
+        result: {
+          token: "session-undo-token",
+          repoPath: "/tmp/demo",
+          worktreePath: "/tmp/demo/.acorn/worktrees/alpha",
+          gitCommonDir: "/tmp/demo/.git",
+          sessionIds: ["s-1"],
+        },
+        removedSessionIds: ["s-1"],
+        issues: [],
+        retryToken: null,
       };
     });
     await tauri.handle("restore_removed_session", (args) => {
@@ -542,7 +659,12 @@ test.describe("session lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__sessionRemoved = true;
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [String(args?.id ?? "")],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");
@@ -676,7 +798,12 @@ test.describe("session lifecycle", () => {
       w.__removeCalls = w.__removeCalls ?? [];
       w.__removeCalls.push(args);
       w.__sessionRemoved = true;
-      return null;
+      return {
+        result: null,
+        removedSessionIds: [String(args?.id ?? "")],
+        issues: [],
+        retryToken: null,
+      };
     });
 
     await page.goto("/");

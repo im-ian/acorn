@@ -858,6 +858,8 @@ pub fn run() {
             commands::list_project_worktrees,
             commands::list_project_branches,
             commands::remove_worktree,
+            commands::retry_removal_cleanup,
+            commands::discard_removal_retry,
             commands::restore_removed_worktree,
             commands::discard_removed_worktree,
             commands::restore_removed_session,

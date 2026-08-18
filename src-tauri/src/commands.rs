@@ -19,7 +19,7 @@ use crate::pull_requests::{
     PrStateFilter, PullRequestDetailListing, PullRequestDiffListing, PullRequestListing,
     PullRequestStateChange, WorkflowRunDetailListing, WorkflowRunsListing,
 };
-use crate::state::{AppState, PendingSessionRemoval};
+use crate::state::{AppState, PendingRemovalStep, PendingSessionRemoval};
 use crate::todos::{self, TodoItem};
 use crate::work_graph::{self, GraphPromptPlan};
 use crate::worktree;
@@ -83,6 +83,221 @@ impl SessionRemoval {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovalIssue {
+    pub kind: String,
+    pub target: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovalOutcome<T> {
+    pub result: T,
+    pub removed_session_ids: Vec<String>,
+    pub issues: Vec<RemovalIssue>,
+    pub retry_token: Option<String>,
+}
+
+impl<T> RemovalOutcome<T> {
+    fn complete(result: T, removed_session_ids: Vec<String>) -> Self {
+        Self {
+            result,
+            removed_session_ids,
+            issues: Vec::new(),
+            retry_token: None,
+        }
+    }
+}
+
+#[derive(Default)]
+struct RemovalProgress {
+    issues: Vec<RemovalIssue>,
+    retry_steps: Vec<PendingRemovalStep>,
+}
+
+impl RemovalProgress {
+    fn record_failure(&mut self, step: PendingRemovalStep, error: impl std::fmt::Display) {
+        let (kind, target) = removal_step_context(&step);
+        self.issues.push(RemovalIssue {
+            kind: kind.to_string(),
+            target,
+            message: error.to_string(),
+            retryable: true,
+        });
+        self.retry_steps.push(step);
+    }
+
+    fn into_outcome<T>(
+        self,
+        state: &AppState,
+        result: T,
+        removed_session_ids: Vec<String>,
+        preferred_retry_token: Option<String>,
+    ) -> RemovalOutcome<T> {
+        let retry_token = register_removal_retries(state, self.retry_steps, preferred_retry_token);
+        RemovalOutcome {
+            result,
+            removed_session_ids,
+            issues: self.issues,
+            retry_token,
+        }
+    }
+}
+
+fn removal_step_context(step: &PendingRemovalStep) -> (&'static str, String) {
+    match step {
+        PendingRemovalStep::DeleteScrollbacks { session_ids } => (
+            "scrollback",
+            if session_ids.len() == 1 {
+                session_ids[0].clone()
+            } else {
+                format!("{} sessions", session_ids.len())
+            },
+        ),
+        PendingRemovalStep::StageWorktree { worktree_path, .. } => {
+            ("worktree", worktree_path.display().to_string())
+        }
+        PendingRemovalStep::RemoveProjectSettings { repo_path, .. } => {
+            ("settings", repo_path.display().to_string())
+        }
+        PendingRemovalStep::PersistSessions => ("persistence", "sessions".to_string()),
+        PendingRemovalStep::PersistProjects => ("persistence", "projects".to_string()),
+    }
+}
+
+fn register_removal_retries(
+    state: &AppState,
+    retry_steps: Vec<PendingRemovalStep>,
+    preferred_token: Option<String>,
+) -> Option<String> {
+    if retry_steps.is_empty() {
+        return None;
+    }
+    let token = preferred_token.unwrap_or_else(|| Uuid::new_v4().to_string());
+    state
+        .pending_removal_retries
+        .lock()
+        .insert(token.clone(), retry_steps);
+    Some(token)
+}
+
+fn cleanup_removed_scrollbacks(session_ids: &[String], progress: &mut RemovalProgress) {
+    match persistence::data_dir() {
+        Ok(data_dir) => cleanup_removed_scrollbacks_from_dir(&data_dir, session_ids, progress),
+        Err(error) => progress.record_failure(
+            PendingRemovalStep::DeleteScrollbacks {
+                session_ids: session_ids.to_vec(),
+            },
+            error,
+        ),
+    }
+}
+
+fn cleanup_removed_scrollbacks_from_dir(
+    data_dir: &Path,
+    session_ids: &[String],
+    progress: &mut RemovalProgress,
+) {
+    for session_id in session_ids {
+        if let Err(error) = scrollback::delete(data_dir, session_id) {
+            progress.record_failure(
+                PendingRemovalStep::DeleteScrollbacks {
+                    session_ids: vec![session_id.clone()],
+                },
+                error,
+            );
+        }
+    }
+}
+
+fn persist_removal_state(state: &AppState, progress: &mut RemovalProgress) {
+    if let Err(error) = persistence::save_sessions(&state.sessions) {
+        progress.record_failure(PendingRemovalStep::PersistSessions, error);
+    }
+    if let Err(error) = persistence::save_projects(&state.projects.list()) {
+        progress.record_failure(PendingRemovalStep::PersistProjects, error);
+    }
+}
+
+fn remove_project_settings_step(repo_path: &Path, respect_preference: bool) -> AppResult<()> {
+    if respect_preference && !project_settings::should_remove_on_project_close(repo_path)? {
+        return Ok(());
+    }
+    project_settings::remove(repo_path)
+}
+
+fn retry_removal_cleanup_inner(
+    state: &AppState,
+    retry_token: &str,
+) -> AppResult<RemovalOutcome<Vec<worktree::RemovedWorktree>>> {
+    let steps = state
+        .pending_removal_retries
+        .lock()
+        .remove(retry_token)
+        .ok_or_else(|| AppError::Other("removal cleanup retry is not available".to_string()))?;
+    let mut progress = RemovalProgress::default();
+    let mut removed_worktrees = Vec::new();
+
+    for step in steps {
+        match step {
+            PendingRemovalStep::DeleteScrollbacks { session_ids } => {
+                cleanup_removed_scrollbacks(&session_ids, &mut progress);
+            }
+            PendingRemovalStep::StageWorktree {
+                repo_path,
+                worktree_path,
+            } => {
+                let retry_step = PendingRemovalStep::StageWorktree {
+                    repo_path: repo_path.clone(),
+                    worktree_path: worktree_path.clone(),
+                };
+                let result =
+                    ensure_no_sessions_using_worktree_path_except(state, &worktree_path, None)
+                        .and_then(|()| {
+                            stage_remove_linked_worktree_at_path(&repo_path, &worktree_path)
+                        });
+                match result {
+                    Ok(Some(removed)) => removed_worktrees.push(removed),
+                    Ok(None) => {}
+                    Err(error) => progress.record_failure(retry_step, error),
+                }
+            }
+            PendingRemovalStep::RemoveProjectSettings {
+                repo_path,
+                respect_preference,
+            } => {
+                let retry_step = PendingRemovalStep::RemoveProjectSettings {
+                    repo_path: repo_path.clone(),
+                    respect_preference,
+                };
+                if let Err(error) = remove_project_settings_step(&repo_path, respect_preference) {
+                    progress.record_failure(retry_step, error);
+                }
+            }
+            PendingRemovalStep::PersistSessions => {
+                if let Err(error) = persistence::save_sessions(&state.sessions) {
+                    progress.record_failure(PendingRemovalStep::PersistSessions, error);
+                }
+            }
+            PendingRemovalStep::PersistProjects => {
+                if let Err(error) = persistence::save_projects(&state.projects.list()) {
+                    progress.record_failure(PendingRemovalStep::PersistProjects, error);
+                }
+            }
+        }
+    }
+
+    Ok(progress.into_outcome(
+        state,
+        removed_worktrees,
+        Vec::new(),
+        Some(retry_token.to_string()),
+    ))
+}
+
 async fn run_blocking<T, F>(label: &'static str, f: F) -> AppResult<T>
 where
     T: Send + 'static,
@@ -107,7 +322,7 @@ async fn stage_remove_linked_worktree_and_sessions_blocking(
     state: AppState,
     repo_path: PathBuf,
     worktree_path: PathBuf,
-) -> AppResult<Option<worktree::RemovedWorktree>> {
+) -> AppResult<RemovalOutcome<Option<worktree::RemovedWorktree>>> {
     run_blocking("stage linked worktree removal with sessions", move || {
         stage_remove_linked_worktree_at_path_and_sessions(&state, &repo_path, &worktree_path)
     })
@@ -7110,12 +7325,14 @@ pub async fn remove_project(
     remove_sessions: Option<bool>,
     remove_worktrees: Option<bool>,
     remove_settings: Option<bool>,
-) -> AppResult<Vec<worktree::RemovedWorktree>> {
+) -> AppResult<RemovalOutcome<Vec<worktree::RemovedWorktree>>> {
     let app_state = state.inner().clone();
     let path = PathBuf::from(&repo_path);
     let cascade = remove_sessions.unwrap_or(true);
     let drop_worktrees = remove_worktrees.unwrap_or(false);
     let mut removed_worktrees = Vec::new();
+    let mut removed_session_ids = Vec::new();
+    let mut progress = RemovalProgress::default();
     let mut staged_worktree_paths = HashSet::new();
     // Closing a project closes every root it spans, not just the primary one.
     let roots = app_state
@@ -7134,12 +7351,20 @@ pub async fn remove_project(
             terminate_session_runtime_blocking(app_state.clone(), session.id).await?;
         }
         for session in sessions_to_remove {
+            removed_session_ids.push(session.id.to_string());
             if drop_worktrees && staged_worktree_paths.insert(session.worktree_path.clone()) {
                 if worktree_path_used_outside_project(&app_state, &path, &session.worktree_path) {
                     tracing::warn!(
                         repo_path = %session.repo_path.display(),
                         worktree_path = %session.worktree_path.display(),
                         "skipping linked worktree removal because another project still has a session there"
+                    );
+                    progress.record_failure(
+                        PendingRemovalStep::StageWorktree {
+                            repo_path: session.repo_path.clone(),
+                            worktree_path: session.worktree_path.clone(),
+                        },
+                        WORKTREE_IN_USE_BY_OTHER_SESSIONS,
                     );
                     app_state.sessions.remove(&session.id).ok();
                     continue;
@@ -7159,28 +7384,61 @@ pub async fn remove_project(
                             error = %err,
                             "failed to stage linked worktree removal"
                         );
+                        progress.record_failure(
+                            PendingRemovalStep::StageWorktree {
+                                repo_path: session.repo_path.clone(),
+                                worktree_path: session.worktree_path.clone(),
+                            },
+                            err,
+                        );
                     }
                 }
             }
             app_state.sessions.remove(&session.id).ok();
         }
     }
+    if !removed_session_ids.is_empty() {
+        cleanup_removed_scrollbacks(&removed_session_ids, &mut progress);
+    }
     app_state.projects.remove(roots.first().unwrap_or(&path));
     // Settings are keyed per repository, so a multi-root project has one record
     // per root. Closing it has to clear all of them or the source folders keep
     // a record nothing points at any more.
     for root in &roots {
-        let drop_settings = remove_settings.unwrap_or(false)
-            || project_settings::should_remove_on_project_close(root).unwrap_or(false);
+        let explicitly_remove_settings = remove_settings.unwrap_or(false);
+        let drop_settings = if explicitly_remove_settings {
+            true
+        } else {
+            match project_settings::should_remove_on_project_close(root) {
+                Ok(drop_settings) => drop_settings,
+                Err(error) => {
+                    progress.record_failure(
+                        PendingRemovalStep::RemoveProjectSettings {
+                            repo_path: root.clone(),
+                            respect_preference: true,
+                        },
+                        error,
+                    );
+                    false
+                }
+            }
+        };
         if !drop_settings {
             continue;
         }
         if let Err(err) = project_settings::remove(root) {
             tracing::warn!(error = %err, path = %root.display(), "failed to remove project settings");
+            progress.record_failure(
+                PendingRemovalStep::RemoveProjectSettings {
+                    repo_path: root.clone(),
+                    respect_preference: false,
+                },
+                err,
+            );
         }
     }
-    persist(&app_state);
-    Ok(removed_worktrees)
+    persist_removal_state(&app_state, &mut progress);
+    Ok(progress.into_outcome(&app_state, removed_worktrees, removed_session_ids, None))
 }
 
 #[tauri::command]
@@ -7188,11 +7446,16 @@ pub async fn remove_session(
     state: State<'_, AppState>,
     id: String,
     remove_worktree: Option<bool>,
-) -> AppResult<Option<SessionRemoval>> {
+) -> AppResult<RemovalOutcome<Option<SessionRemoval>>> {
     let app_state = state.inner().clone();
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = app_state.sessions.get(&id)?;
     let sessions_to_remove = session_removal_cascade(&app_state, &session);
+    let mut progress = RemovalProgress::default();
+    let removed_session_ids = sessions_to_remove
+        .iter()
+        .map(|session| session.id.to_string())
+        .collect::<Vec<_>>();
     let removal_ids: HashSet<_> = sessions_to_remove
         .iter()
         .map(|session| session.id)
@@ -7222,6 +7485,13 @@ pub async fn remove_session(
                     error = %err,
                     "failed to stage linked worktree removal"
                 );
+                progress.record_failure(
+                    PendingRemovalStep::StageWorktree {
+                        repo_path: session.repo_path.clone(),
+                        worktree_path: session.worktree_path.clone(),
+                    },
+                    err,
+                );
                 None
             }
         }
@@ -7238,24 +7508,25 @@ pub async fn remove_session(
     if should_remove_local_project_mirror(&session, &app_state.sessions.list()) {
         app_state.projects.remove(&session.repo_path);
     }
-    persist(&app_state);
-    let Some(removed_worktree) = removed_worktree else {
-        if let Ok(dir) = persistence::data_dir() {
-            for session in &sessions_to_remove {
-                scrollback::delete(&dir, &session.id.to_string()).ok();
-            }
+    let result = match removed_worktree {
+        Some(removed_worktree) => {
+            let removal = SessionRemoval::new(&removed_worktree, &sessions_to_remove);
+            app_state.pending_session_removals.lock().insert(
+                removed_worktree.token.clone(),
+                PendingSessionRemoval {
+                    worktree: removed_worktree,
+                    sessions: sessions_to_remove,
+                },
+            );
+            Some(removal)
         }
-        return Ok(None);
+        None => {
+            cleanup_removed_scrollbacks(&removed_session_ids, &mut progress);
+            None
+        }
     };
-    let removal = SessionRemoval::new(&removed_worktree, &sessions_to_remove);
-    app_state.pending_session_removals.lock().insert(
-        removed_worktree.token.clone(),
-        PendingSessionRemoval {
-            worktree: removed_worktree,
-            sessions: sessions_to_remove,
-        },
-    );
-    Ok(Some(removal))
+    persist_removal_state(&app_state, &mut progress);
+    Ok(progress.into_outcome(&app_state, result, removed_session_ids, None))
 }
 
 #[tauri::command]
@@ -8061,7 +8332,7 @@ pub async fn remove_worktree(
     repo_path: String,
     worktree_path: String,
     remove_sessions: Option<bool>,
-) -> AppResult<Option<worktree::RemovedWorktree>> {
+) -> AppResult<RemovalOutcome<Option<worktree::RemovedWorktree>>> {
     let app_state = state.inner().clone();
     let repo_path = PathBuf::from(repo_path);
     let worktree_path = PathBuf::from(worktree_path);
@@ -8085,7 +8356,26 @@ pub async fn remove_worktree(
         .await;
     }
     ensure_no_sessions_using_worktree_path_except(&app_state, &worktree_path, None)?;
-    stage_remove_linked_worktree_blocking(repo_path, worktree_path).await
+    let removed = stage_remove_linked_worktree_blocking(repo_path, worktree_path).await?;
+    Ok(RemovalOutcome::complete(removed, Vec::new()))
+}
+
+#[tauri::command]
+pub async fn retry_removal_cleanup(
+    state: State<'_, AppState>,
+    retry_token: String,
+) -> AppResult<RemovalOutcome<Vec<worktree::RemovedWorktree>>> {
+    let app_state = state.inner().clone();
+    run_blocking("retry removal cleanup", move || {
+        retry_removal_cleanup_inner(&app_state, &retry_token)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn discard_removal_retry(state: State<'_, AppState>, retry_token: String) -> AppResult<()> {
+    state.pending_removal_retries.lock().remove(&retry_token);
+    Ok(())
 }
 
 #[tauri::command]
@@ -11306,7 +11596,7 @@ fn stage_remove_linked_worktree_at_path_and_sessions(
     state: &AppState,
     repo_path: &Path,
     worktree_path: &Path,
-) -> AppResult<Option<worktree::RemovedWorktree>> {
+) -> AppResult<RemovalOutcome<Option<worktree::RemovedWorktree>>> {
     let sessions = sessions_using_linked_worktree(state, repo_path, worktree_path);
 
     for session in &sessions {
@@ -11314,17 +11604,17 @@ fn stage_remove_linked_worktree_at_path_and_sessions(
     }
 
     let removed = stage_remove_linked_worktree_at_path(repo_path, worktree_path)?;
-
-    if let Ok(dir) = persistence::data_dir() {
-        for session in &sessions {
-            scrollback::delete(&dir, &session.id.to_string()).ok();
-        }
-    }
+    let removed_session_ids = sessions
+        .iter()
+        .map(|session| session.id.to_string())
+        .collect::<Vec<_>>();
+    let mut progress = RemovalProgress::default();
+    cleanup_removed_scrollbacks(&removed_session_ids, &mut progress);
     for session in sessions {
         state.sessions.remove(&session.id).ok();
     }
-    persist(state);
-    Ok(removed)
+    persist_removal_state(state, &mut progress);
+    Ok(progress.into_outcome(state, removed, removed_session_ids, None))
 }
 
 pub(crate) fn stage_remove_linked_worktree_at_path(
@@ -11516,18 +11806,19 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 mod tests {
     use super::{
         auto_title_enabled_for_new_session, can_store_generated_session_title,
-        collect_memory_usage_from_roots, configured_git_identity, create_unique_worktree,
-        daemon_attach_replay_scrollback, daemon_spawn_name_for_session,
-        detach_requested_by_stale_renderer, discard_pending_session_removal_from_dir,
-        font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
-        memory_root_pids, normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
-        remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
-        should_remove_local_project_mirror, should_route_session_to_daemon,
-        terminate_session_runtime, validate_editor_command, validate_new_project_name,
-        ChatProviderAdapter, ProcessMemorySnapshot,
+        cleanup_removed_scrollbacks_from_dir, collect_memory_usage_from_roots,
+        configured_git_identity, create_unique_worktree, daemon_attach_replay_scrollback,
+        daemon_spawn_name_for_session, detach_requested_by_stale_renderer,
+        discard_pending_session_removal_from_dir, font_name_from_path,
+        infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
+        normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
+        remove_linked_worktree_at_path, restore_pending_session_removal,
+        retry_removal_cleanup_inner, seed_initial_commit, should_remove_local_project_mirror,
+        should_route_session_to_daemon, terminate_session_runtime, validate_editor_command,
+        validate_new_project_name, ChatProviderAdapter, ProcessMemorySnapshot, RemovalProgress,
     };
     use crate::error::{AppError, AppResult};
-    use crate::state::{AppState, PendingSessionRemoval};
+    use crate::state::{AppState, PendingRemovalStep, PendingSessionRemoval};
     #[cfg(unix)]
     use acorn_session::{AgentStatusSource, SessionStatus};
     use acorn_session::{
@@ -16155,6 +16446,128 @@ mod tests {
         .expect("retry cleanup");
 
         assert!(state.pending_session_removals.lock().is_empty());
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn scrollback_cleanup_records_only_failed_items_for_both_removal_paths() {
+        let data_dir = tempfile::tempdir().expect("temporary data directory");
+        let session_ok = Uuid::new_v4().to_string();
+        let session_blocked = Uuid::new_v4().to_string();
+        let worktree_blocked = Uuid::new_v4().to_string();
+        acorn_session::scrollback::save(data_dir.path(), &session_ok, "saved")
+            .expect("save removable scrollback");
+        for id in [&session_blocked, &worktree_blocked] {
+            std::fs::create_dir_all(data_dir.path().join("scrollback").join(format!("{id}.txt")))
+                .expect("create blocking scrollback directory");
+        }
+
+        let mut session_progress = RemovalProgress::default();
+        cleanup_removed_scrollbacks_from_dir(
+            data_dir.path(),
+            &[session_ok.clone(), session_blocked.clone()],
+            &mut session_progress,
+        );
+        let mut worktree_progress = RemovalProgress::default();
+        cleanup_removed_scrollbacks_from_dir(
+            data_dir.path(),
+            std::slice::from_ref(&worktree_blocked),
+            &mut worktree_progress,
+        );
+
+        assert_eq!(session_progress.issues.len(), 1);
+        assert_eq!(session_progress.issues[0].target, session_blocked);
+        assert!(matches!(
+            session_progress.retry_steps.as_slice(),
+            [PendingRemovalStep::DeleteScrollbacks { session_ids }]
+                if session_ids == &[session_blocked]
+        ));
+        assert_eq!(worktree_progress.issues.len(), 1);
+        assert_eq!(worktree_progress.issues[0].target, worktree_blocked);
+        assert!(matches!(
+            worktree_progress.retry_steps.as_slice(),
+            [PendingRemovalStep::DeleteScrollbacks { session_ids }]
+                if session_ids == &[worktree_blocked]
+        ));
+        assert_eq!(
+            acorn_session::scrollback::load(data_dir.path(), &session_ok)
+                .expect("load deleted scrollback"),
+            None,
+        );
+    }
+
+    #[test]
+    fn removal_retry_registry_exposes_only_an_opaque_capability() {
+        let state = AppState::new();
+        let mut progress = RemovalProgress::default();
+        progress.record_failure(PendingRemovalStep::PersistSessions, "disk full");
+
+        let outcome = progress.into_outcome(&state, (), Vec::new(), None);
+
+        let retry_token = outcome.retry_token.expect("retry token");
+        Uuid::parse_str(&retry_token).expect("opaque UUID token");
+        let pending = state.pending_removal_retries.lock();
+        assert!(matches!(
+            pending.get(&retry_token).map(Vec::as_slice),
+            Some([PendingRemovalStep::PersistSessions])
+        ));
+        assert_eq!(outcome.issues[0].target, "sessions");
+        assert_eq!(outcome.issues[0].message, "disk full");
+    }
+
+    #[test]
+    fn worktree_cleanup_retry_stays_blocked_until_live_sessions_are_gone() {
+        let repo_dir = unique_repo_dir("safe-worktree-cleanup-retry");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let worktree_path = crate::worktree::create_worktree(&repo_dir, "retry-safe")
+            .expect("create linked worktree");
+        let state = AppState::new();
+        let peer = state.sessions.insert(worktree_session(
+            "peer",
+            repo_dir.to_str().expect("repo path"),
+            worktree_path.to_str().expect("worktree path"),
+        ));
+        let retry_token = Uuid::new_v4().to_string();
+        state.pending_removal_retries.lock().insert(
+            retry_token.clone(),
+            vec![PendingRemovalStep::StageWorktree {
+                repo_path: repo_dir.clone(),
+                worktree_path: worktree_path.clone(),
+            }],
+        );
+
+        let blocked = retry_removal_cleanup_inner(&state, &retry_token)
+            .expect("blocked retry returns a partial outcome");
+
+        assert!(blocked.result.is_empty());
+        assert_eq!(blocked.retry_token.as_deref(), Some(retry_token.as_str()));
+        assert_eq!(blocked.issues.len(), 1);
+        assert_eq!(
+            blocked.issues[0].message,
+            super::WORKTREE_IN_USE_BY_OTHER_SESSIONS,
+        );
+        assert!(worktree_path.exists());
+
+        state
+            .sessions
+            .remove(&peer.id)
+            .expect("remove blocking peer");
+        let completed =
+            retry_removal_cleanup_inner(&state, &retry_token).expect("retry after peer removal");
+
+        assert_eq!(completed.result.len(), 1);
+        assert!(completed.issues.is_empty());
+        assert_eq!(completed.retry_token, None);
+        assert!(!worktree_path.exists());
+        let removed = &completed.result[0];
+        crate::worktree::discard_removed_worktree(
+            Path::new(&removed.repo_path),
+            Path::new(&removed.worktree_path),
+            &removed.token,
+            Path::new(&removed.git_common_dir),
+        )
+        .expect("discard staged worktree");
         std::fs::remove_dir_all(&repo_dir).ok();
     }
 

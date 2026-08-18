@@ -25,8 +25,18 @@ vi.mock("./lib/api", () => {
       ),
       ptyInWorktreeAll: vi.fn(async () => ({} as Record<string, boolean>)),
       createSession: vi.fn(async () => ({}) as Session),
-      removeSession: vi.fn(async () => null),
-      removeWorktree: vi.fn(async () => null),
+      removeSession: vi.fn(async () => ({
+        result: null,
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      })),
+      removeWorktree: vi.fn(async () => ({
+        result: null,
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      })),
       renameSession: vi.fn(async () => ({}) as Session),
       generateSessionTitle: vi.fn(
         async () =>
@@ -46,7 +56,12 @@ vi.mock("./lib/api", () => {
       mergeProjectSource: vi.fn(async () => ({}) as Project),
       splitProjectSource: vi.fn(async () => ({}) as Project),
       createNewProject: vi.fn(async () => ({}) as Project),
-      removeProject: vi.fn(async () => []),
+      removeProject: vi.fn(async () => ({
+        result: [],
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      })),
       reorderProjects: vi.fn(async (paths: string[]) =>
         paths.map<Project>((repo_path, i) => ({
           repo_path,
@@ -71,7 +86,7 @@ vi.mock("./lib/api", () => {
   };
 });
 
-import { api } from "./lib/api";
+import { api, type RemovalOutcome } from "./lib/api";
 import { useAppStore } from "./store";
 import { defaultTabByGroup } from "./lib/rightPanelGroups";
 import { DEFAULT_SETTINGS, useSettings } from "./lib/settings";
@@ -81,6 +96,18 @@ const mockApi = vi.mocked(api);
 
 const REPO_A = "/Users/me/repo-a";
 const REPO_B = "/Users/me/repo-b";
+
+function removalOutcome<T>(
+  result: T,
+  removedSessionIds: string[] = [],
+): RemovalOutcome<T> {
+  return {
+    result,
+    removedSessionIds,
+    issues: [],
+    retryToken: null,
+  };
+}
 
 function project(repoPath: string, position: number): Project {
   return {
@@ -256,9 +283,9 @@ beforeEach(() => {
   mockApi.listSessions.mockResolvedValue([]);
   mockApi.listProjects.mockResolvedValue([]);
   mockApi.detectSessionStatuses.mockResolvedValue([]);
-  mockApi.removeSession.mockResolvedValue(null);
-  mockApi.removeWorktree.mockResolvedValue(null);
-  mockApi.removeProject.mockResolvedValue([]);
+  mockApi.removeSession.mockResolvedValue(removalOutcome(null));
+  mockApi.removeWorktree.mockResolvedValue(removalOutcome(null));
+  mockApi.removeProject.mockResolvedValue(removalOutcome([]));
   mockApi.loadChatSessionState.mockResolvedValue({
     messages: [],
     turns: [],
@@ -1698,7 +1725,7 @@ describe("removeSession", () => {
     await seed([project(REPO_A, 0)], [a1, a2]);
     useAppStore.getState().selectSession("a1");
 
-    const pending = deferred<null>();
+    const pending = deferred<RemovalOutcome<null>>();
     mockApi.removeSession.mockReturnValueOnce(pending.promise);
     mockApi.listSessions.mockResolvedValue([a2]);
     mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
@@ -1709,7 +1736,7 @@ describe("removeSession", () => {
     expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual(["a2"]);
     expect(useAppStore.getState().activeSessionId).toBe("a2");
 
-    pending.resolve(null);
+    pending.resolve(removalOutcome(null, ["a1"]));
     await removal;
     expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual(["a2"]);
   });
@@ -1727,7 +1754,7 @@ describe("removeSession", () => {
     useAppStore.getState().setSessionSilenced("a1", true);
     useAppStore.getState().setSessionSilenced("a2", true);
 
-    const pending = deferred<null>();
+    const pending = deferred<RemovalOutcome<null>>();
     mockApi.removeSession.mockReturnValueOnce(pending.promise);
     mockApi.listSessions.mockResolvedValue([a2]);
     mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
@@ -1739,7 +1766,7 @@ describe("removeSession", () => {
     ).toEqual(["n2"]);
     expect(useAppStore.getState().silencedSessionIds).toEqual({ a2: true });
 
-    pending.resolve(null);
+    pending.resolve(removalOutcome(null, ["a1"]));
     await removal;
   });
 
@@ -1798,13 +1825,15 @@ describe("removeSession", () => {
     });
     await seed([project(REPO_A, 0)], [control, worker]);
 
-    mockApi.removeSession.mockResolvedValueOnce(null);
+    mockApi.removeSession.mockResolvedValueOnce(
+      removalOutcome(null, ["ctl", "worker"]),
+    );
     mockApi.listSessions.mockResolvedValue([]);
     mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
 
     const removed = await useAppStore.getState().removeSession("ctl", true);
 
-    expect(removed).toBeNull();
+    expect(removed).toEqual(removalOutcome(null, ["ctl", "worker"]));
     expect(mockApi.removeSession).toHaveBeenCalledWith("ctl", true);
     expect(useAppStore.getState().error).toBeNull();
   });
@@ -1826,7 +1855,7 @@ describe("removeSession", () => {
     });
     expect(useAppStore.getState().layout.kind).toBe("split");
 
-    const pending = deferred<null>();
+    const pending = deferred<RemovalOutcome<null>>();
     mockApi.removeSession.mockReturnValueOnce(pending.promise);
     mockApi.listSessions.mockResolvedValue([a1]);
     mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
@@ -1840,7 +1869,7 @@ describe("removeSession", () => {
     expect(mid.panes[mid.focusedPaneId].tabIds).toEqual(["a1"]);
     expect(mid.activeSessionId).toBe("a1");
 
-    pending.resolve(null);
+    pending.resolve(removalOutcome(null, ["a2"]));
     await removal;
 
     const after = useAppStore.getState();
@@ -3373,7 +3402,7 @@ describe("removeProject", () => {
     expect(useAppStore.getState().activeProject).toBe(REPO_B);
 
     // After remove, refreshAll re-pulls projects/sessions; return both stripped of B.
-    mockApi.removeProject.mockResolvedValueOnce([]);
+    mockApi.removeProject.mockResolvedValueOnce(removalOutcome([]));
     mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
     mockApi.listSessions.mockResolvedValueOnce([]);
 
@@ -3532,7 +3561,7 @@ describe("requestRemoveProject", () => {
 
   it("removes the project directly without a confirmation modal when no sessions remain", async () => {
     await seed([project(REPO_A, 0), project(REPO_B, 1)], []);
-    mockApi.removeProject.mockResolvedValueOnce([]);
+    mockApi.removeProject.mockResolvedValueOnce(removalOutcome([]));
     mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
     mockApi.listSessions.mockResolvedValueOnce([]);
 
