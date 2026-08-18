@@ -3,12 +3,16 @@ import { RefreshCw, Terminal } from "lucide-react";
 import { api, type StagedRevMismatch } from "../lib/api";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, Modal, ModalFooter, ModalHeader } from "./ui";
+import { Button, Modal, ModalFooter, ModalHeader, Notice } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
 function dt(t: Translator, key: DialogTranslationKey): string {
   return t(key);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 interface StagedRevMismatchModalProps {
@@ -29,32 +33,37 @@ export function StagedRevMismatchModal({
 }: StagedRevMismatchModalProps): ReactElement | null {
   const t = useTranslation();
   const [restarting, setRestarting] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!mismatch) return null;
 
   async function handleRestart() {
+    if (restarting || dismissing) return;
     setRestarting(true);
+    setError(null);
     try {
       await api.daemonShutdown();
-    } catch (err) {
-      console.error("[StagedRevMismatchModal] daemon_shutdown failed", err);
-    }
-    try {
       await api.acknowledgeStagedRevMismatch();
+      // Webview reload re-runs the app setup. The daemon boot thread
+      // will spawn a fresh `acornd` process whose registry is empty, so
+      // the next reconcile finds nothing stale and the prompt does not
+      // reappear.
+      window.location.reload();
     } catch (err) {
-      console.error(
-        "[StagedRevMismatchModal] acknowledge_staged_rev_mismatch failed",
-        err,
+      console.error("[StagedRevMismatchModal] restart failed", err);
+      setError(
+        `${dt(t, "dialogs.stagedRevMismatch.restartFailed")} ${errorMessage(err)}`,
       );
+      setRestarting(false);
+      return;
     }
-    // Webview reload re-runs the app setup. The daemon boot thread
-    // will spawn a fresh `acornd` process whose registry is empty, so
-    // the next reconcile finds nothing stale and the prompt does not
-    // reappear.
-    window.location.reload();
   }
 
   async function handleLater() {
+    if (restarting || dismissing) return;
+    setDismissing(true);
+    setError(null);
     try {
       await api.acknowledgeStagedRevMismatch();
     } catch (err) {
@@ -62,9 +71,16 @@ export function StagedRevMismatchModal({
         "[StagedRevMismatchModal] acknowledge_staged_rev_mismatch failed",
         err,
       );
+      setError(
+        `${dt(t, "dialogs.stagedRevMismatch.dismissFailed")} ${errorMessage(err)}`,
+      );
+      setDismissing(false);
+      return;
     }
     onDismiss();
   }
+
+  const busy = restarting || dismissing;
 
   const sessionWord =
     mismatch.stale_session_count === 1
@@ -94,18 +110,23 @@ export function StagedRevMismatchModal({
         <p>
           {dt(t, "dialogs.stagedRevMismatch.bodyRestart")}
         </p>
+        {error ? (
+          <Notice tone="danger" role="alert">
+            {error}
+          </Notice>
+        ) : null}
       </div>
       <ModalFooter>
         <Button
           onClick={handleLater}
-          disabled={restarting}
+          disabled={busy}
           className="disabled:opacity-50"
         >
           {dt(t, "dialogs.stagedRevMismatch.later")}
         </Button>
         <Button
           onClick={handleRestart}
-          disabled={restarting}
+          disabled={busy}
           variant="primary"
           className="disabled:opacity-50"
         >

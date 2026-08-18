@@ -2440,7 +2440,9 @@
       "bodyRestart": "立即重启以应用新环境。打开的智能体对话（Claude / Codex）会在下次聚焦时从中断处继续。",
       "later": "稍后",
       "restarting": "正在重新启动...",
-      "restartSessions": "重新启动会话"
+      "restartSessions": "重新启动会话",
+      "restartFailed": "无法重启后台会话：",
+      "dismissFailed": "无法关闭此提醒："
     },
     "memoryBreakdown": {
       "title": "内存细分",
