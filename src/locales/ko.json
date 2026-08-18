@@ -65,7 +65,10 @@
       "editorOpenFailed": "편집기에서 경로를 열지 못했습니다:",
       "pathsCopied": "파일 경로를 복사했습니다.",
       "copyFailed": "파일 경로를 복사하지 못했습니다.",
-      "terminalLinkOpenFailed": "터미널 파일 링크를 열지 못했습니다:"
+      "terminalLinkOpenFailed": "터미널 파일 링크를 열지 못했습니다:",
+      "dropListenerFailed": "데스크톱 파일 드롭을 사용할 수 없습니다:",
+      "dropOpenFailed": "드롭한 파일을 열지 못했습니다:",
+      "dropInputFailed": "드롭한 파일 경로를 터미널에 입력하지 못했습니다:"
     },
     "pullRequests": {
       "mergeFailed": "Pull request를 병합하지 못했습니다:",

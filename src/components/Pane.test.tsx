@@ -36,6 +36,8 @@ const mocks = vi.hoisted(() => ({
   agentTranscriptSummary: vi.fn(),
   agentTranscriptSummaryAtPath: vi.fn(),
   ptyWrite: vi.fn(async () => undefined),
+  fsGrantExternalFile: vi.fn(async () => undefined),
+  showTranslatedErrorToast: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => ({
@@ -60,7 +62,12 @@ vi.mock("../lib/api", () => ({
     agentTranscriptSummary: mocks.agentTranscriptSummary,
     agentTranscriptSummaryAtPath: mocks.agentTranscriptSummaryAtPath,
     ptyWrite: mocks.ptyWrite,
+    fsGrantExternalFile: mocks.fsGrantExternalFile,
   },
+}));
+
+vi.mock("../lib/operationToasts", () => ({
+  showTranslatedErrorToast: mocks.showTranslatedErrorToast,
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -347,6 +354,7 @@ describe("Pane empty state", () => {
     });
     mocks.fsGitDiffStats.mockResolvedValue({});
     mocks.loadChatSessionState.mockResolvedValue(chatStateWithTokens(140));
+    mocks.fsGrantExternalFile.mockResolvedValue(undefined);
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -1265,6 +1273,66 @@ describe("Pane empty state", () => {
     expect(mocks.ptyWrite).toHaveBeenCalledTimes(1);
     expect(mocks.ptyWrite).toHaveBeenCalledWith(second.id, "src/App.tsx ");
     expect(useAppStore.getState().focusedPaneId).toBe("pane-2");
+  });
+
+  it("surfaces terminal write failures from file drops", async () => {
+    const active = session("active-session");
+    const filePath = `${active.worktree_path}/src/App.tsx`;
+    seedActivePaneWithTab(active);
+    mocks.ptyWrite.mockRejectedValueOnce(new Error("PTY access denied"));
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const paneBody = container.querySelector('[data-pane-body="root"]');
+    expect(paneBody).not.toBeNull();
+    mockRect(paneBody!, { left: 0, top: 40, width: 360, height: 300 });
+
+    await act(async () => {
+      dropFilePayloadsAtPoint(
+        { x: 120, y: 120 },
+        [{ path: filePath, entryKind: "file", source: "explorer" }],
+      );
+      await Promise.resolve();
+    });
+
+    expect(mocks.showTranslatedErrorToast).toHaveBeenCalledWith(
+      "toasts.files.dropInputFailed",
+      expect.objectContaining({ message: "PTY access denied" }),
+    );
+  });
+
+  it("surfaces external file grant failures from desktop drops", async () => {
+    const active = session("active-session");
+    const filePath = "/Users/me/Desktop/private.txt";
+    seedActivePaneWithTab(active);
+    mocks.fsGrantExternalFile.mockRejectedValueOnce(
+      new Error("filesystem access denied"),
+    );
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const tabStrip = container.querySelector('[data-pane-tab-strip="root"]');
+    expect(tabStrip).not.toBeNull();
+    mockRect(tabStrip!, { left: 0, top: 0, width: 320, height: 36 });
+
+    await act(async () => {
+      dropFilePayloadsAtPoint(
+        { x: 12, y: 12 },
+        [{ path: filePath, entryKind: "file", source: "native" }],
+      );
+      await Promise.resolve();
+    });
+
+    expect(mocks.fsGrantExternalFile).toHaveBeenCalledWith(filePath);
+    expect(mocks.showTranslatedErrorToast).toHaveBeenCalledWith(
+      "toasts.files.dropOpenFailed",
+      expect.objectContaining({ message: "filesystem access denied" }),
+    );
+    expect(useAppStore.getState().panes.root.tabIds).toEqual([active.id]);
   });
 
   it("keeps the file mention prefix for Claude agent terminal drops", () => {

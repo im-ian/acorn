@@ -65,7 +65,10 @@
       "editorOpenFailed": "Failed to open the path in the editor:",
       "pathsCopied": "File paths copied.",
       "copyFailed": "Failed to copy file paths.",
-      "terminalLinkOpenFailed": "Failed to open terminal file link:"
+      "terminalLinkOpenFailed": "Failed to open terminal file link:",
+      "dropListenerFailed": "Desktop file drop is unavailable:",
+      "dropOpenFailed": "Failed to open dropped file:",
+      "dropInputFailed": "Failed to insert dropped file path into the terminal:"
     },
     "pullRequests": {
       "mergeFailed": "Failed to merge pull request:",

@@ -3,6 +3,7 @@ import { resolveSessionAgentProvider } from "./agentProvider";
 import { formatTerminalFileMention } from "./fileMention";
 import type { PaneId } from "./layout";
 import { visibleMultiInputSessionIds } from "./multiInput";
+import { showTranslatedErrorToast } from "./operationToasts";
 import type { SessionAgentProvider } from "./types";
 import { useAppStore } from "../store";
 
@@ -127,11 +128,13 @@ function writePayloadsToTerminal(
     .join("");
   if (!data) return;
 
-  for (const sessionId of ptyWriteTargets(target.sessionId)) {
-    void api.ptyWrite(sessionId, data).catch((err: unknown) => {
-      console.error("[fileDropTargets] pty_write failed", err);
-    });
-  }
+  const writes = ptyWriteTargets(target.sessionId).map((sessionId) =>
+    api.ptyWrite(sessionId, data),
+  );
+  void Promise.all(writes).catch((err: unknown) => {
+    console.error("[fileDropTargets] pty_write failed", err);
+    showTranslatedErrorToast("toasts.files.dropInputFailed", err);
+  });
 }
 
 async function openPayloadsInPane(
@@ -247,6 +250,7 @@ export function applyFileDropTarget(
 
   void openPayloadsInPane(target.paneId, payloads).catch((err: unknown) => {
     console.error("[fileDropTargets] file open failed", err);
+    showTranslatedErrorToast("toasts.files.dropOpenFailed", err);
   });
 }
 

@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 import { hasNativeFileDropData } from "./fileDrop";
 import { useFileExplorerDragSession } from "./fileExplorerDrag";
+import { showTranslatedErrorToast } from "./operationToasts";
 import {
   dropFilePayloadsAtPoint,
   resolveFileDropTargetAtPoint,
@@ -218,6 +219,7 @@ export function useNativeFileDropBridge(): NativeFileDropHoverTarget | null {
       })
       .catch((err: unknown) => {
         console.error("[nativeFileDrop] listener setup failed", err);
+        showTranslatedErrorToast("toasts.files.dropListenerFailed", err);
       });
 
     return () => {

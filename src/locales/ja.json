@@ -65,7 +65,10 @@
       "editorOpenFailed": "エディターでパスを開けませんでした:",
       "pathsCopied": "ファイルパスがコピーされました。",
       "copyFailed": "ファイルパスのコピーに失敗しました。",
-      "terminalLinkOpenFailed": "ターミナルのファイルリンクを開けませんでした:"
+      "terminalLinkOpenFailed": "ターミナルのファイルリンクを開けませんでした:",
+      "dropListenerFailed": "デスクトップからのファイルドロップを利用できません:",
+      "dropOpenFailed": "ドロップしたファイルを開けませんでした:",
+      "dropInputFailed": "ドロップしたファイルパスをターミナルに入力できませんでした:"
     },
     "pullRequests": {
       "mergeFailed": "プル リクエストのマージに失敗しました:",
