@@ -74,6 +74,72 @@ function sessionRemovalToastValues(
   };
 }
 
+async function discardWithRetry<T>(
+  items: readonly T[],
+  discard: (item: T) => Promise<void>,
+  failureKey: TranslationKey,
+): Promise<void> {
+  const failures = (
+    await Promise.all(
+      items.map(async (item) => {
+        try {
+          await discard(item);
+          return null;
+        } catch (reason) {
+          return { item, reason };
+        }
+      }),
+    )
+  ).filter(
+    (failure): failure is { item: T; reason: unknown } => failure !== null,
+  );
+  if (failures.length === 0) return;
+
+  const error = failures
+    .map(({ reason }) =>
+      reason instanceof Error ? reason.message : String(reason),
+    )
+    .join("; ");
+  useToasts.getState().show(currentText(failureKey, { error }), {
+    action: () =>
+      discardWithRetry(
+        failures.map(({ item }) => item),
+        discard,
+        failureKey,
+      ),
+  });
+}
+
+export function discardRemovedWorktreesWithRetry(
+  removals: WorktreeRemoval | readonly WorktreeRemoval[] | null | undefined,
+): Promise<void> {
+  const list = Array.isArray(removals)
+    ? removals.filter(Boolean)
+    : removals
+      ? [removals]
+      : [];
+  return discardWithRetry(
+    list,
+    (removal) => api.discardRemovedWorktree(removal),
+    "toasts.session.worktreeDiscardFailedRetry",
+  );
+}
+
+export function discardRemovedSessionsWithRetry(
+  removals: SessionRemoval | readonly SessionRemoval[] | null | undefined,
+): Promise<void> {
+  const list = Array.isArray(removals)
+    ? removals.filter(Boolean)
+    : removals
+      ? [removals]
+      : [];
+  return discardWithRetry(
+    list,
+    (removal) => api.discardRemovedSession(removal),
+    "toasts.session.sessionWorktreeDiscardFailedRetry",
+  );
+}
+
 export function showWorktreeRemovalToast(
   removals: WorktreeRemoval | WorktreeRemoval[] | null | undefined,
   successKey: TranslationKey,
@@ -113,9 +179,7 @@ export function showWorktreeRemovalToast(
         }
       },
       onDismiss: async () => {
-        await Promise.allSettled(
-          list.map((removal) => api.discardRemovedWorktree(removal)),
-        );
+        await discardRemovedWorktreesWithRetry(list);
       },
     },
   );
@@ -185,9 +249,7 @@ export function showSessionRemovalToast(
         }
       },
       onDismiss: async () => {
-        await Promise.allSettled(
-          list.map((removal) => api.discardRemovedSession(removal)),
-        );
+        await discardRemovedSessionsWithRetry(list);
       },
     },
   );
