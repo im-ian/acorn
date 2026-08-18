@@ -7,6 +7,7 @@ import {
   readDir,
   remove,
   writeTextFile,
+  type DirEntry,
 } from "@tauri-apps/plugin-fs";
 import { create } from "zustand";
 import { ensureRealDirectory } from "./safeAppLocalFs";
@@ -510,9 +511,22 @@ function installedMetadataFromUnknown(value: unknown): InstalledThemeMetadata {
 
 async function readInstalledMetadata(
   dir: string,
+  entries?: DirEntry[],
 ): Promise<InstalledThemeMetadata> {
   const path = await join(dir, INSTALLED_METADATA_FILE);
-  if (!(await exists(path))) return emptyInstalledMetadata();
+  if (!(await exists(path))) {
+    // `exists()` delegates to `Path::exists()`, which reports a metadata
+    // access failure as `false`. Taking that at face value would report an
+    // unreadable catalog as empty, and the next write would overwrite the real
+    // installed-theme records. Confirm against the directory listing, which
+    // fails loudly instead of guessing.
+    const directoryEntries = entries ?? (await readDir(dir));
+    if (
+      !directoryEntries.some((entry) => entry.name === INSTALLED_METADATA_FILE)
+    ) {
+      return emptyInstalledMetadata();
+    }
+  }
   const contents = await readBoundedRegularTextFile(
     path,
     MAX_INSTALLED_THEME_METADATA_BYTES,
@@ -540,10 +554,8 @@ async function writeInstalledMetadata(
 export async function loadUserThemes(): Promise<AcornTheme[]> {
   try {
     const dir = await ensureThemesDir();
-    const [entries, metadata] = await Promise.all([
-      readDir(dir),
-      readInstalledMetadata(dir),
-    ]);
+    const entries = await readDir(dir);
+    const metadata = await readInstalledMetadata(dir, entries);
     const themes: AcornTheme[] = [];
 
     for (const entry of entries) {

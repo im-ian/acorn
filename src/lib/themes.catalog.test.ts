@@ -483,6 +483,33 @@ describe("catalog theme persistence", () => {
     expect(tauriFsMock.readTextFile).toHaveBeenCalledTimes(1);
   });
 
+  it("does not treat an inaccessible catalog as an empty one", async () => {
+    // `exists()` reports a metadata access failure as `false`. The directory
+    // listing still shows the file, so the read must be attempted and its
+    // access error surfaced — reporting "no installed themes" here would let
+    // the next write erase the real records.
+    tauriFsMock.exists.mockImplementation((path: string) =>
+      Promise.resolve(!path.endsWith("catalog.json")),
+    );
+    tauriFsMock.readDir.mockResolvedValue([
+      { name: "catalog.json", isFile: true, isDirectory: false },
+    ]);
+    // Only the catalog file is unreadable; the themes directory itself still
+    // passes its checks, so the rejection can only come from the metadata read.
+    const directoryStat = { isFile: false, isDirectory: true, isSymlink: false };
+    tauriFsMock.lstat.mockImplementation((path: string) =>
+      path.endsWith("catalog.json")
+        ? Promise.reject(new Error("permission denied"))
+        : Promise.resolve(directoryStat),
+    );
+
+    await expect(uninstallCatalogTheme("note")).rejects.toThrow(
+      /permission denied/,
+    );
+    expect(tauriFsMock.writeTextFile).not.toHaveBeenCalled();
+    expect(tauriFsMock.remove).not.toHaveBeenCalled();
+  });
+
   it("removes only files recorded as catalog-managed", async () => {
     tauriFsMock.readTextFile.mockResolvedValue(
       JSON.stringify({
