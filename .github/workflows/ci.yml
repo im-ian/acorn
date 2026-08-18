@@ -92,8 +92,20 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
 
+      # GitHub's Ubuntu image already carries Chromium's runtime libraries,
+      # but Playwright's dependency refresh can add optional fonts. Keep that
+      # refresh bounded and best-effort so an unavailable apt mirror cannot
+      # consume the entire E2E job; the browser install and tests below remain
+      # required and will still fail if the runner image is actually missing
+      # a runtime dependency.
+      - name: Refresh Chromium system dependencies
+        continue-on-error: true
+        timeout-minutes: 3
+        run: pnpm exec playwright install-deps chromium
+
       - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 5
+        run: pnpm exec playwright install chromium
 
       - name: Run E2E tests
         env:
