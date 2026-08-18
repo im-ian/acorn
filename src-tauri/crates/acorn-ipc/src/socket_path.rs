@@ -17,7 +17,7 @@ const ENV_OVERRIDE: &str = "ACORN_IPC_SOCKET";
 /// Resolve the canonical socket path. Errors as a plain `String` so the CLI
 /// (which has no access to `AppError`) can print it directly.
 pub fn resolve() -> Result<PathBuf, String> {
-    if let Ok(override_path) = std::env::var(ENV_OVERRIDE) {
+    if let Some(override_path) = std::env::var_os(ENV_OVERRIDE) {
         if !override_path.is_empty() {
             return Ok(PathBuf::from(override_path));
         }
@@ -36,7 +36,7 @@ mod tests {
     fn env_override_takes_precedence() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         // SAFETY: serialized via ENV_LOCK and restored before returning.
-        let prev = std::env::var(ENV_OVERRIDE).ok();
+        let prev = std::env::var_os(ENV_OVERRIDE);
         unsafe {
             std::env::set_var(ENV_OVERRIDE, "/tmp/acorn-test.sock");
         }
@@ -50,12 +50,33 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn env_override_preserves_non_unicode_os_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let prev = std::env::var_os(ENV_OVERRIDE);
+        let expected = PathBuf::from(OsString::from_vec(b"/tmp/acorn-ipc-\xff.sock".to_vec()));
+        unsafe { std::env::set_var(ENV_OVERRIDE, &expected) };
+
+        assert_eq!(resolve().expect("override resolves"), expected);
+
+        unsafe {
+            match prev {
+                Some(value) => std::env::set_var(ENV_OVERRIDE, value),
+                None => std::env::remove_var(ENV_OVERRIDE),
+            }
+        }
+    }
+
     #[test]
     fn falls_back_to_data_dir() {
         let _guard = ENV_LOCK.lock().expect("env lock");
-        let prev = std::env::var(ENV_OVERRIDE).ok();
-        let prev_data_dir = std::env::var(acorn_paths::ENV_DATA_DIR_OVERRIDE).ok();
-        let prev_profile = std::env::var(acorn_paths::ENV_PROFILE).ok();
+        let prev = std::env::var_os(ENV_OVERRIDE);
+        let prev_data_dir = std::env::var_os(acorn_paths::ENV_DATA_DIR_OVERRIDE);
+        let prev_profile = std::env::var_os(acorn_paths::ENV_PROFILE);
         unsafe {
             std::env::remove_var(ENV_OVERRIDE);
             std::env::remove_var(acorn_paths::ENV_DATA_DIR_OVERRIDE);
