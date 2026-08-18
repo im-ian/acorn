@@ -26,8 +26,15 @@ pub fn default_profile() -> &'static str {
 }
 
 fn profile_from_env() -> io::Result<Option<String>> {
-    let Ok(raw) = std::env::var(ENV_PROFILE) else {
-        return Ok(None);
+    let raw = match std::env::var(ENV_PROFILE) {
+        Ok(raw) => raw,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{ENV_PROFILE} is not valid Unicode"),
+            ));
+        }
     };
     let profile = raw.trim();
     if profile.is_empty() {
@@ -75,13 +82,14 @@ fn ensure_private_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn data_dir_override_from(raw: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    raw.filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
 pub fn data_dir() -> io::Result<PathBuf> {
-    if let Ok(over) = std::env::var(ENV_DATA_DIR_OVERRIDE) {
-        if !over.is_empty() {
-            let p = PathBuf::from(over);
-            ensure_private_dir(&p)?;
-            return Ok(p);
-        }
+    if let Some(path) = data_dir_override_from(std::env::var_os(ENV_DATA_DIR_OVERRIDE)) {
+        ensure_private_dir(&path)?;
+        return Ok(path);
     }
 
     let base = base_data_dir()?;
@@ -186,6 +194,22 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn data_dir_override_preserves_non_unicode_os_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let mut component = format!("acorn-paths-non-unicode-{}-", std::process::id()).into_bytes();
+        component.push(0xff);
+        let tmp = std::env::temp_dir().join(OsString::from_vec(component));
+
+        assert_eq!(
+            data_dir_override_from(Some(tmp.clone().into_os_string())),
+            Some(tmp)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn data_dir_tightens_existing_permissions() {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp =
@@ -213,6 +237,26 @@ mod tests {
         }
 
         assert_eq!(data_dir().unwrap_err().kind(), io::ErrorKind::InvalidInput);
+
+        unsafe { std::env::remove_var(ENV_PROFILE) };
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn profile_rejects_non_unicode_values() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(ENV_DATA_DIR_OVERRIDE);
+            std::env::set_var(ENV_PROFILE, OsString::from_vec(vec![0xff]));
+        }
+
+        assert_eq!(
+            effective_profile().unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
 
         unsafe { std::env::remove_var(ENV_PROFILE) };
     }
