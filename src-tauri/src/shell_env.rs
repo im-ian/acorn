@@ -188,7 +188,7 @@ fn shell_capture() -> Option<HashMap<String, String>> {
     }
     #[cfg(not(windows))]
     {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let shell = crate::shell_runtime::interactive_shell().program;
         let script = build_capture_script(CAPTURED_VARS);
         let out = acorn_platform::process::run_bounded(
             Command::new(&shell).args(["-l", "-i", "-c", &script]),
@@ -421,7 +421,7 @@ mod tests {
         // Re-purpose CAPTURED_VARS to include our marker var temporarily.
         let probe_vars = ["LANG", "ACORN_SHELL_ENV_TEST"];
         let script = build_capture_script(&probe_vars);
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let shell = crate::shell_runtime::interactive_shell().program;
         let out = Command::new(&shell)
             .args(["-l", "-i", "-c", &script])
             .output()
