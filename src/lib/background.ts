@@ -140,8 +140,18 @@ export async function removeBackgroundImage(
     throw new Error("Invalid managed background image path");
   }
   const dir = await ensureBackgroundsDir();
-  const absolute = await join(dir, relativePath.slice(BG_DIR.length + 1));
-  await remove(absolute).catch(() => {});
+  const name = relativePath.slice(BG_DIR.length + 1);
+  const absolute = await join(dir, name);
+
+  // Deleting the background is something the user asked for, so a failure has
+  // to reach them. Presence comes from the directory listing rather than
+  // `exists()`, which reports a metadata access failure as `false` and would
+  // turn "could not read it" into a silent success. An entry that is already
+  // gone stays a no-op.
+  const entries = await readDir(dir);
+  if (entries.some((entry) => entry.name === name)) {
+    await remove(absolute);
+  }
 }
 
 export function backgroundCssVarsForState(
