@@ -171,20 +171,10 @@ fn normalize_settings(mut settings: ProjectSettings) -> ProjectSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_data_dir(test: impl FnOnce(&Path)) {
-        let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var(acorn_paths::ENV_DATA_DIR_OVERRIDE, dir.path());
-        }
-        test(dir.path());
-        unsafe {
-            std::env::remove_var(acorn_paths::ENV_DATA_DIR_OVERRIDE);
-        }
+        persistence::with_test_data_dir(dir.path(), || test(dir.path()));
     }
 
     #[test]
