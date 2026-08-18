@@ -37,6 +37,7 @@
 //! latest process state.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
@@ -1546,9 +1547,19 @@ fn claude_projects_root() -> Option<PathBuf> {
 }
 
 fn codex_sessions_root() -> Option<PathBuf> {
-    std::env::var_os("CODEX_HOME")
+    codex_sessions_root_from(
+        std::env::var_os("CODEX_HOME"),
+        directories::UserDirs::new().map(|d| d.home_dir().to_path_buf()),
+    )
+}
+
+fn codex_sessions_root_from(
+    codex_home: Option<OsString>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    codex_home
         .map(PathBuf::from)
-        .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".codex")))
+        .or_else(|| home.map(|home| home.join(".codex")))
         .map(|p| p.join("sessions"))
 }
 
@@ -3552,6 +3563,27 @@ fn is_uuid_v4_shape(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_sessions_root_preserves_non_utf8_codex_home() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let codex_home = OsString::from_vec(b"/tmp/codex-\xff-home".to_vec());
+
+        assert_eq!(
+            codex_sessions_root_from(Some(codex_home.clone()), Some(PathBuf::from("/fallback"))),
+            Some(PathBuf::from(codex_home).join("sessions"))
+        );
+    }
+
+    #[test]
+    fn codex_sessions_root_falls_back_to_user_home() {
+        assert_eq!(
+            codex_sessions_root_from(None, Some(PathBuf::from("/home/user"))),
+            Some(PathBuf::from("/home/user/.codex/sessions"))
+        );
+    }
 
     fn agent_node(kind: AgentKind, shape: AgentProcessShape) -> AgentProcessNode {
         AgentProcessNode {
