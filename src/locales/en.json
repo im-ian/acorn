@@ -24,6 +24,7 @@
       "refreshFailed": "Failed to refresh sessions:",
       "renameFailed": "Failed to rename session:",
       "agentDetectionFailed": "Failed to inspect live agent transcripts:",
+      "scrollbackLoadFailed": "Failed to load saved terminal scrollback; saving is paused to protect it:",
       "titleNotReady": "No transcript is available for this session yet.",
       "titleRegenerateSkipped": "Session name was not regenerated.",
       "worktreeAdopted": "Worktree adopted: {name}",
@@ -748,7 +749,7 @@
         "clearedSingular": "Cleared {count} cached file.",
         "clearedPlural": "Cleared {count} cached files.",
         "nothingToClear": "Nothing to clear.",
-        "clearFailed": "Failed to clear cache. See console for details."
+        "clearFailed": "Failed to clear cache:"
       },
       "confirm": {
         "message": "This will permanently delete the cached data listed above ({size}). Continue?",

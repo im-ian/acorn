@@ -6,8 +6,9 @@
 //! mount it loads via `scrollback_load` and `term.write`s the bytes back into
 //! xterm before spawning the PTY.
 //!
-//! Atomic writes use same-directory replace semantics. Files are best-effort: read errors
-//! return `None` so the UI can proceed with an empty buffer.
+//! Atomic writes use same-directory replace semantics. A missing file is an
+//! empty buffer; other read failures remain errors so the UI does not enable
+//! saves over a snapshot it could not restore.
 //!
 //! Callers pass the application's data directory in explicitly so this crate
 //! does not depend on the main `acorn` crate's `persistence::data_dir()`
@@ -37,9 +38,19 @@ pub enum ScrollbackError {
 
 pub type ScrollbackResult<T> = Result<T, ScrollbackError>;
 
+fn path_io_error(operation: &str, path: &Path, error: io::Error) -> ScrollbackError {
+    ScrollbackError::Io(io::Error::new(
+        error.kind(),
+        format!(
+            "failed to {operation} scrollback path {}: {error}",
+            path.display()
+        ),
+    ))
+}
+
 fn scrollback_dir(data_dir: &Path) -> ScrollbackResult<PathBuf> {
     let dir = data_dir.join(SCROLLBACK_DIR);
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(&dir).map_err(|error| path_io_error("create", &dir, error))?;
     Ok(dir)
 }
 
@@ -78,24 +89,20 @@ fn trailing_utf8_slice(value: &str, max_bytes: usize) -> &str {
 
 pub fn load(data_dir: &Path, session_id: &str) -> ScrollbackResult<Option<String>> {
     let path = session_file(data_dir, session_id)?;
-    if !path.exists() {
-        return Ok(None);
-    }
     match fs::read_to_string(&path) {
         Ok(s) => Ok(Some(s)),
-        Err(err) => {
-            tracing::warn!(path = %path.display(), error = %err, "failed to read scrollback");
-            Ok(None)
-        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(path_io_error("read", &path, error)),
     }
 }
 
 pub fn delete(data_dir: &Path, session_id: &str) -> ScrollbackResult<()> {
     let path = session_file(data_dir, session_id)?;
-    if path.exists() {
-        fs::remove_file(&path)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(path_io_error("delete", &path, error)),
     }
-    Ok(())
 }
 
 /// Remove scrollback files for any session id not present in `keep`.
@@ -109,15 +116,16 @@ where
     let keep_set: std::collections::HashSet<String> =
         keep.into_iter().map(|s| s.as_ref().to_string()).collect();
     let mut removed = 0usize;
-    let entries = match fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(err) => {
-            tracing::warn!(path = %dir.display(), error = %err, "scrollback prune: read_dir failed");
-            return Ok(0);
-        }
-    };
-    for entry in entries.flatten() {
+    let entries = fs::read_dir(&dir).map_err(|error| path_io_error("read", &dir, error))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| path_io_error("read entry in", &dir, error))?;
         let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| path_io_error("inspect", &path, error))?;
+        if !file_type.is_file() {
+            continue;
+        }
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
@@ -129,11 +137,8 @@ where
         if keep_set.contains(stem) {
             continue;
         }
-        if let Err(err) = fs::remove_file(&path) {
-            tracing::warn!(path = %path.display(), error = %err, "scrollback prune: remove failed");
-        } else {
-            removed += 1;
-        }
+        fs::remove_file(&path).map_err(|error| path_io_error("delete", &path, error))?;
+        removed += 1;
     }
     if removed > 0 {
         tracing::info!(removed, "pruned orphan scrollback files");
@@ -145,7 +150,9 @@ where
 /// id no longer exists in `keep`. Files for live sessions are not
 /// counted because they cannot be safely reclaimed without losing the
 /// session's restorable buffer; the user-facing "Clear cache" UI only
-/// surfaces the reclaimable portion. Returns 0 on read errors.
+/// surfaces the reclaimable portion. Access and directory-entry failures
+/// remain errors so the UI does not display an authoritative zero for an
+/// unreadable cache.
 pub fn orphan_size_bytes<I, S>(data_dir: &Path, keep: I) -> ScrollbackResult<u64>
 where
     I: IntoIterator<Item = S>,
@@ -154,13 +161,17 @@ where
     let dir = scrollback_dir(data_dir)?;
     let keep_set: std::collections::HashSet<String> =
         keep.into_iter().map(|s| s.as_ref().to_string()).collect();
-    let entries = match fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(0),
-    };
+    let entries = fs::read_dir(&dir).map_err(|error| path_io_error("read", &dir, error))?;
     let mut total: u64 = 0;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(|error| path_io_error("read entry in", &dir, error))?;
         let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| path_io_error("inspect", &path, error))?;
+        if !file_type.is_file() {
+            continue;
+        }
         if path.extension().and_then(|s| s.to_str()) != Some("txt") {
             continue;
         }
@@ -170,9 +181,10 @@ where
         if keep_set.contains(stem) {
             continue;
         }
-        if let Ok(meta) = entry.metadata() {
-            total = total.saturating_add(meta.len());
-        }
+        let metadata = entry
+            .metadata()
+            .map_err(|error| path_io_error("inspect", &path, error))?;
+        total = total.saturating_add(metadata.len());
     }
     Ok(total)
 }
@@ -237,13 +249,80 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn load_reports_an_unreadable_snapshot_instead_of_empty() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir_path();
+        let id = "550e8400-e29b-41d4-a716-44665544000c";
+        save(&tmp, id, "preserve me").expect("save");
+        let path = tmp.join(SCROLLBACK_DIR).join(format!("{id}.txt"));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("deny read");
+        let permission_bits_enforced = fs::File::open(&path).is_err();
+        let result = load(&tmp, id);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("restore read");
+
+        if permission_bits_enforced {
+            let error = result.expect_err("unreadable snapshot must remain an error");
+            assert!(error.to_string().contains("failed to read scrollback path"));
+            assert!(error.to_string().contains(&path.display().to_string()));
+            assert_eq!(fs::read_to_string(&path).unwrap(), "preserve me");
+        }
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prune_reports_remove_failures_instead_of_partial_success() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir_path();
+        let id = "550e8400-e29b-41d4-a716-44665544000d";
+        save(&tmp, id, "orphan").expect("save");
+        let dir = tmp.join(SCROLLBACK_DIR);
+        let path = dir.join(format!("{id}.txt"));
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).expect("deny delete");
+        let result = prune_orphans(&tmp, std::iter::empty::<&str>());
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).expect("restore delete");
+
+        if path.exists() {
+            let error = result.expect_err("failed orphan deletion must remain an error");
+            assert!(error
+                .to_string()
+                .contains("failed to delete scrollback path"));
+            assert!(error.to_string().contains(&path.display().to_string()));
+        }
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn orphan_size_reports_an_unreadable_directory_instead_of_zero() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir_path();
+        let id = "550e8400-e29b-41d4-a716-44665544000e";
+        save(&tmp, id, "orphan").expect("save");
+        let dir = tmp.join(SCROLLBACK_DIR);
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).expect("deny scan");
+        let permission_bits_enforced = fs::read_dir(&dir).is_err();
+        let result = orphan_size_bytes(&tmp, std::iter::empty::<&str>());
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).expect("restore scan");
+
+        if permission_bits_enforced {
+            let error = result.expect_err("unreadable cache must not report zero bytes");
+            assert!(error.to_string().contains("scrollback path"));
+            assert!(error.to_string().contains(&dir.display().to_string()));
+        }
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
     fn tempdir_path() -> PathBuf {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let ns = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let p = std::env::temp_dir().join(format!("acorn-session-scrollback-{ns}"));
+        let p = std::env::temp_dir().join(format!(
+            "acorn-session-scrollback-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         fs::create_dir_all(&p).unwrap();
         p
     }
