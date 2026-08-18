@@ -36,26 +36,32 @@ let cachedPermission: boolean | null = null;
 let inboxNotificationCounter = 0;
 
 async function checkPermission(): Promise<boolean> {
+  let granted = await isPermissionGranted();
+  if (!granted) {
+    const result = await requestPermission();
+    granted = result === "granted";
+  }
+  return granted;
+}
+
+async function ensurePermission(): Promise<boolean> {
+  if (cachedPermission !== null) return cachedPermission;
   try {
-    let granted = await isPermissionGranted();
-    if (!granted) {
-      const result = await requestPermission();
-      granted = result === "granted";
-    }
-    return granted;
+    cachedPermission = await checkPermission();
+    return cachedPermission;
   } catch (err) {
+    // A probe failure is not a permission denial. Leave the cache empty so a
+    // later transition can retry after a transient plugin/IPC failure.
     console.error("[notifications] permission check failed", err);
     return false;
   }
 }
 
-async function ensurePermission(): Promise<boolean> {
-  if (cachedPermission !== null) return cachedPermission;
-  cachedPermission = await checkPermission();
-  return cachedPermission;
-}
-
 async function refreshPermission(): Promise<boolean> {
+  // The explicit test action must not fall back to a previously cached result.
+  // Clearing first also lets normal notifications retry if this fresh probe
+  // fails instead of retaining stale permission state.
+  cachedPermission = null;
   cachedPermission = await checkPermission();
   return cachedPermission;
 }
@@ -268,6 +274,13 @@ async function fire(
   }
 }
 
+export type NotificationClickFailureStage = "registration" | "activation";
+
+type NotificationClickFailureHandler = (
+  stage: NotificationClickFailureStage,
+  error: unknown,
+) => void;
+
 /**
  * Registers a listener that fires when the user clicks a session-status
  * notification we sent. Each notification carries the originating session id
@@ -278,25 +291,74 @@ async function fire(
  * Returns a cleanup function. Designed to run once at app boot. The Tauri
  * plugin only delivers click events while a listener is attached, so the
  * caller must keep this registration alive for the lifetime of the app.
+ * Registration and window-activation failures are reported through
+ * `onFailure`; activation failures intentionally leave inbox activity unread.
  */
-export async function startNotificationClickHandler(): Promise<() => void> {
+export async function startNotificationClickHandler(
+  onFailure?: NotificationClickFailureHandler,
+): Promise<() => void> {
   let disposed = false;
-  const listener = await onAction((notification) => {
-    if (disposed) return;
-    const sessionId =
-      typeof notification.extra?.sessionId === "string"
-        ? notification.extra.sessionId
-        : null;
-    if (!sessionId) return;
-    const win = getCurrentWindow();
-    void win.show();
-    void win.unminimize();
-    void win.setFocus();
-    useAppStore
-      .getState()
-      .openSessionSurface(sessionId, { centerInCanvas: true });
-    markSessionNotificationsRead(sessionId);
-  });
+  const reportFailure = (
+    stage: NotificationClickFailureStage,
+    error: unknown,
+  ) => {
+    console.error(`[notifications] click ${stage} failed`, error);
+    try {
+      onFailure?.(stage, error);
+    } catch (callbackError) {
+      console.error(
+        "[notifications] click failure callback failed",
+        callbackError,
+      );
+    }
+  };
+
+  let listener: Awaited<ReturnType<typeof onAction>>;
+  try {
+    listener = await onAction((notification) => {
+      if (disposed) return;
+      const sessionId =
+        typeof notification.extra?.sessionId === "string"
+          ? notification.extra.sessionId
+          : null;
+      if (!sessionId) return;
+
+      void (async () => {
+        try {
+          const opened = useAppStore
+            .getState()
+            .openSessionSurface(sessionId, { centerInCanvas: true });
+          const win = getCurrentWindow();
+          const restoreAttempts = [
+            () => win.show(),
+            () => win.unminimize(),
+            () => win.setFocus(),
+          ];
+          const restoreFailures: unknown[] = [];
+          for (const run of restoreAttempts) {
+            try {
+              await run();
+            } catch (error) {
+              restoreFailures.push(error);
+            }
+          }
+          if (disposed) return;
+          if (restoreFailures.length > 0) {
+            reportFailure("activation", restoreFailures[0]);
+            return;
+          }
+          if (opened) markSessionNotificationsRead(sessionId);
+        } catch (error) {
+          reportFailure("activation", error);
+        }
+      })();
+    });
+  } catch (error) {
+    reportFailure("registration", error);
+    return () => {
+      disposed = true;
+    };
+  }
   return () => {
     disposed = true;
     listener.unregister();
@@ -311,19 +373,19 @@ export async function startNotificationClickHandler(): Promise<() => void> {
  *
  * - `"sent"`  — fire-and-forget succeeded
  * - `"denied"` — the OS rejected (or the user dismissed) the permission prompt
- * - `"error"` — `sendNotification` threw; details are logged to the console
+ * - `"error"` — the permission probe or notification send failed
  */
 export async function sendTestNotification(): Promise<"sent" | "denied" | "error"> {
-  const ok = await refreshPermission();
-  if (!ok) return "denied";
   try {
+    const ok = await refreshPermission();
+    if (!ok) return "denied";
     sendNotification({
       title: "Acorn — test notification",
       body: "If you can see this, system notifications are working.",
     });
     return "sent";
   } catch (err) {
-    console.error("[notifications] test sendNotification failed", err);
+    console.error("[notifications] test notification failed", err);
     return "error";
   }
 }

@@ -930,7 +930,9 @@
       "shellEnvironmentReloaded": "シェル環境がリロードされました。新しいセッションを開いて適用します。",
       "shellEnvironmentReloadFailed": "シェル環境のリロードに失敗しました。",
       "preventSleepSyncFailedPrefix": "スリープ防止設定を適用できませんでした:",
-      "controlGuidePreferenceSaveFailed": "コントロールセッションガイドの設定を保存できませんでした。"
+      "controlGuidePreferenceSaveFailed": "コントロールセッションガイドの設定を保存できませんでした。",
+      "notificationClickRegistrationFailedPrefix": "通知クリック処理を有効にできませんでした:",
+      "notificationClickActivationFailedPrefix": "クリックした通知から Acorn を開けませんでした:"
     }
   },
   "statusBar": {
