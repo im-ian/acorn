@@ -4577,13 +4577,15 @@ pub fn ipc_restart<R: Runtime>(
         handle.signal_stop();
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
-    let new_handle = crate::ipc::server::start(app.clone(), state.inner().clone());
-    let started = new_handle.is_some();
-    *state.ipc_handle.lock() = new_handle;
-    if started {
-        Ok(())
-    } else {
-        Err("ipc server failed to start; see app logs for details".to_string())
+    match crate::ipc::server::start(app.clone(), state.inner().clone()) {
+        Ok(handle) => {
+            *state.ipc_handle.lock() = Some(handle);
+            Ok(())
+        }
+        Err(err) => {
+            *state.ipc_handle.lock() = None;
+            Err(format!("IPC server failed to start: {err}"))
+        }
     }
 }
 
