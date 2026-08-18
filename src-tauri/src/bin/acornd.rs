@@ -167,10 +167,11 @@ fn run_serve(detach: bool) -> io::Result<()> {
     let pid_lock = match daemon::lifecycle::try_acquire_pid_lock()? {
         daemon::lifecycle::PidLock::Acquired(guard) => guard,
         daemon::lifecycle::PidLock::AlreadyHeld(pid) => {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("daemon already running (pid {pid})"),
-            ));
+            let message = pid.map_or_else(
+                || "daemon already running".to_owned(),
+                |pid| format!("daemon already running (pid {pid})"),
+            );
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, message));
         }
     };
     let auth_token = daemon::auth::load_or_create()?;

@@ -32,8 +32,10 @@ const MAX_PID_FILE_BYTES: u64 = 32;
 pub enum PidLock {
     /// We hold the lock. The file now contains our PID.
     Acquired(PidLockGuard),
-    /// Another daemon is already running. Field is its PID.
-    AlreadyHeld(u32),
+    /// Another daemon is already running. The diagnostic PID is unavailable
+    /// on platforms such as Windows that deny reads through a second handle
+    /// while the exclusive kernel lock is held.
+    AlreadyHeld(Option<u32>),
 }
 
 #[derive(Debug)]
@@ -75,7 +77,7 @@ pub fn try_acquire_pid_lock() -> io::Result<PidLock> {
     let mut file = open_pid_lock_file(&path)?;
     if let Err(error) = fs2::FileExt::try_lock_exclusive(&file) {
         if error.kind() == io::ErrorKind::WouldBlock {
-            return Ok(PidLock::AlreadyHeld(read_pid_file_at(&path)?.unwrap_or(0)));
+            return Ok(PidLock::AlreadyHeld(read_pid_file_at(&path)?));
         }
         return Err(error);
     }
@@ -128,16 +130,26 @@ pub fn read_pid_file() -> io::Result<Option<u32>> {
 }
 
 fn read_pid_file_at(path: &Path) -> io::Result<Option<u32>> {
-    let (file, opened) = match acorn_platform::fs::open_regular_nofollow(path) {
+    let (mut file, opened) = match acorn_platform::fs::open_regular_nofollow(path) {
         Ok(opened) => opened,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) if error.kind() == io::ErrorKind::InvalidInput => return Ok(None),
+        Err(error) if pid_file_read_blocked_by_lock(&error) => return Ok(None),
         Err(error) => return Err(error),
     };
-    if opened.len() > MAX_PID_FILE_BYTES {
+    match read_pid_from_open_file(&mut file, opened.len()) {
+        Ok(pid) => Ok(pid),
+        Err(error) if pid_file_read_blocked_by_lock(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn read_pid_from_open_file(file: &mut File, length: u64) -> io::Result<Option<u32>> {
+    if length > MAX_PID_FILE_BYTES {
         return Ok(None);
     }
-    let mut contents = Vec::with_capacity(opened.len() as usize);
+    file.rewind()?;
+    let mut contents = Vec::with_capacity(length as usize);
     file.take(MAX_PID_FILE_BYTES + 1)
         .read_to_end(&mut contents)?;
     if contents.len() as u64 > MAX_PID_FILE_BYTES {
@@ -146,6 +158,20 @@ fn read_pid_file_at(path: &Path) -> io::Result<Option<u32>> {
     Ok(std::str::from_utf8(&contents)
         .ok()
         .and_then(|value| value.trim().parse::<u32>().ok()))
+}
+
+#[cfg(windows)]
+fn pid_file_read_blocked_by_lock(error: &io::Error) -> bool {
+    // ERROR_SHARING_VIOLATION (32) may be returned while opening the file;
+    // ERROR_LOCK_VIOLATION (33) is returned when a read overlaps the range
+    // held by LockFileEx. Both mean the singleton lock is doing its job and
+    // only the diagnostic PID is temporarily unavailable.
+    matches!(error.raw_os_error(), Some(32 | 33))
+}
+
+#[cfg(not(windows))]
+fn pid_file_read_blocked_by_lock(_error: &io::Error) -> bool {
+    false
 }
 
 /// Probe a daemon by attempting to connect to the canonical control
@@ -254,14 +280,14 @@ mod tests {
         let tmp = short_tmp_root().join(format!("acn-pid-{}", uuid::Uuid::new_v4().simple()));
         unsafe { std::env::set_var(paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
         match try_acquire_pid_lock().unwrap() {
-            PidLock::Acquired(guard) => {
+            PidLock::Acquired(mut guard) => {
                 assert!(guard.path().exists());
-                let pid: u32 = std::fs::read_to_string(guard.path())
-                    .unwrap()
-                    .trim()
-                    .parse()
-                    .unwrap();
-                assert_eq!(pid, std::process::id());
+                let file = guard.file.as_mut().unwrap();
+                let length = file.metadata().unwrap().len();
+                assert_eq!(
+                    read_pid_from_open_file(file, length).unwrap(),
+                    Some(std::process::id())
+                );
                 drop(guard);
                 assert!(paths::pid_file_path().unwrap().exists());
                 assert_eq!(read_pid_file().unwrap(), None);
@@ -283,7 +309,7 @@ mod tests {
         std::fs::write(&pidfile, u32::MAX.to_string()).unwrap();
         let acquired = match try_acquire_pid_lock().unwrap() {
             PidLock::Acquired(guard) => guard,
-            PidLock::AlreadyHeld(pid) => panic!("reclaim should have happened, got {pid}"),
+            PidLock::AlreadyHeld(pid) => panic!("reclaim should have happened, got {pid:?}"),
         };
         drop(acquired);
         unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
@@ -302,9 +328,17 @@ mod tests {
             .set_len(MAX_PID_FILE_BYTES + 1)
             .unwrap();
 
-        let acquired = try_acquire_pid_lock().unwrap();
-        assert!(matches!(&acquired, PidLock::Acquired(_)));
-        assert_eq!(read_pid_file().unwrap(), Some(std::process::id()));
+        let mut acquired = try_acquire_pid_lock().unwrap();
+        let guard = match &mut acquired {
+            PidLock::Acquired(guard) => guard,
+            PidLock::AlreadyHeld(pid) => panic!("expected acquire, got holder {pid:?}"),
+        };
+        let file = guard.file.as_mut().unwrap();
+        let length = file.metadata().unwrap().len();
+        assert_eq!(
+            read_pid_from_open_file(file, length).unwrap(),
+            Some(std::process::id())
+        );
         drop(acquired);
 
         unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
@@ -358,7 +392,7 @@ mod tests {
         let acquired = match try_acquire_pid_lock().unwrap() {
             PidLock::Acquired(guard) => guard,
             PidLock::AlreadyHeld(pid) => {
-                panic!("recycled PID should have been reclaimed, got {pid}")
+                panic!("recycled PID should have been reclaimed, got {pid:?}")
             }
         };
         drop(acquired);
@@ -374,12 +408,16 @@ mod tests {
 
         let first = match try_acquire_pid_lock().unwrap() {
             PidLock::Acquired(guard) => guard,
-            PidLock::AlreadyHeld(pid) => panic!("unexpected lock holder {pid}"),
+            PidLock::AlreadyHeld(pid) => panic!("unexpected lock holder {pid:?}"),
         };
-        assert!(matches!(
-            try_acquire_pid_lock().unwrap(),
-            PidLock::AlreadyHeld(pid) if pid == std::process::id()
-        ));
+        let observed_pid = match try_acquire_pid_lock().unwrap() {
+            PidLock::AlreadyHeld(pid) => pid,
+            PidLock::Acquired(_) => panic!("second acquire unexpectedly succeeded"),
+        };
+        #[cfg(unix)]
+        assert_eq!(observed_pid, Some(std::process::id()));
+        #[cfg(windows)]
+        assert_eq!(observed_pid, None);
         drop(first);
         let second = try_acquire_pid_lock().unwrap();
         assert!(matches!(&second, PidLock::Acquired(_)));
