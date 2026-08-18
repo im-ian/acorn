@@ -2440,7 +2440,9 @@
       "bodyRestart": "새 환경을 적용하려면 지금 재시작하세요. 열린 에이전트 대화(Claude / Codex)는 다음 포커스 시점에 이어서 진행됩니다.",
       "later": "나중에",
       "restarting": "재시작 중...",
-      "restartSessions": "세션 재시작"
+      "restartSessions": "세션 재시작",
+      "restartFailed": "백그라운드 세션을 재시작하지 못했습니다:",
+      "dismissFailed": "이 알림을 닫지 못했습니다:"
     },
     "memoryBreakdown": {
       "title": "메모리 세부 정보",
