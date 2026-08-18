@@ -386,7 +386,7 @@ fn read_request_line<R: Read>(
                 }
             }
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+            Err(err) if acorn_local_ipc::nonblocking_read_pending(&err) => {
                 if Instant::now() >= deadline {
                     return Err(std::io::Error::new(
                         ErrorKind::TimedOut,

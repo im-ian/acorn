@@ -99,6 +99,24 @@ pub fn marker_exists(endpoint: &Path) -> bool {
     }
 }
 
+/// Whether a nonblocking local-stream read should be retried.
+///
+/// Windows named pipes report an empty `PIPE_NOWAIT` read as
+/// `ERROR_NO_DATA`, while Unix transports use `WouldBlock`.
+pub fn nonblocking_read_pending(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::WouldBlock {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        error.raw_os_error() == Some(232)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 fn endpoint_name(endpoint: &Path) -> io::Result<Name<'_>> {
     endpoint
         .as_os_str()
@@ -442,17 +460,24 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn fully_nonblocking_named_pipe_accepts_a_usable_stream() {
+    fn fully_nonblocking_named_pipe_supports_a_delayed_round_trip() {
         let endpoint = unique_pipe("nonblocking");
         let listener = bind(&endpoint).expect("bind named pipe");
         listener
             .set_nonblocking(ListenerNonblockingMode::Both)
             .expect("set listener and accepted streams nonblocking");
+        let (connected_tx, connected_rx) = std::sync::mpsc::channel();
+        let (write_tx, write_rx) = std::sync::mpsc::channel();
         let client = std::thread::spawn({
             let endpoint = endpoint.clone();
             move || {
                 let mut stream = connect(&endpoint).expect("connect named pipe");
+                connected_tx.send(()).unwrap();
+                write_rx.recv().unwrap();
                 stream.write_all(b"ping").unwrap();
+                let mut reply = [0; 4];
+                stream.read_exact(&mut reply).unwrap();
+                assert_eq!(&reply, b"pong");
             }
         });
 
@@ -470,13 +495,19 @@ mod tests {
                 Err(error) => panic!("nonblocking named-pipe accept failed: {error}"),
             }
         };
+        connected_rx.recv().unwrap();
+        let pending = server
+            .read(&mut [0; 1])
+            .expect_err("empty nonblocking named-pipe read must be pending");
+        assert!(nonblocking_read_pending(&pending));
+        write_tx.send(()).unwrap();
         let mut bytes = [0; 4];
         let mut offset = 0;
         while offset < bytes.len() {
             match server.read(&mut bytes[offset..]) {
                 Ok(0) => panic!("named-pipe client closed before sending the test payload"),
                 Ok(read) => offset += read,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                Err(error) if nonblocking_read_pending(&error) => {
                     assert!(
                         std::time::Instant::now() < deadline,
                         "accepted named-pipe stream did not receive before timeout"
@@ -487,6 +518,7 @@ mod tests {
             }
         }
         assert_eq!(&bytes, b"ping");
+        server.write_all(b"pong").unwrap();
         client.join().unwrap();
     }
 

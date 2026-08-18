@@ -860,7 +860,7 @@ fn read_request_line_with_deadline(
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err(error) if acorn_local_ipc::nonblocking_read_pending(&error) => {
                 if Instant::now() >= deadline {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
