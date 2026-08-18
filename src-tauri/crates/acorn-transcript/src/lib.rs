@@ -106,13 +106,29 @@ struct ProviderScanBudget {
     head_opens: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProviderScanError {
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ProviderScanError {
+    #[error("provider transcript scan limit exceeded")]
     LimitExceeded,
-    Incomplete,
+    #[error("failed to access provider transcript path {path}: {message}")]
+    Access {
+        path: PathBuf,
+        kind: std::io::ErrorKind,
+        message: String,
+    },
 }
 
-type ProviderScanResult<T> = Result<T, ProviderScanError>;
+impl From<ProviderScanError> for std::io::Error {
+    fn from(error: ProviderScanError) -> Self {
+        let kind = match &error {
+            ProviderScanError::Access { kind, .. } => *kind,
+            ProviderScanError::LimitExceeded => std::io::ErrorKind::Other,
+        };
+        std::io::Error::new(kind, error)
+    }
+}
+
+pub type ProviderScanResult<T> = Result<T, ProviderScanError>;
 
 impl ProviderScanBudget {
     fn new(limits: ProviderScanLimits) -> Self {
@@ -145,14 +161,22 @@ fn charge_limit(used: &mut usize, limit: usize) -> ProviderScanResult<()> {
     Ok(())
 }
 
-fn complete_io<T>(result: std::io::Result<T>) -> ProviderScanResult<T> {
-    result.map_err(|_| ProviderScanError::Incomplete)
+fn provider_access_error(path: &Path, error: std::io::Error) -> ProviderScanError {
+    ProviderScanError::Access {
+        path: path.to_path_buf(),
+        kind: error.kind(),
+        message: error.to_string(),
+    }
+}
+
+fn complete_io<T>(path: &Path, result: std::io::Result<T>) -> ProviderScanResult<T> {
+    result.map_err(|error| provider_access_error(path, error))
 }
 
 struct ScanCache {
     captured_at: Instant,
     session_key: Vec<(uuid::Uuid, Option<u32>)>,
-    mappings: Vec<(uuid::Uuid, AgentKind, String)>,
+    outcome: ProviderScanResult<Vec<(uuid::Uuid, AgentKind, String)>>,
 }
 
 type OwnerTranscriptQuarantine = std::collections::HashMap<uuid::Uuid, HashSet<PathBuf>>;
@@ -273,6 +297,15 @@ pub fn slug_for_cwd(cwd: &Path) -> String {
 /// so repeated menu opens within a short window do not multiply the
 /// per-process syscall cost.
 pub fn collect_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, String)> {
+    collect_live_mappings_checked(sessions).unwrap_or_default()
+}
+
+/// Checked form of [`collect_live_mappings`]. An empty vector means the scan
+/// completed and found no live provider transcript; access and safety-budget
+/// failures remain visible to interactive callers.
+pub fn collect_live_mappings_checked(
+    sessions: &[SessionPid],
+) -> ProviderScanResult<Vec<(uuid::Uuid, AgentKind, String)>> {
     collect_mappings_cached(scan_cache(), sessions, MappingScope::AllDescendants)
 }
 
@@ -283,6 +316,15 @@ pub fn collect_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentK
 pub fn collect_session_owner_mappings(
     sessions: &[SessionPid],
 ) -> Vec<(uuid::Uuid, AgentKind, String)> {
+    collect_session_owner_mappings_checked(sessions).unwrap_or_default()
+}
+
+/// Checked form of [`collect_session_owner_mappings`]. Background callers can
+/// keep their existing marker state when this returns an error instead of
+/// treating a failed scan as proof that no owner exists.
+pub fn collect_session_owner_mappings_checked(
+    sessions: &[SessionPid],
+) -> ProviderScanResult<Vec<(uuid::Uuid, AgentKind, String)>> {
     collect_mappings_cached(owner_scan_cache(), sessions, MappingScope::SessionOwners)
 }
 
@@ -290,9 +332,9 @@ fn collect_mappings_cached(
     cache: &'static Mutex<Option<ScanCache>>,
     sessions: &[SessionPid],
     scope: MappingScope,
-) -> Vec<(uuid::Uuid, AgentKind, String)> {
+) -> ProviderScanResult<Vec<(uuid::Uuid, AgentKind, String)>> {
     if sessions.len() > LIVE_SCAN_SESSION_LIMIT {
-        return Vec::new();
+        return Err(ProviderScanError::LimitExceeded);
     }
     let session_key = scan_cache_session_key(sessions);
     {
@@ -301,17 +343,17 @@ fn collect_mappings_cached(
             if cache.session_key == session_key
                 && cache.captured_at.elapsed() < Duration::from_millis(SCAN_CACHE_TTL_MS)
             {
-                return cache.mappings.clone();
+                return cache.outcome.clone();
             }
         }
     }
-    let mappings = scan_live_mappings(sessions, scope);
+    let outcome = scan_live_mappings(sessions, scope);
     *cache.lock() = Some(ScanCache {
         captured_at: Instant::now(),
         session_key,
-        mappings: mappings.clone(),
+        outcome: outcome.clone(),
     });
-    mappings
+    outcome
 }
 
 fn scan_cache_session_key(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, Option<u32>)> {
@@ -336,7 +378,18 @@ pub fn find_completed_agent_run(
     kind: AgentKind,
     process_start: SystemTime,
 ) -> Option<String> {
-    find_agent_run_transcript(cwd, kind, process_start).map(|(_, id)| id)
+    find_completed_agent_run_checked(cwd, kind, process_start)
+        .ok()
+        .flatten()
+}
+
+/// Checked form of [`find_completed_agent_run`].
+pub fn find_completed_agent_run_checked(
+    cwd: &Path,
+    kind: AgentKind,
+    process_start: SystemTime,
+) -> ProviderScanResult<Option<String>> {
+    Ok(find_agent_run_transcript_checked(cwd, kind, process_start)?.map(|(_, id)| id))
 }
 
 /// Path-returning form of [`find_completed_agent_run`]. The status poll's
@@ -348,6 +401,17 @@ pub fn find_agent_run_transcript(
     kind: AgentKind,
     process_start: SystemTime,
 ) -> Option<(PathBuf, String)> {
+    find_agent_run_transcript_checked(cwd, kind, process_start)
+        .ok()
+        .flatten()
+}
+
+/// Checked form of [`find_agent_run_transcript`].
+pub fn find_agent_run_transcript_checked(
+    cwd: &Path,
+    kind: AgentKind,
+    process_start: SystemTime,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
     let now = SystemTime::now();
     let recency_cutoff = now
         .checked_sub(Duration::from_secs(RECENCY_WINDOW_SECS))
@@ -357,33 +421,54 @@ pub fn find_agent_run_transcript(
         // run, not a long-lived interactive process, so there is no
         // in-session `/new` to follow and no process-table context to
         // prove the cwd has a single claude. Keep the plain birth anchor.
-        AgentKind::Claude => find_recent_claude_jsonl(
-            cwd,
-            claude_projects_root().as_deref(),
-            recency_cutoff,
-            process_start,
-            now,
-            false,
-            &HashSet::new(),
-        ),
-        AgentKind::Codex => find_completed_codex_jsonl(
-            cwd,
-            codex_sessions_root().as_deref(),
-            recency_cutoff,
-            process_start,
-        ),
-        AgentKind::Antigravity => find_completed_antigravity_jsonl(
-            cwd,
-            &antigravity_brain_roots(),
-            recency_cutoff,
-            process_start,
-        ),
-        AgentKind::Grok => find_completed_grok_jsonl(
-            cwd,
-            grok_sessions_root().as_deref(),
-            recency_cutoff,
-            process_start,
-        ),
+        AgentKind::Claude => {
+            let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+            find_recent_claude_jsonl_budgeted(
+                cwd,
+                claude_projects_root().as_deref(),
+                recency_cutoff,
+                process_start,
+                now,
+                false,
+                &HashSet::new(),
+                &mut budget,
+            )
+        }
+        AgentKind::Codex => {
+            let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+            find_completed_codex_jsonl_budgeted(
+                cwd,
+                codex_sessions_root().as_deref(),
+                recency_cutoff,
+                process_start,
+                CodexRolloutScope::SessionOwner,
+                &mut budget,
+            )
+        }
+        AgentKind::Antigravity => {
+            let roots = antigravity_brain_roots_checked()?;
+            let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+            find_completed_antigravity_jsonl_budgeted(
+                cwd,
+                &roots,
+                recency_cutoff,
+                process_start,
+                &mut budget,
+            )
+        }
+        AgentKind::Grok => {
+            let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+            find_recent_grok_jsonl_budgeted(
+                cwd,
+                grok_sessions_root().as_deref(),
+                recency_cutoff,
+                process_start,
+                now,
+                false,
+                &HashSet::new(),
+                &mut budget,
+            )
+        }
     }
 }
 
@@ -395,24 +480,37 @@ pub fn find_resumed_codex_run_transcript(
     cwd: &Path,
     process_start: SystemTime,
 ) -> Option<(PathBuf, String)> {
+    find_resumed_codex_run_transcript_checked(cwd, process_start)
+        .ok()
+        .flatten()
+}
+
+/// Checked form of [`find_resumed_codex_run_transcript`].
+pub fn find_resumed_codex_run_transcript_checked(
+    cwd: &Path,
+    process_start: SystemTime,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
     let now = SystemTime::now();
     let recency_cutoff = now
         .checked_sub(Duration::from_secs(RECENCY_WINDOW_SECS))
         .unwrap_or(SystemTime::UNIX_EPOCH);
-    find_completed_resumed_codex_jsonl(
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    find_completed_codex_jsonl_budgeted(
         cwd,
         codex_sessions_root().as_deref(),
         recency_cutoff,
         process_start,
+        CodexRolloutScope::ResumedOwner,
+        &mut budget,
     )
 }
 
 fn scan_live_mappings(
     sessions: &[SessionPid],
     scope: MappingScope,
-) -> Vec<(uuid::Uuid, AgentKind, String)> {
+) -> ProviderScanResult<Vec<(uuid::Uuid, AgentKind, String)>> {
     if sessions.len() > LIVE_SCAN_SESSION_LIMIT {
-        return Vec::new();
+        return Err(ProviderScanError::LimitExceeded);
     }
     let mut out = Vec::new();
     let refresh = ProcessRefreshKind::nothing()
@@ -470,7 +568,6 @@ fn scan_live_mappings(
     let claude_root = claude_projects_root();
     let codex_root = codex_sessions_root();
     let antigravity_storage_root = google_agent_storage_root();
-    let antigravity_roots = antigravity_brain_roots();
     let grok_root = grok_sessions_root();
 
     // Collect every (session, agent-process) candidate first so we can
@@ -506,7 +603,7 @@ fn scan_live_mappings(
             |pid| sys.process(pid).and_then(agent_process_node),
         ) {
             Ok(matches) => matches,
-            Err(_) => return Vec::new(),
+            Err(_) => return Err(ProviderScanError::LimitExceeded),
         };
 
         for process_match in matches {
@@ -537,6 +634,15 @@ fn scan_live_mappings(
         }
     }
 
+    let antigravity_roots = if candidates
+        .iter()
+        .any(|candidate| candidate.kind == AgentKind::Antigravity)
+    {
+        antigravity_brain_roots_checked()?
+    } else {
+        Vec::new()
+    };
+
     if scope == MappingScope::SessionOwners {
         for c in candidates
             .iter()
@@ -566,11 +672,14 @@ fn scan_live_mappings(
     let mut codex_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     let mut antigravity_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     let mut grok_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
-    let antigravity_owner_cursors = candidates
+    let antigravity_owner_cursors = if candidates
         .iter()
         .any(|candidate| candidate.kind == AgentKind::Antigravity)
-        .then(|| load_antigravity_owner_cursors(antigravity_storage_root.as_deref()))
-        .unwrap_or_default();
+    {
+        load_antigravity_owner_cursors_checked(antigravity_storage_root.as_deref())?
+    } else {
+        std::collections::HashMap::new()
+    };
     for c in candidates {
         let mut reserved = assigned.clone();
         if c.role == AgentProcessRole::Emit {
@@ -699,10 +808,7 @@ fn scan_live_mappings(
                 }
             }
         })();
-        let candidate = match candidate {
-            Ok(candidate) => candidate,
-            Err(_) => return Vec::new(),
-        };
+        let candidate = candidate?;
         if let Some((path, uuid)) = candidate {
             tracing::info!(
                 session_id = %c.session_id,
@@ -744,7 +850,7 @@ fn scan_live_mappings(
         }
     }
 
-    out
+    Ok(out)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1440,8 +1546,7 @@ fn claude_projects_root() -> Option<PathBuf> {
 }
 
 fn codex_sessions_root() -> Option<PathBuf> {
-    std::env::var("CODEX_HOME")
-        .ok()
+    std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
         .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".codex")))
         .map(|p| p.join("sessions"))
@@ -1454,33 +1559,40 @@ fn grok_sessions_root() -> Option<PathBuf> {
         .map(|p| p.join("sessions"))
 }
 
-fn safe_is_directory(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|meta| meta.file_type().is_dir())
-        .unwrap_or(false)
+fn safe_is_directory(path: &Path) -> ProviderScanResult<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => Ok(meta.file_type().is_dir()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(provider_access_error(path, error)),
+    }
 }
 
 fn safe_read_dir(path: &Path) -> ProviderScanResult<Option<std::fs::ReadDir>> {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(ProviderScanError::Incomplete),
+        Err(error) => return Err(provider_access_error(path, error)),
     };
     if !meta.file_type().is_dir() {
         return Ok(None);
     }
-    complete_io(std::fs::read_dir(path)).map(Some)
+    complete_io(path, std::fs::read_dir(path)).map(Some)
 }
 
 fn safe_directory_entry_path(entry: &std::fs::DirEntry) -> ProviderScanResult<Option<PathBuf>> {
-    Ok(complete_io(entry.file_type())?
+    let path = entry.path();
+    Ok(complete_io(&path, entry.file_type())?
         .is_dir()
-        .then(|| entry.path()))
+        .then_some(path))
 }
 
-fn safe_regular_file_metadata(path: &Path) -> Option<std::fs::Metadata> {
-    let meta = std::fs::symlink_metadata(path).ok()?;
-    meta.file_type().is_file().then_some(meta)
+fn safe_regular_file_metadata(path: &Path) -> ProviderScanResult<Option<std::fs::Metadata>> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(provider_access_error(path, error)),
+    };
+    Ok(meta.file_type().is_file().then_some(meta))
 }
 
 #[cfg(unix)]
@@ -1498,10 +1610,11 @@ fn same_file_metadata(_before: &std::fs::Metadata, _opened: &std::fs::Metadata) 
 fn safe_regular_file_entry_metadata(
     entry: &std::fs::DirEntry,
 ) -> ProviderScanResult<Option<std::fs::Metadata>> {
-    if !complete_io(entry.file_type())?.is_file() {
+    let path = entry.path();
+    if !complete_io(&path, entry.file_type())?.is_file() {
         return Ok(None);
     }
-    let meta = complete_io(std::fs::symlink_metadata(entry.path()))?;
+    let meta = complete_io(&path, std::fs::symlink_metadata(&path))?;
     Ok(meta.file_type().is_file().then_some(meta))
 }
 
@@ -1512,15 +1625,32 @@ fn safe_regular_file_entry_metadata(
 /// so their first 48 bits identify the rollout's timestamp; check that date
 /// first and keep a small recent fallback for non-v7 or unusual layouts.
 pub fn locate_codex_transcript(uuid: &str) -> Option<PathBuf> {
-    let root = codex_sessions_root()?;
-    locate_codex_transcript_in(&root, uuid)
+    locate_codex_transcript_checked(uuid).ok().flatten()
 }
 
+/// Checked form of [`locate_codex_transcript`]. Missing transcript roots and
+/// UUIDs return `Ok(None)`; access failures and exhausted safety budgets remain
+/// distinguishable so interactive callers do not report false absence.
+pub fn locate_codex_transcript_checked(uuid: &str) -> ProviderScanResult<Option<PathBuf>> {
+    let Some(root) = codex_sessions_root() else {
+        return Ok(None);
+    };
+    locate_codex_transcript_in_checked(&root, uuid)
+}
+
+#[cfg(test)]
 fn locate_codex_transcript_in(sessions_root: &Path, uuid: &str) -> Option<PathBuf> {
-    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
-    locate_codex_transcript_in_budgeted(sessions_root, uuid, &mut budget)
+    locate_codex_transcript_in_checked(sessions_root, uuid)
         .ok()
         .flatten()
+}
+
+fn locate_codex_transcript_in_checked(
+    sessions_root: &Path,
+    uuid: &str,
+) -> ProviderScanResult<Option<PathBuf>> {
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    locate_codex_transcript_in_budgeted(sessions_root, uuid, &mut budget)
 }
 
 fn locate_codex_transcript_in_budgeted(
@@ -1599,7 +1729,7 @@ fn find_claude_jsonl_for_uuid_budgeted(
     let Some(root) = projects_root else {
         return Ok(None);
     };
-    if !safe_is_directory(root) {
+    if !safe_is_directory(root)? {
         return Ok(None);
     }
     if !is_uuid_v4_shape(uuid) {
@@ -1607,7 +1737,7 @@ fn find_claude_jsonl_for_uuid_budgeted(
     }
     let filename = format!("{uuid}.jsonl");
     let slug_dir = root.join(slug_for_cwd(cwd));
-    if safe_is_directory(&slug_dir) {
+    if safe_is_directory(&slug_dir)? {
         let slug_path = slug_dir.join(&filename);
         if claude_uuid_path_matches_cwd_budgeted(&slug_path, cwd, assigned, budget)? {
             return Ok(Some((slug_path, uuid.to_string())));
@@ -1619,7 +1749,7 @@ fn find_claude_jsonl_for_uuid_budgeted(
     };
     for raw_project in projects {
         budget.charge_directory_entry()?;
-        let project = complete_io(raw_project)?;
+        let project = complete_io(root, raw_project)?;
         let Some(project_dir) = safe_directory_entry_path(&project)? else {
             continue;
         };
@@ -1641,7 +1771,7 @@ fn claude_uuid_path_matches_cwd_budgeted(
         return Ok(false);
     }
     budget.charge_candidate()?;
-    if safe_regular_file_metadata(path).is_none() {
+    if safe_regular_file_metadata(path)?.is_none() {
         return Ok(false);
     }
     Ok(read_agent_transcript_cwd_budgeted(path, budget)?
@@ -1704,7 +1834,7 @@ fn find_rollout_for_uuid_budgeted(
     };
     for raw_entry in entries {
         budget.charge_directory_entry()?;
-        let entry = complete_io(raw_entry)?;
+        let entry = complete_io(day_dir, raw_entry)?;
         let path = entry.path();
         let Some(filename) = path.file_name().and_then(|s| s.to_str()) else {
             continue;
@@ -1727,76 +1857,100 @@ fn google_agent_storage_root() -> Option<PathBuf> {
         .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".gemini")))
 }
 
-fn antigravity_brain_roots() -> Vec<PathBuf> {
+fn antigravity_brain_roots_checked() -> ProviderScanResult<Vec<PathBuf>> {
     let Some(root) = google_agent_storage_root() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    ["antigravity", "antigravity-ide", "antigravity-cli"]
-        .into_iter()
-        .map(|profile| root.join(profile).join("brain"))
-        .filter(|path| safe_is_directory(path))
-        .collect()
+    let mut roots = Vec::new();
+    for profile in ["antigravity", "antigravity-ide", "antigravity-cli"] {
+        let path = root.join(profile).join("brain");
+        if safe_is_directory(&path)? {
+            roots.push(path);
+        }
+    }
+    Ok(roots)
 }
 
 pub fn locate_antigravity_transcript(uuid: &str) -> Option<PathBuf> {
-    locate_antigravity_transcript_in(&antigravity_brain_roots(), uuid)
+    locate_antigravity_transcript_checked(uuid).ok().flatten()
 }
 
+/// Checked form of [`locate_antigravity_transcript`].
+pub fn locate_antigravity_transcript_checked(uuid: &str) -> ProviderScanResult<Option<PathBuf>> {
+    locate_antigravity_transcript_in_checked(&antigravity_brain_roots_checked()?, uuid)
+}
+
+#[cfg(test)]
 fn locate_antigravity_transcript_in(brain_roots: &[PathBuf], uuid: &str) -> Option<PathBuf> {
+    locate_antigravity_transcript_in_checked(brain_roots, uuid)
+        .ok()
+        .flatten()
+}
+
+fn locate_antigravity_transcript_in_checked(
+    brain_roots: &[PathBuf],
+    uuid: &str,
+) -> ProviderScanResult<Option<PathBuf>> {
     if !is_uuid_v4_shape(uuid) {
-        return None;
+        return Ok(None);
     }
-    brain_roots.iter().find_map(|root| {
+    for root in brain_roots {
         let session_dir = root.join(uuid);
         let path = session_dir
             .join(".system_generated")
             .join("logs")
             .join("transcript.jsonl");
-        (safe_antigravity_transcript_path(&session_dir, &path)
-            && antigravity_uuid_from_transcript_path(&path).as_deref() == Some(uuid))
-        .then_some(path)
-    })
+        if safe_antigravity_transcript_path(&session_dir, &path)?
+            && antigravity_uuid_from_transcript_path(&path).as_deref() == Some(uuid)
+        {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
+#[cfg(test)]
 fn load_antigravity_owner_cursors(
     storage_root: Option<&Path>,
 ) -> std::collections::HashMap<String, String> {
+    load_antigravity_owner_cursors_checked(storage_root).unwrap_or_default()
+}
+
+fn load_antigravity_owner_cursors_checked(
+    storage_root: Option<&Path>,
+) -> ProviderScanResult<std::collections::HashMap<String, String>> {
     use std::io::Read;
 
     let Some(storage_root) = storage_root else {
-        return std::collections::HashMap::new();
+        return Ok(std::collections::HashMap::new());
     };
     let path = storage_root
         .join("antigravity-cli")
         .join("cache")
         .join("last_conversations.json");
-    let Some(before) = safe_regular_file_metadata(&path) else {
-        return std::collections::HashMap::new();
+    let Some(before) = safe_regular_file_metadata(&path)? else {
+        return Ok(std::collections::HashMap::new());
     };
     let max_bytes = PROVIDER_SCAN_LIMITS.head_bytes as u64;
     if before.len() > max_bytes {
-        return std::collections::HashMap::new();
+        return Err(ProviderScanError::LimitExceeded);
     }
-    let Ok(file) = std::fs::File::open(&path) else {
-        return std::collections::HashMap::new();
-    };
-    let Ok(opened) = file.metadata() else {
-        return std::collections::HashMap::new();
-    };
+    let file = complete_io(&path, std::fs::File::open(&path))?;
+    let opened = complete_io(&path, file.metadata())?;
     if !opened.is_file() || opened.len() > max_bytes || !same_file_metadata(&before, &opened) {
-        return std::collections::HashMap::new();
+        return Err(ProviderScanError::LimitExceeded);
     }
 
     let mut bytes = Vec::with_capacity(opened.len() as usize);
-    if file
-        .take(max_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .is_err()
-        || bytes.len() as u64 > max_bytes
-    {
-        return std::collections::HashMap::new();
+    complete_io(
+        &path,
+        file.take(max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes),
+    )?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(ProviderScanError::LimitExceeded);
     }
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    Ok(serde_json::from_slice(&bytes).unwrap_or_default())
 }
 
 fn antigravity_owner_cursor_id(
@@ -1810,6 +1964,7 @@ fn antigravity_owner_cursor_id(
 /// Resolve the JSONL transcript a `claude` process is currently writing
 /// in the given cwd. Claude normally buckets transcripts by slugified cwd,
 /// but the metadata fallback keeps pairing stable when that slug differs.
+#[cfg(test)]
 fn find_recent_claude_jsonl(
     cwd: &Path,
     projects_root: Option<&Path>,
@@ -1832,6 +1987,7 @@ fn find_recent_claude_jsonl(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn find_recent_claude_jsonl_with_limits(
     cwd: &Path,
     projects_root: Option<&Path>,
@@ -1871,7 +2027,7 @@ fn find_recent_claude_jsonl_budgeted(
     let Some(root) = projects_root else {
         return Ok(None);
     };
-    if !safe_is_directory(root) {
+    if !safe_is_directory(root)? {
         return Ok(None);
     }
     let slug_dir = root.join(slug_for_cwd(cwd));
@@ -1915,7 +2071,7 @@ fn find_recent_claude_jsonl_by_cwd_budgeted(
     };
     for raw_project in projects {
         budget.charge_directory_entry()?;
-        let project = complete_io(raw_project)?;
+        let project = complete_io(projects_root, raw_project)?;
         let Some(dir) = safe_directory_entry_path(&project)? else {
             continue;
         };
@@ -1924,7 +2080,7 @@ fn find_recent_claude_jsonl_by_cwd_budgeted(
         };
         for raw_entry in entries {
             budget.charge_directory_entry()?;
-            let entry = complete_io(raw_entry)?;
+            let entry = complete_io(&dir, raw_entry)?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
@@ -1936,7 +2092,7 @@ fn find_recent_claude_jsonl_by_cwd_budgeted(
             let Some(meta) = safe_regular_file_entry_metadata(&entry)? else {
                 continue;
             };
-            let Ok(mtime) = meta.modified() else { continue };
+            let mtime = complete_io(&path, meta.modified())?;
             if mtime < recency_cutoff || mtime < process_start {
                 continue;
             }
@@ -2154,7 +2310,7 @@ fn find_recent_codex_jsonl_budgeted(
         };
         for raw_entry in entries {
             budget.charge_directory_entry()?;
-            let entry = complete_io(raw_entry)?;
+            let entry = complete_io(&day_dir, raw_entry)?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
@@ -2166,9 +2322,7 @@ fn find_recent_codex_jsonl_budgeted(
             let Some(meta) = safe_regular_file_entry_metadata(&entry)? else {
                 continue;
             };
-            let Ok(mtime) = meta.modified() else {
-                continue;
-            };
+            let mtime = complete_io(&path, meta.modified())?;
             if mtime < recency_cutoff || mtime < process_start {
                 continue;
             }
@@ -2201,6 +2355,7 @@ fn find_recent_codex_jsonl_budgeted(
     ))
 }
 
+#[cfg(test)]
 fn find_completed_codex_jsonl(
     cwd: &Path,
     sessions_root: Option<&Path>,
@@ -2216,6 +2371,7 @@ fn find_completed_codex_jsonl(
     )
 }
 
+#[cfg(test)]
 fn find_completed_resumed_codex_jsonl(
     cwd: &Path,
     sessions_root: Option<&Path>,
@@ -2231,6 +2387,7 @@ fn find_completed_resumed_codex_jsonl(
     )
 }
 
+#[cfg(test)]
 fn find_completed_codex_jsonl_with_scope(
     cwd: &Path,
     sessions_root: Option<&Path>,
@@ -2269,7 +2426,7 @@ fn find_completed_codex_jsonl_budgeted(
         };
         for raw_entry in entries {
             budget.charge_directory_entry()?;
-            let entry = complete_io(raw_entry)?;
+            let entry = complete_io(&day_dir, raw_entry)?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
@@ -2278,9 +2435,7 @@ fn find_completed_codex_jsonl_budgeted(
             let Some(meta) = safe_regular_file_entry_metadata(&entry)? else {
                 continue;
             };
-            let Ok(mtime) = meta.modified() else {
-                continue;
-            };
+            let mtime = complete_io(&path, meta.modified())?;
             if mtime < recency_cutoff || mtime < process_start {
                 continue;
             }
@@ -2358,7 +2513,7 @@ fn find_recent_antigravity_jsonl_budgeted(
         };
         for raw_entry in entries {
             budget.charge_directory_entry()?;
-            let entry = complete_io(raw_entry)?;
+            let entry = complete_io(root, raw_entry)?;
             let Some(session_dir) = safe_directory_entry_path(&entry)? else {
                 continue;
             };
@@ -2373,16 +2528,16 @@ fn find_recent_antigravity_jsonl_budgeted(
                 .join("logs")
                 .join("transcript.jsonl");
             budget.charge_candidate()?;
-            if assigned.contains(&path) || !safe_antigravity_transcript_path(&session_dir, &path) {
+            if assigned.contains(&path) || !safe_antigravity_transcript_path(&session_dir, &path)? {
                 continue;
             }
             let Some(id) = antigravity_uuid_from_transcript_path(&path) else {
                 continue;
             };
-            let Some(meta) = safe_regular_file_metadata(&path) else {
+            let Some(meta) = safe_regular_file_metadata(&path)? else {
                 continue;
             };
-            let Ok(mtime) = meta.modified() else { continue };
+            let mtime = complete_io(&path, meta.modified())?;
             if mtime < recency_cutoff || mtime < process_start {
                 continue;
             }
@@ -2404,6 +2559,7 @@ fn find_recent_antigravity_jsonl_budgeted(
     ))
 }
 
+#[cfg(test)]
 fn find_completed_antigravity_jsonl(
     cwd: &Path,
     brain_roots: &[PathBuf],
@@ -2436,7 +2592,7 @@ fn find_completed_antigravity_jsonl_budgeted(
         };
         for raw_entry in entries {
             budget.charge_directory_entry()?;
-            let entry = complete_io(raw_entry)?;
+            let entry = complete_io(root, raw_entry)?;
             let Some(session_dir) = safe_directory_entry_path(&entry)? else {
                 continue;
             };
@@ -2445,16 +2601,16 @@ fn find_completed_antigravity_jsonl_budgeted(
                 .join("logs")
                 .join("transcript.jsonl");
             budget.charge_candidate()?;
-            if !safe_antigravity_transcript_path(&session_dir, &path) {
+            if !safe_antigravity_transcript_path(&session_dir, &path)? {
                 continue;
             }
             let Some(id) = antigravity_uuid_from_transcript_path(&path) else {
                 continue;
             };
-            let Some(meta) = safe_regular_file_metadata(&path) else {
+            let Some(meta) = safe_regular_file_metadata(&path)? else {
                 continue;
             };
-            let Ok(mtime) = meta.modified() else { continue };
+            let mtime = complete_io(&path, meta.modified())?;
             if mtime < recency_cutoff || mtime < process_start {
                 continue;
             }
@@ -2490,24 +2646,52 @@ pub struct GrokSessionSummary {
 }
 
 pub fn locate_grok_transcript(uuid: &str) -> Option<PathBuf> {
-    let root = grok_sessions_root()?;
+    locate_grok_transcript_checked(uuid).ok().flatten()
+}
+
+/// Checked form of [`locate_grok_transcript`].
+pub fn locate_grok_transcript_checked(uuid: &str) -> ProviderScanResult<Option<PathBuf>> {
+    let Some(root) = grok_sessions_root() else {
+        return Ok(None);
+    };
     let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     locate_grok_transcript_in_budgeted(&root, uuid, &mut budget)
+}
+
+#[cfg(test)]
+fn locate_grok_transcript_in(sessions_root: &Path, uuid: &str) -> Option<PathBuf> {
+    locate_grok_transcript_in_checked(sessions_root, uuid)
         .ok()
         .flatten()
 }
 
+#[cfg(test)]
+fn locate_grok_transcript_in_checked(
+    sessions_root: &Path,
+    uuid: &str,
+) -> ProviderScanResult<Option<PathBuf>> {
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    locate_grok_transcript_in_budgeted(sessions_root, uuid, &mut budget)
+}
+
 pub fn read_grok_session_summary(transcript: &Path) -> Option<GrokSessionSummary> {
+    read_grok_session_summary_checked(transcript).ok().flatten()
+}
+
+/// Checked form of [`read_grok_session_summary`].
+pub fn read_grok_session_summary_checked(
+    transcript: &Path,
+) -> ProviderScanResult<Option<GrokSessionSummary>> {
     if transcript.file_name().and_then(|name| name.to_str()) != Some("updates.jsonl")
-        || safe_regular_file_metadata(transcript).is_none()
+        || safe_regular_file_metadata(transcript)?.is_none()
     {
-        return None;
+        return Ok(None);
     }
-    let session_dir = transcript.parent()?;
+    let Some(session_dir) = transcript.parent() else {
+        return Ok(None);
+    };
     let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     read_grok_session_summary_budgeted(session_dir, &mut budget)
-        .ok()
-        .flatten()
 }
 
 fn locate_grok_transcript_in_budgeted(
@@ -2523,17 +2707,17 @@ fn locate_grok_transcript_in_budgeted(
     };
     for raw_bucket in cwd_buckets {
         budget.charge_directory_entry()?;
-        let bucket = complete_io(raw_bucket)?;
+        let bucket = complete_io(sessions_root, raw_bucket)?;
         let Some(bucket_dir) = safe_directory_entry_path(&bucket)? else {
             continue;
         };
         let session_dir = bucket_dir.join(uuid);
-        if !safe_is_directory(&session_dir) {
+        if !safe_is_directory(&session_dir)? {
             continue;
         }
         let updates = session_dir.join("updates.jsonl");
         budget.charge_candidate()?;
-        if safe_regular_file_metadata(&updates).is_none() {
+        if safe_regular_file_metadata(&updates)?.is_none() {
             continue;
         }
         let Some(summary) = read_grok_session_summary_budgeted(&session_dir, budget)? else {
@@ -2584,7 +2768,7 @@ fn find_recent_grok_jsonl_budgeted(
     };
     for raw_bucket in cwd_buckets {
         budget.charge_directory_entry()?;
-        let bucket = complete_io(raw_bucket)?;
+        let bucket = complete_io(root, raw_bucket)?;
         let Some(bucket_dir) = safe_directory_entry_path(&bucket)? else {
             continue;
         };
@@ -2593,7 +2777,7 @@ fn find_recent_grok_jsonl_budgeted(
         };
         for raw_session in session_entries {
             budget.charge_directory_entry()?;
-            let session = complete_io(raw_session)?;
+            let session = complete_io(&bucket_dir, raw_session)?;
             let Some(session_dir) = safe_directory_entry_path(&session)? else {
                 continue;
             };
@@ -2602,12 +2786,10 @@ fn find_recent_grok_jsonl_budgeted(
                 continue;
             }
             budget.charge_candidate()?;
-            let Some(meta) = safe_regular_file_metadata(&updates) else {
+            let Some(meta) = safe_regular_file_metadata(&updates)? else {
                 continue;
             };
-            let Ok(mtime) = meta.modified() else {
-                continue;
-            };
+            let mtime = complete_io(&updates, meta.modified())?;
             if mtime < recency_cutoff || mtime < process_start {
                 continue;
             }
@@ -2633,32 +2815,11 @@ fn find_recent_grok_jsonl_budgeted(
     ))
 }
 
-fn find_completed_grok_jsonl(
-    cwd: &Path,
-    sessions_root: Option<&Path>,
-    recency_cutoff: SystemTime,
-    process_start: SystemTime,
-) -> Option<(PathBuf, String)> {
-    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
-    find_recent_grok_jsonl_budgeted(
-        cwd,
-        sessions_root,
-        recency_cutoff,
-        process_start,
-        SystemTime::now(),
-        false,
-        &HashSet::new(),
-        &mut budget,
-    )
-    .ok()
-    .flatten()
-}
-
 fn read_grok_session_summary_budgeted(
     session_dir: &Path,
     budget: &mut ProviderScanBudget,
 ) -> ProviderScanResult<Option<GrokSessionSummary>> {
-    if !safe_is_directory(session_dir) {
+    if !safe_is_directory(session_dir)? {
         return Ok(None);
     }
     let summary_path = session_dir.join("summary.json");
@@ -2726,7 +2887,7 @@ fn read_bounded_json_value(
 ) -> ProviderScanResult<Option<serde_json::Value>> {
     use std::io::Read;
 
-    let Some(meta) = safe_regular_file_metadata(path) else {
+    let Some(meta) = safe_regular_file_metadata(path)? else {
         return Ok(None);
     };
     let max_bytes = budget.limits.head_bytes;
@@ -2734,8 +2895,8 @@ fn read_bounded_json_value(
         return Err(ProviderScanError::LimitExceeded);
     }
     budget.charge_head_open()?;
-    let file = complete_io(std::fs::File::open(path))?;
-    let opened = complete_io(file.metadata())?;
+    let file = complete_io(path, std::fs::File::open(path))?;
+    let opened = complete_io(path, file.metadata())?;
     if !opened.file_type().is_file()
         || opened.len() > max_bytes as u64
         || !same_file_metadata(&meta, &opened)
@@ -2743,19 +2904,26 @@ fn read_bounded_json_value(
         return Err(ProviderScanError::LimitExceeded);
     }
     let mut bytes = Vec::with_capacity(opened.len() as usize);
-    complete_io(file.take(max_bytes as u64 + 1).read_to_end(&mut bytes))?;
+    complete_io(
+        path,
+        file.take(max_bytes as u64 + 1).read_to_end(&mut bytes),
+    )?;
     if bytes.len() > max_bytes {
         return Err(ProviderScanError::LimitExceeded);
     }
     Ok(serde_json::from_slice(&bytes).ok())
 }
 
-fn safe_antigravity_transcript_path(session_dir: &Path, transcript: &Path) -> bool {
+fn safe_antigravity_transcript_path(
+    session_dir: &Path,
+    transcript: &Path,
+) -> ProviderScanResult<bool> {
     let generated = session_dir.join(".system_generated");
     let logs = generated.join("logs");
-    safe_is_directory(&generated)
-        && safe_is_directory(&logs)
-        && safe_regular_file_metadata(transcript).is_some()
+    Ok(safe_is_directory(session_dir)?
+        && safe_is_directory(&generated)?
+        && safe_is_directory(&logs)?
+        && safe_regular_file_metadata(transcript)?.is_some())
 }
 
 /// Read codex rollout's first non-empty JSONL line and pull `payload.cwd`.
@@ -2803,10 +2971,15 @@ pub enum CodexRolloutLineage {
 
 /// Classify a Codex rollout from its leading session metadata.
 pub fn codex_rollout_lineage(path: &Path) -> Option<CodexRolloutLineage> {
+    codex_rollout_lineage_checked(path).ok().flatten()
+}
+
+/// Checked form of [`codex_rollout_lineage`].
+pub fn codex_rollout_lineage_checked(
+    path: &Path,
+) -> ProviderScanResult<Option<CodexRolloutLineage>> {
     let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     codex_rollout_lineage_budgeted(path, &mut budget)
-        .ok()
-        .flatten()
 }
 
 fn codex_rollout_lineage_budgeted(
@@ -2836,10 +3009,13 @@ fn codex_rollout_lineage_budgeted(
 /// this relationship narrowly; arbitrary backwards transcript moves still
 /// pass the normal dormant-echo guard.
 pub fn codex_rollout_parent_thread_id(path: &Path) -> Option<String> {
+    codex_rollout_parent_thread_id_checked(path).ok().flatten()
+}
+
+/// Checked form of [`codex_rollout_parent_thread_id`].
+pub fn codex_rollout_parent_thread_id_checked(path: &Path) -> ProviderScanResult<Option<String>> {
     let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     codex_rollout_parent_thread_id_budgeted(path, &mut budget)
-        .ok()
-        .flatten()
 }
 
 fn codex_rollout_parent_thread_id_budgeted(
@@ -3010,24 +3186,24 @@ fn read_bounded_head<T>(
 ) -> ProviderScanResult<Option<T>> {
     use std::io::Read;
 
-    if safe_regular_file_metadata(path).is_none() {
+    if safe_regular_file_metadata(path)?.is_none() {
         return Ok(None);
     }
     budget.charge_head_open()?;
-    let mut file = complete_io(std::fs::File::open(path))?;
+    let mut file = complete_io(path, std::fs::File::open(path))?;
     let mut buffer = [0_u8; 8 * 1024];
     let mut line = Vec::new();
     let mut bytes_read = 0;
     let mut lines_read = 0;
 
     if budget.limits.head_bytes == 0 || budget.limits.head_lines == 0 {
-        return probe_head_boundary(&mut file);
+        return probe_head_boundary(path, &mut file);
     }
 
     while bytes_read < budget.limits.head_bytes {
         let remaining = budget.limits.head_bytes - bytes_read;
         let read_len = remaining.min(buffer.len());
-        let read = complete_io(file.read(&mut buffer[..read_len]))?;
+        let read = complete_io(path, file.read(&mut buffer[..read_len]))?;
         if read == 0 {
             if !line.is_empty() {
                 if let Some(value) = parse_line(&line) {
@@ -3049,7 +3225,7 @@ fn read_bounded_head<T>(
                     if index + 1 < read {
                         return Err(ProviderScanError::LimitExceeded);
                     }
-                    return probe_head_boundary(&mut file);
+                    return probe_head_boundary(path, &mut file);
                 }
                 continue;
             }
@@ -3063,14 +3239,14 @@ fn read_bounded_head<T>(
     if let Some(value) = parse_line(&line) {
         return Ok(Some(value));
     }
-    probe_head_boundary(&mut file)
+    probe_head_boundary(path, &mut file)
 }
 
-fn probe_head_boundary<T>(file: &mut std::fs::File) -> ProviderScanResult<Option<T>> {
+fn probe_head_boundary<T>(path: &Path, file: &mut std::fs::File) -> ProviderScanResult<Option<T>> {
     use std::io::Read;
 
     let mut probe = [0_u8; 1];
-    match complete_io(file.read(&mut probe))? {
+    match complete_io(path, file.read(&mut probe))? {
         0 => Ok(None),
         _ => Err(ProviderScanError::LimitExceeded),
     }
@@ -3098,7 +3274,7 @@ fn newest_subdir_budgeted(
     };
     for raw_entry in entries {
         budget.charge_directory_entry()?;
-        let entry = complete_io(raw_entry)?;
+        let entry = complete_io(dir, raw_entry)?;
         let Some(path) = safe_directory_entry_path(&entry)? else {
             continue;
         };
@@ -3123,7 +3299,7 @@ fn iter_subdirs_desc_budgeted(
     let mut entries = Vec::new();
     for raw_entry in raw_entries {
         budget.charge_directory_entry()?;
-        let entry = complete_io(raw_entry)?;
+        let entry = complete_io(dir, raw_entry)?;
         let Some(path) = safe_directory_entry_path(&entry)? else {
             continue;
         };
@@ -3201,7 +3377,7 @@ fn pick_newest_unassigned_jsonl_budgeted(
     };
     for raw_entry in entries {
         budget.charge_directory_entry()?;
-        let entry = complete_io(raw_entry)?;
+        let entry = complete_io(dir, raw_entry)?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
@@ -3213,7 +3389,7 @@ fn pick_newest_unassigned_jsonl_budgeted(
         let Some(meta) = safe_regular_file_entry_metadata(&entry)? else {
             continue;
         };
-        let Ok(mtime) = meta.modified() else { continue };
+        let mtime = complete_io(&path, meta.modified())?;
         if mtime < recency_cutoff {
             continue;
         }
@@ -3656,13 +3832,55 @@ mod tests {
     }
 
     #[test]
-    fn io_errors_mark_provider_scan_incomplete() {
+    fn io_errors_preserve_provider_path_and_kind() {
+        let path = Path::new("/provider/transcripts");
         let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "unreadable");
+        let expected = ProviderScanError::Access {
+            path: path.to_path_buf(),
+            kind: std::io::ErrorKind::PermissionDenied,
+            message: "unreadable".to_string(),
+        };
 
-        assert_eq!(
-            complete_io::<()>(Err(error)),
-            Err(ProviderScanError::Incomplete)
-        );
+        assert_eq!(complete_io::<()>(path, Err(error)), Err(expected.clone()));
+        let io_error = std::io::Error::from(expected);
+        assert_eq!(io_error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(io_error.to_string().contains("/provider/transcripts"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_codex_lineage_reports_unreadable_transcript() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-codex-lineage-permission-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join(format!("rollout-{A_UUID}.jsonl"));
+        fs::write(&transcript, "{}\n").unwrap();
+        fs::set_permissions(&transcript, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let permission_bits_enforced = fs::File::open(&transcript).is_err();
+        let checked = codex_rollout_lineage_checked(&transcript);
+        let legacy = codex_rollout_lineage(&transcript);
+
+        fs::set_permissions(&transcript, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        if !permission_bits_enforced {
+            return;
+        }
+
+        assert!(matches!(
+            checked,
+            Err(ProviderScanError::Access {
+                path,
+                kind: std::io::ErrorKind::PermissionDenied,
+                ..
+            }) if path == transcript
+        ));
+        assert_eq!(legacy, None);
     }
 
     #[test]
@@ -3671,7 +3889,11 @@ mod tests {
         let cache = Box::leak(Box::new(Mutex::new(Some(ScanCache {
             captured_at: Instant::now(),
             session_key: Vec::new(),
-            mappings: vec![(cached_session, AgentKind::Codex, "cached".to_string())],
+            outcome: Ok(vec![(
+                cached_session,
+                AgentKind::Codex,
+                "cached".to_string(),
+            )]),
         }))));
         let sessions = (0..=LIVE_SCAN_SESSION_LIMIT)
             .map(|_| SessionPid {
@@ -3680,7 +3902,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert!(collect_mappings_cached(cache, &sessions, MappingScope::SessionOwners).is_empty());
+        assert_eq!(
+            collect_mappings_cached(cache, &sessions, MappingScope::SessionOwners),
+            Err(ProviderScanError::LimitExceeded),
+        );
     }
 
     #[test]
@@ -3697,15 +3922,16 @@ mod tests {
         let cache = Box::leak(Box::new(Mutex::new(Some(ScanCache {
             captured_at: Instant::now(),
             session_key: scan_cache_session_key(std::slice::from_ref(&stale_session)),
-            mappings: vec![cached_mapping],
+            outcome: Ok(vec![cached_mapping]),
         }))));
         let replacement = SessionPid {
             session_id: stale_session.session_id,
             root_pid: None,
         };
 
-        assert!(
-            collect_mappings_cached(cache, &[replacement], MappingScope::SessionOwners,).is_empty()
+        assert_eq!(
+            collect_mappings_cached(cache, &[replacement], MappingScope::SessionOwners),
+            Ok(Vec::new()),
         );
     }
 
@@ -4697,6 +4923,75 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn checked_provider_locators_treat_missing_roots_as_absence() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-provider-missing-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let codex_id = "019e2001-3250-76b0-8410-2e073b38a2c1";
+        let antigravity_id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let grok_id = "0198c151-f3ee-7991-9768-741923bb6b50";
+
+        assert_eq!(
+            locate_codex_transcript_in_checked(&root, codex_id),
+            Ok(None)
+        );
+        assert_eq!(
+            locate_antigravity_transcript_in_checked(std::slice::from_ref(&root), antigravity_id,),
+            Ok(None)
+        );
+        assert_eq!(locate_grok_transcript_in_checked(&root, grok_id), Ok(None));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_provider_locators_report_inaccessible_roots() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-provider-permission-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Privileged test runners can bypass mode bits. The direct error
+        // contract is covered separately, so skip this filesystem proof there.
+        let permission_bits_enforced = fs::read_dir(&root).is_err();
+        let codex_id = "019e2001-3250-76b0-8410-2e073b38a2c1";
+        let antigravity_id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let grok_id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let codex = locate_codex_transcript_in_checked(&root, codex_id);
+        let antigravity =
+            locate_antigravity_transcript_in_checked(std::slice::from_ref(&root), antigravity_id);
+        let grok = locate_grok_transcript_in_checked(&root, grok_id);
+        let legacy_codex = locate_codex_transcript_in(&root, codex_id);
+        let legacy_antigravity =
+            locate_antigravity_transcript_in(std::slice::from_ref(&root), antigravity_id);
+        let legacy_grok = locate_grok_transcript_in(&root, grok_id);
+
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        if !permission_bits_enforced {
+            return;
+        }
+
+        for result in [codex, antigravity, grok] {
+            assert!(matches!(
+                result,
+                Err(ProviderScanError::Access {
+                    kind: std::io::ErrorKind::PermissionDenied,
+                    ..
+                })
+            ));
+        }
+        assert_eq!(legacy_codex, None);
+        assert_eq!(legacy_antigravity, None);
+        assert_eq!(legacy_grok, None);
     }
 
     #[test]

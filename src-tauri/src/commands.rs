@@ -242,24 +242,63 @@ fn discard_pending_session_removal(
     worktree_path: &str,
     git_common_dir: &str,
 ) -> AppResult<()> {
+    let data_dir = persistence::data_dir()?;
+    discard_pending_session_removal_from_dir(
+        state,
+        token,
+        repo_path,
+        worktree_path,
+        git_common_dir,
+        &data_dir,
+    )
+}
+
+fn discard_pending_session_removal_from_dir(
+    state: &AppState,
+    token: &str,
+    repo_path: &str,
+    worktree_path: &str,
+    git_common_dir: &str,
+    data_dir: &Path,
+) -> AppResult<()> {
     let pending =
         take_pending_session_removal(state, token, repo_path, worktree_path, git_common_dir)?;
-    if let Err(error) = worktree::discard_removed_worktree(
-        Path::new(repo_path),
-        Path::new(worktree_path),
-        token,
-        Path::new(git_common_dir),
-    ) {
+    let result = (|| {
+        worktree::discard_removed_worktree(
+            Path::new(repo_path),
+            Path::new(worktree_path),
+            token,
+            Path::new(git_common_dir),
+        )?;
+        let mut first_error = None;
+        for session in &pending.sessions {
+            if let Err(error) = scrollback::delete(data_dir, &session.id.to_string()) {
+                first_error.get_or_insert_with(|| match error {
+                    scrollback::ScrollbackError::Io(source) => AppError::Io(io::Error::new(
+                        source.kind(),
+                        format!(
+                            "failed to delete scrollback for removed session '{}': {source}",
+                            session.id
+                        ),
+                    )),
+                    other => AppError::Other(format!(
+                        "failed to delete scrollback for removed session '{}': {other}",
+                        session.id
+                    )),
+                });
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    })();
+    if let Err(error) = result {
         state
             .pending_session_removals
             .lock()
             .insert(token.to_string(), pending);
         return Err(error);
-    }
-    if let Ok(dir) = persistence::data_dir() {
-        for session in pending.sessions {
-            scrollback::delete(&dir, &session.id.to_string()).ok();
-        }
     }
     Ok(())
 }
@@ -2105,27 +2144,29 @@ fn codex_event_type(value: &serde_json::Value) -> Option<&str> {
 fn backfill_latest_empty_codex_assistant_message_from_path(
     state: &mut persistence::ChatSessionState,
     path: &Path,
-) -> bool {
+) -> io::Result<bool> {
     let Some(index) = latest_empty_codex_assistant_message_index(state) else {
-        return false;
+        return Ok(false);
     };
-    let Ok(Some(content)) = latest_codex_agent_message_from_transcript(path) else {
-        return false;
+    let Some(content) = latest_codex_agent_message_from_transcript(path)? else {
+        return Ok(false);
     };
     state.messages[index].content = content;
-    true
+    Ok(true)
 }
 
 fn backfill_latest_empty_codex_assistant_message(
     state: &mut persistence::ChatSessionState,
-) -> bool {
+) -> AppResult<bool> {
     let Some(cursor) = codex_provider_thread_cursor(state) else {
-        return false;
+        return Ok(false);
     };
-    let Some(path) = acorn_transcript::locate_codex_transcript(&cursor) else {
-        return false;
+    let Some(path) = acorn_transcript::locate_codex_transcript_checked(&cursor)? else {
+        return Ok(false);
     };
-    backfill_latest_empty_codex_assistant_message_from_path(state, &path)
+    Ok(backfill_latest_empty_codex_assistant_message_from_path(
+        state, &path,
+    )?)
 }
 
 const ANTIGRAVITY_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -2511,9 +2552,12 @@ impl ChatProviderAdapter for CliChatProviderAdapter {
         output_parser.flush_pending(on_event);
         let raw = raw?;
         let content = output_parser.finish(&raw);
-        let discovered_thread_id = invocation.transcript_discovery.and_then(|kind| {
-            acorn_transcript::find_completed_agent_run(&self.cwd, kind, started_at)
-        });
+        let discovered_thread_id = match invocation.transcript_discovery {
+            Some(kind) => {
+                acorn_transcript::find_completed_agent_run_checked(&self.cwd, kind, started_at)?
+            }
+            None => None,
+        };
         let native_thread_id = invocation.native_thread_id.or(discovered_thread_id);
         let resume_token = invocation.resume_token.or_else(|| native_thread_id.clone());
         Ok(ProviderResponse {
@@ -4605,8 +4649,18 @@ fn enrich_session(mut s: Session) -> Session {
         s.branch = branch;
     }
     s.in_worktree = worktree::is_linked_worktree_root(&s.worktree_path);
-    let live = crate::agent_resume::live_transcript(s.id);
-    s.agent_transcript_id = live.as_ref().map(|transcript| transcript.id.clone());
+    match crate::agent_resume::live_transcript_checked(s.id) {
+        Ok(live) => {
+            s.agent_transcript_id = live.as_ref().map(|transcript| transcript.id.clone());
+        }
+        Err(error) => {
+            tracing::debug!(
+                session_id = %s.id,
+                error = %error,
+                "preserving session transcript id after lookup failure"
+            );
+        }
+    }
     s
 }
 
@@ -5313,7 +5367,7 @@ pub async fn load_chat_session_state(
     })
     .await?;
     apply_acorn_session_metadata(&mut chat_state, &session);
-    if backfill_latest_empty_codex_assistant_message(&mut chat_state) {
+    if backfill_latest_empty_codex_assistant_message(&mut chat_state)? {
         let repaired_state = chat_state.clone();
         match run_blocking("save repaired chat session state", move || {
             persistence::save_chat_session_state(repaired_state)
@@ -8152,7 +8206,7 @@ pub async fn detect_session_agent(
 fn detect_session_agent_inner(state: AppState, session_id: String) -> AppResult<AgentDetection> {
     let parsed = authorize_existing_session_id(&state, &session_id)?;
     let session_pids = crate::agent_resume_persister::collect_session_pids(&state);
-    let mappings = acorn_transcript::collect_live_mappings(&session_pids);
+    let mappings = acorn_transcript::collect_live_mappings_checked(&session_pids)?;
     let mut detection = empty_agent_detection();
     for (sid, kind, uuid) in mappings {
         if sid != parsed {
@@ -9383,9 +9437,34 @@ fn chat_conversation_preview(
     preview
 }
 
+#[cfg(test)]
 fn transcript_activity_at(path: &Path) -> Option<String> {
-    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
-    Some(chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339())
+    transcript_activity_at_checked(path).ok().flatten()
+}
+
+fn transcript_activity_at_checked(path: &Path) -> io::Result<Option<String>> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(io::Error::new(
+                error.kind(),
+                format!("failed to inspect transcript {}: {error}", path.display()),
+            ));
+        }
+    };
+    let modified = metadata.modified().map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to read transcript timestamp from {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    Ok(Some(
+        chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339(),
+    ))
 }
 
 fn git_context_for_path(path: &std::path::Path) -> Option<(String, String)> {
@@ -9852,44 +9931,120 @@ fn detect_session_statuses_blocking(
             // tree already exposes a live provider, only trust that provider's
             // marker. A nested peer agent from another provider can update its
             // own marker while the parent agent is still the session owner.
-            let live = parsed_id.and_then(|uuid| match live_agent_kind {
-                Some(kind) => agent_resume::live_transcript_for_kind(uuid, kind),
-                None => agent_resume::live_transcript(uuid),
-            });
+            let live_result = match parsed_id {
+                Some(uuid) => match live_agent_kind {
+                    Some(kind) => agent_resume::live_transcript_for_kind_checked(uuid, kind),
+                    None => agent_resume::live_transcript_checked(uuid),
+                },
+                None => Ok(None),
+            };
+            let mut transcript_lookup_failed = false;
+            let mut live = match live_result {
+                Ok(live) => live,
+                Err(error) => {
+                    transcript_lookup_failed = true;
+                    tracing::debug!(
+                        session_id = %id,
+                        error = %error,
+                        "status poll: preserving transcript state after lookup failure"
+                    );
+                    None
+                }
+            };
             // Claude gets a marker-less fallback below via the todos
             // mapping; codex has no equivalent, so a persister miss (pid
             // gap at spawn, ambiguous host scan) silently disables auto
             // titles and resume for the whole session. Bind the live
             // codex process straight to its rollout instead.
-            let live = live.or_else(|| codex_live_transcript_fallback(&sys, parsed_id, live_agent));
-            let agent_binding_changed =
-                session
+            if !transcript_lookup_failed && live.is_none() {
+                match codex_live_transcript_fallback(&sys, parsed_id, live_agent) {
+                    Ok(fallback) => live = fallback,
+                    Err(error) => {
+                        transcript_lookup_failed = true;
+                        tracing::debug!(
+                            session_id = %id,
+                            error = %error,
+                            "status poll: preserving transcript state after fallback failure"
+                        );
+                    }
+                }
+            }
+            let transcript = match live.as_ref() {
+                Some(t) => Some((t.path.clone(), t.kind)),
+                None if !transcript_lookup_failed
+                    && matches!(live_agent_kind, None | Some(AgentKind::Claude)) =>
+                {
+                    match todos::locate_transcript_for(&id) {
+                        Ok(path) => path.map(|path| (path, AgentKind::Claude)),
+                        Err(error) => {
+                            transcript_lookup_failed = true;
+                            tracing::debug!(
+                                session_id = %id,
+                                error = %error,
+                                "status poll: preserving transcript state after Claude lookup failure"
+                            );
+                            None
+                        }
+                    }
+                }
+                None => None,
+            };
+            let conversation_preview = match transcript.as_ref() {
+                Some((path, kind)) => match agent_resume::extract_conversation_preview(*kind, path)
+                {
+                    Ok(preview) => Some(preview),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                    Err(error) => {
+                        transcript_lookup_failed = true;
+                        tracing::debug!(
+                            session_id = %id,
+                            error = %error,
+                            "status poll: preserving transcript state after preview read failure"
+                        );
+                        None
+                    }
+                },
+                None => None,
+            };
+            let agent_activity_at = match transcript.as_ref() {
+                Some((path, _)) => match transcript_activity_at_checked(path) {
+                    Ok(activity_at) => activity_at,
+                    Err(error) => {
+                        transcript_lookup_failed = true;
+                        tracing::debug!(
+                            session_id = %id,
+                            error = %error,
+                            "status poll: preserving transcript state after timestamp read failure"
+                        );
+                        None
+                    }
+                },
+                None => None,
+            };
+            let agent_binding_changed = !transcript_lookup_failed
+                && session
                     .as_ref()
                     .zip(live.as_ref())
                     .is_some_and(|(session, transcript)| {
                         session.agent_transcript_id.as_deref() != Some(transcript.id.as_str())
                     });
-            let agent_transcript_id = live.as_ref().map(|t| t.id.clone());
-            let transcript = match live.as_ref() {
-                Some(t) => Some((t.path.clone(), t.kind)),
-                None if matches!(live_agent_kind, None | Some(AgentKind::Claude)) => {
-                    todos::locate_transcript_for(&id)
-                        .ok()
-                        .flatten()
-                        .map(|p| (p, AgentKind::Claude))
-                }
-                None => None,
+            let agent_transcript_id = if transcript_lookup_failed {
+                session
+                    .as_ref()
+                    .and_then(|session| session.agent_transcript_id.clone())
+            } else {
+                live.as_ref().map(|transcript| transcript.id.clone())
             };
-            let conversation_preview = transcript.as_ref().and_then(|(path, kind)| {
-                agent_resume::extract_conversation_preview(*kind, path).ok()
-            });
-            let agent_transcript_path = transcript
-                .as_ref()
-                .map(|(path, _)| path.to_string_lossy().into_owned());
-            let agent_activity_at = transcript
-                .as_ref()
-                .and_then(|(path, _)| transcript_activity_at(path));
-            let agent_transcript_provider = transcript.as_ref().map(|(_, kind)| *kind);
+            let agent_transcript_path = (!transcript_lookup_failed)
+                .then(|| {
+                    transcript
+                        .as_ref()
+                        .map(|(path, _)| path.to_string_lossy().into_owned())
+                })
+                .flatten();
+            let agent_transcript_provider = (!transcript_lookup_failed)
+                .then(|| transcript.as_ref().map(|(_, kind)| *kind))
+                .flatten();
             let transcript_preview = conversation_preview
                 .as_ref()
                 .and_then(|p| p.last_agent_message.clone());
@@ -9905,7 +10060,10 @@ fn detect_session_statuses_blocking(
             let auto_title_enabled = {
                 let current = session.as_ref().and_then(|s| s.auto_title_enabled);
                 match parsed_id {
-                    Some(uuid) if auto_title_promotion_needed(current, transcript.is_some()) => {
+                    Some(uuid)
+                        if !transcript_lookup_failed
+                            && auto_title_promotion_needed(current, transcript.is_some()) =>
+                    {
                         promoted_auto_title = true;
                         state
                             .sessions
@@ -9917,7 +10075,18 @@ fn detect_session_statuses_blocking(
                     _ => current,
                 }
             };
-            let detection = session_status::detect_with_reason(transcript, previous, shell_hint);
+            let detection = if transcript_lookup_failed {
+                session_status::StatusDetection {
+                    status: previous,
+                    reason: None,
+                    evidence: session_status::StatusEvidence::Previous,
+                    completed_provider_turn_id: None,
+                    turn_timestamp: None,
+                    agent_activity_timestamp: None,
+                }
+            } else {
+                session_status::detect_with_reason(transcript, previous, shell_hint)
+            };
             let hook_provider = parsed_id.and_then(|uuid| state.sessions.hook_provider(&uuid));
             let defer_to_hook = poll_defers_to_hook(
                 parsed_id
@@ -9926,7 +10095,7 @@ fn detect_session_statuses_blocking(
                 hook_provider,
                 live_agent_kind,
             );
-            let mut metadata_write_allowed = true;
+            let mut metadata_write_allowed = !transcript_lookup_failed;
             let metadata_expected_lifecycle_revision;
             let metadata_expected_source;
             // When a live hooked agent owns the status, keep the hook-set value
@@ -10045,6 +10214,21 @@ fn detect_session_statuses_blocking(
                     current_source
                 };
                 (visible_status, visible_source, None)
+            } else if transcript_lookup_failed {
+                // An access failure is not evidence of a status transition.
+                // Return the latest fenced value without letting this poll
+                // rewrite either the status or its source.
+                let (stored, stored_source, _, lifecycle_revision) = parsed_id
+                    .and_then(|uuid| state.sessions.lifecycle_snapshot(&uuid).ok())
+                    .unwrap_or((
+                        previous,
+                        expected_poll_source,
+                        observed_hook_revision,
+                        expected_poll_lifecycle_revision,
+                    ));
+                metadata_expected_lifecycle_revision = lifecycle_revision;
+                metadata_expected_source = stored_source;
+                (stored, stored_source, None)
             } else {
                 let candidate_source = fallback_agent_status_source(
                     live_agent_kind,
@@ -10256,14 +10440,22 @@ fn codex_live_transcript_fallback(
     sys: &System,
     session_id: Option<Uuid>,
     live_agent: Option<(AgentKind, Pid)>,
-) -> Option<agent_resume::LiveTranscript> {
-    let session_id = session_id?;
-    let (kind, pid) = live_agent?;
+) -> io::Result<Option<agent_resume::LiveTranscript>> {
+    let Some(session_id) = session_id else {
+        return Ok(None);
+    };
+    let Some((kind, pid)) = live_agent else {
+        return Ok(None);
+    };
     if kind != AgentKind::Codex {
-        return None;
+        return Ok(None);
     }
-    let proc = sys.process(pid)?;
-    let cwd = proc.cwd()?;
+    let Some(proc) = sys.process(pid) else {
+        return Ok(None);
+    };
+    let Some(cwd) = proc.cwd() else {
+        return Ok(None);
+    };
     let process_start = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(proc.start_time());
     let process_args = proc
         .cmd()
@@ -10271,9 +10463,9 @@ fn codex_live_transcript_fallback(
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     let resolved = if acorn_transcript::codex_resume_requested_from_args(&process_args) {
-        acorn_transcript::find_resumed_codex_run_transcript(cwd, process_start)
+        acorn_transcript::find_resumed_codex_run_transcript_checked(cwd, process_start)?
     } else {
-        acorn_transcript::find_agent_run_transcript(cwd, AgentKind::Codex, process_start)
+        acorn_transcript::find_agent_run_transcript_checked(cwd, AgentKind::Codex, process_start)?
     };
     let Some((path, id)) = resolved else {
         tracing::debug!(
@@ -10282,7 +10474,7 @@ fn codex_live_transcript_fallback(
             ?cwd,
             "status poll: live codex has no unambiguous rollout; marker fallback skipped"
         );
-        return None;
+        return Ok(None);
     };
     match crate::agent_resume_persister::bind_session_marker(session_id, AgentKind::Codex, &id) {
         Ok(()) => {
@@ -10311,11 +10503,11 @@ fn codex_live_transcript_fallback(
             }
         }
     }
-    Some(agent_resume::LiveTranscript {
+    Ok(Some(agent_resume::LiveTranscript {
         id,
         path,
         kind: AgentKind::Codex,
-    })
+    }))
 }
 
 /// Sessions whose codex marker fallback already warned about a write
@@ -11623,7 +11815,8 @@ mod tests {
         authorize_registered_worktree, auto_title_enabled_for_new_session,
         can_store_generated_session_title, collect_memory_usage_from_roots,
         configured_git_identity, create_unique_worktree, daemon_attach_replay_scrollback,
-        daemon_spawn_name_for_session, detach_requested_by_stale_renderer, font_name_from_path,
+        daemon_spawn_name_for_session, detach_requested_by_stale_renderer,
+        discard_pending_session_removal_from_dir, font_name_from_path,
         infer_acornd_root_from_session_pids, inject_agent_hook_env,
         linked_worktree_root_for_registered_path, memory_root_pids, normalize_session_goal,
         normalize_session_graph, poll_defers_to_hook, remove_linked_worktree_at_path,
@@ -13679,11 +13872,56 @@ mod tests {
 
         assert!(
             super::backfill_latest_empty_codex_assistant_message_from_path(&mut state, &transcript)
+                .unwrap()
         );
         assert_eq!(
             state.messages.last().unwrap().content,
             "안녕하세요. 무엇을 도와드릴까요?"
         );
+    }
+
+    #[test]
+    fn backfill_empty_codex_assistant_message_reports_missing_transcript() {
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "안녕"),
+            chat_message("a1", crate::persistence::ChatRole::Assistant, ""),
+        ]);
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("missing-rollout.jsonl");
+
+        let error =
+            super::backfill_latest_empty_codex_assistant_message_from_path(&mut state, &transcript)
+                .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(state.messages.last().unwrap().content, "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backfill_empty_codex_assistant_message_reports_unreadable_transcript() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "안녕"),
+            chat_message("a1", crate::persistence::ChatRole::Assistant, ""),
+        ]);
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("rollout.jsonl");
+        std::fs::write(&transcript, "{}\n").unwrap();
+        std::fs::set_permissions(&transcript, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let permission_bits_enforced = std::fs::File::open(&transcript).is_err();
+        let result =
+            super::backfill_latest_empty_codex_assistant_message_from_path(&mut state, &transcript);
+        std::fs::set_permissions(&transcript, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        if permission_bits_enforced {
+            assert_eq!(
+                result.unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+            assert_eq!(state.messages.last().unwrap().content, "");
+        }
     }
 
     #[test]
@@ -13711,6 +13949,7 @@ mod tests {
                 &mut state,
                 &transcript
             )
+            .unwrap()
         );
         assert_eq!(state.messages.last().unwrap().content, "");
     }
@@ -13740,6 +13979,7 @@ mod tests {
                 &mut state,
                 &transcript
             )
+            .unwrap()
         );
         assert_eq!(state.messages.last().unwrap().content, "");
     }
@@ -13766,6 +14006,7 @@ mod tests {
 
         assert!(
             super::backfill_latest_empty_codex_assistant_message_from_path(&mut state, &transcript)
+                .unwrap()
         );
         assert_eq!(state.messages.last().unwrap().content, "새 답변");
     }
@@ -13793,6 +14034,7 @@ mod tests {
                 &mut state,
                 &transcript
             )
+            .unwrap()
         );
         assert_eq!(state.messages.last().unwrap().content, "");
     }
@@ -13822,6 +14064,7 @@ mod tests {
                 &mut state,
                 &transcript
             )
+            .unwrap()
         );
         assert_eq!(state.messages.last().unwrap().content, "");
     }
@@ -16297,6 +16540,76 @@ mod tests {
 
         assert!(state.sessions.get(&session_id).is_err());
         assert!(state.pending_session_removals.lock().contains_key(&token));
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn failed_session_cleanup_keeps_pending_removal_retryable() {
+        let repo_dir = unique_repo_dir("retry-session-cleanup");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let worktree_path =
+            crate::worktree::create_worktree(&repo_dir, "cleanup").expect("create linked worktree");
+        let removed = crate::worktree::stage_remove_worktree_at_path(&repo_dir, &worktree_path)
+            .expect("stage worktree removal")
+            .expect("removal token");
+
+        let state = AppState::new();
+        let session = worktree_session(
+            "cleanup",
+            repo_dir.to_str().expect("repo path"),
+            worktree_path.to_str().expect("worktree path"),
+        );
+        let session_id = session.id;
+        state.pending_session_removals.lock().insert(
+            removed.token.clone(),
+            PendingSessionRemoval {
+                worktree: removed.clone(),
+                sessions: vec![session],
+            },
+        );
+
+        let data_dir = repo_dir.join("test-data");
+        let blocking_path = data_dir
+            .join("scrollback")
+            .join(format!("{session_id}.txt"));
+        std::fs::create_dir_all(&blocking_path).expect("create blocking scrollback directory");
+
+        let error = discard_pending_session_removal_from_dir(
+            &state,
+            &removed.token,
+            &removed.repo_path,
+            &removed.worktree_path,
+            &removed.git_common_dir,
+            &data_dir,
+        )
+        .expect_err("scrollback cleanup must fail");
+
+        assert!(error.to_string().contains(&session_id.to_string()));
+        assert!(
+            state
+                .pending_session_removals
+                .lock()
+                .contains_key(&removed.token),
+            "failed cleanup must keep the removal token available for retry"
+        );
+        assert!(
+            !worktree_path.exists(),
+            "successful worktree cleanup should remain complete"
+        );
+
+        std::fs::remove_dir(&blocking_path).expect("remove blocking scrollback directory");
+        discard_pending_session_removal_from_dir(
+            &state,
+            &removed.token,
+            &removed.repo_path,
+            &removed.worktree_path,
+            &removed.git_common_dir,
+            &data_dir,
+        )
+        .expect("retry cleanup");
+
+        assert!(state.pending_session_removals.lock().is_empty());
         std::fs::remove_dir_all(&repo_dir).ok();
     }
 
