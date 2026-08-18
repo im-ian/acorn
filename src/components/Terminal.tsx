@@ -1291,7 +1291,7 @@ export function Terminal({
     // cleanup serialises the still-empty xterm buffer and writes 0
     // bytes to disk, wiping the previously persisted scrollback. By the
     // time mount B's load runs, the disk content is already gone. The
-    // flag flips to `true` only after the initial load step settles, so
+    // flag flips to `true` only after the initial load step succeeds, so
     // earlier serialise calls (whether from the debounced output trigger
     // or from `flushAllScrollbacks` on app close) become no-ops.
     let savesAllowed = false;
@@ -2969,15 +2969,19 @@ export function Terminal({
           await writeAndDrain("\r\n");
           if (disposed) return;
         }
+        // A missing snapshot is a successful load. Any other failure leaves
+        // this gate closed for the lifetime of the mount so later PTY output
+        // cannot overwrite bytes that Acorn never managed to restore.
+        savesAllowed = true;
       } catch (err) {
         console.warn("[Terminal] scrollback_load failed", err);
+        if (!disposed) {
+          showTranslatedErrorToast(
+            "toasts.session.scrollbackLoadFailed",
+            err,
+          );
+        }
       }
-
-      // Now safe to persist: the buffer either holds the prior session's
-      // restored content or starts genuinely empty. Either state is the
-      // legitimate post-load baseline, so future saves cannot accidentally
-      // overwrite still-on-disk content with a never-loaded empty buffer.
-      savesAllowed = true;
 
       if (disposed) return;
       await spawnPty();
@@ -3005,7 +3009,7 @@ export function Terminal({
       skipOutputDrain?: boolean;
     }) => {
       // `savesAllowed` flips true only after the initial scrollback_load
-      // settles. Skipping the save until then prevents a still-empty
+      // succeeds. Skipping the save until then prevents a still-empty
       // buffer from clobbering the persisted scrollback during the
       // StrictMode mount → cleanup → mount cycle.
       if ((!options?.force && disposed) || !savesAllowed) return;

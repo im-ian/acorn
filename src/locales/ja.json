@@ -15,6 +15,7 @@
       "sessionWorktreeRestoreFailed": "セッションとワークツリーの復元に失敗しました:",
       "refreshFailed": "セッションを更新できませんでした:",
       "renameFailed": "セッション名の変更に失敗しました:",
+      "scrollbackLoadFailed": "保存済みのターミナルスクロールバックを読み込めなかったため、保護のため保存を一時停止しました:",
       "titleNotReady": "このセッションのトランスクリプトはまだありません。",
       "titleRegenerateSkipped": "セッション名は再生成されませんでした。",
       "worktreeAdopted": "採用されたワークツリー: {name}",
@@ -739,7 +740,7 @@
         "clearedSingular": "{count} キャッシュ ファイルをクリアしました。",
         "clearedPlural": "{count} キャッシュ ファイルをクリアしました。",
         "nothingToClear": "クリアするものは何もありません。",
-        "clearFailed": "キャッシュのクリアに失敗しました。詳細については、コンソールを参照してください。"
+        "clearFailed": "キャッシュのクリアに失敗しました:"
       },
       "confirm": {
         "message": "これにより、上記のキャッシュ データ ({size}) が完全に削除されます。続く？",

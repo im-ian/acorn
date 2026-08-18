@@ -3703,4 +3703,63 @@ test.describe("terminal: spawn", () => {
       "stale disk snapshot",
     );
   });
+
+  test("scrollback load failure keeps later terminal saves disabled", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+    await tauri.handle("scrollback_load", () => {
+      throw new Error("permission denied: /data/scrollback/s-term.txt");
+    });
+    await tauri.handle("scrollback_save", (args) => {
+      const w = window as unknown as { __scrollbackSaveCalls?: unknown[] };
+      w.__scrollbackSaveCalls = w.__scrollbackSaveCalls ?? [];
+      w.__scrollbackSaveCalls.push(args);
+      return undefined;
+    });
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __scrollbackGuardChannelId?: number };
+      w.__scrollbackGuardChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+
+    await expect(
+      page.getByText(
+        /Failed to load saved terminal scrollback.*permission denied: \/data\/scrollback\/s-term\.txt/,
+      ),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __scrollbackGuardChannelId?: number })
+              .__scrollbackGuardChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__scrollbackGuardChannelId",
+      "new output must not replace unread data\r\n",
+    );
+    await expect(page.locator(".xterm")).toContainText(
+      "new output must not replace unread data",
+    );
+    await page.waitForTimeout(1_250);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __scrollbackSaveCalls?: unknown[] })
+            .__scrollbackSaveCalls?.length ?? 0,
+      ),
+    ).toBe(0);
+  });
 });
