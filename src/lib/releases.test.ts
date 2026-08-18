@@ -89,6 +89,35 @@ describe("fetchReleaseNotes", () => {
 
     expect(notes?.body).toBe("");
   });
+
+  it("rejects oversized responses before reading the body", async () => {
+    fetchMock.mockResolvedValue(
+      new Response("{}", {
+        status: 200,
+        headers: { "Content-Length": String(2 * 1024 * 1024 + 1) },
+      }),
+    );
+
+    await expect(fetchReleaseNotes("1.0.8")).rejects.toThrow(/too large/);
+  });
+
+  it("rejects release links outside the canonical GitHub repository", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          tag_name: "v1.0.8",
+          body: "release body",
+          html_url: "https://example.invalid/phishing",
+          published_at: "2026-05-11T07:00:00Z",
+        }),
+        { status: 200 },
+      ),
+    );
+
+    await expect(fetchReleaseNotes("1.0.8")).rejects.toThrow(
+      /invalid release URL/,
+    );
+  });
 });
 
 describe("fetchLatestReleaseNotes", () => {

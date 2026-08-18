@@ -126,6 +126,10 @@ vi.mock("../lib/api", () => ({
 
 vi.mock("../lib/background", () => ({
   importBackgroundImage: mocks.importBackgroundImage,
+  isManagedBackgroundRelativePath: (value: unknown) =>
+    typeof value === "string" &&
+    /^backgrounds\/[0-9a-f]{8}\.[a-z0-9]{1,16}$/.test(value),
+  MAX_BACKGROUND_IMAGE_BYTES: 25 * 1024 * 1024,
   removeBackgroundImage: mocks.removeBackgroundImage,
 }));
 
@@ -166,7 +170,7 @@ vi.mock("../lib/updater-store", () => ({
     dismiss: vi.fn(),
     error: null,
     init: vi.fn(),
-    install: vi.fn(),
+    openDownload: vi.fn(),
   }),
 }));
 
@@ -1789,6 +1793,10 @@ describe("SettingsModal background controls", () => {
     );
     const file = new File([new Uint8Array([1, 2, 3])], "wallpaper.png", {
       type: "image/png",
+    });
+    Object.defineProperty(file, "arrayBuffer", {
+      configurable: true,
+      value: vi.fn(async () => new Uint8Array([1, 2, 3]).buffer),
     });
     Object.defineProperty(fileInput, "files", {
       configurable: true,

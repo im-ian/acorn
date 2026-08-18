@@ -46,7 +46,6 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel } from "react-resizable-panels";
 import { PersistentGroup } from "./PersistentGroup";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, FS_CHANGED_EVENT, type FsChangePayload } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboardText";
 import { cn } from "../lib/cn";
@@ -59,6 +58,7 @@ import {
 import { joinPath } from "../lib/paths";
 import { trimTrailingPathSeparators } from "../lib/pathUtils";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
+import { openSafeUrl } from "../lib/safeOpenUrl";
 import { findSessionsForPullRequest } from "../lib/sessionContext";
 import { readSessionPullRequestBranchLinks } from "../lib/sessionPullRequestLinks";
 import {
@@ -2078,7 +2078,7 @@ function CommitsTab({
           <Tooltip label={rt(t, "rightPanel.tooltips.openOnGitHub")} side="bottom">
             <button
               type="button"
-              onClick={() => void openUrl(webUrl)}
+              onClick={() => void openSafeUrl(webUrl)}
               className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
             >
               <ExternalLink size={12} />
@@ -2143,7 +2143,7 @@ function CommitsTab({
         setError(rt(t, "rightPanel.errors.notGitHubRemote"));
         return;
       }
-      await openUrl(url);
+      await openSafeUrl(url);
     } catch (e) {
       setError(String(e));
     }
@@ -2824,7 +2824,7 @@ function usePrRowActions(
 
   async function openPrInBrowser(pr: PullRequestInfo) {
     try {
-      await openUrl(pr.url);
+      await openSafeUrl(pr.url);
     } catch (e) {
       setError(String(e));
     }
@@ -3456,7 +3456,7 @@ function useIssueRowActions(onOpenDetail: (number: number) => void) {
 
   async function openIssueInBrowser(issue: IssueInfo) {
     try {
-      await openUrl(issue.url);
+      await openSafeUrl(issue.url);
     } catch (e) {
       setError(String(e));
     }
@@ -4172,7 +4172,7 @@ function WorkflowRunDetailModal({
                 >
                   <button
                     type="button"
-                    onClick={() => void openUrl(detail.url)}
+                    onClick={() => void openSafeUrl(detail.url)}
                     className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
                   >
                     <ExternalLink size={14} />
@@ -4447,13 +4447,13 @@ function WorkflowJobRow({ job, nowUnix }: { job: WorkflowJob; nowUnix: number })
               tabIndex={0}
               onClick={(e) => {
                 e.stopPropagation();
-                void openUrl(job.url);
+                void openSafeUrl(job.url);
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   e.stopPropagation();
-                  void openUrl(job.url);
+                  void openSafeUrl(job.url);
                 }
               }}
               className="shrink-0 cursor-pointer rounded p-0.5 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"

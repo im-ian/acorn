@@ -10,10 +10,14 @@ name = "acorn_local_ipc"
 [dependencies]
 interprocess = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["socket"] }
+
 [target.'cfg(windows)'.dependencies]
 widestring = { workspace = true }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }

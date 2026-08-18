@@ -164,7 +164,8 @@ pub fn attach<R: Runtime>(
     let mut conn = socket::connect_stream()?;
 
     // Handshake: Hello → server Hello → StreamAttach.
-    let hello = Hello::current(ClientRole::Stream);
+    let mut hello = Hello::current(ClientRole::Stream);
+    hello.auth_token = Some(acorn_daemon::auth::read()?.simple().to_string());
     writeln!(
         conn,
         "{}",

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { ExternalLink, X } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { isSafeOpenUrl, openSafeUrl } from "../lib/safeOpenUrl";
 import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
 
@@ -59,22 +59,24 @@ export function ImageLightbox({ image, onClose }: ImageLightboxProps) {
       onClick={onClose}
     >
       <div className="absolute right-3 top-3 flex items-center gap-1">
-        <Tooltip
-          label={t("imageLightbox.openInBrowser")}
-          side="bottom"
-        >
-          <button
-            type="button"
-            aria-label={t("imageLightbox.openInBrowser")}
-            onClick={(e) => {
-              e.stopPropagation();
-              void openUrl(image.src);
-            }}
-            className="rounded p-1.5 text-white/70 transition hover:bg-white/10 hover:text-white"
+        {isSafeOpenUrl(image.src) ? (
+          <Tooltip
+            label={t("imageLightbox.openInBrowser")}
+            side="bottom"
           >
-            <ExternalLink size={16} />
-          </button>
-        </Tooltip>
+            <button
+              type="button"
+              aria-label={t("imageLightbox.openInBrowser")}
+              onClick={(e) => {
+                e.stopPropagation();
+                void openSafeUrl(image.src);
+              }}
+              className="rounded p-1.5 text-white/70 transition hover:bg-white/10 hover:text-white"
+            >
+              <ExternalLink size={16} />
+            </button>
+          </Tooltip>
+        ) : null}
         <Tooltip label={t("imageLightbox.close")} side="bottom">
           <button
             type="button"

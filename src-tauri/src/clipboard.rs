@@ -1,5 +1,16 @@
 use serde::Serialize;
 
+const MAX_CLIPBOARD_IMAGE_BYTES: usize = 25 * 1024 * 1024;
+const MAX_CLIPBOARD_TEXT_UTF16_UNITS: usize = 4 * 1024 * 1024;
+const MAX_CLIPBOARD_TYPES: usize = 128;
+const MAX_CLIPBOARD_TYPE_UTF16_UNITS: usize = 1024;
+
+const _: () = {
+    assert!(MAX_CLIPBOARD_IMAGE_BYTES >= 10 * 1024 * 1024);
+    assert!(MAX_CLIPBOARD_TEXT_UTF16_UNITS >= 1024 * 1024);
+    assert!(MAX_CLIPBOARD_TYPES >= 32);
+};
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardSnapshot {
@@ -79,13 +90,9 @@ fn platform_clipboard_snapshot() -> ClipboardSnapshot {
 #[cfg(target_os = "macos")]
 fn platform_clipboard_snapshot() -> ClipboardSnapshot {
     use objc2::rc::autoreleasepool;
-    use objc2::runtime::AnyObject;
-    use objc2::AnyThread;
     use objc2_app_kit::{
-        NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSPasteboard,
-        NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF,
+        NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF,
     };
-    use objc2_foundation::NSDictionary;
 
     autoreleasepool(|_| {
         let pasteboard = NSPasteboard::generalPasteboard();
@@ -94,17 +101,22 @@ fn platform_clipboard_snapshot() -> ClipboardSnapshot {
             .types()
             .map(|types| {
                 types
-                    .to_vec()
-                    .into_iter()
+                    .iter()
+                    .take(MAX_CLIPBOARD_TYPES)
+                    .filter(|kind| kind.length() <= MAX_CLIPBOARD_TYPE_UTF16_UNITS)
                     .map(|kind| kind.to_string())
                     .collect()
             })
             .unwrap_or_default();
         let text = pasteboard
             .stringForType(unsafe { NSPasteboardTypeString })
-            .map(|s| s.to_string());
+            .filter(|value| value.length() <= MAX_CLIPBOARD_TEXT_UTF16_UNITS)
+            .map(|value| value.to_string());
 
         if let Some(data) = pasteboard.dataForType(unsafe { NSPasteboardTypePNG }) {
+            if data.len() > MAX_CLIPBOARD_IMAGE_BYTES {
+                return ClipboardSnapshot::empty(change_count, types, text);
+            }
             return ClipboardSnapshot::image(
                 change_count,
                 types,
@@ -118,31 +130,20 @@ fn platform_clipboard_snapshot() -> ClipboardSnapshot {
         let Some(tiff_data) = pasteboard.dataForType(unsafe { NSPasteboardTypeTIFF }) else {
             return ClipboardSnapshot::empty(change_count, types, text);
         };
-        let Some(rep) = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &tiff_data)
-        else {
+        if tiff_data.len() > MAX_CLIPBOARD_IMAGE_BYTES {
             return ClipboardSnapshot::empty(change_count, types, text);
-        };
-        let props = NSDictionary::<NSBitmapImageRepPropertyKey, AnyObject>::new();
-        let Some(png_data) =
-            (unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props) })
-        else {
-            return ClipboardSnapshot::image(
-                change_count,
-                types,
-                text,
-                "image/tiff",
-                "tiff",
-                tiff_data.to_vec(),
-            );
-        };
+        }
 
+        // Do not decode arbitrary TIFF clipboard payloads inside the Acorn
+        // process. Keeping the original bounded bytes avoids decompression
+        // bombs while preserving the TIFF attachment fallback.
         ClipboardSnapshot::image(
             change_count,
             types,
             text,
-            "image/png",
-            "png",
-            png_data.to_vec(),
+            "image/tiff",
+            "tiff",
+            tiff_data.to_vec(),
         )
     })
 }

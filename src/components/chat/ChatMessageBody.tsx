@@ -1,8 +1,8 @@
 import { Children, isValidElement, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../lib/cn";
+import { isSafeOpenUrl, openSafeUrl } from "../../lib/safeOpenUrl";
 import {
   markdownImageUrlTransform,
   RemoteImage,
@@ -49,19 +49,17 @@ export function ChatMessageBody({
   isStreaming = false,
 }: ChatMessageBodyProps) {
   const components: Components = {
-    a({ href, children, ...rest }) {
+    a({ href, children }) {
+      const safeHref = href && isSafeOpenUrl(href) ? href : null;
+      if (!safeHref) return <span>{children}</span>;
       return (
-        <a
-          {...rest}
-          href={href}
-          onClick={(event) => {
-            event.preventDefault();
-            if (href) void openUrl(href);
-          }}
-          className="text-accent underline-offset-2 hover:underline"
+        <button
+          type="button"
+          onClick={() => void openSafeUrl(safeHref)}
+          className="inline cursor-pointer bg-transparent p-0 text-accent underline-offset-2 hover:underline"
         >
           {children}
-        </a>
+        </button>
       );
     },
     p({ children }) {

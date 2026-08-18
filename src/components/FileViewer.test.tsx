@@ -19,6 +19,7 @@ vi.mock("../lib/api", () => ({
   FS_CHANGED_EVENT: "acorn:fs-changed",
   api: {
     fsPrepareAsset: vi.fn<(path: string) => Promise<FsPrepareAssetResult>>(),
+    fsReleaseAsset: vi.fn<(capability: string) => Promise<void>>(),
     fsReadFile: vi.fn<(path: string) => Promise<FsReadFileResult>>(),
     fsGitDiffLines: vi.fn<(path: string) => Promise<FsLineDiffEntry[]>>(),
   },
@@ -57,6 +58,8 @@ describe("FileViewer", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     vi.mocked(api.fsPrepareAsset).mockReset();
+    vi.mocked(api.fsReleaseAsset).mockReset();
+    vi.mocked(api.fsReleaseAsset).mockResolvedValue();
     vi.mocked(api.fsReadFile).mockReset();
     vi.mocked(api.fsGitDiffLines).mockReset();
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
@@ -68,7 +71,11 @@ describe("FileViewer", () => {
   });
 
   it("opens image files in the media viewer without reading them as text", async () => {
-    vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({ size: 1024 });
+    vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({
+      size: 1024,
+      asset_path: "/private/snapshots/logo.png",
+      capability: "asset-logo",
+    });
 
     await act(async () => {
       root.render(<FileViewer path="/repo/assets/logo.png" isActive />);
@@ -77,13 +84,19 @@ describe("FileViewer", () => {
 
     const image = container.querySelector<HTMLImageElement>('img[alt="logo.png"]');
     expect(image).not.toBeNull();
-    expect(image?.src).toContain(encodeURIComponent("/repo/assets/logo.png"));
+    expect(image?.src).toContain(
+      encodeURIComponent("/private/snapshots/logo.png"),
+    );
     expect(api.fsPrepareAsset).toHaveBeenCalledWith("/repo/assets/logo.png");
     expect(api.fsReadFile).not.toHaveBeenCalled();
   });
 
   it("lets image media zoom in, zoom out, and reset", async () => {
-    vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({ size: 1536 });
+    vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({
+      size: 1536,
+      asset_path: "/private/snapshots/icon.svg",
+      capability: "asset-icon",
+    });
 
     await act(async () => {
       root.render(<FileViewer path="/repo/assets/icon.svg" isActive />);
@@ -128,7 +141,11 @@ describe("FileViewer", () => {
   });
 
   it("restores and reports image media zoom and scroll state", async () => {
-    vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({ size: 1536 });
+    vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({
+      size: 1536,
+      asset_path: "/private/snapshots/icon.svg",
+      capability: "asset-icon",
+    });
     const onViewStateChange = vi.fn();
 
     await act(async () => {
@@ -176,7 +193,11 @@ describe("FileViewer", () => {
   });
 
   it("opens pdf files in the media viewer", async () => {
-    vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({ size: 2048 });
+    vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({
+      size: 2048,
+      asset_path: "/private/snapshots/spec.pdf",
+      capability: "asset-pdf",
+    });
 
     await act(async () => {
       root.render(<FileViewer path="/repo/docs/spec.pdf" isActive />);
@@ -187,7 +208,10 @@ describe("FileViewer", () => {
       'iframe[title="spec.pdf"]',
     );
     expect(frame).not.toBeNull();
-    expect(frame?.src).toContain(encodeURIComponent("/repo/docs/spec.pdf"));
+    expect(frame?.src).toContain(
+      encodeURIComponent("/private/snapshots/spec.pdf"),
+    );
+    expect(frame?.getAttribute("sandbox")).toBe("");
     expect(
       container.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]'),
     ).toBeNull();

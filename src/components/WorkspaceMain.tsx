@@ -14,7 +14,6 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Activity,
   BarChart3,
@@ -60,6 +59,7 @@ import { formatHotkey, matchesHotkeyEvent } from "../lib/hotkeys";
 import type { LayoutNode } from "../lib/layout";
 import { basename } from "../lib/pathUtils";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
+import { openSafeUrl } from "../lib/safeOpenUrl";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
   PROJECT_SESSION_CREATE_MENU,
@@ -1686,7 +1686,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
                   onKeyUp={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    void openUrl(currentPullRequest.url).catch(
+                    void openSafeUrl(currentPullRequest.url).catch(
                       (err: unknown) => {
                         console.error(
                           "[WorkspaceMain] open PR URL failed",
@@ -2681,7 +2681,7 @@ function KanbanTerminalPopoverPullRequestMetaItem({
         onKeyUp={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation();
-          void openUrl(pullRequest.url).catch((err: unknown) => {
+          void openSafeUrl(pullRequest.url).catch((err: unknown) => {
             console.error("[WorkspaceMain] open PR URL failed", err);
           });
         }}

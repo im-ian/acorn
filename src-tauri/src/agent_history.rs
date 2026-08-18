@@ -1538,23 +1538,12 @@ fn open_transcript_snapshot_checked(
     path: &Path,
     limits: TranscriptScanLimits,
 ) -> AppResult<Option<TranscriptSnapshot>> {
-    let path_metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(path_access_error("inspect", path, error)),
-    };
-    if !path_metadata.file_type().is_file() {
-        return Ok(None);
-    }
-    let file = match fs::File::open(path) {
-        Ok(file) => file,
+    let (file, metadata) = match open_plain_regular_file(path) {
+        Ok(opened) => opened,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(path_access_error("open", path, error)),
     };
-    let metadata = file
-        .metadata()
-        .map_err(|error| path_access_error("inspect opened", path, error))?;
-    if !metadata.is_file() || metadata.len() > limits.max_bytes {
+    if metadata.len() > limits.max_bytes {
         return Ok(None);
     }
     let modified = metadata
@@ -1845,16 +1834,12 @@ fn parse_agent_state(kind: AgentKind, path: &Path) -> Option<ParsedAgentFile> {
 }
 
 fn parse_agent_state_checked(kind: AgentKind, path: &Path) -> AppResult<Option<ParsedAgentFile>> {
-    let file = match fs::File::open(path) {
-        Ok(file) => file,
+    let (file, metadata) = match open_plain_regular_file(path) {
+        Ok(opened) => opened,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(path_access_error("open", path, error)),
     };
-    let len = file
-        .metadata()
-        .map_err(|error| path_access_error("inspect opened", path, error))?
-        .len();
-    parse_agent_state_from_opened_checked(kind, path, file, len)
+    parse_agent_state_from_opened_checked(kind, path, file, metadata.len())
 }
 
 fn parse_agent_state_from_opened_checked(
@@ -2190,9 +2175,44 @@ fn looks_like_acorn_title_generation_prompt(text: &str) -> bool {
 }
 
 fn sample_lines(path: &Path) -> std::io::Result<Vec<String>> {
-    let file = fs::File::open(path)?;
-    let len = file.metadata()?.len();
+    let (file, metadata) = open_plain_regular_file(path)?;
+    let len = metadata.len();
     sample_lines_from_opened(file, len)
+}
+
+fn open_plain_regular_file(path: &Path) -> std::io::Result<(fs::File, fs::Metadata)> {
+    let before = fs::symlink_metadata(path)?;
+    if !before.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "expected a regular file without symlinks: {}",
+                path.display()
+            ),
+        ));
+    }
+
+    let file = fs::File::open(path)?;
+    let opened = file.metadata()?;
+    if !opened.file_type().is_file() || !same_opened_file(&before, &opened) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("file changed while opening: {}", path.display()),
+        ));
+    }
+    Ok((file, opened))
+}
+
+#[cfg(unix)]
+fn same_opened_file(before: &fs::Metadata, opened: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    before.dev() == opened.dev() && before.ino() == opened.ino()
+}
+
+#[cfg(not(unix))]
+fn same_opened_file(_before: &fs::Metadata, _opened: &fs::Metadata) -> bool {
+    true
 }
 
 fn sample_lines_from_opened(mut file: fs::File, len: u64) -> std::io::Result<Vec<String>> {
@@ -4561,6 +4581,30 @@ mod tests {
         };
         let snapshot = open_transcript_snapshot(&transcript, too_many_lines).unwrap();
         assert!(scan_transcript_json_lines(snapshot, too_many_lines, |_| {}).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transcript_readers_reject_symlinked_leaves() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("transcript.jsonl");
+        fs::write(
+            &target,
+            b"{\"payload\":{\"id\":\"019e4818-7c15-7e60-9b3b-898a1c7803d6\"}}\n",
+        )
+        .unwrap();
+        let linked = dir.path().join("linked.jsonl");
+        symlink(&target, &linked).unwrap();
+
+        assert!(open_transcript_snapshot(&linked, TRANSCRIPT_SCAN_LIMITS).is_none());
+        assert!(parse_agent_state(AgentKind::Codex, &linked).is_none());
+        assert_eq!(
+            sample_lines(&linked).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
     }
 
     #[test]

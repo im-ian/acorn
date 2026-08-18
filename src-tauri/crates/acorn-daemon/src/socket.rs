@@ -77,7 +77,15 @@ pub fn connect_stream() -> io::Result<acorn_local_ipc::Stream> {
 }
 
 fn connect_one(path: &PathBuf) -> io::Result<acorn_local_ipc::Stream> {
-    acorn_local_ipc::connect(path)
+    let stream = acorn_local_ipc::connect(path)?;
+    let peer_pid = acorn_local_ipc::peer_process_id(&stream)?;
+    if !acorn_platform::process::pid_executable_name_matches(peer_pid, "acornd") {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("daemon socket peer {peer_pid} is not an acornd process"),
+        ));
+    }
+    Ok(stream)
 }
 
 #[cfg(test)]
@@ -138,10 +146,10 @@ mod tests {
         // Connect to the paths returned by this bind rather than resolving
         // the process-wide test override again; other path tests mutate that
         // environment variable in parallel.
-        let control_client =
-            connect_one(&listeners.control_path).expect("control socket should accept connects");
-        let stream_client =
-            connect_one(&listeners.stream_path).expect("stream socket should accept connects");
+        let control_client = acorn_local_ipc::connect(&listeners.control_path)
+            .expect("control socket should accept connects");
+        let stream_client = acorn_local_ipc::connect(&listeners.stream_path)
+            .expect("stream socket should accept connects");
         drop((control_client, stream_client));
 
         #[cfg(unix)]

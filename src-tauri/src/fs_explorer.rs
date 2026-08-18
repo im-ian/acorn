@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
@@ -16,6 +16,8 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tempfile::{NamedTempFile, TempDir};
+use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -432,6 +434,14 @@ impl FsScope {
     }
 }
 
+/// Authorize an existing path against the same project/worktree scope used by
+/// the file explorer without exposing its internal scoped-path representation.
+pub(crate) fn authorize_existing_path(state: &AppState, path: &Path) -> AppResult<()> {
+    FsScope::from_state(state)
+        .authorize_existing(path)
+        .map(|_| ())
+}
+
 fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
     let mut current = Some(path);
     while let Some(candidate) = current {
@@ -467,23 +477,10 @@ fn build_gitignore(repo_root: &Path) -> Gitignore {
 fn add_bounded_gitignore_file(builder: &mut GitignoreBuilder, path: &Path) {
     // Repositories are untrusted input. Never let a linked special file (for
     // example `/dev/zero`) or an oversized ignore file block the explorer.
-    let Ok(link_meta) = std::fs::symlink_metadata(path) else {
+    let Ok((file, open_meta)) = acorn_platform::fs::open_regular_nofollow(path) else {
         return;
     };
-    if link_meta.file_type().is_symlink()
-        || !link_meta.is_file()
-        || link_meta.len() > MAX_GITIGNORE_BYTES
-    {
-        return;
-    }
-
-    let Ok(file) = File::open(path) else {
-        return;
-    };
-    let Ok(open_meta) = file.metadata() else {
-        return;
-    };
-    if !open_meta.is_file() || open_meta.len() > MAX_GITIGNORE_BYTES {
+    if open_meta.len() > MAX_GITIGNORE_BYTES {
         return;
     }
 
@@ -1211,9 +1208,176 @@ pub struct ReadFileResult {
 #[derive(Debug, Clone, Serialize)]
 pub struct PrepareAssetResult {
     pub size: u64,
+    pub asset_path: String,
+    pub capability: String,
 }
 
 const VIEWER_MAX_BYTES: u64 = 2 * 1024 * 1024;
+const IMAGE_OR_PDF_ASSET_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const AUDIO_OR_VIDEO_ASSET_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const ACTIVE_ASSET_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+const ACTIVE_ASSET_MAX_COUNT: usize = 64;
+
+#[derive(Default)]
+pub struct AssetSnapshotStore {
+    run_dir: Option<TempDir>,
+    entries: HashMap<String, AssetSnapshot>,
+    total_bytes: u64,
+}
+
+struct AssetSnapshot {
+    file: NamedTempFile,
+    size: u64,
+}
+
+struct PendingAssetSnapshot {
+    capability: String,
+    file: NamedTempFile,
+    size: u64,
+}
+
+impl PendingAssetSnapshot {
+    fn path(&self) -> &Path {
+        self.file.path()
+    }
+}
+
+impl AssetSnapshotStore {
+    fn prepare(
+        &mut self,
+        requested_path: &Path,
+        source: &mut File,
+        source_size: u64,
+    ) -> AppResult<PendingAssetSnapshot> {
+        let (extension, max_bytes) = asset_extension_and_limit(requested_path)?;
+        if source_size > max_bytes {
+            return Err(AppError::Other(format!(
+                "media asset is too large ({source_size} bytes; maximum {max_bytes} bytes)"
+            )));
+        }
+        if self.entries.len() >= ACTIVE_ASSET_MAX_COUNT {
+            return Err(AppError::Other(format!(
+                "too many active media snapshots (maximum {ACTIVE_ASSET_MAX_COUNT})"
+            )));
+        }
+        if self.total_bytes.saturating_add(source_size) > ACTIVE_ASSET_MAX_BYTES {
+            return Err(AppError::Other(format!(
+                "active media snapshots exceed the {} byte budget",
+                ACTIVE_ASSET_MAX_BYTES
+            )));
+        }
+
+        if self.run_dir.is_none() {
+            self.run_dir = Some(
+                tempfile::Builder::new()
+                    .prefix("acorn-asset-snapshots-")
+                    .tempdir()?,
+            );
+        }
+        let run_dir = self
+            .run_dir
+            .as_ref()
+            .expect("asset snapshot directory initialized");
+        let capability = Uuid::new_v4().simple().to_string();
+        let suffix = format!(".{extension}");
+        let mut snapshot = tempfile::Builder::new()
+            .prefix(&format!("asset-{capability}-"))
+            .suffix(&suffix)
+            .tempfile_in(run_dir.path())?;
+
+        source.rewind()?;
+        let copied = std::io::copy(
+            &mut source.take(max_bytes.saturating_add(1)),
+            snapshot.as_file_mut(),
+        )?;
+        if copied > max_bytes {
+            return Err(AppError::Other(format!(
+                "media asset grew beyond the {max_bytes} byte limit while being copied"
+            )));
+        }
+        snapshot.as_file_mut().flush()?;
+        snapshot.as_file().sync_all()?;
+        set_snapshot_read_only(snapshot.path())?;
+
+        if self.total_bytes.saturating_add(copied) > ACTIVE_ASSET_MAX_BYTES {
+            return Err(AppError::Other(format!(
+                "active media snapshots exceed the {} byte budget",
+                ACTIVE_ASSET_MAX_BYTES
+            )));
+        }
+
+        Ok(PendingAssetSnapshot {
+            capability,
+            file: snapshot,
+            size: copied,
+        })
+    }
+
+    fn commit(&mut self, snapshot: PendingAssetSnapshot) -> PrepareAssetResult {
+        let asset_path = snapshot.path().to_string_lossy().into_owned();
+        let capability = snapshot.capability;
+        let size = snapshot.size;
+        self.total_bytes = self.total_bytes.saturating_add(size);
+        self.entries.insert(
+            capability.clone(),
+            AssetSnapshot {
+                file: snapshot.file,
+                size,
+            },
+        );
+        PrepareAssetResult {
+            size,
+            asset_path,
+            capability,
+        }
+    }
+
+    fn remove(&mut self, capability: &str) -> Option<AssetSnapshot> {
+        let snapshot = self.entries.remove(capability)?;
+        self.total_bytes = self.total_bytes.saturating_sub(snapshot.size);
+        Some(snapshot)
+    }
+}
+
+fn asset_extension_and_limit(path: &Path) -> AppResult<(String, u64)> {
+    const IMAGE_EXTENSIONS: &[&str] = &[
+        "apng", "avif", "bmp", "gif", "ico", "jpg", "jpeg", "png", "svg", "webp",
+    ];
+    const VIDEO_EXTENSIONS: &[&str] = &["m4v", "mov", "mp4", "mpeg", "mpg", "ogv", "webm"];
+    const AUDIO_EXTENSIONS: &[&str] = &[
+        "aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba",
+    ];
+
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| AppError::InvalidPath("media asset has no valid extension".into()))?;
+    let max_bytes = if extension == "pdf" || IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+        IMAGE_OR_PDF_ASSET_MAX_BYTES
+    } else if VIDEO_EXTENSIONS.contains(&extension.as_str())
+        || AUDIO_EXTENSIONS.contains(&extension.as_str())
+    {
+        AUDIO_OR_VIDEO_ASSET_MAX_BYTES
+    } else {
+        return Err(AppError::InvalidPath(format!(
+            "unsupported media asset extension: {extension}"
+        )));
+    };
+    Ok((extension, max_bytes))
+}
+
+#[cfg(unix)]
+fn set_snapshot_read_only(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o400))
+}
+
+#[cfg(not(unix))]
+fn set_snapshot_read_only(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
 
 #[tauri::command]
 pub fn fs_grant_external_file(state: State<'_, AppState>, path: String) -> AppResult<()> {
@@ -1249,18 +1413,24 @@ pub fn fs_read_file(state: State<'_, AppState>, path: String) -> AppResult<ReadF
 }
 
 #[tauri::command]
-pub fn fs_prepare_asset<R: Runtime>(
+pub async fn fs_prepare_asset<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     path: String,
 ) -> AppResult<PrepareAssetResult> {
     let scope = FsScope::from_state(state.inner());
-    fs_prepare_asset_scoped(&scope, app, path)
+    let snapshots = Arc::clone(&state.asset_snapshots);
+    tauri::async_runtime::spawn_blocking(move || {
+        fs_prepare_asset_scoped(&scope, app, &snapshots, path)
+    })
+    .await
+    .map_err(|error| AppError::Other(format!("asset snapshot task failed: {error}")))?
 }
 
 fn fs_prepare_asset_scoped<R: Runtime>(
     scope: &FsScope,
     app: AppHandle<R>,
+    snapshots: &Arc<Mutex<AssetSnapshotStore>>,
     path: String,
 ) -> AppResult<PrepareAssetResult> {
     let p = PathBuf::from(&path);
@@ -1268,15 +1438,39 @@ fn fs_prepare_asset_scoped<R: Runtime>(
     if !scoped.resolved.is_file() {
         return Err(AppError::InvalidPath(format!("not a file: {path}")));
     }
-    validate_embeddable_asset(&scoped.requested, &scoped.resolved)?;
-    let meta = std::fs::metadata(&scoped.resolved)?;
+    let (mut file, meta) = open_verified_regular_file(&scoped.resolved)?;
+    validate_embeddable_asset_file(&scoped.requested, &mut file)?;
+    let mut snapshots = snapshots.lock();
+    let snapshot = snapshots.prepare(&scoped.requested, &mut file, meta.len())?;
     app.asset_protocol_scope()
-        .allow_file(&scoped.resolved)
+        .allow_file(snapshot.path())
         .map_err(|e| AppError::Other(format!("asset scope failed: {e}")))?;
-    Ok(PrepareAssetResult { size: meta.len() })
+    Ok(snapshots.commit(snapshot))
 }
 
+#[tauri::command]
+pub fn fs_release_asset<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    capability: String,
+) -> AppResult<()> {
+    let snapshot = state.asset_snapshots.lock().remove(&capability);
+    let Some(snapshot) = snapshot else {
+        return Ok(());
+    };
+    app.asset_protocol_scope()
+        .forbid_file(snapshot.file.path())
+        .map_err(|e| AppError::Other(format!("asset scope revoke failed: {e}")))?;
+    Ok(())
+}
+
+#[cfg(test)]
 fn validate_embeddable_asset(requested_path: &Path, resolved_path: &Path) -> AppResult<()> {
+    let (mut file, _) = open_verified_regular_file(resolved_path)?;
+    validate_embeddable_asset_file(requested_path, &mut file)
+}
+
+fn validate_embeddable_asset_file(requested_path: &Path, file: &mut File) -> AppResult<()> {
     // The frontend chooses its renderer from the requested filename, so a
     // symlink must not change whether the backend enforces PDF validation.
     let is_pdf = requested_path
@@ -1287,9 +1481,8 @@ fn validate_embeddable_asset(requested_path: &Path, resolved_path: &Path) -> App
         return Ok(());
     }
 
-    use std::io::Read;
     let mut header = [0u8; 5];
-    let bytes_read = std::fs::File::open(resolved_path)?.read(&mut header)?;
+    let bytes_read = file.read(&mut header)?;
     if bytes_read != header.len() || header != *b"%PDF-" {
         return Err(AppError::InvalidPath(
             "refusing to embed a file with an invalid PDF header".into(),
@@ -1304,13 +1497,13 @@ fn fs_read_file_scoped(scope: &FsScope, path: String) -> AppResult<ReadFileResul
     if !scoped.resolved.is_file() {
         return Err(AppError::InvalidPath(format!("not a file: {path}")));
     }
-    let meta = std::fs::metadata(&scoped.resolved)?;
+    let (file, meta) = open_verified_regular_file(&scoped.resolved)?;
     let size = meta.len();
-    let mut probe = vec![0u8; 4096.min(size as usize)];
-    use std::io::Read;
-    let mut file = std::fs::File::open(&scoped.resolved)?;
-    let probe_n = file.read(&mut probe)?;
-    if probe[..probe_n].contains(&0) {
+    let truncated = size > VIEWER_MAX_BYTES;
+    let to_read = if truncated { VIEWER_MAX_BYTES } else { size };
+    let mut buf = Vec::with_capacity(to_read as usize);
+    file.take(to_read).read_to_end(&mut buf)?;
+    if buf[..buf.len().min(4096)].contains(&0) {
         return Ok(ReadFileResult {
             content: String::new(),
             size,
@@ -1318,12 +1511,6 @@ fn fs_read_file_scoped(scope: &FsScope, path: String) -> AppResult<ReadFileResul
             binary: true,
         });
     }
-    let truncated = size > VIEWER_MAX_BYTES;
-    let to_read = if truncated { VIEWER_MAX_BYTES } else { size };
-    let mut buf = Vec::with_capacity(to_read as usize);
-    let file = std::fs::File::open(&scoped.resolved)?;
-    let mut take = file.take(to_read);
-    take.read_to_end(&mut buf)?;
     let content = String::from_utf8_lossy(&buf).into_owned();
     Ok(ReadFileResult {
         content,
@@ -1331,6 +1518,10 @@ fn fs_read_file_scoped(scope: &FsScope, path: String) -> AppResult<ReadFileResul
         truncated,
         binary: false,
     })
+}
+
+fn open_verified_regular_file(path: &Path) -> AppResult<(File, std::fs::Metadata)> {
+    acorn_platform::fs::open_regular_nofollow(path).map_err(AppError::from)
 }
 
 /// Per-line change marker against HEAD for the file at `path`. Frontend
@@ -2516,6 +2707,45 @@ mod tests {
         fs::write(&image, b"not checked here").unwrap();
 
         assert!(validate_embeddable_asset(&image, &image).is_ok());
+    }
+
+    #[test]
+    fn asset_snapshot_is_stable_after_the_source_path_changes() {
+        let d = tmpdir();
+        let source_path = d.path().join("image.png");
+        fs::write(&source_path, b"original bytes").unwrap();
+        let mut source = File::open(&source_path).unwrap();
+        let source_size = source.metadata().unwrap().len();
+        let mut store = AssetSnapshotStore::default();
+
+        let pending = store
+            .prepare(&source_path, &mut source, source_size)
+            .unwrap();
+        let snapshot_path = pending.path().to_path_buf();
+        fs::write(&source_path, b"replacement bytes").unwrap();
+
+        assert_eq!(fs::read(&snapshot_path).unwrap(), b"original bytes");
+        let result = store.commit(pending);
+        assert_ne!(Path::new(&result.asset_path), source_path);
+        assert_eq!(result.size, b"original bytes".len() as u64);
+        assert!(store.remove(&result.capability).is_some());
+        assert_eq!(store.total_bytes, 0);
+    }
+
+    #[test]
+    fn asset_snapshot_rejects_unsupported_extensions_and_oversized_images() {
+        let d = tmpdir();
+        let source_path = d.path().join("payload.html");
+        fs::write(&source_path, b"payload").unwrap();
+        let mut source = File::open(&source_path).unwrap();
+        let mut store = AssetSnapshotStore::default();
+
+        assert!(store.prepare(&source_path, &mut source, 7).is_err());
+
+        let image_path = d.path().join("payload.png");
+        assert!(store
+            .prepare(&image_path, &mut source, IMAGE_OR_PDF_ASSET_MAX_BYTES + 1,)
+            .is_err());
     }
 
     #[test]

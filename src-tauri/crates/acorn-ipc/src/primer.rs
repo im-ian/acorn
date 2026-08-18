@@ -16,9 +16,10 @@
 //!      threaded into argv at spawn time. For ordinary shells the
 //!      `AgentFlavor::Unknown` branch is a no-op.
 //!
-//! This module takes plain primitives (session id, repo path, socket
-//! paths) instead of an `acorn` `Session` struct so the crate stays a
-//! leaf with no upstream dependency on the host app's module graph.
+//! The primer deliberately contains no runtime paths or names. Repository and
+//! socket paths can contain attacker-controlled text, and interpolating them
+//! into an agent system prompt would create a prompt-injection boundary. The
+//! shell already exposes the authoritative values through Acorn-owned env vars.
 
 use std::path::Path;
 
@@ -46,32 +47,19 @@ impl AgentFlavor {
     }
 }
 
-/// Build the primer string for a given control session. Substitutes the
-/// session id and socket paths so the agent can copy-paste examples
-/// verbatim. Kept short on purpose — every byte goes into every
-/// agent-call's system prompt.
-///
-/// `daemon_socket_path` is `None` when the daemon's socket path could
-/// not be resolved (e.g. data dir lookup failure); the primer prints an
-/// empty path in that case so the rest of the message still renders.
-pub fn primer_for(
-    session_id: &str,
-    repo_path: &Path,
-    socket_path: &Path,
-    daemon_socket_path: Option<&Path>,
-) -> String {
-    let daemon = daemon_socket_path
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-    format!(
-        "You are running inside an Acorn \"control session\". You can orchestrate \
-         other terminal sessions in the same project ({repo}) via the `acorn-ipc` \
+/// Build the static control-session primer. Kept short on purpose — every byte
+/// goes into every agent call's system prompt. Runtime identity and endpoint
+/// values stay in the Acorn-owned environment instead of being interpolated
+/// into trusted instructions.
+pub fn primer() -> &'static str {
+    "You are running inside an Acorn \"control session\". You can orchestrate \
+         other terminal sessions in the same project via the `acorn-ipc` \
          CLI. The user does not need to know that `acorn-ipc` exists; treat it as \
          your local control tool.\n\
          \n\
-         Your session id: {session_id}\n\
-         IPC socket:      {socket}\n\
-         Daemon socket:   {daemon}\n\
+         Your session id: $ACORN_SESSION_ID\n\
+         IPC socket:      $ACORN_IPC_SOCKET\n\
+         Daemon socket:   $ACORN_DAEMON_SOCKET\n\
          Context command: acorn-ipc context\n\
          Workspace env:   $ACORN_WORKSPACE_ID / $ACORN_WORKSPACE_PATH\n\
          \n\
@@ -118,12 +106,7 @@ pub fn primer_for(
          - Prefer delegating CPU-bound or long-running work to sibling sessions \
          instead of running it serially here; this seat is the orchestrator.\n\
          - `read-buffer` after a `send-keys` may need a brief wait — the sibling \
-         is a real PTY, not a synchronous RPC.",
-        repo = repo_path.display(),
-        session_id = session_id,
-        socket = socket_path.display(),
-        daemon = daemon,
-    )
+         is a real PTY, not a synchronous RPC."
 }
 
 /// Augment `(command, args)` with the agent-specific flag that injects the
@@ -166,8 +149,6 @@ fn insert_llm_system_arg(args: Vec<String>, primer: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
     #[test]
     fn detect_recognizes_known_agents() {
         assert_eq!(AgentFlavor::detect("claude"), AgentFlavor::Claude);
@@ -181,32 +162,12 @@ mod tests {
     }
 
     #[test]
-    fn primer_substitutes_session_and_socket() {
-        let p = primer_for(
-            "00000000-0000-0000-0000-000000000001",
-            &PathBuf::from("/tmp/repo"),
-            &PathBuf::from("/tmp/ipc.sock"),
-            Some(&PathBuf::from("/tmp/daemon.sock")),
-        );
-        assert!(p.contains("00000000-0000-0000-0000-000000000001"));
-        assert!(p.contains("/tmp/ipc.sock"));
-        assert!(p.contains("/tmp/repo"));
-        assert!(p.contains("/tmp/daemon.sock"));
+    fn primer_references_authoritative_env_without_interpolated_values() {
+        let p = primer();
+        assert!(p.contains("$ACORN_SESSION_ID"));
+        assert!(p.contains("$ACORN_IPC_SOCKET"));
+        assert!(p.contains("$ACORN_DAEMON_SOCKET"));
         assert!(p.contains("acorn-ipc list-sessions"));
-    }
-
-    #[test]
-    fn primer_renders_empty_daemon_when_unresolved() {
-        let p = primer_for(
-            "00000000-0000-0000-0000-000000000001",
-            &PathBuf::from("/tmp/repo"),
-            &PathBuf::from("/tmp/ipc.sock"),
-            None,
-        );
-        // The line still renders, just with an empty value after the
-        // label — same shape as the pre-extraction behaviour where the
-        // daemon resolver returned an empty string on lookup failure.
-        assert!(p.contains("Daemon socket:   \n"));
     }
 
     #[test]

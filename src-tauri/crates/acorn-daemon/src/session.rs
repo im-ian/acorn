@@ -74,6 +74,9 @@ pub struct DaemonSession {
     /// `ACORN_STAGED_REV` in `SpawnSpec.env`. Surfaced back via
     /// `SessionSummary.staged_rev` so the app can reconcile on boot.
     pub staged_rev: Option<String>,
+    /// Random capability inherited by commands inside this PTY. Daemon CLI
+    /// requests must present it and originate from a descendant process.
+    pub ipc_capability: Option<Uuid>,
 }
 
 impl DaemonSession {
@@ -93,6 +96,7 @@ impl DaemonSession {
             exit_code: None,
             created_at: chrono::Utc::now(),
             staged_rev: None,
+            ipc_capability: None,
         }
     }
 }

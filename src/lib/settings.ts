@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import type { AiExecutionRequest } from "./api";
-import type { BackgroundFit, BackgroundState } from "./background";
+import {
+  isManagedBackgroundRelativePath,
+  type BackgroundFit,
+  type BackgroundState,
+} from "./background";
 import {
   fontStackFromSlots,
   sanitizeFontFamilyName,
@@ -1240,6 +1244,11 @@ function loadSettings(): AcornSettings {
     > & {
       background?: Partial<BackgroundState>;
     };
+    const backgroundRelativePath = isManagedBackgroundRelativePath(
+      appearanceRaw.background?.relativePath,
+    )
+      ? appearanceRaw.background.relativePath
+      : null;
     const appearance: AcornSettings["appearance"] = {
       themeId: normalizeThemeId(
         appearanceRaw.themeId,
@@ -1258,11 +1267,9 @@ function loadSettings(): AcornSettings {
         DEFAULT_SETTINGS.appearance.toastPosition,
       ),
       background: {
-        relativePath:
-          typeof appearanceRaw.background?.relativePath === "string"
-            ? appearanceRaw.background.relativePath
-            : DEFAULT_SETTINGS.appearance.background.relativePath,
+        relativePath: backgroundRelativePath,
         fileName:
+          backgroundRelativePath &&
           typeof appearanceRaw.background?.fileName === "string"
             ? appearanceRaw.background.fileName
             : DEFAULT_SETTINGS.appearance.background.fileName,

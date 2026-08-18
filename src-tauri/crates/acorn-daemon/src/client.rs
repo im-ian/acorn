@@ -37,7 +37,7 @@ impl ControlConn {
         let mut writer = conn.try_clone()?;
         let mut reader = BufReader::new(conn);
 
-        let mut hello = Hello::current(ClientRole::ControlPersistent);
+        let mut hello = authenticated_hello(ClientRole::ControlPersistent)?;
         hello.client_name = Some(client_name.into());
         writeln!(
             writer,
@@ -86,11 +86,39 @@ impl ControlConn {
 /// `acornd` CLI subcommands and by app probes that do not want to pin a
 /// long-lived connection (e.g. status polling from the StatusBar).
 pub fn one_shot(payload: ControlPayload) -> io::Result<ControlResponse> {
+    one_shot_with_hello(payload, authenticated_hello(ClientRole::ControlOneShot)?)
+}
+
+/// One-shot call issued from the `acornd` CLI inside an Acorn PTY. Unlike app
+/// calls, this must carry the source id and per-session capability; the server
+/// additionally verifies that the kernel peer PID descends from that PTY.
+pub fn one_shot_from_session(payload: ControlPayload) -> io::Result<ControlResponse> {
+    let mut hello = authenticated_hello(ClientRole::ControlOneShot)?;
+    hello.source_session_id = std::env::var("ACORN_SESSION_ID")
+        .ok()
+        .or_else(|| std::env::var("ACORN_RESUME_TOKEN").ok())
+        .and_then(|value| uuid::Uuid::parse_str(&value).ok());
+    hello.session_capability = std::env::var("ACORN_IPC_CAPABILITY").ok();
+    if hello.source_session_id.is_none() || hello.session_capability.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "daemon CLI authority is missing; run this command inside an Acorn session",
+        ));
+    }
+    one_shot_with_hello(payload, hello)
+}
+
+fn authenticated_hello(role: ClientRole) -> io::Result<Hello> {
+    let mut hello = Hello::current(role);
+    hello.auth_token = Some(super::auth::read()?.simple().to_string());
+    Ok(hello)
+}
+
+fn one_shot_with_hello(payload: ControlPayload, hello: Hello) -> io::Result<ControlResponse> {
     let conn = socket::connect_control()?;
     let mut writer = conn.try_clone()?;
     let mut reader = BufReader::new(conn);
 
-    let hello = Hello::current(ClientRole::ControlOneShot);
     writeln!(
         writer,
         "{}",

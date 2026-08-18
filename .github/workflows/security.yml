@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/security.yml
+      - package.json
+      - pnpm-lock.yaml
       - src-tauri/Cargo.toml
       - src-tauri/Cargo.lock
       - src-tauri/crates/**/Cargo.toml
@@ -11,6 +13,8 @@ on:
     branches: [main]
     paths:
       - .github/workflows/security.yml
+      - package.json
+      - pnpm-lock.yaml
       - src-tauri/Cargo.toml
       - src-tauri/Cargo.lock
       - src-tauri/crates/**/Cargo.toml
@@ -26,6 +30,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  frontend-dependencies:
+    name: Frontend dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9.15.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Audit frontend dependencies
+        run: pnpm audit --audit-level=low
+
   rust-dependencies:
     name: Rust dependencies
     runs-on: ubuntu-latest
@@ -48,14 +76,4 @@ jobs:
         run: cargo install cargo-audit --version 0.22.2 --locked
 
       - name: Audit Rust dependencies
-        # The affected quick-xml versions have no untrusted XML input here.
-        # tauri-winrt-notification uses 0.37.5 only for `escape::escape`, not
-        # the vulnerable attribute or namespace readers. wayland-scanner uses
-        # 0.39.4 at build time on protocol XML shipped by its dependency, not
-        # user/network data. Keep these reachability exceptions visible until
-        # both upstream paths move to quick-xml >=0.41; every other advisory
-        # still fails the audit.
-        run: >-
-          cargo audit --file src-tauri/Cargo.lock
-          --ignore RUSTSEC-2026-0194
-          --ignore RUSTSEC-2026-0195
+        run: cargo audit --file src-tauri/Cargo.lock

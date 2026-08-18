@@ -1,15 +1,16 @@
 import { appLocalDataDir, join } from "@tauri-apps/api/path";
+import { invoke } from "@tauri-apps/api/core";
 import {
   exists,
-  mkdir,
+  lstat,
+  open,
   readDir,
-  readTextFile,
   remove,
-  stat,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { create } from "zustand";
+import { ensureRealDirectory } from "./safeAppLocalFs";
+import { openSafeUrl } from "./safeOpenUrl";
 
 import acornDarkCss from "../assets/themes/acorn-dark.css?raw";
 import acornLightCss from "../assets/themes/acorn-light.css?raw";
@@ -121,7 +122,72 @@ const INSTALLED_METADATA_FILE = "catalog.json";
 const MAX_THEME_CATALOG_BYTES = 256 * 1024;
 const MAX_INSTALLED_THEME_METADATA_BYTES = 256 * 1024;
 const MAX_THEME_CSS_BYTES = 1_000_000;
+const THEME_REQUEST_TIMEOUT_MS = 15_000;
 const THEME_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function sameFileIdentity(
+  before: Awaited<ReturnType<typeof lstat>>,
+  opened: Awaited<ReturnType<typeof lstat>>,
+): boolean {
+  if (
+    typeof before.dev === "number" &&
+    typeof before.ino === "number" &&
+    typeof opened.dev === "number" &&
+    typeof opened.ino === "number"
+  ) {
+    return before.dev === opened.dev && before.ino === opened.ino;
+  }
+  return before.size === opened.size;
+}
+
+async function readBoundedRegularTextFile(
+  path: string,
+  maxBytes: number,
+  label: string,
+): Promise<string> {
+  const before = await lstat(path);
+  if (
+    !before.isFile ||
+    before.isSymlink ||
+    before.size > maxBytes ||
+    before.size < 0
+  ) {
+    throw new Error(`${label} is too large or not a regular file`);
+  }
+
+  const file = await open(path, { read: true });
+  try {
+    const opened = await file.stat();
+    if (
+      !opened.isFile ||
+      opened.isSymlink ||
+      opened.size > maxBytes ||
+      opened.size < 0 ||
+      !sameFileIdentity(before, opened)
+    ) {
+      throw new Error(`${label} changed or exceeded its limit while opening`);
+    }
+
+    const bytes = new Uint8Array(maxBytes + 1);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const count = await file.read(bytes.subarray(offset));
+      if (count === null) break;
+      if (!Number.isInteger(count) || count <= 0 || count > bytes.length - offset) {
+        throw new Error(`${label} returned an invalid read length`);
+      }
+      offset += count;
+    }
+    if (offset > maxBytes) {
+      throw new Error(`${label} grew beyond its ${maxBytes}-byte limit`);
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      bytes.subarray(0, offset),
+    );
+  } finally {
+    await file.close();
+  }
+}
 
 function normalizeCssSecurityTokens(css: string): string {
   // Match CSS Syntax preprocessing before scanning. In particular, CRLF is
@@ -266,6 +332,24 @@ async function readBoundedResponseText(
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
+async function withThemeResponse<T>(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  consume: (response: Response) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    THEME_REQUEST_TIMEOUT_MS,
+  );
+  try {
+    const response = await fetch(input, { ...init, signal: controller.signal });
+    return await consume(response);
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 export function applyTheme(id: string, css: string): void {
   let styleEl = document.getElementById(STYLE_ELEMENT_ID) as
     | HTMLStyleElement
@@ -346,30 +430,45 @@ export function parseThemeCatalog(value: unknown): ThemeCatalogEntry[] {
 }
 
 export async function fetchThemeCatalog(): Promise<ThemeCatalogEntry[]> {
-  const response = await fetch(THEME_CATALOG_URL, {
-    cache: "no-store",
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) {
-    throw new Error(`Theme catalog request failed: ${response.status}`);
-  }
-  const body = await readBoundedResponseText(
-    response,
-    MAX_THEME_CATALOG_BYTES,
-    "Theme catalog",
+  return withThemeResponse(
+    THEME_CATALOG_URL,
+    {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    },
+    async (response) => {
+      if (!response.ok) {
+        throw new Error(`Theme catalog request failed: ${response.status}`);
+      }
+      const body = await readBoundedResponseText(
+        response,
+        MAX_THEME_CATALOG_BYTES,
+        "Theme catalog",
+      );
+      return parseThemeCatalog(JSON.parse(body));
+    },
   );
-  return parseThemeCatalog(JSON.parse(body));
 }
 
 async function ensureThemesDir(): Promise<string> {
   const root = await appLocalDataDir();
   const dir = await join(root, USER_THEMES_DIR);
-
-  if (!(await exists(dir))) {
-    await mkdir(dir, { recursive: true });
-  }
+  await ensureRealDirectory(dir, "User themes directory");
 
   return dir;
+}
+
+async function assertRegularFileOrMissing(
+  path: string,
+  label: string,
+): Promise<boolean> {
+  if (!(await exists(path))) return false;
+
+  const info = await lstat(path);
+  if (!info.isFile || info.isSymlink) {
+    throw new Error(`${label} is not a regular file`);
+  }
+  return true;
 }
 
 function emptyInstalledMetadata(): InstalledThemeMetadata {
@@ -414,18 +513,11 @@ async function readInstalledMetadata(
 ): Promise<InstalledThemeMetadata> {
   const path = await join(dir, INSTALLED_METADATA_FILE);
   if (!(await exists(path))) return emptyInstalledMetadata();
-
-  const info = await stat(path);
-  if (!info.isFile || info.size > MAX_INSTALLED_THEME_METADATA_BYTES) {
-    throw new Error("Installed theme metadata is too large or not regular");
-  }
-  const contents = await readTextFile(path);
-  if (
-    new TextEncoder().encode(contents).byteLength >
-    MAX_INSTALLED_THEME_METADATA_BYTES
-  ) {
-    throw new Error("Installed theme metadata is too large");
-  }
+  const contents = await readBoundedRegularTextFile(
+    path,
+    MAX_INSTALLED_THEME_METADATA_BYTES,
+    "Installed theme metadata",
+  );
   return installedMetadataFromUnknown(JSON.parse(contents));
 }
 
@@ -441,6 +533,7 @@ async function writeInstalledMetadata(
   ) {
     throw new Error("Installed theme metadata is too large");
   }
+  await assertRegularFileOrMissing(path, "Installed theme metadata");
   await writeTextFile(path, contents);
 }
 
@@ -461,25 +554,25 @@ export async function loadUserThemes(): Promise<AcornTheme[]> {
       const id = entry.name.replace(/\.css$/, "");
       const path = await join(dir, entry.name);
       const installed = metadata.installed[id];
-
-      if (installed?.file === entry.name) {
-        const info = await stat(path);
-        if (!info.isFile || info.size > MAX_THEME_CSS_BYTES) {
-          console.warn(
-            `[acorn] skipping catalog theme ${entry.name}: file is too large or not regular`,
-          );
-          continue;
-        }
+      let css: string;
+      try {
+        css = await readBoundedRegularTextFile(
+          path,
+          MAX_THEME_CSS_BYTES,
+          `Theme ${entry.name}`,
+        );
+      } catch (error) {
+        console.warn("[acorn] skipping theme %s:", entry.name, error);
+        continue;
       }
-
-      const css = await readTextFile(path);
 
       if (installed?.file === entry.name) {
         try {
           assertCatalogThemeCss(id, css);
         } catch (error) {
           console.warn(
-            `[acorn] skipping catalog theme ${entry.name}:`,
+            "[acorn] skipping catalog theme %s:",
+            entry.name,
             error,
           );
           continue;
@@ -490,9 +583,9 @@ export async function loadUserThemes(): Promise<AcornTheme[]> {
 
       if (!result.ok) {
         console.warn(
-          `[acorn] skipping theme ${entry.name}: missing ${result.missing.join(
-            ", ",
-          )}`,
+          "[acorn] skipping theme %s: missing %s",
+          entry.name,
+          result.missing.join(", "),
         );
         continue;
       }
@@ -530,31 +623,63 @@ function assertCatalogThemeCss(id: string, css: string): void {
       `Theme ${id} is missing required variables: ${validation.missing.join(", ")}`,
     );
   }
-  const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const selector = new RegExp(
-    `data-acorn-theme\\s*=\\s*["']${escapedId}["']`,
-  );
-  if (!selector.test(css)) {
+  if (!catalogThemeTargetsId(css, id)) {
     throw new Error(`Theme ${id} does not target its catalog id`);
   }
+}
+
+function catalogThemeTargetsId(css: string, id: string): boolean {
+  const attribute = "data-acorn-theme";
+  let searchFrom = 0;
+  while (searchFrom < css.length) {
+    const attributeIndex = css.indexOf(attribute, searchFrom);
+    if (attributeIndex === -1) return false;
+    let cursor = attributeIndex + attribute.length;
+    while (cursor < css.length && isCssWhitespace(css[cursor])) cursor += 1;
+    if (css[cursor] !== "=") {
+      searchFrom = cursor;
+      continue;
+    }
+    cursor += 1;
+    while (cursor < css.length && isCssWhitespace(css[cursor])) cursor += 1;
+    const quote = css[cursor];
+    if (quote !== '"' && quote !== "'") {
+      searchFrom = cursor + 1;
+      continue;
+    }
+    const valueStart = cursor + 1;
+    const valueEnd = css.indexOf(quote, valueStart);
+    if (valueEnd === -1) return false;
+    if (css.slice(valueStart, valueEnd) === id) return true;
+    searchFrom = valueEnd + 1;
+  }
+  return false;
+}
+
+function isCssWhitespace(value: string | undefined): boolean {
+  return value !== undefined && " \t\n\f\r".includes(value);
 }
 
 export async function installCatalogTheme(
   theme: ThemeCatalogEntry,
 ): Promise<void> {
   const catalogTheme = catalogEntryFromUnknown(theme);
-  const response = await fetch(new URL(catalogTheme.file, THEME_CATALOG_URL), {
-    cache: "no-store",
-    headers: { Accept: "text/css" },
-  });
-  if (!response.ok) {
-    throw new Error(`Theme download failed: ${response.status}`);
-  }
-
-  const css = await readBoundedResponseText(
-    response,
-    MAX_THEME_CSS_BYTES,
-    `Theme ${catalogTheme.id}`,
+  const css = await withThemeResponse(
+    new URL(catalogTheme.file, THEME_CATALOG_URL),
+    {
+      cache: "no-store",
+      headers: { Accept: "text/css" },
+    },
+    async (response) => {
+      if (!response.ok) {
+        throw new Error(`Theme download failed: ${response.status}`);
+      }
+      return readBoundedResponseText(
+        response,
+        MAX_THEME_CSS_BYTES,
+        `Theme ${catalogTheme.id}`,
+      );
+    },
   );
   assertCatalogThemeCss(catalogTheme.id, css);
 
@@ -563,6 +688,7 @@ export async function installCatalogTheme(
   const path = await join(dir, file);
   const metadata = await readInstalledMetadata(dir);
 
+  await assertRegularFileOrMissing(path, `Theme ${catalogTheme.id}`);
   await writeTextFile(path, css);
   metadata.installed[catalogTheme.id] = {
     label: catalogTheme.label,
@@ -586,7 +712,7 @@ export async function uninstallCatalogTheme(id: string): Promise<void> {
   }
 
   const path = await join(dir, installed.file);
-  if (await exists(path)) {
+  if (await assertRegularFileOrMissing(path, `Theme ${id}`)) {
     await remove(path);
   }
   delete metadata.installed[id];
@@ -594,12 +720,11 @@ export async function uninstallCatalogTheme(id: string): Promise<void> {
 }
 
 export async function revealThemesFolder(): Promise<void> {
-  const dir = await ensureThemesDir();
-  await openPath(dir);
+  await invoke("reveal_themes_folder");
 }
 
 export async function openThemePreview(): Promise<void> {
-  await openUrl(THEME_PREVIEW_URL);
+  await openSafeUrl(THEME_PREVIEW_URL);
 }
 
 export function mergeThemes(

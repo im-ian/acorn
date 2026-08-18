@@ -1,11 +1,16 @@
 import { appLocalDataDir, join } from "@tauri-apps/api/path";
-import { mkdir, writeFile } from "@tauri-apps/plugin-fs";
+import {
+  ensureRealDirectory,
+  writeNewPrivateFile,
+} from "./safeAppLocalFs";
 
 export const CLIPBOARD_ATTACHMENTS_DIR = "clipboard-attachments";
+export const MAX_CLIPBOARD_IMAGE_BYTES = 25 * 1024 * 1024;
 
 export interface ClipboardImageAttachmentSource {
   name?: string;
   type?: string;
+  size?: number;
   arrayBuffer: () => Promise<ArrayBuffer>;
 }
 
@@ -27,15 +32,12 @@ const IMAGE_TYPE_EXTENSIONS: Record<string, string> = {
   "image/webp": ".webp",
 };
 
-function shortHash(bytes: Uint8Array): string {
-  let h = 0x811c9dc5;
-
-  for (const byte of bytes) {
-    h ^= byte;
-    h = Math.imul(h, 0x01000193);
-  }
-
-  return (h >>> 0).toString(16).padStart(8, "0");
+function randomAttachmentToken(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
 }
 
 function extOfName(name: string | undefined): string {
@@ -54,14 +56,31 @@ function extOfImage(source: ClipboardImageAttachmentSource): string {
 export async function saveClipboardImageAttachment(
   source: ClipboardImageAttachmentSource,
 ): Promise<ClipboardImageAttachment> {
+  if (
+    source.size !== undefined &&
+    (!Number.isSafeInteger(source.size) ||
+      source.size < 0 ||
+      source.size > MAX_CLIPBOARD_IMAGE_BYTES)
+  ) {
+    throw new Error(
+      `Clipboard image exceeds the ${MAX_CLIPBOARD_IMAGE_BYTES}-byte limit`,
+    );
+  }
+
+  const buffer = await source.arrayBuffer();
+  if (buffer.byteLength > MAX_CLIPBOARD_IMAGE_BYTES) {
+    throw new Error(
+      `Clipboard image exceeds the ${MAX_CLIPBOARD_IMAGE_BYTES}-byte limit`,
+    );
+  }
+  const bytes = new Uint8Array(buffer);
   const root = await appLocalDataDir();
   const dir = await join(root, CLIPBOARD_ATTACHMENTS_DIR);
-  await mkdir(dir, { recursive: true });
+  await ensureRealDirectory(dir, "Clipboard attachment directory");
 
-  const bytes = new Uint8Array(await source.arrayBuffer());
-  const storedName = `clipboard-${shortHash(bytes)}${extOfImage(source)}`;
+  const storedName = `clipboard-${randomAttachmentToken()}${extOfImage(source)}`;
   const path = await join(dir, storedName);
-  await writeFile(path, bytes);
+  await writeNewPrivateFile(path, bytes, "Clipboard image attachment");
 
   return {
     path,

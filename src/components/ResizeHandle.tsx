@@ -329,12 +329,18 @@ function findSiblingPanel(
   handle: HTMLElement,
   direction: "previousElementSibling" | "nextElementSibling",
 ): HTMLElement | null {
-  let cursor = handle[direction];
+  let cursor =
+    direction === "previousElementSibling"
+      ? handle.previousElementSibling
+      : handle.nextElementSibling;
   while (cursor) {
     if (cursor instanceof HTMLElement && cursor.hasAttribute("data-panel")) {
       return cursor;
     }
-    cursor = cursor[direction];
+    cursor =
+      direction === "previousElementSibling"
+        ? cursor.previousElementSibling
+        : cursor.nextElementSibling;
   }
   return null;
 }

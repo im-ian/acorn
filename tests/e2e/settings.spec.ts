@@ -117,6 +117,17 @@ test.describe("settings modal", () => {
     page,
     tauri,
   }) => {
+    await page.addInitScript(
+      ({ css }) => {
+        const state = window as unknown as {
+          __themeCss?: string;
+          __themeOpenFiles?: Record<number, { contents: string; read: boolean }>;
+        };
+        state.__themeCss = css;
+        state.__themeOpenFiles = {};
+      },
+      { css: NOTE_CSS },
+    );
     await page.route(
       "https://raw.githubusercontent.com/im-ian/acorn-themes/main/manifest.json",
       (route) =>
@@ -163,6 +174,119 @@ test.describe("settings modal", () => {
         ? [{ name: "note.css", isFile: true, isDirectory: false, isSymlink: false }]
         : [];
     });
+    await tauri.handle("plugin:fs|lstat", (args) => {
+      const path = String((args as { path?: string })?.path ?? "");
+      const state = window as unknown as {
+        __themeCss?: string;
+      };
+      const isDirectory = path.endsWith("/themes");
+      const metadata = JSON.stringify({
+        schemaVersion: 1,
+        installed: {
+          note: {
+            label: "Note",
+            mode: "light",
+            version: 1,
+            file: "note.css",
+          },
+        },
+      });
+      const size = path.endsWith("catalog.json")
+        ? new TextEncoder().encode(metadata).byteLength
+        : new TextEncoder().encode(state.__themeCss ?? "").byteLength;
+      return {
+        isFile: !isDirectory,
+        isDirectory,
+        isSymlink: false,
+        size: isDirectory ? 0 : size,
+        mtime: null,
+        atime: null,
+        birthtime: null,
+        readonly: false,
+        fileAttributes: null,
+        dev: 1,
+        ino: path.endsWith("catalog.json") ? 2 : 3,
+        mode: null,
+        nlink: null,
+        uid: null,
+        gid: null,
+        rdev: null,
+        blksize: null,
+        blocks: null,
+      };
+    });
+    await tauri.handle("plugin:fs|open", (args) => {
+      const path = String((args as { path?: string })?.path ?? "");
+      const state = window as unknown as {
+        __themeCss?: string;
+        __themeOpenFiles?: Record<number, { contents: string; read: boolean }>;
+      };
+      const metadata = JSON.stringify({
+        schemaVersion: 1,
+        installed: {
+          note: {
+            label: "Note",
+            mode: "light",
+            version: 1,
+            file: "note.css",
+          },
+        },
+      });
+      const rid = path.endsWith("catalog.json") ? 201 : 202;
+      const files = (state.__themeOpenFiles ??= {});
+      files[rid] = {
+        contents: path.endsWith("catalog.json")
+          ? metadata
+          : (state.__themeCss ?? ""),
+        read: false,
+      };
+      return rid;
+    });
+    await tauri.handle("plugin:fs|fstat", (args) => {
+      const rid = Number((args as { rid?: unknown })?.rid);
+      const state = window as unknown as {
+        __themeOpenFiles?: Record<number, { contents: string; read: boolean }>;
+      };
+      const entry = state.__themeOpenFiles?.[rid];
+      const size = new TextEncoder().encode(entry?.contents ?? "").byteLength;
+      return {
+        isFile: true,
+        isDirectory: false,
+        isSymlink: false,
+        size,
+        mtime: null,
+        atime: null,
+        birthtime: null,
+        readonly: false,
+        fileAttributes: null,
+        dev: 1,
+        ino: rid === 201 ? 2 : 3,
+        mode: null,
+        nlink: null,
+        uid: null,
+        gid: null,
+        rdev: null,
+        blksize: null,
+        blocks: null,
+      };
+    });
+    await tauri.handle("plugin:fs|read", (args) => {
+      const rid = Number((args as { rid?: unknown })?.rid);
+      const state = window as unknown as {
+        __themeOpenFiles?: Record<number, { contents: string; read: boolean }>;
+      };
+      const entry = state.__themeOpenFiles?.[rid];
+      if (!entry || entry.read) return new Array(8).fill(0);
+      entry.read = true;
+      const contents = Array.from(new TextEncoder().encode(entry.contents));
+      const length = contents.length;
+      const trailer = new Array(8).fill(0);
+      trailer[4] = (length >>> 24) & 0xff;
+      trailer[5] = (length >>> 16) & 0xff;
+      trailer[6] = (length >>> 8) & 0xff;
+      trailer[7] = length & 0xff;
+      return [...contents, ...trailer];
+    });
     await tauri.handle("plugin:fs|read_text_file", (args) => {
       const path = String((args as { path?: string })?.path ?? "");
       if (path.endsWith("catalog.json")) {
@@ -179,21 +303,7 @@ test.describe("settings modal", () => {
         });
         return Array.from(new TextEncoder().encode(metadata));
       }
-      const css = `/* @mode light */
-:root[data-acorn-theme="note"] {
-  --color-bg: #f7f1e1;
-  --color-bg-elevated: #eee5cf;
-  --color-bg-sidebar: #e5dbc3;
-  --color-fg: #2c2922;
-  --color-fg-muted: #756e60;
-  --color-border: #c9bda4;
-  --color-accent: #244e8a;
-  --color-accent-hover: #183d70;
-  --color-danger: #a33f35;
-  --color-warning: #a56b20;
-  --color-terminal-bg: #f7f0df;
-  --color-terminal-fg: #29261f;
-}`;
+      const css = (window as unknown as { __themeCss?: string }).__themeCss ?? "";
       return Array.from(new TextEncoder().encode(css));
     });
     await tauri.handle("plugin:fs|write_text_file", () => {

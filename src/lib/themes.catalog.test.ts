@@ -3,7 +3,9 @@ import defaultCapability from "../../src-tauri/capabilities/default.json";
 
 const tauriFsMock = vi.hoisted(() => ({
   exists: vi.fn(),
+  lstat: vi.fn(),
   mkdir: vi.fn(),
+  open: vi.fn(),
   readDir: vi.fn(),
   readTextFile: vi.fn(),
   remove: vi.fn(),
@@ -16,9 +18,13 @@ const tauriPathMock = vi.hoisted(() => ({
   join: vi.fn(),
 }));
 
+const tauriCoreMock = vi.hoisted(() => ({
+  invoke: vi.fn(),
+}));
+
 vi.mock("@tauri-apps/plugin-fs", () => tauriFsMock);
 vi.mock("@tauri-apps/api/path", () => tauriPathMock);
-vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => tauriCoreMock);
 
 import {
   THEME_CSS_VARS,
@@ -26,6 +32,7 @@ import {
   installCatalogTheme,
   loadUserThemes,
   parseThemeCatalog,
+  revealThemesFolder,
   uninstallCatalogTheme,
   type ThemeCatalogEntry,
 } from "./themes";
@@ -55,8 +62,42 @@ beforeEach(() => {
   tauriFsMock.readDir.mockResolvedValue([]);
   tauriFsMock.readTextFile.mockResolvedValue("");
   tauriFsMock.remove.mockResolvedValue(undefined);
-  tauriFsMock.stat.mockResolvedValue({ isFile: true, size: VALID_CSS.length });
+  tauriFsMock.stat.mockResolvedValue({
+    isFile: true,
+    isSymlink: false,
+    size: VALID_CSS.length,
+  });
+  tauriFsMock.lstat.mockImplementation((path: string) => {
+    if (path === "/app/local/themes") {
+      return Promise.resolve({ isDirectory: true, isSymlink: false });
+    }
+    return tauriFsMock.stat(path);
+  });
+  tauriFsMock.open.mockImplementation(async (path: string) => {
+    const contents = await tauriFsMock.readTextFile(path);
+    const encoded = new TextEncoder().encode(contents);
+    let offset = 0;
+    return {
+      stat: () => tauriFsMock.stat(path),
+      read: (buffer: Uint8Array) => {
+        if (offset >= encoded.length) return Promise.resolve(null);
+        const count = Math.min(buffer.byteLength, encoded.length - offset);
+        buffer.set(encoded.subarray(offset, offset + count));
+        offset += count;
+        return Promise.resolve(count);
+      },
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  });
   tauriFsMock.writeTextFile.mockResolvedValue(undefined);
+  tauriCoreMock.invoke.mockResolvedValue(undefined);
+});
+
+it("reveals themes only through the constrained backend command", async () => {
+  await revealThemesFolder();
+
+  expect(tauriCoreMock.invoke).toHaveBeenCalledWith("reveal_themes_folder");
+  expect(tauriPathMock.appLocalDataDir).not.toHaveBeenCalled();
 });
 
 describe("parseThemeCatalog", () => {
@@ -115,11 +156,25 @@ describe("theme filesystem capability", () => {
     expect(defaultCapability.permissions).toContain(
       "fs:allow-write-text-file",
     );
-    expect(defaultCapability.permissions).toContain("fs:allow-stat");
+    expect(defaultCapability.permissions).toContain("fs:allow-lstat");
+    expect(defaultCapability.permissions).toContain("fs:allow-open");
+    expect(defaultCapability.permissions).toContain("fs:allow-read");
+    expect(defaultCapability.permissions).toContain("fs:allow-fstat");
   });
 });
 
 describe("catalog theme persistence", () => {
+  it("rejects a symlinked user themes directory", async () => {
+    tauriFsMock.lstat.mockResolvedValueOnce({
+      isDirectory: false,
+      isSymlink: true,
+    });
+
+    await expect(loadUserThemes()).resolves.toEqual([]);
+    expect(tauriFsMock.readDir).not.toHaveBeenCalled();
+    expect(tauriFsMock.writeTextFile).not.toHaveBeenCalled();
+  });
+
   it("downloads validated CSS and records the installed catalog version", async () => {
     tauriFsMock.exists.mockImplementation((path: string) =>
       Promise.resolve(!path.endsWith("catalog.json")),
@@ -155,6 +210,35 @@ describe("catalog theme persistence", () => {
       version: 2,
       file: "note.css",
     });
+  });
+
+  it("refuses to overwrite a symlinked catalog CSS target", async () => {
+    tauriFsMock.exists.mockResolvedValue(true);
+    tauriFsMock.lstat.mockImplementation((path: string) => {
+      if (path === "/app/local/themes") {
+        return Promise.resolve({ isDirectory: true, isSymlink: false });
+      }
+      if (path.endsWith("note.css")) {
+        return Promise.resolve({ isFile: false, isSymlink: true, size: 0 });
+      }
+      return tauriFsMock.stat(path);
+    });
+    tauriFsMock.readTextFile.mockImplementation((path: string) =>
+      Promise.resolve(
+        path.endsWith("catalog.json")
+          ? JSON.stringify({ schemaVersion: 1, installed: {} })
+          : "",
+      ),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(VALID_CSS, { status: 200 })),
+    );
+
+    await expect(installCatalogTheme(THEME)).rejects.toThrow(
+      /Theme note is not a regular file/,
+    );
+    expect(tauriFsMock.writeTextFile).not.toHaveBeenCalled();
   });
 
   it("rejects downloaded CSS that targets a different theme id", async () => {
@@ -267,7 +351,7 @@ describe("catalog theme persistence", () => {
     ]);
   });
 
-  it("revalidates persisted catalog CSS without restricting user themes", async () => {
+  it("revalidates persisted catalog CSS without applying catalog policy to user themes", async () => {
     tauriFsMock.readDir.mockResolvedValue([
       { isFile: true, name: "note.css" },
       { isFile: true, name: "personal.css" },
@@ -337,6 +421,38 @@ describe("catalog theme persistence", () => {
 
     await expect(loadUserThemes()).resolves.toEqual([]);
     expect(tauriFsMock.readTextFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips oversized custom CSS before opening it", async () => {
+    tauriFsMock.exists.mockResolvedValue(false);
+    tauriFsMock.readDir.mockResolvedValue([
+      { isFile: true, name: "personal.css" },
+    ]);
+    tauriFsMock.stat.mockResolvedValue({
+      isFile: true,
+      isSymlink: false,
+      size: 1_000_001,
+    });
+
+    await expect(loadUserThemes()).resolves.toEqual([]);
+    expect(tauriFsMock.open).not.toHaveBeenCalled();
+    expect(tauriFsMock.readTextFile).not.toHaveBeenCalled();
+  });
+
+  it("skips symlinked custom CSS without following it", async () => {
+    tauriFsMock.exists.mockResolvedValue(false);
+    tauriFsMock.readDir.mockResolvedValue([
+      { isFile: true, name: "personal.css" },
+    ]);
+    tauriFsMock.stat.mockResolvedValue({
+      isFile: false,
+      isSymlink: true,
+      size: VALID_CSS.length,
+    });
+
+    await expect(loadUserThemes()).resolves.toEqual([]);
+    expect(tauriFsMock.open).not.toHaveBeenCalled();
+    expect(tauriFsMock.readTextFile).not.toHaveBeenCalled();
   });
 
   it("fails closed before reading oversized installed metadata", async () => {

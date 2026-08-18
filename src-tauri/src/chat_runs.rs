@@ -54,13 +54,24 @@ impl ChatCancellation {
 
     pub fn try_wait(&self, command: &str) -> AppResult<Option<ExitStatus>> {
         let mut guard = self.inner.child.lock();
-        let child = guard
+        let result = guard
             .as_mut()
-            .ok_or_else(|| AppError::Other(format!("{command} child missing")))?;
-        child
+            .ok_or_else(|| AppError::Other(format!("{command} child missing")))?
             .child
-            .try_wait()
-            .map_err(|e| AppError::Other(format!("failed waiting for {command}: {e}")))
+            .try_wait();
+        match result {
+            Ok(status) => Ok(status),
+            Err(error) => {
+                if let Some(mut tracked) = guard.take() {
+                    let _ = tracked.tree.terminate();
+                    let _ = tracked.child.kill();
+                    let _ = tracked.child.wait();
+                }
+                Err(AppError::Other(format!(
+                    "failed waiting for {command}: {error}"
+                )))
+            }
+        }
     }
 
     pub fn cancel(&self) {

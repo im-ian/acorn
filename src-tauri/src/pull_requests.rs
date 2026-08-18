@@ -28,7 +28,6 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -36,7 +35,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli_resolver;
 use crate::error::{AppError, AppResult};
-use crate::git_ops::{github_owner_repo, DiffImages, DiffPayload};
+use crate::git_ops::{
+    github_owner_repo, validate_commit_oid, validate_github_slug, DiffImages, DiffPayload,
+};
+
+// GitHub diff images cross the `gh` process boundary as raw bytes, then grow
+// again when encoded as a data URI and serialized into the renderer. Match
+// the local diff-preview ceiling so a repository-controlled image cannot
+// amplify an already-large CLI response across each of those copies.
+const MAX_REMOTE_DIFF_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
 /// PR state filter accepted from the frontend. Mirrors the values gh
 /// understands so we can pass it straight through.
@@ -373,6 +380,7 @@ impl ResolutionCache {
         self.entries.remove(repo_path);
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.entries.len()
     }
@@ -1137,12 +1145,13 @@ fn primary_email_for(token: &str) -> Option<String> {
 }
 
 fn git_user_email(repo_path: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(["config", "user.email"])
-        .output()
-        .ok()?;
+    let out = cli_resolver::run("git", |command| {
+        command
+            .arg("-C")
+            .arg(repo_path)
+            .args(["config", "user.email"]);
+    })
+    .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -1620,7 +1629,8 @@ fn resolve_issue_actor_avatars(view: &GhIssueView, token: &str) -> PrActorAvatar
 }
 
 fn resolve_actor_avatar_url(login: &str, token: &str) -> Option<String> {
-    let user_endpoint = format!("users/{login}");
+    let encoded_login = encode_github_api_segment(login);
+    let user_endpoint = format!("users/{encoded_login}");
     if let Some(url) = gh_api_json::<GhRestUser>(&user_endpoint, token)
         .ok()
         .and_then(|u| u.avatar_url)
@@ -1628,7 +1638,7 @@ fn resolve_actor_avatar_url(login: &str, token: &str) -> Option<String> {
         return Some(url);
     }
 
-    let app_endpoint = format!("apps/{login}");
+    let app_endpoint = format!("apps/{encoded_login}");
     gh_api_json::<GhRestApp>(&app_endpoint, token)
         .ok()
         .map(|app| format!("https://avatars.githubusercontent.com/in/{}?v=4", app.id))
@@ -1666,6 +1676,7 @@ struct GhRestApp {
 }
 
 pub fn get_pull_request_commit_diff(repo_path: &Path, sha: &str) -> AppResult<DiffPayload> {
+    validate_commit_oid(sha)?;
     let Some(slug) = github_owner_repo(repo_path)? else {
         return Err(AppError::Other(
             "origin remote is not a GitHub repository".into(),
@@ -1688,6 +1699,7 @@ pub fn get_pull_request_commit_diff_images(
     old_path: Option<&str>,
     new_path: Option<&str>,
 ) -> AppResult<DiffImages> {
+    validate_commit_oid(sha)?;
     let Some(slug) = github_owner_repo(repo_path)? else {
         return Err(AppError::Other(
             "origin remote is not a GitHub repository".into(),
@@ -1801,34 +1813,6 @@ pub fn resolve_commit_logins(
     }
 }
 
-fn validate_github_slug(slug: &str) -> AppResult<(&str, &str)> {
-    let (owner, name) = slug
-        .split_once('/')
-        .ok_or_else(|| AppError::Other(format!("invalid GitHub slug: {slug}")))?;
-    if owner.is_empty()
-        || name.is_empty()
-        || owner.contains('/')
-        || name.contains('/')
-        || !owner.bytes().all(is_github_slug_part_byte)
-        || !name.bytes().all(is_github_slug_part_byte)
-    {
-        return Err(AppError::Other(format!("invalid GitHub slug: {slug}")));
-    }
-    Ok((owner, name))
-}
-
-fn is_github_slug_part_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-}
-
-fn validate_commit_oid(oid: &str) -> AppResult<()> {
-    if oid.len() == 40 && oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Ok(())
-    } else {
-        Err(AppError::Other(format!("invalid commit oid: {oid}")))
-    }
-}
-
 fn build_commit_login_query(count: usize) -> String {
     let mut query = String::from("query($owner:String!,$name:String!");
     for i in 0..count {
@@ -1883,6 +1867,7 @@ impl CommitLoginCache {
         self.entries.insert(key, login);
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.entries.len()
     }
@@ -1921,14 +1906,18 @@ fn image_previews_for_commit(
 }
 
 fn fetch_raw_blob(slug: &str, git_ref: &str, path: &str, token: &str) -> AppResult<Vec<u8>> {
-    let endpoint = format!("repos/{slug}/contents/{path}?ref={git_ref}");
+    crate::git_ops::validate_relative_git_path(path)?;
+    let encoded_path = encode_github_api_path(path);
+    let endpoint = format!("repos/{slug}/contents/{encoded_path}");
     let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            "api",
-            "-H",
-            "Accept: application/vnd.github.raw",
-            &endpoint,
-        ]);
+        cmd.env("GH_TOKEN", token)
+            .env("GH_HOST", GH_HOST)
+            .arg("api")
+            .args(["--method", "GET"])
+            .args(["-H", "Accept: application/vnd.github.raw"])
+            .arg("--raw-field")
+            .arg(format!("ref={git_ref}"))
+            .arg(&endpoint);
     })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1939,10 +1928,20 @@ fn fetch_raw_blob(slug: &str, git_ref: &str, path: &str, token: &str) -> AppResu
         };
         return Err(AppError::Other(msg));
     }
-    Ok(output.stdout)
+    enforce_raw_blob_size(output.stdout, MAX_REMOTE_DIFF_IMAGE_BYTES)
+}
+
+fn enforce_raw_blob_size(bytes: Vec<u8>, max_bytes: usize) -> AppResult<Vec<u8>> {
+    if bytes.len() > max_bytes {
+        return Err(AppError::Other(format!(
+            "remote diff image byte limit exceeded (maximum {max_bytes})"
+        )));
+    }
+    Ok(bytes)
 }
 
 fn run_commit_diff(slug: &str, sha: &str, token: &str) -> AppResult<String> {
+    validate_commit_oid(sha)?;
     let endpoint = format!("repos/{slug}/commits/{sha}");
     let output = cli_resolver::run("gh", |cmd| {
         cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
@@ -1962,6 +1961,32 @@ fn run_commit_diff(slug: &str, sha: &str, token: &str) -> AppResult<String> {
         return Err(AppError::Other(msg));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn encode_github_api_path(path: &str) -> String {
+    percent_encode_github_api_value(path, true)
+}
+
+fn encode_github_api_segment(segment: &str) -> String {
+    percent_encode_github_api_value(segment, false)
+}
+
+fn percent_encode_github_api_value(value: &str, preserve_slashes: bool) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(byte, b'-' | b'.' | b'_' | b'~')
+            || (preserve_slashes && byte == b'/')
+        {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
 }
 
 fn run_pr_diff(slug: &str, number: u64, token: &str) -> AppResult<String> {
@@ -2265,64 +2290,31 @@ fn run_pr_merge(
     commit_body: Option<&str>,
     admin: bool,
 ) -> AppResult<()> {
-    use std::io::Write;
-    use std::process::Stdio;
-
-    // stdin-piped invocation can't go through `cli_resolver::run` (which is
-    // shaped for `output()`-style calls), so resolve the path manually and
-    // build the Command ourselves. NotFound during spawn invalidates the
-    // cache so the next attempt re-resolves.
-    let gh_path = cli_resolver::resolve("gh")?;
-    let mut cmd = Command::new(&gh_path);
-    cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-        "pr",
-        "merge",
-        &number.to_string(),
-        "--repo",
-        slug,
-        method.flag(),
-    ]);
-
-    // `--admin` instructs gh to use admin privileges to override branch
-    // protection rules. Required when checks are failing or pending but the
-    // user has the role to force-merge against repo policy.
-    if admin {
-        cmd.arg("--admin");
-    }
-
-    if method.accepts_message_override() {
-        if let Some(title) = commit_title {
-            if !title.trim().is_empty() {
-                cmd.args(["--subject", title]);
-            }
-        }
-        if let Some(body) = commit_body {
-            // Always pass --body even when empty so gh doesn't fall back to a
-            // user-config template on top of the supplied subject.
-            cmd.args(["--body", body]);
-        }
-    }
-
     // Older `gh` releases reject `--yes` as an unknown flag. Pipe a
     // confirmation through stdin instead — it answers any "Continue with
     // merge?" prompt without depending on a flag the local CLI may not have.
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                cli_resolver::invalidate("gh");
+    let number_s = number.to_string();
+    let output = cli_resolver::run_with_input("gh", b"y\n", |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "pr",
+            "merge",
+            &number_s,
+            "--repo",
+            slug,
+            method.flag(),
+        ]);
+        if admin {
+            cmd.arg("--admin");
+        }
+        if method.accepts_message_override() {
+            if let Some(title) = commit_title.filter(|title| !title.trim().is_empty()) {
+                cmd.args(["--subject", title]);
             }
-            cli_resolver::spawn_error("gh", e)
-        })?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        let _ = stdin.write_all(b"y\n");
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| AppError::Other(format!("failed waiting for gh: {e}")))?;
+            if let Some(body) = commit_body {
+                cmd.args(["--body", body]);
+            }
+        }
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
@@ -2399,40 +2391,18 @@ fn run_pr_state_change(
 /// pitfalls — bodies routinely contain backticks, `$`, and other characters
 /// that would need defensive quoting if passed as `--body "..."`.
 fn run_pr_edit_body(slug: &str, number: u64, token: &str, body: &str) -> AppResult<()> {
-    use std::io::Write;
-    use std::process::Stdio;
-
-    let gh_path = cli_resolver::resolve("gh")?;
-    let mut cmd = Command::new(&gh_path);
-    cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-        "pr",
-        "edit",
-        &number.to_string(),
-        "--repo",
-        slug,
-        "--body-file",
-        "-",
-    ]);
-
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                cli_resolver::invalidate("gh");
-            }
-            cli_resolver::spawn_error("gh", e)
-        })?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(body.as_bytes())
-            .map_err(|e| AppError::Other(format!("failed writing body to gh: {e}")))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| AppError::Other(format!("failed waiting for gh: {e}")))?;
+    let number_s = number.to_string();
+    let output = cli_resolver::run_with_input("gh", body.as_bytes(), |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "pr",
+            "edit",
+            &number_s,
+            "--repo",
+            slug,
+            "--body-file",
+            "-",
+        ]);
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
@@ -2446,41 +2416,18 @@ fn run_pr_edit_body(slug: &str, number: u64, token: &str, body: &str) -> AppResu
 }
 
 fn run_gh_comment(target: &str, slug: &str, number: u64, token: &str, body: &str) -> AppResult<()> {
-    use std::io::Write;
-    use std::process::Stdio;
-
-    let gh_path = cli_resolver::resolve("gh")?;
     let number_s = number.to_string();
-    let mut cmd = Command::new(&gh_path);
-    cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-        target,
-        "comment",
-        &number_s,
-        "--repo",
-        slug,
-        "--body-file",
-        "-",
-    ]);
-
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                cli_resolver::invalidate("gh");
-            }
-            cli_resolver::spawn_error("gh", e)
-        })?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(body.as_bytes())
-            .map_err(|e| AppError::Other(format!("failed writing comment to gh: {e}")))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| AppError::Other(format!("failed waiting for gh: {e}")))?;
+    let output = cli_resolver::run_with_input("gh", body.as_bytes(), |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            target,
+            "comment",
+            &number_s,
+            "--repo",
+            slug,
+            "--body-file",
+            "-",
+        ]);
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
@@ -2494,36 +2441,13 @@ fn run_gh_comment(target: &str, slug: &str, number: u64, token: &str, body: &str
 }
 
 fn run_issue_comment_update(slug: &str, comment_id: u64, token: &str, body: &str) -> AppResult<()> {
-    use std::io::Write;
-    use std::process::Stdio;
-
-    let gh_path = cli_resolver::resolve("gh")?;
     let endpoint = format!("repos/{slug}/issues/comments/{comment_id}");
     let payload = serde_json::json!({ "body": body }).to_string();
-    let mut cmd = Command::new(&gh_path);
-    cmd.env("GH_TOKEN", token)
-        .env("GH_HOST", GH_HOST)
-        .args(["api", "-X", "PATCH", &endpoint, "--input", "-", "--silent"]);
-
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                cli_resolver::invalidate("gh");
-            }
-            cli_resolver::spawn_error("gh", e)
-        })?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(payload.as_bytes())
-            .map_err(|e| AppError::Other(format!("failed writing comment update to gh: {e}")))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| AppError::Other(format!("failed waiting for gh: {e}")))?;
+    let output = cli_resolver::run_with_input("gh", payload.as_bytes(), |cmd| {
+        cmd.env("GH_TOKEN", token)
+            .env("GH_HOST", GH_HOST)
+            .args(["api", "-X", "PATCH", &endpoint, "--input", "-", "--silent"]);
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
@@ -2577,8 +2501,6 @@ pub fn generate_pr_commit_message(
     ai: crate::ai::AiExecutionRequest,
     prompt: String,
 ) -> AppResult<GeneratedCommitMessage> {
-    let resolved = ai.resolve()?;
-
     let Some(slug) = github_owner_repo(repo_path)? else {
         return Err(AppError::Other(
             "Origin remote is not a GitHub repository.".to_string(),
@@ -2600,7 +2522,7 @@ pub fn generate_pr_commit_message(
 
     let (view, diff) = context;
     let prompt = build_commit_message_prompt(method, &prompt, &view, &diff);
-    let raw = crate::ai::run_resolved_oneshot(&resolved, &prompt, "Settings → Agents")?;
+    let raw = crate::ai::run_passive_text(&ai, &prompt, "Settings → Agents")?;
     Ok(parse_commit_message_response(&raw))
 }
 
@@ -3349,6 +3271,25 @@ mod tests {
         assert!(validate_commit_oid("0123456789abcdef0123456789abcdef0123456").is_err());
         assert!(validate_commit_oid("0123456789abcdef0123456789abcdef0123456\"").is_err());
         assert!(validate_commit_oid("0123456789abcdef0123456789abcdef0123456g").is_err());
+    }
+
+    #[test]
+    fn github_api_path_encoding_separates_path_and_query_data() {
+        assert_eq!(
+            encode_github_api_path("images/a b?#%/한글.png"),
+            "images/a%20b%3F%23%25/%ED%95%9C%EA%B8%80.png"
+        );
+        assert_eq!(encode_github_api_segment("app/name?#"), "app%2Fname%3F%23");
+    }
+
+    #[test]
+    fn remote_diff_images_are_rejected_before_data_uri_amplification() {
+        assert_eq!(
+            enforce_raw_blob_size(vec![0; 4], 4).expect("at-limit image"),
+            vec![0; 4]
+        );
+        let error = enforce_raw_blob_size(vec![0; 5], 4).expect_err("oversized image");
+        assert!(error.to_string().contains("byte limit exceeded"));
     }
 
     #[test]

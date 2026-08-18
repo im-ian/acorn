@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -13,6 +13,8 @@ use crate::cli_resolver;
 const APP_SERVER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
 const APP_SERVER_PAGE_LIMIT: u32 = 100;
 const APP_SERVER_MAX_PAGES: usize = 10;
+const APP_SERVER_MAX_LINE_BYTES: usize = 1024 * 1024;
+const APP_SERVER_EVENT_BUFFER: usize = 32;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -285,16 +287,25 @@ fn codex_model_catalog() -> Result<Vec<CodexCatalogModel>, String> {
         .stdout
         .take()
         .ok_or_else(|| "Codex app-server stdout was unavailable".to_string())?;
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(APP_SERVER_EVENT_BUFFER);
     std::thread::Builder::new()
         .name("codex-model-catalog-reader".to_string())
         .spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let parsed = line.map_err(|error| error.to_string()).and_then(|line| {
-                    serde_json::from_str::<Value>(&line).map_err(|e| e.to_string())
-                });
-                if sender.send(parsed).is_err() {
-                    return;
+            let mut reader = BufReader::new(stdout);
+            loop {
+                match read_bounded_utf8_line(&mut reader, APP_SERVER_MAX_LINE_BYTES) {
+                    Ok(Some(line)) => {
+                        let parsed =
+                            serde_json::from_str::<Value>(&line).map_err(|error| error.to_string());
+                        if sender.send(parsed).is_err() {
+                            return;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        return;
+                    }
                 }
             }
             let _ = sender.send(Err("Codex app-server closed before responding".to_string()));
@@ -347,6 +358,28 @@ fn codex_model_catalog() -> Result<Vec<CodexCatalogModel>, String> {
         }
     }
     Err("Codex model/list pagination exceeded the safety limit".to_string())
+}
+
+fn read_bounded_utf8_line<R: BufRead>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> Result<Option<String>, String> {
+    let read_limit = max_bytes
+        .checked_add(1)
+        .ok_or_else(|| "Codex response line limit overflowed".to_string())?;
+    let mut bytes = Vec::new();
+    let read = Read::take(reader, read_limit as u64)
+        .read_until(b'\n', &mut bytes)
+        .map_err(|error| error.to_string())?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if bytes.len() > max_bytes {
+        return Err(format!("Codex response line exceeded {max_bytes} bytes"));
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| format!("Codex response was not UTF-8: {error}"))
 }
 
 fn send_app_server_message(stdin: &mut ChildStdin, message: &Value) -> Result<(), String> {
@@ -600,5 +633,25 @@ mod tests {
             claude_models_from_help(""),
             vec!["default", "opus", "sonnet", "haiku"]
         );
+    }
+
+    #[test]
+    fn codex_catalog_reader_bounds_line_length() {
+        let mut exact = vec![b'x'; APP_SERVER_MAX_LINE_BYTES - 1];
+        exact.push(b'\n');
+        let mut exact = std::io::Cursor::new(exact);
+        assert_eq!(
+            read_bounded_utf8_line(&mut exact, APP_SERVER_MAX_LINE_BYTES)
+                .unwrap()
+                .expect("line")
+                .len(),
+            APP_SERVER_MAX_LINE_BYTES
+        );
+
+        let mut oversized = vec![b'x'; APP_SERVER_MAX_LINE_BYTES];
+        oversized.push(b'\n');
+        let mut oversized = std::io::Cursor::new(oversized);
+        let error = read_bounded_utf8_line(&mut oversized, APP_SERVER_MAX_LINE_BYTES).unwrap_err();
+        assert!(error.contains("exceeded"));
     }
 }

@@ -1083,7 +1083,7 @@ export const api = {
   /**
    * Force the bridge to reconnect — drops the cached control connection
    * and re-spawns the daemon if necessary. Used by the Settings
-   * "Restart daemon" button after a manual `acornd shutdown`.
+   * "Restart daemon" button after an app-authorized shutdown.
    */
   daemonRestart(): Promise<void> {
     return invoke<void>("daemon_restart");
@@ -1239,6 +1239,13 @@ export const api = {
   fsPrepareAsset(path: string): Promise<FsPrepareAssetResult> {
     return invoke<FsPrepareAssetResult>("fs_prepare_asset", { path });
   },
+  fsReleaseAsset(capability: string): Promise<void> {
+    return invoke<void>("fs_release_asset", { capability });
+  },
+
+  openExternalUrl(url: string): Promise<boolean> {
+    return invoke<boolean>("open_external_url", { url });
+  },
   fsGitDiffLines(path: string): Promise<FsLineDiffEntry[]> {
     return invoke<FsLineDiffEntry[]>("fs_git_diff_lines", { path });
   },
@@ -1325,6 +1332,8 @@ export interface FsReadFileResult {
 /** Mirror of `crate::fs_explorer::PrepareAssetResult`. */
 export interface FsPrepareAssetResult {
   size: number;
+  asset_path: string;
+  capability: string;
 }
 
 /** Mirror of `crate::fs_explorer::LineDiffEntry`. */

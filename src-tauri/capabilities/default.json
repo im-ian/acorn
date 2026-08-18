@@ -4,38 +4,28 @@
   "description": "Capability for the main window",
   "windows": ["main"],
   "permissions": [
-    "core:path:default",
-    "core:event:default",
-    "core:window:default",
-    "core:webview:default",
-    "core:app:default",
-    "core:resources:default",
+    "core:path:allow-resolve-directory",
+    "core:path:allow-join",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-scale-factor",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
     "core:window:allow-destroy",
+    "core:app:allow-version",
+    "core:resources:allow-close",
     "clipboard-manager:allow-write-text",
-    {
-      "identifier": "opener:allow-open-url",
-      "allow": [
-        { "url": "http://*" },
-        { "url": "https://*" },
-        { "url": "mailto:*" }
-      ]
-    },
-    {
-      "identifier": "opener:allow-open-path",
-      "allow": [
-        { "path": "$APPLOCALDATA/themes" },
-        { "path": "$APPLOCALDATA/themes/*" },
-        { "path": "$APPLOCALDATA/themes/**/*" }
-      ]
-    },
     "dialog:allow-open",
     "fs:allow-exists",
+    "fs:allow-fstat",
+    "fs:allow-lstat",
     "fs:allow-mkdir",
+    "fs:allow-open",
+    "fs:allow-read",
     "fs:allow-read-dir",
-    "fs:allow-read-text-file",
     "fs:allow-remove",
-    "fs:allow-stat",
-    "fs:allow-write-file",
+    "fs:allow-write",
     "fs:allow-write-text-file",
     {
       "identifier": "fs:scope",
@@ -54,8 +44,6 @@
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
     "notification:allow-notify",
-    "updater:allow-check",
-    "updater:allow-download-and-install",
-    "process:allow-restart"
+    "notification:allow-register-listener"
   ]
 }

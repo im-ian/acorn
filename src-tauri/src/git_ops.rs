@@ -126,6 +126,7 @@ pub struct DiffFile {
 /// given commit. Returns `None` when there is no `origin` remote, the URL
 /// cannot be parsed, or the host is not recognised as GitHub.
 pub fn web_url_for_commit(repo_path: &Path, sha: &str) -> AppResult<Option<String>> {
+    validate_commit_oid(sha)?;
     let Some(owner_repo) = github_owner_repo(repo_path)? else {
         return Ok(None);
     };
@@ -180,18 +181,48 @@ fn parse_github_owner_repo(remote: &str) -> Option<String> {
         return None;
     }
 
-    let owner_repo = path.trim_start_matches('/').trim_end_matches(".git");
-    if owner_repo.is_empty() || !owner_repo.contains('/') {
-        return None;
-    }
+    let owner_repo = path.strip_suffix(".git").unwrap_or(path);
+    validate_github_slug(owner_repo).ok()?;
     Some(owner_repo.to_string())
+}
+
+pub(crate) fn validate_github_slug(slug: &str) -> AppResult<(&str, &str)> {
+    let (owner, name) = slug
+        .split_once('/')
+        .ok_or_else(|| AppError::Other(format!("invalid GitHub slug: {slug}")))?;
+    if owner.is_empty()
+        || name.is_empty()
+        || owner.contains('/')
+        || name.contains('/')
+        || !is_github_slug_part(owner)
+        || !is_github_slug_part(name)
+    {
+        return Err(AppError::Other(format!("invalid GitHub slug: {slug}")));
+    }
+    Ok((owner, name))
+}
+
+fn is_github_slug_part(value: &str) -> bool {
+    !matches!(value, "." | "..") && value.bytes().all(is_github_slug_part_byte)
+}
+
+fn is_github_slug_part_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+}
+
+pub(crate) fn validate_commit_oid(oid: &str) -> AppResult<()> {
+    if oid.len() == 40 && oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(AppError::Other(format!("invalid commit oid: {oid}")))
+    }
 }
 
 /// Test whether `host` ultimately points at github.com.
 ///
-/// Direct match for plain `github.com`. For everything else we resolve via
-/// `ssh -G <host>` — multi-identity setups commonly alias github.com in
-/// `~/.ssh/config` with blocks like:
+/// Direct match for plain `github.com`. For everything else we inspect only a
+/// simple, exact `Host` block in `~/.ssh/config` — multi-identity setups
+/// commonly alias github.com with blocks like:
 ///
 /// ```text
 /// Host github-im-ian
@@ -199,9 +230,9 @@ fn parse_github_owner_repo(remote: &str) -> Option<String> {
 ///     IdentityFile ~/.ssh/id_im_ian
 /// ```
 ///
-/// which produces remotes such as `git@github-im-ian:org/repo.git`. Without
-/// alias resolution we'd reject those as "not GitHub" even though they're
-/// just GitHub-with-routing.
+/// which produces remotes such as `git@github-im-ian:org/repo.git`. We must not
+/// use `ssh -G` here: the alias originates in a repository-controlled remote,
+/// and OpenSSH configuration evaluation can execute `Match exec` commands.
 fn is_github_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("github.com") {
         return true;
@@ -233,8 +264,8 @@ impl SshHostnameCache {
     }
 
     fn insert(&mut self, alias: String, hostname: Option<String>) {
-        if self.entries.contains_key(&alias) {
-            self.entries.insert(alias, hostname);
+        if let Some(entry) = self.entries.get_mut(&alias) {
+            *entry = hostname;
             return;
         }
         if self.capacity == 0 {
@@ -250,6 +281,7 @@ impl SshHostnameCache {
         self.entries.insert(alias, hostname);
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.entries.len()
     }
@@ -266,8 +298,8 @@ fn cached_ssh_hostname(alias: &str) -> Option<String> {
     }
     let cache = ssh_hostname_cache();
 
-    // A poisoned lock would otherwise silently skip the cache and re-spawn
-    // `ssh -G` on every call; the map itself stays valid, so recover it.
+    // A poisoned lock would otherwise silently skip the cache and re-read the
+    // config on every call; the map itself stays valid, so recover it.
     {
         let map = cache
             .lock()
@@ -285,10 +317,8 @@ fn cached_ssh_hostname(alias: &str) -> Option<String> {
     resolved
 }
 
-/// Aliases come from git remote URLs, i.e. repo-controlled data. Only pass
-/// plain host-shaped strings to `ssh -G`: anything with spaces, globs, or an
-/// option-like leading `-` could match an unexpected wildcard `Host` block
-/// (whose `ProxyCommand` OpenSSH would then execute) or be parsed as a flag.
+/// Aliases come from git remote URLs, i.e. repo-controlled data. Restrict them
+/// to plain host-shaped strings before comparing them with local config.
 fn is_plain_hostname(alias: &str) -> bool {
     !alias.is_empty()
         && alias.len() <= 255
@@ -302,24 +332,77 @@ fn resolve_ssh_hostname(alias: &str) -> Option<String> {
     if !is_plain_hostname(alias) {
         return None;
     }
-    let out = std::process::Command::new("ssh")
-        .args(["-G", alias])
-        .output()
-        .ok()?;
-    if !out.status.success() {
+    let config = acorn_paths::user_home_dir().ok()?.join(".ssh/config");
+    resolve_ssh_hostname_from_config(alias, &config)
+}
+
+const MAX_SSH_CONFIG_BYTES: u64 = 1024 * 1024;
+
+fn resolve_ssh_hostname_from_config(alias: &str, config: &Path) -> Option<String> {
+    let (file, metadata) = acorn_platform::fs::open_regular_nofollow(config).ok()?;
+    if metadata.len() > MAX_SSH_CONFIG_BYTES {
         return None;
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    for line in stdout.lines() {
-        // `ssh -G` lowercases keys; the hostname line is exactly:
-        //     hostname github.com
-        if let Some(rest) = line.strip_prefix("hostname ") {
-            let h = rest.trim();
-            if !h.is_empty() {
-                return Some(h.to_string());
+
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_SSH_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_SSH_CONFIG_BYTES {
+        return None;
+    }
+    let config = String::from_utf8(bytes).ok()?;
+    parse_simple_ssh_hostname(alias, &config)
+}
+
+/// Resolve only literal `Host` blocks. Wildcards, negation, `Include`, and
+/// `Match` can alter OpenSSH's first-value-wins semantics or execute helpers;
+/// rejecting those cases preserves a useful common alias without trying to
+/// reimplement or evaluate OpenSSH configuration.
+fn parse_simple_ssh_hostname(alias: &str, config: &str) -> Option<String> {
+    let mut matching_literal_block = false;
+
+    for raw_line in config.lines() {
+        let line = raw_line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let Some(keyword) = fields.next() else {
+            continue;
+        };
+
+        if keyword.eq_ignore_ascii_case("include") {
+            return None;
+        }
+        if keyword.eq_ignore_ascii_case("match") {
+            matching_literal_block = false;
+            continue;
+        }
+        if keyword.eq_ignore_ascii_case("host") {
+            let patterns: Vec<&str> = fields.collect();
+            let all_literal = !patterns.is_empty()
+                && patterns.iter().all(|pattern| {
+                    !pattern
+                        .bytes()
+                        .any(|byte| matches!(byte, b'*' | b'?' | b'!' | b'[' | b']'))
+                        && is_plain_hostname(pattern)
+                });
+            matching_literal_block = all_literal
+                && patterns
+                    .iter()
+                    .any(|pattern| pattern.eq_ignore_ascii_case(alias));
+            continue;
+        }
+        if matching_literal_block && keyword.eq_ignore_ascii_case("hostname") {
+            let hostname = fields.next()?;
+            if fields.next().is_some() || !is_plain_hostname(hostname) {
+                return None;
             }
+            return Some(hostname.to_string());
         }
     }
+
     None
 }
 
@@ -1023,7 +1106,10 @@ fn read_workdir_image(repo: &Repository, path: &str, max_bytes: usize) -> Option
     }
     let file = File::open(resolved).ok()?;
     let open_meta = file.metadata().ok()?;
-    if !open_meta.is_file() || open_meta.len() > max_bytes_u64 {
+    if !open_meta.is_file()
+        || open_meta.len() > max_bytes_u64
+        || !same_workdir_file(&metadata, &open_meta)
+    {
         return None;
     }
 
@@ -1038,6 +1124,18 @@ fn read_workdir_image(repo: &Repository, path: &str, max_bytes: usize) -> Option
         return None;
     }
     Some(bytes)
+}
+
+#[cfg(unix)]
+fn same_workdir_file(before: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    before.dev() == opened.dev() && before.ino() == opened.ino()
+}
+
+#[cfg(not(unix))]
+fn same_workdir_file(_before: &std::fs::Metadata, _opened: &std::fs::Metadata) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -1134,6 +1232,96 @@ mod tests {
     fn ssh_hostname_validation_rejects_oversized_cache_keys() {
         assert!(is_plain_hostname(&"a".repeat(255)));
         assert!(!is_plain_hostname(&"a".repeat(256)));
+    }
+
+    #[test]
+    fn simple_ssh_alias_parser_accepts_only_literal_blocks() {
+        let config = r#"
+            Host github-work github-personal
+                User git
+                HostName github.com
+
+            Host example
+                HostName example.com
+        "#;
+        assert_eq!(
+            parse_simple_ssh_hostname("github-work", config).as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(
+            parse_simple_ssh_hostname("example", config).as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(parse_simple_ssh_hostname("missing", config), None);
+
+        for unsafe_config in [
+            "Host github-*\n  HostName github.com",
+            "Host * github-work\n  HostName github.com",
+            "Include ~/.ssh/conf.d/*\nHost github-work\n HostName github.com",
+            "Match exec true\n HostName github.com",
+        ] {
+            assert_eq!(
+                parse_simple_ssh_hostname("github-work", unsafe_config),
+                None,
+                "{unsafe_config}"
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_alias_config_read_is_bounded_and_rejects_symlinks() {
+        let scratch = tempfile::tempdir().unwrap();
+        let config = scratch.path().join("config");
+        std::fs::write(&config, "Host github-work\n HostName github.com\n").unwrap();
+        assert_eq!(
+            resolve_ssh_hostname_from_config("github-work", &config).as_deref(),
+            Some("github.com")
+        );
+
+        std::fs::write(&config, vec![b'x'; MAX_SSH_CONFIG_BYTES as usize + 1]).unwrap();
+        assert_eq!(
+            resolve_ssh_hostname_from_config("github-work", &config),
+            None
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let target = scratch.path().join("target");
+            let link = scratch.path().join("link");
+            std::fs::write(&target, "Host github-work\n HostName github.com\n").unwrap();
+            symlink(&target, &link).unwrap();
+            assert_eq!(resolve_ssh_hostname_from_config("github-work", &link), None);
+        }
+    }
+
+    #[test]
+    fn github_remote_parser_accepts_only_an_exact_owner_and_repository() {
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/acme/widgets.git"),
+            Some("acme/widgets".to_string())
+        );
+        assert_eq!(
+            parse_github_owner_repo("git@github.com:acme/widgets.git"),
+            Some("acme/widgets".to_string())
+        );
+        assert_eq!(
+            parse_github_owner_repo("ssh://git@github.com/acme/widgets.git"),
+            Some("acme/widgets".to_string())
+        );
+
+        for remote in [
+            "https://github.com/../widgets",
+            "https://github.com/acme/..",
+            "https://github.com/acme/widgets/../../other",
+            "https://github.com/acme/widgets?ref=other",
+            "https://github.com/acme/widgets%2fother",
+            "https://github.com/acme/widgets/extra",
+            "https://github.com/acme/widgets.git#fragment",
+            "https://github.com/acme/widgets\nother",
+        ] {
+            assert_eq!(parse_github_owner_repo(remote), None, "{remote}");
+        }
     }
 
     #[test]
