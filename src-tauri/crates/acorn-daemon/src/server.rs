@@ -189,7 +189,7 @@ impl Daemon {
                         })
                         .ok();
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(err) if retryable_accept_error(&err) => {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
                 Err(err) => {
@@ -775,6 +775,25 @@ impl Daemon {
     }
 }
 
+fn retryable_accept_error(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::WouldBlock {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        // A Windows named-pipe client can disconnect after ConnectNamedPipe
+        // succeeds but before interprocess finishes configuring the accepted
+        // stream. The listener has already staged its next pipe instance, so
+        // ERROR_NO_DATA / ERROR_PIPE_NOT_CONNECTED are transient accept
+        // outcomes rather than reasons to stop the daemon's accept loop.
+        matches!(error.raw_os_error(), Some(232 | 233))
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 struct ConnectionPermit {
     active: Arc<AtomicUsize>,
 }
@@ -1022,6 +1041,21 @@ mod tests {
         assert!(ConnectionPermit::try_acquire(active.clone(), 1).is_none());
         drop(first);
         assert!(ConnectionPermit::try_acquire(active.clone(), 1).is_some());
+    }
+
+    #[test]
+    fn would_block_accept_errors_are_retryable() {
+        let error = io::Error::from(io::ErrorKind::WouldBlock);
+        assert!(retryable_accept_error(&error));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn disconnected_windows_pipe_accept_errors_are_retryable() {
+        for code in [232, 233] {
+            assert!(retryable_accept_error(&io::Error::from_raw_os_error(code)));
+        }
+        assert!(!retryable_accept_error(&io::Error::from_raw_os_error(5)));
     }
 
     #[test]

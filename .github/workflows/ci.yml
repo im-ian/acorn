@@ -235,6 +235,7 @@ jobs:
           $smokeDataDir = Join-Path $env:RUNNER_TEMP "acorn-daemon-smoke-$([guid]::NewGuid().ToString('N'))"
           $previousDataDir = [Environment]::GetEnvironmentVariable("ACORN_DATA_DIR", "Process")
           $daemonLaunched = $false
+          $smokeSucceeded = $false
           [int]$daemonPid = 0
 
           try {
@@ -280,20 +281,14 @@ jobs:
             if (!$ready) {
               throw "acornd did not become ready: $($statusOutput -join [Environment]::NewLine)"
             }
-            if ($statusOutput -notcontains "running" -or $statusOutput -notcontains "version=$expectedVersion") {
-              throw "acornd status omitted the running state or expected version ${expectedVersion}: $($statusOutput -join [Environment]::NewLine)"
+            if (
+              $statusOutput -notcontains "running" -or
+              $statusOutput -notcontains "version=$expectedVersion" -or
+              $statusOutput -notcontains "sessions=0/0"
+            ) {
+              throw "acornd status omitted the expected fresh-daemon state: $($statusOutput -join [Environment]::NewLine)"
             }
             $statusOutput | Write-Host
-
-            $sessionsOutput = @(& $acornd list-sessions 2>&1)
-            $sessionsExit = $LASTEXITCODE
-            if ($sessionsExit -ne 0) {
-              throw "acornd list-sessions failed with exit code ${sessionsExit}: $($sessionsOutput -join [Environment]::NewLine)"
-            }
-            if ($sessionsOutput -notcontains "(no sessions)") {
-              throw "fresh acornd returned an unexpected session list: $($sessionsOutput -join [Environment]::NewLine)"
-            }
-            $sessionsOutput | Write-Host
 
             # The public shutdown CLI is intentionally absent: a same-user
             # process must not be able to terminate the user's daemon. This
@@ -335,6 +330,7 @@ jobs:
               throw "acornd did not stop with the expected status exit 2: $($stoppedStatusOutput -join [Environment]::NewLine)"
             }
             $daemonLaunched = $false
+            $smokeSucceeded = $true
           }
           finally {
             if ($daemonLaunched -and (Test-Path -LiteralPath $acornd -PathType Leaf)) {
@@ -357,6 +353,14 @@ jobs:
                   Stop-Process -Id $daemonPid -Force -ErrorAction SilentlyContinue
                   Wait-Process -Id $daemonPid -Timeout 5 -ErrorAction SilentlyContinue
                 }
+              }
+            }
+
+            if (!$smokeSucceeded) {
+              $daemonLog = Join-Path $smokeDataDir "daemon.log"
+              if (Test-Path -LiteralPath $daemonLog -PathType Leaf) {
+                Write-Host "--- daemon.log (last 200 lines) ---"
+                Get-Content -LiteralPath $daemonLog -Tail 200 -ErrorAction Continue | Write-Host
               }
             }
 
