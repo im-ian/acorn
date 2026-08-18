@@ -194,20 +194,12 @@ printf '<<<ACORN_CLI_PATH>>>%s<<<END>>>' \"$_acorn_path\"",
                     shell.display()
                 ))
             })?;
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let extracted = extract_path(&stdout).map(str::trim).unwrap_or("");
-        if extracted.is_empty() {
-            return Err(AppError::Other(format!(
-            "`{name}` not found in your shell PATH. Install it and ensure it's available in your login shell."
-        )));
-        }
-        let path = PathBuf::from(extracted);
-        if !path.is_absolute() {
-            return Err(AppError::Other(format!(
-                "shell returned a non-absolute path for `{name}`: {extracted}"
-            )));
-        }
-        Ok(path)
+        resolve_from_shell_output(
+            name,
+            &String::from_utf8_lossy(&out.stdout),
+            &String::from_utf8_lossy(&out.stderr),
+            &out.status.to_string(),
+        )
     }
 }
 
@@ -226,34 +218,82 @@ fn windows_resolve(name: &str) -> AppResult<PathBuf> {
             "failed to invoke where.exe to resolve {name}: {err}"
         ))
     })?;
-    first_existing_windows_command(&output.stdout).ok_or_else(|| {
-        AppError::Other(format!(
-            "`{name}` not found in PATH. Install it and ensure it is available to Windows."
-        ))
-    })
+    if let Some(path) = first_existing_windows_command(&output.stdout)? {
+        return Ok(path);
+    }
+    if !output.status.success() && output.status.code() != Some(1) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        let detail = if stderr.is_empty() {
+            output.status.to_string()
+        } else {
+            format!("{}: {stderr}", output.status)
+        };
+        return Err(AppError::Other(format!(
+            "where.exe failed while resolving `{name}`: {detail}"
+        )));
+    }
+    Err(AppError::Other(format!(
+        "`{name}` not found in PATH. Install it and ensure it is available to Windows."
+    )))
+}
+
+#[cfg(windows)]
+fn windows_where_exe() -> AppResult<PathBuf> {
+    let Some(system_root) = std::env::var_os("SystemRoot") else {
+        return Ok(PathBuf::from("where.exe"));
+    };
+    let candidate = PathBuf::from(system_root)
+        .join("System32")
+        .join("where.exe");
+    match candidate.metadata() {
+        Ok(metadata) if metadata.is_file() => Ok(candidate),
+        Ok(_) => Ok(PathBuf::from("where.exe")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(PathBuf::from("where.exe"))
+        }
+        Err(error) => Err(AppError::Other(format!(
+            "failed to inspect Windows command resolver {}: {error}",
+            candidate.display()
+        ))),
+    }
 }
 
 /// Select the first executable path emitted by `where.exe`. Windows editor
 /// shims are commonly `.cmd`/`.bat` files, so retain those alongside native
 /// executables while rejecting extensionless Unix shims and PowerShell scripts.
 #[cfg(any(windows, test))]
-fn first_existing_windows_command(stdout: &[u8]) -> Option<PathBuf> {
-    String::from_utf8_lossy(stdout)
+fn first_existing_windows_command(stdout: &[u8]) -> AppResult<Option<PathBuf>> {
+    for path in String::from_utf8_lossy(stdout)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(PathBuf::from)
-        .find(|path| {
-            let launchable_extension = path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| {
-                    ["exe", "com", "cmd", "bat"]
-                        .iter()
-                        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-                });
-            path.is_absolute() && path.is_file() && launchable_extension
-        })
+    {
+        let launchable_extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                ["exe", "com", "cmd", "bat"]
+                    .iter()
+                    .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+            });
+        if !path.is_absolute() || !launchable_extension {
+            continue;
+        }
+        match path.metadata() {
+            Ok(metadata) if metadata.is_file() => return Ok(Some(path)),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(AppError::Other(format!(
+                    "failed to inspect Windows command candidate {}: {error}",
+                    path.display()
+                )))
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Pull the resolved-path payload out of the marker we wrap around
@@ -266,6 +306,39 @@ fn extract_path(stdout: &str) -> Option<&str> {
     let rest = &stdout[start..];
     let end = rest.find(end_marker)?;
     Some(&rest[..end])
+}
+
+#[cfg(any(not(windows), test))]
+fn resolve_from_shell_output(
+    name: &str,
+    stdout: &str,
+    stderr: &str,
+    status: &str,
+) -> AppResult<PathBuf> {
+    let extracted = extract_path(stdout).ok_or_else(|| {
+        let stderr = stderr.trim();
+        let detail = if stderr.is_empty() {
+            format!("login shell exited with {status}")
+        } else {
+            format!("login shell exited with {status}: {stderr}")
+        };
+        AppError::Other(format!(
+            "failed to resolve `{name}` because the {detail} before returning a CLI path"
+        ))
+    })?;
+    let extracted = extracted.trim();
+    if extracted.is_empty() {
+        return Err(AppError::Other(format!(
+            "`{name}` not found in your shell PATH. Install it and ensure it's available in your login shell."
+        )));
+    }
+    let path = PathBuf::from(extracted);
+    if !path.is_absolute() {
+        return Err(AppError::Other(format!(
+            "shell returned a non-absolute path for `{name}`: {extracted}"
+        )));
+    }
+    Ok(path)
 }
 
 /// Test-only helper to manipulate the cache directly. Production code should
@@ -313,6 +386,35 @@ mod tests {
     }
 
     #[test]
+    fn shell_output_preserves_startup_errors_when_markers_are_missing() {
+        let error = resolve_from_shell_output(
+            "codex",
+            "shell banner only",
+            "zsh: /private/.zshrc: Permission denied",
+            "exit status: 1",
+        )
+        .expect_err("missing markers must remain a shell failure");
+        let message = error.to_string();
+
+        assert!(message.contains("Permission denied"), "got: {message}");
+        assert!(message.contains("exit status: 1"), "got: {message}");
+        assert!(!message.contains("not found in your shell PATH"));
+    }
+
+    #[test]
+    fn shell_output_keeps_empty_markers_as_a_missing_cli() {
+        let error = resolve_from_shell_output(
+            "codex",
+            "<<<ACORN_CLI_PATH>>><<<END>>>",
+            "",
+            "exit status: 0",
+        )
+        .expect_err("an empty path must remain a missing CLI");
+
+        assert!(error.to_string().contains("not found in your shell PATH"));
+    }
+
+    #[test]
     fn windows_command_output_accepts_cmd_shims_and_skips_ps1() {
         let directory = tempfile::tempdir().unwrap();
         let extensionless = directory.path().join("code");
@@ -329,9 +431,29 @@ mod tests {
         );
 
         assert_eq!(
-            first_existing_windows_command(output.as_bytes()),
+            first_existing_windows_command(output.as_bytes()).unwrap(),
             Some(command)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn windows_command_output_preserves_candidate_access_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let command = directory.path().join("code.cmd");
+        std::fs::write(&command, b"@echo off").unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let output = format!("{}\r\n", command.display());
+        let result = first_existing_windows_command(output.as_bytes());
+
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = result.expect_err("inaccessible candidate must remain an error");
+        assert!(error
+            .to_string()
+            .contains("failed to inspect Windows command candidate"));
     }
 
     #[test]

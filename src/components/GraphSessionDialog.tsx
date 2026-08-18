@@ -32,6 +32,7 @@ import {
   Modal,
   ModalFooter,
   ModalHeader,
+  Notice,
   Select,
   TextInput,
   type SelectItem,
@@ -79,6 +80,9 @@ export function GraphSessionDialog({
   const [agentCapabilities, setAgentCapabilities] =
     useState<GoalAgentCapabilities | null>(null);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
+  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(
+    null,
+  );
   const [customModel, setCustomModel] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +96,7 @@ export function GraphSessionDialog({
     );
     setAgentCapabilities(null);
     setCapabilitiesLoading(false);
+    setCapabilitiesError(null);
     setCustomModel(false);
     setSubmitting(false);
     setError(null);
@@ -103,18 +108,23 @@ export function GraphSessionDialog({
     if (!hasModelCatalog(provider)) {
       setAgentCapabilities(null);
       setCapabilitiesLoading(false);
+      setCapabilitiesError(null);
       return;
     }
     let cancelled = false;
     setAgentCapabilities(null);
     setCapabilitiesLoading(true);
+    setCapabilitiesError(null);
     void api
       .getGoalAgentCapabilities(provider)
       .then((capabilities) => {
         if (!cancelled) setAgentCapabilities(capabilities);
       })
-      .catch(() => {
-        if (!cancelled) setAgentCapabilities(null);
+      .catch((capabilityError: unknown) => {
+        if (!cancelled) {
+          setAgentCapabilities(null);
+          setCapabilitiesError(String(capabilityError));
+        }
       })
       .finally(() => {
         if (!cancelled) setCapabilitiesLoading(false);
@@ -133,6 +143,7 @@ export function GraphSessionDialog({
     draft.objective.trim().length > 0 &&
     validation.valid &&
     !submitting;
+  const capabilityWarning = agentCapabilities?.warning ?? capabilitiesError;
 
   const modelOptions = useMemo<SelectItem[]>(() => {
     const models = agentCapabilities?.models ?? [];
@@ -411,6 +422,16 @@ export function GraphSessionDialog({
               )}
             </Field>
           </div>
+          {capabilityWarning ? (
+            <Notice
+              tone="neutral"
+              density="compact"
+              className="col-span-2"
+              data-graph-capability-warning
+            >
+              {capabilityWarning}
+            </Notice>
+          ) : null}
         </div>
         <GraphPresetToolbar
           graph={draft}
