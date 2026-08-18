@@ -10,9 +10,10 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { api } from "../lib/api";
+import { api, type WorktreeRemoval } from "../lib/api";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { discardRemovedWorktreesWithRetry } from "../lib/operationToasts";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
 import { basenamePath, projectRootPaths } from "../lib/projectFolders";
 import {
@@ -629,9 +630,6 @@ export function ProjectSettingsModal({
         target.path,
         targetSessions.length > 0,
       );
-      if (removedWorktree) {
-        await api.discardRemovedWorktree(removedWorktree);
-      }
       setConfirmRemove(null);
       setWorktrees((current) =>
         current.filter(
@@ -640,6 +638,7 @@ export function ProjectSettingsModal({
             worktree.path !== target.path,
         ),
       );
+      await discardRemovedWorktreesWithRetry(removedWorktree);
     } catch (e) {
       setWorktreeError({ kind: "remove", message: String(e) });
     } finally {
@@ -681,6 +680,7 @@ export function ProjectSettingsModal({
     setRemovingUnused(true);
     setWorktreeError(null);
     const removedKeys = new Set<string>();
+    const removals: WorktreeRemoval[] = [];
     const failures: string[] = [];
     try {
       for (const target of targets) {
@@ -695,7 +695,7 @@ export function ProjectSettingsModal({
             false,
           );
           if (removedWorktree) {
-            await api.discardRemovedWorktree(removedWorktree);
+            removals.push(removedWorktree);
           }
           removedKeys.add(`${target.rootPath}\u0000${target.path}`);
         } catch (e) {
@@ -710,6 +710,7 @@ export function ProjectSettingsModal({
         ),
       );
       setConfirmRemoveUnused(false);
+      await discardRemovedWorktreesWithRetry(removals);
       if (failures.length > 0) {
         setWorktreeError({
           kind: "removeUnused",
