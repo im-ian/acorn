@@ -763,7 +763,8 @@
         "clearedSingular": "Cleared {count} cached file.",
         "clearedPlural": "Cleared {count} cached files.",
         "nothingToClear": "Nothing to clear.",
-        "clearFailed": "Failed to clear cache:"
+        "clearFailed": "Failed to clear cache:",
+        "loadFailed": "Failed to calculate cache size. Check folder access and reopen this tab to retry."
       },
       "confirm": {
         "message": "This will permanently delete the cached data listed above ({size}). Continue?",
