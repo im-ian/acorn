@@ -761,6 +761,54 @@ test.describe("settings modal", () => {
       .toBe(false);
   });
 
+  test("surfaces keep-awake backend failures while retaining the preference", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "platform", {
+        get: () => "MacIntel",
+        configurable: true,
+      });
+    });
+    await tauri.handle("set_prevent_sleep", (args) => {
+      const enabled =
+        !!args &&
+        typeof args === "object" &&
+        "enabled" in args &&
+        !!args.enabled;
+      if (enabled) throw new Error("permission denied");
+      return { supported: true, enabled: false };
+    });
+
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Sessions|세션)$/ }).click();
+
+    const checkbox = modal.getByRole("checkbox", {
+      name: /Keep this Mac awake|이 Mac 잠자기 방지/,
+    });
+    await expect(checkbox).not.toBeChecked();
+    await checkbox.click();
+
+    await expect(
+      page.getByRole("status").filter({
+        hasText:
+          /Could not apply the keep-awake setting:.*permission denied|잠자기 방지 설정을 적용하지 못했습니다:.*permission denied/,
+      }),
+    ).toBeVisible();
+    await expect(checkbox).toBeChecked();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).power?.preventSleep : null;
+        }),
+      )
+      .toBe(true);
+  });
+
   test("toggles the working-session close warning from Sessions settings", async ({
     page,
   }) => {
