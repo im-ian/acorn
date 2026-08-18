@@ -23,17 +23,17 @@
 //! handler code linear and reuses the existing blocking PTY pool without
 //! a runtime hop.
 
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use acorn_ipc::primer;
 use acorn_ipc::proto::{
     Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, WorkspaceSummary,
-    PROTOCOL_VERSION,
+    MAX_REQUEST_FRAME_BYTES, MAX_RESPONSE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use acorn_ipc::socket_path;
 use acorn_local_ipc::{
@@ -99,6 +99,9 @@ impl IpcServerHandle {
 /// fast restart: the listener notices a stop signal within this window.
 const ACCEPT_POLL_INTERVAL_MS: u64 = 100;
 const LIST_WORKSPACES_TIMEOUT_MS: u64 = 2_000;
+const MAX_ACTIVE_CONNECTIONS: usize = 32;
+const CONNECTION_IO_TIMEOUT: Duration = Duration::from_secs(2);
+const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 /// Spawn the IPC server on a dedicated background thread. Returns the
 /// shutdown handle on success, or `None` if bind failed (rest of the app
@@ -155,14 +158,25 @@ fn run_listener<R: Runtime>(
     state: AppState,
     running: Arc<AtomicBool>,
 ) {
+    let active_connections = Arc::new(AtomicUsize::new(0));
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok(stream) => {
-                // Accepted streams inherit the listener's non-blocking flag,
-                // but the per-connection handler does blocking reads/writes.
-                // Restoring blocking mode here keeps the handler code simple.
-                if let Err(err) = stream.set_nonblocking(false) {
-                    tracing::warn!(error = %err, "ipc: stream set_blocking failed");
+                let Some(permit) = ConnectionPermit::try_acquire(
+                    active_connections.clone(),
+                    MAX_ACTIVE_CONNECTIONS,
+                ) else {
+                    tracing::warn!(
+                        limit = MAX_ACTIVE_CONNECTIONS,
+                        "ipc: dropping connection because the handler limit is full"
+                    );
+                    continue;
+                };
+                // Nonblocking I/O lets the handler enforce a portable deadline.
+                // interprocess receive/send timeouts are unsupported by its
+                // Windows named-pipe backend.
+                if let Err(err) = stream.set_nonblocking(true) {
+                    tracing::warn!(error = %err, "ipc: stream set_nonblocking failed");
                     continue;
                 }
                 let app = app.clone();
@@ -170,6 +184,7 @@ fn run_listener<R: Runtime>(
                 std::thread::Builder::new()
                     .name("acorn-ipc-conn".to_string())
                     .spawn(move || {
+                        let _permit = permit;
                         if let Err(err) = handle_connection(stream, &app, &state) {
                             tracing::warn!(error = %err, "ipc: connection handler failed");
                         }
@@ -190,44 +205,193 @@ fn run_listener<R: Runtime>(
     tracing::info!("ipc: listener stopped");
 }
 
+struct ConnectionPermit {
+    active: Arc<AtomicUsize>,
+}
+
+impl ConnectionPermit {
+    fn try_acquire(active: Arc<AtomicUsize>, limit: usize) -> Option<Self> {
+        active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < limit).then_some(current + 1)
+            })
+            .ok()?;
+        Some(Self { active })
+    }
+}
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// Upper bound for a single request line. `read_line` otherwise grows the
 /// buffer without limit, so a misbehaving client writing an endless unbroken
 /// line could exhaust memory. Generous compared to any real `Envelope`.
-const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
-
 fn handle_connection<R: Runtime>(
-    stream: Stream,
+    mut stream: Stream,
     app: &AppHandle<R>,
     state: &AppState,
 ) -> std::io::Result<()> {
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    let n = std::io::Read::take(&mut reader, MAX_REQUEST_BYTES).read_line(&mut line)?;
-    if n == 0 {
+    let peer_pid = match acorn_local_ipc::peer_process_id(&stream) {
+        Ok(pid) => Some(pid),
+        Err(error) => {
+            tracing::warn!(error = %error, "ipc: kernel peer process id unavailable");
+            None
+        }
+    };
+    let Some(line) = read_request_line(&mut stream, CONNECTION_IO_TIMEOUT)? else {
         return Ok(());
-    }
+    };
     let response = match serde_json::from_str::<Envelope>(line.trim_end()) {
-        Ok(envelope) => dispatch(envelope, app, state),
+        Ok(envelope) => dispatch(envelope, peer_pid, app, state),
         Err(err) => Response::Error {
             code: ErrorCode::Invalid,
             message: format!("malformed request: {err}"),
         },
     };
-    let mut out = serde_json::to_vec(&response).unwrap_or_else(|_| {
-        b"{\"kind\":\"error\",\"code\":\"internal\",\"message\":\"failed to serialize response\"}"
-            .to_vec()
-    });
-    out.push(b'\n');
-    reader.get_mut().write_all(&out)?;
-    reader.get_mut().flush()?;
-    Ok(())
+    let out = serialize_response_bounded(&response);
+    write_with_deadline(&mut stream, &out, CONNECTION_IO_TIMEOUT)
 }
 
-/// Top-level request dispatch. Except for `promote-self`, resolves the source
-/// session and enforces the "must be Control" gate before invoking
-/// command-specific handlers, so each handler can assume `source` is a live,
-/// authorized session.
-fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState) -> Response {
+fn read_request_line<R: Read>(
+    reader: &mut R,
+    timeout: Duration,
+) -> std::io::Result<Option<String>> {
+    let deadline = Instant::now() + timeout;
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 8 * 1024];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) if bytes.is_empty() => return Ok(None),
+            Ok(0) => break,
+            Ok(read) => {
+                let end = chunk[..read]
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(read, |index| index + 1);
+                if bytes.len().saturating_add(end) > MAX_REQUEST_FRAME_BYTES {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("IPC request exceeds {MAX_REQUEST_FRAME_BYTES}-byte limit"),
+                    ));
+                }
+                bytes.extend_from_slice(&chunk[..end]);
+                if end < read || bytes.last() == Some(&b'\n') {
+                    break;
+                }
+            }
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        ErrorKind::TimedOut,
+                        "IPC request read timed out",
+                    ));
+                }
+                std::thread::sleep(CONNECTION_POLL_INTERVAL);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    String::from_utf8(bytes).map(Some).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("IPC request is not UTF-8: {err}"),
+        )
+    })
+}
+
+struct BoundedResponseWriter {
+    bytes: Vec<u8>,
+}
+
+impl Write for BoundedResponseWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len().saturating_add(buf.len()) > MAX_RESPONSE_FRAME_BYTES - 1 {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("IPC response exceeds {MAX_RESPONSE_FRAME_BYTES}-byte limit"),
+            ));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialize_response_bounded(response: &Response) -> Vec<u8> {
+    let mut writer = BoundedResponseWriter { bytes: Vec::new() };
+    if serde_json::to_writer(&mut writer, response).is_err() {
+        writer.bytes =
+            b"{\"kind\":\"error\",\"code\":\"internal\",\"message\":\"response exceeded the IPC size limit\"}"
+                .to_vec();
+    }
+    writer.bytes.push(b'\n');
+    writer.bytes
+}
+
+fn write_with_deadline<W: Write>(
+    writer: &mut W,
+    bytes: &[u8],
+    timeout: Duration,
+) -> std::io::Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut written = 0;
+    while written < bytes.len() {
+        match writer.write(&bytes[written..]) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    ErrorKind::WriteZero,
+                    "IPC response writer accepted no bytes",
+                ));
+            }
+            Ok(count) => written += count,
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        ErrorKind::TimedOut,
+                        "IPC response write timed out",
+                    ));
+                }
+                std::thread::sleep(CONNECTION_POLL_INTERVAL);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    loop {
+        match writer.flush() {
+            Ok(()) => return Ok(()),
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        ErrorKind::TimedOut,
+                        "IPC response flush timed out",
+                    ));
+                }
+                std::thread::sleep(CONNECTION_POLL_INTERVAL);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+/// Top-level request dispatch. Every request resolves the source session and
+/// enforces the "must be Control" gate before invoking command-specific
+/// handlers. Control authority is granted only when Acorn creates the session;
+/// code running inside a regular repository terminal cannot self-promote.
+fn dispatch<R: Runtime>(
+    envelope: Envelope,
+    peer_pid: Option<u32>,
+    app: &AppHandle<R>,
+    state: &AppState,
+) -> Response {
     if envelope.protocol_version != PROTOCOL_VERSION {
         return Response::Error {
             code: ErrorCode::Invalid,
@@ -237,8 +401,8 @@ fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState
             ),
         };
     }
-    if matches!(&envelope.request, Request::PromoteSelf) {
-        return handle_promote_self(&envelope.source_session_id, app, state);
+    if let Err(response) = authenticate_source_process(&envelope, peer_pid, state) {
+        return response;
     }
     let source = match resolve_source(&envelope.source_session_id, &state.sessions) {
         Ok(s) => s,
@@ -251,7 +415,7 @@ fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState
         "ipc: dispatch",
     );
     match envelope.request {
-        Request::PromoteSelf => handle_promote_self(&source.id.to_string(), app, state),
+        Request::PromoteSelf => handle_promote_self(&source),
         Request::Context => handle_context(&source),
         Request::ListSessions => handle_list_sessions(&source, &state.sessions),
         Request::ListWorkspaces => handle_list_workspaces(&source, app, state),
@@ -292,6 +456,66 @@ fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState
     }
 }
 
+fn authenticate_source_process(
+    envelope: &Envelope,
+    peer_pid: Option<u32>,
+    state: &AppState,
+) -> Result<(), Response> {
+    let source_id = Uuid::parse_str(&envelope.source_session_id).map_err(|_| Response::Error {
+        code: ErrorCode::Unauthorized,
+        message: "source session identity is invalid".to_string(),
+    })?;
+    state
+        .sessions
+        .get(&source_id)
+        .map_err(|_| Response::Error {
+            code: ErrorCode::Unauthorized,
+            message: "source session is not live".to_string(),
+        })?;
+    let peer_pid = peer_pid.ok_or_else(|| Response::Error {
+        code: ErrorCode::Unauthorized,
+        message: "the operating system did not identify the IPC peer process".to_string(),
+    })?;
+    let root_pid =
+        crate::commands::session_root_pid(state, &source_id).ok_or_else(|| Response::Error {
+            code: ErrorCode::Unauthorized,
+            message: "source session has no live PTY process".to_string(),
+        })?;
+    if !acorn_platform::process::is_descendant_or_same(root_pid, peer_pid) {
+        return Err(Response::Error {
+            code: ErrorCode::Unauthorized,
+            message: "IPC peer is outside the source session process tree".to_string(),
+        });
+    }
+    verify_or_bind_session_capability(state, source_id, &envelope.session_capability)
+}
+
+fn verify_or_bind_session_capability(
+    state: &AppState,
+    source_id: Uuid,
+    raw_capability: &str,
+) -> Result<(), Response> {
+    let capability = Uuid::parse_str(raw_capability).map_err(|_| Response::Error {
+        code: ErrorCode::Unauthorized,
+        message: "source session capability is invalid".to_string(),
+    })?;
+    let mut capabilities = state.ipc_session_capabilities.lock();
+    match capabilities.get(&source_id) {
+        Some(expected) if expected == &capability => Ok(()),
+        Some(_) => Err(Response::Error {
+            code: ErrorCode::Unauthorized,
+            message: "source session capability does not match".to_string(),
+        }),
+        None => {
+            // A daemon PTY can outlive the app. Kernel-verified ancestry above
+            // is the authority that permits binding its inherited token into
+            // the fresh in-process registry after an app restart.
+            capabilities.insert(source_id, capability);
+            Ok(())
+        }
+    }
+}
+
 fn request_label(req: &Request) -> &'static str {
     match req {
         Request::PromoteSelf => "promote-self",
@@ -324,64 +548,11 @@ fn resolve_source(raw_id: &str, sessions: &SessionStore) -> Result<Session, Resp
     Ok(session)
 }
 
-fn promote_source_session(
-    raw_id: &str,
-    sessions: &SessionStore,
-) -> Result<(Session, bool), Response> {
-    let id = Uuid::parse_str(raw_id).map_err(|_| Response::Error {
-        code: ErrorCode::Unauthorized,
-        message: format!("source session id is not a valid uuid: {raw_id}"),
-    })?;
-    let session = sessions.get(&id).map_err(|_| Response::Error {
-        code: ErrorCode::Unauthorized,
-        message: "source session not found; is the Acorn session id still valid?".to_string(),
-    })?;
-    if session.kind == SessionKind::Control {
-        return Ok((session, true));
-    }
-    let promoted = sessions
-        .set_kind(&id, SessionKind::Control)
-        .map_err(|err| Response::Error {
-            code: ErrorCode::Internal,
-            message: format!("promote-self failed: {err}"),
-        })?;
-    Ok((promoted, false))
-}
-
-fn handle_promote_self<R: Runtime>(
-    source_id: &str,
-    app: &AppHandle<R>,
-    state: &AppState,
-) -> Response {
-    let (session, already_control) = match promote_source_session(source_id, &state.sessions) {
-        Ok(result) => result,
-        Err(err) => return err,
-    };
-    if !already_control {
-        if let Err(err) = persistence::save_sessions(&state.sessions) {
-            tracing::warn!(error = %err, "ipc: persist after promote-self failed");
-        }
-        if let Err(err) = app.emit(
-            SESSIONS_CHANGED_EVENT,
-            SessionsChangedPayload {
-                action: "promoted",
-                session_id: session.id.to_string(),
-                repo_path: session.repo_path.display().to_string(),
-                workspace_path: Some(session.worktree_path.display().to_string()),
-                workspace_id: None,
-            },
-        ) {
-            tracing::warn!(
-                error = %err,
-                event = SESSIONS_CHANGED_EVENT,
-                "ipc: sessions-changed emit failed after promote-self",
-            );
-        }
-    }
+fn handle_promote_self(session: &Session) -> Response {
     Response::SelfPromoted {
         session_id: session.id.to_string(),
-        already_control,
-        context: control_context_text(&session),
+        already_control: true,
+        context: control_context_text(),
     }
 }
 
@@ -404,9 +575,8 @@ fn resolve_target(
     if target.repo_path != source.repo_path {
         return Err(Response::Error {
             code: ErrorCode::OutOfScope,
-            message: format!(
-                "target session belongs to a different project than the control session"
-            ),
+            message: "target session belongs to a different project than the control session"
+                .to_string(),
         });
     }
     Ok(target)
@@ -435,21 +605,14 @@ fn resolve_action_target(
     Ok(target)
 }
 
-fn handle_context(source: &Session) -> Response {
+fn handle_context(_source: &Session) -> Response {
     Response::Context {
-        text: control_context_text(source),
+        text: control_context_text(),
     }
 }
 
-fn control_context_text(source: &Session) -> String {
-    let socket = socket_path::resolve().unwrap_or_default();
-    let daemon_socket = acorn_daemon::paths::control_socket_path().ok();
-    primer::primer_for(
-        &source.id.to_string(),
-        &source.repo_path,
-        &socket,
-        daemon_socket.as_deref(),
-    )
+fn control_context_text() -> String {
+    primer::primer().to_string()
 }
 
 fn handle_list_sessions(source: &Session, sessions: &SessionStore) -> Response {
@@ -676,12 +839,15 @@ fn handle_new_session<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
 ) -> Response {
-    if name.trim().is_empty() {
-        return Response::Error {
-            code: ErrorCode::Invalid,
-            message: "name must not be empty".to_string(),
-        };
-    }
+    let name = match crate::commands::validate_display_name(&name, "session name") {
+        Ok(name) => name,
+        Err(error) => {
+            return Response::Error {
+                code: ErrorCode::Invalid,
+                message: error.to_string(),
+            };
+        }
+    };
     let workspace_id = normalize_optional_string(workspace_id);
     if isolated
         && (normalize_optional_string(workspace_path.clone()).is_some() || workspace_id.is_some())
@@ -830,6 +996,7 @@ fn handle_kill_session<R: Runtime>(
 mod tests {
     use super::*;
     use acorn_session::SessionStatus;
+    use std::io::Cursor;
     use std::path::PathBuf;
 
     fn make_session(repo: &str, name: &str, kind: SessionKind) -> Session {
@@ -854,6 +1021,44 @@ mod tests {
             std::env::temp_dir().join(format!("acorn-ipc-{label}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    #[test]
+    fn request_reader_enforces_the_frame_limit() {
+        let mut exact = vec![b'x'; MAX_REQUEST_FRAME_BYTES - 1];
+        exact.push(b'\n');
+        let line = read_request_line(&mut Cursor::new(exact), Duration::ZERO)
+            .unwrap()
+            .expect("line");
+        assert_eq!(line.len(), MAX_REQUEST_FRAME_BYTES);
+
+        let mut oversized = vec![b'x'; MAX_REQUEST_FRAME_BYTES];
+        oversized.push(b'\n');
+        let error = read_request_line(&mut Cursor::new(oversized), Duration::ZERO).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn response_serializer_replaces_oversized_payloads() {
+        let response = Response::Context {
+            text: "x".repeat(MAX_RESPONSE_FRAME_BYTES),
+        };
+
+        let serialized = serialize_response_bounded(&response);
+
+        assert!(serialized.len() < MAX_RESPONSE_FRAME_BYTES);
+        assert!(String::from_utf8(serialized)
+            .unwrap()
+            .contains("exceeded the IPC size limit"));
+    }
+
+    #[test]
+    fn connection_permit_caps_and_releases_handlers() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let first = ConnectionPermit::try_acquire(active.clone(), 1).expect("first permit");
+        assert!(ConnectionPermit::try_acquire(active.clone(), 1).is_none());
+        drop(first);
+        assert!(ConnectionPermit::try_acquire(active.clone(), 1).is_some());
     }
 
     #[test]
@@ -1076,32 +1281,39 @@ mod tests {
     }
 
     #[test]
-    fn promote_regular_source_session_sets_control_kind() {
-        let store = SessionStore::new();
-        let regular = store.insert(make_session("/tmp/A", "regular", SessionKind::Regular));
+    fn promote_self_is_idempotent_for_an_existing_control_session() {
+        let ctl = make_session("/tmp/A", "ctl", SessionKind::Control);
+        match handle_promote_self(&ctl) {
+            Response::SelfPromoted {
+                session_id,
+                already_control,
+                ..
+            } => {
+                assert_eq!(session_id, ctl.id.to_string());
+                assert!(already_control);
+            }
+            other => panic!("expected idempotent control response, got {other:?}"),
+        }
+    }
 
-        let (promoted, already_control) =
-            promote_source_session(&regular.id.to_string(), &store).expect("promoted");
+    #[test]
+    fn session_capability_binds_once_and_rejects_replacement() {
+        let state = AppState::new();
+        let source_id = Uuid::new_v4();
+        let first = Uuid::new_v4();
+        let replacement = Uuid::new_v4();
 
-        assert_eq!(promoted.id, regular.id);
-        assert_eq!(promoted.kind, SessionKind::Control);
-        assert!(!already_control);
-        assert_eq!(
-            store.get(&regular.id).expect("session persisted").kind,
-            SessionKind::Control
+        assert!(verify_or_bind_session_capability(&state, source_id, &first.to_string()).is_ok());
+        assert!(verify_or_bind_session_capability(&state, source_id, &first.to_string()).is_ok());
+        assert!(
+            verify_or_bind_session_capability(&state, source_id, &replacement.to_string()).is_err()
         );
     }
 
     #[test]
-    fn promote_control_source_session_is_idempotent() {
-        let store = SessionStore::new();
-        let ctl = store.insert(make_session("/tmp/A", "ctl", SessionKind::Control));
-
-        let (promoted, already_control) =
-            promote_source_session(&ctl.id.to_string(), &store).expect("promoted");
-
-        assert_eq!(promoted.id, ctl.id);
-        assert_eq!(promoted.kind, SessionKind::Control);
-        assert!(already_control);
+    fn process_ancestry_accepts_the_same_live_process() {
+        let pid = std::process::id();
+        assert!(acorn_platform::process::is_descendant_or_same(pid, pid));
+        assert!(!acorn_platform::process::is_descendant_or_same(0, pid));
     }
 }

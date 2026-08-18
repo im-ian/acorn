@@ -23,6 +23,9 @@ use serde_json::{json, Value};
 use crate::agent_resume::LiveTranscript;
 
 const CODEX_RPC_TIMEOUT: Duration = Duration::from_secs(5);
+const CODEX_RPC_MAX_LINE_BYTES: usize = 1024 * 1024;
+const CODEX_RPC_EVENT_BUFFER: usize = 32;
+const TITLE_SYNC_QUEUE_CAPACITY: usize = 64;
 const MAX_PROVIDER_TITLE_BYTES: usize = 1_024;
 
 struct TitleSyncRequest {
@@ -71,8 +74,18 @@ pub fn enqueue(enabled: bool, target: LiveTranscript, title: impl Into<String>) 
     let Some(sender) = worker_sender() else {
         return;
     };
-    if let Err(err) = sender.send(request) {
-        tracing::warn!(error = %err, "provider session name worker is unavailable");
+    match sender.try_send(request) {
+        Ok(()) => {}
+        Err(mpsc::TrySendError::Full(request)) => {
+            tracing::warn!(
+                provider = request.target.kind.as_str(),
+                transcript_id = %request.target.id,
+                "provider session name queue is full; skipping best-effort title sync"
+            );
+        }
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            tracing::warn!("provider session name worker is unavailable");
+        }
     }
 }
 
@@ -102,11 +115,11 @@ fn should_sync_existing_title(session: &Session, transcript_id: &str) -> bool {
     }
 }
 
-fn worker_sender() -> Option<&'static mpsc::Sender<TitleSyncRequest>> {
-    static WORKER: OnceLock<Option<mpsc::Sender<TitleSyncRequest>>> = OnceLock::new();
+fn worker_sender() -> Option<&'static mpsc::SyncSender<TitleSyncRequest>> {
+    static WORKER: OnceLock<Option<mpsc::SyncSender<TitleSyncRequest>>> = OnceLock::new();
     WORKER
         .get_or_init(|| {
-            let (sender, receiver) = mpsc::channel();
+            let (sender, receiver) = mpsc::sync_channel(TITLE_SYNC_QUEUE_CAPACITY);
             match thread::Builder::new()
                 .name("agent-session-name-sync".to_string())
                 .spawn(move || worker(receiver))
@@ -186,20 +199,21 @@ fn run_codex_name_protocol(mut child: Child, thread_id: &str, title: &str) -> Re
             .stdin
             .take()
             .ok_or_else(|| "Codex app server stdin was not captured".to_string())?;
-        let (event_tx, event_rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::sync_channel(CODEX_RPC_EVENT_BUFFER);
         thread::Builder::new()
             .name("codex-name-rpc-reader".to_string())
             .spawn(move || {
-                let reader = BufReader::new(stdout);
-                for line in reader.lines() {
-                    match line {
-                        Ok(line) => {
+                let mut reader = BufReader::new(stdout);
+                loop {
+                    match read_bounded_utf8_line(&mut reader, CODEX_RPC_MAX_LINE_BYTES) {
+                        Ok(Some(line)) => {
                             if event_tx.send(ReaderEvent::Line(line)).is_err() {
                                 return;
                             }
                         }
+                        Ok(None) => break,
                         Err(err) => {
-                            let _ = event_tx.send(ReaderEvent::Error(err.to_string()));
+                            let _ = event_tx.send(ReaderEvent::Error(err));
                             return;
                         }
                     }
@@ -221,6 +235,28 @@ fn run_codex_name_protocol(mut child: Child, thread_id: &str, title: &str) -> Re
     let _ = child.kill();
     let _ = child.wait();
     result
+}
+
+fn read_bounded_utf8_line<R: BufRead>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> Result<Option<String>, String> {
+    let read_limit = max_bytes
+        .checked_add(1)
+        .ok_or_else(|| "Codex response line limit overflowed".to_string())?;
+    let mut bytes = Vec::new();
+    let read = Read::take(reader, read_limit as u64)
+        .read_until(b'\n', &mut bytes)
+        .map_err(|err| err.to_string())?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if bytes.len() > max_bytes {
+        return Err(format!("Codex response line exceeded {max_bytes} bytes"));
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|err| format!("Codex response was not UTF-8: {err}"))
 }
 
 fn initialize_request() -> Value {
@@ -476,6 +512,26 @@ mod tests {
         .expect("matching response")
         .expect_err("server error");
         assert!(error.contains("no rollout found"));
+    }
+
+    #[test]
+    fn codex_response_reader_bounds_line_length() {
+        let mut exact = vec![b'x'; CODEX_RPC_MAX_LINE_BYTES - 1];
+        exact.push(b'\n');
+        let mut exact = std::io::Cursor::new(exact);
+        assert_eq!(
+            read_bounded_utf8_line(&mut exact, CODEX_RPC_MAX_LINE_BYTES)
+                .unwrap()
+                .expect("line")
+                .len(),
+            CODEX_RPC_MAX_LINE_BYTES
+        );
+
+        let mut oversized = vec![b'x'; CODEX_RPC_MAX_LINE_BYTES];
+        oversized.push(b'\n');
+        let mut oversized = std::io::Cursor::new(oversized);
+        let error = read_bounded_utf8_line(&mut oversized, CODEX_RPC_MAX_LINE_BYTES).unwrap_err();
+        assert!(error.contains("exceeded"));
     }
 
     #[test]

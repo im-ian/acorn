@@ -38,7 +38,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Audit dependencies
-        run: pnpm audit --audit-level=moderate
+        run: pnpm audit --audit-level=low
 
       - name: Type check
         run: pnpm run typecheck
@@ -96,7 +96,9 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Run E2E tests
-        run: pnpm run test:e2e --shard=${{ matrix.shard }}/2
+        env:
+          PLAYWRIGHT_SHARD: ${{ matrix.shard }}
+        run: pnpm run test:e2e --shard="$PLAYWRIGHT_SHARD/2"
 
       - name: Upload report on failure
         if: failure()
@@ -273,14 +275,25 @@ jobs:
             }
             $sessionsOutput | Write-Host
 
-            $shutdownOutput = @(& $acornd shutdown 2>&1)
-            $shutdownExit = $LASTEXITCODE
-            if ($shutdownExit -ne 0) {
-              throw "acornd shutdown failed with exit code ${shutdownExit}: $($shutdownOutput -join [Environment]::NewLine)"
+            # The public shutdown CLI is intentionally absent: a same-user
+            # process must not be able to terminate the user's daemon. This
+            # isolated smoke owns the unique data directory and may stop only
+            # the PID it just launched after validating the executable name.
+            $pidFile = Join-Path $smokeDataDir "daemon.pid"
+            if (!(Test-Path -LiteralPath $pidFile -PathType Leaf)) {
+              throw "acornd pid file is missing: $pidFile"
             }
-            if ($shutdownOutput -notcontains "shutdown acknowledged") {
-              throw "acornd shutdown response was unexpected: $($shutdownOutput -join [Environment]::NewLine)"
+            [int]$daemonPid = 0
+            $pidText = (Get-Content -LiteralPath $pidFile -Raw).Trim()
+            if (![int]::TryParse($pidText, [ref]$daemonPid)) {
+              throw "acornd pid file is invalid: $pidText"
             }
+            $daemonProcess = Get-Process -Id $daemonPid -ErrorAction SilentlyContinue
+            if ($null -eq $daemonProcess -or $daemonProcess.ProcessName -ne "acornd") {
+              throw "acornd pid $daemonPid does not identify the launched daemon"
+            }
+            Stop-Process -Id $daemonPid -Force
+            Wait-Process -Id $daemonPid -Timeout 5 -ErrorAction SilentlyContinue
 
             $stopped = $false
             $stoppedStatusOutput = @()
@@ -303,23 +316,16 @@ jobs:
           }
           finally {
             if ($daemonLaunched -and (Test-Path -LiteralPath $acornd -PathType Leaf)) {
-              $cleanupOutput = @(& $acornd shutdown 2>&1)
-              $cleanupExit = $LASTEXITCODE
-              if ($cleanupExit -notin @(0, 1)) {
-                Write-Warning "cleanup shutdown returned exit code ${cleanupExit}: $($cleanupOutput -join [Environment]::NewLine)"
-              }
-              Start-Sleep -Milliseconds 250
-            }
-
-            $pidFile = Join-Path $smokeDataDir "daemon.pid"
-            if (Test-Path -LiteralPath $pidFile -PathType Leaf) {
-              [int]$daemonPid = 0
-              $pidText = (Get-Content -LiteralPath $pidFile -Raw).Trim()
-              if ([int]::TryParse($pidText, [ref]$daemonPid)) {
-                $daemonProcess = Get-Process -Id $daemonPid -ErrorAction SilentlyContinue
-                if ($null -ne $daemonProcess -and $daemonProcess.ProcessName -eq "acornd") {
-                  Stop-Process -Id $daemonPid -Force -ErrorAction SilentlyContinue
-                  Wait-Process -Id $daemonPid -Timeout 5 -ErrorAction SilentlyContinue
+              $pidFile = Join-Path $smokeDataDir "daemon.pid"
+              if (Test-Path -LiteralPath $pidFile -PathType Leaf) {
+                [int]$daemonPid = 0
+                $pidText = (Get-Content -LiteralPath $pidFile -Raw).Trim()
+                if ([int]::TryParse($pidText, [ref]$daemonPid)) {
+                  $daemonProcess = Get-Process -Id $daemonPid -ErrorAction SilentlyContinue
+                  if ($null -ne $daemonProcess -and $daemonProcess.ProcessName -eq "acornd") {
+                    Stop-Process -Id $daemonPid -Force -ErrorAction SilentlyContinue
+                    Wait-Process -Id $daemonPid -Timeout 5 -ErrorAction SilentlyContinue
+                  }
                 }
               }
             }
@@ -333,7 +339,7 @@ jobs:
             }
           }
 
-          # The successful shutdown probe intentionally leaves the native exit
+          # The successful stopped-status probe intentionally leaves the native exit
           # code at 2 ("not running"). Do not let pwsh report that expected
           # status as the workflow step's exit code.
           $global:LASTEXITCODE = 0

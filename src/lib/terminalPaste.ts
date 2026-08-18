@@ -26,6 +26,7 @@ type ClipboardFilePayloadInput = {
 export type ClipboardImageFile = {
   name?: string;
   type?: string;
+  size?: number;
   arrayBuffer: () => Promise<ArrayBuffer>;
 };
 

@@ -75,6 +75,7 @@ const PREVIEW_SEARCH_MARK_SELECTOR = "mark[data-acorn-preview-search]";
 const SHOW_TEXT_NODE = 4;
 const FILTER_ACCEPT = 1;
 const FILTER_REJECT = 2;
+const MAX_CODE_SEARCH_QUERY_CHARS = 256;
 
 interface SearchMatch {
   line: number;
@@ -510,8 +511,11 @@ export function CodeViewer({
           <input
             ref={searchInputRef}
             value={searchQuery}
+            maxLength={MAX_CODE_SEARCH_QUERY_CHARS}
             onChange={(event) => {
-              setSearchQuery(event.target.value);
+              setSearchQuery(
+                event.target.value.slice(0, MAX_CODE_SEARCH_QUERY_CHARS),
+              );
               setActiveMatchIndex(0);
             }}
             onKeyDown={(event) => {
@@ -760,8 +764,10 @@ function removePreviewSearchMarks(root: HTMLElement) {
 }
 
 function findTextRanges(text: string, query: string): { start: number; end: number }[] {
-  if (query === "") return [];
-  const re = new RegExp(escapeRegExp(query), "giu");
+  if (query === "" || query.length > MAX_CODE_SEARCH_QUERY_CHARS) return [];
+  // `escapeRegExp` makes this a literal search, so repository text cannot
+  // introduce regex operators or backtracking structure.
+  const re = new RegExp(escapeRegExp(query), "giu"); // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
   const ranges: { start: number; end: number }[] = [];
   for (const match of text.matchAll(re)) {
     const start = match.index;

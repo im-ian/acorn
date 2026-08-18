@@ -30,7 +30,6 @@ import {
   X,
 } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Suspense,
   lazy,
@@ -65,6 +64,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useAppStore, type WorkspaceViewMode } from "../store";
+import { openSafeUrl } from "../lib/safeOpenUrl";
 import {
   AgentProviderIcon,
   buildAgentForkCommand,
@@ -3840,7 +3840,7 @@ function SessionRowLabel({
               onKeyUp={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                void openUrl(currentPullRequest.url).catch((err: unknown) => {
+                void openSafeUrl(currentPullRequest.url).catch((err: unknown) => {
                   console.error("[Sidebar] open PR URL failed", err);
                 });
               }}

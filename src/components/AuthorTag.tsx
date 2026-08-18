@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ExternalLink } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openSafeUrl } from "../lib/safeOpenUrl";
 import { AuthorAvatar } from "./AuthorAvatar";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { cn } from "../lib/cn";
@@ -51,7 +51,7 @@ export function buildProfileMenuItems(
     {
       label,
       icon: <ExternalLink size={12} />,
-      onClick: () => void openUrl(`https://github.com/${slug}`),
+      onClick: () => void openSafeUrl(`https://github.com/${slug}`),
     },
   ];
 }

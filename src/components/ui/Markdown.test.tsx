@@ -1,6 +1,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn().mockResolvedValue(true),
+}));
+
+import { invoke } from "@tauri-apps/api/core";
 import { Markdown } from "./Markdown";
 
 describe("Markdown — interactive task list", () => {
@@ -8,6 +14,7 @@ describe("Markdown — interactive task list", () => {
   let root: Root;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -106,6 +113,54 @@ describe("Markdown — interactive task list", () => {
       root.render(<Markdown content={"안녕\n하세요"} />);
     });
     expect(container.querySelectorAll("br")).toHaveLength(0);
+  });
+
+  it("never leaves raw Markdown links as WebView navigation anchors", () => {
+    act(() => {
+      root.render(
+        <Markdown
+          content={
+            '<a href="https://example.com/path" target="_blank" rel="opener">safe</a> <a href="javascript:alert(1)">unsafe</a>'
+          }
+        />,
+      );
+    });
+
+    expect(container.querySelector("a")).toBeNull();
+    const linkAction = container.querySelector<HTMLButtonElement>("button");
+    expect(linkAction?.textContent).toBe("safe");
+    act(() => linkAction!.click());
+    expect(invoke).toHaveBeenCalledWith("open_external_url", {
+      url: "https://example.com/path",
+    });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("strips active raw HTML and event-handler attributes", () => {
+    act(() => {
+      root.render(
+        <Markdown
+          content={
+            '<script data-probe="script">alert(1)</script><iframe data-probe="frame" srcdoc="<script>alert(1)</script>"></iframe><form data-probe="form" action="https://attacker.example"><input name="secret"></form><svg data-probe="svg" onload="alert(1)"></svg><img src="https://tracker.example/pixel.png" onerror="alert(1)" alt="Tracking pixel">'
+          }
+        />,
+      );
+    });
+
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector("form")).toBeNull();
+    expect(container.querySelector("svg")).toBeNull();
+
+    const load = container.querySelector<HTMLButtonElement>(
+      "[data-remote-image-placeholder]",
+    );
+    expect(load).not.toBeNull();
+    act(() => load!.click());
+
+    const image = container.querySelector("img");
+    expect(image?.hasAttribute("onerror")).toBe(false);
+    expect(image?.getAttribute("referrerpolicy")).toBe("no-referrer");
   });
 
   it("removes raw picture sources and gates the fallback remote image", () => {

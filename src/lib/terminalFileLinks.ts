@@ -151,8 +151,18 @@ export function findTerminalFileReferences(
 ): TerminalFileReference[] {
   const references: TerminalFileReference[] = [];
   collectQuotedWindowsFileReferences(text, references);
-  collectTerminalFileReferences(text, FILE_REF_RE, references, true);
-  collectTerminalFileReferences(text, FILE_PATH_RE, references, false);
+  collectTerminalFileReferences(
+    text,
+    new RegExp(FILE_REF_RE.source, FILE_REF_RE.flags),
+    references,
+    true,
+  );
+  collectTerminalFileReferences(
+    text,
+    new RegExp(FILE_PATH_RE.source, FILE_PATH_RE.flags),
+    references,
+    false,
+  );
   return references.sort((a, b) => a.startIndex - b.startIndex);
 }
 
@@ -190,11 +200,10 @@ function collectQuotedWindowsFileReferences(
 
 function collectTerminalFileReferences(
   text: string,
-  pattern: RegExp,
+  regex: RegExp,
   references: TerminalFileReference[],
   includesLocation: boolean,
 ): void {
-  const regex = new RegExp(pattern.source, pattern.flags);
   let match: RegExpExecArray | null;
   while ((match = regex.exec(text)) !== null) {
     const prefix = match[1] ?? "";

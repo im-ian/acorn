@@ -14,6 +14,7 @@ mod daemon_bridge;
 mod daemon_commands;
 mod daemon_stream;
 mod error;
+mod external_url;
 mod fs_explorer;
 mod git_ops;
 mod graph_runs;
@@ -321,8 +322,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .manage(app_state)
         .setup(|app| {
             // The native Settings accelerator remains available when the
@@ -890,6 +889,8 @@ pub fn run() {
             commands::acknowledge_agent_resume,
             commands::staged_rev_mismatch_status,
             commands::acknowledge_staged_rev_mismatch,
+            external_url::open_external_url,
+            external_url::reveal_themes_folder,
             power_assertion::prevent_sleep_status,
             power_assertion::set_prevent_sleep,
             daemon_commands::daemon_status,
@@ -913,6 +914,7 @@ pub fn run() {
             fs_explorer::fs_file_exists,
             fs_explorer::fs_read_file,
             fs_explorer::fs_prepare_asset,
+            fs_explorer::fs_release_asset,
             fs_explorer::fs_git_diff_stats,
             fs_explorer::fs_git_diff_lines,
             fs_explorer::fs_watch_set_root,

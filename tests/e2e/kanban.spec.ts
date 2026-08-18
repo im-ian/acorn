@@ -680,13 +680,13 @@ test.describe("workspace kanban mode", () => {
         ],
       };
     });
-    await tauri.handle("plugin:opener|open_url", (args) => {
+    await tauri.handle("open_external_url", (args) => {
       const w = window as unknown as {
         __openUrlCalls?: Array<{ url?: string }>;
       };
       w.__openUrlCalls = w.__openUrlCalls ?? [];
       w.__openUrlCalls.push(args as { url?: string });
-      return null;
+      return true;
     });
 
     await page.goto("/");

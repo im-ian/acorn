@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::str;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,6 +16,9 @@ use acorn_platform::process::{configure_tree_root, ProcessTree};
 
 const ONESHOT_TIMEOUT: Duration = Duration::from_secs(60);
 const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+const PIPE_CHANNEL_CAPACITY: usize = 32;
+const MAX_AI_STDOUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_AI_STDERR_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +57,13 @@ pub struct ResolvedAiCommand {
     pub command: &'static str,
     pub args: Vec<String>,
     pub prompt_transport: PromptTransport,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandEnvironment {
+    #[cfg(test)]
+    Interactive,
+    Passive,
 }
 
 pub enum AiProcessStreamEvent<'a> {
@@ -126,6 +136,66 @@ impl AiExecutionRequest {
                     .to_string(),
             )),
         }
+    }
+
+    /// Resolve a provider for passive text generation such as session titles
+    /// and suggested commit messages. Passive jobs are not user-authorized
+    /// agent turns: they must accept the prompt over stdin, expose no tools or
+    /// project customizations, and avoid provider-side session persistence.
+    pub fn resolve_passive_text(&self) -> AppResult<ResolvedAiCommand> {
+        let mut resolved = self.resolve()?;
+        match self.provider {
+            AiProvider::Claude => {
+                resolved.args.extend([
+                    "--safe-mode".to_string(),
+                    "--tools".to_string(),
+                    String::new(),
+                    "--disable-slash-commands".to_string(),
+                    "--no-chrome".to_string(),
+                    "--no-session-persistence".to_string(),
+                    "--permission-mode".to_string(),
+                    "dontAsk".to_string(),
+                ]);
+            }
+            AiProvider::Ollama => {
+                // `ollama run` is a direct model invocation. Acorn does not
+                // provide it with a tool registry or a resumable session.
+            }
+            AiProvider::Llm => {
+                // LLM logs every prompt by default. These flags make this a
+                // one-shot, non-persisted response and keep output collection
+                // deterministic for the bounded runner.
+                resolved
+                    .args
+                    .extend(["--no-log".to_string(), "--no-stream".to_string()]);
+            }
+            AiProvider::Codex | AiProvider::Antigravity | AiProvider::Grok => {
+                return Err(AppError::Other(format!(
+                    "{} cannot be used for passive text generation because its CLI does not expose a verified tool-free, non-persistent mode; choose Claude, Ollama, or LLM",
+                    provider_label(self.provider)
+                )));
+            }
+            AiProvider::Custom => unreachable!("custom providers fail in resolve"),
+        }
+        if resolved.prompt_transport != PromptTransport::Stdin {
+            return Err(AppError::Other(format!(
+                "{} cannot be used for passive text generation because it would expose the prompt in process arguments",
+                provider_label(self.provider)
+            )));
+        }
+        Ok(resolved)
+    }
+}
+
+fn provider_label(provider: AiProvider) -> &'static str {
+    match provider {
+        AiProvider::Claude => "Claude",
+        AiProvider::Antigravity => "Antigravity",
+        AiProvider::Codex => "Codex",
+        AiProvider::Grok => "Grok",
+        AiProvider::Ollama => "Ollama",
+        AiProvider::Llm => "LLM",
+        AiProvider::Custom => "Custom AI",
     }
 }
 
@@ -213,38 +283,31 @@ pub(crate) fn normalize_effort_arg(raw: Option<&str>) -> AppResult<Option<String
     Ok(Some(effort))
 }
 
-pub fn run_resolved_oneshot(
-    resolved: &ResolvedAiCommand,
+/// Execute an unprivileged, non-persistent model call in a fresh empty
+/// directory. This is the only entry point passive text features should use.
+pub fn run_passive_text(
+    request: &AiExecutionRequest,
     prompt: &str,
     settings_label: &str,
 ) -> AppResult<String> {
-    run_resolved_oneshot_in_dir(resolved, prompt, settings_label, None)
-}
-
-pub fn run_resolved_oneshot_in_dir(
-    resolved: &ResolvedAiCommand,
-    prompt: &str,
-    settings_label: &str,
-    cwd: Option<&Path>,
-) -> AppResult<String> {
-    run_resolved_oneshot_in_dir_cancellable(resolved, prompt, settings_label, cwd, None)
-}
-
-pub fn run_resolved_oneshot_in_dir_cancellable(
-    resolved: &ResolvedAiCommand,
-    prompt: &str,
-    settings_label: &str,
-    cwd: Option<&Path>,
-    cancellation: Option<ChatCancellation>,
-) -> AppResult<String> {
-    run_oneshot_in_dir_cancellable_with_transport(
+    let resolved = request.resolve_passive_text()?;
+    let working_directory = tempfile::Builder::new()
+        .prefix("acorn-passive-ai-")
+        .tempdir()
+        .map_err(|error| {
+            AppError::Other(format!(
+                "failed to create a private passive AI working directory: {error}"
+            ))
+        })?;
+    run_oneshot_in_dir_cancellable_with_transport_and_environment(
         resolved.command,
         &resolved.args,
         prompt,
         settings_label,
-        cwd,
-        cancellation,
+        Some(working_directory.path()),
+        None,
         resolved.prompt_transport,
+        CommandEnvironment::Passive,
     )
 }
 
@@ -271,6 +334,7 @@ where
     )
 }
 
+#[cfg(test)]
 fn run_oneshot_in_dir_cancellable_with_transport(
     command: &str,
     args: &[String],
@@ -279,6 +343,29 @@ fn run_oneshot_in_dir_cancellable_with_transport(
     cwd: Option<&Path>,
     cancellation: Option<ChatCancellation>,
     prompt_transport: PromptTransport,
+) -> AppResult<String> {
+    run_oneshot_in_dir_cancellable_with_transport_and_environment(
+        command,
+        args,
+        prompt,
+        settings_label,
+        cwd,
+        cancellation,
+        prompt_transport,
+        CommandEnvironment::Interactive,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_oneshot_in_dir_cancellable_with_transport_and_environment(
+    command: &str,
+    args: &[String],
+    prompt: &str,
+    settings_label: &str,
+    cwd: Option<&Path>,
+    cancellation: Option<ChatCancellation>,
+    prompt_transport: PromptTransport,
+    environment: CommandEnvironment,
 ) -> AppResult<String> {
     let resolved = cli_resolver::resolve(command).map_err(|_| {
         AppError::Other(format!(
@@ -291,6 +378,9 @@ fn run_oneshot_in_dir_cancellable_with_transport(
     }
     let mut command_builder = Command::new(&resolved);
     crate::shell_env::apply_to_command(&mut command_builder);
+    if environment == CommandEnvironment::Passive {
+        strip_acorn_authority_environment(&mut command_builder);
+    }
     configure_tree_root(&mut command_builder);
     command_builder
         .args(&command_args)
@@ -338,6 +428,19 @@ fn run_oneshot_in_dir_cancellable_with_transport(
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn strip_acorn_authority_environment(command: &mut Command) {
+    let mut keys = std::env::vars_os()
+        .map(|(key, _)| key)
+        .chain(command.get_envs().map(|(key, _)| key.to_os_string()))
+        .filter(|key| key.to_string_lossy().starts_with("ACORN_"))
+        .collect::<Vec<_>>();
+    keys.sort();
+    keys.dedup();
+    for key in keys {
+        command.env_remove(key);
+    }
 }
 
 fn run_streaming_in_dir_cancellable_with_transport<F>(
@@ -436,7 +539,7 @@ fn wait_with_timeout(
         .take()
         .ok_or_else(|| AppError::Other(format!("{command} stderr missing")))?;
 
-    let (pipe_tx, pipe_rx) = mpsc::channel();
+    let (pipe_tx, pipe_rx) = mpsc::sync_channel(PIPE_CHANNEL_CAPACITY);
     spawn_pipe_reader(PipeKind::Stdout, stdout, pipe_tx.clone());
     spawn_pipe_reader(PipeKind::Stderr, stderr, pipe_tx);
     let mut stdout = Vec::new();
@@ -448,18 +551,23 @@ fn wait_with_timeout(
     let status = if let Some(cancellation) = cancellation {
         cancellation.set_child(child, Arc::clone(&process_tree));
         let status = loop {
-            drain_pipe_events(
+            if let Err(err) = drain_pipe_events(
                 command,
                 &pipe_rx,
                 &mut stdout,
                 &mut stderr,
                 &mut stdout_open,
                 &mut stderr_open,
-            )?;
+            ) {
+                let _ = process_tree.terminate();
+                cancellation.kill_and_wait();
+                cancellation.clear_child();
+                return Err(err);
+            }
             if cancellation.is_cancelled() {
                 let _ = process_tree.terminate();
                 cancellation.kill_and_wait();
-                drain_pipe_events_until_closed(
+                let drain_result = drain_pipe_events_until_closed(
                     command,
                     &pipe_rx,
                     &mut stdout,
@@ -467,8 +575,9 @@ fn wait_with_timeout(
                     &mut stdout_open,
                     &mut stderr_open,
                     PIPE_DRAIN_TIMEOUT,
-                )?;
+                );
                 cancellation.clear_child();
+                drain_result?;
                 return Err(AppError::Other(format!("{command} cancelled")));
             }
             match cancellation.try_wait(command)? {
@@ -476,7 +585,7 @@ fn wait_with_timeout(
                 None if started.elapsed() >= timeout => {
                     let _ = process_tree.terminate();
                     cancellation.kill_and_wait();
-                    drain_pipe_events_until_closed(
+                    let drain_result = drain_pipe_events_until_closed(
                         command,
                         &pipe_rx,
                         &mut stdout,
@@ -484,8 +593,9 @@ fn wait_with_timeout(
                         &mut stdout_open,
                         &mut stderr_open,
                         PIPE_DRAIN_TIMEOUT,
-                    )?;
+                    );
                     cancellation.clear_child();
+                    drain_result?;
                     return Err(AppError::Other(format!(
                         "{command} timed out after {} seconds",
                         timeout.as_secs()
@@ -498,14 +608,19 @@ fn wait_with_timeout(
         status
     } else {
         loop {
-            drain_pipe_events(
+            if let Err(err) = drain_pipe_events(
                 command,
                 &pipe_rx,
                 &mut stdout,
                 &mut stderr,
                 &mut stdout_open,
                 &mut stderr_open,
-            )?;
+            ) {
+                let _ = process_tree.terminate();
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(err);
+            }
             match child
                 .try_wait()
                 .map_err(|e| AppError::Other(format!("failed waiting for {command}: {e}")))?
@@ -583,7 +698,7 @@ enum PipeEvent {
     Done(PipeKind),
 }
 
-fn spawn_pipe_reader<R>(kind: PipeKind, mut reader: R, tx: mpsc::Sender<PipeEvent>)
+fn spawn_pipe_reader<R>(kind: PipeKind, mut reader: R, tx: SyncSender<PipeEvent>)
 where
     R: Read + Send + 'static,
 {
@@ -613,6 +728,47 @@ where
     });
 }
 
+impl PipeKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+
+    fn byte_limit(self) -> usize {
+        match self {
+            Self::Stdout => MAX_AI_STDOUT_BYTES,
+            Self::Stderr => MAX_AI_STDERR_BYTES,
+        }
+    }
+}
+
+fn append_pipe_chunk(
+    command: &str,
+    kind: PipeKind,
+    destination: &mut Vec<u8>,
+    bytes: &[u8],
+) -> AppResult<()> {
+    append_chunk_with_limit(command, kind.label(), destination, bytes, kind.byte_limit())
+}
+
+fn append_chunk_with_limit(
+    command: &str,
+    stream: &str,
+    destination: &mut Vec<u8>,
+    bytes: &[u8],
+    limit: usize,
+) -> AppResult<()> {
+    if bytes.len() > limit.saturating_sub(destination.len()) {
+        return Err(AppError::Other(format!(
+            "{command} {stream} exceeded the {limit} byte output limit"
+        )));
+    }
+    destination.extend_from_slice(bytes);
+    Ok(())
+}
+
 fn process_pipe_event(
     command: &str,
     event: PipeEvent,
@@ -623,16 +779,13 @@ fn process_pipe_event(
 ) -> AppResult<()> {
     match event {
         PipeEvent::Chunk(kind, Ok(bytes)) => match kind {
-            PipeKind::Stdout => stdout.extend_from_slice(&bytes),
-            PipeKind::Stderr => stderr.extend_from_slice(&bytes),
+            PipeKind::Stdout => append_pipe_chunk(command, kind, stdout, &bytes)?,
+            PipeKind::Stderr => append_pipe_chunk(command, kind, stderr, &bytes)?,
         },
         PipeEvent::Chunk(kind, Err(err)) => {
-            let stream = match kind {
-                PipeKind::Stdout => "stdout",
-                PipeKind::Stderr => "stderr",
-            };
             return Err(AppError::Other(format!(
-                "failed reading {command} {stream}: {err}"
+                "failed reading {command} {}: {err}",
+                kind.label()
             )));
         }
         PipeEvent::Done(PipeKind::Stdout) => *stdout_open = false,
@@ -751,33 +904,53 @@ impl Utf8ChunkDecoder {
     }
 }
 
-fn process_stdout_chunk<F>(
+fn process_streaming_pipe_event<F>(
     command: &str,
-    chunk: io::Result<Vec<u8>>,
+    event: PipeEvent,
     stdout: &mut Vec<u8>,
+    stderr: &mut Vec<u8>,
+    stdout_open: &mut bool,
+    stderr_open: &mut bool,
     decoder: &mut Utf8ChunkDecoder,
     on_event: &mut F,
 ) -> AppResult<()>
 where
     F: FnMut(AiProcessStreamEvent<'_>),
 {
-    let chunk =
-        chunk.map_err(|e| AppError::Other(format!("failed reading {command} stdout: {e}")))?;
-    if chunk.is_empty() {
-        return Ok(());
-    }
-    stdout.extend_from_slice(&chunk);
-    let text = decoder.push(&chunk);
-    if !text.is_empty() {
-        on_event(AiProcessStreamEvent::Stdout(&text));
+    match event {
+        PipeEvent::Chunk(PipeKind::Stdout, Ok(bytes)) => {
+            if bytes.is_empty() {
+                return Ok(());
+            }
+            append_pipe_chunk(command, PipeKind::Stdout, stdout, &bytes)?;
+            let text = decoder.push(&bytes);
+            if !text.is_empty() {
+                on_event(AiProcessStreamEvent::Stdout(&text));
+            }
+        }
+        PipeEvent::Chunk(PipeKind::Stderr, Ok(bytes)) => {
+            append_pipe_chunk(command, PipeKind::Stderr, stderr, &bytes)?;
+        }
+        PipeEvent::Chunk(kind, Err(err)) => {
+            return Err(AppError::Other(format!(
+                "failed reading {command} {}: {err}",
+                kind.label()
+            )));
+        }
+        PipeEvent::Done(PipeKind::Stdout) => *stdout_open = false,
+        PipeEvent::Done(PipeKind::Stderr) => *stderr_open = false,
     }
     Ok(())
 }
 
-fn drain_stdout_chunks<F>(
+#[allow(clippy::too_many_arguments)]
+fn drain_streaming_pipe_events<F>(
     command: &str,
-    stdout_rx: &Receiver<io::Result<Vec<u8>>>,
+    rx: &Receiver<PipeEvent>,
     stdout: &mut Vec<u8>,
+    stderr: &mut Vec<u8>,
+    stdout_open: &mut bool,
+    stderr_open: &mut bool,
     decoder: &mut Utf8ChunkDecoder,
     on_event: &mut F,
 ) -> AppResult<()>
@@ -785,11 +958,76 @@ where
     F: FnMut(AiProcessStreamEvent<'_>),
 {
     loop {
-        match stdout_rx.try_recv() {
-            Ok(chunk) => process_stdout_chunk(command, chunk, stdout, decoder, on_event)?,
+        match rx.try_recv() {
+            Ok(event) => process_streaming_pipe_event(
+                command,
+                event,
+                stdout,
+                stderr,
+                stdout_open,
+                stderr_open,
+                decoder,
+                on_event,
+            )?,
             Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(()),
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drain_streaming_pipe_events_until_closed<F>(
+    command: &str,
+    rx: &Receiver<PipeEvent>,
+    stdout: &mut Vec<u8>,
+    stderr: &mut Vec<u8>,
+    stdout_open: &mut bool,
+    stderr_open: &mut bool,
+    decoder: &mut Utf8ChunkDecoder,
+    on_event: &mut F,
+    timeout: Duration,
+) -> AppResult<()>
+where
+    F: FnMut(AiProcessStreamEvent<'_>),
+{
+    let deadline = Instant::now() + timeout;
+    while *stdout_open || *stderr_open {
+        match rx.try_recv() {
+            Ok(event) => process_streaming_pipe_event(
+                command,
+                event,
+                stdout,
+                stderr,
+                stdout_open,
+                stderr_open,
+                decoder,
+                on_event,
+            )?,
+            Err(TryRecvError::Empty) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Ok(());
+                }
+                let remaining = deadline.saturating_duration_since(now);
+                let wait = remaining.min(Duration::from_millis(25));
+                match rx.recv_timeout(wait) {
+                    Ok(event) => process_streaming_pipe_event(
+                        command,
+                        event,
+                        stdout,
+                        stderr,
+                        stdout_open,
+                        stderr_open,
+                        decoder,
+                        on_event,
+                    )?,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                }
+            }
+            Err(TryRecvError::Disconnected) => return Ok(()),
+        }
+    }
+    Ok(())
 }
 
 fn wait_with_timeout_streaming<F>(
@@ -803,7 +1041,7 @@ fn wait_with_timeout_streaming<F>(
 where
     F: FnMut(AiProcessStreamEvent<'_>),
 {
-    let stdout_pipe = child
+    let stdout = child
         .stdout
         .take()
         .ok_or_else(|| AppError::Other(format!("{command} stdout missing")))?;
@@ -812,45 +1050,51 @@ where
         .take()
         .ok_or_else(|| AppError::Other(format!("{command} stderr missing")))?;
 
-    let (stdout_tx, stdout_rx) = mpsc::channel();
-    let stdout_reader = thread::spawn(move || {
-        let mut reader = stdout_pipe;
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if stdout_tx.send(Ok(buf[..n].to_vec())).is_err() {
-                        break;
-                    }
-                }
-                Err(err) => {
-                    let _ = stdout_tx.send(Err(err));
-                    break;
-                }
-            }
-        }
-    });
-    let stderr_reader = thread::spawn(move || {
-        let mut reader = stderr;
-        let mut buf = Vec::new();
-        reader.read_to_end(&mut buf).map(|_| buf)
-    });
+    let (pipe_tx, pipe_rx) = mpsc::sync_channel(PIPE_CHANNEL_CAPACITY);
+    spawn_pipe_reader(PipeKind::Stdout, stdout, pipe_tx.clone());
+    spawn_pipe_reader(PipeKind::Stderr, stderr, pipe_tx);
 
     let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut stdout_open = true;
+    let mut stderr_open = true;
     let mut decoder = Utf8ChunkDecoder::new();
     let started = Instant::now();
     let status = if let Some(cancellation) = cancellation {
         cancellation.set_child(child, Arc::clone(&process_tree));
         let status = loop {
-            drain_stdout_chunks(command, &stdout_rx, &mut stdout, &mut decoder, on_event)?;
+            if let Err(err) = drain_streaming_pipe_events(
+                command,
+                &pipe_rx,
+                &mut stdout,
+                &mut stderr,
+                &mut stdout_open,
+                &mut stderr_open,
+                &mut decoder,
+                on_event,
+            ) {
+                let _ = process_tree.terminate();
+                cancellation.kill_and_wait();
+                cancellation.clear_child();
+                return Err(err);
+            }
             on_event(AiProcessStreamEvent::Tick);
             if cancellation.is_cancelled() {
                 let _ = process_tree.terminate();
                 cancellation.kill_and_wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                let drain_result = drain_streaming_pipe_events_until_closed(
+                    command,
+                    &pipe_rx,
+                    &mut stdout,
+                    &mut stderr,
+                    &mut stdout_open,
+                    &mut stderr_open,
+                    &mut decoder,
+                    on_event,
+                    PIPE_DRAIN_TIMEOUT,
+                );
                 cancellation.clear_child();
+                drain_result?;
                 return Err(AppError::Other(format!("{command} cancelled")));
             }
             match cancellation.try_wait(command)? {
@@ -858,9 +1102,19 @@ where
                 None if timeout.is_some_and(|timeout| started.elapsed() >= timeout) => {
                     let _ = process_tree.terminate();
                     cancellation.kill_and_wait();
-                    let _ = stdout_reader.join();
-                    let _ = stderr_reader.join();
+                    let drain_result = drain_streaming_pipe_events_until_closed(
+                        command,
+                        &pipe_rx,
+                        &mut stdout,
+                        &mut stderr,
+                        &mut stdout_open,
+                        &mut stderr_open,
+                        &mut decoder,
+                        on_event,
+                        PIPE_DRAIN_TIMEOUT,
+                    );
                     cancellation.clear_child();
+                    drain_result?;
                     let timeout = timeout.expect("timeout checked as some");
                     return Err(AppError::Other(format!(
                         "{command} timed out after {} seconds",
@@ -874,7 +1128,21 @@ where
         status
     } else {
         loop {
-            drain_stdout_chunks(command, &stdout_rx, &mut stdout, &mut decoder, on_event)?;
+            if let Err(err) = drain_streaming_pipe_events(
+                command,
+                &pipe_rx,
+                &mut stdout,
+                &mut stderr,
+                &mut stdout_open,
+                &mut stderr_open,
+                &mut decoder,
+                on_event,
+            ) {
+                let _ = process_tree.terminate();
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(err);
+            }
             on_event(AiProcessStreamEvent::Tick);
             match child
                 .try_wait()
@@ -885,8 +1153,17 @@ where
                     let _ = process_tree.terminate();
                     let _ = child.kill();
                     let _ = child.wait();
-                    let _ = stdout_reader.join();
-                    let _ = stderr_reader.join();
+                    drain_streaming_pipe_events_until_closed(
+                        command,
+                        &pipe_rx,
+                        &mut stdout,
+                        &mut stderr,
+                        &mut stdout_open,
+                        &mut stderr_open,
+                        &mut decoder,
+                        on_event,
+                        PIPE_DRAIN_TIMEOUT,
+                    )?;
                     let timeout = timeout.expect("timeout checked as some");
                     return Err(AppError::Other(format!(
                         "{command} timed out after {} seconds",
@@ -898,23 +1175,33 @@ where
         }
     };
 
-    if !stdout_reader.is_finished() || !stderr_reader.is_finished() {
+    if stdout_open || stderr_open {
         let _ = process_tree.terminate();
     }
-    stdout_reader
-        .join()
-        .map_err(|_| AppError::Other(format!("{command} stdout reader failed")))?;
-    drain_stdout_chunks(command, &stdout_rx, &mut stdout, &mut decoder, on_event)?;
+    drain_streaming_pipe_events_until_closed(
+        command,
+        &pipe_rx,
+        &mut stdout,
+        &mut stderr,
+        &mut stdout_open,
+        &mut stderr_open,
+        &mut decoder,
+        on_event,
+        PIPE_DRAIN_TIMEOUT,
+    )?;
+    if stdout_open || stderr_open {
+        tracing::warn!(
+            command,
+            stdout_open,
+            stderr_open,
+            "AI streaming pipe reader did not finish after child exit"
+        );
+    }
     on_event(AiProcessStreamEvent::Tick);
     let trailing = decoder.finish();
     if !trailing.is_empty() {
         on_event(AiProcessStreamEvent::Stdout(&trailing));
     }
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| AppError::Other(format!("{command} stderr reader failed")))?
-        .map_err(|e| AppError::Other(format!("failed reading {command} stderr: {e}")))?;
-
     Ok(Output {
         status,
         stdout,
@@ -925,6 +1212,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_output_rejects_chunks_past_limit_without_growing_buffer() {
+        let mut output = b"1234".to_vec();
+        append_chunk_with_limit("test-ai", "stdout", &mut output, b"56", 6).unwrap();
+        let err = append_chunk_with_limit("test-ai", "stdout", &mut output, b"7", 6)
+            .expect_err("output beyond the configured limit must fail");
+
+        assert_eq!(output, b"123456");
+        assert!(err.to_string().contains("exceeded the 6 byte output limit"));
+    }
 
     #[test]
     fn resolves_known_ai_provider_commands() {
@@ -990,6 +1288,94 @@ mod tests {
                 "--effort",
                 "max",
             ]
+        );
+    }
+
+    #[test]
+    fn passive_claude_is_tool_free_non_persistent_and_stdin_only() {
+        let request = AiExecutionRequest {
+            provider: AiProvider::Claude,
+            model: Some("claude-opus-4-1".to_string()),
+            effort: None,
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        let resolved = request.resolve_passive_text().unwrap();
+        assert_eq!(resolved.prompt_transport, PromptTransport::Stdin);
+        for required in [
+            "--safe-mode",
+            "--tools",
+            "--disable-slash-commands",
+            "--no-chrome",
+            "--no-session-persistence",
+            "--permission-mode",
+            "dontAsk",
+        ] {
+            assert!(resolved.args.iter().any(|argument| argument == required));
+        }
+        let tools = resolved
+            .args
+            .iter()
+            .position(|argument| argument == "--tools")
+            .unwrap();
+        assert_eq!(resolved.args.get(tools + 1).map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn passive_llm_disables_default_logging() {
+        let request = AiExecutionRequest {
+            provider: AiProvider::Llm,
+            model: None,
+            effort: None,
+            ollama_model: None,
+            llm_model: Some("gpt-4o-mini".to_string()),
+        };
+
+        let resolved = request.resolve_passive_text().unwrap();
+        assert_eq!(resolved.prompt_transport, PromptTransport::Stdin);
+        assert!(resolved.args.iter().any(|argument| argument == "--no-log"));
+        assert!(resolved
+            .args
+            .iter()
+            .any(|argument| argument == "--no-stream"));
+    }
+
+    #[test]
+    fn passive_generation_rejects_agent_clis_without_tool_free_mode() {
+        for provider in [AiProvider::Codex, AiProvider::Antigravity, AiProvider::Grok] {
+            let request = AiExecutionRequest {
+                provider,
+                model: None,
+                effort: None,
+                ollama_model: None,
+                llm_model: None,
+            };
+            let error = request
+                .resolve_passive_text()
+                .expect_err("agent provider must fail closed");
+            assert!(error.to_string().contains("tool-free, non-persistent"));
+        }
+    }
+
+    #[test]
+    fn passive_environment_removes_acorn_authority_values() {
+        let mut command = Command::new("ignored");
+        command
+            .env("ACORN_TEST_AUTHORITY", "secret")
+            .env("SAFE_VALUE", "visible");
+
+        strip_acorn_authority_environment(&mut command);
+
+        let env = command
+            .get_envs()
+            .map(|(key, value)| (key.to_string_lossy().into_owned(), value))
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(env.get("ACORN_TEST_AUTHORITY"), Some(&None));
+        assert_eq!(
+            env.get("SAFE_VALUE")
+                .and_then(|value| value.map(|value| value.to_string_lossy().into_owned())),
+            Some("visible".to_string())
         );
     }
 

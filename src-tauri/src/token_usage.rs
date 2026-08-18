@@ -1,9 +1,10 @@
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
+#[cfg(test)]
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use acorn_transcript::read_tail;
 use directories::UserDirs;
@@ -19,7 +20,6 @@ const CODEX_SESSION_TAIL_BYTES: u64 = 256 * 1024;
 const CLAUDE_RATE_LIMIT_MAX_BYTES: u64 = 64 * 1024;
 const CODEX_SQLITE_STDOUT_MAX_BYTES: usize = 256 * 1024;
 const CODEX_SQLITE_TIMEOUT: Duration = Duration::from_secs(2);
-const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -535,14 +535,14 @@ fn is_plain_regular_file(path: &Path) -> bool {
 }
 
 fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_file() {
+    let before = fs::symlink_metadata(path)?;
+    if !before.file_type().is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "expected a regular file without symlinks",
         ));
     }
-    if metadata.len() > max_bytes {
+    if before.len() > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "file exceeds byte budget",
@@ -550,7 +550,17 @@ fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>>
     }
 
     let file = File::open(path)?;
-    let capacity = metadata.len().min(max_bytes).min(usize::MAX as u64) as usize;
+    let opened = file.metadata()?;
+    if !opened.file_type().is_file()
+        || opened.len() > max_bytes
+        || !same_opened_file(&before, &opened)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "file changed or exceeded its byte budget while opening",
+        ));
+    }
+    let capacity = opened.len().min(max_bytes).min(usize::MAX as u64) as usize;
     let mut data = Vec::with_capacity(capacity);
     file.take(max_bytes.saturating_add(1))
         .read_to_end(&mut data)?;
@@ -563,79 +573,40 @@ fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>>
     Ok(data)
 }
 
+#[cfg(unix)]
+fn same_opened_file(before: &fs::Metadata, opened: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    before.dev() == opened.dev() && before.ino() == opened.ino()
+}
+
+#[cfg(not(unix))]
+fn same_opened_file(_before: &fs::Metadata, _opened: &fs::Metadata) -> bool {
+    true
+}
+
 fn command_stdout_bounded(
     command: &mut Command,
     max_stdout: usize,
     timeout: Duration,
 ) -> io::Result<Vec<u8>> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = command.spawn()?;
-    let stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            terminate_child(&mut child);
-            return Err(io::Error::other("child stdout pipe missing"));
-        }
-    };
-    let reader = match thread::Builder::new()
-        .name("token-usage-stdout".to_string())
-        .spawn(move || {
-            let mut bytes = Vec::with_capacity(max_stdout.min(8 * 1024));
-            stdout
-                .take((max_stdout as u64).saturating_add(1))
-                .read_to_end(&mut bytes)?;
-            Ok::<_, io::Error>(bytes)
-        }) {
-        Ok(reader) => reader,
-        Err(err) => {
-            terminate_child(&mut child);
-            return Err(err);
-        }
-    };
-
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() >= timeout => {
-                terminate_child(&mut child);
-                let _ = reader.join();
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "child process exceeded time budget",
-                ));
-            }
-            Ok(None) => thread::sleep(CHILD_POLL_INTERVAL),
-            Err(err) => {
-                terminate_child(&mut child);
-                let _ = reader.join();
-                return Err(err);
-            }
-        }
-    };
-    let bytes = reader
-        .join()
-        .map_err(|_| io::Error::other("child stdout reader panicked"))??;
-    if bytes.len() > max_stdout {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "child stdout exceeds byte budget",
-        ));
-    }
-    if !status.success() {
+    let output = acorn_platform::process::run_bounded(
+        command,
+        None,
+        acorn_platform::process::BoundedOutputLimits {
+            timeout,
+            stdin_bytes: 0,
+            stdout_bytes: max_stdout,
+            stderr_bytes: 64 * 1024,
+        },
+    )?;
+    if !output.status.success() {
         return Err(io::Error::other(format!(
-            "child process exited with {status}"
+            "child process exited with {}",
+            output.status
         )));
     }
-    Ok(bytes)
-}
-
-fn terminate_child(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+    Ok(output.stdout)
 }
 
 fn render_source_path(path: &Path) -> String {

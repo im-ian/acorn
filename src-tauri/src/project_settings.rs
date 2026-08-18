@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -8,6 +7,7 @@ use crate::error::{AppError, AppResult};
 use crate::{git_ops, persistence};
 
 const PROJECT_SETTINGS_FILE: &str = "project_settings.json";
+const MAX_PROJECT_SETTINGS_FILE_BYTES: u64 = 4 * 1024 * 1024;
 pub const PR_GENERATION_PROMPT_MAX_CHARS: usize = 2_000;
 pub const WORKTREE_BASE_BRANCH_MAX_CHARS: usize = 255;
 pub const STANDARD_PR_GENERATION_PROMPT: &str = "Use a standard GitHub-style pull request merge message.
@@ -73,10 +73,14 @@ fn settings_path() -> AppResult<PathBuf> {
 
 fn load_all() -> AppResult<SettingsMap> {
     let path = settings_path()?;
-    if !path.exists() {
-        return Ok(SettingsMap::new());
-    }
-    let bytes = fs::read(&path)?;
+    let bytes = match persistence::read_bounded_regular_file(&path, MAX_PROJECT_SETTINGS_FILE_BYTES)
+    {
+        Ok(bytes) => bytes,
+        Err(AppError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SettingsMap::new());
+        }
+        Err(err) => return Err(err),
+    };
     serde_json::from_slice::<SettingsMap>(&bytes)
         .map_err(|err| AppError::Other(format!("failed to parse project settings: {err}")))
 }
@@ -85,6 +89,11 @@ fn save_all(settings: &SettingsMap) -> AppResult<()> {
     let final_path = settings_path()?;
     let payload = serde_json::to_vec_pretty(settings)
         .map_err(|err| AppError::Other(format!("failed to serialize project settings: {err}")))?;
+    persistence::ensure_payload_within_limit(
+        &payload,
+        MAX_PROJECT_SETTINGS_FILE_BYTES,
+        "project settings",
+    )?;
     acorn_platform::fs::write_atomic(&final_path, &payload)?;
     Ok(())
 }

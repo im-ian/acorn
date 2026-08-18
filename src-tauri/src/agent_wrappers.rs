@@ -1065,7 +1065,7 @@ pub fn remove_agent_hook_endpoint() {
 
 fn ensure_agent_wrapper_dir_at(base: &Path) -> io::Result<PathBuf> {
     let dir = base.join(WRAPPER_DIR_NAME);
-    fs::create_dir_all(&dir)?;
+    ensure_plain_wrapper_directory(&dir)?;
     write_executable(&dir.join(CODEX_WRAPPER_NAME), CODEX_WRAPPER_BODY)?;
     write_executable(&dir.join(CODEX_NOTIFY_NAME), CODEX_NOTIFY_BODY)?;
     write_executable(&dir.join(CLAUDE_WRAPPER_NAME), CLAUDE_WRAPPER_BODY)?;
@@ -1078,6 +1078,35 @@ fn ensure_agent_wrapper_dir_at(base: &Path) -> io::Result<PathBuf> {
     write_executable(&dir.join(GROK_WRAPPER_NAME), GROK_WRAPPER_BODY)?;
     write_claude_settings(&dir)?;
     Ok(dir)
+}
+
+fn ensure_plain_wrapper_directory(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => return Ok(()),
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "expected a real agent-wrapper directory: {}",
+                    path.display()
+                ),
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::create_dir_all(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "expected a real agent-wrapper directory: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn write_claude_settings(dir: &Path) -> io::Result<()> {
@@ -1097,7 +1126,7 @@ fn write_claude_settings(dir: &Path) -> io::Result<()> {
 "#,
         cmd = escaped
     );
-    fs::write(dir.join(CLAUDE_SETTINGS_NAME), body)
+    acorn_platform::fs::write_atomic_private(&dir.join(CLAUDE_SETTINGS_NAME), body.as_bytes())
 }
 
 fn shell_quote(input: &str) -> String {
@@ -1121,7 +1150,7 @@ fn json_escape(input: &str) -> String {
 }
 
 fn write_executable(path: &Path, body: &str) -> io::Result<()> {
-    fs::write(path, body)?;
+    acorn_platform::fs::write_atomic_private(path, body.as_bytes())?;
     #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
     Ok(())
@@ -1155,6 +1184,41 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_wrapper_replaces_symlink_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let base = ScratchDir::new("managed-link");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let sentinel = base.path().join("sentinel");
+        fs::write(&sentinel, "do not overwrite").unwrap();
+        let wrapper = dir.join(CODEX_WRAPPER_NAME);
+        fs::remove_file(&wrapper).unwrap();
+        symlink(&sentinel, &wrapper).unwrap();
+
+        ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "do not overwrite");
+        assert!(fs::symlink_metadata(&wrapper)
+            .unwrap()
+            .file_type()
+            .is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_wrapper_rejects_symlinked_directory() {
+        use std::os::unix::fs::symlink;
+
+        let base = ScratchDir::new("managed-dir-link");
+        let outside = ScratchDir::new("managed-dir-outside");
+        symlink(outside.path(), base.path().join(WRAPPER_DIR_NAME)).unwrap();
+
+        assert!(ensure_agent_wrapper_dir_at(base.path()).is_err());
+        assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
     }
 
     fn shell_quote_for_test(input: &str) -> String {
@@ -1607,10 +1671,11 @@ done
 [ -s "$ACORN_TEST_TAIL_PID" ] || exit 1
 printf '%s\n' "$ACORN_TEST_TUI_LINE" >> "$CODEX_TUI_SESSION_LOG_PATH"
 _acorn_i=0
-while [ ! -s "$ACORN_NOTIFY_CAPTURE" ] && [ "$_acorn_i" -lt 50 ]; do
+while [ ! -s "$ACORN_NOTIFY_CAPTURE" ] && [ "$_acorn_i" -lt 250 ]; do
   _acorn_i=$((_acorn_i + 1))
   sleep 0.02
 done
+[ -s "$ACORN_NOTIFY_CAPTURE" ] || exit 1
 "#,
         )
         .unwrap();

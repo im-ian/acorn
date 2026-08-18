@@ -66,6 +66,7 @@ export function MediaViewer({
     clampImageZoom(viewState?.media?.imageZoom ?? 1),
   );
   const loadSeqRef = useRef(0);
+  const assetCapabilityRef = useRef<string | null>(null);
   const title = basenameFromPath(path);
   const reportMediaScrollPosition = useDeferredScrollReporter(
     useCallback(
@@ -83,8 +84,14 @@ export function MediaViewer({
       if (reset) setState(EMPTY_STATE);
       try {
         const asset = await api.fsPrepareAsset(path);
-        if (seq !== loadSeqRef.current) return;
-        const baseSrc = convertFileSrc(path);
+        if (seq !== loadSeqRef.current) {
+          void api.fsReleaseAsset(asset.capability);
+          return;
+        }
+        const previousCapability = assetCapabilityRef.current;
+        assetCapabilityRef.current = asset.capability;
+        if (previousCapability) void api.fsReleaseAsset(previousCapability);
+        const baseSrc = convertFileSrc(asset.asset_path);
         const separator = baseSrc.includes("?") ? "&" : "?";
         setState({
           src: `${baseSrc}${separator}v=${seq}`,
@@ -94,6 +101,9 @@ export function MediaViewer({
         });
       } catch (err: unknown) {
         if (seq !== loadSeqRef.current) return;
+        const previousCapability = assetCapabilityRef.current;
+        assetCapabilityRef.current = null;
+        if (previousCapability) void api.fsReleaseAsset(previousCapability);
         setState({
           src: null,
           asset: null,
@@ -109,6 +119,9 @@ export function MediaViewer({
     void refreshAsset({ reset: true });
     return () => {
       loadSeqRef.current += 1;
+      const capability = assetCapabilityRef.current;
+      assetCapabilityRef.current = null;
+      if (capability) void api.fsReleaseAsset(capability);
     };
   }, [refreshAsset]);
 
@@ -225,6 +238,7 @@ function renderMedia(
           <img
             src={src}
             alt={title}
+            referrerPolicy="no-referrer"
             className="max-h-full max-w-full object-contain will-change-transform"
             style={{
               transform: `scale(${imageZoom})`,
@@ -259,6 +273,7 @@ function renderMedia(
       src={src}
       title={title}
       referrerPolicy="no-referrer"
+      sandbox=""
       className="h-full w-full border-0 bg-white"
     />
   );

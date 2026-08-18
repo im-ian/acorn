@@ -2,32 +2,39 @@
 //!
 //! Run from inside an Acorn PTY: the spawning code in `commands::pty_spawn`
 //! injects Acorn identity/path environment so this binary can locate the
-//! server and identify itself without flags. Regular sessions can bootstrap
-//! themselves with `promote-self`; other commands still require a control
-//! source session.
+//! server and identify itself without flags. Commands require a control source
+//! session created explicitly by Acorn; repository code in a regular session
+//! cannot promote itself.
 //!
 //! Exits non-zero on protocol errors so it composes cleanly in shell scripts;
 //! the exit code maps the server's `ErrorCode` so callers can branch on the
 //! specific failure mode (`2` = unauthorized, `3` = not-found, etc.).
 
-use std::io::{BufRead, BufReader, Write};
+#[cfg(test)]
+use std::io::BufRead;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use clap::{Parser, Subcommand};
 
 use acorn_ipc::proto::{
     Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, WorkspaceSummary,
-    PROTOCOL_VERSION,
+    MAX_REQUEST_FRAME_BYTES, MAX_RESPONSE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use acorn_ipc::socket_path;
+use acorn_local_ipc::StreamTrait as _;
 
 const ENV_SESSION_ID: &str = "ACORN_SESSION_ID";
 const ENV_RESUME_TOKEN: &str = "ACORN_RESUME_TOKEN";
+const ENV_IPC_CAPABILITY: &str = "ACORN_IPC_CAPABILITY";
 const ENV_WORKSPACE_ID: &str = "ACORN_WORKSPACE_ID";
 const ENV_WORKSPACE_PATH: &str = "ACORN_WORKSPACE_PATH";
 const ENV_WORKSPACE_NAME: &str = "ACORN_WORKSPACE_NAME";
+const IPC_IO_TIMEOUT: Duration = Duration::from_secs(2);
+const IPC_IO_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 #[derive(Parser)]
 #[command(
@@ -35,9 +42,8 @@ const ENV_WORKSPACE_NAME: &str = "ACORN_WORKSPACE_NAME";
     about = "Talk to a running Acorn app from inside an Acorn terminal.",
     long_about = "acorn-ipc speaks to the in-app server over private local \
                   IPC. Acorn terminals export session identity and endpoint \
-                  paths into their PTY environment. Run `promote-self` once \
-                  from a regular Acorn terminal to turn it into a control \
-                  session; other commands require that control permission."
+                  paths into their PTY environment. Acorn must create the \
+                  terminal as a control session before commands are authorized."
 )]
 struct Cli {
     /// Print responses as raw JSON instead of the default table/text. Useful
@@ -55,13 +61,18 @@ struct Cli {
     #[arg(long, global = true, value_name = "UUID")]
     source: Option<String>,
 
+    /// Override the PTY capability. Falls back to `$ACORN_IPC_CAPABILITY`.
+    /// Intended for protocol tests; normal terminals receive it from Acorn.
+    #[arg(long, global = true, value_name = "TOKEN")]
+    capability: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Promote this Acorn terminal into a control session.
+    /// Confirm that this Acorn terminal already has control authority.
     PromoteSelf,
     /// Print the Acorn control-session context an agent should load.
     Context,
@@ -190,6 +201,19 @@ fn main() -> ExitCode {
     };
 
     let json = cli.json;
+    let session_capability = match cli
+        .capability
+        .clone()
+        .or_else(|| std::env::var(ENV_IPC_CAPABILITY).ok())
+    {
+        Some(value) if !value.trim().is_empty() => value,
+        _ => {
+            eprintln!(
+                "acorn-ipc: session capability is unset. Run me from inside the source Acorn terminal."
+            );
+            return ExitCode::from(map_error_exit(ErrorCode::Unauthorized));
+        }
+    };
     let request = match build_request(&cli.command) {
         Ok(r) => r,
         Err(msg) => {
@@ -201,6 +225,7 @@ fn main() -> ExitCode {
     let envelope = Envelope {
         protocol_version: PROTOCOL_VERSION,
         source_session_id: source,
+        session_capability,
         request,
     };
 
@@ -398,10 +423,20 @@ fn run_status(socket_path: &Path, json: bool) -> ExitCode {
     let exists = acorn_local_ipc::marker_exists(socket_path);
     let (reachable, error) = match acorn_local_ipc::connect(socket_path) {
         Ok(stream) => {
-            // Close immediately — the server treats every connection as a
-            // single request and would otherwise wait for one.
+            let verified = acorn_local_ipc::peer_process_id(&stream)
+                .ok()
+                .is_some_and(|pid| {
+                    acorn_platform::process::pid_executable_name_matches(pid, "acorn")
+                });
             drop(stream);
-            (true, None)
+            if verified {
+                (true, None)
+            } else {
+                (
+                    false,
+                    Some("socket peer is not the Acorn application".to_string()),
+                )
+            }
         }
         Err(err) => (false, Some(err.to_string())),
     };
@@ -428,7 +463,10 @@ fn run_status(socket_path: &Path, json: bool) -> ExitCode {
         }
         return ExitCode::SUCCESS;
     }
-    println!("socket:           {}", socket_path.display());
+    println!(
+        "socket:           {}",
+        terminal_safe_field(&socket_path.display().to_string())
+    );
     println!(
         "socket file:      {}",
         if exists { "present" } else { "missing" }
@@ -437,42 +475,173 @@ fn run_status(socket_path: &Path, json: bool) -> ExitCode {
         println!("reachable:        yes");
     } else {
         let reason = error.as_deref().unwrap_or("unknown");
-        println!("reachable:        no ({reason})");
+        println!("reachable:        no ({})", terminal_safe_field(reason));
     }
     println!("protocol version: {PROTOCOL_VERSION}");
     println!(
         "source env:       {}",
-        source_env.as_deref().unwrap_or("(unset)")
+        terminal_safe_field(source_env.as_deref().unwrap_or("(unset)"))
     );
     println!(
         "workspace id:     {}",
-        workspace_env.id.as_deref().unwrap_or("(unset)")
+        terminal_safe_field(workspace_env.id.as_deref().unwrap_or("(unset)"))
     );
     println!(
         "workspace path:   {}",
-        workspace_env.path.as_deref().unwrap_or("(unset)")
+        terminal_safe_field(workspace_env.path.as_deref().unwrap_or("(unset)"))
     );
     println!(
         "workspace name:   {}",
-        workspace_env.name.as_deref().unwrap_or("(unset)")
+        terminal_safe_field(workspace_env.name.as_deref().unwrap_or("(unset)"))
     );
     ExitCode::SUCCESS
 }
 
 fn send(path: &std::path::Path, envelope: &Envelope) -> Result<Response, String> {
     let mut stream = acorn_local_ipc::connect(path).map_err(|e| format!("connect: {e}"))?;
+    let peer_pid =
+        acorn_local_ipc::peer_process_id(&stream).map_err(|e| format!("identify server: {e}"))?;
+    if !acorn_platform::process::pid_executable_name_matches(peer_pid, "acorn") {
+        return Err(format!(
+            "server process {peer_pid} is not the Acorn application"
+        ));
+    }
+    stream
+        .set_nonblocking(true)
+        .map_err(|e| format!("set nonblocking: {e}"))?;
     let mut payload = serde_json::to_vec(envelope).map_err(|e| format!("encode: {e}"))?;
     payload.push(b'\n');
-    stream
-        .write_all(&payload)
-        .map_err(|e| format!("write: {e}"))?;
-    stream.flush().map_err(|e| format!("flush: {e}"))?;
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .map_err(|e| format!("read: {e}"))?;
+    if payload.len() > MAX_REQUEST_FRAME_BYTES {
+        return Err(format!(
+            "request exceeds {MAX_REQUEST_FRAME_BYTES}-byte protocol limit"
+        ));
+    }
+    write_all_with_deadline(&mut stream, &payload, IPC_IO_TIMEOUT)?;
+    let line = read_response_with_deadline(&mut stream, IPC_IO_TIMEOUT)?;
     serde_json::from_str(line.trim_end()).map_err(|e| format!("decode: {e}"))
+}
+
+fn write_all_with_deadline<W: Write>(
+    writer: &mut W,
+    bytes: &[u8],
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    let mut offset = 0;
+    while offset < bytes.len() {
+        match writer.write(&bytes[offset..]) {
+            Ok(0) => return Err("write: connection closed".into()),
+            Ok(written) => offset += written,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err("write: IPC request timed out".into());
+                }
+                std::thread::sleep(IPC_IO_POLL_INTERVAL);
+            }
+            Err(error) => return Err(format!("write: {error}")),
+        }
+    }
+    loop {
+        match writer.flush() {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err("flush: IPC request timed out".into());
+                }
+                std::thread::sleep(IPC_IO_POLL_INTERVAL);
+            }
+            Err(error) => return Err(format!("flush: {error}")),
+        }
+    }
+}
+
+fn read_response_with_deadline<R: Read>(
+    reader: &mut R,
+    timeout: Duration,
+) -> Result<String, String> {
+    let deadline = Instant::now() + timeout;
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 8 * 1024];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) if bytes.is_empty() => return Err("read: connection closed".into()),
+            Ok(0) => break,
+            Ok(read) => {
+                let newline = chunk[..read].iter().position(|byte| *byte == b'\n');
+                let take = newline.map_or(read, |index| index + 1);
+                bytes.extend_from_slice(&chunk[..take]);
+                if bytes.len() > MAX_RESPONSE_FRAME_BYTES {
+                    return Err(format!(
+                        "response exceeds {MAX_RESPONSE_FRAME_BYTES}-byte protocol limit"
+                    ));
+                }
+                if newline.is_some() {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err("read: IPC response timed out".into());
+                }
+                std::thread::sleep(IPC_IO_POLL_INTERVAL);
+            }
+            Err(error) => return Err(format!("read: {error}")),
+        }
+    }
+    String::from_utf8(bytes).map_err(|error| format!("read: response is not UTF-8: {error}"))
+}
+
+#[cfg(test)]
+fn read_response_line<R: BufRead>(reader: &mut R) -> Result<String, String> {
+    let mut line = String::new();
+    let mut limited = Read::take(reader, (MAX_RESPONSE_FRAME_BYTES + 1) as u64);
+    limited
+        .read_line(&mut line)
+        .map_err(|error| format!("read: {error}"))?;
+    if line.len() > MAX_RESPONSE_FRAME_BYTES {
+        return Err(format!(
+            "response exceeds {MAX_RESPONSE_FRAME_BYTES}-byte protocol limit"
+        ));
+    }
+    Ok(line)
+}
+
+fn terminal_safe_field(value: &str) -> String {
+    terminal_safe_text(value, false)
+}
+
+fn terminal_safe_multiline(value: &str) -> String {
+    terminal_safe_text(value, true)
+}
+
+fn terminal_safe_text(value: &str, preserve_newlines: bool) -> String {
+    let mut safe = String::with_capacity(value.len());
+    for character in value.chars() {
+        if preserve_newlines && character == '\n' {
+            safe.push('\n');
+        } else if terminal_unsafe_character(character) {
+            match character {
+                '\n' => safe.push_str("\\n"),
+                '\r' => safe.push_str("\\r"),
+                '\t' => safe.push_str("\\t"),
+                _ => safe.push_str(&format!("\\u{{{:x}}}", u32::from(character))),
+            }
+        } else {
+            safe.push(character);
+        }
+    }
+    safe
+}
+
+fn terminal_unsafe_character(value: char) -> bool {
+    value.is_control()
+        || matches!(
+            value,
+            '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
 }
 
 fn render(response: &Response, json: bool) -> ExitCode {
@@ -491,7 +660,7 @@ fn render(response: &Response, json: bool) -> ExitCode {
     }
     match response {
         Response::Context { text } => {
-            println!("{text}");
+            println!("{}", terminal_safe_multiline(text));
             ExitCode::SUCCESS
         }
         Response::Sessions { sessions } => {
@@ -531,16 +700,22 @@ fn render(response: &Response, json: bool) -> ExitCode {
             context,
         } => {
             if *already_control {
-                println!("session {session_id} is already a control session");
+                println!(
+                    "session {} is already a control session",
+                    terminal_safe_field(session_id)
+                );
             } else {
-                println!("promoted session {session_id} to control session");
+                println!(
+                    "promoted session {} to control session",
+                    terminal_safe_field(session_id)
+                );
             }
             println!();
-            println!("{context}");
+            println!("{}", terminal_safe_multiline(context));
             ExitCode::SUCCESS
         }
         Response::Error { code, message } => {
-            eprintln!("acorn-ipc: {message}");
+            eprintln!("acorn-ipc: {}", terminal_safe_field(message));
             ExitCode::from(map_error_exit(*code))
         }
     }
@@ -551,40 +726,57 @@ fn print_sessions(sessions: &[SessionSummary]) {
         println!("(no sessions)");
         return;
     }
-    let id_w = sessions.iter().map(|s| s.id.len()).max().unwrap_or(8);
-    let name_w = sessions
+    let rows = sessions
         .iter()
-        .map(|s| s.name.len())
+        .map(|session| {
+            (
+                terminal_safe_field(&session.id),
+                terminal_safe_field(&session.name),
+                terminal_safe_field(&session.kind),
+                terminal_safe_field(&session.owner),
+                terminal_safe_field(&session.status),
+                terminal_safe_field(printable_workspace_path(session)),
+                terminal_safe_field(&session.branch),
+            )
+        })
+        .collect::<Vec<_>>();
+    let id_w = rows
+        .iter()
+        .map(|row| row.0.chars().count())
+        .max()
+        .unwrap_or(8);
+    let name_w = rows
+        .iter()
+        .map(|row| row.1.chars().count())
         .max()
         .unwrap_or(8)
         .max(4);
-    let kind_w = sessions
+    let kind_w = rows
         .iter()
-        .map(|s| s.kind.len())
+        .map(|row| row.2.chars().count())
         .max()
         .unwrap_or(7)
         .max(4);
-    let owner_w = sessions
+    let owner_w = rows
         .iter()
-        .map(|s| s.owner.len())
+        .map(|row| row.3.chars().count())
         .max()
         .unwrap_or(5)
         .max(5);
-    let status_w = sessions
+    let status_w = rows
         .iter()
-        .map(|s| s.status.len())
+        .map(|row| row.4.chars().count())
         .max()
         .unwrap_or(6)
         .max(6);
-    let workspace_w = sessions
+    let workspace_w = rows
         .iter()
-        .map(|s| printable_workspace_path(s).len())
+        .map(|row| row.5.chars().count())
         .max()
         .unwrap_or(9)
         .max(9);
     println!(
-        "{marker} {mine:<4}  {id:<id_w$}  {name:<name_w$}  {kind:<kind_w$}  {owner:<owner_w$}  {status:<status_w$}  {workspace:<workspace_w$}  branch",
-        marker = " ",
+        "  {mine:<4}  {id:<id_w$}  {name:<name_w$}  {kind:<kind_w$}  {owner:<owner_w$}  {status:<status_w$}  {workspace:<workspace_w$}  branch",
         mine = "MINE",
         id = "ID",
         name = "NAME",
@@ -593,21 +785,20 @@ fn print_sessions(sessions: &[SessionSummary]) {
         status = "STATUS",
         workspace = "WORKSPACE",
     );
-    for s in sessions {
+    for (s, row) in sessions.iter().zip(rows) {
         let marker = if s.is_source { "*" } else { " " };
         let mine = if s.owned_by_me { "yes" } else { "no" };
-        let workspace = printable_workspace_path(s);
         println!(
             "{marker} {mine:<4}  {id:<id_w$}  {name:<name_w$}  {kind:<kind_w$}  {owner:<owner_w$}  {status:<status_w$}  {workspace:<workspace_w$}  {branch}",
             marker = marker,
             mine = mine,
-            id = s.id,
-            name = s.name,
-            kind = s.kind,
-            owner = s.owner,
-            status = s.status,
-            workspace = workspace,
-            branch = s.branch,
+            id = row.0,
+            name = row.1,
+            kind = row.2,
+            owner = row.3,
+            status = row.4,
+            workspace = row.5,
+            branch = row.6,
         );
     }
 }
@@ -625,27 +816,36 @@ fn print_workspaces(workspaces: &[WorkspaceSummary]) {
         println!("(no workspaces)");
         return;
     }
-    let id_w = workspaces
+    let rows = workspaces
         .iter()
-        .map(|w| w.id.len())
+        .map(|workspace| {
+            (
+                terminal_safe_field(&workspace.id),
+                terminal_safe_field(&workspace.name),
+                terminal_safe_field(&workspace.workspace_path),
+            )
+        })
+        .collect::<Vec<_>>();
+    let id_w = rows
+        .iter()
+        .map(|row| row.0.chars().count())
         .max()
         .unwrap_or(2)
         .max(2);
-    let name_w = workspaces
+    let name_w = rows
         .iter()
-        .map(|w| w.name.len())
+        .map(|row| row.1.chars().count())
         .max()
         .unwrap_or(4)
         .max(4);
-    let workspace_w = workspaces
+    let workspace_w = rows
         .iter()
-        .map(|w| w.workspace_path.len())
+        .map(|row| row.2.chars().count())
         .max()
         .unwrap_or(9)
         .max(9);
     println!(
-        "{marker} {source:<6}  {active:<6}  {sessions:<8}  {id:<id_w$}  {name:<name_w$}  {workspace:<workspace_w$}",
-        marker = " ",
+        "  {source:<6}  {active:<6}  {sessions:<8}  {id:<id_w$}  {name:<name_w$}  {workspace:<workspace_w$}",
         source = "SOURCE",
         active = "ACTIVE",
         sessions = "SESSIONS",
@@ -653,7 +853,7 @@ fn print_workspaces(workspaces: &[WorkspaceSummary]) {
         name = "NAME",
         workspace = "WORKSPACE",
     );
-    for workspace in workspaces {
+    for (workspace, row) in workspaces.iter().zip(rows) {
         let marker = if workspace.is_default { "*" } else { " " };
         let source = if workspace.source { "yes" } else { "no" };
         let active = if workspace.active { "yes" } else { "no" };
@@ -663,9 +863,9 @@ fn print_workspaces(workspaces: &[WorkspaceSummary]) {
             source = source,
             active = active,
             sessions = workspace.session_count,
-            id = workspace.id,
-            name = workspace.name,
-            workspace_path = workspace.workspace_path,
+            id = row.0,
+            name = row.1,
+            workspace_path = row.2,
         );
     }
 }
@@ -690,6 +890,37 @@ mod tests {
 
     fn decode(b64: &str) -> Vec<u8> {
         STANDARD.decode(b64).expect("valid base64")
+    }
+
+    #[test]
+    fn response_reader_enforces_the_shared_frame_limit() {
+        let mut exact = vec![b'x'; MAX_RESPONSE_FRAME_BYTES - 1];
+        exact.push(b'\n');
+        assert_eq!(
+            read_response_line(&mut std::io::Cursor::new(exact))
+                .expect("exact response")
+                .len(),
+            MAX_RESPONSE_FRAME_BYTES
+        );
+
+        let mut oversized = vec![b'x'; MAX_RESPONSE_FRAME_BYTES];
+        oversized.push(b'\n');
+        let error = read_response_line(&mut std::io::Cursor::new(oversized))
+            .expect_err("oversized response must fail");
+        assert!(error.contains("protocol limit"));
+    }
+
+    #[test]
+    fn terminal_text_escapes_control_and_bidi_override_characters() {
+        assert_eq!(
+            terminal_safe_field("name\n\u{1b}[2J\u{202e}"),
+            "name\\n\\u{1b}[2J\\u{202e}"
+        );
+        assert_eq!(
+            terminal_safe_multiline("line one\nline two\r"),
+            "line one\nline two\\r"
+        );
+        assert_eq!(terminal_safe_field("한글 이름"), "한글 이름");
     }
 
     fn send_keys_request(

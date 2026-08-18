@@ -261,6 +261,10 @@ impl PtyManager {
         // app can detect, on boot, that this session was spawned by an
         // older build with different rc bodies and force-respawn it.
         session.staged_rev = spec.env.get("ACORN_STAGED_REV").cloned();
+        session.ipc_capability = spec
+            .env
+            .get("ACORN_IPC_CAPABILITY")
+            .and_then(|value| Uuid::parse_str(value).ok());
         let created_at = session.created_at;
         registry.insert(session);
 

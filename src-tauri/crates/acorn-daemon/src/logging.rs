@@ -15,6 +15,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
 use super::paths;
 
 /// 10 MB rotation threshold. Three rotations × 10 MB ≈ 40 MB worst-case
@@ -54,7 +57,7 @@ impl RotatingFile {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let file = open_log_file(&path)?;
         let written = file.metadata().map(|m| m.len()).unwrap_or(0);
         Ok(Self {
             inner: Mutex::new(Inner {
@@ -84,10 +87,7 @@ impl RotatingFile {
     }
 
     fn reopen(inner: &mut Inner) -> io::Result<()> {
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&inner.path)?;
+        let file = open_log_file(&inner.path)?;
         inner.written = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
         inner.file = Some(file);
         Ok(())
@@ -106,11 +106,16 @@ impl RotatingFile {
 
 impl Write for &RotatingFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
         let mut inner = self.inner.lock().unwrap();
-        if inner.written + buf.len() as u64 > MAX_FILE_BYTES {
+        if inner.written >= MAX_FILE_BYTES {
             RotatingFile::rotate(&mut inner)?;
         }
-        let n = RotatingFile::file_mut(&mut inner)?.write(buf)?;
+        let available = usize::try_from(MAX_FILE_BYTES - inner.written).unwrap_or(usize::MAX);
+        let to_write = buf.len().min(available);
+        let n = RotatingFile::file_mut(&mut inner)?.write(&buf[..to_write])?;
         inner.written += n as u64;
         Ok(n)
     }
@@ -118,6 +123,52 @@ impl Write for &RotatingFile {
         let mut inner = self.inner.lock().unwrap();
         RotatingFile::file_mut(&mut inner)?.flush()
     }
+}
+
+fn open_log_file(path: &Path) -> io::Result<File> {
+    let before = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+
+    if let Some(before) = before {
+        if !before.file_type().is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("daemon log path is not a regular file: {}", path.display()),
+            ));
+        }
+        let file = OpenOptions::new().append(true).open(path)?;
+        let opened = file.metadata()?;
+        if !opened.is_file() || !same_opened_file(&before, &opened) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("daemon log changed while opening: {}", path.display()),
+            ));
+        }
+        #[cfg(unix)]
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        return Ok(file);
+    }
+
+    let mut options = OpenOptions::new();
+    options.append(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(path)
+}
+
+#[cfg(unix)]
+fn same_opened_file(before: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    before.dev() == opened.dev() && before.ino() == opened.ino()
+}
+
+#[cfg(not(unix))]
+fn same_opened_file(_before: &std::fs::Metadata, _opened: &std::fs::Metadata) -> bool {
+    true
 }
 
 fn rotate_paths(path: &Path) -> io::Result<()> {
@@ -250,6 +301,24 @@ mod tests {
         output.flush().unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"before-after");
         drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn log_open_rejects_symlink_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join(format!("acorn-log-link-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sentinel = dir.join("sentinel");
+        std::fs::write(&sentinel, b"do not append").unwrap();
+        let path = dir.join("daemon.log");
+        symlink(&sentinel, &path).unwrap();
+
+        assert!(RotatingFile::open(path).is_err());
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"do not append");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

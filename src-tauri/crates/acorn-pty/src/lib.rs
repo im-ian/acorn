@@ -517,6 +517,7 @@ mod tests {
         assert_eq!(transition.needs_input_until, None);
     }
 
+    #[test]
     fn push_tail_keeps_recent_bytes_when_cap_exceeded() {
         let tail: Mutex<VecDeque<u8>> = Mutex::new(VecDeque::new());
         // Push twice the cap; expect exactly TAIL_BUFFER_CAP bytes left,

@@ -853,7 +853,7 @@ function App() {
     });
   }, [preventSleep]);
 
-  // Auto-update: check once on startup, then every 24h. Both calls are
+  // Update notification: check once on startup, then every 24h. Both calls are
   // best-effort and non-blocking — surfaced via the App-level
   // `<UpdateBanner />`. Manual recheck stays available in Settings.
   useEffect(() => {

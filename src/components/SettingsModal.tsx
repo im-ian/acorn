@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import {
   importBackgroundImage,
+  MAX_BACKGROUND_IMAGE_BYTES,
   removeBackgroundImage,
   type BackgroundFit,
 } from "../lib/background";
@@ -2257,6 +2258,11 @@ function BackgroundSection({
     if (!file) return;
 
     try {
+      if (file.size > MAX_BACKGROUND_IMAGE_BYTES) {
+        throw new Error(
+          `Background image exceeds the ${MAX_BACKGROUND_IMAGE_BYTES}-byte limit`,
+        );
+      }
       const bytes = new Uint8Array(await file.arrayBuffer());
       const result = await importBackgroundImage(file.name, bytes);
       onChange({
@@ -3970,7 +3976,7 @@ function AboutSettings() {
   const error = useUpdater((s) => s.error);
   const lastCheckedAt = useUpdater((s) => s.lastCheckedAt);
   const check = useUpdater((s) => s.check);
-  const install = useUpdater((s) => s.install);
+  const openDownload = useUpdater((s) => s.openDownload);
   const init = useUpdater((s) => s.init);
   const [whatsNewSource, setWhatsNewSource] = useState<WhatsNewSource | null>(
     null,
@@ -4075,13 +4081,13 @@ function AboutSettings() {
     }
   }, [check, showToast, t]);
 
-  const handleInstall = useCallback(async () => {
-    await install();
+  const handleOpenDownload = useCallback(async () => {
+    await openDownload();
     const next = useUpdater.getState();
     if (next.error) {
       showToast(`${st(t, "settings.about.toasts.installFailed")} ${next.error}`);
     }
-  }, [install, showToast, t]);
+  }, [openDownload, showToast, t]);
 
   return (
     <section className="space-y-4">
@@ -4135,6 +4141,7 @@ function AboutSettings() {
                       kind: "update",
                       version: available.version,
                       body: available.body ?? "",
+                      htmlUrl: available.htmlUrl,
                     });
                   }}
                   className="rounded px-2 py-1 text-[11px] text-fg-muted underline-offset-2 transition hover:text-fg hover:underline"
@@ -4144,7 +4151,7 @@ function AboutSettings() {
               ) : null}
               <button
                 type="button"
-                onClick={() => void handleInstall()}
+                onClick={() => void handleOpenDownload()}
                 disabled={busy}
                 className="inline-flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
               >
@@ -4213,7 +4220,7 @@ function AboutSettings() {
         version={whatsNewSource?.version ?? ""}
         body={whatsNewSource?.body ?? ""}
         currentVersion={currentVersion}
-        showInstall={whatsNewSource?.kind === "update"}
+        showDownload={whatsNewSource?.kind === "update"}
         busy={busy}
         loading={whatsNewSource?.kind === "current" ? notesLoading : false}
         error={
@@ -4223,14 +4230,12 @@ function AboutSettings() {
               ? error
               : null
         }
-        onInstall={
+        onOpenDownload={
           whatsNewSource?.kind === "update"
-            ? () => void handleInstall()
+            ? () => void handleOpenDownload()
             : undefined
         }
-        htmlUrl={
-          whatsNewSource?.kind === "current" ? whatsNewSource.htmlUrl : undefined
-        }
+        htmlUrl={whatsNewSource?.htmlUrl}
         isFallback={
           whatsNewSource?.kind === "current" ? whatsNewSource.isFallback : false
         }

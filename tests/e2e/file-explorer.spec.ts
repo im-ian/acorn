@@ -793,8 +793,20 @@ test.describe("file explorer", () => {
     });
     await tauri.handle("fs_prepare_asset", (args) => {
       const { path } = args as { path: string };
-      if (path === "/tmp/demo/logo.png") return { size: 512 };
-      if (path === "/tmp/demo/spec.pdf") return { size: 1024 };
+      if (path === "/tmp/demo/logo.png") {
+        return {
+          size: 512,
+          asset_path: path,
+          capability: "e2e-logo-capability",
+        };
+      }
+      if (path === "/tmp/demo/spec.pdf") {
+        return {
+          size: 1024,
+          asset_path: path,
+          capability: "e2e-pdf-capability",
+        };
+      }
       throw new Error(`unexpected media path: ${path}`);
     });
     await tauri.handle("fs_read_file", () => {

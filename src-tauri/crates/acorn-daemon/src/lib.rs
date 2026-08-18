@@ -17,6 +17,7 @@
 //! * Crash recovery: panic hook writes a timestamped crash file; the
 //!   app auto-respawns the daemon on socket-probe failure.
 
+pub mod auth;
 pub mod client;
 pub mod crash;
 pub mod lifecycle;

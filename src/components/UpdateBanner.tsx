@@ -1,4 +1,4 @@
-import { Download, X } from "lucide-react";
+import { ExternalLink, X } from "lucide-react";
 import { useState, type ReactElement } from "react";
 import { selectShouldNotify, useUpdater } from "../lib/updater-store";
 import { useTranslation } from "../lib/useTranslation";
@@ -8,15 +8,15 @@ import { Button, IconButton, Notice } from "./ui";
 
 /**
  * Top-of-app non-blocking banner that surfaces an available update.
- * "Install" calls into the updater store to download + relaunch;
+ * The primary action opens the canonical GitHub release page for a manual,
+ * OS-visible download;
  * "What's new" opens a dedicated release-notes dialog (same one the
  * Settings → About panel uses); "Later" dismisses the banner for the
  * current version only — the same update remains reachable from
  * Settings.
  *
- * The banner also shows a single-line error if `install()` fails (e.g.
- * "signature verification failed", network drops) so users aren't left
- * wondering why the click did nothing.
+ * The banner also shows a single-line error if the canonical release page
+ * cannot be opened, so users aren't left wondering why the click did nothing.
  */
 export function UpdateBanner(): ReactElement | null {
   const t = useTranslation();
@@ -25,7 +25,7 @@ export function UpdateBanner(): ReactElement | null {
   const currentVersion = useUpdater((s) => s.currentVersion);
   const busy = useUpdater((s) => s.busy);
   const error = useUpdater((s) => s.error);
-  const install = useUpdater((s) => s.install);
+  const openDownload = useUpdater((s) => s.openDownload);
   const dismiss = useUpdater((s) => s.dismiss);
   const clearError = useUpdater((s) => s.clearError);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
@@ -36,7 +36,7 @@ export function UpdateBanner(): ReactElement | null {
     <>
       <div className="border-b border-border bg-accent/10 text-xs">
         <div className="flex items-center gap-3 px-4 py-2">
-          <Download size={14} className="shrink-0 text-accent" />
+          <ExternalLink size={14} className="shrink-0 text-accent" />
           <div className="min-w-0 flex-1">
             <span className="font-medium text-fg">Acorn {update.version}</span>
             <span className="ml-2 text-fg-muted">
@@ -51,7 +51,7 @@ export function UpdateBanner(): ReactElement | null {
             {t("updateBanner.whatsNew")}
           </button>
           <Button
-            onClick={() => void install()}
+            onClick={() => void openDownload()}
             disabled={busy}
             variant="primary"
             size="xs"
@@ -97,10 +97,11 @@ export function UpdateBanner(): ReactElement | null {
         version={update.version}
         body={update.body ?? ""}
         currentVersion={currentVersion}
-        showInstall
+        showDownload
         busy={busy}
         error={error}
-        onInstall={() => void install()}
+        onOpenDownload={() => void openDownload()}
+        htmlUrl={update.htmlUrl}
       />
     </>
   );

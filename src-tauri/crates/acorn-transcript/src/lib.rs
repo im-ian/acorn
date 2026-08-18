@@ -566,6 +566,11 @@ fn scan_live_mappings(
     let mut codex_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     let mut antigravity_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
     let mut grok_budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    let antigravity_owner_cursors = candidates
+        .iter()
+        .any(|candidate| candidate.kind == AgentKind::Antigravity)
+        .then(|| load_antigravity_owner_cursors(antigravity_storage_root.as_deref()))
+        .unwrap_or_default();
     for c in candidates {
         let mut reserved = assigned.clone();
         if c.role == AgentProcessRole::Emit {
@@ -643,7 +648,7 @@ fn scan_live_mappings(
                 }
                 AgentKind::Antigravity => {
                     let owner_cursor_id =
-                        antigravity_owner_cursor_id(antigravity_storage_root.as_deref(), &c.cwd);
+                        antigravity_owner_cursor_id(&antigravity_owner_cursors, &c.cwd);
                     let sole_antigravity_in_cwd =
                         antigravity_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
                     let allow_rotation = sole_antigravity_in_cwd
@@ -1478,6 +1483,18 @@ fn safe_regular_file_metadata(path: &Path) -> Option<std::fs::Metadata> {
     meta.file_type().is_file().then_some(meta)
 }
 
+#[cfg(unix)]
+fn same_file_metadata(before: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    before.dev() == opened.dev() && before.ino() == opened.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_metadata(_before: &std::fs::Metadata, _opened: &std::fs::Metadata) -> bool {
+    true
+}
+
 fn safe_regular_file_entry_metadata(
     entry: &std::fs::DirEntry,
 ) -> ProviderScanResult<Option<std::fs::Metadata>> {
@@ -1741,14 +1758,52 @@ fn locate_antigravity_transcript_in(brain_roots: &[PathBuf], uuid: &str) -> Opti
     })
 }
 
-fn antigravity_owner_cursor_id(storage_root: Option<&Path>, cwd: &Path) -> Option<String> {
-    let cwd = cwd.to_str()?;
-    let path = storage_root?
+fn load_antigravity_owner_cursors(
+    storage_root: Option<&Path>,
+) -> std::collections::HashMap<String, String> {
+    use std::io::Read;
+
+    let Some(storage_root) = storage_root else {
+        return std::collections::HashMap::new();
+    };
+    let path = storage_root
         .join("antigravity-cli")
         .join("cache")
         .join("last_conversations.json");
-    let cursors: std::collections::HashMap<String, String> =
-        serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let Some(before) = safe_regular_file_metadata(&path) else {
+        return std::collections::HashMap::new();
+    };
+    let max_bytes = PROVIDER_SCAN_LIMITS.head_bytes as u64;
+    if before.len() > max_bytes {
+        return std::collections::HashMap::new();
+    }
+    let Ok(file) = std::fs::File::open(&path) else {
+        return std::collections::HashMap::new();
+    };
+    let Ok(opened) = file.metadata() else {
+        return std::collections::HashMap::new();
+    };
+    if !opened.is_file() || opened.len() > max_bytes || !same_file_metadata(&before, &opened) {
+        return std::collections::HashMap::new();
+    }
+
+    let mut bytes = Vec::with_capacity(opened.len() as usize);
+    if file
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() as u64 > max_bytes
+    {
+        return std::collections::HashMap::new();
+    }
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn antigravity_owner_cursor_id(
+    cursors: &std::collections::HashMap<String, String>,
+    cwd: &Path,
+) -> Option<String> {
+    let cwd = cwd.to_str()?;
     cursors.get(cwd).filter(|id| is_uuid_v4_shape(id)).cloned()
 }
 
@@ -2679,9 +2734,16 @@ fn read_bounded_json_value(
         return Err(ProviderScanError::LimitExceeded);
     }
     budget.charge_head_open()?;
-    let mut file = complete_io(std::fs::File::open(path))?;
-    let mut bytes = Vec::with_capacity(meta.len() as usize);
-    complete_io(file.read_to_end(&mut bytes))?;
+    let file = complete_io(std::fs::File::open(path))?;
+    let opened = complete_io(file.metadata())?;
+    if !opened.file_type().is_file()
+        || opened.len() > max_bytes as u64
+        || !same_file_metadata(&meta, &opened)
+    {
+        return Err(ProviderScanError::LimitExceeded);
+    }
+    let mut bytes = Vec::with_capacity(opened.len() as usize);
+    complete_io(file.take(max_bytes as u64 + 1).read_to_end(&mut bytes))?;
     if bytes.len() > max_bytes {
         return Err(ProviderScanError::LimitExceeded);
     }
@@ -6106,21 +6168,49 @@ mod tests {
         )
         .unwrap();
 
+        let loaded = load_antigravity_owner_cursors(Some(&root));
         assert_eq!(
-            antigravity_owner_cursor_id(Some(&root), &cwd).as_deref(),
+            antigravity_owner_cursor_id(&loaded, &cwd).as_deref(),
             Some(id)
         );
         assert_eq!(
-            antigravity_owner_cursor_id(Some(&root), &other).as_deref(),
+            antigravity_owner_cursor_id(&loaded, &other).as_deref(),
             Some(other_id),
             "each top-level cwd must read only its own continuation cursor"
         );
         assert_eq!(
-            antigravity_owner_cursor_id(Some(&root), &root.join("missing")),
+            antigravity_owner_cursor_id(&loaded, &root.join("missing")),
             None
         );
         fs::write(cache.join("last_conversations.json"), "not-json").unwrap();
-        assert_eq!(antigravity_owner_cursor_id(Some(&root), &cwd), None);
+        assert!(load_antigravity_owner_cursors(Some(&root)).is_empty());
+
+        fs::OpenOptions::new()
+            .write(true)
+            .open(cache.join("last_conversations.json"))
+            .unwrap()
+            .set_len(PROVIDER_SCAN_LIMITS.head_bytes as u64 + 1)
+            .unwrap();
+        assert!(load_antigravity_owner_cursors(Some(&root)).is_empty());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antigravity_owner_cursor_rejects_symlinked_cache() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-agcursor-{}", uuid::Uuid::new_v4().simple()));
+        let cache = root.join("antigravity-cli").join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        let outside = root.join("outside.json");
+        fs::write(&outside, "{}").unwrap();
+        symlink(&outside, cache.join("last_conversations.json")).unwrap();
+
+        assert!(load_antigravity_owner_cursors(Some(&root)).is_empty());
 
         fs::remove_dir_all(&root).unwrap();
     }

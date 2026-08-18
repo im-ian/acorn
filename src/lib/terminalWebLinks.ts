@@ -9,7 +9,6 @@ export interface TerminalWebLinkProviderOptions {
   activate: (event: MouseEvent, uri: string) => void;
   hover?: (event: MouseEvent, uri: string, link: ILink) => void;
   leave?: (event: MouseEvent, uri: string) => void;
-  urlRegex?: RegExp;
 }
 
 const STRICT_URL_RE =
@@ -23,7 +22,6 @@ export function createTerminalWebLinkProvider(
     provideLinks(bufferLineNumber, callback) {
       const links = computeWebLinks(
         bufferLineNumber,
-        options.urlRegex ?? STRICT_URL_RE,
         terminal,
         options,
       );
@@ -34,13 +32,10 @@ export function createTerminalWebLinkProvider(
 
 function computeWebLinks(
   bufferLineNumber: number,
-  pattern: RegExp,
   terminal: XTerm,
   options: TerminalWebLinkProviderOptions,
 ): ILink[] {
-  const flags = new Set(pattern.flags.split(""));
-  flags.add("g");
-  const regex = new RegExp(pattern.source, [...flags].join(""));
+  const regex = new RegExp(STRICT_URL_RE.source, "gi");
   const [lines, startLineIndex] = getWindowedLineStrings(
     bufferLineNumber - 1,
     terminal,

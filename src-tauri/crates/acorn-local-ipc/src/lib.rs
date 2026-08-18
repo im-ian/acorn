@@ -36,6 +36,42 @@ pub fn connect(endpoint: &Path) -> io::Result<Stream> {
     Ok(stream)
 }
 
+/// Return the kernel-reported process id on the other end of a connected
+/// local stream. Callers use this to bind application capabilities to a PTY
+/// process tree instead of trusting forgeable JSON identity fields alone.
+pub fn peer_process_id(stream: &Stream) -> io::Result<u32> {
+    peer_process_id_platform(stream)
+}
+
+#[cfg(target_os = "macos")]
+fn peer_process_id_platform(stream: &Stream) -> io::Result<u32> {
+    use nix::sys::socket::{getsockopt, sockopt::LocalPeerPid};
+
+    let Stream::UdSocket(socket) = stream;
+    let pid = getsockopt(socket, LocalPeerPid).map_err(io::Error::other)?;
+    u32::try_from(pid)
+        .ok()
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid peer process id"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn peer_process_id_platform(stream: &Stream) -> io::Result<u32> {
+    use interprocess::local_socket::traits::StreamCommon;
+
+    stream
+        .peer_creds()?
+        .pid()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "platform did not expose the peer process id",
+            )
+        })
+}
+
 /// Remove filesystem-backed endpoint state after a graceful shutdown.
 /// Named pipes disappear when their last listener handle closes.
 pub fn cleanup(endpoint: &Path) {

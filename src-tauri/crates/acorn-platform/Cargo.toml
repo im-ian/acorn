@@ -10,6 +10,7 @@ name = "acorn_platform"
 [dependencies]
 portable-pty = { workspace = true }
 tempfile = { workspace = true }
+sysinfo = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", default-features = false, features = ["process", "signal"] }

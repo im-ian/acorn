@@ -875,15 +875,15 @@
     },
     "about": {
       "title": "ドングリについて",
-      "description": "Acorn は、起動時と 24 時間ごとに更新を自動的にチェックします。以下で手動で確認することもできます。",
+      "description": "Acorn は起動時とその後 24 時間ごとに公開リリースを確認します。ダウンロードは GitHub で開き、手動でインストールします。",
       "currentVersion": "現在のバージョン",
       "lastChecked": "最後にチェックした",
       "loading": "読み込み中...",
       "updateAvailable": "利用可能なアップデート",
-      "updateReady": "Acorn {version} をインストールする準備ができました。",
+      "updateReady": "Acorn {version} を手動でダウンロードできます。",
       "whatsNew": "新機能",
-      "installing": "インストール中...",
-      "installRelaunch": "インストールと再起動",
+      "installing": "開いています...",
+      "installRelaunch": "ダウンロードを表示",
       "whatsNewInVersion": "{version} の新機能",
       "checking": "確認中...",
       "checkForUpdates": "アップデートをチェックする",
@@ -891,7 +891,7 @@
         "upToDate": "ドングリは最新です。",
         "updateAvailable": "ドングリ {version} が利用可能です。",
         "checkFailed": "アップデートのチェックに失敗しました:",
-        "installFailed": "アップデートのインストールに失敗しました:",
+        "installFailed": "リリースを開けませんでした:",
         "releaseNotesFailed": "リリースノートをロードできませんでした:"
       },
       "relative": {
@@ -1138,10 +1138,10 @@
     "noSessionSelected": "セッションが選択されていません"
   },
   "updateBanner": {
-    "available": "利用可能です。インストール後にアプリが再起動します。",
+    "available": "利用可能です。GitHub で確認してダウンロードできます。",
     "whatsNew": "新機能",
-    "installing": "インストール中...",
-    "installRelaunch": "インストールと再起動",
+    "installing": "開いています...",
+    "installRelaunch": "ダウンロードを表示",
     "hideUntilNextVersion": "次のバージョンまで非表示にする",
     "dismissError": "エラーを無視"
   },
@@ -2437,8 +2437,8 @@
       "loadingReleaseNotes": "リリースノートを読み込んでいます...",
       "noReleaseNotes": "このバージョンではリリース ノートは公開されていません。",
       "viewOnGithub": "GitHub で見る",
-      "installing": "インストール中...",
-      "installRelaunch": "インストールと再起動"
+      "installing": "開いています...",
+      "installRelaunch": "ダウンロードを表示"
     },
     "pullRequestDetail": {
       "notGithub": "オリジンリモートは GitHub リポジトリではありません。",

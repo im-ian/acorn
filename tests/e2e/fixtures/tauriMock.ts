@@ -82,7 +82,6 @@ export const tauriMockSource = `
     if (cmd === 'plugin:event|emit') return Promise.resolve(undefined);
     if (cmd === 'plugin:app|version') return Promise.resolve('0.0.0-test');
     if (cmd === 'plugin:app|name') return Promise.resolve('acorn');
-    if (cmd === 'plugin:updater|check') return Promise.resolve(null);
     if (cmd === 'plugin:notification|is_permission_granted') return Promise.resolve(true);
     if (cmd === 'plugin:notification|request_permission') return Promise.resolve('granted');
     if (cmd === 'plugin:notification|notify') return Promise.resolve(undefined);
@@ -100,6 +99,28 @@ export const tauriMockSource = `
     if (cmd === 'plugin:fs|mkdir') return Promise.resolve(undefined);
     if (cmd === 'plugin:fs|read_dir') return Promise.resolve([]);
     if (cmd === 'plugin:fs|read_text_file') return Promise.resolve('');
+    if (cmd === 'plugin:fs|lstat') {
+      return Promise.resolve({
+        isFile: false,
+        isDirectory: true,
+        isSymlink: false,
+        size: 0,
+        mtime: null,
+        atime: null,
+        birthtime: null,
+        readonly: false,
+        fileAttributes: null,
+        dev: null,
+        ino: null,
+        mode: null,
+        nlink: null,
+        uid: null,
+        gid: null,
+        rdev: null,
+        blksize: null,
+        blocks: null,
+      });
+    }
     if (cmd === 'plugin:fs|stat') {
       return Promise.resolve({
         isFile: true,
@@ -614,7 +635,15 @@ export const tauriMockSource = `
     if (cmd === 'fs_read_file') {
       return Promise.resolve({ content: '', size: 0, truncated: false, binary: false });
     }
-    if (cmd === 'fs_prepare_asset') return Promise.resolve({ size: 0 });
+    if (cmd === 'fs_prepare_asset') {
+      const path = args?.path ?? '';
+      return Promise.resolve({
+        size: 0,
+        asset_path: path,
+        capability: 'e2e-asset-capability',
+      });
+    }
+    if (cmd === 'fs_release_asset') return Promise.resolve(undefined);
     if (cmd === 'fs_git_diff_lines') return Promise.resolve([]);
     if (cmd === 'fs_watch_set_root') return Promise.resolve(undefined);
     if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);

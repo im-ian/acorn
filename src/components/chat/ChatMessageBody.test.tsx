@@ -2,10 +2,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: vi.fn(),
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn().mockResolvedValue(true),
 }));
 
+import { invoke } from "@tauri-apps/api/core";
 import { ChatMessageBody } from "./ChatMessageBody";
 
 async function settle() {
@@ -19,6 +20,7 @@ describe("ChatMessageBody", () => {
   let root: Root;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -158,4 +160,25 @@ describe("ChatMessageBody", () => {
     expect(image?.getAttribute("referrerpolicy")).toBe("no-referrer");
   });
 
+  it("opens only unambiguous web and mail links", () => {
+    act(() => {
+      root.render(
+        <ChatMessageBody
+          content={
+            "[safe](https://example.com/path) [unsafe](irc://chat.example/room)"
+          }
+        />,
+      );
+    });
+
+    expect(container.querySelector("a")).toBeNull();
+    const links = container.querySelectorAll<HTMLButtonElement>("button");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.textContent).toBe("safe");
+    act(() => links[0]?.click());
+    expect(invoke).toHaveBeenCalledWith("open_external_url", {
+      url: "https://example.com/path",
+    });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
 });

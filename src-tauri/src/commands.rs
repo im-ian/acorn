@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::agent_history::{self, AgentHistoryItem};
 use crate::agent_resume;
 use crate::error::{AppError, AppResult};
+use crate::fs_explorer;
 use crate::git_ops::{self, CommitInfo, DiffImages, DiffPayload, StagedFile};
 use crate::persistence;
 use crate::project_settings::{self, ProjectSettings, ProjectSettingsRecord};
@@ -46,6 +47,7 @@ const CODEX_TOOL_PROCESS_START_TOLERANCE: std::time::Duration = std::time::Durat
 const MAX_CODEX_REPAIR_TAIL_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_CLAUDE_FORK_PROJECT_ENTRIES: usize = 10_000;
 const MAX_CLAUDE_FORK_TRANSCRIPT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_DISPLAY_NAME_BYTES: usize = 1_024;
 
 #[derive(Debug, Clone, Copy)]
 struct ClaudeForkLimits {
@@ -269,6 +271,36 @@ fn canonical_existing_path(path: &Path) -> AppResult<PathBuf> {
     path.canonicalize().map_err(AppError::from)
 }
 
+/// Normalize a renderer/IPC supplied label before it reaches persistent state
+/// or a terminal-facing CLI. Besides keeping state files bounded, rejecting
+/// terminal control and bidi-override characters prevents a crafted label from
+/// changing how subsequent CLI output is interpreted or visually ordered.
+pub(crate) fn validate_display_name(name: &str, label: &str) -> AppResult<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::Other(format!("{label} must not be empty")));
+    }
+    if name.len() > MAX_DISPLAY_NAME_BYTES {
+        return Err(AppError::Other(format!(
+            "{label} exceeds the {MAX_DISPLAY_NAME_BYTES}-byte limit"
+        )));
+    }
+    if name.chars().any(is_unsafe_display_name_char) {
+        return Err(AppError::Other(format!(
+            "{label} cannot contain control or bidi-override characters"
+        )));
+    }
+    Ok(name.to_string())
+}
+
+fn is_unsafe_display_name_char(value: char) -> bool {
+    value.is_control()
+        || matches!(
+            value,
+            '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
 fn path_is_inside(path: &Path, root: &Path) -> bool {
     path == root || path.starts_with(root)
 }
@@ -286,6 +318,28 @@ fn registered_project_roots(state: &AppState) -> Vec<PathBuf> {
     roots
 }
 
+fn registered_repository_roots(state: &AppState) -> Vec<PathBuf> {
+    let project_roots = registered_project_roots(state);
+    let mut roots = project_roots.clone();
+    for project_root in project_roots {
+        match worktree::list_worktree_paths(&project_root) {
+            Ok(worktrees) => roots.extend(
+                worktrees
+                    .into_iter()
+                    .filter_map(|path| path.canonicalize().ok()),
+            ),
+            Err(error) => tracing::debug!(
+                path = %project_root.display(),
+                error = %error,
+                "skipping linked worktree repository scope roots"
+            ),
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
 /// Register `repo` as a project unless an existing project already spans it as
 /// an extra source root. Without this guard every session created under a
 /// source root would mint a second, duplicate top-level project.
@@ -298,7 +352,10 @@ pub(crate) fn ensure_project_for_root(state: &AppState, repo: &Path) {
         .ensure(repo.to_path_buf(), project_basename(repo));
 }
 
-fn authorize_registered_project_root(state: &AppState, repo: &Path) -> AppResult<PathBuf> {
+pub(crate) fn authorize_registered_project_root(
+    state: &AppState,
+    repo: &Path,
+) -> AppResult<PathBuf> {
     let repo = canonical_existing_path(repo)?;
     registered_project_roots(state)
         .into_iter()
@@ -308,7 +365,45 @@ fn authorize_registered_project_root(state: &AppState, repo: &Path) -> AppResult
         })
 }
 
-fn authorize_project_session_cwd(repo: &Path, cwd: &Path) -> AppResult<()> {
+fn authorize_registered_repository(state: &AppState, path: &Path) -> AppResult<PathBuf> {
+    let path = canonical_existing_path(path)?;
+    registered_repository_roots(state)
+        .into_iter()
+        .any(|root| root == path || path_is_inside(&path, &root))
+        .then_some(path.clone())
+        .ok_or_else(|| {
+            AppError::InvalidPath(format!("repository is not registered: {}", path.display()))
+        })
+}
+
+fn authorize_registered_worktree(
+    state: &AppState,
+    repo_path: &Path,
+    worktree_path: &Path,
+) -> AppResult<(PathBuf, PathBuf)> {
+    let repo_path = authorize_registered_project_root(state, repo_path)?;
+    if !worktree_path.is_absolute()
+        || worktree_path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(AppError::InvalidPath(
+            "worktree path must be normalized and absolute".into(),
+        ));
+    }
+    let registered = worktree::list_worktree_paths(&repo_path)?
+        .into_iter()
+        .find(|candidate| worktree::same_path(candidate, worktree_path))
+        .ok_or_else(|| {
+            AppError::InvalidPath(format!(
+                "worktree is not registered for the project: {}",
+                worktree_path.display()
+            ))
+        })?;
+    Ok((repo_path, registered))
+}
+
+pub(crate) fn authorize_project_session_cwd(repo: &Path, cwd: &Path) -> AppResult<()> {
     if path_is_inside(cwd, repo) {
         return Ok(());
     }
@@ -476,6 +571,33 @@ fn inject_agent_hook_env(
     session: &Session,
     hooks: Option<&crate::agent_hooks::AgentHookServer>,
 ) {
+    // Hook routing values are authority-bearing server state, never caller
+    // configuration. Clear inherited/caller values before any early return so
+    // an unsupported provider or unavailable hook server cannot leave a
+    // forged endpoint in a fresh PTY.
+    for key in [
+        "ACORN_AGENT_HOOK_URL",
+        "ACORN_AGENT_HOOK_TOKEN",
+        "ACORN_AGENT_HOOK_SESSION_ID",
+        "ACORN_AGENT_HOOK_PROVIDER",
+        "ACORN_AGENT_INVOCATION_ROOT",
+    ] {
+        effective_env.remove(key);
+    }
+
+    // This marker is the one-shot proof that a wrapper was reached directly
+    // from a newly spawned Acorn PTY. A fresh PTY must not inherit ownership
+    // state from an outer Acorn invocation.
+    let inherited_agent_invocation = effective_env.contains_key("ACORN_AGENT_INVOCATION_TOKEN")
+        || effective_env.contains_key("ACORN_AGENT_INVOCATION_DEPTH");
+    effective_env.remove("ACORN_AGENT_INVOCATION_TOKEN");
+    effective_env.remove("ACORN_AGENT_INVOCATION_DEPTH");
+    if inherited_agent_invocation {
+        effective_env.remove("CODEX_TUI_RECORD_SESSION");
+        effective_env.remove("CODEX_TUI_SESSION_LOG_PATH");
+        effective_env.remove("ACORN_CODEX_NATIVE_HOOKS_ENABLED");
+    }
+
     // A known provider that can't use hooks opts out entirely. An unknown
     // provider still gets the channel: a plain terminal session only learns
     // its provider once the status poll spots a live agent in the process
@@ -497,41 +619,65 @@ fn inject_agent_hook_env(
         return;
     };
 
-    // This marker is the one-shot proof that a wrapper was reached directly
-    // from a newly spawned Acorn PTY. Wrappers consume it before launching the
-    // provider, so descendants cannot promote themselves to hook owners.
-    // A control session can launch another Acorn app from inside an existing
-    // provider invocation. The new PTY is nevertheless a fresh ownership
-    // boundary, so do not inherit the outer wrapper's token, nesting depth,
-    // or Codex recorder. Preserve recorder variables when there was no outer
-    // Acorn invocation marker because those may be caller-owned settings.
-    let inherited_agent_invocation = effective_env.contains_key("ACORN_AGENT_INVOCATION_TOKEN")
-        || effective_env.contains_key("ACORN_AGENT_INVOCATION_DEPTH");
-    effective_env.remove("ACORN_AGENT_INVOCATION_TOKEN");
-    effective_env.remove("ACORN_AGENT_INVOCATION_DEPTH");
-    if inherited_agent_invocation {
-        effective_env.remove("CODEX_TUI_RECORD_SESSION");
-        effective_env.remove("CODEX_TUI_SESSION_LOG_PATH");
-        effective_env.remove("ACORN_CODEX_NATIVE_HOOKS_ENABLED");
-    }
+    // Wrappers consume this marker before launching the provider, so
+    // descendants cannot promote themselves to hook owners.
     effective_env.insert("ACORN_AGENT_INVOCATION_ROOT".to_string(), "1".to_string());
-    effective_env
-        .entry("ACORN_AGENT_HOOK_URL".to_string())
-        .or_insert_with(|| hooks.hook_url().to_string());
-    effective_env
-        .entry("ACORN_AGENT_HOOK_TOKEN".to_string())
-        .or_insert_with(|| hooks.token().to_string());
-    effective_env
-        .entry("ACORN_AGENT_HOOK_SESSION_ID".to_string())
-        .or_insert_with(|| session.id.to_string());
+    effective_env.insert(
+        "ACORN_AGENT_HOOK_URL".to_string(),
+        hooks.hook_url().to_string(),
+    );
+    effective_env.insert(
+        "ACORN_AGENT_HOOK_TOKEN".to_string(),
+        hooks.token().to_string(),
+    );
+    effective_env.insert(
+        "ACORN_AGENT_HOOK_SESSION_ID".to_string(),
+        session.id.to_string(),
+    );
 
     // Provider-specific metadata only when the provider is already known; the
     // notify scripts hardcode their own provider so this stays optional.
     if let Some(provider) = session.agent_provider {
-        effective_env
-            .entry("ACORN_AGENT_HOOK_PROVIDER".to_string())
-            .or_insert_with(|| provider.hook_provider_env_value().to_string());
+        effective_env.insert(
+            "ACORN_AGENT_HOOK_PROVIDER".to_string(),
+            provider.hook_provider_env_value().to_string(),
+        );
     }
+}
+
+const MAX_PTY_WORKSPACE_ID_BYTES: usize = 32 * 1024;
+const MAX_PTY_WORKSPACE_NAME_BYTES: usize = 1024;
+const MAX_PTY_WORKSPACE_PATH_BYTES: usize = 32 * 1024;
+
+fn validate_pty_caller_env(
+    env: Option<HashMap<String, String>>,
+) -> AppResult<HashMap<String, String>> {
+    let env = env.unwrap_or_default();
+    if env.len() > 3 {
+        return Err(AppError::Other(
+            "PTY environment accepts only workspace identity hints".to_string(),
+        ));
+    }
+
+    for (key, value) in &env {
+        let limit = match key.as_str() {
+            "ACORN_WORKSPACE_ID" => MAX_PTY_WORKSPACE_ID_BYTES,
+            "ACORN_WORKSPACE_NAME" => MAX_PTY_WORKSPACE_NAME_BYTES,
+            "ACORN_WORKSPACE_PATH" => MAX_PTY_WORKSPACE_PATH_BYTES,
+            _ => {
+                return Err(AppError::Other(format!(
+                    "PTY environment key is not allowed: {key}"
+                )))
+            }
+        };
+        if value.len() > limit || value.chars().any(char::is_control) {
+            return Err(AppError::Other(format!(
+                "PTY environment value is invalid for {key}"
+            )));
+        }
+    }
+
+    Ok(env)
 }
 
 fn authorize_chat_session(state: &AppState, session_id: &str) -> AppResult<Session> {
@@ -544,6 +690,12 @@ fn authorize_chat_session(state: &AppState, session_id: &str) -> AppResult<Sessi
         )));
     }
     Ok(session)
+}
+
+fn authorize_existing_session_id(state: &AppState, session_id: &str) -> AppResult<Uuid> {
+    let id = parse_id(session_id)?;
+    state.sessions.get(&id)?;
+    Ok(id)
 }
 
 fn reject_system_managed_graph_transcript_mutation(session: &Session) -> AppResult<()> {
@@ -2585,6 +2737,22 @@ pub(crate) struct ChatContextOptions {
     pub summary_threshold_chars: usize,
 }
 
+// Chat content is copied into the persisted transcript, compiled context,
+// provider payload, and renderer state. Bound each atomic message before
+// those copies; graph prompt compilation gets a larger ceiling because it
+// legitimately expands the validated user message with structured context.
+const MAX_CHAT_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_CHAT_PROVIDER_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
+
+fn validate_chat_text_bytes(value: &str, max_bytes: usize, label: &str) -> AppResult<()> {
+    if value.len() > max_bytes {
+        return Err(AppError::Other(format!(
+            "{label} exceeds the {max_bytes}-byte limit"
+        )));
+    }
+    Ok(())
+}
+
 impl Default for ChatContextOptions {
     fn default() -> Self {
         Self {
@@ -2843,6 +3011,12 @@ fn start_chat_turn(
     capabilities: ChatProviderCapabilities,
     options: ChatContextOptions,
 ) -> AppResult<StartedChatTurn> {
+    validate_chat_text_bytes(&content, MAX_CHAT_MESSAGE_BYTES, "chat message")?;
+    validate_chat_text_bytes(
+        &provider_content,
+        MAX_CHAT_PROVIDER_MESSAGE_BYTES,
+        "provider chat message",
+    )?;
     let content = content.trim().to_string();
     if content.is_empty() {
         return Err(AppError::Other(
@@ -3888,10 +4062,18 @@ fn reset_macos_developer_permissions_inner(bundle_id: &str) -> Vec<MacosPermissi
 }
 
 fn reset_macos_tcc_service(service: &'static str, bundle_id: &str) -> AppResult<()> {
-    match std::process::Command::new("/usr/bin/tccutil")
-        .args(["reset", service, bundle_id])
-        .output()
-    {
+    const LIMITS: acorn_platform::process::BoundedOutputLimits =
+        acorn_platform::process::BoundedOutputLimits {
+            timeout: Duration::from_secs(10),
+            stdin_bytes: 0,
+            stdout_bytes: 64 * 1024,
+            stderr_bytes: 64 * 1024,
+        };
+    match acorn_platform::process::run_bounded(
+        std::process::Command::new("/usr/bin/tccutil").args(["reset", service, bundle_id]),
+        None,
+        LIMITS,
+    ) {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -4047,36 +4229,42 @@ pub fn list_system_fonts() -> Vec<String> {
 
 #[tauri::command]
 pub async fn list_agent_history(
+    state: State<'_, AppState>,
     repo_path: String,
     limit: Option<usize>,
 ) -> AppResult<Vec<AgentHistoryItem>> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
     run_blocking("list_agent_history", move || {
-        agent_history::list_agent_history(PathBuf::from(repo_path), limit)
+        agent_history::list_agent_history(repo_path, limit)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn agent_transcript_summary(
+    state: State<'_, AppState>,
     repo_path: String,
     transcript_id: String,
 ) -> AppResult<Option<agent_history::AgentTranscriptSummary>> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
     run_blocking("agent_transcript_summary", move || {
-        agent_history::agent_transcript_summary(PathBuf::from(repo_path), transcript_id)
+        agent_history::agent_transcript_summary(repo_path, transcript_id)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn agent_transcript_summary_at_path(
+    state: State<'_, AppState>,
     repo_path: String,
     provider: agent_history::AgentHistoryProvider,
     id: String,
     transcript_path: String,
 ) -> AppResult<Option<agent_history::AgentTranscriptSummary>> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
     run_blocking("agent_transcript_summary_at_path", move || {
         agent_history::agent_transcript_summary_at_path(
-            PathBuf::from(repo_path),
+            repo_path,
             provider,
             id,
             PathBuf::from(transcript_path),
@@ -4551,8 +4739,7 @@ fn daemon_pid_from_status_sessions_or_pidfile(
 }
 
 fn daemon_pid_from_pidfile() -> Option<u32> {
-    let path = acorn_daemon::paths::pid_file_path().ok()?;
-    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+    acorn_daemon::lifecycle::read_pid_file().ok().flatten()
 }
 
 fn memory_root_pids(
@@ -4757,6 +4944,9 @@ fn create_session_inner(
     graph: Option<SessionGraph>,
     allow_project_registration: bool,
 ) -> AppResult<Session> {
+    if !name.trim().is_empty() {
+        name = validate_display_name(&name, "session name")?;
+    }
     let goal = goal
         .map(normalize_session_goal)
         .transpose()?
@@ -4818,6 +5008,7 @@ fn create_session_inner(
     if name.trim().is_empty() {
         name = project_basename(&worktree_path);
     }
+    name = validate_display_name(&name, "session name")?;
     let branch = worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
     let mut session = Session::new(name, repo.clone(), worktree_path, branch, isolated, kind);
     session.project_scoped = project_scoped;
@@ -5922,6 +6113,7 @@ fn send_chat_message_from_state_inner<R: Runtime>(
         default_missing_graph_prompt_plan,
     )?;
     validate_graph_prompt_plan_for_session(&session, graph_prompt_plan.as_ref())?;
+    validate_chat_text_bytes(&content, MAX_CHAT_MESSAGE_BYTES, "chat message")?;
     let raw_content = content.trim().to_string();
     let continuation_checkpoint = if graph_prompt_plan
         .as_ref()
@@ -6268,6 +6460,7 @@ pub fn add_project_at(
     let mut unique: Vec<PathBuf> = Vec::new();
     for root in &roots {
         let root = worktree::project_root_for_path(Path::new(root))?;
+        let root = folder_granted(state.inner(), &root)?;
         if let Some(owner) = state.projects.owner_of_root(&root) {
             return Err(AppError::InvalidPath(format!(
                 "folder already belongs to project {}: {}",
@@ -6283,12 +6476,12 @@ pub fn add_project_at(
     let primary = roots
         .next()
         .ok_or_else(|| AppError::InvalidPath("no project folder was chosen".to_string()))?;
-    let name = name.trim().to_string();
-    let name = if name.is_empty() {
+    let name = if name.trim().is_empty() {
         project_basename(&primary)
     } else {
         name
     };
+    let name = validate_display_name(&name, "project name")?;
     let project = state.projects.ensure(primary.clone(), name);
     let sources: Vec<PathBuf> = roots.collect();
     let project = if sources.is_empty() {
@@ -6357,10 +6550,7 @@ pub fn rename_project(
     repo_path: String,
     name: String,
 ) -> AppResult<Project> {
-    let name = name.trim().to_string();
-    if name.is_empty() {
-        return Err(AppError::InvalidPath("project name is empty".to_string()));
-    }
+    let name = validate_display_name(&name, "project name")?;
     let project = state
         .projects
         .owner_of_root(&PathBuf::from(&repo_path))
@@ -6781,16 +6971,21 @@ fn seed_initial_commit(repo: &git2::Repository) -> Result<(), git2::Error> {
 }
 
 #[tauri::command]
-pub fn get_project_settings(repo_path: String) -> AppResult<ProjectSettingsRecord> {
-    project_settings::get(&PathBuf::from(repo_path))
+pub fn get_project_settings(
+    state: State<'_, AppState>,
+    repo_path: String,
+) -> AppResult<ProjectSettingsRecord> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    project_settings::get(&repo_path)
 }
 
 #[tauri::command]
 pub fn update_project_settings(
+    state: State<'_, AppState>,
     repo_path: String,
     settings: ProjectSettings,
 ) -> AppResult<ProjectSettingsRecord> {
-    let repo_path = PathBuf::from(repo_path);
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
     if let Some(branch) = settings
         .worktrees
         .base_branch
@@ -6890,6 +7085,7 @@ pub(crate) fn terminate_session_pty(state: &AppState, id: &Uuid) {
     } else {
         state.pty.kill(id).ok();
     }
+    state.ipc_session_capabilities.lock().remove(id);
 }
 
 fn terminate_session_runtime(state: &AppState, id: &Uuid) -> AppResult<()> {
@@ -7059,16 +7255,16 @@ pub async fn remove_project(
 ) -> AppResult<Vec<worktree::RemovedWorktree>> {
     let app_state = state.inner().clone();
     let path = PathBuf::from(&repo_path);
+    let project = app_state
+        .projects
+        .owner_of_root(&path)
+        .ok_or_else(|| AppError::InvalidPath(format!("project is not registered: {repo_path}")))?;
     let cascade = remove_sessions.unwrap_or(true);
     let drop_worktrees = remove_worktrees.unwrap_or(false);
     let mut removed_worktrees = Vec::new();
     let mut staged_worktree_paths = HashSet::new();
     // Closing a project closes every root it spans, not just the primary one.
-    let roots = app_state
-        .projects
-        .owner_of_root(&path)
-        .map(|project| project.roots())
-        .unwrap_or_else(|| vec![path.clone()]);
+    let roots = project.roots();
     if cascade {
         let sessions_to_remove: Vec<_> = app_state
             .sessions
@@ -7312,10 +7508,7 @@ pub fn rename_session(
 ) -> AppResult<Session> {
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let sync_agent_session_titles = sync_agent_session_titles.unwrap_or(false);
-    let trimmed = name.trim().to_string();
-    if trimmed.is_empty() {
-        return Err(AppError::Other("name must not be empty".to_string()));
-    }
+    let trimmed = validate_display_name(&name, "session name")?;
     let current = state.sessions.get(&id)?;
     if matches!(current.owner, SessionOwner::Control { .. }) {
         return Err(AppError::Other(
@@ -7478,12 +7671,8 @@ fn generate_session_title_inner(
         });
     };
     let native_session = title_input.native_session.clone();
-    let generated = crate::session_titles::generate_title_in_dir(
-        &ai,
-        prompt.as_deref(),
-        &title_input.title_context,
-        Some(&session.worktree_path),
-    )?;
+    let generated =
+        crate::session_titles::generate_title(&ai, prompt.as_deref(), &title_input.title_context)?;
     let latest = state.sessions.get(&id)?;
     let current_title_input = resolve_title_input_for_session(&latest, id);
     let current_transcript_id = current_title_input
@@ -7562,16 +7751,10 @@ pub async fn preview_session_title(
                 "first user message must not be empty".to_string(),
             ));
         }
-        let cwd = repo_path
-            .as_deref()
-            .map(|path| authorize_registered_project_root(&state, Path::new(path)))
-            .transpose()?;
-        crate::session_titles::generate_title_in_dir(
-            &ai,
-            prompt.as_deref(),
-            &first_user_message,
-            cwd.as_deref(),
-        )
+        if let Some(path) = repo_path.as_deref() {
+            authorize_registered_project_root(&state, Path::new(path))?;
+        }
+        crate::session_titles::generate_title(&ai, prompt.as_deref(), &first_user_message)
     })
     .await
 }
@@ -7669,14 +7852,19 @@ fn empty_agent_detection() -> AgentDetection {
 ///     the destination directory is then verified beneath the canonical
 ///     `~/.claude/projects/` root before it is used.
 #[tauri::command]
-pub fn prepare_claude_fork(parent_uuid: String, new_cwd: String) -> AppResult<()> {
+pub fn prepare_claude_fork(
+    state: State<'_, AppState>,
+    parent_uuid: String,
+    new_cwd: String,
+) -> AppResult<()> {
     let home = directories::UserDirs::new()
         .map(|d| d.home_dir().to_path_buf())
         .ok_or_else(|| AppError::Other("no home dir".into()))?;
+    let new_cwd = authorize_registered_repository(state.inner(), Path::new(&new_cwd))?;
     prepare_claude_fork_in(
         &home.join(".claude").join("projects"),
         &parent_uuid,
-        Path::new(&new_cwd),
+        &new_cwd,
         DEFAULT_CLAUDE_FORK_LIMITS,
     )
 }
@@ -7962,7 +8150,7 @@ pub async fn detect_session_agent(
 }
 
 fn detect_session_agent_inner(state: AppState, session_id: String) -> AppResult<AgentDetection> {
-    let parsed = parse_id(&session_id)?;
+    let parsed = authorize_existing_session_id(&state, &session_id)?;
     let session_pids = crate::agent_resume_persister::collect_session_pids(&state);
     let mappings = acorn_transcript::collect_live_mappings(&session_pids);
     let mut detection = empty_agent_detection();
@@ -7980,8 +8168,8 @@ fn detect_session_agent_inner(state: AppState, session_id: String) -> AppResult<
 /// looked" by simple set diff. The main checkout is intentionally excluded —
 /// it is never created or removed by the in-PTY commands we're watching for.
 #[tauri::command]
-pub fn git_worktrees(repo_path: String) -> AppResult<Vec<String>> {
-    let path = PathBuf::from(repo_path);
+pub fn git_worktrees(state: State<'_, AppState>, repo_path: String) -> AppResult<Vec<String>> {
+    let path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     let paths = crate::worktree::list_worktree_paths(&path)?;
     Ok(paths
         .into_iter()
@@ -7990,14 +8178,20 @@ pub fn git_worktrees(repo_path: String) -> AppResult<Vec<String>> {
 }
 
 #[tauri::command]
-pub fn list_project_worktrees(repo_path: String) -> AppResult<Vec<worktree::ProjectWorktreeInfo>> {
-    let path = PathBuf::from(repo_path);
+pub fn list_project_worktrees(
+    state: State<'_, AppState>,
+    repo_path: String,
+) -> AppResult<Vec<worktree::ProjectWorktreeInfo>> {
+    let path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
     crate::worktree::list_worktree_infos(&path)
 }
 
 #[tauri::command]
-pub fn list_project_branches(repo_path: String) -> AppResult<Vec<worktree::ProjectBranchInfo>> {
-    let path = PathBuf::from(repo_path);
+pub fn list_project_branches(
+    state: State<'_, AppState>,
+    repo_path: String,
+) -> AppResult<Vec<worktree::ProjectBranchInfo>> {
+    let path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     crate::worktree::list_branch_infos(&path)
 }
 
@@ -8009,8 +8203,11 @@ pub async fn remove_worktree(
     remove_sessions: Option<bool>,
 ) -> AppResult<Option<worktree::RemovedWorktree>> {
     let app_state = state.inner().clone();
-    let repo_path = PathBuf::from(repo_path);
-    let worktree_path = PathBuf::from(worktree_path);
+    let (repo_path, worktree_path) = authorize_registered_worktree(
+        &app_state,
+        Path::new(&repo_path),
+        Path::new(&worktree_path),
+    )?;
     let remove_sessions = remove_sessions.unwrap_or(false);
     if remove_sessions {
         let matching_sessions = sessions_using_worktree_path(&app_state, &worktree_path);
@@ -8214,11 +8411,10 @@ fn pty_spawn_blocking<R: Runtime>(
     let resolved_command = shell.program.to_string_lossy().into_owned();
     let shell_kind = shell.kind;
     let resolved_args = shell.args;
-    // Inject Acorn session identity and CLI reachability so a regular
-    // terminal can explicitly bootstrap itself with `acorn-ipc promote-self`.
-    // Privileged IPC commands still fail server-side until the session kind
-    // has been promoted to Control.
-    let mut effective_env = env.unwrap_or_default();
+    // Inject Acorn session identity and CLI reachability. Privileged IPC
+    // commands remain server-gated to sessions Acorn created as Control;
+    // repository code inside a regular terminal cannot self-promote.
+    let mut effective_env = validate_pty_caller_env(env)?;
     let mut primed_args = resolved_args;
 
     // PTY children get the same SHELL/HOME their dotfiles expect to
@@ -8258,6 +8454,16 @@ fn pty_spawn_blocking<R: Runtime>(
     effective_env
         .entry("ACORN_RESUME_TOKEN".to_string())
         .or_insert_with(|| resume_token.clone());
+    let ipc_capability = state
+        .ipc_session_capabilities
+        .lock()
+        .entry(id)
+        .or_insert_with(Uuid::new_v4)
+        .simple()
+        .to_string();
+    // Always override renderer-supplied values: this is backend authority,
+    // not user-configurable shell environment.
+    effective_env.insert("ACORN_IPC_CAPABILITY".to_string(), ipc_capability);
     if let Ok(state_dir) = crate::agent_resume::ensure_session_state_dir(id) {
         effective_env
             .entry("ACORN_AGENT_STATE_DIR".to_string())
@@ -8384,16 +8590,10 @@ fn pty_spawn_blocking<R: Runtime>(
         // an ordinary shell (`AgentFlavor::Unknown`) and only takes
         // effect on the rare configuration where `$SHELL` itself
         // resolves to a recognised agent binary.
-        let daemon_socket = acorn_daemon::paths::control_socket_path().ok();
-        let primer = acorn_ipc::primer::primer_for(
-            &session.id.to_string(),
-            &session.repo_path,
-            &ipc_socket,
-            daemon_socket.as_deref(),
-        );
+        let primer = acorn_ipc::primer::primer();
         let flavor = acorn_ipc::primer::AgentFlavor::detect(&resolved_command);
-        primed_args = acorn_ipc::primer::inject_primer_args(flavor, primed_args, &primer);
-        write_control_marker(&cwd, &primer);
+        primed_args = acorn_ipc::primer::inject_primer_args(flavor, primed_args, primer);
+        write_control_marker(&cwd, primer);
     }
 
     // Daemon path — when the killswitch is on, route exclusively through
@@ -8731,12 +8931,19 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
         if stream_attached {
             state.stream_registry.drop_attachment(&id);
         }
+        if result.is_ok() {
+            state.ipc_session_capabilities.lock().remove(&id);
+        }
         return result;
     }
-    state
+    let result = state
         .pty
         .kill(&id)
-        .map_err(|e| AppError::Pty(e.to_string()))
+        .map_err(|e| AppError::Pty(e.to_string()));
+    if result.is_ok() {
+        state.ipc_session_capabilities.lock().remove(&id);
+    }
+    result
 }
 
 /// Detach the frontend from a daemon-managed session's PTY *without* killing
@@ -8837,11 +9044,12 @@ fn pty_cwd_inner(state: AppState, session_id: String) -> AppResult<Option<String
     Ok(deepest_descendant_cwd(&sys, Pid::from_u32(root_pid)))
 }
 
-fn session_root_pid(state: &AppState, id: &Uuid) -> Option<u32> {
+pub(crate) fn session_root_pid(state: &AppState, id: &Uuid) -> Option<u32> {
     state
         .stream_registry
         .pid(id)
         .or_else(|| state.pty.child_pid(id))
+        .or_else(|| state.daemon_bridge.session_pid(*id))
 }
 
 /// Like [`pty_cwd`], but resolves the cwd to its enclosing git repository's
@@ -8926,14 +9134,21 @@ fn deepest_descendant_cwd(sys: &System, root: Pid) -> Option<String> {
 /// the response feeds straight into the worktree-icon condition without
 /// touching the system process table.
 #[tauri::command]
-pub fn is_path_linked_worktree(path: String) -> bool {
-    linked_worktree_root(path).is_some()
+pub fn is_path_linked_worktree(state: State<'_, AppState>, path: String) -> bool {
+    linked_worktree_root_for_registered_path(state.inner(), Path::new(&path)).is_some()
 }
 
 #[tauri::command]
-pub fn linked_worktree_root(path: String) -> Option<String> {
-    let p = PathBuf::from(&path);
-    let Ok(repo) = git2::Repository::discover(&p) else {
+pub fn linked_worktree_root(state: State<'_, AppState>, path: String) -> Option<String> {
+    linked_worktree_root_for_registered_path(state.inner(), Path::new(&path))
+}
+
+fn linked_worktree_root_for_registered_path(state: &AppState, path: &Path) -> Option<String> {
+    let path = authorize_registered_repository(state, path).ok()?;
+    if !path.is_dir() {
+        return None;
+    }
+    let Ok(repo) = git2::Repository::discover(&path) else {
         return None;
     };
     repo.workdir()
@@ -9017,14 +9232,21 @@ pub async fn scrollback_save(
 }
 
 #[tauri::command]
-pub async fn scrollback_load(session_id: String) -> AppResult<Option<String>> {
+pub async fn scrollback_load(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Option<String>> {
+    let id = parse_id(&session_id)?;
+    state.sessions.get(&id)?;
     let dir = persistence::data_dir()?;
     let value = scrollback::load(&dir, &session_id)?;
     Ok(value)
 }
 
 #[tauri::command]
-pub async fn scrollback_delete(session_id: String) -> AppResult<()> {
+pub async fn scrollback_delete(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
+    let id = parse_id(&session_id)?;
+    state.sessions.get(&id)?;
     let dir = persistence::data_dir()?;
     scrollback::delete(&dir, &session_id)?;
     Ok(())
@@ -9063,8 +9285,14 @@ pub async fn scrollback_orphan_clear(state: State<'_, AppState>) -> AppResult<us
 }
 
 #[tauri::command]
-pub async fn read_session_todos(session_id: String, cwd: String) -> AppResult<Vec<TodoItem>> {
-    let cwd = PathBuf::from(cwd);
+pub async fn read_session_todos(
+    state: State<'_, AppState>,
+    session_id: String,
+    cwd: String,
+) -> AppResult<Vec<TodoItem>> {
+    let id = parse_id(&session_id)?;
+    let session = state.sessions.get(&id)?;
+    let cwd = authorize_session_cwd(state.inner(), &session, Path::new(&cwd))?;
     run_blocking("read_session_todos", move || {
         todos::read_latest_todos(&session_id, &cwd)
     })
@@ -10677,48 +10905,61 @@ mod status_hint_tests {
 
 #[tauri::command]
 pub async fn list_commits(
+    state: State<'_, AppState>,
     repo_path: String,
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> AppResult<Vec<CommitInfo>> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("list_commits", move || {
-        git_ops::list_commits(
-            &PathBuf::from(repo_path),
-            offset.unwrap_or(0),
-            limit.unwrap_or(50),
-        )
+        git_ops::list_commits(&repo_path, offset.unwrap_or(0), limit.unwrap_or(50))
     })
     .await
 }
 
 #[tauri::command]
-pub async fn list_staged(repo_path: String) -> AppResult<Vec<StagedFile>> {
-    run_blocking("list_staged", move || {
-        git_ops::list_staged(&PathBuf::from(repo_path))
-    })
-    .await
+pub async fn list_staged(
+    state: State<'_, AppState>,
+    repo_path: String,
+) -> AppResult<Vec<StagedFile>> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    run_blocking("list_staged", move || git_ops::list_staged(&repo_path)).await
 }
 
 #[tauri::command]
-pub async fn commit_diff(repo_path: String, sha: String) -> AppResult<DiffPayload> {
+pub async fn commit_diff(
+    state: State<'_, AppState>,
+    repo_path: String,
+    sha: String,
+) -> AppResult<DiffPayload> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("commit_diff", move || {
-        git_ops::diff_for_commit(&PathBuf::from(repo_path), &sha)
+        git_ops::diff_for_commit(&repo_path, &sha)
     })
     .await
 }
 
 #[tauri::command]
-pub async fn commit_web_url(repo_path: String, sha: String) -> AppResult<Option<String>> {
-    git_ops::web_url_for_commit(&PathBuf::from(repo_path), &sha)
+pub async fn commit_web_url(
+    state: State<'_, AppState>,
+    repo_path: String,
+    sha: String,
+) -> AppResult<Option<String>> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    git_ops::web_url_for_commit(&repo_path, &sha)
 }
 
 /// `Some("owner/repo")` when the repo's `origin` remote points at GitHub,
 /// `None` otherwise. The frontend uses this to hide the GitHub group of the
 /// right panel for non-GitHub repos. Read-only and cheap — no network calls.
 #[tauri::command]
-pub async fn github_origin_slug(repo_path: String) -> AppResult<Option<String>> {
+pub async fn github_origin_slug(
+    state: State<'_, AppState>,
+    repo_path: String,
+) -> AppResult<Option<String>> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("github_origin_slug", move || {
-        git_ops::github_owner_repo(&PathBuf::from(repo_path))
+        git_ops::github_owner_repo(&repo_path)
     })
     .await
 }
@@ -10726,9 +10967,10 @@ pub async fn github_origin_slug(repo_path: String) -> AppResult<Option<String>> 
 /// True when `repo_path` is inside a git repository. The frontend uses this
 /// to avoid showing GitHub-only UI for projects that have not run `git init`.
 #[tauri::command]
-pub async fn is_git_repository(repo_path: String) -> AppResult<bool> {
+pub async fn is_git_repository(state: State<'_, AppState>, repo_path: String) -> AppResult<bool> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("is_git_repository", move || {
-        Ok(git_ops::is_git_repository(&PathBuf::from(repo_path)))
+        Ok(git_ops::is_git_repository(&repo_path))
     })
     .await
 }
@@ -10742,9 +10984,15 @@ pub async fn is_git_repository(repo_path: String) -> AppResult<bool> {
 /// the binary themselves at runtime — adding it to a static capability scope
 /// would defeat the configurability.
 #[tauri::command]
-pub async fn open_in_editor(command: String, args: Vec<String>, path: String) -> AppResult<()> {
+pub async fn open_in_editor(
+    state: State<'_, AppState>,
+    command: String,
+    args: Vec<String>,
+    path: String,
+) -> AppResult<()> {
     let command = validate_editor_command(&command, &args)?;
     let path = canonical_existing_path(&PathBuf::from(path))?;
+    fs_explorer::authorize_existing_path(state.inner(), &path)?;
     #[cfg(windows)]
     let program = crate::cli_resolver::resolve(&command)?;
     #[cfg(not(windows))]
@@ -10770,17 +11018,20 @@ pub async fn open_in_editor(command: String, args: Vec<String>, path: String) ->
 }
 
 #[tauri::command]
-pub async fn staged_diff(repo_path: String) -> AppResult<DiffPayload> {
-    run_blocking("staged_diff", move || {
-        git_ops::diff_staged(&PathBuf::from(repo_path))
-    })
-    .await
+pub async fn staged_diff(state: State<'_, AppState>, repo_path: String) -> AppResult<DiffPayload> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    run_blocking("staged_diff", move || git_ops::diff_staged(&repo_path)).await
 }
 
 #[tauri::command]
-pub async fn staged_file_diff(repo_path: String, path: String) -> AppResult<DiffPayload> {
+pub async fn staged_file_diff(
+    state: State<'_, AppState>,
+    repo_path: String,
+    path: String,
+) -> AppResult<DiffPayload> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("staged_file_diff", move || {
-        git_ops::diff_staged_file(&PathBuf::from(repo_path), &path)
+        git_ops::diff_staged_file(&repo_path, &path)
     })
     .await
 }
@@ -10796,11 +11047,13 @@ pub enum DiffImageSource {
 
 #[tauri::command]
 pub async fn load_diff_images(
+    state: State<'_, AppState>,
     repo_path: String,
     source: DiffImageSource,
     old_path: Option<String>,
     new_path: Option<String>,
 ) -> AppResult<DiffImages> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("load_diff_images", move || {
         if old_path.is_none() && new_path.is_none() {
             return Err(AppError::InvalidPath("diff image path is missing".into()));
@@ -10813,25 +11066,23 @@ pub async fn load_diff_images(
         }
         match source {
             DiffImageSource::Commit { sha } => git_ops::diff_images_for_commit(
-                &PathBuf::from(repo_path),
+                &repo_path,
                 &sha,
                 old_path.as_deref(),
                 new_path.as_deref(),
             ),
-            DiffImageSource::Staged => git_ops::diff_images_staged(
-                &PathBuf::from(repo_path),
-                old_path.as_deref(),
-                new_path.as_deref(),
-            ),
+            DiffImageSource::Staged => {
+                git_ops::diff_images_staged(&repo_path, old_path.as_deref(), new_path.as_deref())
+            }
             DiffImageSource::PullRequest { number } => pull_requests::get_pull_request_diff_images(
-                &PathBuf::from(repo_path),
+                &repo_path,
                 number,
                 old_path.as_deref(),
                 new_path.as_deref(),
             ),
             DiffImageSource::PullRequestCommit { sha } => {
                 pull_requests::get_pull_request_commit_diff_images(
-                    &PathBuf::from(repo_path),
+                    &repo_path,
                     &sha,
                     old_path.as_deref(),
                     new_path.as_deref(),
@@ -10844,14 +11095,16 @@ pub async fn load_diff_images(
 
 #[tauri::command]
 pub async fn list_pull_requests(
+    app_state: State<'_, AppState>,
     repo_path: String,
     state: Option<PrStateFilter>,
     limit: Option<u32>,
     query: Option<String>,
 ) -> AppResult<PullRequestListing> {
+    let repo_path = authorize_registered_repository(app_state.inner(), Path::new(&repo_path))?;
     run_blocking("list_pull_requests", move || {
         pull_requests::list_pull_requests(
-            &PathBuf::from(repo_path),
+            &repo_path,
             state.unwrap_or(PrStateFilter::Open),
             limit.unwrap_or(50),
             query.as_deref().map(str::trim).filter(|s| !s.is_empty()),
@@ -10862,14 +11115,16 @@ pub async fn list_pull_requests(
 
 #[tauri::command]
 pub async fn list_issues(
+    app_state: State<'_, AppState>,
     repo_path: String,
     state: Option<IssueStateFilter>,
     limit: Option<u32>,
     query: Option<String>,
 ) -> AppResult<IssueListing> {
+    let repo_path = authorize_registered_repository(app_state.inner(), Path::new(&repo_path))?;
     run_blocking("list_issues", move || {
         pull_requests::list_issues(
-            &PathBuf::from(repo_path),
+            &repo_path,
             state.unwrap_or(IssueStateFilter::Open),
             limit.unwrap_or(50),
             query.as_deref().map(str::trim).filter(|s| !s.is_empty()),
@@ -10879,106 +11134,127 @@ pub async fn list_issues(
 }
 
 #[tauri::command]
-pub async fn get_issue_detail(repo_path: String, number: u64) -> AppResult<IssueDetailListing> {
+pub async fn get_issue_detail(
+    state: State<'_, AppState>,
+    repo_path: String,
+    number: u64,
+) -> AppResult<IssueDetailListing> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("get_issue_detail", move || {
-        pull_requests::get_issue_detail(&PathBuf::from(repo_path), number)
+        pull_requests::get_issue_detail(&repo_path, number)
     })
     .await
 }
 
 #[tauri::command]
-pub async fn add_issue_comment(repo_path: String, number: u64, body: String) -> AppResult<()> {
+pub async fn add_issue_comment(
+    state: State<'_, AppState>,
+    repo_path: String,
+    number: u64,
+    body: String,
+) -> AppResult<()> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("add_issue_comment", move || {
-        pull_requests::add_issue_comment(&PathBuf::from(repo_path), number, &body)
+        pull_requests::add_issue_comment(&repo_path, number, &body)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn update_github_comment(
+    state: State<'_, AppState>,
     repo_path: String,
     account_login: String,
     comment_id: u64,
     body: String,
 ) -> AppResult<()> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("update_github_comment", move || {
-        pull_requests::update_github_comment(
-            &PathBuf::from(repo_path),
-            &account_login,
-            comment_id,
-            &body,
-        )
+        pull_requests::update_github_comment(&repo_path, &account_login, comment_id, &body)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn delete_github_comment(
+    state: State<'_, AppState>,
     repo_path: String,
     account_login: String,
     comment_id: u64,
 ) -> AppResult<()> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("delete_github_comment", move || {
-        pull_requests::delete_github_comment(&PathBuf::from(repo_path), &account_login, comment_id)
+        pull_requests::delete_github_comment(&repo_path, &account_login, comment_id)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn get_pull_request_detail(
+    state: State<'_, AppState>,
     repo_path: String,
     number: u64,
 ) -> AppResult<PullRequestDetailListing> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("get_pull_request_detail", move || {
-        pull_requests::get_pull_request_detail(&PathBuf::from(repo_path), number)
+        pull_requests::get_pull_request_detail(&repo_path, number)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn get_pull_request_diff(
+    state: State<'_, AppState>,
     repo_path: String,
     number: u64,
 ) -> AppResult<PullRequestDiffListing> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("get_pull_request_diff", move || {
-        pull_requests::get_pull_request_diff(&PathBuf::from(repo_path), number)
+        pull_requests::get_pull_request_diff(&repo_path, number)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn add_pull_request_comment(
+    state: State<'_, AppState>,
     repo_path: String,
     number: u64,
     body: String,
 ) -> AppResult<()> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("add_pull_request_comment", move || {
-        pull_requests::add_pull_request_comment(&PathBuf::from(repo_path), number, &body)
+        pull_requests::add_pull_request_comment(&repo_path, number, &body)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn get_pull_request_commit_diff(
+    state: State<'_, AppState>,
     repo_path: String,
     sha: String,
 ) -> AppResult<DiffPayload> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("get_pull_request_commit_diff", move || {
-        pull_requests::get_pull_request_commit_diff(&PathBuf::from(repo_path), &sha)
+        pull_requests::get_pull_request_commit_diff(&repo_path, &sha)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn resolve_commit_logins(
+    state: State<'_, AppState>,
     repo_path: String,
     shas: Vec<String>,
 ) -> AppResult<std::collections::HashMap<String, Option<String>>> {
-    pull_requests::resolve_commit_logins(&PathBuf::from(repo_path), shas)
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    pull_requests::resolve_commit_logins(&repo_path, shas)
 }
 
 #[tauri::command]
 pub async fn merge_pull_request(
+    state: State<'_, AppState>,
     repo_path: String,
     number: u64,
     method: MergeMethod,
@@ -10986,8 +11262,9 @@ pub async fn merge_pull_request(
     commit_body: Option<String>,
     admin: Option<bool>,
 ) -> AppResult<()> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     pull_requests::merge_pull_request(
-        &PathBuf::from(repo_path),
+        &repo_path,
         number,
         method,
         commit_title,
@@ -10997,56 +11274,71 @@ pub async fn merge_pull_request(
 }
 
 #[tauri::command]
-pub async fn close_pull_request(repo_path: String, number: u64) -> AppResult<()> {
-    pull_requests::close_pull_request(&PathBuf::from(repo_path), number)
+pub async fn close_pull_request(
+    state: State<'_, AppState>,
+    repo_path: String,
+    number: u64,
+) -> AppResult<()> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    pull_requests::close_pull_request(&repo_path, number)
 }
 
 #[tauri::command]
 pub async fn change_pull_request_state(
+    state: State<'_, AppState>,
     repo_path: String,
     number: u64,
     change: PullRequestStateChange,
 ) -> AppResult<()> {
-    pull_requests::change_pull_request_state(&PathBuf::from(repo_path), number, change)
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    pull_requests::change_pull_request_state(&repo_path, number, change)
 }
 
 #[tauri::command]
 pub async fn update_pull_request_body(
+    state: State<'_, AppState>,
     repo_path: String,
     number: u64,
     body: String,
 ) -> AppResult<()> {
-    pull_requests::update_pull_request_body(&PathBuf::from(repo_path), number, &body)
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    pull_requests::update_pull_request_body(&repo_path, number, &body)
 }
 
 #[tauri::command]
 pub async fn list_workflow_runs(
+    state: State<'_, AppState>,
     repo_path: String,
     limit: Option<u32>,
 ) -> AppResult<WorkflowRunsListing> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("list_workflow_runs", move || {
-        pull_requests::list_workflow_runs(&PathBuf::from(repo_path), limit.unwrap_or(50))
+        pull_requests::list_workflow_runs(&repo_path, limit.unwrap_or(50))
     })
     .await
 }
 
 #[tauri::command]
 pub async fn get_workflow_run_detail(
+    state: State<'_, AppState>,
     repo_path: String,
     run_id: u64,
 ) -> AppResult<WorkflowRunDetailListing> {
-    pull_requests::get_workflow_run_detail(&PathBuf::from(repo_path), run_id)
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    pull_requests::get_workflow_run_detail(&repo_path, run_id)
 }
 
 #[tauri::command]
 pub async fn generate_pr_commit_message(
+    state: State<'_, AppState>,
     repo_path: String,
     number: u64,
     method: MergeMethod,
     ai: crate::ai::AiExecutionRequest,
     prompt: String,
 ) -> AppResult<GeneratedCommitMessage> {
-    pull_requests::generate_pr_commit_message(&PathBuf::from(repo_path), number, method, ai, prompt)
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    pull_requests::generate_pr_commit_message(&repo_path, number, method, ai, prompt)
 }
 
 #[cfg(test)]
@@ -11152,7 +11444,7 @@ pub fn get_agent_resume_candidate(
     session_id: String,
     kind: AgentKind,
 ) -> AppResult<Option<agent_resume::ResumeCandidate>> {
-    let id = parse_id(&session_id)?;
+    let id = authorize_existing_session_id(state.inner(), &session_id)?;
     if agent_running_basenames(kind)
         .iter()
         .any(|basename| agent_is_running_in_session(&state, &id, basename))
@@ -11166,8 +11458,12 @@ pub fn get_agent_resume_candidate(
 /// for the same UUID. The only thing that revives the candidate is a new
 /// transcript appearing under a different UUID.
 #[tauri::command]
-pub fn acknowledge_agent_resume(session_id: String, kind: AgentKind) -> AppResult<()> {
-    let id = parse_id(&session_id)?;
+pub fn acknowledge_agent_resume(
+    state: State<'_, AppState>,
+    session_id: String,
+    kind: AgentKind,
+) -> AppResult<()> {
+    let id = authorize_existing_session_id(state.inner(), &session_id)?;
     agent_resume::acknowledge_resume(id, kind).map_err(|e| AppError::Other(e.to_string()))
 }
 
@@ -11323,16 +11619,18 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_title_enabled_for_new_session, can_store_generated_session_title,
-        collect_memory_usage_from_roots, configured_git_identity, create_unique_worktree,
-        daemon_attach_replay_scrollback, daemon_spawn_name_for_session,
-        detach_requested_by_stale_renderer, font_name_from_path,
-        infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
-        normalize_session_goal, normalize_session_graph, poll_defers_to_hook,
-        remove_linked_worktree_at_path, restore_pending_session_removal, seed_initial_commit,
-        should_remove_local_project_mirror, should_route_session_to_daemon,
-        terminate_session_runtime, validate_editor_command, validate_new_project_name,
-        ChatProviderAdapter, ProcessMemorySnapshot,
+        authorize_existing_session_id, authorize_registered_repository,
+        authorize_registered_worktree, auto_title_enabled_for_new_session,
+        can_store_generated_session_title, collect_memory_usage_from_roots,
+        configured_git_identity, create_unique_worktree, daemon_attach_replay_scrollback,
+        daemon_spawn_name_for_session, detach_requested_by_stale_renderer, font_name_from_path,
+        infer_acornd_root_from_session_pids, inject_agent_hook_env,
+        linked_worktree_root_for_registered_path, memory_root_pids, normalize_session_goal,
+        normalize_session_graph, poll_defers_to_hook, remove_linked_worktree_at_path,
+        restore_pending_session_removal, seed_initial_commit, should_remove_local_project_mirror,
+        should_route_session_to_daemon, terminate_session_runtime, validate_display_name,
+        validate_editor_command, validate_new_project_name, validate_pty_caller_env,
+        ChatProviderAdapter, ProcessMemorySnapshot, MAX_PTY_WORKSPACE_NAME_BYTES,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingSessionRemoval};
@@ -11377,6 +11675,98 @@ mod tests {
         );
         session.in_worktree = true;
         session
+    }
+
+    #[test]
+    fn repository_authorization_accepts_registered_roots_and_descendants_only() {
+        let state = AppState::new();
+        let root = tempfile::tempdir().expect("registered project root");
+        let nested = root.path().join("nested");
+        std::fs::create_dir(&nested).expect("nested project directory");
+        let outside = tempfile::tempdir().expect("outside project root");
+        state
+            .projects
+            .ensure(root.path().to_path_buf(), "registered".to_string());
+
+        assert_eq!(
+            authorize_registered_repository(&state, root.path()).unwrap(),
+            root.path().canonicalize().unwrap()
+        );
+        assert_eq!(
+            authorize_registered_repository(&state, &nested).unwrap(),
+            nested.canonicalize().unwrap()
+        );
+        assert!(authorize_registered_repository(&state, outside.path()).is_err());
+    }
+
+    #[test]
+    fn repository_authorization_accepts_registered_external_worktrees() {
+        let state = AppState::new();
+        let root = tempfile::tempdir().expect("registered project root");
+        let repo = init_repo_with_commit(root.path());
+        let external = tempfile::tempdir().expect("external worktree parent");
+        let worktree_path = external.path().join("linked");
+        let commit = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("resolve initial commit");
+        repo.branch("external-linked", &commit, false)
+            .expect("create worktree branch");
+        let branch = repo
+            .find_reference("refs/heads/external-linked")
+            .expect("find worktree branch");
+        let mut options = git2::WorktreeAddOptions::new();
+        options.checkout_existing(true).reference(Some(&branch));
+        repo.worktree("external-linked", &worktree_path, Some(&options))
+            .expect("create external linked worktree");
+        let nested = worktree_path.join("nested");
+        std::fs::create_dir(&nested).expect("nested worktree directory");
+        state
+            .projects
+            .ensure(root.path().to_path_buf(), "registered".to_string());
+
+        assert_eq!(
+            authorize_registered_repository(&state, &worktree_path).unwrap(),
+            worktree_path.canonicalize().unwrap()
+        );
+        assert_eq!(
+            authorize_registered_repository(&state, &nested).unwrap(),
+            nested.canonicalize().unwrap()
+        );
+        assert_eq!(
+            authorize_registered_worktree(&state, root.path(), &worktree_path).unwrap(),
+            (
+                root.path().canonicalize().unwrap(),
+                worktree_path.canonicalize().unwrap()
+            )
+        );
+        let linked_root = linked_worktree_root_for_registered_path(&state, &nested)
+            .map(PathBuf::from)
+            .expect("registered linked worktree root");
+        assert_eq!(
+            linked_root.canonicalize().unwrap(),
+            worktree_path.canonicalize().unwrap()
+        );
+        assert!(linked_worktree_root_for_registered_path(&state, external.path()).is_none());
+        assert!(authorize_registered_worktree(&state, root.path(), external.path()).is_err());
+    }
+
+    #[test]
+    fn existing_session_authorization_rejects_unknown_ids() {
+        let state = AppState::new();
+        let id = Uuid::new_v4();
+        assert!(matches!(
+            authorize_existing_session_id(&state, &id.to_string()),
+            Err(AppError::SessionNotFound(_))
+        ));
+
+        let mut session = scoped_session("session", "/tmp/repo", true);
+        session.id = id;
+        state.sessions.insert(session);
+        assert_eq!(
+            authorize_existing_session_id(&state, &id.to_string()).unwrap(),
+            id
+        );
     }
 
     #[test]
@@ -13741,6 +14131,19 @@ mod tests {
     }
 
     #[test]
+    fn chat_text_byte_limits_reject_oversized_atomic_messages() {
+        assert!(super::validate_chat_text_bytes("1234", 4, "chat message").is_ok());
+        let error = super::validate_chat_text_bytes("12345", 4, "chat message")
+            .expect_err("oversized chat message");
+        assert!(error.to_string().contains("4-byte limit"));
+
+        // The limit is measured in encoded bytes rather than scalar values.
+        let error = super::validate_chat_text_bytes("가나", 5, "chat message")
+            .expect_err("UTF-8 message over byte budget");
+        assert!(error.to_string().contains("5-byte limit"));
+    }
+
+    #[test]
     fn provider_switch_compiled_context_embeds_the_active_graph_checkpoint() {
         let mut initial_user = chat_message(
             "u1",
@@ -15176,6 +15579,21 @@ mod tests {
     }
 
     #[test]
+    fn display_names_are_bounded_and_cannot_inject_terminal_controls() {
+        assert_eq!(
+            validate_display_name("  정상 이름  ", "session name").unwrap(),
+            "정상 이름"
+        );
+        assert!(validate_display_name("bad\u{1b}[2J", "session name").is_err());
+        assert!(validate_display_name("spoof\u{202e}txt", "session name").is_err());
+        assert!(validate_display_name(
+            &"x".repeat(super::MAX_DISPLAY_NAME_BYTES + 1),
+            "session name"
+        )
+        .is_err());
+    }
+
+    #[test]
     fn configured_git_identity_requires_non_empty_name_and_email() {
         let config_dir = unique_repo_dir("git-identity-config");
         let config_path = config_dir.join("config");
@@ -15374,7 +15792,7 @@ mod tests {
     }
 
     #[test]
-    fn inject_agent_hook_env_stamps_known_provider_without_overriding_callers() {
+    fn inject_agent_hook_env_overwrites_authority_bearing_caller_values() {
         let hooks = crate::agent_hooks::AgentHookServer::start().expect("hook server starts");
         let mut session = Session::new(
             "Codex".to_string(),
@@ -15419,7 +15837,7 @@ mod tests {
         );
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_TOKEN"),
-            Some(&"caller-token".to_string())
+            Some(&hooks.token().to_string())
         );
         assert_eq!(
             env.get("ACORN_AGENT_HOOK_SESSION_ID"),
@@ -15487,10 +15905,46 @@ mod tests {
         );
         session.agent_provider = None;
 
-        let mut env = HashMap::new();
+        let mut env = HashMap::from([
+            (
+                "ACORN_AGENT_HOOK_URL".to_string(),
+                "https://attacker.example/collect".to_string(),
+            ),
+            ("ACORN_AGENT_HOOK_TOKEN".to_string(), "forged".to_string()),
+            ("ACORN_AGENT_INVOCATION_ROOT".to_string(), "1".to_string()),
+        ]);
         inject_agent_hook_env(&mut env, &session, None);
         assert!(!env.contains_key("ACORN_AGENT_HOOK_URL"));
+        assert!(!env.contains_key("ACORN_AGENT_HOOK_TOKEN"));
         assert!(!env.contains_key("ACORN_AGENT_INVOCATION_ROOT"));
+    }
+
+    #[test]
+    fn pty_caller_env_accepts_only_bounded_workspace_hints() {
+        let env = HashMap::from([
+            ("ACORN_WORKSPACE_ID".to_string(), "folder-1".to_string()),
+            ("ACORN_WORKSPACE_NAME".to_string(), "Workspace".to_string()),
+            (
+                "ACORN_WORKSPACE_PATH".to_string(),
+                "/tmp/workspace".to_string(),
+            ),
+        ]);
+        assert_eq!(validate_pty_caller_env(Some(env.clone())).unwrap(), env);
+
+        for rejected in [
+            HashMap::from([("ACORN_AGENT_HOOK_TOKEN".to_string(), "forged".to_string())]),
+            HashMap::from([("TERM".to_string(), "xterm".to_string())]),
+            HashMap::from([(
+                "ACORN_WORKSPACE_NAME".to_string(),
+                "name\nwith-control".to_string(),
+            )]),
+            HashMap::from([(
+                "ACORN_WORKSPACE_NAME".to_string(),
+                "x".repeat(MAX_PTY_WORKSPACE_NAME_BYTES + 1),
+            )]),
+        ] {
+            assert!(validate_pty_caller_env(Some(rejected)).is_err());
+        }
     }
 
     #[test]
