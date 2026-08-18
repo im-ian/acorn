@@ -29,6 +29,7 @@
       "titleRegenerateSkipped": "セッション名は再生成されませんでした。",
       "worktreeAdopted": "採用されたワークツリー: {name}",
       "worktreeAdoptFailed": "ワークツリーの採用に失敗しました:",
+      "pendingCommandFailed": "予約されたターミナルコマンドを実行できませんでした:",
       "worktreeMissing": "Worktree フォルダーはディスク上に存在しません。"
     },
     "autonomousGoal": {

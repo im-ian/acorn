@@ -29,6 +29,7 @@
       "titleRegenerateSkipped": "Session name was not regenerated.",
       "worktreeAdopted": "Worktree adopted: {name}",
       "worktreeAdoptFailed": "Failed to adopt worktree:",
+      "pendingCommandFailed": "Failed to run queued terminal command:",
       "worktreeMissing": "Worktree folder no longer exists on disk."
     },
     "autonomousGoal": {

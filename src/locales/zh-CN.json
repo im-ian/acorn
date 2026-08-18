@@ -29,6 +29,7 @@
       "titleRegenerateSkipped": "会话名称未重新生成。",
       "worktreeAdopted": "已采用工作树：{name}",
       "worktreeAdoptFailed": "未能采用工作树：",
+      "pendingCommandFailed": "无法运行已排队的终端命令：",
       "worktreeMissing": "工作树文件夹磁盘上不再存在。"
     },
     "autonomousGoal": {

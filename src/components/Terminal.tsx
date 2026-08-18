@@ -2655,16 +2655,38 @@ export function Terminal({
         // Cleanup can run between consume and write under StrictMode's
         // mount/cleanup/mount sequence. Re-check `disposed` so we do not
         // pty_write into a session whose PTY has already been killed.
-        if (queued && !disposed) {
+        if (queued) {
+          if (disposed) {
+            useAppStore
+              .getState()
+              .restorePendingTerminalInput(sessionId, queued);
+            return;
+          }
+          const payload = encodeStringToBase64(queued.command + "\r");
+          try {
+            await invoke("pty_write", { sessionId, data: payload });
+          } catch (err) {
+            const restored = useAppStore
+              .getState()
+              .restorePendingTerminalInput(sessionId, queued);
+            console.error("[Terminal] pending pty_write failed", err);
+            if (!disposed) {
+              const retryDetail = restored
+                ? " The command remains queued for the next terminal attach."
+                : " A newer command is already queued for this session.";
+              term.write(
+                `\r\n${ANSI_RED}[acorn] Failed to run queued command: ${formatError(err)}${retryDetail}${ANSI_RESET}\r\n`,
+              );
+              showTranslatedErrorToast(
+                "toasts.session.pendingCommandFailed",
+                err,
+              );
+            }
+            return;
+          }
           if (queued.adoptWorktreeOnExit) {
             worktreeAdoptionIntent = { kind: "after-exit" };
           }
-          const payload = encodeStringToBase64(queued.command + "\r");
-          invoke("pty_write", { sessionId, data: payload }).catch(
-            (err: unknown) => {
-              console.error("[Terminal] pending pty_write failed", err);
-            },
-          );
         }
       } catch (err) {
         if (!disposed) {
