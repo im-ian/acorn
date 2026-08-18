@@ -165,6 +165,26 @@ describe("importBackgroundImage", () => {
     ).rejects.toThrow(/Invalid managed background image path/);
     expect(tauriFsMock.remove).not.toHaveBeenCalled();
   });
+
+  it("surfaces a failed removal instead of reporting success", async () => {
+    tauriFsMock.readDir.mockResolvedValue([
+      { name: "abcd1234.png", isFile: true, isDirectory: false },
+    ]);
+    tauriFsMock.remove.mockRejectedValue(new Error("permission denied"));
+
+    await expect(
+      removeBackgroundImage("backgrounds/abcd1234.png"),
+    ).rejects.toThrow(/permission denied/);
+  });
+
+  it("stays a no-op when the image is already gone", async () => {
+    tauriFsMock.readDir.mockResolvedValue([]);
+
+    await expect(
+      removeBackgroundImage("backgrounds/abcd1234.png"),
+    ).resolves.toBeUndefined();
+    expect(tauriFsMock.remove).not.toHaveBeenCalled();
+  });
 });
 
 describe("backgroundCssVarsForState", () => {
