@@ -55,6 +55,9 @@
       "restarted": "IPC 서버를 다시 시작했습니다.",
       "restartFailed": "IPC 서버를 다시 시작하지 못했습니다:"
     },
+    "clipboard": {
+      "writeFailed": "클립보드에 쓰지 못했습니다:"
+    },
     "files": {
       "renameFailed": "파일 이름을 바꾸지 못했습니다:",
       "trashFailed": "휴지통으로 이동하지 못했습니다:",

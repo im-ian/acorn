@@ -1,6 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useToasts } from "../../lib/toasts";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue(true),
@@ -25,6 +26,7 @@ describe("ChatMessageBody", () => {
       configurable: true,
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
     });
+    useToasts.getState().hide(undefined, { skipDismiss: true });
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -33,6 +35,7 @@ describe("ChatMessageBody", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    useToasts.getState().hide(undefined, { skipDismiss: true });
   });
 
   it("preserves paragraph and fenced code block order", async () => {
@@ -101,6 +104,37 @@ describe("ChatMessageBody", () => {
 
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       "const copied = true;",
+    );
+  });
+
+  it("surfaces clipboard permission failures from fenced code copy", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi
+          .fn()
+          .mockRejectedValue(new Error("clipboard permission denied")),
+      },
+    });
+    await act(async () => {
+      root.render(
+        <ChatMessageBody content={"```ts\nconst blocked = true;\n```"} />,
+      );
+    });
+    await settle();
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Copy code block"]',
+        )!
+        .click();
+      await Promise.resolve();
+    });
+
+    const toasts = useToasts.getState().toasts;
+    expect(toasts[toasts.length - 1]?.message).toContain(
+      "clipboard permission denied",
     );
   });
 

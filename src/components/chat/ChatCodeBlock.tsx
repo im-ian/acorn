@@ -1,7 +1,7 @@
 import { Check, ChevronDown, ChevronUp, Copy } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { copyTextWithFeedback } from "../../lib/clipboardActions";
 import { cn } from "../../lib/cn";
-import { writeClipboardText } from "../../lib/clipboardText";
 import { diffGutterWidth, parseDiff, type ParsedLine } from "../../lib/diff";
 import { highlightCode, langFromPath } from "../../lib/highlight";
 import { useSettings } from "../../lib/settings";
@@ -133,7 +133,8 @@ export function ChatCodeBlock({
   }, [isDiff, label, normalizedCode, sourceLines.length, themeMode]);
 
   async function copyCode() {
-    await writeClipboardText(normalizedCode);
+    const copied = await copyTextWithFeedback(normalizedCode);
+    if (!copied) return;
     setCopied(true);
     if (copyResetTimer.current !== null) {
       window.clearTimeout(copyResetTimer.current);

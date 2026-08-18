@@ -47,6 +47,7 @@ import { Panel } from "react-resizable-panels";
 import { PersistentGroup } from "./PersistentGroup";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api, FS_CHANGED_EVENT, type FsChangePayload } from "../lib/api";
+import { copyTextWithFeedback } from "../lib/clipboardActions";
 import { writeClipboardText } from "../lib/clipboardText";
 import { cn } from "../lib/cn";
 import { openFileInEditor } from "../lib/editor";
@@ -2068,7 +2069,7 @@ function CommitsTab({
         <Tooltip label={rt(t, "rightPanel.tooltips.copySha")} side="bottom">
           <button
             type="button"
-            onClick={() => void writeClipboardText(c.sha)}
+            onClick={() => void copyTextWithFeedback(c.sha)}
             className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
           >
             {c.short_sha}
