@@ -16,6 +16,7 @@
 //! `acorn-ipc` CLI for now.
 
 use std::io;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -51,6 +52,10 @@ enum Command {
         /// exiting.
         #[arg(long)]
         detach: bool,
+        /// Executable path of the Acorn app that started this daemon. Used only
+        /// to authenticate the released pre-token protocol during upgrades.
+        #[arg(long, hide = true)]
+        app_executable: Option<PathBuf>,
     },
     /// Probe a running daemon. Exits non-zero if no daemon answered.
     Status,
@@ -105,8 +110,14 @@ enum Command {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Serve { detach: false }) {
-        Command::Serve { detach } => match run_serve(detach) {
+    match cli.command.unwrap_or(Command::Serve {
+        detach: false,
+        app_executable: None,
+    }) {
+        Command::Serve {
+            detach,
+            app_executable,
+        } => match run_serve(detach, app_executable) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("acornd: {err}");
@@ -127,7 +138,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_serve(detach: bool) -> io::Result<()> {
+fn run_serve(detach: bool, app_executable: Option<PathBuf>) -> io::Result<()> {
     // 1) Detach BEFORE doing anything thread-spawning. fork() after we have
     //    spawned tokio / tracing threads is undefined behavior on Unix, and
     //    the Windows re-exec must not inherit initialized daemon state.
@@ -146,7 +157,7 @@ fn run_serve(detach: bool) -> io::Result<()> {
     }
     #[cfg(windows)]
     if detach {
-        spawn_detached_windows()?;
+        spawn_detached_windows(app_executable.as_deref())?;
         return Ok(());
     }
     #[cfg(not(any(unix, windows)))]
@@ -196,8 +207,12 @@ fn run_serve(detach: bool) -> io::Result<()> {
     // Keeping the closure in this binary (host crate) avoids pulling
     // host-only modules into the `acorn-daemon` leaf crate.
     let env_applier: daemon::pty::EnvApplier = Arc::new(pty_env::apply_layered_env);
-    let daemon_handle =
-        daemon::server::Daemon::new(env!("CARGO_PKG_VERSION"), auth_token, env_applier);
+    let daemon_handle = daemon::server::Daemon::new(
+        env!("CARGO_PKG_VERSION"),
+        auth_token,
+        app_executable,
+        env_applier,
+    );
     let serve_result = daemon_handle.serve(listeners);
 
     // 7) Cleanup on the way out. Always reached on graceful shutdown;
@@ -214,7 +229,7 @@ fn run_serve(detach: bool) -> io::Result<()> {
 /// safe post-startup `fork`, so `--detach` starts a fresh foreground daemon
 /// process without forwarding `--detach` (which also prevents recursion).
 #[cfg(windows)]
-fn detached_windows_command(executable: &Path) -> ProcessCommand {
+fn detached_windows_command(executable: &Path, app_executable: Option<&Path>) -> ProcessCommand {
     use std::os::windows::process::CommandExt;
 
     // Win32 process creation flags from winbase.h. `DETACHED_PROCESS` avoids
@@ -230,13 +245,16 @@ fn detached_windows_command(executable: &Path) -> ProcessCommand {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    if let Some(app_executable) = app_executable {
+        command.arg("--app-executable").arg(app_executable);
+    }
     command
 }
 
 #[cfg(windows)]
-fn spawn_detached_windows() -> io::Result<()> {
+fn spawn_detached_windows(app_executable: Option<&Path>) -> io::Result<()> {
     let executable = std::env::current_exe()?;
-    detached_windows_command(&executable).spawn()?;
+    detached_windows_command(&executable, app_executable).spawn()?;
     Ok(())
 }
 
@@ -630,7 +648,9 @@ fn init_tracing() {
 
 #[cfg(test)]
 mod terminal_output_tests {
-    use super::terminal_safe_field;
+    use super::{terminal_safe_field, Cli, Command};
+    use clap::Parser;
+    use std::path::PathBuf;
 
     #[test]
     fn terminal_fields_escape_controls_and_bidi_overrides() {
@@ -639,6 +659,34 @@ mod terminal_output_tests {
             "session\\n\\u{1b}[2J\\u{202e}"
         );
         assert_eq!(terminal_safe_field("한글 이름"), "한글 이름");
+    }
+
+    #[test]
+    fn serve_accepts_hidden_app_executable_trust_path() {
+        let cli = Cli::try_parse_from([
+            "acornd",
+            "serve",
+            "--detach",
+            "--app-executable",
+            "/Applications/Acorn.app/Contents/MacOS/acorn",
+        ])
+        .unwrap();
+
+        match cli.command.unwrap() {
+            Command::Serve {
+                detach,
+                app_executable,
+            } => {
+                assert!(detach);
+                assert_eq!(
+                    app_executable,
+                    Some(PathBuf::from(
+                        "/Applications/Acorn.app/Contents/MacOS/acorn"
+                    ))
+                );
+            }
+            other => panic!("expected serve command, got {other:?}"),
+        }
     }
 }
 
@@ -650,12 +698,17 @@ mod windows_detach_tests {
     #[test]
     fn detached_reexec_enters_foreground_serve_without_recursing() {
         let executable = Path::new(r"C:\Program Files\Acorn\acornd.exe");
-        let command = detached_windows_command(executable);
+        let app_executable = Path::new(r"C:\Program Files\Acorn\acorn.exe");
+        let command = detached_windows_command(executable, Some(app_executable));
 
         assert_eq!(command.get_program(), executable.as_os_str());
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
-            vec![OsStr::new("serve")]
+            vec![
+                OsStr::new("serve"),
+                OsStr::new("--app-executable"),
+                app_executable.as_os_str(),
+            ]
         );
     }
 }

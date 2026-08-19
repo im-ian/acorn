@@ -394,10 +394,18 @@ impl DaemonBridge {
         // `--detach` so the daemon survives the app's exit. Spawn returns
         // immediately; acornd forks on Unix and re-execs on Windows.
         let data_dir = paths::data_dir()?;
+        let app_executable = std::env::current_exe().map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("failed to locate Acorn executable for daemon trust: {error}"),
+            )
+        })?;
         let mut command = Command::new(&path);
         command
             .arg("serve")
             .arg("--detach")
+            .arg("--app-executable")
+            .arg(app_executable)
             .env(paths::ENV_DATA_DIR_OVERRIDE, data_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::null())

@@ -19,6 +19,7 @@
 //!   closes the connection.
 
 use std::io::{self, BufReader, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -50,6 +51,10 @@ pub struct Daemon {
     shutdown_flag: Arc<AtomicBool>,
     next_seq: AtomicU64,
     auth_token: uuid::Uuid,
+    /// App path supplied by the process that spawned this daemon. Only the
+    /// released minor-0 protocol may use it in place of the token it predates.
+    trusted_app_executable: Option<PathBuf>,
+    legacy_app_seen: AtomicBool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +76,7 @@ impl Daemon {
     pub fn new(
         daemon_version: impl Into<String>,
         auth_token: uuid::Uuid,
+        trusted_app_executable: Option<PathBuf>,
         env_applier: crate::pty::EnvApplier,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -81,6 +87,8 @@ impl Daemon {
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             next_seq: AtomicU64::new(1),
             auth_token,
+            trusted_app_executable,
+            legacy_app_seen: AtomicBool::new(false),
         })
     }
 
@@ -650,7 +658,17 @@ impl Daemon {
         let presented = hello
             .auth_token
             .as_deref()
-            .and_then(|value| uuid::Uuid::parse_str(value).ok())
+            .and_then(|value| uuid::Uuid::parse_str(value).ok());
+        if presented.is_none() && self.is_trusted_legacy_app(hello, peer_pid) {
+            if !self.legacy_app_seen.swap(true, Ordering::SeqCst) {
+                tracing::warn!(
+                    peer_pid,
+                    "accepting a legacy Acorn app through the executable-path compatibility boundary"
+                );
+            }
+            return Ok(CallerAuthority::App);
+        }
+        let presented = presented
             .ok_or_else(|| "daemon authentication token is missing or invalid".to_string())?;
         if presented != self.auth_token {
             return Err("daemon authentication token does not match".into());
@@ -696,6 +714,17 @@ impl Daemon {
             return Ok(CallerAuthority::StatusCli);
         }
         Err("daemon IPC peer executable is not authorized for this role".into())
+    }
+
+    fn is_trusted_legacy_app(&self, hello: &Hello, peer_pid: u32) -> bool {
+        legacy_app_hello_shape(hello)
+            && self
+                .trusted_app_executable
+                .as_ref()
+                .is_some_and(|expected| {
+                    acorn_platform::process::pid_executable_name_matches(peer_pid, "acorn")
+                        && acorn_platform::process::pid_executable_path_matches(peer_pid, expected)
+                })
     }
 
     fn authorization_error(
@@ -776,6 +805,21 @@ impl Daemon {
                 })
             }
         }
+    }
+}
+
+fn legacy_app_hello_shape(hello: &Hello) -> bool {
+    if hello.protocol_version_major != PROTOCOL_VERSION_MAJOR
+        || hello.protocol_version_minor != 0
+        || hello.auth_token.is_some()
+        || hello.source_session_id.is_some()
+        || hello.session_capability.is_some()
+    {
+        return false;
+    }
+    match hello.role {
+        ClientRole::ControlPersistent => hello.client_name.as_deref() == Some("acorn-app"),
+        ClientRole::ControlOneShot | ClientRole::Stream => hello.client_name.is_none(),
     }
 }
 
@@ -1053,6 +1097,55 @@ mod tests {
         assert!(retryable_accept_error(&error));
     }
 
+    #[test]
+    fn released_legacy_app_hello_shapes_are_narrowly_recognized() {
+        for role in [
+            ClientRole::ControlOneShot,
+            ClientRole::ControlPersistent,
+            ClientRole::Stream,
+        ] {
+            let mut hello = Hello::current(role);
+            hello.protocol_version_minor = 0;
+            if role == ClientRole::ControlPersistent {
+                hello.client_name = Some("acorn-app".into());
+            }
+            assert!(legacy_app_hello_shape(&hello), "role {role:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_app_hello_rejects_any_nonlegacy_authority_claim() {
+        let mut hello = Hello::current(ClientRole::ControlOneShot);
+        hello.protocol_version_minor = 0;
+
+        let mut with_token = hello.clone();
+        with_token.auth_token = Some(uuid::Uuid::new_v4().simple().to_string());
+        assert!(!legacy_app_hello_shape(&with_token));
+
+        let mut with_session = hello.clone();
+        with_session.source_session_id = Some(uuid::Uuid::new_v4());
+        assert!(!legacy_app_hello_shape(&with_session));
+
+        let mut with_capability = hello.clone();
+        with_capability.session_capability = Some(uuid::Uuid::new_v4().simple().to_string());
+        assert!(!legacy_app_hello_shape(&with_capability));
+
+        hello.protocol_version_minor = 1;
+        assert!(!legacy_app_hello_shape(&hello));
+    }
+
+    #[test]
+    fn legacy_app_requires_a_trusted_executable_path() {
+        let daemon = Daemon::new("test-version", uuid::Uuid::nil(), None, noop_env_applier());
+        let mut hello = Hello::current(ClientRole::ControlOneShot);
+        hello.protocol_version_minor = 0;
+
+        assert_eq!(
+            daemon.authenticate_hello(&hello, std::process::id()),
+            Err("daemon authentication token is missing or invalid".into())
+        );
+    }
+
     #[cfg(windows)]
     #[test]
     fn disconnected_windows_pipe_accept_errors_are_retryable() {
@@ -1079,7 +1172,7 @@ mod tests {
 
     #[test]
     fn ping_returns_pong() {
-        let d = Daemon::new("test-version", uuid::Uuid::nil(), noop_env_applier());
+        let d = Daemon::new("test-version", uuid::Uuid::nil(), None, noop_env_applier());
         let req = ControlRequest {
             seq: 1,
             payload: ControlPayload::Ping,
@@ -1096,7 +1189,7 @@ mod tests {
 
     #[test]
     fn status_reports_the_host_binary_version() {
-        let d = Daemon::new("1.32.0-host", uuid::Uuid::nil(), noop_env_applier());
+        let d = Daemon::new("1.32.0-host", uuid::Uuid::nil(), None, noop_env_applier());
         let resp = d.dispatch(
             ControlRequest {
                 seq: 4,
@@ -1115,7 +1208,7 @@ mod tests {
 
     #[test]
     fn control_session_authority_is_project_scoped_and_not_daemon_global() {
-        let d = Daemon::new("test-version", uuid::Uuid::nil(), noop_env_applier());
+        let d = Daemon::new("test-version", uuid::Uuid::nil(), None, noop_env_applier());
         let source_id = uuid::Uuid::new_v4();
         let same_project_id = uuid::Uuid::new_v4();
         let other_project_id = uuid::Uuid::new_v4();
@@ -1185,7 +1278,7 @@ mod tests {
 
     #[test]
     fn forget_alive_session_is_rejected() {
-        let d = Daemon::new("test-version", uuid::Uuid::nil(), noop_env_applier());
+        let d = Daemon::new("test-version", uuid::Uuid::nil(), None, noop_env_applier());
         let id = uuid::Uuid::new_v4();
         d.registry.insert(super::super::session::DaemonSession::new(
             id,
@@ -1208,7 +1301,7 @@ mod tests {
 
     #[test]
     fn forget_dead_session_succeeds() {
-        let d = Daemon::new("test-version", uuid::Uuid::nil(), noop_env_applier());
+        let d = Daemon::new("test-version", uuid::Uuid::nil(), None, noop_env_applier());
         let id = uuid::Uuid::new_v4();
         let mut session = super::super::session::DaemonSession::new(
             id,

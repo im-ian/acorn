@@ -1,6 +1,7 @@
 //! Process-tree ownership across Unix process groups and Windows Job Objects.
 
 use std::io::{self, Read, Write};
+use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -62,6 +63,43 @@ pub fn pid_executable_name_matches(pid: u32, expected: &str) -> bool {
         || process.cmd().first().is_some_and(|value| {
             crate::executable::executable_name_matches(&value.to_string_lossy(), expected)
         })
+}
+
+/// Compare a live process's executable path with an expected executable.
+/// Both paths must resolve successfully; this fails closed on inaccessible or
+/// stale paths. Like the basename check above, this is an identity signal and
+/// not a substitute for a platform code signature.
+pub fn pid_executable_path_matches(pid: u32, expected: &Path) -> bool {
+    if pid == 0 || expected.as_os_str().is_empty() {
+        return false;
+    }
+    let system = System::new_all();
+    let Some(actual) = system
+        .process(Pid::from_u32(pid))
+        .and_then(|process| process.exe())
+    else {
+        return false;
+    };
+    executable_paths_match(actual, expected)
+}
+
+fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
+    let (Ok(actual), Ok(expected)) = (
+        std::fs::canonicalize(actual),
+        std::fs::canonicalize(expected),
+    ) else {
+        return false;
+    };
+    #[cfg(windows)]
+    {
+        actual
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&expected.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        actual == expected
+    }
 }
 
 /// Configure a native child as the root of a separately terminable tree.
@@ -453,6 +491,19 @@ mod tests {
         assert!(is_descendant_or_same(pid, pid));
         assert!(!is_descendant_or_same(0, pid));
         assert!(!is_descendant_or_same(pid, 0));
+    }
+
+    #[test]
+    fn executable_path_match_uses_the_live_process_path() {
+        let current = std::env::current_exe().unwrap();
+        assert!(pid_executable_path_matches(std::process::id(), &current));
+
+        let other = tempfile::NamedTempFile::new().unwrap();
+        assert!(!pid_executable_path_matches(
+            std::process::id(),
+            other.path()
+        ));
+        assert!(!pid_executable_path_matches(0, &current));
     }
 
     #[cfg(unix)]
