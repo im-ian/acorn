@@ -51,6 +51,7 @@ write.
 - **Logic stuck inside a component** that wants a unit test should be extracted to `src/lib/`. Don't try to test it through the rendered component. Example: `Sidebar.tsx`'s project folder grouping logic should live in `src/lib/projectFolders.ts`.
 - **`src/lib/api.ts` is the only place that calls `invoke()` from app code.** New backend commands get a wrapper there with explicit types. Components import from `api`, not from `@tauri-apps/api/core`.
 - **Comments describe current state only.** No history accumulation, no "previously/legacy/v1/PR #N" framing, no WHAT restatement. Present-tense WHY only — see [`docs/COMMENTS.md`](COMMENTS.md).
+- **Rust is `rustfmt`-formatted, and CI enforces it.** Style is pinned in `src-tauri/rustfmt.toml`, the `Rust format` CI job runs `cargo fmt --all --check`, and `.githooks/pre-commit` reformats staged `.rs` files so drift never reaches a commit. Enable the hook once per clone: `git config core.hooksPath .githooks`.
 
 ## Things that go wrong if you forget
 

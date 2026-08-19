@@ -385,3 +385,24 @@ jobs:
           path: staged/**
           if-no-files-found: error
           retention-days: 1
+
+  rustfmt:
+    name: Rust format
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # rustfmt only parses — no crate compilation, so this job needs neither
+      # a cargo cache nor a sidecar build. Style is pinned in
+      # src-tauri/rustfmt.toml so every toolchain formats identically.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
