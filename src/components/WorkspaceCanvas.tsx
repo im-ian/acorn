@@ -14,6 +14,7 @@ import {
   Scan,
   Sparkles,
   Terminal as TerminalIcon,
+  Trash2,
   Undo2,
   Waypoints,
   X,
@@ -1540,7 +1541,7 @@ const WorkspaceCanvasSessionNode = memo(
               data-testid="workspace-canvas-node-close"
               onClick={onClose}
             >
-              <X size={12} />
+              <Trash2 size={12} />
             </IconButton>
           </Tooltip>
         </header>
