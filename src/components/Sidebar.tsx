@@ -2053,11 +2053,18 @@ function projectSessionCreateMenuForWorkspace(
   return PROJECT_SESSION_CREATE_MENU.filter((item) => {
     if (item.type === "separator") return true;
     if (!includeTerminal && item.action.id === "terminal") return false;
-    if (isWorktreeWorkspace(folder) && item.action.id === "isolated") {
+    if (
+      !canCreateWorktreeSessionInWorkspace(folder) &&
+      item.action.id === "isolated"
+    ) {
       return false;
     }
     return true;
   });
+}
+
+function canCreateWorktreeSessionInWorkspace(folder: ProjectFolder): boolean {
+  return !isWorktreeWorkspace(folder);
 }
 
 function isSessionRowDragId(id: string): boolean {
@@ -3109,7 +3116,7 @@ function ProjectFolderView({
                 <Plus size={12} />
               </button>
             </Tooltip>
-            {isDefaultProjectFolder(folder) ? (
+            {canCreateWorktreeSessionInWorkspace(folder) ? (
               <Tooltip
                 label={sidebarText(
                   t,

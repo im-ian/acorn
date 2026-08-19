@@ -5010,7 +5010,7 @@ test.describe("sidebar: project lifecycle", () => {
     ).toBeVisible();
   });
 
-  test("primary and source root headers create worktree sessions in their repositories", async ({
+  test("primary and source workspace headers create worktree sessions in their repositories", async ({
     page,
     tauri,
   }) => {
@@ -5062,6 +5062,34 @@ test.describe("sidebar: project lifecycle", () => {
       w.__sessions = [...(w.__sessions ?? []), created];
       return created;
     });
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn-workspaces",
+        JSON.stringify({
+          state: {
+            projectFolders: {
+              "/tmp/acorn": [
+                {
+                  id: "/tmp/acorn",
+                  repoPath: "/tmp/acorn",
+                  name: "Default",
+                  cwdPath: "/tmp/acorn",
+                  position: 0,
+                },
+                {
+                  id: "project-folder:/tmp/acorn:scratch",
+                  repoPath: "/tmp/acorn",
+                  name: "scratch",
+                  cwdPath: "/tmp/acorn",
+                  position: 1,
+                },
+              ],
+            },
+          },
+          version: 4,
+        }),
+      );
+    });
 
     await page.goto("/");
 
@@ -5087,6 +5115,17 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(createSourceWorktreeSessionButton).toBeVisible();
     await createSourceWorktreeSessionButton.click();
 
+    const sourceWorkspaceHeader = page.locator(
+      'aside [data-sidebar-workspace-id="project-folder:/tmp/acorn:scratch"]',
+    );
+    await sourceWorkspaceHeader.hover();
+    const createSourceWorkspaceWorktreeSessionButton =
+      sourceWorkspaceHeader.getByRole("button", {
+        name: "New worktree session in this workspace",
+      });
+    await expect(createSourceWorkspaceWorktreeSessionButton).toBeVisible();
+    await createSourceWorkspaceWorktreeSessionButton.click();
+
     await expect
       .poll(async () =>
         page.evaluate(
@@ -5101,6 +5140,11 @@ test.describe("sidebar: project lifecycle", () => {
       .toEqual([
         expect.objectContaining({
           repoPath: "/tmp/demo",
+          isolated: true,
+          kind: "regular",
+        }),
+        expect.objectContaining({
+          repoPath: "/tmp/acorn",
           isolated: true,
           kind: "regular",
         }),
