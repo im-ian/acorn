@@ -108,9 +108,13 @@ pub fn one_shot_from_session(payload: ControlPayload) -> io::Result<ControlRespo
     one_shot_with_hello(payload, hello)
 }
 
+/// Build an app/CLI hello and ensure the shared token exists first. Creating
+/// the token here lets a new client negotiate with a pre-token daemon on a
+/// clean upgrade; that daemon ignores the additive field, and its replacement
+/// later reuses the same token.
 pub fn authenticated_hello(role: ClientRole) -> io::Result<Hello> {
     let mut hello = Hello::current(role);
-    hello.auth_token = Some(super::auth::read()?.simple().to_string());
+    hello.auth_token = Some(super::auth::load_or_create()?.simple().to_string());
     Ok(hello)
 }
 
@@ -175,12 +179,25 @@ pub fn probe_status() -> io::Result<Option<StatusSnapshot>> {
 /// the server; this check then fails closed on malformed or incompatible wire
 /// endpoints owned by that user.
 pub fn validate_server_hello(line: &str, expected_role: ClientRole) -> io::Result<Hello> {
-    let hello: Hello = serde_json::from_str(line.trim()).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid daemon hello: {error}"),
-        )
-    })?;
+    let hello: Hello = match serde_json::from_str(line.trim()) {
+        Ok(hello) => hello,
+        Err(hello_error) => {
+            if let Ok(ControlResponse {
+                payload: ControlResult::Error { code, message },
+                ..
+            }) = serde_json::from_str(line.trim())
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("daemon handshake rejected ({code:?}): {message}"),
+                ));
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid daemon hello: {hello_error}"),
+            ));
+        }
+    };
     if hello.protocol_version_major != PROTOCOL_VERSION_MAJOR {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -205,6 +222,7 @@ pub fn validate_server_hello(line: &str, expected_role: ClientRole) -> io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env::ENV_LOCK;
 
     #[test]
     fn server_hello_accepts_expected_role_and_protocol() {
@@ -222,6 +240,42 @@ mod tests {
         let error = validate_server_hello("not-json", ClientRole::ControlPersistent).unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn server_hello_preserves_typed_handshake_error() {
+        let encoded = serde_json::to_string(&ControlResponse {
+            seq: 0,
+            payload: ControlResult::Error {
+                code: super::super::protocol::ErrorCode::ProtocolMismatch,
+                message: "daemon authentication token is missing or invalid".into(),
+            },
+        })
+        .unwrap();
+
+        let error = validate_server_hello(&encoded, ClientRole::ControlPersistent).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            error.to_string(),
+            "daemon handshake rejected (ProtocolMismatch): daemon authentication token is missing or invalid"
+        );
+    }
+
+    #[test]
+    fn authenticated_hello_bootstraps_a_missing_token() {
+        let _guard = ENV_LOCK.lock();
+        let root = std::env::temp_dir().join(format!(
+            "acorn-daemon-client-auth-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        unsafe { std::env::set_var(crate::paths::ENV_DATA_DIR_OVERRIDE, &root) };
+
+        let hello = authenticated_hello(ClientRole::ControlOneShot).unwrap();
+        let presented = uuid::Uuid::parse_str(hello.auth_token.as_deref().unwrap()).unwrap();
+        assert_eq!(presented, crate::auth::read().unwrap());
+
+        unsafe { std::env::remove_var(crate::paths::ENV_DATA_DIR_OVERRIDE) };
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
