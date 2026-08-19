@@ -1,0 +1,8 @@
+#!/bin/sh
+# Format staged Rust files so formatting never lands as a separate diff.
+# Enable once per clone: git config core.hooksPath .githooks
+# ponytail: no filename-with-space handling — this repo has none.
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
+[ -z "$files" ] && exit 0
+rustfmt --edition 2021 $files || exit 1
+git add $files
