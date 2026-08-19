@@ -116,9 +116,7 @@ pub fn resolve_title_input(session_id: uuid::Uuid) -> Option<ResolvedTitleInput>
 /// corrupt, or belongs to another session. Those must not be reported as "no
 /// input", because the caller turns that into a silent `Skipped` for a title
 /// the user explicitly asked to generate.
-pub fn resolve_chat_title_input(
-    session_id: uuid::Uuid,
-) -> AppResult<Option<ResolvedTitleInput>> {
+pub fn resolve_chat_title_input(session_id: uuid::Uuid) -> AppResult<Option<ResolvedTitleInput>> {
     let state = crate::persistence::load_chat_session_state(&session_id.to_string())?;
     Ok(chat_title_input_from_state(&state))
 }
@@ -270,11 +268,9 @@ mod tests {
         let session_id = uuid::Uuid::new_v4();
 
         // A session with no state file yet has nothing to title — not an error.
-        assert!(
-            resolve_chat_title_input_from_dir(base.path(), session_id)
-                .expect("a missing state file is an empty session")
-                .is_none()
-        );
+        assert!(resolve_chat_title_input_from_dir(base.path(), session_id)
+            .expect("a missing state file is an empty session")
+            .is_none());
 
         // A state file that exists but cannot be parsed is a real failure. It
         // must not be reported as "nothing to title", which the command turns

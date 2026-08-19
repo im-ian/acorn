@@ -12189,7 +12189,16 @@ mod tests {
         can_store_generated_session_title, cleanup_removed_scrollbacks_from_dir,
         collect_memory_usage_from_roots, configured_git_identity, create_unique_worktree,
         daemon_attach_replay_scrollback, daemon_spawn_name_for_session,
-        detach_requested_by_stale_renderer, discard_pending_session_removal_from_dir, ensure_new_project_destination_available, font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env, linked_worktree_root_for_registered_path, memory_root_pids, normalize_session_goal, normalize_session_graph, poll_defers_to_hook, project_creation_git_error, remove_linked_worktree_at_path, restore_pending_session_removal, retry_removal_cleanup_inner, seed_initial_commit, should_remove_local_project_mirror, should_route_session_to_daemon, terminate_session_runtime, validate_display_name, validate_editor_command, validate_new_project_name, validate_pty_caller_env, ChatProviderAdapter, MAX_PTY_WORKSPACE_NAME_BYTES, ProcessMemorySnapshot, RemovalProgress,
+        detach_requested_by_stale_renderer, discard_pending_session_removal_from_dir,
+        ensure_new_project_destination_available, font_name_from_path,
+        infer_acornd_root_from_session_pids, inject_agent_hook_env,
+        linked_worktree_root_for_registered_path, memory_root_pids, normalize_session_goal,
+        normalize_session_graph, poll_defers_to_hook, project_creation_git_error,
+        remove_linked_worktree_at_path, restore_pending_session_removal,
+        retry_removal_cleanup_inner, seed_initial_commit, should_remove_local_project_mirror,
+        should_route_session_to_daemon, terminate_session_runtime, validate_display_name,
+        validate_editor_command, validate_new_project_name, validate_pty_caller_env,
+        ChatProviderAdapter, ProcessMemorySnapshot, RemovalProgress, MAX_PTY_WORKSPACE_NAME_BYTES,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingRemovalStep, PendingSessionRemoval};
