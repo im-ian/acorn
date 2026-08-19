@@ -505,7 +505,10 @@ fn path_entry_exists(path: &Path) -> AppResult<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(AppError::Io(std::io::Error::new(
             error.kind(),
-            format!("failed to inspect worktree path {}: {error}", path.display()),
+            format!(
+                "failed to inspect worktree path {}: {error}",
+                path.display()
+            ),
         ))),
     }
 }

@@ -2097,9 +2097,8 @@ fn parse_spooled_hook_event(
         .iter()
         .position(|byte| *byte == b'\n')
         .ok_or_else(|| SpoolFileError::Invalid("missing transport metadata line".to_string()))?;
-    let meta: SpooledTransportMeta =
-        serde_json::from_slice(&raw[..meta_end])
-            .map_err(|err| SpoolFileError::Invalid(err.to_string()))?;
+    let meta: SpooledTransportMeta = serde_json::from_slice(&raw[..meta_end])
+        .map_err(|err| SpoolFileError::Invalid(err.to_string()))?;
     let head = synthetic_request_head(&meta)?;
     parse_agent_hook_request(&head, &raw[meta_end + 1..]).map_err(SpoolFileError::Invalid)
 }
