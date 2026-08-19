@@ -117,6 +117,12 @@ fn locate_transcript_in(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(path_access_error("read", &canonical_root, error)),
     };
+    // A sibling project directory we cannot read says nothing about the
+    // transcript we are looking for: session ids are UUIDs, so an exact match
+    // found elsewhere is still the right answer. Remember the first access
+    // failure and only report it if the scan ends without a match, so one
+    // unreadable directory cannot mask every session's todos.
+    let mut first_access_error: Option<AppError> = None;
     for (index, entry) in entries.enumerate() {
         if index >= limits.max_project_dir_entries {
             return Err(limit_error(
@@ -124,11 +130,23 @@ fn locate_transcript_in(
                 limits.max_project_dir_entries,
             ));
         }
-        let entry = entry.map_err(|error| path_access_error("read", &canonical_root, error))?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                first_access_error
+                    .get_or_insert_with(|| path_access_error("read", &canonical_root, error));
+                continue;
+            }
+        };
         let entry_path = entry.path();
-        let entry_type = entry
-            .file_type()
-            .map_err(|error| path_access_error("inspect", &entry_path, error))?;
+        let entry_type = match entry.file_type() {
+            Ok(entry_type) => entry_type,
+            Err(error) => {
+                first_access_error
+                    .get_or_insert_with(|| path_access_error("inspect", &entry_path, error));
+                continue;
+            }
+        };
         if !entry_type.is_dir() {
             continue;
         }
@@ -136,7 +154,11 @@ fn locate_transcript_in(
         let candidate_meta = match std::fs::symlink_metadata(&candidate) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(path_access_error("inspect", &candidate, error)),
+            Err(error) => {
+                first_access_error
+                    .get_or_insert_with(|| path_access_error("inspect", &candidate, error));
+                continue;
+            }
         };
         if candidate_meta.file_type().is_symlink() || !candidate_meta.is_file() {
             continue;
@@ -144,13 +166,20 @@ fn locate_transcript_in(
         let resolved = match candidate.canonicalize() {
             Ok(resolved) => resolved,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(path_access_error("resolve", &candidate, error)),
+            Err(error) => {
+                first_access_error
+                    .get_or_insert_with(|| path_access_error("resolve", &candidate, error));
+                continue;
+            }
         };
         if resolved.starts_with(&canonical_root) {
             return Ok(Some(resolved));
         }
     }
-    Ok(None)
+    match first_access_error {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
 }
 
 fn path_access_error(operation: &str, path: &Path, error: std::io::Error) -> AppError {
@@ -836,6 +865,53 @@ mod tests {
             let error = result.unwrap_err().to_string();
             assert!(error.contains("failed to read transcript path"));
             assert!(error.contains(&root.path().display().to_string()));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_sibling_project_does_not_hide_a_readable_transcript() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        // read_dir order is not specified, so seed enough unreadable siblings
+        // that at least one is almost certainly visited before the match.
+        for index in 0..4 {
+            let sibling = root.path().join(format!("-unreadable-{index}"));
+            std::fs::create_dir(&sibling).unwrap();
+            std::fs::set_permissions(&sibling, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let expected = write_transcript(root.path(), b"\n");
+
+        let result = locate_transcript_in(root.path(), SESSION_ID, small_limits());
+
+        for index in 0..4 {
+            let sibling = root.path().join(format!("-unreadable-{index}"));
+            std::fs::set_permissions(&sibling, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        assert_eq!(result.unwrap().unwrap(), expected.canonicalize().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_project_is_reported_when_no_transcript_matches() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("-unreadable");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let permission_bits_enforced = std::fs::read_dir(&project).is_err();
+
+        let result = locate_transcript_in(root.path(), SESSION_ID, small_limits());
+
+        std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if permission_bits_enforced {
+            let error = result.unwrap_err().to_string();
+            assert!(
+                error.contains("failed to inspect transcript path"),
+                "an unreadable project must not look like an empty todo list: {error}"
+            );
         }
     }
 

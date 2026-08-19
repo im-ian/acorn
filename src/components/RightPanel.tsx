@@ -343,7 +343,9 @@ export function RightPanel() {
     active?.id ?? null,
     active?.worktree_path ?? null,
   );
-  const showTodos = todosState.todos.length > 0;
+  // An access failure is not an empty list: keep the tab reachable so the
+  // reason is visible instead of the todos silently disappearing.
+  const showTodos = todosState.todos.length > 0 || todosState.error !== null;
   const isCodeGitRepo = useIsGitRepository(
     codePanelRepoPath,
     gitRepoProbeVersion,
@@ -524,7 +526,11 @@ export function RightPanel() {
       ) : null}
       <div className="flex-1 overflow-hidden">
         {rightTab === "todos" ? (
-          active && showTodos ? (
+          active && todosState.error ? (
+            <div className="p-3 text-xs text-danger" role="alert">
+              {todosState.error}
+            </div>
+          ) : active && showTodos ? (
             <TodosTab todos={todosState.todos} />
           ) : (
             <Empty msg={rt(t, "rightPanel.empty.noTodos")} />
