@@ -166,7 +166,8 @@ flowchart LR
 2. **가짜 `acornd` socket → 앱의 세션/입력 탈취**
 
    client는 peer executable을 확인하고 server는 app auth 또는 scoped session auth를
-   요구한다. 커널 lock이 중복 daemon을 막는다.
+   요구한다. 인증 도입 전 minor-0 앱은 daemon을 시작한 정확한 app executable 경로와
+   kernel peer PID가 일치할 때만 호환 경로를 사용한다. 커널 lock이 중복 daemon을 막는다.
 
 3. **경로 검사 직후 symlink 교체 → 외부 파일 읽기**
 
@@ -201,7 +202,7 @@ flowchart LR
 | --- | --- | --- | --- | --- | --- | --- |
 | TM-001 | IPC 세션 UUID 사칭/승격 | Control capability | 높음(이전) | Critical | protocol v2, one-time capability, Control-only, peer ancestry | debugger 주입 시 탈취 가능 |
 | TM-002 | 교차 프로젝트 세션 명령 | 프로젝트/PTY | 중간 | High | source/target project scope, ownership 기본값 | 명시적 Control 정책 오용 |
-| TM-003 | 가짜/중복 daemon | socket/state | 중간 | Critical | kernel lock, auth token, peer executable, deadlines | writable unsigned binary 대체 |
+| TM-003 | 가짜/중복 daemon | socket/state | 중간 | Critical | kernel lock, auth token, peer executable, legacy app path pin, deadlines | writable unsigned binary 대체 |
 | TM-004 | symlink/TOCTOU 파일 탈출 | 로컬 파일 | 높음 | High | canonical scope + no-follow descriptor + snapshot | 동일 UID 직접 파일 권한 |
 | TM-005 | 과대 파일/출력/frame DoS | 가용성 | 높음 | High | byte/line/entry/time/connection/process-tree caps | 예산 내 반복 요청 |
 | TM-006 | passive AI tool execution | shell/repo/secrets | 중간 | High | tool-free provider allowlist, empty cwd, stdin, strip env | provider CLI 자체 취약점 |

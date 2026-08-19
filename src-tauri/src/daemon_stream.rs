@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use crate::pty_output::{self, PtyOutputRouter};
 use acorn_daemon::client::validate_server_hello;
-use acorn_daemon::protocol::{ClientRole, Hello, StreamAttach, StreamFrame};
+use acorn_daemon::protocol::{ClientRole, StreamAttach, StreamFrame};
 use acorn_daemon::socket;
 use acorn_daemon::wire::read_response_frame_line;
 use acorn_pty::{transition_shell_hint, ShellHint};
@@ -164,8 +164,7 @@ pub fn attach<R: Runtime>(
     let mut conn = socket::connect_stream()?;
 
     // Handshake: Hello → server Hello → StreamAttach.
-    let mut hello = Hello::current(ClientRole::Stream);
-    hello.auth_token = Some(acorn_daemon::auth::read()?.simple().to_string());
+    let hello = acorn_daemon::client::authenticated_hello(ClientRole::Stream)?;
     writeln!(
         conn,
         "{}",
