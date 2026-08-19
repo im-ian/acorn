@@ -73,12 +73,16 @@ describe("AgentResumeModal", () => {
     return onDismiss;
   }
 
-  function clickButton(label: string) {
+  async function clickButton(label: string) {
     const button = Array.from(document.querySelectorAll("button")).find(
       (b) => b.textContent?.includes(label),
     );
     if (!button) throw new Error(`button "${label}" not found`);
-    act(() => button.click());
+    await act(async () => {
+      button.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
   }
 
   it("renders nothing when candidate is null", () => {
@@ -102,9 +106,9 @@ describe("AgentResumeModal", () => {
     expect(document.body.textContent).toContain(CANDIDATE.preview);
   });
 
-  it("Resume on a claude candidate dispatches `claude --resume <uuid>` to the PTY without ack", () => {
+  it("Resume on a claude candidate dispatches `claude --resume <uuid>` to the PTY without ack", async () => {
     const onDismiss = render("claude", CANDIDATE);
-    clickButton("Resume");
+    await clickButton("Resume");
     expect(mocks.ptyWrite).toHaveBeenCalledWith(
       SESSION_ID,
       `claude --resume ${CANDIDATE.uuid}\r`,
@@ -116,9 +120,9 @@ describe("AgentResumeModal", () => {
     expect(mocks.acknowledgeAgentResume).not.toHaveBeenCalled();
   });
 
-  it("Resume on a codex candidate dispatches `codex resume <uuid>` to the PTY without ack", () => {
+  it("Resume on a codex candidate dispatches `codex resume <uuid>` to the PTY without ack", async () => {
     const onDismiss = render("codex", CANDIDATE);
-    clickButton("Resume");
+    await clickButton("Resume");
     expect(mocks.ptyWrite).toHaveBeenCalledWith(
       SESSION_ID,
       `codex resume ${CANDIDATE.uuid}\r`,
@@ -127,9 +131,9 @@ describe("AgentResumeModal", () => {
     expect(mocks.acknowledgeAgentResume).not.toHaveBeenCalled();
   });
 
-  it("Resume on a Grok candidate dispatches `grok --resume <uuid>` to the PTY without ack", () => {
+  it("Resume on a Grok candidate dispatches `grok --resume <uuid>` to the PTY without ack", async () => {
     const onDismiss = render("grok", CANDIDATE);
-    clickButton("Resume");
+    await clickButton("Resume");
     expect(mocks.ptyWrite).toHaveBeenCalledWith(
       SESSION_ID,
       `grok --resume ${CANDIDATE.uuid}\r`,
@@ -140,22 +144,19 @@ describe("AgentResumeModal", () => {
 
   it("Copy ID writes the UUID to the clipboard and toasts", async () => {
     const onDismiss = render("claude", CANDIDATE);
-    clickButton("Copy ID");
+    await clickButton("Copy ID");
     expect(mocks.clipboardWriteText).toHaveBeenCalledWith(CANDIDATE.uuid);
     expect(onDismiss).toHaveBeenCalledTimes(1);
     expect(mocks.acknowledgeAgentResume).toHaveBeenCalledWith(
       "claude",
       SESSION_ID,
     );
-    // Allow the clipboard promise to flush before checking the toast.
-    await Promise.resolve();
-    await Promise.resolve();
     expect(mocks.toastShow).toHaveBeenCalledWith("Session ID copied.");
   });
 
-  it("Cancel on a claude candidate writes a single `#`-commented resume command for recall", () => {
+  it("Cancel on a claude candidate writes a single `#`-commented resume command for recall", async () => {
     const onDismiss = render("claude", CANDIDATE);
-    clickButton("Cancel");
+    await clickButton("Cancel");
     expect(mocks.ptyWrite).toHaveBeenCalledTimes(1);
     const payload = mocks.ptyWrite.mock.calls[0][1];
     expect(payload).toBe(`# claude --resume ${CANDIDATE.uuid}\r`);
@@ -166,9 +167,9 @@ describe("AgentResumeModal", () => {
     );
   });
 
-  it("Cancel on a codex candidate writes a single `#`-commented `codex resume` command", () => {
+  it("Cancel on a codex candidate writes a single `#`-commented `codex resume` command", async () => {
     const onDismiss = render("codex", CANDIDATE);
-    clickButton("Cancel");
+    await clickButton("Cancel");
     const payload = mocks.ptyWrite.mock.calls[0][1];
     expect(payload).toBe(`# codex resume ${CANDIDATE.uuid}\r`);
     expect(onDismiss).toHaveBeenCalledTimes(1);
@@ -176,5 +177,65 @@ describe("AgentResumeModal", () => {
       "codex",
       SESSION_ID,
     );
+  });
+  it("keeps the candidate open when acknowledgement cannot be stored", async () => {
+    mocks.acknowledgeAgentResume.mockRejectedValueOnce(
+      new Error("agent state ack Permission denied"),
+    );
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onDismiss = render("claude", CANDIDATE);
+
+    await clickButton("Cancel");
+
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Failed to remember that this conversation was dismissed: agent state ack Permission denied",
+    );
+    expect(consoleWarn).toHaveBeenCalled();
+    consoleWarn.mockRestore();
+  });
+
+  it("keeps the candidate open when the resume command cannot be written", async () => {
+    mocks.ptyWrite.mockRejectedValueOnce(new Error("PTY access denied"));
+    const onDismiss = render("claude", CANDIDATE);
+
+    await clickButton("Resume");
+
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeAgentResume).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Failed to send the resume command: PTY access denied",
+    );
+  });
+
+  it("keeps the candidate open and unacknowledged when clipboard access fails", async () => {
+    mocks.clipboardWriteText.mockRejectedValueOnce(
+      new Error("clipboard permission denied"),
+    );
+    const onDismiss = render("claude", CANDIDATE);
+
+    await clickButton("Copy ID");
+
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeAgentResume).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Failed to copy session ID. clipboard permission denied",
+    );
+  });
+
+  it("reports a failed recall hint but still persists explicit cancellation", async () => {
+    mocks.ptyWrite.mockRejectedValueOnce(new Error("PTY closed"));
+    const onDismiss = render("claude", CANDIDATE);
+
+    await clickButton("Cancel");
+
+    expect(mocks.toastShow).toHaveBeenCalledWith(
+      "Failed to add the resume hint: PTY closed",
+    );
+    expect(mocks.acknowledgeAgentResume).toHaveBeenCalledWith(
+      "claude",
+      SESSION_ID,
+    );
+    expect(onDismiss).toHaveBeenCalledOnce();
   });
 });

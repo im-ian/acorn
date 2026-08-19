@@ -342,4 +342,68 @@ test.describe("agent resume modal", () => {
     expect(writes).toHaveLength(1);
     expect(writes[0].data).toBe(`# claude --resume ${CANDIDATE_UUID}\r`);
   });
+  test("surfaces resume candidate access errors instead of treating them as no conversation", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION]);
+    await tauri.handle("get_agent_resume_candidate", (args) => {
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind === "claude") {
+        throw new Error(
+          "failed to read /Users/tester/.acorn/agent-state/claude.id: Permission denied",
+        );
+      }
+      return null;
+    });
+
+    await page.goto("/");
+
+    await expect(
+      page.getByText(
+        "Failed to check previous agent conversations: failed to read /Users/tester/.acorn/agent-state/claude.id: Permission denied",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("dialog", { name: /Resume previous conversation/ }),
+    ).toHaveCount(0);
+  });
+
+  test("keeps the modal open when dismissal acknowledgement is denied", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION]);
+    await tauri.handle("get_agent_resume_candidate", (args) => {
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind !== "claude") return null;
+      // The handler is evaluated in the page, so the module-scope
+      // CANDIDATE_UUID is not in scope here.
+      return {
+        uuid: "deadbeef-1234-5678-9abc-def012345678",
+        lastActivityUnix: Math.floor(Date.now() / 1000) - 60,
+        preview: "Preview of the previous conversation",
+      };
+    });
+    await tauri.handle("pty_write", () => undefined);
+    await tauri.handle("acknowledge_agent_resume", () => {
+      throw new Error("agent state marker Permission denied");
+    });
+
+    await page.goto("/");
+
+    const modal = page.getByRole("dialog", {
+      name: /Resume previous conversation/,
+    });
+    await expect(modal).toBeVisible();
+    await modal.getByRole("button", { name: "Cancel" }).click();
+
+    await expect(modal).toBeVisible();
+    await expect(modal.getByRole("alert")).toContainText(
+      "Failed to remember that this conversation was dismissed: agent state marker Permission denied",
+    );
+    await expect(modal.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  });
 });

@@ -942,7 +942,8 @@
       "preventSleepSyncFailedPrefix": "잠자기 방지 설정을 적용하지 못했습니다:",
       "controlGuidePreferenceSaveFailed": "제어 세션 안내 설정을 저장하지 못했습니다.",
       "notificationClickRegistrationFailedPrefix": "알림 클릭 처리를 활성화하지 못했습니다:",
-      "notificationClickActivationFailedPrefix": "클릭한 알림으로 Acorn을 열지 못했습니다:"
+      "notificationClickActivationFailedPrefix": "클릭한 알림으로 Acorn을 열지 못했습니다:",
+      "agentResumeProbeFailed": "이전 에이전트 대화를 확인하지 못했습니다:"
     }
   },
   "statusBar": {
@@ -2352,6 +2353,9 @@
       "bodyGrok": "이 세션에 진행 중이던 Grok 대화가 있습니다. 이어서 진행하거나 이 대화상자를 닫고 새로 시작할 수 있습니다.",
       "sessionIdCopied": "세션 ID를 복사했습니다.",
       "copyFailed": "세션 ID를 복사하지 못했습니다.",
+      "ackFailed": "이 대화를 닫았다는 기록을 저장하지 못했습니다:",
+      "resumeFailed": "재개 명령을 보내지 못했습니다:",
+      "hintFailed": "재개 힌트를 입력하지 못했습니다:",
       "copyId": "ID 복사",
       "resume": "재개",
       "lastUser": "사용자",
