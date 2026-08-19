@@ -1,12 +1,19 @@
 import { Copy, History, Play } from "lucide-react";
-import { useMemo, type ReactElement } from "react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { api, type AgentKind, type ResumeCandidate } from "../lib/api";
 import { buildAgentResumeCommand } from "../lib/agentProvider";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useToasts } from "../lib/toasts";
 import { writeClipboardText } from "../lib/clipboardText";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, CodeValue, Modal, ModalFooter, ModalHeader } from "./ui";
+import {
+  Button,
+  CodeValue,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+  Notice,
+} from "./ui";
 
 interface AgentResumeModalProps {
   /** Session whose previous agent conversation is being offered. */
@@ -16,10 +23,9 @@ interface AgentResumeModalProps {
   /** Candidate metadata to render; `null` hides the modal. */
   candidate: ResumeCandidate | null;
   /**
-   * Invoked after any modal action (or backdrop dismiss) so the host can
-   * drop the candidate from its state. The modal also calls the matching
-   * `acknowledgeAgentResume` API itself; the host only needs to clear its
-   * in-memory candidate slot.
+   * Invoked once the selected action's required writes have completed, so the
+   * host can drop the candidate from its in-memory state. A failed action
+   * keeps the modal open with the reason instead.
    */
   onDismiss: () => void;
 }
@@ -33,6 +39,10 @@ type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
 function dt(t: Translator, key: DialogTranslationKey): string {
   return t(key);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 const COPY: Record<AgentKind, AgentCopy> = {
@@ -56,16 +66,19 @@ const COPY: Record<AgentKind, AgentCopy> = {
 
 /**
  * Renders the focus-time "Resume previous conversation" modal. Three
- * actions, all of which acknowledge the candidate so the same UUID does
- * not re-pop on the next focus event:
+ * actions, each of which closes the modal only once its required writes
+ * have landed — a failure that closed the modal anyway would drop the
+ * candidate from memory while the acknowledgement never reached disk, so
+ * the same UUID would silently pop again on the next focus event:
  *
  * - **Resume** — sends `<agent-resume-command> <uuid>\r` into the PTY.
  *   The agent's own resume flag (claude: `--resume`, codex: `resume`
  *   subcommand) takes it from there.
- * - **Copy ID** — copies the UUID to clipboard with a toast.
- * - **Cancel** — types two `#`-prefixed shell-comment lines into the
+ * - **Copy ID** — copies the UUID, then acknowledges the candidate.
+ * - **Cancel** — types one `#`-prefixed shell-comment line into the
  *   PTY so the user can still see (and later copy) the resume command
- *   if they change their mind. `#` lines are inert if Enter is mashed.
+ *   if they change their mind, then acknowledges the candidate. The hint
+ *   is best-effort; the acknowledgement is not.
  */
 export function AgentResumeModal({
   sessionId,
@@ -77,6 +90,9 @@ export function AgentResumeModal({
   const showToast = useToasts((s) => s.show);
   const copy = COPY[agent];
 
+  const [busy, setBusy] = useState<"resume" | "copy" | "dismiss" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
   const lastActivityLabel = useMemo(
     () => formatRelativeTime(candidate?.lastActivityUnix ?? 0, t),
     [candidate?.lastActivityUnix, t],
@@ -85,20 +101,46 @@ export function AgentResumeModal({
   const lastAgentMessage =
     candidate?.lastAgentMessage?.trim() || candidate?.preview?.trim() || null;
 
+  useEffect(() => {
+    setBusy(null);
+    setError(null);
+  }, [agent, candidate?.uuid, sessionId]);
+
   if (!candidate) return null;
 
-  const ack = () => {
-    void api.acknowledgeAgentResume(agent, sessionId).catch(() => {});
+  const acknowledge = async (): Promise<boolean> => {
+    try {
+      await api.acknowledgeAgentResume(agent, sessionId);
+      return true;
+    } catch (ackError: unknown) {
+      console.warn(
+        `[AgentResumeModal] failed to acknowledge ${agent} candidate for ${sessionId}`,
+        ackError,
+      );
+      setError(
+        `${dt(t, "dialogs.agentResume.ackFailed")} ${errorMessage(ackError)}`,
+      );
+      return false;
+    }
   };
 
-  const handleResume = () => {
+  const handleResume = async () => {
+    if (busy) return;
+    setBusy("resume");
+    setError(null);
     // PTYs expect a carriage return (`\r`, what xterm sends when the
     // user presses Enter) to commit a line. Using `\n` lands as a
     // literal LF in zsh's line buffer instead of running the command.
     const cmd = `${buildAgentResumeCommand(agent, candidate.uuid)}\r`;
-    void api.ptyWrite(sessionId, cmd).catch((err: unknown) => {
-      console.error("[AgentResumeModal] failed to write resume cmd", err);
-    });
+    try {
+      await api.ptyWrite(sessionId, cmd);
+    } catch (writeError: unknown) {
+      setError(
+        `${dt(t, "dialogs.agentResume.resumeFailed")} ${errorMessage(writeError)}`,
+      );
+      setBusy(null);
+      return;
+    }
     // Deliberately do NOT ack here. Resume means "I want to keep
     // working in this conversation"; after the user exits the
     // resumed agent run, the same JSONL UUID stays on disk
@@ -108,40 +150,71 @@ export function AgentResumeModal({
     onDismiss();
   };
 
-  const handleCopy = () => {
-    void writeClipboardText(candidate.uuid)
-      .then(() => showToast(dt(t, "dialogs.agentResume.sessionIdCopied")))
-      .catch(() => showToast(dt(t, "dialogs.agentResume.copyFailed")));
+  const handleCopy = async () => {
+    if (busy) return;
+    setBusy("copy");
+    setError(null);
+    try {
+      await writeClipboardText(candidate.uuid);
+    } catch (copyError: unknown) {
+      setError(
+        `${dt(t, "dialogs.agentResume.copyFailed")} ${errorMessage(copyError)}`,
+      );
+      setBusy(null);
+      return;
+    }
+    if (!(await acknowledge())) {
+      setBusy(null);
+      return;
+    }
+    showToast(dt(t, "dialogs.agentResume.sessionIdCopied"));
     onDismiss();
-    ack();
   };
 
   // Backdrop click / Esc takes the same path as Cancel (without the
   // shell-comment hint write): the user explicitly closed the modal
   // without choosing Resume, so we ack and stop offering it.
-  const dismiss = () => {
-    onDismiss();
-    ack();
+  const dismiss = async () => {
+    if (busy) return;
+    setBusy("dismiss");
+    setError(null);
+    if (await acknowledge()) {
+      onDismiss();
+      return;
+    }
+    setBusy(null);
   };
 
-  const handleCancelWithHint = () => {
+  const handleCancelWithHint = async () => {
+    if (busy) return;
+    setBusy("dismiss");
+    setError(null);
     // Single `#`-prefixed line so the shell skips it (it's a comment),
     // but the user can hit Up-arrow to recall the command, remove the
     // `#`, and run it. Multi-line hints would need bracketed-paste
     // escapes to keep zle from collapsing the two `\r`s into one
     // input row; a single line dodges that entire problem.
     const hint = `# ${buildAgentResumeCommand(agent, candidate.uuid)}\r`;
-    void api.ptyWrite(sessionId, hint).catch((err: unknown) => {
-      console.error("[AgentResumeModal] failed to write cancel hint", err);
-    });
-    onDismiss();
-    ack();
+    try {
+      await api.ptyWrite(sessionId, hint);
+    } catch (writeError: unknown) {
+      // The hint is a convenience. The user's dismiss intent still has to
+      // clear the durable acknowledgement below, so only toast here.
+      showToast(
+        `${dt(t, "dialogs.agentResume.hintFailed")} ${errorMessage(writeError)}`,
+      );
+    }
+    if (await acknowledge()) {
+      onDismiss();
+      return;
+    }
+    setBusy(null);
   };
 
   return (
     <Modal
       open={true}
-      onClose={dismiss}
+      onClose={() => void dismiss()}
       variant="dialog"
       size="md"
       ariaLabelledBy={copy.ariaLabelledBy}
@@ -152,7 +225,7 @@ export function AgentResumeModal({
         titleId={copy.ariaLabelledBy}
         icon={<History size={14} className="text-accent" />}
         variant="dialog"
-        onClose={dismiss}
+        onClose={() => void dismiss()}
       />
       <div className="space-y-3 px-4 py-4 text-xs">
         <p className="text-fg-muted">{dt(t, copy.bodyKey)}</p>
@@ -175,23 +248,31 @@ export function AgentResumeModal({
         <CodeValue surface="elevated" tone="muted">
           {candidate.uuid}
         </CodeValue>
+        {error ? (
+          <Notice tone="danger" role="alert">
+            {error}
+          </Notice>
+        ) : null}
       </div>
       <ModalFooter>
         <Button
-          onClick={handleCancelWithHint}
+          onClick={() => void handleCancelWithHint()}
+          disabled={busy !== null}
           surface="panel"
         >
           {dt(t, "dialogs.common.cancel")}
         </Button>
         <Button
-          onClick={handleCopy}
+          onClick={() => void handleCopy()}
+          disabled={busy !== null}
           surface="panel"
         >
           <Copy size={12} />
           {dt(t, "dialogs.agentResume.copyId")}
         </Button>
         <Button
-          onClick={handleResume}
+          onClick={() => void handleResume()}
+          disabled={busy !== null}
           variant="primary"
         >
           <Play size={12} />

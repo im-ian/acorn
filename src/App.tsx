@@ -168,6 +168,10 @@ function appText(t: Translator, key: AppTranslationKey): string {
   return t(key);
 }
 
+function unknownErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function isEditableTextElement(
   element: Element | null,
 ): element is HTMLInputElement | HTMLTextAreaElement {
@@ -631,23 +635,53 @@ function App() {
     for (const sid of toProbe) probedSessionsRef.current.add(sid);
     void Promise.all(
       toProbe.map(async (sid) => {
-        const candidates = await Promise.all(
+        const probes = await Promise.all(
           AGENT_PROVIDER_ORDER.map(async (agent) => {
-            const candidate = await api
-              .getAgentResumeCandidate(agent, sid)
-              .catch(() => null);
-            return [agent, candidate] as const;
+            try {
+              const candidate = await api.getAgentResumeCandidate(agent, sid);
+              return { agent, candidate, failure: null } as const;
+            } catch (error: unknown) {
+              return { agent, candidate: null, failure: { error } } as const;
+            }
           }),
         );
-        const pick = pickResumeCandidate(candidates);
-        return pick ? ([sid, pick] as const) : null;
+        const pick = pickResumeCandidate(
+          probes.map(({ agent, candidate }) => [agent, candidate] as const),
+        );
+        return {
+          entry: pick ? ([sid, pick] as const) : null,
+          failures: probes.flatMap(({ agent, failure }) =>
+            failure === null
+              ? []
+              : [{ sessionId: sid, agent, error: failure.error }],
+          ),
+        };
       }),
     )
-      .then((entries) => {
+      .then((results) => {
         const latestSessions = new Map(
           useAppStore.getState().sessions.map((session) => [session.id, session]),
         );
-        const additions = entries
+        // A provider probe that threw is not "no previous conversation": the
+        // session's modal silently never appears. Say so once instead.
+        const failures = results
+          .flatMap((result) => result.failures)
+          .filter(({ sessionId }) => latestSessions.has(sessionId));
+        if (failures.length > 0) {
+          for (const failure of failures) {
+            console.warn(
+              `[App] ${failure.agent} resume candidate probe failed for ${failure.sessionId}`,
+              failure.error,
+            );
+          }
+          showToast(
+            `${appText(t, "app.toast.agentResumeProbeFailed")} ${unknownErrorMessage(
+              failures[0].error,
+            )}`,
+          );
+        }
+        const additions = results
+          .map((result) => result.entry)
           .filter(
             (e): e is readonly [
               string,
@@ -666,10 +700,10 @@ function App() {
         });
       })
       .catch(() => {
-        // Best-effort probe — failures here just mean a session won't
-        // surface its modal on this boot. The next launch retries.
+        // Per-provider failures are reported above; this only catches an
+        // unexpected orchestration failure. The next launch retries.
       });
-  }, [sessions, resumeModalEnabled, resumePrimeVersion]);
+  }, [sessions, resumeModalEnabled, resumePrimeVersion, showToast, t]);
 
   const resumeCandidate = useMemo(() => {
     if (!activeSessionId) return null;

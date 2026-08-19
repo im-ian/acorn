@@ -942,7 +942,8 @@
       "preventSleepSyncFailedPrefix": "Could not apply the keep-awake setting:",
       "controlGuidePreferenceSaveFailed": "Couldn't save the control-session guide preference.",
       "notificationClickRegistrationFailedPrefix": "Could not enable notification click handling:",
-      "notificationClickActivationFailedPrefix": "Could not bring Acorn to the clicked notification:"
+      "notificationClickActivationFailedPrefix": "Could not bring Acorn to the clicked notification:",
+      "agentResumeProbeFailed": "Failed to check previous agent conversations:"
     }
   },
   "statusBar": {
@@ -2352,6 +2353,9 @@
       "bodyGrok": "There's a Grok conversation that was in progress in this session. You can pick it up where you left off, or just close this dialog to start fresh.",
       "sessionIdCopied": "Session ID copied.",
       "copyFailed": "Failed to copy session ID.",
+      "ackFailed": "Failed to remember that this conversation was dismissed:",
+      "resumeFailed": "Failed to send the resume command:",
+      "hintFailed": "Failed to add the resume hint:",
       "copyId": "Copy ID",
       "resume": "Resume",
       "lastUser": "User",

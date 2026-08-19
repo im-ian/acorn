@@ -942,7 +942,8 @@
       "preventSleepSyncFailedPrefix": "无法应用防止睡眠设置：",
       "controlGuidePreferenceSaveFailed": "无法保存控制会话指南偏好设置。",
       "notificationClickRegistrationFailedPrefix": "无法启用通知点击处理：",
-      "notificationClickActivationFailedPrefix": "无法从点击的通知打开 Acorn："
+      "notificationClickActivationFailedPrefix": "无法从点击的通知打开 Acorn：",
+      "agentResumeProbeFailed": "无法检查之前的智能体对话："
     }
   },
   "statusBar": {
@@ -2352,6 +2353,9 @@
       "bodyGrok": "此会话中有未完成的 Grok 对话。您可以从上次中断处继续，或关闭此对话框重新开始。",
       "sessionIdCopied": "会话 ID 已复制。",
       "copyFailed": "无法复制会话 ID。",
+      "ackFailed": "无法记录此对话已关闭：",
+      "resumeFailed": "无法发送恢复命令：",
+      "hintFailed": "无法输入恢复提示：",
       "copyId": "复制 ID",
       "resume": "继续",
       "lastUser": "用户",

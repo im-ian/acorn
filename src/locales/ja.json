@@ -942,7 +942,8 @@
       "preventSleepSyncFailedPrefix": "スリープ防止設定を適用できませんでした:",
       "controlGuidePreferenceSaveFailed": "コントロールセッションガイドの設定を保存できませんでした。",
       "notificationClickRegistrationFailedPrefix": "通知クリック処理を有効にできませんでした:",
-      "notificationClickActivationFailedPrefix": "クリックした通知から Acorn を開けませんでした:"
+      "notificationClickActivationFailedPrefix": "クリックした通知から Acorn を開けませんでした:",
+      "agentResumeProbeFailed": "以前のエージェント会話を確認できませんでした:"
     }
   },
   "statusBar": {
@@ -2352,6 +2353,9 @@
       "bodyGrok": "このセッションでは Grok の会話が進行中です。中断したところから再開することも、このダイアログを閉じて最初から始めることもできます。",
       "sessionIdCopied": "セッションIDがコピーされました。",
       "copyFailed": "セッションIDのコピーに失敗しました。",
+      "ackFailed": "この会話を閉じたことを記録できませんでした:",
+      "resumeFailed": "再開コマンドを送信できませんでした:",
+      "hintFailed": "再開ヒントを入力できませんでした:",
       "copyId": "IDをコピーする",
       "resume": "再開",
       "lastUser": "ユーザー",
