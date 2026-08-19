@@ -320,6 +320,9 @@ export function Sidebar() {
   const projects = useAppStore((s) => s.projects);
   const projectFolders = useAppStore((s) => s.projectFolders);
   const sessionFolderIds = useAppStore((s) => s.sessionFolderIds);
+  const sessionListInitialized = useAppStore(
+    (s) => s.sessionListInitialized,
+  );
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const activeProject = useAppStore((s) => s.activeProject);
   const activeProjectFolderId = useAppStore((s) => s.activeProjectFolderId);
@@ -385,6 +388,7 @@ export function Sidebar() {
     useState<SessionCreateScope | null>(null);
   const [pendingRemoveProjectFolderId, setPendingRemoveProjectFolderId] =
     useState<string | null>(null);
+  const knownSessionIdsRef = useRef<Set<string> | null>(null);
 
   useEffect(() => {
     saveStringSet(COLLAPSED_KEY, collapsed);
@@ -412,6 +416,58 @@ export function Sidebar() {
     () => buildProjectRootIndex(projects),
     [projects],
   );
+  useEffect(() => {
+    if (!sessionListInitialized) return;
+
+    const currentSessionIds = new Set(sessions.map((session) => session.id));
+    const knownSessionIds = knownSessionIdsRef.current;
+    knownSessionIdsRef.current = currentSessionIds;
+    if (!knownSessionIds) return;
+
+    const addedSessionIds = new Set(
+      sessions
+        .filter((session) => !knownSessionIds.has(session.id))
+        .map((session) => session.id),
+    );
+    if (addedSessionIds.size === 0) return;
+
+    const projectRepoPaths = new Set<string>();
+    const projectFolderIds = new Set<string>();
+    for (const project of projectGroups) {
+      for (const folderGroup of project.folders) {
+        if (
+          !folderGroup.sessions.some((session) =>
+            addedSessionIds.has(session.id),
+          )
+        ) {
+          continue;
+        }
+        projectRepoPaths.add(project.repoPath);
+        projectFolderIds.add(folderGroup.folder.id);
+      }
+    }
+
+    if (projectRepoPaths.size > 0) {
+      setCollapsed((prev) => {
+        if (![...projectRepoPaths].some((repoPath) => prev.has(repoPath))) {
+          return prev;
+        }
+        const next = new Set(prev);
+        for (const repoPath of projectRepoPaths) next.delete(repoPath);
+        return next;
+      });
+    }
+    if (projectFolderIds.size > 0) {
+      setCollapsedFolders((prev) => {
+        if (![...projectFolderIds].some((folderId) => prev.has(folderId))) {
+          return prev;
+        }
+        const next = new Set(prev);
+        for (const folderId of projectFolderIds) next.delete(folderId);
+        return next;
+      });
+    }
+  }, [projectGroups, sessionListInitialized, sessions]);
   // A source folder's workspace makes its own root active; the project row it
   // belongs to still has to read as the active one.
   const activeProjectRoot = activeProject
@@ -889,12 +945,6 @@ export function Sidebar() {
         if (!created) return;
         await useAppStore.getState().refreshAll();
         selectSession(created.id);
-        setCollapsed((prev) => {
-          if (!prev.has(created.repo_path)) return prev;
-          const next = new Set(prev);
-          next.delete(created.repo_path);
-          return next;
-        });
         return;
       }
       const request = buildSessionCreateRequest(
@@ -914,12 +964,6 @@ export function Sidebar() {
       if (!created || error) {
         showToast(`${t("toasts.session.createFailed")} ${error ?? ""}`.trim());
       }
-      setCollapsed((prev) => {
-        if (!prev.has(request.repoPath)) return prev;
-        const next = new Set(prev);
-        next.delete(request.repoPath);
-        return next;
-      });
     } catch (e) {
       console.error("create session failed", e);
       showToast(`${t("toasts.session.createFailed")} ${String(e)}`);

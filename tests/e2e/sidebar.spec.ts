@@ -2780,6 +2780,108 @@ test.describe("sidebar: project lifecycle", () => {
     ).toBeVisible();
   });
 
+  test("a new session expands its collapsed project and source folder", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+        source_paths: ["/tmp/demo-api"],
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __sourceSessions?: unknown[] };
+      w.__sourceSessions = w.__sourceSessions ?? [
+        {
+          id: "source-existing",
+          name: "existing",
+          repo_path: "/tmp/demo-api",
+          worktree_path: "/tmp/demo-api",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: 0,
+          in_worktree: false,
+        },
+      ];
+      return w.__sourceSessions;
+    });
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:sidebar:collapsed-projects",
+        JSON.stringify(["/tmp/demo"]),
+      );
+      localStorage.setItem(
+        "acorn:sidebar:collapsed-project-folders",
+        JSON.stringify(["/tmp/demo-api"]),
+      );
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    await expect(
+      sidebar.getByRole("button", { name: "Expand project", exact: true }),
+    ).toBeVisible();
+    await expect(
+      sidebar.locator('[data-sidebar-workspace-id="/tmp/demo-api"]'),
+    ).toHaveCount(0);
+
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __sourceSessions: unknown[];
+        __ACORN_EMIT_TAURI_EVENT__?: (event: string, payload: unknown) => void;
+      };
+      w.__sourceSessions.push({
+        id: "source-new",
+        name: "new source session",
+        repo_path: "/tmp/demo-api",
+        worktree_path: "/tmp/demo-api",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      });
+      w.__ACORN_EMIT_TAURI_EVENT__?.("acorn:ipc-sessions-changed", {
+        action: "created",
+        session_id: "source-new",
+      });
+    });
+
+    await expect(
+      sidebar.getByRole("button", {
+        name: /^new source session main · Ready/,
+      }),
+    ).toBeVisible();
+    await expect(
+      sidebar.getByRole("button", { name: "Collapse project", exact: true }),
+    ).toBeVisible();
+    await expect(
+      sidebar
+        .locator('[data-sidebar-workspace-id="/tmp/demo-api"]')
+        .getByRole("button", { name: "Collapse workspace", exact: true }),
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+
   test("project header uses full title width until hover actions need ellipsis", async ({
     page,
     tauri,

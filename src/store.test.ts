@@ -234,6 +234,7 @@ function resetStore(): void {
       pendingRemoveId: null,
       pendingRemoveProject: null,
       sessionsLoadedCleanly: true,
+      sessionListInitialized: false,
       liveInWorktree: {},
       generatingSessionTitleIds: {},
     },

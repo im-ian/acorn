@@ -462,6 +462,12 @@ interface AppStateModel {
    */
   sessionsLoadedCleanly: boolean;
   /**
+   * Whether at least one backend session snapshot has loaded successfully.
+   * Sidebar consumers use the first snapshot as a baseline so persisted
+   * collapse state is only changed for sessions that arrive afterwards.
+   */
+  sessionListInitialized: boolean;
+  /**
    * Session ids whose *live* PTY cwd resolves inside a linked git worktree
    * (`.git` is a file). Separate from `Session.in_worktree`, which only
    * reflects the recorded `worktree_path` at spawn / adoption time — this
@@ -1702,6 +1708,7 @@ export const useAppStore = create<AppStateModel>()(
   pendingRemoveProject: null,
   pendingSourceMerge: null,
   sessionsLoadedCleanly: true,
+  sessionListInitialized: false,
   liveInWorktree: {},
   generatingSessionTitleIds: {},
 
@@ -1758,6 +1765,7 @@ export const useAppStore = create<AppStateModel>()(
           loading: false,
           error: null,
           sessionsLoadedCleanly: nextSessionsLoadedCleanly,
+          sessionListInitialized: true,
           sessionNotifications: shouldPruneActivity
             ? s.sessionNotifications.filter((notification) =>
                 sessionIds.has(notification.sessionId),
@@ -1902,6 +1910,7 @@ export const useAppStore = create<AppStateModel>()(
         loading: false,
         error: refreshError,
         sessionsLoadedCleanly: nextSessionsLoadedCleanly,
+        sessionListInitialized: s.sessionListInitialized || receivedSessions,
         sessionNotifications: shouldPruneActivity
           ? s.sessionNotifications.filter((notification) =>
               sessionIds.has(notification.sessionId),
