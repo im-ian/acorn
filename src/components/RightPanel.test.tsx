@@ -498,6 +498,55 @@ describe("RightPanel background tab loading", () => {
     expect(mockApi.listUnscopedAgentHistory).toHaveBeenCalledWith(100);
   });
 
+  it("keeps the Todos tab reachable when transcript access fails", async () => {
+    useAppStore.setState({
+      sessions: [
+        {
+          id: "local-todos",
+          name: "claude",
+          repo_path: "/Users/tester",
+          worktree_path: "/Users/tester",
+          branch: "HEAD",
+          isolated: false,
+          project_scoped: false,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "default",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: null,
+          in_worktree: false,
+          agent_provider: "claude",
+        },
+      ],
+      activeSessionId: "local-todos",
+      activeTabId: "local-todos",
+      activeProject: REPO,
+      rightTab: "history",
+    });
+    mockApi.readSessionTodos.mockRejectedValue(
+      new Error("transcript permission denied"),
+    );
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(0);
+    });
+    await flushPromises();
+
+    expect(mockApi.readSessionTodos).toHaveBeenCalledWith(
+      "local-todos",
+      "/Users/tester",
+    );
+    const todosButton = buttonContaining(container, "Todos");
+    act(() => todosButton.click());
+    expect(container.textContent).toContain("transcript permission denied");
+  });
+
   it("filters agent history by provider", async () => {
     useAppStore.setState({ rightTab: "history" });
     mockApi.listAgentHistory.mockResolvedValue([
