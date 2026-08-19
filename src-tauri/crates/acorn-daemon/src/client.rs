@@ -108,7 +108,7 @@ pub fn one_shot_from_session(payload: ControlPayload) -> io::Result<ControlRespo
     one_shot_with_hello(payload, hello)
 }
 
-fn authenticated_hello(role: ClientRole) -> io::Result<Hello> {
+pub fn authenticated_hello(role: ClientRole) -> io::Result<Hello> {
     let mut hello = Hello::current(role);
     hello.auth_token = Some(super::auth::read()?.simple().to_string());
     Ok(hello)
