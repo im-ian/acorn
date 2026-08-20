@@ -276,6 +276,19 @@ async function fire(
 
 export type NotificationClickFailureStage = "registration" | "activation";
 
+/**
+ * Whether this platform implements the notification click listener. Only the
+ * mobile builds of tauri-plugin-notification register the `register_listener`
+ * command that `onAction` calls.
+ */
+export function notificationClickListenerSupported(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return (
+    /Android/i.test(navigator.userAgent) ||
+    /iP(hone|od|ad)/.test(navigator.platform)
+  );
+}
+
 type NotificationClickFailureHandler = (
   stage: NotificationClickFailureStage,
   error: unknown,
@@ -297,6 +310,16 @@ type NotificationClickFailureHandler = (
 export async function startNotificationClickHandler(
   onFailure?: NotificationClickFailureHandler,
 ): Promise<() => void> {
+  // `onAction` invokes the plugin's `register_listener` command, which
+  // tauri-plugin-notification only implements for Android and iOS — its
+  // desktop invoke handler exposes `notify`, `request_permission` and
+  // `is_permission_granted` and nothing else. Asking for it anyway is refused
+  // by the ACL, which surfaced as a startup toast the user cannot act on, so
+  // skip a registration that has never been able to succeed here.
+  if (!notificationClickListenerSupported()) {
+    return () => {};
+  }
+
   let disposed = false;
   const reportFailure = (
     stage: NotificationClickFailureStage,

@@ -45,10 +45,15 @@ describe("Tauri core capability", () => {
         "fs:allow-open",
         "fs:allow-read",
         "fs:allow-write",
-        "notification:allow-register-listener",
       ]),
     );
     expect(defaultCapability.permissions).not.toContain("fs:default");
+    // `register_listener` only exists in the mobile builds of
+    // tauri-plugin-notification, so granting it on desktop bought nothing and
+    // the refused call surfaced as a startup toast.
+    expect(defaultCapability.permissions).not.toContain(
+      "notification:allow-register-listener",
+    );
     expect(defaultCapability.permissions).not.toContain("notification:default");
     expect(defaultCapability.permissions).not.toContain("opener:default");
     expect(defaultCapability.permissions).not.toContain(
