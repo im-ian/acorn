@@ -19,6 +19,7 @@ mod fs_explorer;
 mod git_ops;
 mod graph_runs;
 mod ipc;
+mod notifications;
 mod persistence;
 mod power_assertion;
 mod project_settings;
@@ -775,6 +776,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            notifications::notify_session,
             commands::load_status,
             commands::list_sessions,
             commands::create_session,
