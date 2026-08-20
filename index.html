@@ -5,66 +5,7 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Acorn</title>
-    <style>
-      html,
-      body,
-      #root {
-        width: 100%;
-        height: 100%;
-        margin: 0;
-      }
-
-      body {
-        background: #f4f1ea;
-        color: #24221f;
-        font-family: Inter, "SF Pro Text", system-ui, sans-serif;
-      }
-
-      .acorn-startup-fallback {
-        box-sizing: border-box;
-        display: grid;
-        min-height: 100%;
-        place-items: center;
-        padding: 24px;
-      }
-
-      .acorn-startup-fallback section {
-        box-sizing: border-box;
-        width: min(100%, 480px);
-        padding: 24px;
-        border: 1px solid #d7d1c6;
-        border-radius: 12px;
-        background: #fffdf8;
-      }
-
-      .acorn-startup-fallback h1 {
-        margin: 0;
-        font-size: 20px;
-      }
-
-      .acorn-startup-fallback p {
-        margin: 12px 0 0;
-        color: #686158;
-        font-size: 14px;
-        line-height: 1.6;
-      }
-
-      @media (prefers-color-scheme: dark) {
-        body {
-          background: #1f2326;
-          color: #ededed;
-        }
-
-        .acorn-startup-fallback section {
-          border-color: #3a3f43;
-          background: #272b2f;
-        }
-
-        .acorn-startup-fallback p {
-          color: #a5aaad;
-        }
-      }
-    </style>
+    <link rel="stylesheet" href="/startup-fallback.css" />
   </head>
 
   <body>
