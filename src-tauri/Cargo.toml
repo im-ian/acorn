@@ -119,6 +119,11 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
+# Posted directly (not through the plugin) so a click on the banner can be
+# observed and routed back to the session that raised it.
+# 4.18 is the first release whose response API covers macOS and Windows as
+# well as Linux; the notification plugin's own `^4.11` resolves to it too.
+notify-rust = "4.18"
 tauri-plugin-single-instance = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }

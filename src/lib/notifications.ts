@@ -1,9 +1,9 @@
 import {
   isPermissionGranted,
-  onAction,
   requestPermission,
-  sendNotification,
 } from "@tauri-apps/plugin-notification";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../store";
 import { useSettings } from "./settings";
@@ -264,10 +264,10 @@ async function fire(
   const ok = await ensurePermission();
   if (!ok || useAppStore.getState().silencedSessionIds[session.id]) return;
   try {
-    sendNotification({
+    await postNotification({
       title: `${projectNameFor(session)} — ${session.name}`,
       body: STATUS_SENTENCE[next],
-      extra: { sessionId: session.id },
+      sessionId: session.id,
     });
   } catch (err) {
     console.error("[notifications] sendNotification failed", err);
@@ -276,17 +276,31 @@ async function fire(
 
 export type NotificationClickFailureStage = "registration" | "activation";
 
+/** Event the backend emits when the user activates a session notification. */
+export const NOTIFICATION_CLICKED_EVENT = "notification://clicked";
+
+interface NotificationClickedPayload {
+  sessionId: string;
+}
+
 /**
- * Whether this platform implements the notification click listener. Only the
- * mobile builds of tauri-plugin-notification register the `register_listener`
- * command that `onAction` calls.
+ * Posts a notification through Acorn's own command rather than the plugin.
+ *
+ * The plugin's desktop path is fire-and-forget — it never reads `extra` and
+ * never reports what the user did with the banner — so a click could not be
+ * routed anywhere. `notify_session` keeps the session id on the Rust side and
+ * emits {@link NOTIFICATION_CLICKED_EVENT} when the banner is activated.
  */
-export function notificationClickListenerSupported(): boolean {
-  if (typeof navigator === "undefined") return false;
-  return (
-    /Android/i.test(navigator.userAgent) ||
-    /iP(hone|od|ad)/.test(navigator.platform)
-  );
+async function postNotification(input: {
+  title: string;
+  body: string;
+  sessionId: string | null;
+}): Promise<void> {
+  await invoke("notify_session", {
+    title: input.title,
+    body: input.body,
+    sessionId: input.sessionId,
+  });
 }
 
 type NotificationClickFailureHandler = (
@@ -295,31 +309,20 @@ type NotificationClickFailureHandler = (
 ) => void;
 
 /**
- * Registers a listener that fires when the user clicks a session-status
- * notification we sent. Each notification carries the originating session id
- * in its `extra` payload so the handler can route focus directly to that
- * session — bringing the app window forward, switching workspaces if the
- * session lives in a different project, and selecting the tab.
+ * Listens for the backend's notification-click event and routes focus to the
+ * session that raised the notification — bringing the app window forward,
+ * switching workspaces if the session lives in a different project, and
+ * selecting the tab.
  *
- * Returns a cleanup function. Designed to run once at app boot. The Tauri
- * plugin only delivers click events while a listener is attached, so the
- * caller must keep this registration alive for the lifetime of the app.
- * Registration and window-activation failures are reported through
- * `onFailure`; activation failures intentionally leave inbox activity unread.
+ * Returns a cleanup function. Designed to run once at app boot; the backend
+ * only emits while a listener is attached, so the caller must keep this
+ * registration alive for the lifetime of the app. Registration and
+ * window-activation failures are reported through `onFailure`; activation
+ * failures intentionally leave inbox activity unread.
  */
 export async function startNotificationClickHandler(
   onFailure?: NotificationClickFailureHandler,
 ): Promise<() => void> {
-  // `onAction` invokes the plugin's `register_listener` command, which
-  // tauri-plugin-notification only implements for Android and iOS — its
-  // desktop invoke handler exposes `notify`, `request_permission` and
-  // `is_permission_granted` and nothing else. Asking for it anyway is refused
-  // by the ACL, which surfaced as a startup toast the user cannot act on, so
-  // skip a registration that has never been able to succeed here.
-  if (!notificationClickListenerSupported()) {
-    return () => {};
-  }
-
   let disposed = false;
   const reportFailure = (
     stage: NotificationClickFailureStage,
@@ -336,46 +339,47 @@ export async function startNotificationClickHandler(
     }
   };
 
-  let listener: Awaited<ReturnType<typeof onAction>>;
-  try {
-    listener = await onAction((notification) => {
-      if (disposed) return;
-      const sessionId =
-        typeof notification.extra?.sessionId === "string"
-          ? notification.extra.sessionId
-          : null;
-      if (!sessionId) return;
-
-      void (async () => {
+  const focusSession = async (sessionId: string): Promise<void> => {
+    try {
+      const opened = useAppStore
+        .getState()
+        .openSessionSurface(sessionId, { centerInCanvas: true });
+      const win = getCurrentWindow();
+      const restoreAttempts = [
+        () => win.show(),
+        () => win.unminimize(),
+        () => win.setFocus(),
+      ];
+      const restoreFailures: unknown[] = [];
+      for (const run of restoreAttempts) {
         try {
-          const opened = useAppStore
-            .getState()
-            .openSessionSurface(sessionId, { centerInCanvas: true });
-          const win = getCurrentWindow();
-          const restoreAttempts = [
-            () => win.show(),
-            () => win.unminimize(),
-            () => win.setFocus(),
-          ];
-          const restoreFailures: unknown[] = [];
-          for (const run of restoreAttempts) {
-            try {
-              await run();
-            } catch (error) {
-              restoreFailures.push(error);
-            }
-          }
-          if (disposed) return;
-          if (restoreFailures.length > 0) {
-            reportFailure("activation", restoreFailures[0]);
-            return;
-          }
-          if (opened) markSessionNotificationsRead(sessionId);
+          await run();
         } catch (error) {
-          reportFailure("activation", error);
+          restoreFailures.push(error);
         }
-      })();
-    });
+      }
+      if (disposed) return;
+      if (restoreFailures.length > 0) {
+        reportFailure("activation", restoreFailures[0]);
+        return;
+      }
+      if (opened) markSessionNotificationsRead(sessionId);
+    } catch (error) {
+      reportFailure("activation", error);
+    }
+  };
+
+  let unlisten: () => void;
+  try {
+    unlisten = await listen<NotificationClickedPayload>(
+      NOTIFICATION_CLICKED_EVENT,
+      (event) => {
+        if (disposed) return;
+        const sessionId = event.payload?.sessionId;
+        if (typeof sessionId !== "string" || !sessionId) return;
+        void focusSession(sessionId);
+      },
+    );
   } catch (error) {
     reportFailure("registration", error);
     return () => {
@@ -384,7 +388,7 @@ export async function startNotificationClickHandler(
   }
   return () => {
     disposed = true;
-    listener.unregister();
+    unlisten();
   };
 }
 
@@ -402,9 +406,10 @@ export async function sendTestNotification(): Promise<"sent" | "denied" | "error
   try {
     const ok = await refreshPermission();
     if (!ok) return "denied";
-    sendNotification({
+    await postNotification({
       title: "Acorn — test notification",
       body: "If you can see this, system notifications are working.",
+      sessionId: null,
     });
     return "sent";
   } catch (err) {

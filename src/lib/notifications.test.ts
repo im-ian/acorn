@@ -3,9 +3,9 @@ import type { Session } from "./types";
 
 const mocks = vi.hoisted(() => ({
   isPermissionGranted: vi.fn<() => Promise<boolean>>(),
-  onAction: vi.fn(),
   requestPermission: vi.fn<() => Promise<NotificationPermission>>(),
-  sendNotification: vi.fn(),
+  invoke: vi.fn(),
+  listen: vi.fn(),
   show: vi.fn<() => Promise<void>>(),
   unminimize: vi.fn<() => Promise<void>>(),
   setFocus: vi.fn<() => Promise<void>>(),
@@ -13,9 +13,15 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: mocks.isPermissionGranted,
-  onAction: mocks.onAction,
   requestPermission: mocks.requestPermission,
-  sendNotification: mocks.sendNotification,
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: mocks.invoke,
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: mocks.listen,
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -39,14 +45,14 @@ import { useAppStore } from "../store";
 
 const originalOpenSessionSurface = useAppStore.getState().openSessionSurface;
 
-// `startNotificationClickHandler` only registers on the mobile builds that
-// implement the plugin's `register_listener` command, so the click tests have
-// to look like one.
-function pretendMobilePlatform(): void {
-  vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
-    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36",
-  );
+// `@tauri-apps/api/core` is mocked module-wide, so the store's own commands land
+// on the same spy. Assert against the notification command alone.
+function notifyCalls(): Array<Record<string, unknown>> {
+  return mocks.invoke.mock.calls
+    .filter(([command]) => command === "notify_session")
+    .map(([, payload]) => payload as Record<string, unknown>);
 }
+
 
 const BASE_SESSION: Session = {
   id: "session-1",
@@ -84,6 +90,8 @@ describe("notifications", () => {
     vi.restoreAllMocks();
     mocks.isPermissionGranted.mockResolvedValue(true);
     mocks.requestPermission.mockResolvedValue("granted");
+    mocks.invoke.mockResolvedValue(undefined);
+    mocks.listen.mockResolvedValue(vi.fn());
     mocks.show.mockResolvedValue(undefined);
     mocks.unminimize.mockResolvedValue(undefined);
     mocks.setFocus.mockResolvedValue(undefined);
@@ -127,13 +135,13 @@ describe("notifications", () => {
     });
     await flushPromises();
 
-    expect(mocks.sendNotification).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(notifyCalls()).toEqual([
+      {
         title: "acorn — Agent",
         body: "Awaiting your next input.",
-        extra: { sessionId: "session-1" },
-      }),
-    );
+        sessionId: "session-1",
+      },
+    ]);
     dispose();
   });
 
@@ -154,7 +162,7 @@ describe("notifications", () => {
     await flushPromises();
 
     expect(mocks.isPermissionGranted).toHaveBeenCalledTimes(1);
-    expect(mocks.sendNotification).not.toHaveBeenCalled();
+    expect(notifyCalls()).toEqual([]);
 
     useAppStore.setState({
       sessions: [
@@ -175,7 +183,7 @@ describe("notifications", () => {
     await flushPromises();
 
     expect(mocks.isPermissionGranted).toHaveBeenCalledTimes(2);
-    expect(mocks.sendNotification).toHaveBeenCalledTimes(1);
+    expect(notifyCalls()).toHaveLength(1);
     dispose();
   });
 
@@ -186,7 +194,7 @@ describe("notifications", () => {
 
     await expect(sendTestNotification()).resolves.toBe("error");
     expect(mocks.requestPermission).not.toHaveBeenCalled();
-    expect(mocks.sendNotification).not.toHaveBeenCalled();
+    expect(notifyCalls()).toEqual([]);
   });
 
   it("keeps an explicit permission denial distinct from probe errors", async () => {
@@ -194,13 +202,12 @@ describe("notifications", () => {
     mocks.requestPermission.mockResolvedValueOnce("denied");
 
     await expect(sendTestNotification()).resolves.toBe("denied");
-    expect(mocks.sendNotification).not.toHaveBeenCalled();
+    expect(notifyCalls()).toEqual([]);
   });
 
   it("opens the destination session surface when a system notification is clicked", async () => {
-    pretendMobilePlatform();
-    const unregister = vi.fn();
-    mocks.onAction.mockResolvedValue({ unregister });
+    const unlisten = vi.fn();
+    mocks.listen.mockResolvedValue(unlisten);
     const openSessionSurface = vi.fn(() => true);
     useAppStore.setState({
       openSessionSurface,
@@ -220,13 +227,16 @@ describe("notifications", () => {
     });
 
     const dispose = await startNotificationClickHandler();
-    const handleAction = mocks.onAction.mock.calls[0]?.[0] as
-      | ((notification: { extra?: Record<string, unknown> }) => void)
+    expect(mocks.listen).toHaveBeenCalledWith(
+      "notification://clicked",
+      expect.any(Function),
+    );
+    const handleClick = mocks.listen.mock.calls[0]?.[1] as
+      | ((event: { payload: { sessionId: string } }) => void)
       | undefined;
-    expect(handleAction).toBeDefined();
-    if (!handleAction) throw new Error("notification action handler missing");
+    if (!handleClick) throw new Error("notification click handler missing");
 
-    handleAction({ extra: { sessionId: "session-1" } });
+    handleClick({ payload: { sessionId: "session-1" } });
     await flushPromises();
 
     expect(openSessionSurface).toHaveBeenCalledWith("session-1", {
@@ -238,22 +248,29 @@ describe("notifications", () => {
     expect(useAppStore.getState().sessionNotifications).toEqual([]);
 
     dispose();
-    expect(unregister).toHaveBeenCalled();
+    expect(unlisten).toHaveBeenCalled();
   });
 
-  it("skips click-listener registration on desktop, where the command does not exist", async () => {
-    const onFailure = vi.fn();
+  it("ignores a click event that names no session", async () => {
+    mocks.listen.mockResolvedValue(vi.fn());
+    const openSessionSurface = vi.fn(() => true);
+    useAppStore.setState({ openSessionSurface });
 
-    const dispose = await startNotificationClickHandler(onFailure);
+    const dispose = await startNotificationClickHandler();
+    const handleClick = mocks.listen.mock.calls[0]?.[1] as
+      | ((event: { payload: { sessionId?: string } }) => void)
+      | undefined;
+    if (!handleClick) throw new Error("notification click handler missing");
 
-    expect(mocks.onAction).not.toHaveBeenCalled();
-    expect(onFailure).not.toHaveBeenCalled();
-    expect(() => dispose()).not.toThrow();
+    handleClick({ payload: {} });
+    await flushPromises();
+
+    expect(openSessionSurface).not.toHaveBeenCalled();
+    dispose();
   });
 
   it("reports click-listener registration failures without rejecting", async () => {
-    pretendMobilePlatform();
-    mocks.onAction.mockRejectedValueOnce(new Error("listener denied"));
+    mocks.listen.mockRejectedValueOnce(new Error("listener denied"));
     const onFailure = vi.fn();
 
     const dispose = await startNotificationClickHandler(onFailure);
@@ -266,8 +283,7 @@ describe("notifications", () => {
   });
 
   it("keeps activity unread when the clicked notification cannot activate the window", async () => {
-    pretendMobilePlatform();
-    mocks.onAction.mockResolvedValue({ unregister: vi.fn() });
+    mocks.listen.mockResolvedValue(vi.fn());
     mocks.show.mockRejectedValueOnce(new Error("window access denied"));
     const onFailure = vi.fn();
     const openSessionSurface = vi.fn(() => true);
@@ -288,12 +304,12 @@ describe("notifications", () => {
       ],
     });
     const dispose = await startNotificationClickHandler(onFailure);
-    const handleAction = mocks.onAction.mock.calls[0]?.[0] as
-      | ((notification: { extra?: Record<string, unknown> }) => void)
+    const handleClick = mocks.listen.mock.calls[0]?.[1] as
+      | ((event: { payload: { sessionId: string } }) => void)
       | undefined;
-    if (!handleAction) throw new Error("notification action handler missing");
+    if (!handleClick) throw new Error("notification click handler missing");
 
-    handleAction({ extra: { sessionId: "session-1" } });
+    handleClick({ payload: { sessionId: "session-1" } });
     await flushPromises();
 
     expect(openSessionSurface).toHaveBeenCalledWith("session-1", {
@@ -324,7 +340,7 @@ describe("notifications", () => {
     });
     await flushPromises();
 
-    expect(mocks.sendNotification).not.toHaveBeenCalled();
+    expect(notifyCalls()).toEqual([]);
     dispose();
   });
 
@@ -383,7 +399,7 @@ describe("notifications", () => {
     });
     await flushPromises();
 
-    expect(mocks.sendNotification).not.toHaveBeenCalled();
+    expect(notifyCalls()).toEqual([]);
     expect(useAppStore.getState().sessionNotifications).toEqual([]);
 
     useAppStore.getState().setSessionSilenced("session-1", false);
@@ -405,7 +421,7 @@ describe("notifications", () => {
     });
     await flushPromises();
 
-    expect(mocks.sendNotification).toHaveBeenCalledTimes(1);
+    expect(notifyCalls()).toHaveLength(1);
     expect(useAppStore.getState().sessionNotifications).toMatchObject([
       {
         sessionId: "session-1",
@@ -570,7 +586,7 @@ describe("notifications", () => {
     useAppStore.setState({ activeSessionId: "session-1" });
 
     expect(useAppStore.getState().sessionNotifications).toHaveLength(0);
-    expect(mocks.sendNotification).not.toHaveBeenCalled();
+    expect(notifyCalls()).toEqual([]);
     disposeActivity();
     disposeFocusedRead();
   });
