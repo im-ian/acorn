@@ -39,6 +39,15 @@ import { useAppStore } from "../store";
 
 const originalOpenSessionSurface = useAppStore.getState().openSessionSurface;
 
+// `startNotificationClickHandler` only registers on the mobile builds that
+// implement the plugin's `register_listener` command, so the click tests have
+// to look like one.
+function pretendMobilePlatform(): void {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36",
+  );
+}
+
 const BASE_SESSION: Session = {
   id: "session-1",
   name: "Agent",
@@ -70,6 +79,9 @@ describe("notifications", () => {
   beforeEach(() => {
     resetNotificationsForTests();
     vi.clearAllMocks();
+    // Drop any platform spy a previous test installed so each case starts on
+    // the real (desktop) navigator.
+    vi.restoreAllMocks();
     mocks.isPermissionGranted.mockResolvedValue(true);
     mocks.requestPermission.mockResolvedValue("granted");
     mocks.show.mockResolvedValue(undefined);
@@ -186,6 +198,7 @@ describe("notifications", () => {
   });
 
   it("opens the destination session surface when a system notification is clicked", async () => {
+    pretendMobilePlatform();
     const unregister = vi.fn();
     mocks.onAction.mockResolvedValue({ unregister });
     const openSessionSurface = vi.fn(() => true);
@@ -228,7 +241,18 @@ describe("notifications", () => {
     expect(unregister).toHaveBeenCalled();
   });
 
+  it("skips click-listener registration on desktop, where the command does not exist", async () => {
+    const onFailure = vi.fn();
+
+    const dispose = await startNotificationClickHandler(onFailure);
+
+    expect(mocks.onAction).not.toHaveBeenCalled();
+    expect(onFailure).not.toHaveBeenCalled();
+    expect(() => dispose()).not.toThrow();
+  });
+
   it("reports click-listener registration failures without rejecting", async () => {
+    pretendMobilePlatform();
     mocks.onAction.mockRejectedValueOnce(new Error("listener denied"));
     const onFailure = vi.fn();
 
@@ -242,6 +266,7 @@ describe("notifications", () => {
   });
 
   it("keeps activity unread when the clicked notification cannot activate the window", async () => {
+    pretendMobilePlatform();
     mocks.onAction.mockResolvedValue({ unregister: vi.fn() });
     mocks.show.mockRejectedValueOnce(new Error("window access denied"));
     const onFailure = vi.fn();
