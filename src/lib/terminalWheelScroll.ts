@@ -23,13 +23,17 @@ interface XtermWheelInternals {
 // protocol, the modifier bits and the cell coordinates stay its job.
 const APP_WHEEL_TRACKING_MODES = new Set(["vt200", "drag", "any"]);
 // Trackpad momentum carries hundreds of pixels per event; each reported line
-// is one `pty_write` IPC round trip, so cap the burst.
+// is one `pty_write` IPC round trip, so cap the burst. Scaled by the scroll
+// speed so raising the setting still raises the ceiling.
 // ponytail: per-report writes are fine at this cap; coalesce `writeToPty` into
 // a microtask if PTY IPC ever shows up in a profile.
 const MAX_LINES_PER_EVENT = 8;
-// Large enough that xterm's own pixel→line conversion resolves to at least one
-// line for any cell height, and above its 50px trackpad-damping threshold.
-const REPLAY_DELTA_PX = 200;
+// Replayed events must survive xterm's own pixel→line conversion: at least one
+// line for the current cell height and `scrollSensitivity`, and above its 50px
+// trackpad-damping threshold.
+function replayDeltaPx(cellHeight: number, speed: number): number {
+  return Math.max(50, (cellHeight * 2) / speed);
+}
 
 /**
  * Wheel delta → number of lines to report, carrying the sub-line remainder so
@@ -41,28 +45,31 @@ export function wheelScrollLineCount({
   cellHeight,
   rows,
   carry,
+  speed = 1,
 }: {
   deltaY: number;
   deltaMode: number;
   cellHeight: number;
   rows: number;
   carry: number;
+  speed?: number;
 }): { lines: number; carry: number } {
   if (deltaY === 0 || !Number.isFinite(deltaY) || cellHeight <= 0) {
     return { lines: 0, carry };
   }
   const raw =
-    deltaMode === WheelEvent.DOM_DELTA_LINE
+    (deltaMode === WheelEvent.DOM_DELTA_LINE
       ? deltaY
       : deltaMode === WheelEvent.DOM_DELTA_PAGE
         ? deltaY * rows
-        : deltaY / cellHeight;
+        : deltaY / cellHeight) * speed;
   const total = carry + raw;
   const lines = Math.trunc(total);
-  if (Math.abs(lines) > MAX_LINES_PER_EVENT) {
+  const cap = Math.max(1, Math.round(MAX_LINES_PER_EVENT * speed));
+  if (Math.abs(lines) > cap) {
     // Dropping the carry keeps a clamped burst from queueing a backlog that
     // scrolls on after the fingers stop.
-    return { lines: Math.sign(lines) * MAX_LINES_PER_EVENT, carry: 0 };
+    return { lines: Math.sign(lines) * cap, carry: 0 };
   }
   return { lines, carry: total - lines };
 }
@@ -75,7 +82,15 @@ function applicationOwnsWheel(term: XTerm): boolean {
   );
 }
 
-export function patchTerminalWheelScroll(term: XTerm): () => void {
+/**
+ * @param getSpeed Terminal scroll-speed multiplier, read per event so the
+ *   setting applies live. Mirrors xterm's own `scrollSensitivity`, which
+ *   covers the viewport (scrollback) path this handler leaves alone.
+ */
+export function patchTerminalWheelScroll(
+  term: XTerm,
+  getSpeed: () => number = () => 1,
+): () => void {
   const core = (term as unknown as XtermWheelInternals)._core;
   let carry = 0;
   let replaying = false;
@@ -93,12 +108,16 @@ export function patchTerminalWheelScroll(term: XTerm): () => void {
     const cellHeight = core?._renderService?.dimensions?.css?.cell?.height ?? 0;
     if (!element || cellHeight <= 0) return true;
 
+    const rawSpeed = getSpeed();
+    const speed =
+      Number.isFinite(rawSpeed) && rawSpeed > 0 ? rawSpeed : 1;
     const next = wheelScrollLineCount({
       deltaY: event.deltaY,
       deltaMode: event.deltaMode,
       cellHeight,
       rows: term.rows,
       carry,
+      speed,
     });
     carry = next.carry;
     // xterm cancels the event on the reporting path but not on the alt-screen
@@ -106,7 +125,8 @@ export function patchTerminalWheelScroll(term: XTerm): () => void {
     event.preventDefault();
     if (next.lines === 0) return false;
 
-    const deltaY = next.lines > 0 ? REPLAY_DELTA_PX : -REPLAY_DELTA_PX;
+    const magnitude = replayDeltaPx(cellHeight, speed);
+    const deltaY = next.lines > 0 ? magnitude : -magnitude;
     replaying = true;
     try {
       for (let i = 0; i < Math.abs(next.lines); i++) {

@@ -219,6 +219,10 @@
           "pill": "알약형"
         }
       },
+      "scrollSpeed": {
+        "label": "스크롤 속도",
+        "hint": "터미널 스크롤의 마우스 휠 배율. Claude Code, vim, less 같은 전체 화면 앱에도 적용됩니다."
+      },
       "canvasInactiveRefreshRate": {
         "label": "비활성 캔버스 새로고침 빈도",
         "hint": "화면에 보이지만 선택되지 않은 캔버스 터미널이 새 출력을 렌더링하는 빈도입니다. 선택한 터미널은 항상 최고 속도를 유지합니다.",

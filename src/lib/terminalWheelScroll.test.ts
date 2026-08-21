@@ -9,10 +9,12 @@ function makeTerm({
   mouseTrackingMode = "any",
   bufferType = "alternate",
   cellHeight = 20,
+  speed = 1,
 }: {
   mouseTrackingMode?: string;
   bufferType?: string;
   cellHeight?: number;
+  speed?: number;
 } = {}) {
   const element = document.createElement("div");
   let handler: (event: WheelEvent) => boolean = () => true;
@@ -35,11 +37,12 @@ function makeTerm({
       _renderService: { dimensions: { css: { cell: { height: cellHeight } } } },
     },
   } as unknown as XTerm;
+  const patch = () => patchTerminalWheelScroll(term, () => speed);
   const wheel = (init: WheelEventInit) =>
     element.dispatchEvent(
       new WheelEvent("wheel", { cancelable: true, ...init }),
     );
-  return { term, element, reported, wheel };
+  return { term, element, reported, patch, wheel };
 }
 
 describe("wheelScrollLineCount", () => {
@@ -62,6 +65,29 @@ describe("wheelScrollLineCount", () => {
     });
     expect(second.lines).toBe(1);
     expect(second.carry).toBeCloseTo(0.2);
+  });
+
+  it("scales the line count by the scroll-speed multiplier", () => {
+    expect(
+      wheelScrollLineCount({
+        deltaY: 100,
+        deltaMode: 0,
+        cellHeight: 20,
+        rows: 24,
+        carry: 0,
+        speed: 0.5,
+      }).lines,
+    ).toBe(2);
+    expect(
+      wheelScrollLineCount({
+        deltaY: 40,
+        deltaMode: 0,
+        cellHeight: 20,
+        rows: 24,
+        carry: 0,
+        speed: 3,
+      }).lines,
+    ).toBe(6);
   });
 
   it("clamps momentum bursts without queueing a backlog", () => {
@@ -107,6 +133,15 @@ describe("patchTerminalWheelScroll", () => {
 
     expect(reported).toHaveLength(5);
     expect(reported.every((event) => event.deltaY < 0)).toBe(true);
+  });
+
+  it("reports more lines as the scroll speed rises", () => {
+    const { patch, reported, wheel } = makeTerm({ speed: 2 });
+    patch();
+
+    wheel({ deltaY: -100 });
+
+    expect(reported).toHaveLength(10);
   });
 
   it("swallows sub-line deltas instead of reporting them", () => {

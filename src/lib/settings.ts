@@ -140,6 +140,9 @@ export const TERMINAL_LETTER_SPACING_STEP = 0.25;
 export const TERMINAL_LINE_HEIGHT_MIN = 1.0;
 export const TERMINAL_LINE_HEIGHT_MAX = 2.0;
 export const TERMINAL_LINE_HEIGHT_STEP = 0.05;
+export const TERMINAL_SCROLL_SPEED_MIN = 0.25;
+export const TERMINAL_SCROLL_SPEED_MAX = 5;
+export const TERMINAL_SCROLL_SPEED_STEP = 0.25;
 
 export type ToastPosition = "top" | "bottom";
 export type DefaultWorkspaceViewMode = "panes" | "kanban" | "canvas";
@@ -327,6 +330,13 @@ export interface AcornSettings {
      * selected one with DECSCUSR.
      */
     cursorStyle: TerminalCursorStyle;
+    /**
+     * Mouse-wheel scroll multiplier. Scales both the terminal's own
+     * scrollback scrolling and the per-line wheel reports sent to a
+     * full-screen application that took the wheel over (Claude Code, vim,
+     * less). 1.0 tracks the pointer one line per cell height.
+     */
+    scrollSpeed: number;
     /**
      * Gesture required to follow a URL in terminal output. Plain click is
      * the xterm default; modifier-click matches iTerm2 / Terminal.app so a
@@ -572,6 +582,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     fontWeightBold: 700,
     lineHeight: 1.0,
     cursorStyle: "block",
+    scrollSpeed: 1,
     linkActivation: "click",
     rightClickPasteSelection: false,
     canvasInactiveTerminalRenderIntervalMs:
@@ -843,6 +854,15 @@ function normalizeLineHeight(v: unknown, fallback: number): number {
   const clamped = Math.max(
     TERMINAL_LINE_HEIGHT_MIN,
     Math.min(TERMINAL_LINE_HEIGHT_MAX, v),
+  );
+  return Math.round(clamped * 100) / 100;
+}
+
+function normalizeTerminalScrollSpeed(v: unknown, fallback: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  const clamped = Math.max(
+    TERMINAL_SCROLL_SPEED_MIN,
+    Math.min(TERMINAL_SCROLL_SPEED_MAX, v),
   );
   return Math.round(clamped * 100) / 100;
 }
@@ -1352,6 +1372,10 @@ function loadSettings(): AcornSettings {
           (terminalRaw as { cursorStyle?: unknown }).cursorStyle,
           DEFAULT_SETTINGS.terminal.cursorStyle,
         ),
+        scrollSpeed: normalizeTerminalScrollSpeed(
+          (terminalRaw as { scrollSpeed?: unknown }).scrollSpeed,
+          DEFAULT_SETTINGS.terminal.scrollSpeed,
+        ),
         linkActivation: normalizeLinkActivation(
           (terminalRaw as { linkActivation?: unknown }).linkActivation,
           DEFAULT_SETTINGS.terminal.linkActivation,
@@ -1724,6 +1748,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
               : normalizeTerminalCursorStyle(
                   patch.cursorStyle,
                   s.settings.terminal.cursorStyle,
+                ),
+          scrollSpeed:
+            patch.scrollSpeed === undefined
+              ? s.settings.terminal.scrollSpeed
+              : normalizeTerminalScrollSpeed(
+                  patch.scrollSpeed,
+                  s.settings.terminal.scrollSpeed,
                 ),
           rightClickPasteSelection:
             patch.rightClickPasteSelection === undefined
