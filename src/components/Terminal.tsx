@@ -51,6 +51,7 @@ import {
   type ConversationNavigationDirection,
 } from "../lib/terminalConversation";
 import { patchTerminalMouseCoordinateScale } from "../lib/terminalMouseScale";
+import { patchTerminalWheelScroll } from "../lib/terminalWheelScroll";
 import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
   TERMINAL_PASTE_EVENT,
@@ -1080,6 +1081,7 @@ export function Terminal({
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
     const unpatchMouseCoordinateScale = patchTerminalMouseCoordinateScale(term);
+    const unpatchWheelScroll = patchTerminalWheelScroll(term);
     const fitWithCellMeasurements = () => {
       const cjkEnabled =
         useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
@@ -3097,6 +3099,7 @@ export function Terminal({
         outputWriterRef.current = null;
       }
       unpatchMouseCoordinateScale();
+      unpatchWheelScroll();
       try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
       webLinksDisposable = null;
       try { fileLinksDisposable?.dispose(); } catch { /* ignore */ }
