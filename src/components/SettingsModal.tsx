@@ -84,6 +84,9 @@ import {
   TERMINAL_LINE_HEIGHT_MAX,
   TERMINAL_LINE_HEIGHT_MIN,
   TERMINAL_LINE_HEIGHT_STEP,
+  TERMINAL_SCROLL_SPEED_MAX,
+  TERMINAL_SCROLL_SPEED_MIN,
+  TERMINAL_SCROLL_SPEED_STEP,
   TOAST_POSITION_OPTIONS,
   type KanbanTerminalPopoverDefaultSize,
   type KanbanTerminalPopoverPlacement,
@@ -938,6 +941,19 @@ function TerminalSettings() {
             </option>
           ))}
         </Select>
+      </Field>
+      <Field
+        label={st(t, "settings.terminal.scrollSpeed.label")}
+        hint={st(t, "settings.terminal.scrollSpeed.hint")}
+      >
+        <Stepper
+          value={settings.terminal.scrollSpeed}
+          min={TERMINAL_SCROLL_SPEED_MIN}
+          max={TERMINAL_SCROLL_SPEED_MAX}
+          step={TERMINAL_SCROLL_SPEED_STEP}
+          format={(n) => `${n.toFixed(2)}x`}
+          onChange={(n) => patchTerminal({ scrollSpeed: n })}
+        />
       </Field>
       <Field
         label={st(t, "settings.terminal.canvasInactiveRefreshRate.label")}

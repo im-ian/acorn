@@ -51,6 +51,7 @@ import {
   type ConversationNavigationDirection,
 } from "../lib/terminalConversation";
 import { patchTerminalMouseCoordinateScale } from "../lib/terminalMouseScale";
+import { patchTerminalWheelScroll } from "../lib/terminalWheelScroll";
 import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
   TERMINAL_PASTE_EVENT,
@@ -777,6 +778,9 @@ export function Terminal({
       fontWeightBold: initialSettings.terminal.fontWeightBold,
       lineHeight: initialSettings.terminal.lineHeight,
       cursorStyle: xtermCursorStyle(initialSettings.terminal.cursorStyle),
+      // Viewport (scrollback) scrolling; the wheel-report path applies the
+      // same multiplier itself in patchTerminalWheelScroll.
+      scrollSensitivity: initialSettings.terminal.scrollSpeed,
       cursorBlink: isFocusedPane,
       allowProposedApi: true,
       // Let Option+drag force a local selection even while a TUI has mouse
@@ -1080,6 +1084,10 @@ export function Terminal({
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
     const unpatchMouseCoordinateScale = patchTerminalMouseCoordinateScale(term);
+    const unpatchWheelScroll = patchTerminalWheelScroll(
+      term,
+      () => useSettings.getState().settings.terminal.scrollSpeed,
+    );
     const fitWithCellMeasurements = () => {
       const cjkEnabled =
         useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
@@ -1267,6 +1275,9 @@ export function Terminal({
       }
       if (next.cursorStyle !== previous.cursorStyle) {
         term.options.cursorStyle = xtermCursorStyle(next.cursorStyle);
+      }
+      if (next.scrollSpeed !== previous.scrollSpeed) {
+        term.options.scrollSensitivity = next.scrollSpeed;
       }
       if (next.linkActivation !== previous.linkActivation) {
         linkActivation = next.linkActivation;
@@ -3097,6 +3108,7 @@ export function Terminal({
         outputWriterRef.current = null;
       }
       unpatchMouseCoordinateScale();
+      unpatchWheelScroll();
       try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
       webLinksDisposable = null;
       try { fileLinksDisposable?.dispose(); } catch { /* ignore */ }
