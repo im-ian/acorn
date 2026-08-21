@@ -219,6 +219,10 @@
           "pill": "圆角竖线"
         }
       },
+      "scrollSpeed": {
+        "label": "滚动速度",
+        "hint": "终端滚动的鼠标滚轮倍率，同样适用于 Claude Code、vim、less 等全屏应用。"
+      },
       "canvasInactiveRefreshRate": {
         "label": "非活动画布刷新率",
         "hint": "可见但未选中的画布终端渲染新输出的频率。所选的终端始终保持全速。",
