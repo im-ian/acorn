@@ -516,6 +516,7 @@ impl DaemonBridge {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         &self,
         session_id: Uuid,
@@ -526,6 +527,8 @@ impl DaemonBridge {
         env: std::collections::HashMap<String, String>,
         cols: u16,
         rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
         kind: SessionKind,
         repo_path: Option<PathBuf>,
         branch: Option<String>,
@@ -541,6 +544,8 @@ impl DaemonBridge {
             env,
             cols,
             rows,
+            pixel_width,
+            pixel_height,
             kind,
             repo_path,
             branch,
@@ -579,11 +584,20 @@ impl DaemonBridge {
         }
     }
 
-    pub fn resize(&self, target: Uuid, cols: u16, rows: u16) -> BridgeResult<()> {
+    pub fn resize(
+        &self,
+        target: Uuid,
+        cols: u16,
+        rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+    ) -> BridgeResult<()> {
         match Self::unpack_error(self.call(ControlPayload::Resize {
             target_session_id: target,
             cols,
             rows,
+            pixel_width,
+            pixel_height,
         })?)? {
             ControlResult::Ack => Ok(()),
             other => Err(unexpected(other)),

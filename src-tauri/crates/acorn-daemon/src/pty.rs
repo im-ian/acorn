@@ -37,6 +37,16 @@ use super::session::{DaemonSession, SessionRegistry};
 
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
+
+fn pty_window_size(cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) -> PtySize {
+    PtySize {
+        cols: if cols == 0 { DEFAULT_COLS } else { cols },
+        rows: if rows == 0 { DEFAULT_ROWS } else { rows },
+        pixel_width,
+        pixel_height,
+    }
+}
+
 const READ_BUFFER_SIZE: usize = 4096;
 
 /// Tuple returned by `PtyManager::spawn`. The pid is surfaced separately
@@ -163,20 +173,7 @@ impl PtyManager {
             });
         }
 
-        let size = PtySize {
-            cols: if spec.cols == 0 {
-                DEFAULT_COLS
-            } else {
-                spec.cols
-            },
-            rows: if spec.rows == 0 {
-                DEFAULT_ROWS
-            } else {
-                spec.rows
-            },
-            pixel_width: 0,
-            pixel_height: 0,
-        };
+        let size = pty_window_size(spec.cols, spec.rows, spec.pixel_width, spec.pixel_height);
 
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -311,7 +308,14 @@ impl PtyManager {
         writer.flush()
     }
 
-    pub fn resize(&self, id: &Uuid, cols: u16, rows: u16) -> std::io::Result<()> {
+    pub fn resize(
+        &self,
+        id: &Uuid,
+        cols: u16,
+        rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+    ) -> std::io::Result<()> {
         let handle = self
             .handles
             .get(id)
@@ -319,12 +323,7 @@ impl PtyManager {
             .ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, format!("no pty for {id}"))
             })?;
-        let size = PtySize {
-            cols: if cols == 0 { DEFAULT_COLS } else { cols },
-            rows: if rows == 0 { DEFAULT_ROWS } else { rows },
-            pixel_width: 0,
-            pixel_height: 0,
-        };
+        let size = pty_window_size(cols, rows, pixel_width, pixel_height);
         // Bind MutexGuard to a local so it drops before `handle` does —
         // returning the chain directly leaves the guard alive past
         // `handle`'s end-of-scope, which the borrow checker rejects.
@@ -533,6 +532,8 @@ mod tests {
             env: HashMap::new(),
             cols: 80,
             rows: 24,
+            pixel_width: 0,
+            pixel_height: 0,
             kind: crate::protocol::SessionKind::Regular,
             repo_path: None,
             branch: None,
@@ -662,7 +663,7 @@ mod tests {
         spec.args = vec!["-NoLogo".to_string(), "-NoProfile".to_string()];
 
         manager.spawn(spec, registry).unwrap();
-        manager.resize(&id, 101, 37).unwrap();
+        manager.resize(&id, 101, 37, 0, 0).unwrap();
 
         // Interactive PowerShell asks the terminal for its cursor position
         // before presenting the first prompt. xterm.js answers this DSR in the

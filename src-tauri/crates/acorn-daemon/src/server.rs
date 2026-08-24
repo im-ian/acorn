@@ -401,7 +401,12 @@ impl Daemon {
                 target_session_id,
                 cols,
                 rows,
-            } => match self.pty.resize(&target_session_id, cols, rows) {
+                pixel_width,
+                pixel_height,
+            } => match self
+                .pty
+                .resize(&target_session_id, cols, rows, pixel_width, pixel_height)
+            {
                 Ok(()) => ControlResult::Ack,
                 Err(err) => ControlResult::Error {
                     code: io_error_to_code(&err),
@@ -598,8 +603,19 @@ impl Daemon {
                                 let _ = pty_for_input.write(&session_id, &b);
                             }
                         }
-                        StreamFrame::Resize { cols, rows } => {
-                            let _ = pty_for_input.resize(&session_id, cols, rows);
+                        StreamFrame::Resize {
+                            cols,
+                            rows,
+                            pixel_width,
+                            pixel_height,
+                        } => {
+                            let _ = pty_for_input.resize(
+                                &session_id,
+                                cols,
+                                rows,
+                                pixel_width,
+                                pixel_height,
+                            );
                         }
                         StreamFrame::ClientNote { .. } => {} // telemetry-only
                         _ => {} // daemon-bound frames from client are ignored

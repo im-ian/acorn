@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION_MAJOR: u32 = 1;
 /// Minor version of the protocol. Bumped when adding optional fields or
 /// non-breaking new variants. Reported in the handshake purely for telemetry
 /// and feature detection — not used for compatibility gating.
-pub const PROTOCOL_VERSION_MINOR: u32 = 1;
+pub const PROTOCOL_VERSION_MINOR: u32 = 2;
 
 /// First frame on every fresh connection. Both daemon and client send their
 /// own `Hello`; either side may close the connection if the major version
@@ -137,6 +137,13 @@ pub enum ControlPayload {
         target_session_id: Uuid,
         cols: u16,
         rows: u16,
+        /// CSS-pixel window size from the xterm renderer. `0` means
+        /// unknown; overlay TUIs that read `TIOCGWINSZ` then cannot
+        /// size pixel-backed layout.
+        #[serde(default)]
+        pixel_width: u16,
+        #[serde(default)]
+        pixel_height: u16,
     },
     /// Read the tail of a session's scrollback ring. Returns up to
     /// `max_bytes` of the freshest output. Pure read — does not drain.
@@ -185,11 +192,17 @@ pub struct SpawnSpec {
     /// (which is the user-login environment captured at daemon spawn).
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
-    /// Initial window size. `0` falls back to `80x24`.
+    /// Initial window size. `0` cols/rows fall back to `80x24`. Pixel
+    /// fields of `0` mean "unknown"; overlay TUIs then skip pixel-backed
+    /// layout until a later resize supplies them.
     #[serde(default)]
     pub cols: u16,
     #[serde(default)]
     pub rows: u16,
+    #[serde(default)]
+    pub pixel_width: u16,
+    #[serde(default)]
+    pub pixel_height: u16,
     /// Session classification (regular / control). Mirrors the
     /// `SessionKind` enum in `acorn_session`. The daemon preserves it
     /// in metadata so reattach can re-augment the env on respawn.
@@ -409,7 +422,14 @@ pub enum StreamFrame {
     /// PTY stdin bytes (client → daemon).
     Input { data_b64: String },
     /// Resize (client → daemon).
-    Resize { cols: u16, rows: u16 },
+    Resize {
+        cols: u16,
+        rows: u16,
+        #[serde(default)]
+        pixel_width: u16,
+        #[serde(default)]
+        pixel_height: u16,
+    },
     /// PTY child exited (daemon → client). After this frame the daemon
     /// closes the stream; further input is dropped.
     Exit { code: Option<i32> },
@@ -507,6 +527,48 @@ mod tests {
         let s = serde_json::to_string(&f).unwrap();
         let parsed: StreamFrame = serde_json::from_str(&s).unwrap();
         assert_eq!(parsed, f);
+    }
+
+    #[test]
+    fn resize_payloads_default_missing_pixel_fields() {
+        let id = Uuid::new_v4();
+        let control: ControlPayload = serde_json::from_value(serde_json::json!({
+            "kind": "resize",
+            "target_session_id": id,
+            "cols": 80,
+            "rows": 24
+        }))
+        .unwrap();
+        match control {
+            ControlPayload::Resize {
+                cols,
+                rows,
+                pixel_width,
+                pixel_height,
+                ..
+            } => {
+                assert_eq!((cols, rows, pixel_width, pixel_height), (80, 24, 0, 0));
+            }
+            other => panic!("expected resize, got {other:?}"),
+        }
+
+        let frame: StreamFrame = serde_json::from_value(serde_json::json!({
+            "kind": "resize",
+            "cols": 101,
+            "rows": 37
+        }))
+        .unwrap();
+        match frame {
+            StreamFrame::Resize {
+                cols,
+                rows,
+                pixel_width,
+                pixel_height,
+            } => {
+                assert_eq!((cols, rows, pixel_width, pixel_height), (101, 37, 0, 0));
+            }
+            other => panic!("expected resize, got {other:?}"),
+        }
     }
 
     #[test]
