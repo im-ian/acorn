@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use parking_lot::Mutex;
 
 use crate::daemon_bridge::DaemonBridge;
@@ -49,6 +50,9 @@ pub struct AppState {
     /// Raw-byte output channels registered by renderer terminals. PTY output
     /// falls back to the legacy base64 event path when no channel is active.
     pub pty_output: Arc<PtyOutputRouter>,
+    /// Serializes stdin writes per session so async `pty_write` tasks cannot
+    /// reorder keystrokes or mouse reports for the same PTY.
+    pub pty_write_locks: DashMap<Uuid, Arc<Mutex<()>>>,
     /// Set to false at boot if `persistence::load_sessions_with_status`
     /// reported a recoverable load failure (file existed but could not be
     /// read or parsed). Frontend reads this via `load_status` and skips the
@@ -124,12 +128,20 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn pty_write_lock(&self, id: Uuid) -> Arc<Mutex<()>> {
+        self.pty_write_locks
+            .entry(id)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
     pub fn new() -> Self {
         Self {
             sessions: SessionStore::new(),
             projects: ProjectStore::new(),
             pty: PtyManager::new(),
             pty_output: Arc::new(PtyOutputRouter::default()),
+            pty_write_locks: DashMap::new(),
             sessions_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             projects_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             pending_session_removals: Arc::new(Mutex::new(HashMap::new())),

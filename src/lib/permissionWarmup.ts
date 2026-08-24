@@ -36,6 +36,9 @@ export const FOLDER_PERMISSION_RECHECK_EVENT =
 
 const ANSI_CSI_SEQUENCE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const MAX_PERMISSION_OUTPUT_TAIL = 512;
+// Permission failures are short ASCII lines. TUI frames are kilobytes of CSI;
+// inspecting only the tail keeps the detector off the redraw hot path.
+const MAX_PERMISSION_INSPECT_BYTES = 1024;
 const BREW_UNREADABLE_CWD =
   /the current working directory must be readable to [^\r\n]+ to run brew\./i;
 const CODEX_PERMISSION_FAILURE =
@@ -50,7 +53,11 @@ export function createFolderPermissionOutputDetector(): {
   return {
     push(bytes) {
       if (bytes.byteLength === 0) return false;
-      const output = (tail + decoder.decode(bytes, { stream: true })).replace(
+      const slice =
+        bytes.byteLength > MAX_PERMISSION_INSPECT_BYTES
+          ? bytes.subarray(bytes.byteLength - MAX_PERMISSION_INSPECT_BYTES)
+          : bytes;
+      const output = (tail + decoder.decode(slice, { stream: true })).replace(
         ANSI_CSI_SEQUENCE,
         "",
       );
