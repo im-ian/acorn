@@ -1,4 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import {
+  enqueuePtyWrite,
+  flushPtyWrite as flushQueuedPtyWrite,
+} from "./ptyWriteCoalescer";
 import type {
   AcornIpcStatus,
   AddProjectSourceResult,
@@ -1177,8 +1181,10 @@ export const api = {
    * on the shell's line buffer untouched.
    */
   ptyWrite(sessionId: string, data: string): Promise<void> {
-    const encoded = encodeStringToBase64(data);
-    return invoke<void>("pty_write", { sessionId, data: encoded });
+    return enqueuePtyWrite(sessionId, data);
+  },
+  flushPtyWrite(sessionId?: string): Promise<void> {
+    return flushQueuedPtyWrite(sessionId);
   },
   fsListDir(
     path: string,
@@ -1340,15 +1346,6 @@ export interface FsPrepareAssetResult {
 export interface FsLineDiffEntry {
   line: number;
   kind: "added" | "modified" | "deleted";
-}
-
-function encodeStringToBase64(input: string): string {
-  const bytes = new TextEncoder().encode(input);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
 }
 
 /** Which user-invoked agent a resume candidate belongs to. */
