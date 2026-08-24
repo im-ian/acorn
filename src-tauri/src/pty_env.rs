@@ -21,6 +21,13 @@ use portable_pty::CommandBuilder;
 pub const RENDER_CAPABILITY: &[(&str, &str)] =
     &[("TERM", "xterm-256color"), ("COLORTERM", "truecolor")];
 
+/// Identity this xterm.js PTY advertises after inherited host fingerprints
+/// are stripped. Agent TUIs special-case `TERM_PROGRAM=Apple_Terminal` /
+/// `iTerm.app` and emit sequences those emulators handle; Acorn is not
+/// them. A stable non-empty value keeps the child from inheriting the
+/// host emulator's name (and vscode shell-integration hooks in user rc).
+pub const TERMINAL_IDENTITY: &[(&str, &str)] = &[("TERM_PROGRAM", "Acorn")];
+
 const HOST_TERMINAL_ENV: &[&str] = &[
     "TERM_PROGRAM",
     "TERM_PROGRAM_VERSION",
@@ -132,6 +139,7 @@ pub fn apply_layered_env(cmd: &mut CommandBuilder, env: HashMap<String, String>)
     }
 
     apply_render_capability_backstop(cmd);
+    apply_terminal_identity_backstop(cmd);
 }
 
 /// Refuse empty `TERM` / `COLORTERM`. Replays after every other layer
@@ -144,6 +152,17 @@ pub fn apply_layered_env(cmd: &mut CommandBuilder, env: HashMap<String, String>)
 /// falling back to plain output.
 pub fn apply_render_capability_backstop(cmd: &mut CommandBuilder) {
     for (k, v) in RENDER_CAPABILITY {
+        if cmd.get_env(*k).map_or(true, |s| s.is_empty()) {
+            cmd.env(k, v);
+        }
+    }
+}
+
+/// Stamp `TERM_PROGRAM=Acorn` when no caller override remains. Inherited
+/// host values are already stripped; without a replacement the child has
+/// no terminal identity of its own.
+pub fn apply_terminal_identity_backstop(cmd: &mut CommandBuilder) {
+    for (k, v) in TERMINAL_IDENTITY {
         if cmd.get_env(*k).map_or(true, |s| s.is_empty()) {
             cmd.env(k, v);
         }
@@ -215,8 +234,22 @@ mod tests {
         cmd.env("TERM_PROGRAM", "Apple_Terminal");
         cmd.env("TERM_SESSION_ID", "abc123");
         apply_layered_env(&mut cmd, HashMap::new());
-        assert_eq!(cmd.get_env("TERM_PROGRAM"), None);
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM").and_then(|s| s.to_str()),
+            Some("Acorn"),
+        );
         assert_eq!(cmd.get_env("TERM_SESSION_ID"), None);
+    }
+
+    #[test]
+    fn layered_env_stamps_acorn_terminal_identity_by_default() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env_clear();
+        apply_layered_env(&mut cmd, HashMap::new());
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM").and_then(|s| s.to_str()),
+            Some("Acorn"),
+        );
     }
 
     #[test]
@@ -229,6 +262,18 @@ mod tests {
         assert_eq!(
             cmd.get_env("TERM_PROGRAM").and_then(|s| s.to_str()),
             Some("AcornTest"),
+        );
+    }
+
+    #[test]
+    fn terminal_identity_backstop_overrides_empty_string() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env_clear();
+        cmd.env("TERM_PROGRAM", "");
+        apply_terminal_identity_backstop(&mut cmd);
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM").and_then(|s| s.to_str()),
+            Some("Acorn"),
         );
     }
 

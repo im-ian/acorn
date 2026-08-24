@@ -8785,6 +8785,8 @@ pub async fn pty_spawn<R: Runtime>(
     env: Option<HashMap<String, String>>,
     cols: Option<u16>,
     rows: Option<u16>,
+    pixel_width: Option<u16>,
+    pixel_height: Option<u16>,
     replay_scrollback: Option<bool>,
     output_token: Option<u64>,
 ) -> AppResult<()> {
@@ -8801,6 +8803,8 @@ pub async fn pty_spawn<R: Runtime>(
             env,
             cols,
             rows,
+            pixel_width,
+            pixel_height,
             replay_scrollback,
             output_token,
         )
@@ -8817,6 +8821,8 @@ fn pty_spawn_blocking<R: Runtime>(
     env: Option<HashMap<String, String>>,
     cols: Option<u16>,
     rows: Option<u16>,
+    pixel_width: Option<u16>,
+    pixel_height: Option<u16>,
     replay_scrollback: Option<bool>,
     output_token: Option<u64>,
 ) -> AppResult<()> {
@@ -9040,6 +9046,8 @@ fn pty_spawn_blocking<R: Runtime>(
             &effective_env,
             cols.unwrap_or(0),
             rows.unwrap_or(0),
+            pixel_width.unwrap_or(0),
+            pixel_height.unwrap_or(0),
             output_token,
             replay_scrollback.unwrap_or(true),
         )
@@ -9065,6 +9073,8 @@ fn pty_spawn_blocking<R: Runtime>(
             |cmd| crate::pty_env::apply_layered_env(cmd, effective_env),
             cols.unwrap_or(0),
             rows.unwrap_or(0),
+            pixel_width.unwrap_or(0),
+            pixel_height.unwrap_or(0),
         )
         .map_err(|e| AppError::Pty(e.to_string()))
 }
@@ -9083,6 +9093,7 @@ fn should_route_session_to_daemon(enabled: bool, daemon_session_id: Option<Uuid>
 ///    it already restored an xterm-rendered disk snapshot.
 /// 3. **No live session** — fresh daemon spawn, attach the stream,
 ///    persist `daemon_session_id` so the next restart hits case 2.
+#[allow(clippy::too_many_arguments)]
 fn spawn_via_daemon<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
@@ -9093,6 +9104,8 @@ fn spawn_via_daemon<R: Runtime>(
     env: &HashMap<String, String>,
     cols: u16,
     rows: u16,
+    pixel_width: u16,
+    pixel_height: u16,
     output_token: Option<u64>,
     replay_scrollback: bool,
 ) -> Result<(), String> {
@@ -9184,6 +9197,8 @@ fn spawn_via_daemon<R: Runtime>(
             env.clone(),
             cols,
             rows,
+            pixel_width,
+            pixel_height,
             kind,
             repo_path,
             branch,
@@ -9325,17 +9340,21 @@ pub fn pty_resize(
     session_id: String,
     cols: u16,
     rows: u16,
+    pixel_width: Option<u16>,
+    pixel_height: Option<u16>,
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
+    let pixel_width = pixel_width.unwrap_or(0);
+    let pixel_height = pixel_height.unwrap_or(0);
     if daemon_session_alive_or_attached(&state, id) {
         return state
             .daemon_bridge
-            .resize(id, cols, rows)
+            .resize(id, cols, rows, pixel_width, pixel_height)
             .map_err(|e| AppError::Pty(e.to_string()));
     }
     state
         .pty
-        .resize(&id, cols, rows)
+        .resize(&id, cols, rows, pixel_width, pixel_height)
         .map_err(|e| AppError::Pty(e.to_string()))
 }
 
@@ -13134,6 +13153,8 @@ mod tests {
                 |_| {},
                 80,
                 24,
+                0,
+                0,
             )
             .expect("spawn test PTY");
 
@@ -17303,6 +17324,8 @@ mod tests {
                 |_| {},
                 80,
                 24,
+                0,
+                0,
             )
             .expect("spawn peer PTY in linked worktree");
 

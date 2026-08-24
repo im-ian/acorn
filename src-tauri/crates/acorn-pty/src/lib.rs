@@ -28,6 +28,16 @@ use uuid::Uuid;
 
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
+
+fn pty_window_size(cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) -> PtySize {
+    PtySize {
+        cols: if cols == 0 { DEFAULT_COLS } else { cols },
+        rows: if rows == 0 { DEFAULT_ROWS } else { rows },
+        pixel_width,
+        pixel_height,
+    }
+}
+
 const READ_BUFFER_SIZE: usize = 4096;
 
 /// Hard cap on the per-session in-memory tail buffer used by the
@@ -159,7 +169,9 @@ impl PtyManager {
 
     /// Spawn a new PTY-backed process for the given session.
     ///
-    /// `cols`/`rows` of 0 fall back to 80x24.
+    /// `cols`/`rows` of 0 fall back to 80x24. Pixel dimensions of 0 mean
+    /// unknown; overlay TUIs that read `TIOCGWINSZ` then wait for a later
+    /// resize that supplies real CSS-pixel sizes.
     ///
     /// `env_applier` is called once with the freshly built `CommandBuilder`,
     /// before spawn. The host crate uses it to layer Acorn's render-capability
@@ -167,6 +179,7 @@ impl PtyManager {
     /// `CommandBuilder`'s base — keeping that policy in the host crate (it
     /// depends on `crate::shell_env`) without dragging those modules into
     /// the pty crate.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn<R, F>(
         &self,
         app: AppHandle<R>,
@@ -178,6 +191,8 @@ impl PtyManager {
         env_applier: F,
         cols: u16,
         rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
     ) -> PtyResult<()>
     where
         R: Runtime,
@@ -189,12 +204,7 @@ impl PtyManager {
             )));
         }
 
-        let size = PtySize {
-            cols: if cols == 0 { DEFAULT_COLS } else { cols },
-            rows: if rows == 0 { DEFAULT_ROWS } else { rows },
-            pixel_width: 0,
-            pixel_height: 0,
-        };
+        let size = pty_window_size(cols, rows, pixel_width, pixel_height);
 
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -296,18 +306,20 @@ impl PtyManager {
     }
 
     /// Resize the PTY window.
-    pub fn resize(&self, session_id: &Uuid, cols: u16, rows: u16) -> PtyResult<()> {
+    pub fn resize(
+        &self,
+        session_id: &Uuid,
+        cols: u16,
+        rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+    ) -> PtyResult<()> {
         let handle = self
             .handles
             .get(session_id)
             .ok_or_else(|| PtyError::Other(format!("no pty for session {session_id}")))?
             .clone();
-        let size = PtySize {
-            cols: if cols == 0 { DEFAULT_COLS } else { cols },
-            rows: if rows == 0 { DEFAULT_ROWS } else { rows },
-            pixel_width: 0,
-            pixel_height: 0,
-        };
+        let size = pty_window_size(cols, rows, pixel_width, pixel_height);
         handle
             .master
             .lock()

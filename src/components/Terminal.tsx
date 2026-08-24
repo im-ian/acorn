@@ -41,6 +41,11 @@ import {
   repaintTerminalViewport,
 } from "../lib/terminalRepaint";
 import {
+  ptyPixelSize,
+  shouldForceCommandPtyResize,
+  xtversionReplyForParams,
+} from "../lib/terminalPtySize";
+import {
   createTerminalOutputWriter,
   type TerminalOutputWriter,
 } from "../lib/terminalOutputWriter";
@@ -783,6 +788,13 @@ export function Terminal({
       scrollSensitivity: initialSettings.terminal.scrollSpeed,
       cursorBlink: isFocusedPane,
       allowProposedApi: true,
+      // CSI 14/16/18 t (pixel and cell size). Overlay TUIs query these
+      // before drawing; xterm.js ignores them unless these flags are on.
+      windowOptions: {
+        getWinSizePixels: true,
+        getCellSizePixels: true,
+        getWinSizeChars: true,
+      },
       // Let Option+drag force a local selection even while a TUI has mouse
       // tracking on (`?1000`–`?1006`); the left-drag takeover relies on this to
       // replay a forced selection into xterm. Gated on the paste setting so a
@@ -1407,6 +1419,18 @@ export function Terminal({
     const sendToPty = (data: string) => {
       writeToPty(sessionId, data);
     };
+    // xterm.js does not answer CSI > 0 q (XTVERSION). Grok uses that
+    // probe to treat the emulator as xterm.js and keep overlay TUIs on
+    // the non-kitty path.
+    const xtversionParserDisposable = term.parser.registerCsiHandler(
+      { prefix: ">", final: "q" },
+      (params) => {
+        const reply = xtversionReplyForParams(params);
+        if (!reply) return false;
+        sendToPty(reply);
+        return true;
+      },
+    );
     const sendUserInputToPty = (data: string) => {
       if (data.length === 0) return;
       const state = useAppStore.getState();
@@ -2397,32 +2421,53 @@ export function Terminal({
       | {
           cols: number;
           rows: number;
+          pixelWidth: number;
+          pixelHeight: number;
         }
       | null = null;
+    const currentPtySize = () => {
+      const cols = term.cols;
+      const rows = term.rows;
+      const pixels = ptyPixelSize(cols, rows, terminalCellDims(term));
+      return {
+        cols,
+        rows,
+        pixelWidth: pixels.pixelWidth,
+        pixelHeight: pixels.pixelHeight,
+      };
+    };
     const sendPtyResize = (
       force = false,
-      size: { cols: number; rows: number } = {
-        cols: term.cols,
-        rows: term.rows,
-      },
+      size: {
+        cols: number;
+        rows: number;
+        pixelWidth: number;
+        pixelHeight: number;
+      } = currentPtySize(),
     ) => {
       if (!ptyReady || size.cols <= 0 || size.rows <= 0) return;
       if (
         !force &&
         lastPtyResize?.cols === size.cols &&
-        lastPtyResize.rows === size.rows
+        lastPtyResize.rows === size.rows &&
+        lastPtyResize.pixelWidth === size.pixelWidth &&
+        lastPtyResize.pixelHeight === size.pixelHeight
       ) {
         return;
       }
-      lastPtyResize = { cols: size.cols, rows: size.rows };
+      lastPtyResize = size;
       invoke("pty_resize", {
         sessionId,
         cols: size.cols,
         rows: size.rows,
+        pixelWidth: size.pixelWidth,
+        pixelHeight: size.pixelHeight,
       }).catch((err: unknown) => {
         if (
           lastPtyResize?.cols === size.cols &&
-          lastPtyResize.rows === size.rows
+          lastPtyResize.rows === size.rows &&
+          lastPtyResize.pixelWidth === size.pixelWidth &&
+          lastPtyResize.pixelHeight === size.pixelHeight
         ) {
           lastPtyResize = null;
         }
@@ -2434,10 +2479,11 @@ export function Terminal({
       if (!fit) return;
       repaintTerminalViewport({ container, fit, term });
       // Before a TUI starts, force one backend resize so commands launched
-      // from an already-open shell see the current pane size. Once a TUI has
-      // entered the alternate screen, avoid same-size SIGWINCH pulses; Claude
-      // Code's fullscreen renderer is sensitive to redundant resize redraws.
-      sendPtyResize(term.buffer.active.type !== "alternate");
+      // from an already-open shell see the current pane size. Once a TUI
+      // owns the viewport (alt-screen or mouse tracking), skip same-size
+      // SIGWINCH pulses — overlay TUIs such as `/usage show` redraw on
+      // that pulse and can fail to paint.
+      sendPtyResize(shouldForceCommandPtyResize(term));
     };
     const commandSizeSyncScheduler = createTerminalRepaintScheduler(
       syncViewportAndPtySize,
@@ -2577,7 +2623,13 @@ export function Terminal({
     window.addEventListener("acorn:terminal-clear", onClearRequested);
 
     const resizeDisposable = term.onResize(({ cols, rows }) => {
-      sendPtyResize(false, { cols, rows });
+      const pixels = ptyPixelSize(cols, rows, terminalCellDims(term));
+      sendPtyResize(false, {
+        cols,
+        rows,
+        pixelWidth: pixels.pixelWidth,
+        pixelHeight: pixels.pixelHeight,
+      });
     });
 
     // Debounce resize-driven `fit()` + SIGWINCH. Without this, dragging the
@@ -2642,8 +2694,7 @@ export function Terminal({
         // "no pty for session".
         //
         // Sessions always drop into the selected native shell on the backend.
-        const spawnCols = term.cols;
-        const spawnRows = term.rows;
+        const spawnSize = currentPtySize();
         const env: Record<string, string> = {};
         if (workspaceId) env.ACORN_WORKSPACE_ID = workspaceId;
         if (workspaceName) env.ACORN_WORKSPACE_NAME = workspaceName;
@@ -2652,8 +2703,10 @@ export function Terminal({
           sessionId,
           cwd,
           env,
-          cols: spawnCols,
-          rows: spawnRows,
+          cols: spawnSize.cols,
+          rows: spawnSize.rows,
+          pixelWidth: spawnSize.pixelWidth,
+          pixelHeight: spawnSize.pixelHeight,
           // Live daemon-backed attaches replay their raw ring as the source of
           // truth. Local snapshots are only restored for dead daemon sessions,
           // where there is no live ring to replay.
@@ -2669,7 +2722,7 @@ export function Terminal({
           return;
         }
         ptyReady = true;
-        lastPtyResize = { cols: spawnCols, rows: spawnRows };
+        lastPtyResize = spawnSize;
         commandSizeSyncScheduler.schedule();
         exited = false;
         // CommandRunDialog may have queued a one-shot command for this
@@ -3116,6 +3169,7 @@ export function Terminal({
       try { cursorStyleParserDisposable.dispose(); } catch { /* ignore */ }
       try { cursorSoftResetParserDisposable.dispose(); } catch { /* ignore */ }
       try { cursorFullResetParserDisposable.dispose(); } catch { /* ignore */ }
+      try { xtversionParserDisposable.dispose(); } catch { /* ignore */ }
       container.removeAttribute("data-acorn-cursor-application-override");
       container.classList.remove(COMPOSING_CLASS);
       try { fitAddon.dispose(); } catch { /* ignore */ }
