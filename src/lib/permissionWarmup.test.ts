@@ -77,6 +77,15 @@ describe("permission warmup gate", () => {
     expect(detector.push(bytes(prefix + message))).toBe(true);
   });
 
+  it("still detects a failure sitting at the start of a large CSI burst", () => {
+    const detector = createFolderPermissionOutputDetector();
+    const csi = "\u001b[38;5;81m";
+    const suffix = csi.repeat(400);
+    const message =
+      "Error: The current working directory must be readable to jthefloor to run brew.\r\n";
+    expect(detector.push(bytes(message + suffix))).toBe(true);
+  });
+
   it("ignores unrelated permission errors", () => {
     const detector = createFolderPermissionOutputDetector();
 

@@ -64,7 +64,7 @@ import {
   applicationOwnsWheel,
   patchTerminalWheelScroll,
 } from "../lib/terminalWheelScroll";
-import { createPtyWriteCoalescer } from "../lib/ptyWriteCoalescer";
+
 import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
   TERMINAL_PASTE_EVENT,
@@ -1417,18 +1417,10 @@ export function Terminal({
       }, VIEWPORT_REPAINT_IDLE_MS);
     };
 
-    const ptyWriteCoalescer = createPtyWriteCoalescer(
-      (targetSessionId, data) => {
-        invoke("pty_write", {
-          sessionId: targetSessionId,
-          data: encodeStringToBase64(data),
-        }).catch((err: unknown) => {
-          console.error("[Terminal] pty_write failed", err);
-        });
-      },
-    );
     const writeToPty = (targetSessionId: string, data: string) => {
-      ptyWriteCoalescer.enqueue(targetSessionId, data);
+      void api.ptyWrite(targetSessionId, data).catch((err: unknown) => {
+        console.error("[Terminal] pty_write failed", err);
+      });
     };
     const sendToPty = (data: string) => {
       writeToPty(sessionId, data);
@@ -3220,7 +3212,7 @@ export function Terminal({
 
     return () => {
       disposed = true;
-      ptyWriteCoalescer.flush();
+      void api.flushPtyWrite(sessionId);
       const detachingForReuse = consumeTerminalDetaching(sessionId);
       unsubSettings();
       hideLinkTooltip(true);
