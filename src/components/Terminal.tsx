@@ -1177,8 +1177,8 @@ export function Terminal({
 
     const scheduleLiveCwdProbe = () => {
       if (disposed || liveCwdProbeTimer !== null) return;
-      // 5s, not 500ms: a streaming TUI keeps this timer armed continuously,
-      // and pty_cwd walks the whole process table.
+      // Streaming TUI output would re-arm this continuously; pty_cwd walks
+      // the process table.
       liveCwdProbeTimer = window.setTimeout(() => {
         liveCwdProbeTimer = null;
         if (disposed) return;

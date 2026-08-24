@@ -51,8 +51,10 @@ pub struct AppState {
     /// falls back to the legacy base64 event path when no channel is active.
     pub pty_output: Arc<PtyOutputRouter>,
     /// Serializes stdin writes per session so async `pty_write` tasks cannot
-    /// reorder keystrokes or mouse reports for the same PTY.
-    pub pty_write_locks: DashMap<Uuid, Arc<Mutex<()>>>,
+    /// reorder keystrokes or mouse reports for the same PTY. Arc so
+    /// `AppState::clone` shares the map; a cloned DashMap would give each
+    /// invoke a private mutex.
+    pub pty_write_locks: Arc<DashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>,
     /// Set to false at boot if `persistence::load_sessions_with_status`
     /// reported a recoverable load failure (file existed but could not be
     /// read or parsed). Frontend reads this via `load_status` and skips the
@@ -128,10 +130,10 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn pty_write_lock(&self, id: Uuid) -> Arc<Mutex<()>> {
+    pub fn pty_write_lock(&self, id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
         self.pty_write_locks
             .entry(id)
-            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone()
     }
 
@@ -141,7 +143,7 @@ impl AppState {
             projects: ProjectStore::new(),
             pty: PtyManager::new(),
             pty_output: Arc::new(PtyOutputRouter::default()),
-            pty_write_locks: DashMap::new(),
+            pty_write_locks: Arc::new(DashMap::new()),
             sessions_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             projects_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             pending_session_removals: Arc::new(Mutex::new(HashMap::new())),

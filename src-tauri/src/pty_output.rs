@@ -87,22 +87,13 @@ impl PtyOutputRouter {
     }
 
     pub fn unsubscribe(&self, session_id: &Uuid, token: u64) {
-        let should_remove = self
-            .inner
+        // Token-matched remove only. Flushing here would send held bytes to a
+        // Channel the renderer already dropped, and a racing subscribe for
+        // the same session would lose the tail. The 8ms timer delivers to
+        // whoever is subscribed, or emit-fallback if no one is.
+        self.inner
             .channels
-            .get(session_id)
-            .map(|entry| entry.token == token)
-            .unwrap_or(false);
-        if !should_remove {
-            return;
-        }
-        let bytes = self.take_flush(session_id).1;
-        if !bytes.is_empty() {
-            if let Some(entry) = self.inner.channels.get(session_id) {
-                let _ = entry.channel.send(Response::new(bytes));
-            }
-        }
-        self.inner.channels.remove(session_id);
+            .remove_if(session_id, |_, sub| sub.token == token);
     }
 
     pub fn current_token(&self, session_id: &Uuid) -> Option<u64> {

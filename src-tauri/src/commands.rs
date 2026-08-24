@@ -9326,8 +9326,8 @@ pub async fn pty_write(
     // WKWebView eval of the matching output.
     let state = state.inner().clone();
     let lock = state.pty_write_lock(id);
+    let _write_order = lock.lock().await;
     run_blocking("pty_write", move || {
-        let _write_order = lock.lock();
         if daemon_session_alive_or_attached(&state, id) {
             state
                 .daemon_bridge
@@ -9389,6 +9389,7 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
         }
         if result.is_ok() {
             state.ipc_session_capabilities.lock().remove(&id);
+            state.pty_write_locks.remove(&id);
         }
         return result;
     }
@@ -9398,6 +9399,7 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
         .map_err(|e| AppError::Pty(e.to_string()));
     if result.is_ok() {
         state.ipc_session_capabilities.lock().remove(&id);
+        state.pty_write_locks.remove(&id);
     }
     result
 }
