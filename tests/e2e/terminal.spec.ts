@@ -430,15 +430,14 @@ async function disableTerminalUnicodeSpaceNormalization(
 
 async function enableTerminalRightClickPasteSelection(
   page: Page,
+  extraTerminal: Record<string, unknown> = {},
 ): Promise<void> {
-  await page.addInitScript(() => {
+  await page.addInitScript((terminal) => {
     window.localStorage.setItem(
       "acorn:settings:v1",
-      JSON.stringify({
-        terminal: { rightClickPasteSelection: true },
-      }),
+      JSON.stringify({ terminal }),
     );
-  });
+  }, { rightClickPasteSelection: true, ...extraTerminal });
 }
 
 async function seedTerminalCursorStyle(
@@ -453,19 +452,32 @@ async function seedTerminalCursorStyle(
   }, cursorStyle);
 }
 
-async function rightClickSelectedTerminalText(
+async function dragSelectTerminalText(
   page: Page,
   text: string,
+  direction: "ltr" | "rtl" = "ltr",
 ): Promise<void> {
   const textRect = await terminalTextRect(page, text);
   expect(textRect).not.toBeNull();
   const y = (textRect!.top + textRect!.bottom) / 2;
-  await page.mouse.move(textRect!.left + 2, y);
+  const from =
+    direction === "ltr" ? textRect!.left + 2 : textRect!.left + textRect!.width - 2;
+  const to =
+    direction === "ltr" ? textRect!.left + textRect!.width - 2 : textRect!.left + 2;
+  await page.mouse.move(from, y);
   await page.mouse.down();
-  await page.mouse.move(textRect!.left + textRect!.width - 2, y, {
-    steps: 8,
-  });
+  await page.mouse.move(to, y, { steps: 8 });
   await page.mouse.up();
+}
+
+async function rightClickSelectedTerminalText(
+  page: Page,
+  text: string,
+): Promise<void> {
+  await dragSelectTerminalText(page, text);
+  const textRect = await terminalTextRect(page, text);
+  expect(textRect).not.toBeNull();
+  const y = (textRect!.top + textRect!.bottom) / 2;
   await page.mouse.click(textRect!.left + 10, y, { button: "right" });
 }
 
@@ -1587,6 +1599,337 @@ test.describe("terminal: spawn", () => {
         ),
       )
       .toContain("run-selected");
+  });
+
+  test("forwards a TUI click while right-click paste selection is enabled", async ({
+    page,
+    tauri,
+  }) => {
+    await enableTerminalRightClickPasteSelection(page);
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __contextPasteChannelId?: number;
+      };
+      w.__contextPasteChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __contextPasteChannelId?: number })
+              .__contextPasteChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "run-selected\r\n",
+    );
+    await expect(page.locator(".xterm")).toContainText("run-selected");
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    const screenBox = await page.locator(".xterm-screen").boundingBox();
+    expect(screenBox).not.toBeNull();
+    await page.mouse.click(screenBox!.x + 12, screenBox!.y + 10);
+
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+        ),
+      )
+      .toMatch(/\x1b\[<0;\d+;\d+M/);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+        ),
+      )
+      .toMatch(/\x1b\[<0;\d+;\d+m/);
+  });
+
+  test("forwards a slightly jittered TUI click instead of keeping a 1-cell selection", async ({
+    page,
+    tauri,
+  }) => {
+    // Large cells so a >8px wobble can still land in the same glyph and hit
+    // the post-takeover empty-selection replay, not only the no-drag path.
+    await enableTerminalRightClickPasteSelection(page, { fontSize: 24 });
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __contextPasteChannelId?: number;
+      };
+      w.__contextPasteChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __contextPasteChannelId?: number })
+              .__contextPasteChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "run-selected\r\n",
+    );
+    await expect(page.locator(".xterm")).toContainText("run-selected");
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    const screenBox = await page.locator(".xterm-screen").boundingBox();
+    expect(screenBox).not.toBeNull();
+    const x = screenBox!.x + 12;
+    const y = screenBox!.y + 10;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    // Past the 8px takeover, still inside one 24px cell — must stay a click.
+    await page.mouse.move(x + 1, y + 10);
+    await page.mouse.up();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+        ),
+      )
+      .toMatch(/\x1b\[<0;\d+;\d+M/);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+        ),
+      )
+      .toMatch(/\x1b\[<0;\d+;\d+m/);
+  });
+
+  test("drag-select inside a TUI does not send a click to the app", async ({
+    page,
+    tauri,
+  }) => {
+    await enableTerminalRightClickPasteSelection(page);
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __contextPasteChannelId?: number;
+      };
+      w.__contextPasteChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __contextPasteChannelId?: number })
+              .__contextPasteChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "run-selected\r\n",
+    );
+    await expect(page.locator(".xterm")).toContainText("run-selected");
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+    await dragSelectTerminalText(page, "run-selected");
+
+    expect(
+      await page.evaluate(() =>
+        ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+          .join(""),
+      ),
+    ).not.toMatch(/\x1b\[<0;\d+;\d+M/);
+  });
+
+  test("right-to-left drag-select still pastes on right-click while a TUI holds mouse tracking", async ({
+    page,
+    tauri,
+  }) => {
+    await enableTerminalRightClickPasteSelection(page);
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __contextPasteChannelId?: number;
+      };
+      w.__contextPasteChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __contextPasteChannelId?: number })
+              .__contextPasteChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "run-selected\r\n",
+    );
+    await expect(page.locator(".xterm")).toContainText("run-selected");
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+    await dragSelectTerminalText(page, "run-selected", "rtl");
+    const textRect = await terminalTextRect(page, "run-selected");
+    expect(textRect).not.toBeNull();
+    await page.mouse.click(textRect!.left + 10, (textRect!.top + textRect!.bottom) / 2, {
+      button: "right",
+    });
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+        ),
+      )
+      .toContain("run-selected");
+  });
+
+  test("a click after drag-select still reaches the TUI", async ({
+    page,
+    tauri,
+  }) => {
+    await enableTerminalRightClickPasteSelection(page);
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __contextPasteChannelId?: number;
+      };
+      w.__contextPasteChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __contextPasteChannelId?: number })
+              .__contextPasteChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "run-selected\r\n",
+    );
+    await expect(page.locator(".xterm")).toContainText("run-selected");
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "\x1b[?1000h\x1b[?1003h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    await dragSelectTerminalText(page, "run-selected");
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    const screenBox = await page.locator(".xterm-screen").boundingBox();
+    expect(screenBox).not.toBeNull();
+    await page.mouse.click(screenBox!.x + 12, screenBox!.y + 10);
+
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+        ),
+      )
+      .toMatch(/\x1b\[<0;\d+;\d+M/);
   });
 
   test("does not write non-terminal selected text on terminal right-click", async ({

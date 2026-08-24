@@ -56,6 +56,10 @@ import {
   type ConversationNavigationDirection,
 } from "../lib/terminalConversation";
 import { patchTerminalMouseCoordinateScale } from "../lib/terminalMouseScale";
+import {
+  TERMINAL_MOUSE_SELECT_THRESHOLD_PX,
+  terminalMouseTrackingReleaseAction,
+} from "../lib/terminalMouseTracking";
 import { patchTerminalWheelScroll } from "../lib/terminalWheelScroll";
 import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
@@ -2161,20 +2165,19 @@ export function Terminal({
     const isMouseTrackingActive = (): boolean =>
       term.modes.mouseTrackingMode !== "none";
 
-    // Left-drag-to-select inside a mouse-tracking TUI (claude, vim). Those apps
-    // enable mouse tracking, so xterm hands every left drag to the app instead
-    // of selecting — that is why a plain drag selects nothing there while it
-    // works in a normal shell. A native DOM selection is no help: claude
-    // repaints constantly, and each repaint rebuilds the DOM rows and destroys
-    // an in-progress browser selection. xterm's own selection is coordinate
-    // based and survives repaints, so we drive *that*: a confirmed drag is
-    // replayed to xterm with the platform force modifier set, which makes xterm
-    // select even while mouse tracking is on (`macOptionClickForcesSelection`).
-    // A plain click (no drag) is replayed without the modifier so the app still
-    // receives the click; wheel is never touched, so scrolling still reaches
-    // the app. Gated on the setting, so other apps are unaffected unless opted
-    // in.
-    const LEFT_DRAG_THRESHOLD_PX = 3;
+    // Left-drag-to-select inside a mouse-tracking TUI (claude, vim, grok).
+    // Those apps enable mouse tracking, so xterm hands every left drag to the
+    // app instead of selecting — that is why a plain drag selects nothing there
+    // while it works in a normal shell. A native DOM selection is no help:
+    // the app repaints constantly, and each repaint rebuilds the DOM rows and
+    // destroys an in-progress browser selection. xterm's own selection is
+    // coordinate based and survives repaints, so we drive *that*: a confirmed
+    // drag is replayed to xterm with the platform force modifier set, which
+    // makes xterm select even while mouse tracking is on
+    // (`macOptionClickForcesSelection`). A press that produces no selected
+    // text is replayed without the modifier so the app still receives the
+    // click. Wheel is never touched, so scrolling still reaches the app.
+    // Gated on the setting, so other apps are unaffected unless opted in.
     // The modifier xterm honors to force a selection while mouse tracking is on:
     // Option on macOS (with `macOptionClickForcesSelection`), Shift elsewhere.
     const forceSelectModifier: MouseEventInit = IS_MAC
@@ -2194,6 +2197,7 @@ export function Terminal({
       x: number;
       y: number;
       modifiers: MouseEventInit;
+      detail: number;
     } | null = null;
     let leftDragSelecting = false;
     let replayingMouse = false;
@@ -2204,8 +2208,10 @@ export function Terminal({
       y: number,
       extra: MouseEventInit,
     ) => {
-      const target =
-        container.ownerDocument.elementFromPoint(x, y) ?? container;
+      // Mouse-protocol and selection listeners are on xterm's root. Dispatch
+      // there so a helper-textarea or canvas hit from elementFromPoint cannot
+      // miss them.
+      const target = term.element ?? container;
       replayingMouse = true;
       try {
         target.dispatchEvent(
@@ -2223,6 +2229,22 @@ export function Terminal({
       } finally {
         replayingMouse = false;
       }
+    };
+
+    const replayTrackingClick = (start: {
+      x: number;
+      y: number;
+      modifiers: MouseEventInit;
+    }) => {
+      if (term.hasSelection()) term.clearSelection();
+      dispatchSyntheticMouse("mousedown", start.x, start.y, {
+        ...start.modifiers,
+        buttons: 1,
+      });
+      dispatchSyntheticMouse("mouseup", start.x, start.y, {
+        ...start.modifiers,
+        buttons: 0,
+      });
     };
 
     const onTerminalMouseDown = (e: MouseEvent) => {
@@ -2256,6 +2278,7 @@ export function Terminal({
           x: e.clientX,
           y: e.clientY,
           modifiers: eventModifiers(e),
+          detail: e.detail,
         };
         leftDragSelecting = false;
         e.preventDefault();
@@ -2308,8 +2331,10 @@ export function Terminal({
       }
       if (leftDragSelecting) return;
       const moved =
-        Math.abs(e.clientX - pendingLeftDrag.x) > LEFT_DRAG_THRESHOLD_PX ||
-        Math.abs(e.clientY - pendingLeftDrag.y) > LEFT_DRAG_THRESHOLD_PX;
+        Math.abs(e.clientX - pendingLeftDrag.x) >
+          TERMINAL_MOUSE_SELECT_THRESHOLD_PX ||
+        Math.abs(e.clientY - pendingLeftDrag.y) >
+          TERMINAL_MOUSE_SELECT_THRESHOLD_PX;
       if (!moved) {
         e.stopImmediatePropagation();
         return;
@@ -2328,26 +2353,26 @@ export function Terminal({
       const start = pendingLeftDrag;
       pendingLeftDrag = null;
       if (leftDragSelecting) {
-        // The real mouseup flows through to xterm, which finalizes the
-        // selection it has been extending.
+        // Let the real mouseup finalize xterm's selection, then keep it only
+        // when it contains text (or was a multi-click word/line select).
+        // Otherwise replay as a TUI click.
         leftDragSelecting = false;
+        queueMicrotask(() => {
+          if (disposed) return;
+          const action = terminalMouseTrackingReleaseAction({
+            selecting: true,
+            selectedTextLength: term.getSelection().length,
+            clickCount: start.detail,
+          });
+          if (action === "keep-selection") return;
+          replayTrackingClick(start);
+        });
         return;
       }
-      // No drag — a plain click. Clear any standing selection so a click
-      // deselects (xterm leaves its selection in place while mouse tracking is
-      // on), then swallow the real mouseup and replay the click without the
-      // force modifier (but with the user's real modifiers) so xterm reports
-      // it to the app.
-      if (term.hasSelection()) term.clearSelection();
+      // No drag — a plain click. Swallow the real mouseup and replay without
+      // the force modifier so xterm reports it to the app.
       e.stopImmediatePropagation();
-      dispatchSyntheticMouse("mousedown", start.x, start.y, {
-        ...start.modifiers,
-        buttons: 1,
-      });
-      dispatchSyntheticMouse("mouseup", start.x, start.y, {
-        ...start.modifiers,
-        buttons: 0,
-      });
+      replayTrackingClick(start);
     };
     container.ownerDocument.addEventListener("mousemove", onTerminalMouseMove, true);
     container.ownerDocument.addEventListener("mouseup", onTerminalMouseUp, true);
