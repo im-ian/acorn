@@ -152,6 +152,20 @@ async function getWrites(page: Page): Promise<string[]> {
   );
 }
 
+function countToken(writes: string[], token: string): number {
+  const joined = writes.join("");
+  if (token.length === 0) return 0;
+  let n = 0;
+  let from = 0;
+  while (from < joined.length) {
+    const i = joined.indexOf(token, from);
+    if (i < 0) break;
+    n += 1;
+    from = i + token.length;
+  }
+  return n;
+}
+
 async function emitPtyOutput(page: Page, text: string): Promise<void> {
   await expect
     .poll(() =>
@@ -487,7 +501,7 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     ]);
 
     const writes = await getWrites(page);
-    const syllableCount = writes.filter((w) => w === "한").length;
+    const syllableCount = countToken(writes, "한");
     expect(syllableCount).toBe(1);
     // And the syllable never coalesces into a doubled-up chunk either.
     expect(writes.join("")).not.toContain("한한");
@@ -513,7 +527,7 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     ]);
 
     const writes = await getWrites(page);
-    expect(writes.filter((w) => w === "한").length).toBe(1);
+    expect(countToken(writes, "한")).toBe(1);
     expect(writes.join("")).toBe("한 ");
     expect(writes.join("")).not.toContain("한한");
   });
@@ -546,7 +560,7 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     ]);
 
     const writes = await getWrites(page);
-    expect(writes.filter((w) => w === "안").length).toBe(1);
+    expect(countToken(writes, "안")).toBe(1);
   });
 
   test("Shift keydown mid-composition does not flush — ssang-jamo 있 stays joined", async ({
@@ -719,8 +733,8 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     ]);
 
     const writes = await getWrites(page);
-    expect(writes.filter((w) => w === "안").length).toBe(1);
-    expect(writes.filter((w) => w === "녕").length).toBe(1);
+    expect(countToken(writes, "안")).toBe(1);
+    expect(countToken(writes, "녕")).toBe(1);
     // Order matters — 안 must arrive before 녕.
     const joined = writes.join("");
     expect(joined.indexOf("안")).toBeLessThan(joined.indexOf("녕"));
@@ -775,8 +789,8 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     ]);
 
     const writes = await getWrites(page);
-    expect(writes.filter((w) => w === "있").length).toBe(1);
-    expect(writes.filter((w) => w === "안").length).toBe(1);
+    expect(countToken(writes, "있")).toBe(1);
+    expect(countToken(writes, "안")).toBe(1);
     const joined = writes.join("");
     // Critical: the post-space composition's textarea-tail slice would
     // re-emit "있" if sentPrefix wasn't reset by the prior commit.
@@ -844,8 +858,8 @@ test.describe("terminal: IME (PR #104 regression)", () => {
 
     const writes = await getWrites(page);
     // The two Hangul syllables on the IME path must each commit exactly once.
-    expect(writes.filter((w) => w === "있").length).toBe(1);
-    expect(writes.filter((w) => w === "한").length).toBe(1);
+    expect(countToken(writes, "있")).toBe(1);
+    expect(countToken(writes, "한")).toBe(1);
     // sentPrefix-regression markers: the next Hangul commit must not drag
     // the ASCII prefix into its emit, and must not re-emit "있".
     expect(writes).not.toContain("Abc한");
