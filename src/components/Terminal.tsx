@@ -60,7 +60,11 @@ import {
   TERMINAL_MOUSE_SELECT_THRESHOLD_PX,
   terminalMouseTrackingReleaseAction,
 } from "../lib/terminalMouseTracking";
-import { patchTerminalWheelScroll } from "../lib/terminalWheelScroll";
+import {
+  applicationOwnsWheel,
+  patchTerminalWheelScroll,
+} from "../lib/terminalWheelScroll";
+import { createPtyWriteCoalescer } from "../lib/ptyWriteCoalescer";
 import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
   TERMINAL_PASTE_EVENT,
@@ -1173,6 +1177,8 @@ export function Terminal({
 
     const scheduleLiveCwdProbe = () => {
       if (disposed || liveCwdProbeTimer !== null) return;
+      // Streaming TUI output would re-arm this continuously; pty_cwd walks
+      // the process table.
       liveCwdProbeTimer = window.setTimeout(() => {
         liveCwdProbeTimer = null;
         if (disposed) return;
@@ -1186,7 +1192,7 @@ export function Terminal({
           .catch((err: unknown) => {
             console.debug("[Terminal] pty_cwd probe failed", err);
           });
-      }, 500);
+      }, 5000);
     };
 
     let cursorApplicationOverride = false;
@@ -1411,14 +1417,18 @@ export function Terminal({
       }, VIEWPORT_REPAINT_IDLE_MS);
     };
 
+    const ptyWriteCoalescer = createPtyWriteCoalescer(
+      (targetSessionId, data) => {
+        invoke("pty_write", {
+          sessionId: targetSessionId,
+          data: encodeStringToBase64(data),
+        }).catch((err: unknown) => {
+          console.error("[Terminal] pty_write failed", err);
+        });
+      },
+    );
     const writeToPty = (targetSessionId: string, data: string) => {
-      if (data.length === 0) return;
-      invoke("pty_write", {
-        sessionId: targetSessionId,
-        data: encodeStringToBase64(data),
-      }).catch((err: unknown) => {
-        console.error("[Terminal] pty_write failed", err);
-      });
+      ptyWriteCoalescer.enqueue(targetSessionId, data);
     };
     const sendToPty = (data: string) => {
       writeToPty(sessionId, data);
@@ -2843,7 +2853,10 @@ export function Terminal({
       createFolderPermissionOutputDetector();
     const handlePtyOutput = (bytes: Uint8Array) => {
       outputWriter.enqueue(bytes);
-      if (folderPermissionOutputDetector.push(bytes)) {
+      if (
+        !applicationOwnsWheel(term) &&
+        folderPermissionOutputDetector.push(bytes)
+      ) {
         window.dispatchEvent(new Event(FOLDER_PERMISSION_RECHECK_EVENT));
       }
       // Output is queued for the buffer — schedule a debounced save so the new
@@ -3207,6 +3220,7 @@ export function Terminal({
 
     return () => {
       disposed = true;
+      ptyWriteCoalescer.flush();
       const detachingForReuse = consumeTerminalDetaching(sessionId);
       unsubSettings();
       hideLinkTooltip(true);

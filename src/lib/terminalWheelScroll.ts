@@ -22,11 +22,10 @@ interface XtermWheelInternals {
 // xterm still encodes the report (or the arrow key), so the active mouse
 // protocol, the modifier bits and the cell coordinates stay its job.
 const APP_WHEEL_TRACKING_MODES = new Set(["vt200", "drag", "any"]);
-// Trackpad momentum carries hundreds of pixels per event; each reported line
-// is one `pty_write` IPC round trip, so cap the burst. Scaled by the scroll
-// speed so raising the setting still raises the ceiling.
-// ponytail: per-report writes are fine at this cap; coalesce `writeToPty` into
-// a microtask if PTY IPC ever shows up in a profile.
+// Trackpad momentum carries hundreds of pixels per event. Writes coalesce
+// into one pty_write per microtask; the cap still bounds how many reports
+// the TUI sees in that burst so a flick cannot queue a backlog. Scaled by
+// the scroll speed so raising the setting still raises the ceiling.
 const MAX_LINES_PER_EVENT = 8;
 // Replayed events must survive xterm's own pixel→line conversion: at least one
 // line for the current cell height and `scrollSensitivity`, and above its 50px
@@ -75,7 +74,7 @@ export function wheelScrollLineCount({
 }
 
 /** Whether the foreground application, not the viewport, owns the wheel. */
-function applicationOwnsWheel(term: XTerm): boolean {
+export function applicationOwnsWheel(term: XTerm): boolean {
   return (
     APP_WHEEL_TRACKING_MODES.has(term.modes.mouseTrackingMode) ||
     term.buffer.active.type === "alternate"

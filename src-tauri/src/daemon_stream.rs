@@ -152,7 +152,7 @@ struct ExitPayload {
 ///
 /// `replay_scrollback` defaults to true so a tab reopened after Acorn
 /// restart sees the last screen contents the daemon recorded.
-pub fn attach<R: Runtime>(
+pub fn attach<R: Runtime + 'static>(
     app: AppHandle<R>,
     registry: Arc<StreamRegistry>,
     output_router: Arc<PtyOutputRouter>,
@@ -245,7 +245,7 @@ fn complete_attachment_spawn(
     }
 }
 
-fn pump_loop<R: Runtime>(
+fn pump_loop<R: Runtime + 'static>(
     app: AppHandle<R>,
     registry: Arc<StreamRegistry>,
     output_router: Arc<PtyOutputRouter>,

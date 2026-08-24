@@ -8777,7 +8777,7 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
 }
 
 #[tauri::command]
-pub async fn pty_spawn<R: Runtime>(
+pub async fn pty_spawn<R: Runtime + 'static>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     session_id: String,
@@ -8813,7 +8813,7 @@ pub async fn pty_spawn<R: Runtime>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn pty_spawn_blocking<R: Runtime>(
+fn pty_spawn_blocking<R: Runtime + 'static>(
     app: AppHandle<R>,
     state: AppState,
     session_id: String,
@@ -9094,7 +9094,7 @@ fn should_route_session_to_daemon(enabled: bool, daemon_session_id: Option<Uuid>
 /// 3. **No live session** — fresh daemon spawn, attach the stream,
 ///    persist `daemon_session_id` so the next restart hits case 2.
 #[allow(clippy::too_many_arguments)]
-fn spawn_via_daemon<R: Runtime>(
+fn spawn_via_daemon<R: Runtime + 'static>(
     app: &AppHandle<R>,
     state: &AppState,
     id: uuid::Uuid,
@@ -9309,29 +9309,39 @@ pub fn pty_unsubscribe_output(
 }
 
 #[tauri::command]
-pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -> AppResult<()> {
+pub async fn pty_write(
+    state: State<'_, AppState>,
+    session_id: String,
+    data: String,
+) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let bytes = decode_b64(&data)?;
     // Terminal input is transport-only: keystrokes express user intent, not
     // confirmed agent lifecycle. Native hooks and runtime evidence own status.
     // Daemon-managed sessions route stdin through the control socket.
-    // Keystrokes are small; one RPC round-trip per keystroke is well
-    // under the typing-feedback threshold and avoids managing a second
-    // socket on the app side just for input. A stream attachment is the
-    // fast-path signal, but detached/re-attaching sessions can be alive in
-    // the daemon without an app-side output pump for a short window.
-    if daemon_session_alive_or_attached(&state, id) {
-        state
-            .daemon_bridge
-            .send_input(id, &bytes)
-            .map_err(|e| AppError::Pty(e.to_string()))?;
-    } else {
-        state
-            .pty
-            .write(&id, &bytes)
-            .map_err(|e| AppError::Pty(e.to_string()))?;
-    }
-    Ok(())
+    // A stream attachment is the fast-path signal, but detached/re-attaching
+    // sessions can be alive in the daemon without an app-side output pump
+    // for a short window. The write itself is blocking I/O (socket or PTY
+    // master); run it off the UI thread so a TUI wheel burst cannot stall
+    // WKWebView eval of the matching output.
+    let state = state.inner().clone();
+    let lock = state.pty_write_lock(id);
+    let _write_order = lock.lock().await;
+    run_blocking("pty_write", move || {
+        if daemon_session_alive_or_attached(&state, id) {
+            state
+                .daemon_bridge
+                .send_input(id, &bytes)
+                .map_err(|e| AppError::Pty(e.to_string()))?;
+        } else {
+            state
+                .pty
+                .write(&id, &bytes)
+                .map_err(|e| AppError::Pty(e.to_string()))?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -9379,6 +9389,7 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
         }
         if result.is_ok() {
             state.ipc_session_capabilities.lock().remove(&id);
+            state.pty_write_locks.remove(&id);
         }
         return result;
     }
@@ -9388,6 +9399,7 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
         .map_err(|e| AppError::Pty(e.to_string()));
     if result.is_ok() {
         state.ipc_session_capabilities.lock().remove(&id);
+        state.pty_write_locks.remove(&id);
     }
     result
 }
@@ -13171,11 +13183,11 @@ mod tests {
             // but the transport byte still must not mutate session lifecycle.
             ("control-c", "Aw=="),
         ] {
-            super::pty_write(
+            tauri::async_runtime::block_on(super::pty_write(
                 app.state::<AppState>(),
                 session.id.to_string(),
                 data.to_string(),
-            )
+            ))
             .unwrap_or_else(|error| panic!("write {label} to PTY: {error}"));
             assert_eq!(
                 state
@@ -13187,7 +13199,8 @@ mod tests {
             );
         }
 
-        state.pty.kill(&session.id).expect("kill test PTY");
+        // Ctrl-C above may already have reaped `cat`; ignore ESRCH.
+        let _ = state.pty.kill(&session.id);
     }
 
     #[test]
