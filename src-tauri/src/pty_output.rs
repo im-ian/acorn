@@ -16,6 +16,9 @@ use uuid::Uuid;
 /// immediate send so a keystroke echo is not delayed by the window.
 const MAX_BATCH_BYTES: usize = 64 * 1024;
 const FLUSH_DELAY: Duration = Duration::from_millis(8);
+/// Remounts leave a brief gap with no Channel. Hold bytes this many flushes
+/// before falling back to `emit`, which nobody is listening to during that gap.
+const MAX_VACANT_RETRIES: u8 = 6;
 
 #[derive(Serialize, Clone)]
 pub struct OutputPayload {
@@ -33,6 +36,7 @@ struct SessionOutputBatch {
     buf: Vec<u8>,
     event: String,
     timer_armed: bool,
+    vacant_retries: u8,
 }
 
 enum EnqueueEffect {
@@ -45,12 +49,14 @@ enum EnqueueEffect {
 }
 
 fn enqueue_output(batch: &mut SessionOutputBatch, event: &str, bytes: &[u8]) -> EnqueueEffect {
-    batch.event = event.to_string();
+    if batch.event.is_empty() {
+        batch.event = event.to_string();
+    }
     if !batch.timer_armed && batch.buf.is_empty() {
         batch.timer_armed = true;
         return EnqueueEffect::Dispatch {
             bytes: bytes.to_vec(),
-            event: event.to_string(),
+            event: batch.event.clone(),
             arm_timer: true,
         };
     }
@@ -58,7 +64,7 @@ fn enqueue_output(batch: &mut SessionOutputBatch, event: &str, bytes: &[u8]) -> 
     if batch.buf.len() >= MAX_BATCH_BYTES {
         return EnqueueEffect::Dispatch {
             bytes: std::mem::take(&mut batch.buf),
-            event: event.to_string(),
+            event: batch.event.clone(),
             arm_timer: false,
         };
     }
@@ -70,6 +76,9 @@ struct Inner {
     next_token: AtomicU64,
     channels: DashMap<Uuid, OutputSubscription>,
     batches: Mutex<HashMap<Uuid, SessionOutputBatch>>,
+    /// Held around take_flush + Channel send so a reader lead-edge cannot
+    /// overtake a timer flush of earlier bytes.
+    dispatch: DashMap<Uuid, Arc<Mutex<()>>>,
 }
 
 #[derive(Clone, Default)]
@@ -110,6 +119,8 @@ impl PtyOutputRouter {
         if bytes.is_empty() {
             return;
         }
+        let dispatch = self.dispatch_lock(*session_id);
+        let _order = dispatch.lock();
         let effect = {
             let mut batches = self.inner.batches.lock();
             let batch = batches.entry(*session_id).or_default();
@@ -122,42 +133,97 @@ impl PtyOutputRouter {
                 event,
                 arm_timer,
             } => {
-                self.dispatch(app, &event, session_id, &bytes);
-                if arm_timer {
+                self.deliver(app, &event, session_id, bytes, arm_timer);
+            }
+        }
+    }
+
+    fn dispatch_lock(&self, session_id: Uuid) -> Arc<Mutex<()>> {
+        self.inner
+            .dispatch
+            .entry(session_id)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    fn try_channel(&self, session_id: &Uuid, bytes: &[u8]) -> bool {
+        let Some(entry) = self.inner.channels.get(session_id) else {
+            return false;
+        };
+        let token = entry.token;
+        let channel = entry.channel.clone();
+        drop(entry);
+        if channel.send(Response::new(bytes.to_vec())).is_ok() {
+            return true;
+        }
+        self.unsubscribe(session_id, token);
+        false
+    }
+
+    fn deliver<R: Runtime + 'static>(
+        &self,
+        app: &AppHandle<R>,
+        event: &str,
+        session_id: &Uuid,
+        bytes: Vec<u8>,
+        arm_timer: bool,
+    ) {
+        if bytes.is_empty() {
+            return;
+        }
+        if self.try_channel(session_id, &bytes) {
+            self.clear_vacant_retries(session_id);
+            if arm_timer {
+                self.arm_flush(app.clone(), *session_id);
+            }
+            return;
+        }
+        match self.requeue_front(*session_id, event, &bytes) {
+            Some(need_arm) => {
+                if need_arm {
                     self.arm_flush(app.clone(), *session_id);
+                }
+            }
+            None => {
+                let payload = OutputPayload {
+                    data: base64_encode(&bytes),
+                };
+                if let Err(err) = app.emit(event, payload) {
+                    tracing::warn!(%session_id, error = %err, "failed to emit pty output");
                 }
             }
         }
     }
 
-    fn dispatch<R: Runtime>(
-        &self,
-        app: &AppHandle<R>,
-        event: &str,
-        session_id: &Uuid,
-        bytes: &[u8],
-    ) {
-        if bytes.is_empty() {
+    fn clear_vacant_retries(&self, session_id: &Uuid) {
+        let mut batches = self.inner.batches.lock();
+        let Some(batch) = batches.get_mut(session_id) else {
             return;
-        }
-        if let Some(entry) = self.inner.channels.get(session_id) {
-            let token = entry.token;
-            let channel = entry.channel.clone();
-            drop(entry);
-
-            if channel.send(Response::new(bytes.to_vec())).is_ok() {
-                return;
-            }
-
-            self.unsubscribe(session_id, token);
-        }
-
-        let payload = OutputPayload {
-            data: base64_encode(bytes),
         };
-        if let Err(err) = app.emit(event, payload) {
-            tracing::warn!(%session_id, error = %err, "failed to emit pty output");
+        batch.vacant_retries = 0;
+        if batch.buf.is_empty() && !batch.timer_armed {
+            batches.remove(session_id);
         }
+    }
+
+    /// Put bytes back at the front of the session batch. `Some(need_arm)`
+    /// means they are held; `None` means the vacant-channel budget is spent.
+    fn requeue_front(&self, session_id: Uuid, event: &str, bytes: &[u8]) -> Option<bool> {
+        let mut batches = self.inner.batches.lock();
+        let batch = batches.entry(session_id).or_default();
+        if batch.vacant_retries >= MAX_VACANT_RETRIES {
+            return None;
+        }
+        batch.vacant_retries += 1;
+        if batch.event.is_empty() {
+            batch.event = event.to_string();
+        }
+        let mut combined = bytes.to_vec();
+        combined.append(&mut batch.buf);
+        batch.buf = combined;
+        let need_arm = !batch.timer_armed;
+        batch.timer_armed = true;
+        Some(need_arm)
     }
 
     fn arm_flush<R: Runtime + 'static>(&self, app: AppHandle<R>, session_id: Uuid) {
@@ -168,9 +234,11 @@ impl PtyOutputRouter {
         });
     }
 
-    fn flush_session<R: Runtime>(&self, app: &AppHandle<R>, session_id: Uuid) {
+    fn flush_session<R: Runtime + 'static>(&self, app: &AppHandle<R>, session_id: Uuid) {
+        let dispatch = self.dispatch_lock(session_id);
+        let _order = dispatch.lock();
         let (event, bytes) = self.take_flush(&session_id);
-        self.dispatch(app, &event, &session_id, &bytes);
+        self.deliver(app, &event, &session_id, bytes, false);
     }
 
     fn take_flush(&self, session_id: &Uuid) -> (String, Vec<u8>) {
@@ -181,7 +249,17 @@ impl PtyOutputRouter {
         batch.timer_armed = false;
         let event = std::mem::take(&mut batch.event);
         let bytes = std::mem::take(&mut batch.buf);
-        batches.remove(session_id);
+        let vacant = batch.vacant_retries;
+        if bytes.is_empty() {
+            batches.remove(session_id);
+            return (event, bytes);
+        }
+        // Keep vacant_retries on an empty leftover entry so deliver's
+        // requeue can see the budget. Stash it on a fresh placeholder.
+        *batch = SessionOutputBatch {
+            vacant_retries: vacant,
+            ..SessionOutputBatch::default()
+        };
         (event, bytes)
     }
 }
