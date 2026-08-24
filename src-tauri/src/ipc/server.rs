@@ -1494,6 +1494,8 @@ mod tests {
                 |_| {},
                 80,
                 24,
+                0,
+                0,
             )
             .expect("spawn unrelated PTY");
         let sibling_pid = state.pty.child_pid(&sibling.id).expect("unrelated pid");
@@ -1535,6 +1537,8 @@ mod tests {
                     |_| {},
                     80,
                     24,
+                    0,
+                    0,
                 )
                 .expect("spawn source PTY tree");
             state
@@ -1549,6 +1553,8 @@ mod tests {
                     |_| {},
                     80,
                     24,
+                    0,
+                    0,
                 )
                 .expect("spawn owned worker PTY");
 
