@@ -2728,19 +2728,26 @@ export function Terminal({
     // created it while this shell was idle.
     let worktreeSnapshot: Set<string> | null = null;
     let worktreeAdoptionIntent: WorktreeAdoptionIntent = { kind: "none" };
+    // Restore after a failed drain re-enters `pendingTerminalInput`. The
+    // subscribe below would otherwise retry the same live PTY in a loop.
+    let restoringFailedQueue = false;
 
     async function writeQueuedCommand(queued: PendingTerminalInput) {
       if (disposed) {
+        restoringFailedQueue = true;
         useAppStore.getState().restorePendingTerminalInput(sessionId, queued);
+        restoringFailedQueue = false;
         return;
       }
       const payload = encodeStringToBase64(queued.command + "\r");
       try {
         await invoke("pty_write", { sessionId, data: payload });
       } catch (err) {
+        restoringFailedQueue = true;
         const restored = useAppStore
           .getState()
           .restorePendingTerminalInput(sessionId, queued);
+        restoringFailedQueue = false;
         console.error("[Terminal] pending pty_write failed", err);
         if (!disposed) {
           const retryDetail = restored
@@ -2852,7 +2859,7 @@ export function Terminal({
     // immediately when the PTY is live; respawn if this shell already
     // exited. An in-flight spawn still consumes the queue at the end.
     const unsubPendingInput = useAppStore.subscribe((state, prev) => {
-      if (disposed) return;
+      if (disposed || restoringFailedQueue) return;
       if (!state.pendingTerminalInput[sessionId]) return;
       if (prev.pendingTerminalInput[sessionId]) return;
       if (ptyReady) {
