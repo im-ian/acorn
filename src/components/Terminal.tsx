@@ -1416,6 +1416,25 @@ export function Terminal({
         repaintViewport();
       }, VIEWPORT_REPAINT_IDLE_MS);
     };
+    // A TUI that owns the wheel (Claude Code's REPL) redraws the full frame
+    // per scroll tick; stacking the full-viewport refresh above on every one
+    // of those writes doubles the DOM renderer's work and starves the next
+    // wheel event on the UI thread. Skip the per-write refresh while a wheel
+    // burst is in flight — successive frames overwrite any stale cells, and
+    // the idle repaint rebuilds the final frame once the burst goes quiet.
+    // Capture phase so an xterm stopPropagation cannot hide the wheel.
+    const WHEEL_BURST_WINDOW_MS = 250;
+    let lastWheelAt = -Infinity;
+    const onWheelBurst = () => {
+      lastWheelAt = performance.now();
+    };
+    container.addEventListener("wheel", onWheelBurst, {
+      capture: true,
+      passive: true,
+    });
+    const inWheelBurst = () =>
+      applicationOwnsWheel(term) &&
+      performance.now() - lastWheelAt < WHEEL_BURST_WINDOW_MS;
 
     const writeToPty = (targetSessionId: string, data: string) => {
       void api.ptyWrite(targetSessionId, data).catch((err: unknown) => {
@@ -2814,7 +2833,7 @@ export function Terminal({
         if (isActiveRef.current) {
           // Hidden portal targets keep their xterm buffer current but do not
           // need DOM repaint work until TerminalHost moves them on-screen.
-          scheduleViewportFrameRepaint();
+          if (!inWheelBurst()) scheduleViewportFrameRepaint();
           scheduleViewportIdleRepaint();
         }
         // The sticky prompt is buffer-derived; keep it in sync with parsed
@@ -3248,6 +3267,7 @@ export function Terminal({
       }
       resizeObserver.disconnect();
       commandSizeSyncScheduler.dispose();
+      container.removeEventListener("wheel", onWheelBurst, true);
       container.removeEventListener("input", onInput, true);
       container.removeEventListener("keydown", onKeydown, true);
       container.removeEventListener("keypress", onKeypress, true);
