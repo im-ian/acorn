@@ -1749,6 +1749,149 @@ test.describe("terminal: spawn", () => {
       .toMatch(/\x1b\[<0;\d+;\d+m/);
   });
 
+  test("a jittered click on a terminal link opens it exactly once", async ({
+    page,
+    tauri,
+  }) => {
+    // The takeover fires the force-select mousedown on the wobble and the
+    // click replay on release. Only the replay may reach xterm's linkifier —
+    // if the force-select press primed it too, the passed-through real mouseup
+    // would activate the link a second time and open two browser tabs.
+    await enableTerminalRightClickPasteSelection(page, { fontSize: 24 });
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __linkClickChannelId?: number };
+      w.__linkClickChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("open_external_url", (args) => {
+      const { url } = args as { url: string };
+      const w = window as unknown as { __openedUrls?: string[] };
+      w.__openedUrls = [...(w.__openedUrls ?? []), url];
+      return true;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __linkClickChannelId?: number })
+              .__linkClickChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "https://example.com/acorn";
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkClickChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkClickChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    const linkRect = await terminalTextRect(page, linkText);
+    expect(linkRect).not.toBeNull();
+    const x = linkRect!.left + 10;
+    const y = (linkRect!.top + linkRect!.bottom) / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    // Past the 8px takeover threshold, still inside one 24px cell.
+    await page.mouse.move(x + 1, y + 10);
+    await page.mouse.up();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            ((window as unknown as { __openedUrls?: string[] }).__openedUrls ??
+              []).length,
+        ),
+      )
+      .toBe(1);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __openedUrls?: string[] }).__openedUrls,
+      ),
+    ).toEqual([linkText]);
+  });
+
+  test("drag-selecting a terminal link inside a TUI does not open it", async ({
+    page,
+    tauri,
+  }) => {
+    await enableTerminalRightClickPasteSelection(page);
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __linkDragChannelId?: number };
+      w.__linkDragChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("open_external_url", (args) => {
+      const { url } = args as { url: string };
+      const w = window as unknown as { __openedUrls?: string[] };
+      w.__openedUrls = [...(w.__openedUrls ?? []), url];
+      return true;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __linkDragChannelId?: number })
+              .__linkDragChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "https://example.com/acorn";
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkDragChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkDragChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    // Drag, then right-click: the paste proves the drag kept a selection, so a
+    // missing open cannot be mistaken for a drag that never selected anything.
+    await rightClickSelectedTerminalText(page, linkText);
+
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+        ),
+      )
+      .toContain(linkText);
+    expect(
+      await page.evaluate(
+        () =>
+          ((window as unknown as { __openedUrls?: string[] }).__openedUrls ?? [])
+            .length,
+      ),
+    ).toBe(0);
+  });
+
   test("drag-select inside a TUI does not send a click to the app", async ({
     page,
     tauri,
@@ -2671,6 +2814,123 @@ test.describe("terminal: spawn", () => {
       .toBe(true);
     await page.waitForTimeout(30);
     await page.mouse.click(screenBox!.x + 12, screenBox!.y + 10);
+
+    await expect(
+      page.getByRole("button", {
+        name: /FolderPermissionWarmupModal\.tsx Close tab/,
+      }),
+    ).toBeVisible();
+    await expect(page.locator('[data-acorn-target-line="true"]')).toContainText(
+      "target line 78",
+    );
+  });
+
+  test("opens terminal file links while a TUI holds mouse tracking", async ({
+    page,
+    tauri,
+  }) => {
+    // Right-click paste takes the real left press/release over inside a
+    // mouse-tracking TUI and replays a synthetic pair. The replay has to land
+    // on xterm's screen element: the linkifier listens there, while the mouse
+    // protocol and selection listen on the root above it.
+    await enableTerminalRightClickPasteSelection(page);
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_cwd", () => "/tmp/demo");
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __trackingLinkChannelId?: number };
+      w.__trackingLinkChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("fs_file_exists", (args) => {
+      const { path } = args as { path: string };
+      const w = window as unknown as { __fsFileExistsCalls?: string[] };
+      w.__fsFileExistsCalls = [...(w.__fsFileExistsCalls ?? []), path];
+      return path === "/tmp/demo/src/components/FolderPermissionWarmupModal.tsx";
+    });
+    await tauri.handle("fs_read_file", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/demo/src/components/FolderPermissionWarmupModal.tsx") {
+        throw new Error(`unexpected path: ${path}`);
+      }
+      const lines = Array.from(
+        { length: 100 },
+        (_, index) => `line ${index + 1}`,
+      );
+      lines[77] = "target line 78";
+      return {
+        content: lines.join("\n"),
+        size: 1024,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __trackingLinkChannelId?: number })
+              .__trackingLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "src/components/FolderPermissionWarmupModal.tsx:78";
+    await emitSubscribedPtyOutput(
+      page,
+      "__trackingLinkChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+    await emitSubscribedPtyOutput(
+      page,
+      "__trackingLinkChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    const linkRect = await terminalTextRect(page, linkText);
+    expect(linkRect).not.toBeNull();
+    const x = linkRect!.left + 10;
+    const y = (linkRect!.top + linkRect!.bottom) / 2;
+    await page.mouse.move(x, y);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            (window as unknown as { __fsFileExistsCalls?: string[] })
+              .__fsFileExistsCalls ?? []
+          ).includes("/tmp/demo/src/components/FolderPermissionWarmupModal.tsx"),
+        ),
+      )
+      .toBe(true);
+    await page.mouse.click(x, y);
 
     await expect(
       page.getByRole("button", {
