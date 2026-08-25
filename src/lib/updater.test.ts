@@ -1,79 +1,76 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Update } from "@tauri-apps/plugin-updater";
 
 const mocks = vi.hoisted(() => ({
-  fetchLatestReleaseNotes: vi.fn(),
+  check: vi.fn(),
   getVersion: vi.fn(),
-  openSafeUrl: vi.fn(),
+  relaunch: vi.fn(),
 }));
 
+vi.mock("@tauri-apps/plugin-updater", () => ({ check: mocks.check }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: mocks.getVersion }));
-vi.mock("./releases", () => ({
-  fetchLatestReleaseNotes: mocks.fetchLatestReleaseNotes,
-}));
-vi.mock("./safeOpenUrl", () => ({ openSafeUrl: mocks.openSafeUrl }));
+vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: mocks.relaunch }));
 
 import {
+  canonicalReleaseUrl,
   checkForUpdate,
-  isNewerVersion,
-  openUpdateDownload,
-  validateAvailableUpdate,
-  type AvailableUpdate,
+  installUpdate,
 } from "./updater";
 
-const update: AvailableUpdate = {
-  version: "1.33.0",
-  body: "Security fixes",
-  htmlUrl: "https://github.com/im-ian/acorn/releases/tag/v1.33.0",
-};
+function fakeUpdate(overrides: Partial<Update> = {}): Update {
+  return {
+    version: "1.34.0",
+    currentVersion: "1.33.1",
+    body: "Bug fixes",
+    downloadAndInstall: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  } as unknown as Update;
+}
 
 beforeEach(() => {
-  mocks.fetchLatestReleaseNotes.mockReset();
+  mocks.check.mockReset();
   mocks.getVersion.mockReset();
-  mocks.openSafeUrl.mockReset();
-  mocks.getVersion.mockResolvedValue("1.32.1");
-  mocks.fetchLatestReleaseNotes.mockResolvedValue({
-    ...update,
-    publishedAt: "2026-08-12T00:00:00Z",
-  });
-  mocks.openSafeUrl.mockResolvedValue(true);
+  mocks.relaunch.mockReset();
+  mocks.relaunch.mockResolvedValue(undefined);
 });
 
-describe("manual update notification", () => {
-  it("compares stable semantic versions without lexical ordering bugs", () => {
-    expect(isNewerVersion("1.10.0", "1.9.9")).toBe(true);
-    expect(isNewerVersion("2.0.0", "1.99.99")).toBe(true);
-    expect(isNewerVersion("1.32.1", "1.32.1")).toBe(false);
-    expect(isNewerVersion("1.31.9", "1.32.0")).toBe(false);
-    expect(() => isNewerVersion("1.32.1-beta.1", "1.32.0")).toThrow(
-      /Invalid stable/,
+describe("in-app updater", () => {
+  it("builds the canonical GitHub release URL for a version", () => {
+    expect(canonicalReleaseUrl("1.34.0")).toBe(
+      "https://github.com/im-ian/acorn/releases/tag/v1.34.0",
     );
   });
 
-  it("accepts only the exact canonical Acorn release page", () => {
-    expect(() => validateAvailableUpdate(update)).not.toThrow();
-    for (const htmlUrl of [
-      "https://example.invalid/im-ian/acorn/releases/tag/v1.33.0",
-      "https://github.com/im-ian/other/releases/tag/v1.33.0",
-      "https://github.com/im-ian/acorn/releases/tag/v1.33.0?download=1",
-      "https://github.com/im-ian/acorn/releases/tag/v1.34.0",
-    ]) {
-      expect(() => validateAvailableUpdate({ ...update, htmlUrl })).toThrow(
-        /canonical/,
-      );
-    }
-  });
+  it("returns the plugin update handle when a newer release exists", async () => {
+    const update = fakeUpdate();
+    mocks.check.mockResolvedValue(update);
+    await expect(checkForUpdate()).resolves.toBe(update);
 
-  it("returns metadata only for a newer release", async () => {
-    await expect(checkForUpdate()).resolves.toEqual(update);
-    mocks.getVersion.mockResolvedValue("1.33.0");
+    mocks.check.mockResolvedValue(null);
     await expect(checkForUpdate()).resolves.toBeNull();
   });
 
-  it("opens the validated release page without downloading or installing", async () => {
-    await expect(openUpdateDownload(update)).resolves.toBeUndefined();
-    expect(mocks.openSafeUrl).toHaveBeenCalledWith(update.htmlUrl);
+  it("downloads, installs, then relaunches", async () => {
+    const update = fakeUpdate();
+    const onProgress = vi.fn();
+    await installUpdate(update, onProgress);
 
-    mocks.openSafeUrl.mockResolvedValue(false);
-    await expect(openUpdateDownload(update)).rejects.toThrow(/Could not open/);
+    expect(update.downloadAndInstall).toHaveBeenCalledTimes(1);
+    const progress = vi.mocked(update.downloadAndInstall).mock.calls[0]?.[0];
+    expect(typeof progress).toBe("function");
+    progress?.({ event: "Started", data: { contentLength: 10 } });
+    expect(onProgress).toHaveBeenCalledWith({
+      event: "Started",
+      data: { contentLength: 10 },
+    });
+    expect(mocks.relaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not relaunch when downloadAndInstall fails", async () => {
+    const update = fakeUpdate({
+      downloadAndInstall: vi.fn().mockRejectedValue(new Error("signature failed")),
+    });
+    await expect(installUpdate(update)).rejects.toThrow(/signature failed/);
+    expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 });

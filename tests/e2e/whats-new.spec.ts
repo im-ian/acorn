@@ -118,7 +118,7 @@ test.describe("about tab: what's new button", () => {
     await expect(dialog.getByText(/you're on this version/i)).toBeVisible();
     // No install action on the current-version flow.
     await expect(
-      dialog.getByRole("button", { name: /View download/i }),
+      dialog.getByRole("button", { name: /Install & relaunch/i }),
     ).toHaveCount(0);
     // The validated external action delegates to the backend URL broker.
     await dialog.getByRole("button", { name: /View on GitHub/i }).click();

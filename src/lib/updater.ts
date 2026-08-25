@@ -1,87 +1,72 @@
+import {
+  check,
+  type DownloadEvent,
+  type Update,
+} from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
-import { fetchLatestReleaseNotes } from "./releases";
-import { openSafeUrl } from "./safeOpenUrl";
+import { relaunch } from "@tauri-apps/plugin-process";
+
+/**
+ * Acorn auto-updater facade.
+ *
+ * Wraps `@tauri-apps/plugin-updater` so the rest of the app talks to one
+ * Promise-based API and never has to know whether an Update handle is
+ * still valid (the handle becomes stale after the install completes).
+ *
+ * Behavior contract:
+ *   - `checkForUpdate()` returns the available `Update` or `null`. Errors
+ *     are surfaced to the caller — never swallowed — so the Settings UI
+ *     can display them.
+ *   - The check itself is non-blocking and side-effect free; nothing is
+ *     downloaded or applied unless the caller explicitly invokes
+ *     `installUpdate(update)` on the returned handle.
+ *   - `installUpdate` does NOT auto-relaunch silently — it explicitly
+ *     calls `plugin-process::relaunch` so the user-clicked
+ *     "Install & relaunch" button fulfills its name. macOS Tauri builds
+ *     don't restart on their own after `downloadAndInstall`; without an
+ *     explicit relaunch the new bundle would only be picked up on the
+ *     user's next manual launch.
+ */
+
+export type { DownloadEvent, Update };
 
 const UPDATE_OWNER = "im-ian";
 const UPDATE_REPO = "acorn";
-const MAX_UPDATE_NOTES_BYTES = 2 * 1024 * 1024;
-const STABLE_VERSION_RE = /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
 
-export interface AvailableUpdate {
-  version: string;
-  body: string;
-  htmlUrl: string;
-}
-
-function utf8Length(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
-}
-
-function parseStableVersion(value: string): [number, number, number] {
-  const match = STABLE_VERSION_RE.exec(value);
-  if (!match) {
-    throw new Error(`Invalid stable Acorn version: ${value}`);
-  }
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-export function isNewerVersion(candidate: string, current: string): boolean {
-  const candidateParts = parseStableVersion(candidate);
-  const currentParts = parseStableVersion(current);
-  for (let index = 0; index < candidateParts.length; index += 1) {
-    if (candidateParts[index] !== currentParts[index]) {
-      return candidateParts[index] > currentParts[index];
-    }
-  }
-  return false;
+/** Canonical public release page for a published Acorn version. */
+export function canonicalReleaseUrl(version: string): string {
+  return `https://github.com/${UPDATE_OWNER}/${UPDATE_REPO}/releases/tag/v${version}`;
 }
 
 /**
- * Update data is notification-only: it can open the canonical GitHub release
- * page, but it never authorizes an executable download or install. Keep the
- * link exact so compromised API content cannot redirect the privileged OS
- * opener to another host or even another repository path.
+ * Check the configured update endpoint. Returns the `Update` handle when
+ * a newer version is available, otherwise `null`. Throws on transport /
+ * signature / configuration errors so callers can surface them.
  */
-export function validateAvailableUpdate(update: AvailableUpdate): void {
-  parseStableVersion(update.version);
-  if (utf8Length(update.body) > MAX_UPDATE_NOTES_BYTES) {
-    throw new Error("Update release notes are too large");
-  }
-  const expected = `https://github.com/${UPDATE_OWNER}/${UPDATE_REPO}/releases/tag/v${update.version}`;
-  if (update.htmlUrl !== expected) {
-    throw new Error("Update release URL is not the canonical Acorn release");
-  }
-}
-
-/**
- * Check the bounded GitHub Releases endpoint and return notification metadata
- * only when its stable version is newer than the running app. Runtime update
- * installation is intentionally disabled until Acorn has OS-trusted signing
- * identities; the Tauri updater buffers manifests/artifacts in memory and an
- * unsigned installation cannot establish publisher identity with the OS.
- */
-export async function checkForUpdate(): Promise<AvailableUpdate | null> {
-  const [currentVersion, release] = await Promise.all([
-    getVersion(),
-    fetchLatestReleaseNotes(),
-  ]);
-  const update: AvailableUpdate = {
-    version: release.version,
-    body: release.body,
-    htmlUrl: release.htmlUrl,
-  };
-  validateAvailableUpdate(update);
-  return isNewerVersion(update.version, currentVersion) ? update : null;
+export async function checkForUpdate(): Promise<Update | null> {
+  const update = await check();
+  return update ?? null;
 }
 
 export async function getCurrentVersion(): Promise<string> {
   return getVersion();
 }
 
-/** Open the exact public release page so the user can choose an OS download. */
-export async function openUpdateDownload(update: AvailableUpdate): Promise<void> {
-  validateAvailableUpdate(update);
-  if (!(await openSafeUrl(update.htmlUrl))) {
-    throw new Error("Could not open the canonical Acorn release page");
-  }
+/**
+ * Download and install an update, then ask Tauri to relaunch. After
+ * `relaunch()` resolves the host process is being torn down — any code
+ * that runs afterwards in the renderer is a transient ghost.
+ *
+ * `onProgress` is forwarded straight through `downloadAndInstall`, so
+ * callers can log to the console for post-mortem diagnosis when an
+ * update misbehaves.
+ */
+export async function installUpdate(
+  update: Update,
+  onProgress?: (event: DownloadEvent) => void,
+): Promise<void> {
+  await update.downloadAndInstall((event) => {
+    onProgress?.(event);
+  });
+  await relaunch();
 }

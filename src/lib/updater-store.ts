@@ -3,15 +3,15 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import {
   checkForUpdate,
   getCurrentVersion,
-  openUpdateDownload,
-  type AvailableUpdate,
+  installUpdate,
+  type Update,
 } from "./updater";
 
 /**
  * App-wide updater state.
  *
  * We split persistent fields (last-check timestamp, dismissed-version
- * memo) from in-memory transient fields (validated release metadata, busy
+ * memo) from in-memory transient fields (live `Update` handle, busy
  * flag, error) so reloading or remounting the app does not lose the
  * "user already saw this version's banner" record.
  *
@@ -22,9 +22,9 @@ import {
 interface UpdaterState {
   /** Current running app version (cached after first read). */
   currentVersion: string | null;
-  /** Validated notification metadata for a newer published release. */
-  available: AvailableUpdate | null;
-  /** True while a check or release-page open is in flight. */
+  /** Live Update handle if a newer version is available; null otherwise. */
+  available: Update | null;
+  /** True while a check or install is in flight. */
   busy: boolean;
   /** User-facing error message from the most recent operation. */
   error: string | null;
@@ -35,7 +35,7 @@ interface UpdaterState {
 
   init: () => Promise<void>;
   check: () => Promise<void>;
-  openDownload: () => Promise<void>;
+  install: () => Promise<void>;
   dismiss: () => void;
   clearError: () => void;
 }
@@ -79,7 +79,7 @@ export const useUpdater = create<UpdaterState>()(
             busy: false,
           });
         } catch (err) {
-          // Connectivity, payload-validation, and opener issues land here. We keep
+          // Connectivity / signature / config issues land here. We keep
           // the previous `available` value so a transient network blip
           // does not make a known-pending update vanish from the UI.
           set({
@@ -89,15 +89,26 @@ export const useUpdater = create<UpdaterState>()(
         }
       },
 
-      async openDownload() {
+      async install() {
         const update = get().available;
         if (!update || get().busy) return;
         set({ busy: true, error: null });
         try {
-          await openUpdateDownload(update);
-          set({ busy: false });
+          await installUpdate(update, (event) => {
+            // Log progress markers so a stuck download / install leaves
+            // a breadcrumb trail in the renderer console for debugging.
+            // We deliberately don't surface bytes-per-chunk to the UI —
+            // the banner is intentionally compact.
+            if (event.event === "Started" || event.event === "Finished") {
+              console.info("[updater]", event.event, event);
+            }
+          });
+          // installUpdate now ends with relaunch(), so control rarely
+          // returns here. If it does (e.g. the relaunch is briefly
+          // queued before the OS tears the process down), keep busy=true
+          // so the UI stays disabled until the relaunch lands.
         } catch (err) {
-          console.error("[updater] failed to open release", err);
+          console.error("[updater] install failed", err);
           set({
             error: err instanceof Error ? err.message : String(err),
             busy: false,

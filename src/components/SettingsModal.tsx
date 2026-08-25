@@ -55,6 +55,7 @@ import {
   fetchReleaseNotes,
   type ReleaseNotes,
 } from "../lib/releases";
+import { canonicalReleaseUrl } from "../lib/updater";
 import { useUpdater } from "../lib/updater-store";
 import { BackgroundSessionsSettings } from "./BackgroundSessionsSettings";
 import { WhatsNewModal } from "./WhatsNewModal";
@@ -4007,7 +4008,7 @@ function AboutSettings() {
   const error = useUpdater((s) => s.error);
   const lastCheckedAt = useUpdater((s) => s.lastCheckedAt);
   const check = useUpdater((s) => s.check);
-  const openDownload = useUpdater((s) => s.openDownload);
+  const install = useUpdater((s) => s.install);
   const init = useUpdater((s) => s.init);
   const [whatsNewSource, setWhatsNewSource] = useState<WhatsNewSource | null>(
     null,
@@ -4112,13 +4113,13 @@ function AboutSettings() {
     }
   }, [check, showToast, t]);
 
-  const handleOpenDownload = useCallback(async () => {
-    await openDownload();
+  const handleInstall = useCallback(async () => {
+    await install();
     const next = useUpdater.getState();
     if (next.error) {
       showToast(`${st(t, "settings.about.toasts.installFailed")} ${next.error}`);
     }
-  }, [openDownload, showToast, t]);
+  }, [install, showToast, t]);
 
   return (
     <section className="space-y-4">
@@ -4172,7 +4173,7 @@ function AboutSettings() {
                       kind: "update",
                       version: available.version,
                       body: available.body ?? "",
-                      htmlUrl: available.htmlUrl,
+                      htmlUrl: canonicalReleaseUrl(available.version),
                     });
                   }}
                   className="rounded px-2 py-1 text-[11px] text-fg-muted underline-offset-2 transition hover:text-fg hover:underline"
@@ -4182,7 +4183,7 @@ function AboutSettings() {
               ) : null}
               <button
                 type="button"
-                onClick={() => void handleOpenDownload()}
+                onClick={() => void handleInstall()}
                 disabled={busy}
                 className="inline-flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
               >
@@ -4251,7 +4252,7 @@ function AboutSettings() {
         version={whatsNewSource?.version ?? ""}
         body={whatsNewSource?.body ?? ""}
         currentVersion={currentVersion}
-        showDownload={whatsNewSource?.kind === "update"}
+        showInstall={whatsNewSource?.kind === "update"}
         busy={busy}
         loading={whatsNewSource?.kind === "current" ? notesLoading : false}
         error={
@@ -4261,9 +4262,9 @@ function AboutSettings() {
               ? error
               : null
         }
-        onOpenDownload={
+        onInstall={
           whatsNewSource?.kind === "update"
-            ? () => void handleOpenDownload()
+            ? () => void handleInstall()
             : undefined
         }
         htmlUrl={whatsNewSource?.htmlUrl}
