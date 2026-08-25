@@ -254,6 +254,7 @@ const MODIFIER_LINK_LABEL = IS_MAC ? "Command-click" : "Ctrl-click";
 
 interface TerminalRenderInternals {
   _core?: {
+    screenElement?: HTMLElement;
     linkifier?: {
       currentLink?: {
         link?: {
@@ -2223,22 +2224,29 @@ export function Terminal({
     let leftDragSelecting = false;
     let replayingMouse = false;
 
+    // xterm splits its mouse listeners across two elements: the mouse protocol
+    // and the selection service listen on the root, the linkifier listens on
+    // the screen element below it. DOM events never travel downwards, so the
+    // dispatch target picks the audience: the root reaches protocol and
+    // selection, the screen element reaches those two (by bubbling) plus the
+    // linkifier. A click replay must reach the linkifier or terminal links go
+    // dead; a force-select replay must not, or selecting a link's text opens
+    // it.
+    const mouseReplayTarget = (audience: "app" | "app-and-links"): EventTarget => {
+      const root = term.element ?? container;
+      if (audience === "app") return root;
+      return (
+        (term as unknown as TerminalRenderInternals)._core?.screenElement ?? root
+      );
+    };
+
     const dispatchSyntheticMouse = (
       type: "mousedown" | "mouseup",
       x: number,
       y: number,
       extra: MouseEventInit,
+      target: EventTarget,
     ) => {
-      // xterm splits its mouse listeners across two elements: the mouse
-      // protocol and selection sit on the root (`.xterm`), the linkifier sits
-      // on the screen element below it (`.xterm-screen`). Dispatch on the
-      // screen element — it fires there in the target phase and still bubbles
-      // to the root, so all three see the replay. Dispatching on the root
-      // instead would skip the linkifier (bubbling never descends) and kill
-      // link clicks; elementFromPoint could land on a helper textarea or
-      // canvas outside both.
-      const target =
-        term.element?.querySelector(".xterm-screen") ?? term.element ?? container;
       replayingMouse = true;
       try {
         target.dispatchEvent(
@@ -2264,14 +2272,21 @@ export function Terminal({
       modifiers: MouseEventInit;
     }) => {
       if (term.hasSelection()) term.clearSelection();
-      dispatchSyntheticMouse("mousedown", start.x, start.y, {
-        ...start.modifiers,
-        buttons: 1,
-      });
-      dispatchSyntheticMouse("mouseup", start.x, start.y, {
-        ...start.modifiers,
-        buttons: 0,
-      });
+      const target = mouseReplayTarget("app-and-links");
+      dispatchSyntheticMouse(
+        "mousedown",
+        start.x,
+        start.y,
+        { ...start.modifiers, buttons: 1 },
+        target,
+      );
+      dispatchSyntheticMouse(
+        "mouseup",
+        start.x,
+        start.y,
+        { ...start.modifiers, buttons: 0 },
+        target,
+      );
     };
 
     const onTerminalMouseDown = (e: MouseEvent) => {
@@ -2316,12 +2331,18 @@ export function Terminal({
         // finalize it, just like a drag.
         if (e.detail >= 2) {
           leftDragSelecting = true;
-          dispatchSyntheticMouse("mousedown", e.clientX, e.clientY, {
-            ...eventModifiers(e),
-            ...forceSelectModifier,
-            buttons: 1,
-            detail: e.detail,
-          });
+          dispatchSyntheticMouse(
+            "mousedown",
+            e.clientX,
+            e.clientY,
+            {
+              ...eventModifiers(e),
+              ...forceSelectModifier,
+              buttons: 1,
+              detail: e.detail,
+            },
+            mouseReplayTarget("app"),
+          );
         }
       }
     };
@@ -2369,11 +2390,17 @@ export function Terminal({
       // Drag confirmed: open an xterm force-selection anchored at the press
       // point. Subsequent real moves are left alone so xterm extends it.
       leftDragSelecting = true;
-      dispatchSyntheticMouse("mousedown", pendingLeftDrag.x, pendingLeftDrag.y, {
-        ...pendingLeftDrag.modifiers,
-        ...forceSelectModifier,
-        buttons: 1,
-      });
+      dispatchSyntheticMouse(
+        "mousedown",
+        pendingLeftDrag.x,
+        pendingLeftDrag.y,
+        {
+          ...pendingLeftDrag.modifiers,
+          ...forceSelectModifier,
+          buttons: 1,
+        },
+        mouseReplayTarget("app"),
+      );
     };
     const onTerminalMouseUp = (e: MouseEvent) => {
       if (!pendingLeftDrag) return;
@@ -2382,9 +2409,13 @@ export function Terminal({
       if (leftDragSelecting) {
         // Let the real mouseup finalize xterm's selection, then keep it only
         // when it contains text (or was a multi-click word/line select).
-        // Otherwise replay as a TUI click.
+        // Otherwise replay as a TUI click. A timer, not a microtask: this runs
+        // in a capture-phase listener, and the browser drains microtasks
+        // between listener callbacks, so a microtask replay would prime the
+        // linkifier while the same mouseup is still bubbling toward it — the
+        // link would then activate twice for one press.
         leftDragSelecting = false;
-        queueMicrotask(() => {
+        window.setTimeout(() => {
           if (disposed) return;
           const action = terminalMouseTrackingReleaseAction({
             selecting: true,
@@ -2393,7 +2424,7 @@ export function Terminal({
           });
           if (action === "keep-selection") return;
           replayTrackingClick(start);
-        });
+        }, 0);
         return;
       }
       // No drag — a plain click. Swallow the real mouseup and replay without
