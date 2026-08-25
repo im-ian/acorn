@@ -25,6 +25,7 @@ vi.mock("../lib/toasts", () => ({
 
 import { AgentResumeModal } from "./AgentResumeModal";
 import type { AgentKind, ResumeCandidate } from "../lib/api";
+import { useAppStore } from "../store";
 
 const CANDIDATE: ResumeCandidate = {
   uuid: "deadbeef-1234-5678-9abc-def012345678",
@@ -55,6 +56,7 @@ describe("AgentResumeModal", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    useAppStore.setState({ pendingTerminalInput: {} });
     vi.clearAllMocks();
   });
 
@@ -203,9 +205,30 @@ describe("AgentResumeModal", () => {
 
     expect(onDismiss).not.toHaveBeenCalled();
     expect(mocks.acknowledgeAgentResume).not.toHaveBeenCalled();
+    expect(useAppStore.getState().pendingTerminalInput[SESSION_ID]).toBeUndefined();
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       "Failed to send the resume command: PTY access denied",
     );
+  });
+
+  it("queues Resume for the next PTY spawn when the session has no live handle", async () => {
+    mocks.ptyWrite.mockRejectedValueOnce(
+      new Error(
+        "pty error: pty error: no pty for session 11111111-2222-3333-4444-555555555555",
+      ),
+    );
+    const onDismiss = render("grok", CANDIDATE);
+
+    await clickButton("Resume");
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(mocks.acknowledgeAgentResume).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(useAppStore.getState().pendingTerminalInput[SESSION_ID]).toEqual({
+      command: `grok --resume ${CANDIDATE.uuid}`,
+      adoptWorktreeOnExit: false,
+      agentProvider: "grok",
+    });
   });
 
   it("keeps the candidate open and unacknowledged when clipboard access fails", async () => {

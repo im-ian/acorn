@@ -289,6 +289,80 @@ test.describe("agent resume modal", () => {
     expect(acked).not.toContain(SESSION.id);
   });
 
+  test("Resume queues grok --resume when the PTY is missing and writes it after spawn", async ({
+    page,
+    tauri,
+    errorTracker,
+  }) => {
+    errorTracker.allow(/no pty for session/);
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION]);
+    await tauri.handle("get_agent_resume_candidate", (args) => {
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind !== "grok") return null;
+      return {
+        uuid: "deadbeef-1234-5678-9abc-def012345678",
+        lastActivityUnix: Math.floor(Date.now() / 1000) - 60,
+        preview: "Previous Grok turn",
+        lastUserMessage: "continue from cold boot",
+        lastAgentMessage: "Previous Grok turn",
+      };
+    });
+    await tauri.handle("pty_write", (args) => {
+      const w = window as unknown as {
+        __ACORN_PTY_WRITES__?: { sessionId: string; data: string }[];
+        __ACORN_PTY_WRITE_ATTEMPTS__?: number;
+      };
+      w.__ACORN_PTY_WRITES__ = w.__ACORN_PTY_WRITES__ ?? [];
+      w.__ACORN_PTY_WRITE_ATTEMPTS__ = (w.__ACORN_PTY_WRITE_ATTEMPTS__ ?? 0) + 1;
+      const input = (args ?? {}) as { sessionId?: string; data?: string };
+      const decoded = input.data
+        ? new TextDecoder().decode(
+            Uint8Array.from(atob(input.data), (c) => c.charCodeAt(0)),
+          )
+        : "";
+      if (w.__ACORN_PTY_WRITE_ATTEMPTS__ === 1) {
+        throw new Error(
+          "pty error: pty error: no pty for session s-resume",
+        );
+      }
+      w.__ACORN_PTY_WRITES__.push({
+        sessionId: input.sessionId ?? "",
+        data: decoded,
+      });
+      return undefined;
+    });
+
+    await page.goto("/");
+
+    const modal = page.getByRole("dialog", {
+      name: /Resume previous conversation/,
+    });
+    await expect(modal).toBeVisible();
+    await expect(modal).toContainText("Grok");
+    await modal.getByRole("button", { name: /Resume/ }).click();
+    await expect(modal).toBeHidden();
+    await expect(modal.getByRole("alert")).toHaveCount(0);
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __ACORN_PTY_WRITES__?: { sessionId: string; data: string }[];
+              }
+            ).__ACORN_PTY_WRITES__ ?? [],
+        ),
+      )
+      .toEqual([
+        {
+          sessionId: SESSION.id,
+          data: `grok --resume ${CANDIDATE_UUID}\r`,
+        },
+      ]);
+  });
+
   test("Cancel writes a shell-comment hint with the resume command", async ({
     page,
     tauri,
