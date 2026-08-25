@@ -62,6 +62,7 @@ import {
   terminalMouseTrackingReleaseAction,
 } from "../lib/terminalMouseTracking";
 import {
+  altScreenOwnsWheel,
   applicationOwnsWheel,
   patchTerminalWheelScroll,
 } from "../lib/terminalWheelScroll";
@@ -1386,10 +1387,11 @@ export function Terminal({
     // stale. Forcing `refresh(0, rows-1)` rebuilds every visible row from
     // the buffer, which clears leftover characters and cursor blocks.
     //
-    // We run one rAF-throttled refresh after each parsed write for live
-    // interactive redraws (notably Claude's slash-command picker), plus
-    // an idle refresh after the burst goes quiet to catch interrupted
-    // final frames.
+    // One rAF-throttled refresh after each parsed write, plus an idle
+    // refresh after the burst goes quiet to catch interrupted final
+    // frames. Alt-screen wheel bursts skip both and rebuild once the
+    // burst window expires — a full refresh per scroll tick starves
+    // the next wheel event.
     const VIEWPORT_REPAINT_IDLE_MS = 120;
     let viewportRepaintTimer: number | null = null;
     let viewportRepaintFrame: number | null = null;
@@ -1419,29 +1421,15 @@ export function Terminal({
         repaintViewport();
       }, VIEWPORT_REPAINT_IDLE_MS);
     };
-    // A TUI that owns the wheel (Claude Code's REPL) redraws the full frame
-    // per scroll tick; stacking the full-viewport refresh above on every one
-    // of those writes doubles the DOM renderer's work and starves the next
-    // wheel event on the UI thread. Skip the per-write refresh while a wheel
-    // burst is in flight — successive frames overwrite any stale cells, and
-    // the idle repaint rebuilds the final frame once the burst goes quiet.
     // Capture phase so an xterm stopPropagation cannot hide the wheel.
     const WHEEL_BURST_WINDOW_MS = 250;
-    let lastWheelAt = -Infinity;
-    // Burst treatment is for ALT-SCREEN TUIs only (Claude Code's REPL):
-    // those repaint the whole frame per scroll tick, which is what the DOM
-    // renderer cannot keep up with. Normal-buffer overlay TUIs (Grok) send
-    // small deltas the DOM renderer consumes at display cadence — see the
-    // delta control in tests/e2e/terminal-scroll-perf.spec.ts — so they keep
-    // the stock render path: no renderer swap, no skipped repaints.
-    const altScreenOwnsWheel = () =>
-      term.buffer.active.type === "alternate" && applicationOwnsWheel(term);
+    let wheelBurstEndTimer: number | null = null;
+    const inAltScreenWheelBurst = () => wheelBurstEndTimer !== null;
     // GPU renderer for the burst window only. The DOM renderer stays the
     // resting state for IME correctness (composition view anchoring, the
     // span-cloning tail view); the WebGL addon takes over while a TUI that
     // owns the wheel is being scrolled, which is the one interaction where
-    // frames arrive faster than the DOM renderer can paint them — see
-    // tests/e2e/terminal-scroll-perf.spec.ts for the measurements.
+    // frames arrive faster than the DOM renderer can paint them.
     const webglBurst = createWebglBurstController({
       loadAddon: () => {
         const addon = new WebglAddon();
@@ -1449,7 +1437,7 @@ export function Terminal({
         return addon;
       },
       isEligible: () =>
-        altScreenOwnsWheel() &&
+        altScreenOwnsWheel(term) &&
         !composing &&
         // The WebGL renderer paints an opaque background; keep the DOM
         // renderer when the terminal background is see-through.
@@ -1457,10 +1445,7 @@ export function Terminal({
           useSettings.getState().settings.appearance.background,
         ),
       afterSwap: () => {
-        // The cell-measurement patch (fractional letter-spacing, CJK cell
-        // width) lives on the renderer INSTANCE; every swap builds a fresh
-        // renderer that reverts to stock spacing until re-measured. Re-run
-        // the measurement fit so spacing survives the round-trip.
+        // The cell-measurement patch lives on the renderer instance.
         try {
           fitTerminalRef.current?.();
         } catch {
@@ -1470,16 +1455,20 @@ export function Terminal({
       },
     });
     const onWheelBurst = () => {
-      lastWheelAt = performance.now();
-      if (altScreenOwnsWheel()) webglBurst.noteWheel();
+      if (!altScreenOwnsWheel(term)) return;
+      webglBurst.noteWheel();
+      if (wheelBurstEndTimer !== null) {
+        window.clearTimeout(wheelBurstEndTimer);
+      }
+      wheelBurstEndTimer = window.setTimeout(() => {
+        wheelBurstEndTimer = null;
+        scheduleViewportFrameRepaint();
+      }, WHEEL_BURST_WINDOW_MS);
     };
     container.addEventListener("wheel", onWheelBurst, {
       capture: true,
       passive: true,
     });
-    const inWheelBurst = () =>
-      altScreenOwnsWheel() &&
-      performance.now() - lastWheelAt < WHEEL_BURST_WINDOW_MS;
 
     const writeToPty = (targetSessionId: string, data: string) => {
       void api.ptyWrite(targetSessionId, data).catch((err: unknown) => {
@@ -2918,8 +2907,10 @@ export function Terminal({
         if (isActiveRef.current) {
           // Hidden portal targets keep their xterm buffer current but do not
           // need DOM repaint work until TerminalHost moves them on-screen.
-          if (!inWheelBurst()) scheduleViewportFrameRepaint();
-          scheduleViewportIdleRepaint();
+          if (!inAltScreenWheelBurst()) {
+            scheduleViewportFrameRepaint();
+            scheduleViewportIdleRepaint();
+          }
         }
         // The sticky prompt is buffer-derived; keep it in sync with parsed
         // output even when the terminal was hidden during the write.
@@ -3341,6 +3332,10 @@ export function Terminal({
       if (viewportRepaintFrame !== null) {
         cancelAnimationFrame(viewportRepaintFrame);
         viewportRepaintFrame = null;
+      }
+      if (wheelBurstEndTimer !== null) {
+        window.clearTimeout(wheelBurstEndTimer);
+        wheelBurstEndTimer = null;
       }
       cancelLinkTooltipHide();
       if (resizeTimer !== null) {

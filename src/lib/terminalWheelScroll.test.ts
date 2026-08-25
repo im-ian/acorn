@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Terminal as XTerm } from "@xterm/xterm";
 import {
+  altScreenOwnsWheel,
+  applicationOwnsWheel,
   patchTerminalWheelScroll,
   wheelScrollLineCount,
 } from "./terminalWheelScroll";
@@ -121,6 +123,35 @@ describe("wheelScrollLineCount", () => {
         carry: 0,
       }).lines,
     ).toBe(6);
+  });
+});
+
+describe("altScreenOwnsWheel", () => {
+  it("is true on the alternate buffer", () => {
+    const { term } = makeTerm({
+      mouseTrackingMode: "none",
+      bufferType: "alternate",
+    });
+    expect(applicationOwnsWheel(term)).toBe(true);
+    expect(altScreenOwnsWheel(term)).toBe(true);
+  });
+
+  it("is false for a mouse-tracking overlay on the normal buffer", () => {
+    const { term } = makeTerm({
+      mouseTrackingMode: "any",
+      bufferType: "normal",
+    });
+    expect(applicationOwnsWheel(term)).toBe(true);
+    expect(altScreenOwnsWheel(term)).toBe(false);
+  });
+
+  it("is false for a normal-buffer shell", () => {
+    const { term } = makeTerm({
+      mouseTrackingMode: "none",
+      bufferType: "normal",
+    });
+    expect(applicationOwnsWheel(term)).toBe(false);
+    expect(altScreenOwnsWheel(term)).toBe(false);
   });
 });
 
