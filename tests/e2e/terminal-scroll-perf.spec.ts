@@ -338,9 +338,7 @@ test.describe("terminal: TUI scroll perf probe", () => {
     console.log("[scroll-perf][delta]", JSON.stringify(result));
   });
 
-  // Same full-frame stream, but with a wheel event first so the burst-scoped
-  // WebGL renderer engages. Compare against [output] to see the GPU win.
-  test("output half: full-frame stream during wheel burst (webgl)", async ({
+  test("output half: full-frame stream after a wheel stays on the DOM renderer", async ({
     page,
     tauri,
   }) => {
@@ -390,8 +388,6 @@ test.describe("terminal: TUI scroll perf probe", () => {
         message: number[];
       }) => void;
 
-      // One wheel notch engages the burst renderer (quiet window 1500ms
-      // outlives the whole stream).
       const screen = document.querySelector<HTMLElement>(".xterm-screen")!;
       screen.dispatchEvent(
         new WheelEvent("wheel", {
@@ -439,15 +435,11 @@ test.describe("terminal: TUI scroll perf probe", () => {
         rafGapMax: Math.max(...rafGaps).toFixed(1),
       };
     });
-    console.log("[scroll-perf][webgl]", JSON.stringify(result));
+    console.log("[scroll-perf][dom-wheel]", JSON.stringify(result));
+    expect(result.webglEngaged).toBe(false);
   });
 
-  // Regression gate: the cell-measurement patch (fractional letter-spacing,
-  // CJK width heuristic) lives on the renderer INSTANCE. A WebGL burst swap
-  // builds a fresh DOM renderer on the way back; without re-patching, the
-  // row container's letter-spacing silently reverts after the first scroll
-  // and stays wrong until the next resize.
-  test("letter-spacing survives a webgl burst round-trip", async ({
+  test("letter-spacing is unchanged after an alt-screen wheel", async ({
     page,
     tauri,
   }) => {
@@ -463,19 +455,19 @@ test.describe("terminal: TUI scroll perf probe", () => {
     await emitPtyOutput(page, "\x1b[1;1Hhello letter spacing");
     await page.waitForTimeout(200);
 
-    const readSpacing = () =>
+    const readState = () =>
       page.evaluate(() => {
         const rows = document.querySelector<HTMLElement>(".xterm-rows");
-        return rows ? rows.style.letterSpacing : null;
+        return {
+          letterSpacing: rows ? rows.style.letterSpacing : null,
+          canvas: !!document.querySelector(".xterm-screen canvas"),
+        };
       });
-    const before = await readSpacing();
-    // The fractional 0.5px configuration must have engaged the patch —
-    // otherwise this test would pass vacuously.
-    expect(before).not.toBeNull();
-    expect(before).not.toBe("");
+    const before = await readState();
+    expect(before.letterSpacing).not.toBeNull();
+    expect(before.letterSpacing).not.toBe("");
+    expect(before.canvas).toBe(false);
 
-    // One wheel notch → WebGL engages; wait past the 1.5s quiet window so
-    // the DOM renderer comes back.
     await page.evaluate(() => {
       const screen = document.querySelector<HTMLElement>(".xterm-screen")!;
       screen.dispatchEvent(
@@ -487,26 +479,14 @@ test.describe("terminal: TUI scroll perf probe", () => {
         }),
       );
     });
-    await expect
-      .poll(() => page.evaluate(() => !!document.querySelector(".xterm-screen canvas")))
-      .toBe(true);
-    await expect
-      .poll(
-        () => page.evaluate(() => !!document.querySelector(".xterm-screen canvas")),
-        { timeout: 5_000 },
-      )
-      .toBe(false);
-
-    await page.waitForTimeout(100);
-    expect(await readSpacing()).toBe(before);
+    await emitPtyOutput(page, "\x1b[H\x1b[2Khello letter spacing");
+    await page.waitForTimeout(200);
+    const after = await readState();
+    expect(after.canvas).toBe(false);
+    expect(after.letterSpacing).toBe(before.letterSpacing);
   });
 
-  // Grok-style overlay TUIs run on the NORMAL buffer with mouse tracking
-  // (no ?1049). They redraw in small deltas the DOM renderer handles at
-  // display cadence, so the burst machinery (WebGL swap, skipped repaints)
-  // must stay out of their way entirely: no canvas, no scrollback growth,
-  // no doubled frame.
-  test("normal-buffer TUI (grok-like) keeps the stock render path", async ({
+  test("normal-buffer TUI (grok-like) keeps a single DOM copy while scrolling", async ({
     page,
     tauri,
   }) => {
@@ -552,7 +532,6 @@ test.describe("terminal: TUI scroll perf probe", () => {
     const before = await readState();
     expect(before.canvas).toBe(false);
 
-    // Engage the burst and stream redraw frames like a scrolled TUI.
     await page.evaluate(() => {
       const screen = document.querySelector<HTMLElement>(".xterm-screen")!;
       screen.dispatchEvent(
@@ -576,7 +555,6 @@ test.describe("terminal: TUI scroll perf probe", () => {
       "[scroll-perf][grok]",
       JSON.stringify({ before, during, after }),
     );
-    // The burst renderer must not engage on the normal buffer.
     expect(during.canvas).toBe(false);
     expect(after.canvas).toBe(false);
     // No redraw frame may leak into scrollback: the viewport must not grow.
