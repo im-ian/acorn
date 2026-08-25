@@ -175,7 +175,9 @@ test.describe("terminal: TUI scroll perf probe", () => {
           out += `\x1b[${r};1H`;
           let col = 0;
           while (col < cols - 12) {
-            const v = (r * 31 + col * 7 + n * 13) % 200;
+            // Fixed 12-color truecolor palette: real transcripts reuse a
+            // small style set, which is what glyph-atlas caches key on.
+            const v = ((r * 31 + col * 7 + n * 13) % 12) * 16;
             out += `\x1b[38;2;${55 + v};${255 - v};${(v * 3) % 255}m`;
             if (r % 4 === 0 && col % 24 === 0) {
               out += "한글텍스트감지"; // 7 wide chars = 14 cells
@@ -334,5 +336,109 @@ test.describe("terminal: TUI scroll perf probe", () => {
       };
     });
     console.log("[scroll-perf][delta]", JSON.stringify(result));
+  });
+
+  // Same full-frame stream, but with a wheel event first so the burst-scoped
+  // WebGL renderer engages. Compare against [output] to see the GPU win.
+  test("output half: full-frame stream during wheel burst (webgl)", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+    await enterTuiMode(page);
+
+    const result = await page.evaluate(async () => {
+      const rows =
+        document.querySelectorAll(".xterm-rows > div").length || 24;
+      const cols = 120;
+      const frame = (n: number): string => {
+        let out = "\x1b[H";
+        for (let r = 1; r <= rows; r++) {
+          out += `\x1b[${r};1H`;
+          let col = 0;
+          while (col < cols - 12) {
+            // Fixed 12-color truecolor palette: real transcripts reuse a
+            // small style set, which is what glyph-atlas caches key on.
+            const v = ((r * 31 + col * 7 + n * 13) % 12) * 16;
+            out += `\x1b[38;2;${55 + v};${255 - v};${(v * 3) % 255}m`;
+            if (r % 4 === 0 && col % 24 === 0) {
+              out += "한글텍스트감지";
+              col += 14;
+            } else {
+              let span = "";
+              for (let c = 0; c < 8; c++) {
+                span += String.fromCharCode(33 + ((col + c + r + n * 7) % 90));
+              }
+              out += span;
+              col += 8;
+            }
+          }
+          out += "\x1b[0m\x1b[K";
+        }
+        return out;
+      };
+
+      const w = window as unknown as {
+        __scrollOutputChannelId?: number;
+        __ptyIndex?: number;
+        [key: string]: unknown;
+      };
+      const id = w.__scrollOutputChannelId!;
+      const callback = w[`_${id}`] as (payload: {
+        index: number;
+        message: number[];
+      }) => void;
+
+      // One wheel notch engages the burst renderer (quiet window 1500ms
+      // outlives the whole stream).
+      const screen = document.querySelector<HTMLElement>(".xterm-screen")!;
+      screen.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaY: 100,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      const webglEngaged = !!document.querySelector(".xterm-screen canvas");
+
+      const rafGaps: number[] = [];
+      let last = performance.now();
+      let watching = true;
+      const tick = () => {
+        const now = performance.now();
+        rafGaps.push(now - last);
+        last = now;
+        if (watching) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+
+      const t0 = performance.now();
+      for (let n = 0; n < 40; n++) {
+        callback({
+          index: w.__ptyIndex!++,
+          message: Array.from(new TextEncoder().encode(frame(n))),
+        });
+        await new Promise((r) => setTimeout(r, 8));
+      }
+      await new Promise((r) => setTimeout(r, 400));
+      watching = false;
+
+      const sorted = [...rafGaps].sort((a, b) => a - b);
+      const pct = (p: number) =>
+        sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+      return {
+        rows,
+        webglEngaged,
+        frames: 40,
+        streamMs: Math.round(performance.now() - t0 - 400),
+        rafGapP50: pct(0.5).toFixed(1),
+        rafGapP95: pct(0.95).toFixed(1),
+        rafGapMax: Math.max(...rafGaps).toFixed(1),
+      };
+    });
+    console.log("[scroll-perf][webgl]", JSON.stringify(result));
   });
 });
