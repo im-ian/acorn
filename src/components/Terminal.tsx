@@ -10,7 +10,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
@@ -62,11 +61,9 @@ import {
   terminalMouseTrackingReleaseAction,
 } from "../lib/terminalMouseTracking";
 import {
-  altScreenOwnsWheel,
   applicationOwnsWheel,
   patchTerminalWheelScroll,
 } from "../lib/terminalWheelScroll";
-import { createWebglBurstController } from "../lib/terminalWebglBurst";
 
 import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
@@ -1389,9 +1386,7 @@ export function Terminal({
     //
     // One rAF-throttled refresh after each parsed write, plus an idle
     // refresh after the burst goes quiet to catch interrupted final
-    // frames. Alt-screen wheel bursts skip both and rebuild once the
-    // burst window expires — a full refresh per scroll tick starves
-    // the next wheel event.
+    // frames.
     const VIEWPORT_REPAINT_IDLE_MS = 120;
     let viewportRepaintTimer: number | null = null;
     let viewportRepaintFrame: number | null = null;
@@ -1421,54 +1416,6 @@ export function Terminal({
         repaintViewport();
       }, VIEWPORT_REPAINT_IDLE_MS);
     };
-    // Capture phase so an xterm stopPropagation cannot hide the wheel.
-    const WHEEL_BURST_WINDOW_MS = 250;
-    let wheelBurstEndTimer: number | null = null;
-    const inAltScreenWheelBurst = () => wheelBurstEndTimer !== null;
-    // GPU renderer for the burst window only. The DOM renderer stays the
-    // resting state for IME correctness (composition view anchoring, the
-    // span-cloning tail view); the WebGL addon takes over while a TUI that
-    // owns the wheel is being scrolled, which is the one interaction where
-    // frames arrive faster than the DOM renderer can paint them.
-    const webglBurst = createWebglBurstController({
-      loadAddon: () => {
-        const addon = new WebglAddon();
-        term.loadAddon(addon);
-        return addon;
-      },
-      isEligible: () =>
-        altScreenOwnsWheel(term) &&
-        !composing &&
-        // The WebGL renderer paints an opaque background; keep the DOM
-        // renderer when the terminal background is see-through.
-        !terminalBackgroundActive(
-          useSettings.getState().settings.appearance.background,
-        ),
-      afterSwap: () => {
-        // The cell-measurement patch lives on the renderer instance.
-        try {
-          fitTerminalRef.current?.();
-        } catch {
-          // Zero-size container mid-teardown; the ResizeObserver re-fits.
-        }
-        repaintViewport();
-      },
-    });
-    const onWheelBurst = () => {
-      if (!altScreenOwnsWheel(term)) return;
-      webglBurst.noteWheel();
-      if (wheelBurstEndTimer !== null) {
-        window.clearTimeout(wheelBurstEndTimer);
-      }
-      wheelBurstEndTimer = window.setTimeout(() => {
-        wheelBurstEndTimer = null;
-        scheduleViewportFrameRepaint();
-      }, WHEEL_BURST_WINDOW_MS);
-    };
-    container.addEventListener("wheel", onWheelBurst, {
-      capture: true,
-      passive: true,
-    });
 
     const writeToPty = (targetSessionId: string, data: string) => {
       void api.ptyWrite(targetSessionId, data).catch((err: unknown) => {
@@ -1789,10 +1736,6 @@ export function Terminal({
         hideComposing();
         return;
       }
-      // Composition rendering needs the DOM renderer (span cloning, cursor
-      // anchoring); a scroll burst cannot be mid-composition, so evict the
-      // WebGL renderer before painting the preview.
-      webglBurst.noteComposition();
       composingText = text;
       container.classList.add(COMPOSING_CLASS);
       renderComposing();
@@ -2907,10 +2850,8 @@ export function Terminal({
         if (isActiveRef.current) {
           // Hidden portal targets keep their xterm buffer current but do not
           // need DOM repaint work until TerminalHost moves them on-screen.
-          if (!inAltScreenWheelBurst()) {
-            scheduleViewportFrameRepaint();
-            scheduleViewportIdleRepaint();
-          }
+          scheduleViewportFrameRepaint();
+          scheduleViewportIdleRepaint();
         }
         // The sticky prompt is buffer-derived; keep it in sync with parsed
         // output even when the terminal was hidden during the write.
@@ -3297,7 +3238,6 @@ export function Terminal({
       try { xtversionParserDisposable.dispose(); } catch { /* ignore */ }
       container.removeAttribute("data-acorn-cursor-application-override");
       container.classList.remove(COMPOSING_CLASS);
-      webglBurst.dispose();
       try { fitAddon.dispose(); } catch { /* ignore */ }
       try { serializeAddon.dispose(); } catch { /* ignore */ }
       term.dispose();
@@ -3333,10 +3273,6 @@ export function Terminal({
         cancelAnimationFrame(viewportRepaintFrame);
         viewportRepaintFrame = null;
       }
-      if (wheelBurstEndTimer !== null) {
-        window.clearTimeout(wheelBurstEndTimer);
-        wheelBurstEndTimer = null;
-      }
       cancelLinkTooltipHide();
       if (resizeTimer !== null) {
         window.clearTimeout(resizeTimer);
@@ -3348,7 +3284,6 @@ export function Terminal({
       }
       resizeObserver.disconnect();
       commandSizeSyncScheduler.dispose();
-      container.removeEventListener("wheel", onWheelBurst, true);
       container.removeEventListener("input", onInput, true);
       container.removeEventListener("keydown", onKeydown, true);
       container.removeEventListener("keypress", onKeypress, true);
