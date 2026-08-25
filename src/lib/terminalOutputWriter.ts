@@ -24,7 +24,9 @@ interface TerminalOutputWriterOptions {
   clearTimeoutFn?: (handle: number) => void;
 }
 
-const DEFAULT_ACTIVE_BATCH_BYTES = 512 * 1024;
+// A truecolor TUI frame is ~16KB. Larger active dumps stall WKWebView so
+// keystrokes queued during the parse flush as one paste when focus returns.
+const DEFAULT_ACTIVE_BATCH_BYTES = 32 * 1024;
 const DEFAULT_BACKGROUND_BATCH_BYTES = 256 * 1024;
 const DEFAULT_INACTIVE_BATCH_BYTES = 128 * 1024;
 const DEFAULT_BACKGROUND_DELAY_MS = 40;
@@ -42,6 +44,25 @@ function joinByteChunks(chunks: Uint8Array[], totalBytes: number): Uint8Array {
   return joined;
 }
 
+function splitAtSafeByte(bytes: Uint8Array, maxBytes: number): number {
+  if (bytes.byteLength <= maxBytes) return bytes.byteLength;
+  let take = maxBytes;
+  // Walk back over UTF-8 continuation bytes so a codepoint isn't torn.
+  while (take > 0 && (bytes[take] & 0xc0) === 0x80) {
+    take--;
+  }
+  // Prefer an ESC boundary so a CSI sequence stays with its payload when
+  // it still fits most of the budget.
+  const floor = Math.max(1, Math.floor(maxBytes / 2));
+  for (let i = take - 1; i >= floor; i--) {
+    if (bytes[i] === 0x1b) {
+      take = i;
+      break;
+    }
+  }
+  return take > 0 ? take : maxBytes;
+}
+
 function takeBatch(
   queue: Uint8Array[],
   maxBytes: number,
@@ -52,12 +73,22 @@ function takeBatch(
   let totalBytes = 0;
   while (queue.length > 0) {
     const next = queue[0];
+    if (totalBytes >= maxBytes) break;
     if (selected.length > 0 && totalBytes + next.byteLength > maxBytes) {
+      break;
+    }
+    // A single PTY read can be hundreds of KB. Yield between slices so
+    // queued keystrokes can run instead of flushing as one paste.
+    const room = maxBytes - totalBytes;
+    if (next.byteLength > room) {
+      const take = splitAtSafeByte(next, room);
+      selected.push(next.subarray(0, take));
+      queue[0] = next.subarray(take);
+      totalBytes += take;
       break;
     }
     selected.push(queue.shift()!);
     totalBytes += next.byteLength;
-    if (totalBytes >= maxBytes) break;
   }
 
   return {
@@ -202,7 +233,10 @@ export function createTerminalOutputWriter({
   const flushSoon = () => {
     if (disposed || queue.length === 0) return;
     cancelScheduledFlush();
-    scheduleFlush(true, true);
+    // Frame-paced, normal active batches. Urgent dumps exist for teardown
+    // and a saturated queue; promoting a hidden terminal to visible still
+    // has to yield so the keyboard can run between frames.
+    scheduleFlush(true, false);
   };
 
   const drainQueuedOutput = () => {

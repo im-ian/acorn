@@ -3,6 +3,8 @@ import {
   createTerminalRepaintScheduler,
   createTerminalVisibilityRepaintObserver,
   repaintTerminalViewport,
+  ALT_SCREEN_VIEWPORT_REFRESH_FLOOR_MS,
+  shouldRefreshViewportAfterWrite,
   shouldRepaintForVisibility,
 } from "./terminalRepaint";
 
@@ -110,6 +112,32 @@ describe("createTerminalRepaintScheduler", () => {
     vi.advanceTimersByTime(50);
 
     expect(repaint).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("shouldRefreshViewportAfterWrite", () => {
+  it("always refreshes overlay writes on the normal buffer", () => {
+    expect(
+      shouldRefreshViewportAfterWrite({
+        bufferType: "normal",
+        msSinceLastRefresh: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("throttles alt-screen refreshes instead of skipping them for the whole burst", () => {
+    expect(
+      shouldRefreshViewportAfterWrite({
+        bufferType: "alternate",
+        msSinceLastRefresh: ALT_SCREEN_VIEWPORT_REFRESH_FLOOR_MS - 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRefreshViewportAfterWrite({
+        bufferType: "alternate",
+        msSinceLastRefresh: ALT_SCREEN_VIEWPORT_REFRESH_FLOOR_MS,
+      }),
+    ).toBe(true);
   });
 });
 

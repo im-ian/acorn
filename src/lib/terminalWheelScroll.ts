@@ -18,21 +18,19 @@ interface XtermWheelInternals {
 // takes the wheel over — Claude Code's REPL enables `?1049` plus
 // `?1000`/`?1002`/`?1003`/`?1006` — scrolls normally there and crawls here.
 //
-// Convert the delta to lines ourselves and replay the event once per line.
-// xterm still encodes the report (or the arrow key), so the active mouse
-// protocol, the modifier bits and the cell coordinates stay its job.
+// Convert the delta to lines ourselves and replay one LINE-mode wheel
+// event per line. PIXEL replays have to beat xterm's 50px trackpad damper
+// and its device-pixel conversion; a tall cell (large font / line-height)
+// makes a 50px tick round to zero, so the TUI receives no report at all.
+// LINE mode is one report per event regardless of cell metrics. xterm still
+// encodes the report (or the arrow key), so the active mouse protocol, the
+// modifier bits and the cell coordinates stay its job.
 const APP_WHEEL_TRACKING_MODES = new Set(["vt200", "drag", "any"]);
 // Trackpad momentum carries hundreds of pixels per event. Writes coalesce
 // into one pty_write per microtask; the cap still bounds how many reports
 // the TUI sees in that burst so a flick cannot queue a backlog. Scaled by
 // the scroll speed so raising the setting still raises the ceiling.
 const MAX_LINES_PER_EVENT = 8;
-// Replayed events must survive xterm's own pixel→line conversion: at least one
-// line for the current cell height and `scrollSensitivity`, and above its 50px
-// trackpad-damping threshold.
-function replayDeltaPx(cellHeight: number, speed: number): number {
-  return Math.max(50, (cellHeight * 2) / speed);
-}
 
 /**
  * Wheel delta → number of lines to report, carrying the sub-line remainder so
@@ -124,19 +122,20 @@ export function patchTerminalWheelScroll(
     event.preventDefault();
     if (next.lines === 0) return false;
 
-    const magnitude = replayDeltaPx(cellHeight, speed);
-    const deltaY = next.lines > 0 ? magnitude : -magnitude;
+    const deltaY = next.lines > 0 ? 1 : -1;
     replaying = true;
     try {
       for (let i = 0; i < Math.abs(next.lines); i++) {
         element.dispatchEvent(
           new WheelEvent("wheel", {
             deltaY,
-            deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+            deltaX: 0,
+            deltaMode: WheelEvent.DOM_DELTA_LINE,
             clientX: event.clientX,
             clientY: event.clientY,
             screenX: event.screenX,
             screenY: event.screenY,
+            view: event.view,
             bubbles: false,
             cancelable: true,
           }),

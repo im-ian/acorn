@@ -72,6 +72,30 @@ export function createTerminalRepaintScheduler(
   return { schedule, dispose };
 }
 
+/** Minimum gap between extra full refreshes on the alternate buffer. */
+export const ALT_SCREEN_VIEWPORT_REFRESH_FLOOR_MS = 300;
+
+/**
+ * Whether a parsed PTY write should force a full viewport refresh.
+ *
+ * Overlay TUIs on the normal buffer leave stale cell DOM without a rebuild
+ * after every write. Alt-screen TUIs already paint dirty rows themselves;
+ * a second `refresh(0, rows-1)` on every write blocks WKWebView so queued
+ * keystrokes flush as one paste. A floor still fires during a continuous
+ * stream so an interrupted frame (Esc/Ctrl+C mid-redraw) cannot starve
+ * the trailing idle refresh forever.
+ */
+export function shouldRefreshViewportAfterWrite({
+  bufferType,
+  msSinceLastRefresh,
+}: {
+  bufferType: string;
+  msSinceLastRefresh: number;
+}): boolean {
+  if (bufferType !== "alternate") return true;
+  return msSinceLastRefresh >= ALT_SCREEN_VIEWPORT_REFRESH_FLOOR_MS;
+}
+
 /**
  * Whether a repaint is needed for a visibility transition. xterm's DOM renderer
  * skips row paints while its element has no layout box (background tab, hidden

@@ -132,7 +132,23 @@ describe("patchTerminalWheelScroll", () => {
     wheel({ deltaY: -100 });
 
     expect(reported).toHaveLength(5);
-    expect(reported.every((event) => event.deltaY < 0)).toBe(true);
+    expect(
+      reported.every(
+        (event) =>
+          event.deltaMode === WheelEvent.DOM_DELTA_LINE && event.deltaY === -1,
+      ),
+    ).toBe(true);
+  });
+
+  it("replays line-mode ticks so a tall cell cannot drop the TUI report", () => {
+    const { term, reported, wheel } = makeTerm({ cellHeight: 80 });
+    patchTerminalWheelScroll(term);
+
+    wheel({ deltaY: -80 });
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]?.deltaMode).toBe(WheelEvent.DOM_DELTA_LINE);
+    expect(reported[0]?.deltaY).toBe(-1);
   });
 
   it("reports more lines as the scroll speed rises", () => {

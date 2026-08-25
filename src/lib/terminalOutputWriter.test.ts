@@ -138,6 +138,56 @@ describe("createTerminalOutputWriter", () => {
     expect(writer.pendingBytes()).toBe(0);
   });
 
+  it("flushSoon drains a backlog in active-sized frame chunks", () => {
+    const frames = createFrameScheduler();
+    const written: string[] = [];
+    const writer = createTerminalOutputWriter({
+      write: (chunk, onParsed) => {
+        written.push(text(chunk));
+        onParsed();
+      },
+      afterWrite: vi.fn(),
+      isActive: () => true,
+      activeBatchBytes: 4,
+      requestFrame: frames.requestFrame,
+      cancelFrame: frames.cancelFrame,
+    });
+
+    writer.enqueue(bytes("abcdefgh"));
+    writer.flushSoon();
+
+    frames.runFrame();
+    expect(written).toEqual(["abcd"]);
+    expect(writer.pendingBytes()).toBe(4);
+
+    frames.runFrame();
+    expect(written).toEqual(["abcd", "efgh"]);
+    expect(writer.pendingBytes()).toBe(0);
+  });
+
+  it("does not tear a UTF-8 codepoint when slicing an oversized chunk", () => {
+    const frames = createFrameScheduler();
+    const written: Uint8Array[] = [];
+    const writer = createTerminalOutputWriter({
+      write: (chunk, onParsed) => {
+        written.push(chunk);
+        onParsed();
+      },
+      afterWrite: vi.fn(),
+      isActive: () => true,
+      activeBatchBytes: 4,
+      requestFrame: frames.requestFrame,
+      cancelFrame: frames.cancelFrame,
+    });
+
+    writer.enqueue(new Uint8Array([0x61, 0x61, 0x61, 0xc3, 0xa9]));
+    writer.flushSoon();
+    frames.runFrame();
+    expect(Array.from(written[0] ?? [])).toEqual([0x61, 0x61, 0x61]);
+    frames.runFrame();
+    expect(Array.from(written[1] ?? [])).toEqual([0xc3, 0xa9]);
+  });
+
   it("promotes pending inactive output to the next frame when flushed soon", () => {
     vi.useFakeTimers();
     const frames = createFrameScheduler();
