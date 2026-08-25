@@ -2682,6 +2682,109 @@ test.describe("terminal: spawn", () => {
     );
   });
 
+  test("opens terminal file links while a TUI holds mouse tracking", async ({
+    page,
+    tauri,
+  }) => {
+    // Right-click paste takes the real left press/release over inside a
+    // mouse-tracking TUI and replays a synthetic pair. The replay has to land
+    // on xterm's screen element: the linkifier listens there, while the mouse
+    // protocol and selection listen on the root above it.
+    await enableTerminalRightClickPasteSelection(page);
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_cwd", () => "/tmp/demo");
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __trackingLinkChannelId?: number };
+      w.__trackingLinkChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("fs_file_exists", (args) => {
+      const { path } = args as { path: string };
+      return path === "/tmp/demo/src/components/FolderPermissionWarmupModal.tsx";
+    });
+    await tauri.handle("fs_read_file", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/demo/src/components/FolderPermissionWarmupModal.tsx") {
+        throw new Error(`unexpected path: ${path}`);
+      }
+      const lines = Array.from(
+        { length: 100 },
+        (_, index) => `line ${index + 1}`,
+      );
+      lines[77] = "target line 78";
+      return {
+        content: lines.join("\n"),
+        size: 1024,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __trackingLinkChannelId?: number })
+              .__trackingLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "src/components/FolderPermissionWarmupModal.tsx:78";
+    await emitSubscribedPtyOutput(
+      page,
+      "__trackingLinkChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+    await emitSubscribedPtyOutput(
+      page,
+      "__trackingLinkChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    const linkRect = await terminalTextRect(page, linkText);
+    expect(linkRect).not.toBeNull();
+    const x = linkRect!.left + 10;
+    const y = (linkRect!.top + linkRect!.bottom) / 2;
+    await page.mouse.move(x, y);
+    await page.waitForTimeout(30);
+    await page.mouse.click(x, y);
+
+    await expect(
+      page.getByRole("button", {
+        name: /FolderPermissionWarmupModal\.tsx Close tab/,
+      }),
+    ).toBeVisible();
+  });
+
   test("opens file-only terminal links in the code viewer", async ({
     page,
     tauri,

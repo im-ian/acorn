@@ -2229,10 +2229,16 @@ export function Terminal({
       y: number,
       extra: MouseEventInit,
     ) => {
-      // Mouse-protocol and selection listeners are on xterm's root. Dispatch
-      // there so a helper-textarea or canvas hit from elementFromPoint cannot
-      // miss them.
-      const target = term.element ?? container;
+      // xterm splits its mouse listeners across two elements: the mouse
+      // protocol and selection sit on the root (`.xterm`), the linkifier sits
+      // on the screen element below it (`.xterm-screen`). Dispatch on the
+      // screen element — it fires there in the target phase and still bubbles
+      // to the root, so all three see the replay. Dispatching on the root
+      // instead would skip the linkifier (bubbling never descends) and kill
+      // link clicks; elementFromPoint could land on a helper textarea or
+      // canvas outside both.
+      const target =
+        term.element?.querySelector(".xterm-screen") ?? term.element ?? container;
       replayingMouse = true;
       try {
         target.dispatchEvent(
