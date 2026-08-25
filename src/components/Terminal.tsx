@@ -130,7 +130,7 @@ import {
   type WorktreeAdoptionIntent,
 } from "../lib/worktreeAdoption";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
-import { useAppStore } from "../store";
+import { useAppStore, type PendingTerminalInput } from "../store";
 import { StickyUserPrompt } from "./StickyUserPrompt";
 import { FloatingTooltip, Tooltip, type TooltipAnchorRect } from "./Tooltip";
 
@@ -2719,6 +2719,7 @@ export function Terminal({
     resizeObserver.observe(container);
 
     let exited = false;
+    let spawnInFlight = false;
     // Snapshot of linked worktrees taken right before each PTY spawn. On exit
     // we re-fetch and compare when this spawn cycle carried an explicit
     // adoption intent, or when this session's own live cwd was observed inside
@@ -2727,9 +2728,57 @@ export function Terminal({
     // created it while this shell was idle.
     let worktreeSnapshot: Set<string> | null = null;
     let worktreeAdoptionIntent: WorktreeAdoptionIntent = { kind: "none" };
+    // Restore after a failed drain re-enters `pendingTerminalInput`. The
+    // subscribe below would otherwise retry the same live PTY in a loop.
+    let restoringFailedQueue = false;
+
+    async function writeQueuedCommand(queued: PendingTerminalInput) {
+      if (disposed) {
+        restoringFailedQueue = true;
+        useAppStore.getState().restorePendingTerminalInput(sessionId, queued);
+        restoringFailedQueue = false;
+        return;
+      }
+      const payload = encodeStringToBase64(queued.command + "\r");
+      try {
+        await invoke("pty_write", { sessionId, data: payload });
+      } catch (err) {
+        restoringFailedQueue = true;
+        const restored = useAppStore
+          .getState()
+          .restorePendingTerminalInput(sessionId, queued);
+        restoringFailedQueue = false;
+        console.error("[Terminal] pending pty_write failed", err);
+        if (!disposed) {
+          const retryDetail = restored
+            ? " The command remains queued for the next terminal attach."
+            : " A newer command is already queued for this session.";
+          term.write(
+            `\r\n${ANSI_RED}[acorn] Failed to run queued command: ${formatError(err)}${retryDetail}${ANSI_RESET}\r\n`,
+          );
+          showTranslatedErrorToast(
+            "toasts.session.pendingCommandFailed",
+            err,
+          );
+        }
+        return;
+      }
+      if (queued.adoptWorktreeOnExit) {
+        worktreeAdoptionIntent = { kind: "after-exit" };
+      }
+    }
+
+    async function drainQueuedTerminalInput() {
+      const queued = useAppStore
+        .getState()
+        .consumePendingTerminalInput(sessionId);
+      if (!queued) return;
+      await writeQueuedCommand(queued);
+    }
 
     async function spawnPty() {
-      if (disposed) return;
+      if (disposed || spawnInFlight) return;
+      spawnInFlight = true;
       try {
         ptyReady = false;
         lastPtyResize = null;
@@ -2793,53 +2842,32 @@ export function Terminal({
         // Drain the queue once the PTY is alive — the shell buffers the
         // bytes until its prompt is ready, so a small startup delay is
         // tolerable without coordinating with the prompt-ready signal.
-        const queued = useAppStore
-          .getState()
-          .consumePendingTerminalInput(sessionId);
-        // Cleanup can run between consume and write under StrictMode's
-        // mount/cleanup/mount sequence. Re-check `disposed` so we do not
-        // pty_write into a session whose PTY has already been killed.
-        if (queued) {
-          if (disposed) {
-            useAppStore
-              .getState()
-              .restorePendingTerminalInput(sessionId, queued);
-            return;
-          }
-          const payload = encodeStringToBase64(queued.command + "\r");
-          try {
-            await invoke("pty_write", { sessionId, data: payload });
-          } catch (err) {
-            const restored = useAppStore
-              .getState()
-              .restorePendingTerminalInput(sessionId, queued);
-            console.error("[Terminal] pending pty_write failed", err);
-            if (!disposed) {
-              const retryDetail = restored
-                ? " The command remains queued for the next terminal attach."
-                : " A newer command is already queued for this session.";
-              term.write(
-                `\r\n${ANSI_RED}[acorn] Failed to run queued command: ${formatError(err)}${retryDetail}${ANSI_RESET}\r\n`,
-              );
-              showTranslatedErrorToast(
-                "toasts.session.pendingCommandFailed",
-                err,
-              );
-            }
-            return;
-          }
-          if (queued.adoptWorktreeOnExit) {
-            worktreeAdoptionIntent = { kind: "after-exit" };
-          }
-        }
+        await drainQueuedTerminalInput();
       } catch (err) {
         if (!disposed) {
           term.write(
             `\r\n${ANSI_RED}[acorn] Failed to spawn pty: ${formatError(err)}${ANSI_RESET}\r\n`,
           );
         }
+      } finally {
+        spawnInFlight = false;
       }
     }
+
+    // Resume can queue after this mount already drained an empty queue
+    // (snapshot restore finishes, then the user clicks Resume). Drain
+    // immediately when the PTY is live; respawn if this shell already
+    // exited. An in-flight spawn still consumes the queue at the end.
+    const unsubPendingInput = useAppStore.subscribe((state, prev) => {
+      if (disposed || restoringFailedQueue) return;
+      if (!state.pendingTerminalInput[sessionId]) return;
+      if (prev.pendingTerminalInput[sessionId]) return;
+      if (ptyReady) {
+        void drainQueuedTerminalInput();
+        return;
+      }
+      if (exited) void spawnPty();
+    });
 
     const outputWriter = createTerminalOutputWriter({
       write: (bytes, onParsed) => {
@@ -3250,6 +3278,7 @@ export function Terminal({
       disposed = true;
       void api.flushPtyWrite(sessionId);
       const detachingForReuse = consumeTerminalDetaching(sessionId);
+      unsubPendingInput();
       unsubSettings();
       hideLinkTooltip(true);
       if (themeFrame !== null) {

@@ -3,9 +3,11 @@ import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { api, type AgentKind, type ResumeCandidate } from "../lib/api";
 import { buildAgentResumeCommand } from "../lib/agentProvider";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { isMissingPtyError } from "../lib/ptyErrors";
 import { useToasts } from "../lib/toasts";
 import { writeClipboardText } from "../lib/clipboardText";
 import { useTranslation } from "../lib/useTranslation";
+import { useAppStore } from "../store";
 import {
   Button,
   CodeValue,
@@ -131,10 +133,20 @@ export function AgentResumeModal({
     // PTYs expect a carriage return (`\r`, what xterm sends when the
     // user presses Enter) to commit a line. Using `\n` lands as a
     // literal LF in zsh's line buffer instead of running the command.
-    const cmd = `${buildAgentResumeCommand(agent, candidate.uuid)}\r`;
+    const command = buildAgentResumeCommand(agent, candidate.uuid);
     try {
-      await api.ptyWrite(sessionId, cmd);
+      await api.ptyWrite(sessionId, `${command}\r`);
     } catch (writeError: unknown) {
+      // Cold boot paints the restored snapshot before `pty_spawn`
+      // returns, so Resume can land with no live handle. Queue for
+      // the in-flight or next spawn instead of failing the click.
+      if (isMissingPtyError(writeError)) {
+        useAppStore.getState().setPendingTerminalInput(sessionId, command, {
+          agentProvider: agent,
+        });
+        onDismiss();
+        return;
+      }
       setError(
         `${dt(t, "dialogs.agentResume.resumeFailed")} ${errorMessage(writeError)}`,
       );
