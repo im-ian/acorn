@@ -1,4 +1,4 @@
-import { test, type Page } from "./support";
+import { expect, test, type Page } from "./support";
 import type { TauriMock } from "./support";
 
 // Diagnostic probe for the TUI scroll pipeline (#851/#857/#859 follow-up).
@@ -440,5 +440,150 @@ test.describe("terminal: TUI scroll perf probe", () => {
       };
     });
     console.log("[scroll-perf][webgl]", JSON.stringify(result));
+  });
+
+  // Regression gate: the cell-measurement patch (fractional letter-spacing,
+  // CJK width heuristic) lives on the renderer INSTANCE. A WebGL burst swap
+  // builds a fresh DOM renderer on the way back; without re-patching, the
+  // row container's letter-spacing silently reverts after the first scroll
+  // and stays wrong until the next resize.
+  test("letter-spacing survives a webgl burst round-trip", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { letterSpacing: 0.5 } }),
+      );
+    });
+    await seed(tauri);
+    await activateTerminal(page);
+    await enterTuiMode(page);
+    await emitPtyOutput(page, "\x1b[1;1Hhello letter spacing");
+    await page.waitForTimeout(200);
+
+    const readSpacing = () =>
+      page.evaluate(() => {
+        const rows = document.querySelector<HTMLElement>(".xterm-rows");
+        return rows ? rows.style.letterSpacing : null;
+      });
+    const before = await readSpacing();
+    // The fractional 0.5px configuration must have engaged the patch —
+    // otherwise this test would pass vacuously.
+    expect(before).not.toBeNull();
+    expect(before).not.toBe("");
+
+    // One wheel notch → WebGL engages; wait past the 1.5s quiet window so
+    // the DOM renderer comes back.
+    await page.evaluate(() => {
+      const screen = document.querySelector<HTMLElement>(".xterm-screen")!;
+      screen.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaY: 100,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    await expect
+      .poll(() => page.evaluate(() => !!document.querySelector(".xterm-screen canvas")))
+      .toBe(true);
+    await expect
+      .poll(
+        () => page.evaluate(() => !!document.querySelector(".xterm-screen canvas")),
+        { timeout: 5_000 },
+      )
+      .toBe(false);
+
+    await page.waitForTimeout(100);
+    expect(await readSpacing()).toBe(before);
+  });
+
+  // Grok-style overlay TUIs run on the NORMAL buffer with mouse tracking
+  // (no ?1049). They redraw in small deltas the DOM renderer handles at
+  // display cadence, so the burst machinery (WebGL swap, skipped repaints)
+  // must stay out of their way entirely: no canvas, no scrollback growth,
+  // no doubled frame.
+  test("normal-buffer TUI (grok-like) keeps the stock render path", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+    // Mouse tracking only — the buffer stays normal.
+    await emitPtyOutput(page, "\x1b[?1002h\x1b[?1006h\x1b[2J\x1b[H");
+    await page.waitForTimeout(100);
+
+    const frame = (n: number) => {
+      let out = "\x1b[H";
+      for (let r = 1; r <= 20; r++) {
+        out += `\x1b[${r};1H\x1b[3${(r + n) % 8}mgrok row ${r} tick ${n}\x1b[0m\x1b[K`;
+      }
+      return out;
+    };
+    await emitPtyOutput(page, frame(0));
+    await page.waitForTimeout(100);
+
+    const readState = () =>
+      page.evaluate(() => {
+        const viewport = document.querySelector<HTMLElement>(".xterm-viewport");
+        const rows = document.querySelector<HTMLElement>(".xterm-rows");
+        const rowTexts = Array.from(
+          document.querySelectorAll(".xterm-rows > div"),
+        )
+          .map((el) => (el.textContent ?? "").trim())
+          .filter((t) => t.length > 0);
+        return {
+          scrollHeight: viewport?.scrollHeight ?? 0,
+          scrollTop: viewport?.scrollTop ?? 0,
+          canvas: !!document.querySelector(".xterm-screen canvas"),
+          domRowsVisible: rows
+            ? getComputedStyle(rows).display !== "none" &&
+              getComputedStyle(rows).visibility !== "hidden"
+            : false,
+          nonEmptyDomRows: rowTexts.length,
+          dupTicks: rowTexts.filter((t) => t.includes("grok row 1 tick"))
+            .length,
+        };
+      });
+
+    const before = await readState();
+    expect(before.canvas).toBe(false);
+
+    // Engage the burst and stream redraw frames like a scrolled TUI.
+    await page.evaluate(() => {
+      const screen = document.querySelector<HTMLElement>(".xterm-screen")!;
+      screen.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaY: 100,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    for (let n = 1; n <= 10; n++) {
+      await emitPtyOutput(page, frame(n));
+      await page.waitForTimeout(16);
+    }
+    const during = await readState();
+    await page.waitForTimeout(300);
+    const after = await readState();
+
+    console.log(
+      "[scroll-perf][grok]",
+      JSON.stringify({ before, during, after }),
+    );
+    // The burst renderer must not engage on the normal buffer.
+    expect(during.canvas).toBe(false);
+    expect(after.canvas).toBe(false);
+    // No redraw frame may leak into scrollback: the viewport must not grow.
+    expect(during.scrollHeight).toBe(before.scrollHeight);
+    expect(after.scrollHeight).toBe(before.scrollHeight);
+    // Exactly one copy of the frame, live in the DOM rows throughout.
+    expect(during.domRowsVisible).toBe(true);
+    expect(after.dupTicks).toBeLessThanOrEqual(1);
   });
 });
