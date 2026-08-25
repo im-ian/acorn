@@ -255,4 +255,84 @@ test.describe("terminal: TUI scroll perf probe", () => {
     });
     console.log("[scroll-perf][output]", JSON.stringify(result));
   });
+
+  // Control group: a vim/htop-style TUI that repaints only the few rows
+  // that changed. If this stays smooth where the full-frame stream chokes,
+  // the bottleneck is per-frame render volume, not the pipeline.
+  test("output half: delta redraw stream (vim-like) render cost", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+    await enterTuiMode(page);
+
+    const result = await page.evaluate(async () => {
+      const rows =
+        document.querySelectorAll(".xterm-rows > div").length || 24;
+      const cols = 120;
+      // 3 rows rewritten per frame, plain 16-color spans.
+      const frame = (n: number): string => {
+        let out = "";
+        for (let i = 0; i < 3; i++) {
+          const r = 1 + ((n * 3 + i) % rows);
+          out += `\x1b[${r};1H\x1b[${31 + ((r + n) % 7)}m`;
+          let line = "";
+          for (let c = 0; c < cols - 10; c++) {
+            line += String.fromCharCode(33 + ((c + r + n * 7) % 90));
+          }
+          out += line + "\x1b[0m\x1b[K";
+        }
+        return out;
+      };
+      const frameBytes = new TextEncoder().encode(frame(0)).length;
+
+      const w = window as unknown as {
+        __scrollOutputChannelId?: number;
+        __ptyIndex?: number;
+        [key: string]: unknown;
+      };
+      const id = w.__scrollOutputChannelId!;
+      const callback = w[`_${id}`] as (payload: {
+        index: number;
+        message: number[];
+      }) => void;
+
+      const rafGaps: number[] = [];
+      let last = performance.now();
+      let watching = true;
+      const tick = () => {
+        const now = performance.now();
+        rafGaps.push(now - last);
+        last = now;
+        if (watching) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+
+      const t0 = performance.now();
+      for (let n = 0; n < 40; n++) {
+        callback({
+          index: w.__ptyIndex!++,
+          message: Array.from(new TextEncoder().encode(frame(n))),
+        });
+        await new Promise((r) => setTimeout(r, 8));
+      }
+      await new Promise((r) => setTimeout(r, 400));
+      watching = false;
+
+      const sorted = [...rafGaps].sort((a, b) => a - b);
+      const pct = (p: number) =>
+        sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+      return {
+        rows,
+        frameBytes,
+        frames: 40,
+        streamMs: Math.round(performance.now() - t0 - 400),
+        rafGapP50: pct(0.5).toFixed(1),
+        rafGapP95: pct(0.95).toFixed(1),
+        rafGapMax: Math.max(...rafGaps).toFixed(1),
+      };
+    });
+    console.log("[scroll-perf][delta]", JSON.stringify(result));
+  });
 });
