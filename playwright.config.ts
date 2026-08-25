@@ -21,6 +21,18 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
+    // WebKit approximates the WKWebView the shipped app runs in. Scoped to
+    // the scroll perf probe and opt-in (CI installs chromium only):
+    //   PERF_WEBKIT=1 playwright test terminal-scroll-perf
+    ...(process.env.PERF_WEBKIT
+      ? [
+          {
+            name: "webkit-perf",
+            use: { ...devices["Desktop Safari"] },
+            testMatch: /terminal-scroll-perf/,
+          },
+        ]
+      : []),
   ],
   webServer: {
     command: `pnpm run dev -- --port ${PORT}`,
