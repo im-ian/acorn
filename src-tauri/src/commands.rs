@@ -9321,14 +9321,17 @@ pub async fn pty_write(
     // Daemon-managed sessions route stdin through the control socket.
     // A stream attachment is the fast-path signal, but detached/re-attaching
     // sessions can be alive in the daemon without an app-side output pump
-    // for a short window. The write itself is blocking I/O (socket or PTY
-    // master); run it off the UI thread so a TUI wheel burst cannot stall
-    // WKWebView eval of the matching output.
+    // for a short window. A persisted `daemon_session_id` is sticky even
+    // when `is_alive` is false (boot reconnect, list_sessions blip) so a
+    // bound UUID cannot fall through to the empty in-process map.
+    // The write itself is blocking I/O (socket or PTY master); run it off
+    // the UI thread so a TUI wheel burst cannot stall WKWebView eval of
+    // the matching output.
     let state = state.inner().clone();
     let lock = state.pty_write_lock(id);
     let _write_order = lock.lock().await;
     run_blocking("pty_write", move || {
-        if daemon_session_alive_or_attached(&state, id) {
+        if pty_io_uses_daemon(&state, id) {
             state
                 .daemon_bridge
                 .send_input(id, &bytes)
@@ -9356,7 +9359,7 @@ pub fn pty_resize(
     let id = parse_id(&session_id)?;
     let pixel_width = pixel_width.unwrap_or(0);
     let pixel_height = pixel_height.unwrap_or(0);
-    if daemon_session_alive_or_attached(&state, id) {
+    if pty_io_uses_daemon(&state, id) {
         return state
             .daemon_bridge
             .resize(id, cols, rows, pixel_width, pixel_height)
@@ -9442,6 +9445,18 @@ pub fn pty_detach(
 
 fn daemon_session_alive_or_attached(state: &AppState, id: Uuid) -> bool {
     state.stream_registry.contains(&id) || state.daemon_bridge.is_alive(id)
+}
+
+fn pty_io_uses_daemon(state: &AppState, id: Uuid) -> bool {
+    if daemon_session_alive_or_attached(state, id) {
+        return true;
+    }
+    state
+        .sessions
+        .get(&id)
+        .ok()
+        .and_then(|session| session.daemon_session_id)
+        .is_some()
 }
 
 fn detach_requested_by_stale_renderer(
@@ -12225,7 +12240,7 @@ mod tests {
         infer_acornd_root_from_session_pids, inject_agent_hook_env,
         linked_worktree_root_for_registered_path, memory_root_pids, normalize_session_goal,
         normalize_session_graph, poll_defers_to_hook, project_creation_git_error,
-        remove_linked_worktree_at_path, restore_pending_session_removal,
+        pty_io_uses_daemon, remove_linked_worktree_at_path, restore_pending_session_removal,
         retry_removal_cleanup_inner, seed_initial_commit, should_remove_local_project_mirror,
         should_route_session_to_daemon, terminate_session_runtime, validate_display_name,
         validate_editor_command, validate_new_project_name, validate_pty_caller_env,
@@ -16457,6 +16472,30 @@ mod tests {
         assert!(should_route_session_to_daemon(true, None));
         assert!(should_route_session_to_daemon(false, Some(daemon_id)));
         assert!(!should_route_session_to_daemon(false, None));
+    }
+
+    #[test]
+    fn sticky_daemon_binding_routes_pty_io_without_live_attachment() {
+        let state = AppState::new();
+        let session = state
+            .sessions
+            .insert(scoped_session("sticky-daemon", "/tmp", false));
+        state
+            .sessions
+            .set_daemon_session_id(&session.id, Some(session.id))
+            .expect("bind session to daemon");
+
+        assert!(pty_io_uses_daemon(&state, session.id));
+    }
+
+    #[test]
+    fn unbound_session_does_not_route_pty_io_through_daemon() {
+        let state = AppState::new();
+        let session = state
+            .sessions
+            .insert(scoped_session("in-process", "/tmp", false));
+
+        assert!(!pty_io_uses_daemon(&state, session.id));
     }
 
     #[test]
