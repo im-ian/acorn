@@ -1252,6 +1252,160 @@ test.describe("terminal: spawn", () => {
       });
   });
 
+  test("keeps fractional letter spacing while an alt-screen TUI is scrolled", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { letterSpacing: -0.25 } }),
+      );
+    });
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __scrollLetterChannelId?: number };
+      w.__scrollLetterChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __scrollLetterChannelId?: number })
+              .__scrollLetterChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const readSpacing = () =>
+      page.evaluate(() => {
+        const rows = document.querySelector<HTMLElement>(".xterm-rows");
+        return rows?.style.letterSpacing ?? null;
+      });
+
+    await expect.poll(readSpacing).not.toBe("");
+    const before = await readSpacing();
+    expect(before).not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__scrollLetterChannelId",
+      "\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[2J\x1b[H",
+      0,
+    );
+    for (let n = 1; n <= 8; n++) {
+      await page.evaluate(() => {
+        document.querySelector<HTMLElement>(".xterm-screen")?.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaY: 100,
+            deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      await emitSubscribedPtyOutput(
+        page,
+        "__scrollLetterChannelId",
+        `\x1b[H\x1b[2Kclaude frame ${n}`,
+        n,
+      );
+    }
+
+    await expect.poll(readSpacing).toBe(before);
+  });
+
+  test("keeps a normal-buffer overlay TUI to a single copy while scrolling", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __grokScrollChannelId?: number };
+      w.__grokScrollChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __grokScrollChannelId?: number })
+              .__grokScrollChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const frame = (n: number) => {
+      let out = "\x1b[H";
+      for (let r = 1; r <= 12; r++) {
+        out += `\x1b[${r};1Hgrok row ${r} tick ${n}\x1b[K`;
+      }
+      return out;
+    };
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__grokScrollChannelId",
+      `\x1b[?1002h\x1b[?1006h\x1b[2J${frame(0)}`,
+      0,
+    );
+    await expect(page.locator(".xterm")).toContainText("grok row 1 tick 0");
+
+    const readState = () =>
+      page.evaluate(() => {
+        const viewport = document.querySelector<HTMLElement>(".xterm-viewport");
+        const rowTexts = Array.from(
+          document.querySelectorAll(".xterm-rows > div"),
+        )
+          .map((el) => (el.textContent ?? "").trim())
+          .filter((t) => t.length > 0);
+        return {
+          scrollHeight: viewport?.scrollHeight ?? 0,
+          dupTicks: rowTexts.filter((t) => t.includes("grok row 1 tick"))
+            .length,
+        };
+      });
+
+    const before = await readState();
+    expect(before.dupTicks).toBe(1);
+
+    for (let n = 1; n <= 8; n++) {
+      await page.evaluate(() => {
+        document.querySelector<HTMLElement>(".xterm-screen")?.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaY: 100,
+            deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      await emitSubscribedPtyOutput(page, "__grokScrollChannelId", frame(n), n);
+    }
+
+    await expect
+      .poll(async () => page.locator(".xterm").innerText())
+      .toContain("grok row 1 tick 8");
+    const after = await readState();
+    expect(after.scrollHeight).toBe(before.scrollHeight);
+    expect(after.dupTicks).toBe(1);
+  });
+
   test("applies terminal line height setting to xterm rows", async ({
     page,
     tauri,

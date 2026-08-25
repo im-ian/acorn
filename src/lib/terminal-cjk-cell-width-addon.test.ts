@@ -258,13 +258,15 @@ describe("terminal CJK cell width patch", () => {
     expect(rowFactory).not.toHaveProperty("defaultSpacing");
   });
 
-  it("restores xterm default letter spacing when no CJK calibration is needed", () => {
+  it("leaves xterm default letter spacing when no CJK calibration is needed", () => {
     const rowContainer = document.createElement("div");
-    const rowFactory = {};
+    const rowFactory = { defaultSpacing: 2 };
+    let defaultSpacingCalls = 0;
     const renderer = {
       _rowContainer: rowContainer,
       _rowFactory: rowFactory,
       _setDefaultSpacing: () => {
+        defaultSpacingCalls += 1;
         rowContainer.style.letterSpacing = "2px";
         Object.assign(rowFactory, { defaultSpacing: 2 });
       },
@@ -299,23 +301,31 @@ describe("terminal CJK cell width patch", () => {
     expect(renderer.dimensions.css.canvas.width).toBe(60);
     expect(rowContainer.style.letterSpacing).toBe("2px");
     expect(rowFactory).toMatchObject({ defaultSpacing: 2 });
+    expect(defaultSpacingCalls).toBe(0);
   });
 
-  it("keeps repeated automatic calibration stable when W measurement includes existing letter spacing", () => {
-    const rowContainer = document.createElement("div");
+  it("keeps repeated automatic calibration stable without clearing live letter spacing", () => {
+    const assignments: string[] = [];
+    const style = {
+      get letterSpacing() {
+        return this.value;
+      },
+      set letterSpacing(value: string) {
+        assignments.push(value);
+        this.value = value;
+      },
+      value: "",
+    };
     const rowFactory = {};
     const renderer = {
-      _rowContainer: rowContainer,
+      _rowContainer: { style } as unknown as HTMLElement,
       _rowFactory: rowFactory,
+      _setDefaultSpacing: undefined as undefined | (() => void),
       _widthCache: {
         clear: () => undefined,
         get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
           if (chars === "가" || chars === "あ" || chars === "汉" || chars === "漢") {
             return 8;
-          }
-          if (chars === "W") {
-            const spacing = Number.parseFloat(rowContainer.style.letterSpacing);
-            return 8 + (Number.isFinite(spacing) ? spacing : 0);
           }
           return 8;
         },
@@ -333,9 +343,18 @@ describe("terminal CJK cell width patch", () => {
     patchTerminalCellMeasurements(terminal);
 
     expect(renderer.dimensions.css.cell.width).toBe(4);
-    expect(renderer.dimensions.css.canvas.width).toBe(24);
-    expect(rowContainer.style.letterSpacing).toBe("-4px");
+    expect(style.letterSpacing).toBe("-4px");
     expect(rowFactory).toMatchObject({ defaultSpacing: -4 });
+    expect(assignments).toEqual(["-4px"]);
+
+    renderer.dimensions.css.cell.width = 8;
+    renderer.dimensions.css.canvas.width = 48;
+    renderer._setDefaultSpacing?.();
+
+    expect(renderer.dimensions.css.cell.width).toBe(4);
+    expect(style.letterSpacing).toBe("-4px");
+    expect(assignments.every((value) => value !== "")).toBe(true);
+    expect(assignments).toEqual(["-4px"]);
   });
 
   it("reapplies patched metrics synchronously when xterm resize resets dimensions", () => {

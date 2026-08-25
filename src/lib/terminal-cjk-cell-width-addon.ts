@@ -67,7 +67,6 @@ export function patchTerminalCellMeasurements(
     return;
   }
 
-  restoreLegacyCellWidthPatch(renderer);
   const patchOptions = normalizePatchOptions(options);
   if (renderer.__acornCjkCellPatch) {
     renderer.__acornCjkCellPatch.cjkCellWidthHeuristic =
@@ -80,26 +79,19 @@ export function patchTerminalCellMeasurements(
     patchOptions,
   );
   if (targetCellWidth === null) {
-    restoreTerminalCellMeasurements(renderer, widthCache);
-    restoreDefaultSpacing(renderer);
+    if (renderer.__acornCjkCellPatch) {
+      restoreTerminalCellMeasurements(renderer, widthCache);
+      restoreDefaultSpacing(renderer);
+    }
     return;
   }
 
-  const originalCellWidth =
+  const baselineWidth =
     renderer.__acornCjkCellPatch?.originalCellWidth ?? getCellWidth(renderer);
-  if (
-    renderer.__acornCjkCellPatch &&
-    !patchWidthsDiffer(targetCellWidth, originalCellWidth)
-  ) {
-    restoreTerminalCellMeasurements(renderer, widthCache);
-    return;
-  }
-
-  if (
-    !renderer.__acornCjkCellPatch &&
-    !patchWidthsDiffer(targetCellWidth, getCellWidth(renderer))
-  ) {
-    restoreDefaultSpacing(renderer);
+  if (!patchWidthsDiffer(targetCellWidth, baselineWidth)) {
+    if (renderer.__acornCjkCellPatch) {
+      restoreTerminalCellMeasurements(renderer, widthCache);
+    }
     return;
   }
 
@@ -112,7 +104,8 @@ export function patchTerminalCellMeasurements(
       originalCanvasWidth: renderer.dimensions?.css?.canvas?.width,
     };
     renderer._setDefaultSpacing = () => {
-      restoreLegacyCellWidthPatch(renderer);
+      // xterm writes the unpatched cell width before this hook.
+      rememberCurrentRendererMetrics(renderer);
       const patchOptions = currentPatchOptions(renderer);
       const targetCellWidth = measureTargetCellWidth(
         term,
@@ -123,6 +116,13 @@ export function patchTerminalCellMeasurements(
       if (targetCellWidth === null) {
         restoreTerminalCellMeasurements(renderer, widthCache);
         restoreDefaultSpacing(renderer);
+        return;
+      }
+      const baselineWidth =
+        renderer.__acornCjkCellPatch?.originalCellWidth ??
+        getCellWidth(renderer);
+      if (!patchWidthsDiffer(targetCellWidth, baselineWidth)) {
+        restoreTerminalCellMeasurements(renderer, widthCache);
         return;
       }
       recalibrateDefaultSpacing(term, renderer, widthCache, targetCellWidth);
@@ -136,7 +136,10 @@ export function patchTerminalCellMeasurements(
     }
   }
 
-  widthCache.clear?.();
+  if (metricsAlreadyApplied(renderer, widthCache, targetCellWidth)) {
+    return;
+  }
+
   recalibrateDefaultSpacing(term, renderer, widthCache, targetCellWidth);
 
   if (typeof term.rows === "number" && term.rows > 0) {
@@ -270,11 +273,10 @@ function measureTargetCellWidth(
   widthCache: WidthCache,
   options: CellMeasurementPatchOptions,
 ): number | null {
-  if (renderer._rowContainer) {
-    renderer._rowContainer.style.letterSpacing = "";
-  }
-  widthCache.clear?.();
-
+  // xterm's width cache lives under `.xterm-helpers`, a sibling of
+  // `.xterm-rows`, so glyph widths do not inherit the row container's
+  // letter-spacing. Clearing the live container to measure would reflow
+  // every visible cell.
   const asciiWidth = widthCache.get("W", false, false);
   if (asciiWidth <= 0) return null;
 
@@ -286,7 +288,21 @@ function measureTargetCellWidth(
       return asciiWidth / 2 + letterSpacing;
     }
   }
-  return getCellWidth(renderer) + fractionalLetterSpacingDelta(letterSpacing);
+  const baselineWidth =
+    renderer.__acornCjkCellPatch?.originalCellWidth ?? getCellWidth(renderer);
+  return baselineWidth + fractionalLetterSpacingDelta(letterSpacing);
+}
+
+function metricsAlreadyApplied(
+  renderer: DomRenderer,
+  widthCache: WidthCache,
+  cellWidth: number,
+): boolean {
+  if (patchWidthsDiffer(getCellWidth(renderer), cellWidth)) return false;
+  const glyphWidth = widthCache.get("W", false, false);
+  const spacing = cellWidth - glyphWidth;
+  if (!Number.isFinite(spacing)) return false;
+  return renderer._rowContainer?.style.letterSpacing === `${spacing}px`;
 }
 
 function restoreDefaultSpacing(renderer: DomRenderer): void {
@@ -303,17 +319,17 @@ function recalibrateDefaultSpacing(
   widthCache: WidthCache,
   cellWidth: number,
 ): void {
-  if (renderer._rowContainer) {
-    renderer._rowContainer.style.letterSpacing = "";
-  }
-
   applyCellWidth(term, renderer, cellWidth);
 
   const spacing = cellWidth - widthCache.get("W", false, false);
   if (!Number.isFinite(spacing)) return;
 
-  if (renderer._rowContainer) {
-    renderer._rowContainer.style.letterSpacing = `${spacing}px`;
+  const next = `${spacing}px`;
+  if (
+    renderer._rowContainer &&
+    renderer._rowContainer.style.letterSpacing !== next
+  ) {
+    renderer._rowContainer.style.letterSpacing = next;
   }
   if (renderer._rowFactory) {
     renderer._rowFactory.defaultSpacing = spacing;
