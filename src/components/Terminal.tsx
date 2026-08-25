@@ -10,6 +10,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
@@ -64,6 +65,7 @@ import {
   applicationOwnsWheel,
   patchTerminalWheelScroll,
 } from "../lib/terminalWheelScroll";
+import { createWebglBurstController } from "../lib/terminalWebglBurst";
 
 import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
@@ -1425,8 +1427,31 @@ export function Terminal({
     // Capture phase so an xterm stopPropagation cannot hide the wheel.
     const WHEEL_BURST_WINDOW_MS = 250;
     let lastWheelAt = -Infinity;
+    // GPU renderer for the burst window only. The DOM renderer stays the
+    // resting state for IME correctness (composition view anchoring, the
+    // span-cloning tail view); the WebGL addon takes over while a TUI that
+    // owns the wheel is being scrolled, which is the one interaction where
+    // frames arrive faster than the DOM renderer can paint them — see
+    // tests/e2e/terminal-scroll-perf.spec.ts for the measurements.
+    const webglBurst = createWebglBurstController({
+      loadAddon: () => {
+        const addon = new WebglAddon();
+        term.loadAddon(addon);
+        return addon;
+      },
+      isEligible: () =>
+        applicationOwnsWheel(term) &&
+        !composing &&
+        // The WebGL renderer paints an opaque background; keep the DOM
+        // renderer when the terminal background is see-through.
+        !terminalBackgroundActive(
+          useSettings.getState().settings.appearance.background,
+        ),
+      afterSwap: () => repaintViewport(),
+    });
     const onWheelBurst = () => {
       lastWheelAt = performance.now();
+      if (applicationOwnsWheel(term)) webglBurst.noteWheel();
     };
     container.addEventListener("wheel", onWheelBurst, {
       capture: true,
@@ -1755,6 +1780,10 @@ export function Terminal({
         hideComposing();
         return;
       }
+      // Composition rendering needs the DOM renderer (span cloning, cursor
+      // anchoring); a scroll burst cannot be mid-composition, so evict the
+      // WebGL renderer before painting the preview.
+      webglBurst.noteComposition();
       composingText = text;
       container.classList.add(COMPOSING_CLASS);
       renderComposing();
@@ -3221,6 +3250,7 @@ export function Terminal({
       try { xtversionParserDisposable.dispose(); } catch { /* ignore */ }
       container.removeAttribute("data-acorn-cursor-application-override");
       container.classList.remove(COMPOSING_CLASS);
+      webglBurst.dispose();
       try { fitAddon.dispose(); } catch { /* ignore */ }
       try { serializeAddon.dispose(); } catch { /* ignore */ }
       term.dispose();
