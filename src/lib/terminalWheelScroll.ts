@@ -81,11 +81,6 @@ export function applicationOwnsWheel(term: XTerm): boolean {
   );
 }
 
-/** Alternate buffer is active and the foreground app owns the wheel. */
-export function altScreenOwnsWheel(term: XTerm): boolean {
-  return term.buffer.active.type === "alternate" && applicationOwnsWheel(term);
-}
-
 /**
  * @param getSpeed Terminal scroll-speed multiplier, read per event so the
  *   setting applies live. Mirrors xterm's own `scrollSensitivity`, which
