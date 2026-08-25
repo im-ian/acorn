@@ -1,4 +1,4 @@
-import { test, type Page } from "./support";
+import { expect, test, type Page } from "./support";
 import type { TauriMock } from "./support";
 
 // Diagnostic probe for the TUI scroll pipeline (#851/#857/#859 follow-up).
@@ -440,5 +440,64 @@ test.describe("terminal: TUI scroll perf probe", () => {
       };
     });
     console.log("[scroll-perf][webgl]", JSON.stringify(result));
+  });
+
+  // Regression gate: the cell-measurement patch (fractional letter-spacing,
+  // CJK width heuristic) lives on the renderer INSTANCE. A WebGL burst swap
+  // builds a fresh DOM renderer on the way back; without re-patching, the
+  // row container's letter-spacing silently reverts after the first scroll
+  // and stays wrong until the next resize.
+  test("letter-spacing survives a webgl burst round-trip", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { letterSpacing: 0.5 } }),
+      );
+    });
+    await seed(tauri);
+    await activateTerminal(page);
+    await enterTuiMode(page);
+    await emitPtyOutput(page, "\x1b[1;1Hhello letter spacing");
+    await page.waitForTimeout(200);
+
+    const readSpacing = () =>
+      page.evaluate(() => {
+        const rows = document.querySelector<HTMLElement>(".xterm-rows");
+        return rows ? rows.style.letterSpacing : null;
+      });
+    const before = await readSpacing();
+    // The fractional 0.5px configuration must have engaged the patch —
+    // otherwise this test would pass vacuously.
+    expect(before).not.toBeNull();
+    expect(before).not.toBe("");
+
+    // One wheel notch → WebGL engages; wait past the 1.5s quiet window so
+    // the DOM renderer comes back.
+    await page.evaluate(() => {
+      const screen = document.querySelector<HTMLElement>(".xterm-screen")!;
+      screen.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaY: 100,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    await expect
+      .poll(() => page.evaluate(() => !!document.querySelector(".xterm-screen canvas")))
+      .toBe(true);
+    await expect
+      .poll(
+        () => page.evaluate(() => !!document.querySelector(".xterm-screen canvas")),
+        { timeout: 5_000 },
+      )
+      .toBe(false);
+
+    await page.waitForTimeout(100);
+    expect(await readSpacing()).toBe(before);
   });
 });

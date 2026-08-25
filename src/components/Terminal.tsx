@@ -1448,7 +1448,18 @@ export function Terminal({
         !terminalBackgroundActive(
           useSettings.getState().settings.appearance.background,
         ),
-      afterSwap: () => repaintViewport(),
+      afterSwap: () => {
+        // The cell-measurement patch (fractional letter-spacing, CJK cell
+        // width) lives on the renderer INSTANCE; every swap builds a fresh
+        // renderer that reverts to stock spacing until re-measured. Re-run
+        // the measurement fit so spacing survives the round-trip.
+        try {
+          fitTerminalRef.current?.();
+        } catch {
+          // Zero-size container mid-teardown; the ResizeObserver re-fits.
+        }
+        repaintViewport();
+      },
     });
     const onWheelBurst = () => {
       lastWheelAt = performance.now();
