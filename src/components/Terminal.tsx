@@ -1428,6 +1428,14 @@ export function Terminal({
     // Capture phase so an xterm stopPropagation cannot hide the wheel.
     const WHEEL_BURST_WINDOW_MS = 250;
     let lastWheelAt = -Infinity;
+    // Burst treatment is for ALT-SCREEN TUIs only (Claude Code's REPL):
+    // those repaint the whole frame per scroll tick, which is what the DOM
+    // renderer cannot keep up with. Normal-buffer overlay TUIs (Grok) send
+    // small deltas the DOM renderer consumes at display cadence — see the
+    // delta control in tests/e2e/terminal-scroll-perf.spec.ts — so they keep
+    // the stock render path: no renderer swap, no skipped repaints.
+    const altScreenOwnsWheel = () =>
+      term.buffer.active.type === "alternate" && applicationOwnsWheel(term);
     // GPU renderer for the burst window only. The DOM renderer stays the
     // resting state for IME correctness (composition view anchoring, the
     // span-cloning tail view); the WebGL addon takes over while a TUI that
@@ -1441,7 +1449,7 @@ export function Terminal({
         return addon;
       },
       isEligible: () =>
-        applicationOwnsWheel(term) &&
+        altScreenOwnsWheel() &&
         !composing &&
         // The WebGL renderer paints an opaque background; keep the DOM
         // renderer when the terminal background is see-through.
@@ -1463,14 +1471,14 @@ export function Terminal({
     });
     const onWheelBurst = () => {
       lastWheelAt = performance.now();
-      if (applicationOwnsWheel(term)) webglBurst.noteWheel();
+      if (altScreenOwnsWheel()) webglBurst.noteWheel();
     };
     container.addEventListener("wheel", onWheelBurst, {
       capture: true,
       passive: true,
     });
     const inWheelBurst = () =>
-      applicationOwnsWheel(term) &&
+      altScreenOwnsWheel() &&
       performance.now() - lastWheelAt < WHEEL_BURST_WINDOW_MS;
 
     const writeToPty = (targetSessionId: string, data: string) => {
