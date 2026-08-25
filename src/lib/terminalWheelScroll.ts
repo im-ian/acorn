@@ -18,18 +18,16 @@ interface XtermWheelInternals {
 // takes the wheel over — Claude Code's REPL enables `?1049` plus
 // `?1000`/`?1002`/`?1003`/`?1006` — scrolls normally there and crawls here.
 //
-// Convert the delta to lines ourselves and replay one LINE-mode wheel
-// event per line. PIXEL replays have to beat xterm's 50px trackpad damper
-// and its device-pixel conversion; a tall cell (large font / line-height)
-// makes a 50px tick round to zero, so the TUI receives no report at all.
-// LINE mode is one report per event regardless of cell metrics. xterm still
-// encodes the report (or the arrow key), so the active mouse protocol, the
-// modifier bits and the cell coordinates stay its job.
+// Convert the delta to lines ourselves, then replay a single LINE-mode
+// tick when that is at least one line. PIXEL replays have to beat xterm's
+// 50px damper and device-pixel conversion; a tall cell rounds a 50px tick
+// to zero, so the TUI receives no report. Replaying one LINE tick per
+// physical event survives that damper without flooding the TUI. xterm
+// still encodes the report (or the arrow key).
 const APP_WHEEL_TRACKING_MODES = new Set(["vt200", "drag", "any"]);
-// Trackpad momentum carries hundreds of pixels per event. Writes coalesce
-// into one pty_write per microtask; the cap still bounds how many reports
-// the TUI sees in that burst so a flick cannot queue a backlog. Scaled by
-// the scroll speed so raising the setting still raises the ceiling.
+// Trackpad momentum carries hundreds of pixels per event. The cap bounds
+// how many lines a flick can accumulate in `carry` so it cannot queue a
+// backlog that scrolls on after the fingers stop.
 const MAX_LINES_PER_EVENT = 8;
 
 /**
@@ -105,6 +103,15 @@ export function patchTerminalWheelScroll(
     const cellHeight = core?._renderService?.dimensions?.css?.cell?.height ?? 0;
     if (!element || cellHeight <= 0) return true;
 
+    // Native PIXEL events at/above 50px already survive xterm's damper.
+    // Leave those to xterm so a real mouse wheel stays one report.
+    if (
+      event.deltaMode === WheelEvent.DOM_DELTA_PIXEL &&
+      Math.abs(event.deltaY) >= 50
+    ) {
+      return true;
+    }
+
     const rawSpeed = getSpeed();
     const speed =
       Number.isFinite(rawSpeed) && rawSpeed > 0 ? rawSpeed : 1;
@@ -122,25 +129,22 @@ export function patchTerminalWheelScroll(
     event.preventDefault();
     if (next.lines === 0) return false;
 
-    const deltaY = next.lines > 0 ? 1 : -1;
     replaying = true;
     try {
-      for (let i = 0; i < Math.abs(next.lines); i++) {
-        element.dispatchEvent(
-          new WheelEvent("wheel", {
-            deltaY,
-            deltaX: 0,
-            deltaMode: WheelEvent.DOM_DELTA_LINE,
-            clientX: event.clientX,
-            clientY: event.clientY,
-            screenX: event.screenX,
-            screenY: event.screenY,
-            view: event.view,
-            bubbles: false,
-            cancelable: true,
-          }),
-        );
-      }
+      element.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaY: next.lines > 0 ? 1 : -1,
+          deltaX: 0,
+          deltaMode: WheelEvent.DOM_DELTA_LINE,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          screenX: event.screenX,
+          screenY: event.screenY,
+          view: event.view,
+          bubbles: false,
+          cancelable: true,
+        }),
+      );
     } finally {
       replaying = false;
     }

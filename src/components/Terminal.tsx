@@ -39,7 +39,6 @@ import {
   createTerminalRepaintScheduler,
   createTerminalVisibilityRepaintObserver,
   repaintTerminalViewport,
-  shouldRefreshViewportAfterWrite,
 } from "../lib/terminalRepaint";
 import {
   ptyPixelSize,
@@ -1377,36 +1376,26 @@ export function Terminal({
     // Force viewport repaints around PTY output bursts.
     //
     // xterm's DOM renderer reuses per-row DOM elements and incrementally
-    // patches glyphs as the buffer changes. Overlay TUIs on the normal
-    // buffer can settle with stale cursor/cell DOM from an earlier frame
-    // even though the xterm buffer is correct (copy-to-clipboard is clean).
-    // A full `refresh(0, rows-1)` rebuilds visible rows from the buffer.
+    // patches glyphs as the buffer changes. When a streaming TUI (Claude
+    // CLI, `htop`, `claude --print`) is mid-redraw — or interrupted by
+    // Esc/Ctrl+C — the parser can settle with stale cursor/cell DOM left
+    // from an earlier frame. The xterm buffer is correct
+    // (copy-to-clipboard yields clean text); only the DOM rendition is
+    // stale. Forcing `refresh(0, rows-1)` rebuilds every visible row from
+    // the buffer, which clears leftover characters and cursor blocks.
     //
-    // Alt-screen TUIs already paint dirty rows themselves, so extra
-    // per-write refresh is throttled there — a full rebuild on every
-    // write blocks WKWebView long enough that queued keystrokes flush
-    // as one paste. A floor still fires during a continuous stream so
-    // an interrupted frame cannot starve the trailing idle refresh.
+    // An idle refresh after the burst goes quiet catches interrupted
+    // final frames. A full rebuild on every write queues pointer motion.
     const VIEWPORT_REPAINT_IDLE_MS = 120;
     let viewportRepaintTimer: number | null = null;
-    let viewportRepaintFrame: number | null = null;
-    let lastViewportRepaintAt = 0;
     const repaintViewport = () => {
       if (disposed) return;
       try {
         term.refresh(0, term.rows - 1);
-        lastViewportRepaintAt = performance.now();
       } catch {
         // ignore — terminal may have been disposed between scheduling
         // and reaching the call.
       }
-    };
-    const scheduleViewportFrameRepaint = () => {
-      if (disposed || viewportRepaintFrame !== null) return;
-      viewportRepaintFrame = requestAnimationFrame(() => {
-        viewportRepaintFrame = null;
-        repaintViewport();
-      });
     };
     const scheduleViewportIdleRepaint = () => {
       if (disposed) return;
@@ -2880,14 +2869,8 @@ export function Terminal({
         if (isActiveRef.current) {
           // Hidden portal targets keep their xterm buffer current but do not
           // need DOM repaint work until TerminalHost moves them on-screen.
-          if (
-            shouldRefreshViewportAfterWrite({
-              bufferType: term.buffer.active.type,
-              msSinceLastRefresh: performance.now() - lastViewportRepaintAt,
-            })
-          ) {
-            scheduleViewportFrameRepaint();
-          }
+          // Extra full refresh is idle-only. Per-write rebuilds queue
+          // TUI pointer motion on WKWebView.
           scheduleViewportIdleRepaint();
         }
         // The sticky prompt is buffer-derived; keep it in sync with parsed
@@ -3306,10 +3289,6 @@ export function Terminal({
       if (viewportRepaintTimer !== null) {
         window.clearTimeout(viewportRepaintTimer);
         viewportRepaintTimer = null;
-      }
-      if (viewportRepaintFrame !== null) {
-        cancelAnimationFrame(viewportRepaintFrame);
-        viewportRepaintFrame = null;
       }
       cancelLinkTooltipHide();
       if (resizeTimer !== null) {

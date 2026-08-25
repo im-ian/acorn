@@ -68,4 +68,31 @@ describe("createPtyWriteCoalescer", () => {
     await second;
     expect(sent).toEqual(["x", "y"]);
   });
+
+  it("folds reports that arrive during an in-flight write into one follow-up", async () => {
+    const sent: string[] = [];
+    let releaseFirst = () => {};
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let writes = 0;
+    const coalescer = createPtyWriteCoalescer(async (_sessionId, data) => {
+      writes += 1;
+      if (writes === 1) await firstGate;
+      sent.push(data);
+    });
+
+    void coalescer.enqueue("a", "x");
+    void coalescer.flush("a");
+    void coalescer.enqueue("a", "y");
+    void coalescer.enqueue("a", "z");
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+    expect(writes).toBe(1);
+
+    releaseFirst();
+    await coalescer.flush("a");
+    expect(sent).toEqual(["x", "yz"]);
+    expect(writes).toBe(2);
+  });
 });
