@@ -82,6 +82,9 @@ export const tauriMockSource = `
     if (cmd === 'plugin:event|emit') return Promise.resolve(undefined);
     if (cmd === 'plugin:app|version') return Promise.resolve('0.0.0-test');
     if (cmd === 'plugin:app|name') return Promise.resolve('acorn');
+    if (cmd === 'plugin:updater|check') return Promise.resolve(null);
+    if (cmd === 'plugin:updater|download_and_install') return Promise.resolve(undefined);
+    if (cmd === 'plugin:process|restart') return Promise.resolve(undefined);
     if (cmd === 'plugin:notification|is_permission_granted') return Promise.resolve(true);
     if (cmd === 'plugin:notification|request_permission') return Promise.resolve('granted');
     if (cmd === 'plugin:notification|notify') return Promise.resolve(undefined);

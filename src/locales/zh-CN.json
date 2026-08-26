@@ -909,15 +909,15 @@
     },
     "about": {
       "title": "关于 Acorn",
-      "description": "Acorn 会在启动时及之后每 24 小时检查公开版本。下载将在 GitHub 中打开并由您手动安装。",
+      "description": "Acorn 在启动时自动检查更新，每 24 小时检查一次。您也可以在下面手动检查。",
       "currentVersion": "当前版本",
       "lastChecked": "上次检查",
       "loading": "正在加载...",
       "updateAvailable": "更新可用",
-      "updateReady": "Acorn {version} 可供手动下载。",
+      "updateReady": "Acorn {version} 已准备好安装。",
       "whatsNew": "新增内容",
-      "installing": "正在打开...",
-      "installRelaunch": "查看下载",
+      "installing": "正在安装...",
+      "installRelaunch": "安装并重新启动",
       "whatsNewInVersion": "{version} 中的新增功能",
       "checking": "正在检查...",
       "checkForUpdates": "检查更新",
@@ -925,7 +925,7 @@
         "upToDate": "Acorn 是最新的。",
         "updateAvailable": "Acorn {version} 可用。",
         "checkFailed": "无法检查更新：",
-        "installFailed": "无法打开版本页面：",
+        "installFailed": "无法安装更新：",
         "releaseNotesFailed": "无法加载发行说明："
       },
       "relative": {
@@ -1177,10 +1177,10 @@
     "noSessionSelected": "未选择会话"
   },
   "updateBanner": {
-    "available": "可用。请在 GitHub 上查看并下载。",
+    "available": "可用。该应用程序将在安装后重新启动。",
     "whatsNew": "新增内容",
-    "installing": "正在打开...",
-    "installRelaunch": "查看下载",
+    "installing": "正在安装...",
+    "installRelaunch": "安装并重新启动",
     "hideUntilNextVersion": "隐藏到下一个版本",
     "dismissError": "关闭错误提示"
   },
@@ -2494,8 +2494,8 @@
       "loadingReleaseNotes": "正在加载发行说明...",
       "noReleaseNotes": "此版本未发布发行说明。",
       "viewOnGithub": "在 GitHub 上查看",
-      "installing": "正在打开...",
-      "installRelaunch": "查看下载"
+      "installing": "正在安装...",
+      "installRelaunch": "安装并重新启动"
     },
     "pullRequestDetail": {
       "notGithub": "源远程不是 GitHub 仓库。",
