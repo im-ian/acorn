@@ -95,4 +95,19 @@ describe("createPtyWriteCoalescer", () => {
     expect(sent).toEqual(["x", "yz"]);
     expect(writes).toBe(2);
   });
+
+  it("rejects enqueue when a write fails so callers can queue a retry", async () => {
+    const sent: string[] = [];
+    let writes = 0;
+    const coalescer = createPtyWriteCoalescer(async (_sessionId, data) => {
+      writes += 1;
+      if (writes === 1) throw new Error("no pty for session");
+      sent.push(data);
+    });
+
+    await expect(coalescer.enqueue("a", "x")).rejects.toThrow(/no pty for session/);
+    await coalescer.enqueue("a", "y");
+    expect(sent).toEqual(["y"]);
+    expect(writes).toBe(2);
+  });
 });

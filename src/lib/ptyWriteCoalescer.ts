@@ -16,10 +16,15 @@ export function createPtyWriteCoalescer(
   enqueue: (sessionId: string, data: string) => Promise<void>;
   flush: (sessionId?: string) => Promise<void>;
 } {
+  type Waiter = {
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  };
   type SessionPipe = {
     pending: string[];
+    hopWaiters: Waiter[];
+    idleWaiters: Waiter[];
     inFlight: boolean;
-    chain: Promise<void>;
   };
   const pipes = new Map<string, SessionPipe>();
   let scheduled = false;
@@ -27,35 +32,59 @@ export function createPtyWriteCoalescer(
   const pipeFor = (sessionId: string): SessionPipe => {
     let pipe = pipes.get(sessionId);
     if (!pipe) {
-      pipe = { pending: [], inFlight: false, chain: Promise.resolve() };
+      pipe = {
+        pending: [],
+        hopWaiters: [],
+        idleWaiters: [],
+        inFlight: false,
+      };
       pipes.set(sessionId, pipe);
     }
     return pipe;
   };
 
-  const whenIdle = (pipe: SessionPipe): Promise<void> => {
+  const waitUntilIdle = (pipe: SessionPipe): Promise<void> => {
     if (!pipe.inFlight && pipe.pending.length === 0) {
       return Promise.resolve();
     }
-    return pipe.chain.then(() => whenIdle(pipe));
+    return new Promise((resolve, reject) => {
+      pipe.idleWaiters.push({ resolve, reject });
+    });
+  };
+
+  const settleIdle = (pipe: SessionPipe, error: unknown | null) => {
+    if (pipe.inFlight || pipe.pending.length > 0) return;
+    const waiters = pipe.idleWaiters;
+    pipe.idleWaiters = [];
+    if (error) {
+      for (const waiter of waiters) waiter.reject(error);
+      return;
+    }
+    for (const waiter of waiters) waiter.resolve();
   };
 
   const sendPending = (sessionId: string) => {
     const pipe = pipes.get(sessionId);
     if (!pipe || pipe.inFlight || pipe.pending.length === 0) return;
     const data = pipe.pending.join("");
+    const hopWaiters = pipe.hopWaiters;
     pipe.pending = [];
+    pipe.hopWaiters = [];
     pipe.inFlight = true;
-    pipe.chain = Promise.resolve()
+    void Promise.resolve()
       .then(() => write(sessionId, data))
       .then(
         () => {
           pipe.inFlight = false;
+          for (const waiter of hopWaiters) waiter.resolve();
           sendPending(sessionId);
+          settleIdle(pipe, null);
         },
-        () => {
+        (error) => {
           pipe.inFlight = false;
+          for (const waiter of hopWaiters) waiter.reject(error);
           sendPending(sessionId);
+          settleIdle(pipe, error);
         },
       );
   };
@@ -70,21 +99,24 @@ export function createPtyWriteCoalescer(
       if (data.length === 0) return Promise.resolve();
       const pipe = pipeFor(sessionId);
       pipe.pending.push(data);
+      const hop = new Promise<void>((resolve, reject) => {
+        pipe.hopWaiters.push({ resolve, reject });
+      });
       if (!scheduled) {
         scheduled = true;
         schedule(kickAll);
       }
-      return whenIdle(pipe);
+      return hop;
     },
     flush(sessionId) {
       if (sessionId) {
         sendPending(sessionId);
         const pipe = pipes.get(sessionId);
-        return pipe ? whenIdle(pipe) : Promise.resolve();
+        return pipe ? waitUntilIdle(pipe) : Promise.resolve();
       }
       kickAll();
       return Promise.all(
-        Array.from(pipes.values()).map((pipe) => whenIdle(pipe)),
+        Array.from(pipes.values()).map((pipe) => waitUntilIdle(pipe)),
       ).then(() => undefined);
     },
   };
