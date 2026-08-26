@@ -12,7 +12,7 @@
 //!   * `pty:exit:{session_id}` — payload `{ "code": Option<i32> }`
 
 use std::collections::VecDeque;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -413,6 +413,7 @@ fn read_loop(
 ) {
     let event = format!("pty:output:{session_id}");
     let mut buf = [0u8; READ_BUFFER_SIZE];
+    let mut xtversion = acorn_platform::xtversion::XtversionProbe::default();
     loop {
         if stop.load(Ordering::SeqCst) {
             break;
@@ -420,8 +421,14 @@ fn read_loop(
         match reader.read(&mut buf) {
             Ok(0) => break, // EOF — child closed the slave
             Ok(n) => {
-                push_tail(&handle.tail_buf, &buf[..n]);
-                output_sink(&event, &session_id, &buf[..n]);
+                let chunk = &buf[..n];
+                let hits = xtversion.push(chunk);
+                if hits > 0 {
+                    let mut writer = handle.writer.lock();
+                    acorn_platform::xtversion::write_replies(hits, writer.as_mut());
+                }
+                push_tail(&handle.tail_buf, chunk);
+                output_sink(&event, &session_id, chunk);
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => {
