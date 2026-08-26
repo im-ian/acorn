@@ -1,5 +1,3 @@
-export const XTVERSION_REPLY = "\x1bP>|xterm.js\x1b\\";
-
 const U16_MAX = 65535;
 
 export function shouldForceCommandPtyResize(term: {
@@ -36,15 +34,6 @@ export function ptyPixelSize(
     pixelWidth: toU16(cols * cell.width),
     pixelHeight: toU16(rows * cell.height),
   };
-}
-
-export function xtversionReplyForParams(
-  params: (number | number[])[],
-): string | null {
-  const raw = params[0];
-  const code = Array.isArray(raw) ? raw[0] : (raw ?? 0);
-  if (code !== 0) return null;
-  return XTVERSION_REPLY;
 }
 
 function toU16(value: number): number {

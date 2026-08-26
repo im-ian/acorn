@@ -20,7 +20,7 @@
 //!    context. Unknown agents pass through unmodified.
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -265,13 +265,11 @@ impl PtyManager {
         let created_at = session.created_at;
         registry.insert(session);
 
-        let stop_reader = stop.clone();
-        let scrollback_reader = scrollback.clone();
-        let output_tx_reader = output_tx.clone();
+        let handle_reader = Arc::clone(&handle);
         std::thread::Builder::new()
             .name(format!("acornd-pty-read-{session_id}"))
             .spawn(move || {
-                read_loop(reader, stop_reader, scrollback_reader, output_tx_reader);
+                read_loop(reader, handle_reader);
             })?;
 
         let handles_for_wait = Arc::clone(&self.handles);
@@ -459,28 +457,31 @@ fn apply_resume_strategy(
     }
 }
 
-fn read_loop(
-    mut reader: Box<dyn Read + Send>,
-    stop: Arc<AtomicBool>,
-    scrollback: Arc<RingBuffer>,
-    output_tx: broadcast::Sender<OutputChunk>,
-) {
+fn read_loop(mut reader: Box<dyn Read + Send>, handle: Arc<PtyHandle>) {
     let mut buf = [0u8; READ_BUFFER_SIZE];
+    let mut xtversion = acorn_platform::xtversion::XtversionProbe::default();
     loop {
-        if stop.load(Ordering::SeqCst) {
+        if handle.stop.load(Ordering::SeqCst) {
             break;
         }
         match reader.read(&mut buf) {
             Ok(0) => break, // EOF
             Ok(n) => {
                 let chunk = &buf[..n];
-                let span = scrollback.push_tracked(chunk);
+                let hits = xtversion.push(chunk);
+                if hits > 0 {
+                    let mut writer = handle.writer.lock();
+                    acorn_platform::xtversion::write_replies(hits, writer.as_mut());
+                }
+                let span = handle.scrollback.push_tracked(chunk);
                 // Broadcast is a best-effort delivery; if no clients are
                 // attached, the send fails and we drop the chunk for
                 // them. The scrollback ring is the safety net on
                 // reattach.
                 if let Some(span) = span {
-                    let _ = output_tx.send(OutputChunk::new(chunk.to_vec(), span));
+                    let _ = handle
+                        .output_tx
+                        .send(OutputChunk::new(chunk.to_vec(), span));
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,

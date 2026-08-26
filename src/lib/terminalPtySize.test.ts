@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  XTVERSION_REPLY,
   ptyPixelSize,
   shouldForceCommandPtyResize,
-  xtversionReplyForParams,
 } from "./terminalPtySize";
 
 function term(type: string, mouseTrackingMode: string) {
@@ -60,14 +58,4 @@ describe("ptyPixelSize", () => {
   });
 });
 
-describe("xtversionReplyForParams", () => {
-  it("answers XTVERSION (CSI > 0 q) as xterm.js", () => {
-    expect(xtversionReplyForParams([0])).toBe(XTVERSION_REPLY);
-    expect(xtversionReplyForParams([])).toBe(XTVERSION_REPLY);
-  });
 
-  it("ignores other DA3-style version queries", () => {
-    expect(xtversionReplyForParams([1])).toBeNull();
-    expect(xtversionReplyForParams([[1]])).toBeNull();
-  });
-});
