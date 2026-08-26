@@ -170,7 +170,7 @@ vi.mock("../lib/updater-store", () => ({
     dismiss: vi.fn(),
     error: null,
     init: vi.fn(),
-    openDownload: vi.fn(),
+    install: vi.fn(),
   }),
 }));
 

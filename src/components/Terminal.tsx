@@ -1384,12 +1384,10 @@ export function Terminal({
     // stale. Forcing `refresh(0, rows-1)` rebuilds every visible row from
     // the buffer, which clears leftover characters and cursor blocks.
     //
-    // One rAF-throttled refresh after each parsed write, plus an idle
-    // refresh after the burst goes quiet to catch interrupted final
-    // frames.
+    // An idle refresh after the burst goes quiet catches interrupted
+    // final frames. A full rebuild on every write queues pointer motion.
     const VIEWPORT_REPAINT_IDLE_MS = 120;
     let viewportRepaintTimer: number | null = null;
-    let viewportRepaintFrame: number | null = null;
     const repaintViewport = () => {
       if (disposed) return;
       try {
@@ -1398,13 +1396,6 @@ export function Terminal({
         // ignore — terminal may have been disposed between scheduling
         // and reaching the call.
       }
-    };
-    const scheduleViewportFrameRepaint = () => {
-      if (disposed || viewportRepaintFrame !== null) return;
-      viewportRepaintFrame = requestAnimationFrame(() => {
-        viewportRepaintFrame = null;
-        repaintViewport();
-      });
     };
     const scheduleViewportIdleRepaint = () => {
       if (disposed) return;
@@ -2878,7 +2869,8 @@ export function Terminal({
         if (isActiveRef.current) {
           // Hidden portal targets keep their xterm buffer current but do not
           // need DOM repaint work until TerminalHost moves them on-screen.
-          scheduleViewportFrameRepaint();
+          // Extra full refresh is idle-only. Per-write rebuilds queue
+          // TUI pointer motion on WKWebView.
           scheduleViewportIdleRepaint();
         }
         // The sticky prompt is buffer-derived; keep it in sync with parsed
@@ -3297,10 +3289,6 @@ export function Terminal({
       if (viewportRepaintTimer !== null) {
         window.clearTimeout(viewportRepaintTimer);
         viewportRepaintTimer = null;
-      }
-      if (viewportRepaintFrame !== null) {
-        cancelAnimationFrame(viewportRepaintFrame);
-        viewportRepaintFrame = null;
       }
       cancelLinkTooltipHide();
       if (resizeTimer !== null) {

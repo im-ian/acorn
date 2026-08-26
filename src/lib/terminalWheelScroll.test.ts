@@ -125,23 +125,50 @@ describe("wheelScrollLineCount", () => {
 });
 
 describe("patchTerminalWheelScroll", () => {
-  it("replays one wheel event per scrolled line while the app owns the wheel", () => {
+  it("leaves large pixel wheels to xterm", () => {
     const { term, reported, wheel } = makeTerm();
     patchTerminalWheelScroll(term);
 
     wheel({ deltaY: -100 });
 
-    expect(reported).toHaveLength(5);
-    expect(reported.every((event) => event.deltaY < 0)).toBe(true);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]?.deltaY).toBe(-100);
   });
 
-  it("reports more lines as the scroll speed rises", () => {
-    const { patch, reported, wheel } = makeTerm({ speed: 2 });
-    patch();
+  it("replays one LINE-mode tick for a trackpad-sized delta", () => {
+    const { term, reported, wheel } = makeTerm();
+    patchTerminalWheelScroll(term);
 
-    wheel({ deltaY: -100 });
+    wheel({ deltaY: -40 });
 
-    expect(reported).toHaveLength(10);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]?.deltaMode).toBe(WheelEvent.DOM_DELTA_LINE);
+    expect(reported[0]?.deltaY).toBe(-1);
+  });
+
+  it("replays a LINE tick for a trackpad delta a tall cell would otherwise drop", () => {
+    const { term, reported, wheel } = makeTerm({ cellHeight: 80 });
+    patchTerminalWheelScroll(term);
+
+    expect(wheel({ deltaY: -40 })).toBe(false);
+    expect(reported).toHaveLength(0);
+
+    wheel({ deltaY: -40 });
+    expect(reported).toHaveLength(1);
+    expect(reported[0]?.deltaMode).toBe(WheelEvent.DOM_DELTA_LINE);
+    expect(reported[0]?.deltaY).toBe(-1);
+  });
+
+  it("reaches a report sooner as the scroll speed rises", () => {
+    const { term, reported, wheel } = makeTerm({ speed: 1 });
+    patchTerminalWheelScroll(term);
+    expect(wheel({ deltaY: 12 })).toBe(false);
+    expect(reported).toHaveLength(0);
+
+    const fast = makeTerm({ speed: 2 });
+    fast.patch();
+    fast.wheel({ deltaY: 12 });
+    expect(fast.reported).toHaveLength(1);
   });
 
   it("swallows sub-line deltas instead of reporting them", () => {

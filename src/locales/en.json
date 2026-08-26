@@ -909,15 +909,15 @@
     },
     "about": {
       "title": "About Acorn",
-      "description": "Acorn checks published releases on startup and once every 24 hours. Downloads open on GitHub for manual installation.",
+      "description": "Acorn checks for updates automatically on startup and once every 24 hours. You can also check manually below.",
       "currentVersion": "Current version",
       "lastChecked": "Last checked",
       "loading": "loading...",
       "updateAvailable": "Update available",
-      "updateReady": "Acorn {version} is available for manual download.",
+      "updateReady": "Acorn {version} is ready to install.",
       "whatsNew": "What's new",
-      "installing": "Opening...",
-      "installRelaunch": "View download",
+      "installing": "Installing...",
+      "installRelaunch": "Install & relaunch",
       "whatsNewInVersion": "What's new in {version}",
       "checking": "Checking...",
       "checkForUpdates": "Check for updates",
@@ -925,7 +925,7 @@
         "upToDate": "Acorn is up to date.",
         "updateAvailable": "Acorn {version} is available.",
         "checkFailed": "Failed to check for updates:",
-        "installFailed": "Failed to open release:",
+        "installFailed": "Failed to install update:",
         "releaseNotesFailed": "Failed to load release notes:"
       },
       "relative": {
@@ -1177,10 +1177,10 @@
     "noSessionSelected": "No session selected"
   },
   "updateBanner": {
-    "available": "is available. Review and download it on GitHub.",
+    "available": "is available. The app will relaunch after install.",
     "whatsNew": "What's new",
-    "installing": "Opening...",
-    "installRelaunch": "View download",
+    "installing": "Installing...",
+    "installRelaunch": "Install & relaunch",
     "hideUntilNextVersion": "Hide until next version",
     "dismissError": "Dismiss error"
   },
@@ -2494,8 +2494,8 @@
       "loadingReleaseNotes": "Loading release notes...",
       "noReleaseNotes": "No release notes were published with this version.",
       "viewOnGithub": "View on GitHub",
-      "installing": "Opening...",
-      "installRelaunch": "View download"
+      "installing": "Installing...",
+      "installRelaunch": "Install & relaunch"
     },
     "pullRequestDetail": {
       "notGithub": "Origin remote is not a GitHub repository.",

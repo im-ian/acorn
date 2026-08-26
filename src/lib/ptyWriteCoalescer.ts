@@ -1,13 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 
 /**
- * Join stdin writes that land in the same turn into one `pty_write`, then
- * send those bursts in submission order per session.
+ * Join stdin writes into one `pty_write` per in-flight hop, per session.
  *
- * Wheel-driven TUI mouse reports arrive as many tiny `onData` payloads;
- * each invoke is a Tauri IPC hop. One microtask later they are a single
- * write. A per-session promise chain keeps the next burst from overtaking
- * an in-flight invoke, which async Tauri commands do not otherwise order.
+ * TUI mouse reports arrive as many tiny `onData` payloads. Each invoke is a
+ * Tauri IPC hop that does not complete until the daemon acks, so chaining
+ * one write per event makes a drag wait N round-trips. Accumulate
+ * everything that lands while a hop is in flight and send it as the next
+ * burst when that hop settles.
  */
 export function createPtyWriteCoalescer(
   write: (sessionId: string, data: string) => Promise<void> | void,
@@ -16,9 +16,15 @@ export function createPtyWriteCoalescer(
   enqueue: (sessionId: string, data: string) => Promise<void>;
   flush: (sessionId?: string) => Promise<void>;
 } {
+  type Waiter = {
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  };
   type SessionPipe = {
     pending: string[];
-    chain: Promise<void>;
+    hopWaiters: Waiter[];
+    idleWaiters: Waiter[];
+    inFlight: boolean;
   };
   const pipes = new Map<string, SessionPipe>();
   let scheduled = false;
@@ -26,23 +32,66 @@ export function createPtyWriteCoalescer(
   const pipeFor = (sessionId: string): SessionPipe => {
     let pipe = pipes.get(sessionId);
     if (!pipe) {
-      pipe = { pending: [], chain: Promise.resolve() };
+      pipe = {
+        pending: [],
+        hopWaiters: [],
+        idleWaiters: [],
+        inFlight: false,
+      };
       pipes.set(sessionId, pipe);
     }
     return pipe;
   };
 
-  const drain = (sessionId: string) => {
-    const pipe = pipes.get(sessionId);
-    if (!pipe || pipe.pending.length === 0) return;
-    const data = pipe.pending.join("");
-    pipe.pending = [];
-    pipe.chain = pipe.chain.then(() => Promise.resolve(write(sessionId, data)));
+  const waitUntilIdle = (pipe: SessionPipe): Promise<void> => {
+    if (!pipe.inFlight && pipe.pending.length === 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      pipe.idleWaiters.push({ resolve, reject });
+    });
   };
 
-  const drainAll = () => {
+  const settleIdle = (pipe: SessionPipe, error: unknown | null) => {
+    if (pipe.inFlight || pipe.pending.length > 0) return;
+    const waiters = pipe.idleWaiters;
+    pipe.idleWaiters = [];
+    if (error) {
+      for (const waiter of waiters) waiter.reject(error);
+      return;
+    }
+    for (const waiter of waiters) waiter.resolve();
+  };
+
+  const sendPending = (sessionId: string) => {
+    const pipe = pipes.get(sessionId);
+    if (!pipe || pipe.inFlight || pipe.pending.length === 0) return;
+    const data = pipe.pending.join("");
+    const hopWaiters = pipe.hopWaiters;
+    pipe.pending = [];
+    pipe.hopWaiters = [];
+    pipe.inFlight = true;
+    void Promise.resolve()
+      .then(() => write(sessionId, data))
+      .then(
+        () => {
+          pipe.inFlight = false;
+          for (const waiter of hopWaiters) waiter.resolve();
+          sendPending(sessionId);
+          settleIdle(pipe, null);
+        },
+        (error) => {
+          pipe.inFlight = false;
+          for (const waiter of hopWaiters) waiter.reject(error);
+          sendPending(sessionId);
+          settleIdle(pipe, error);
+        },
+      );
+  };
+
+  const kickAll = () => {
     scheduled = false;
-    for (const sessionId of Array.from(pipes.keys())) drain(sessionId);
+    for (const sessionId of Array.from(pipes.keys())) sendPending(sessionId);
   };
 
   return {
@@ -50,24 +99,24 @@ export function createPtyWriteCoalescer(
       if (data.length === 0) return Promise.resolve();
       const pipe = pipeFor(sessionId);
       pipe.pending.push(data);
+      const hop = new Promise<void>((resolve, reject) => {
+        pipe.hopWaiters.push({ resolve, reject });
+      });
       if (!scheduled) {
         scheduled = true;
-        schedule(drainAll);
+        schedule(kickAll);
       }
-      return pipe.chain.then(() => {
-        // After the already-queued chain, this payload is in `pending` or
-        // already folded into the next chained write by drainAll.
-        return pipe.chain;
-      });
+      return hop;
     },
     flush(sessionId) {
       if (sessionId) {
-        drain(sessionId);
-        return pipes.get(sessionId)?.chain ?? Promise.resolve();
+        sendPending(sessionId);
+        const pipe = pipes.get(sessionId);
+        return pipe ? waitUntilIdle(pipe) : Promise.resolve();
       }
-      drainAll();
+      kickAll();
       return Promise.all(
-        Array.from(pipes.values()).map((pipe) => pipe.chain),
+        Array.from(pipes.values()).map((pipe) => waitUntilIdle(pipe)),
       ).then(() => undefined);
     },
   };

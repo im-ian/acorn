@@ -62,6 +62,16 @@ describe("Tauri core capability", () => {
     expect(defaultCapability.permissions).not.toContain(
       "opener:allow-open-path",
     );
+    expect(defaultCapability.permissions).toEqual(
+      expect.arrayContaining([
+        "updater:allow-check",
+        "updater:allow-download-and-install",
+        "process:allow-restart",
+      ]),
+    );
+    expect(defaultCapability.permissions).not.toContain("updater:default");
+    expect(defaultCapability.permissions).not.toContain("process:default");
+    expect(defaultCapability.permissions).not.toContain("process:allow-exit");
   });
 });
 
@@ -76,6 +86,13 @@ describe("Tauri renderer policy", () => {
     expect(csp).toContain("worker-src 'none'");
     expect(csp).toContain("manifest-src 'none'");
     expect(tauriConfig.app.windows[0]?.devtools).toBe(false);
+  });
+
+  it("points the updater plugin at the canonical latest.json endpoint", () => {
+    expect(tauriConfig.plugins.updater.endpoints).toEqual([
+      "https://github.com/im-ian/acorn/releases/latest/download/latest.json",
+    ]);
+    expect(tauriConfig.plugins.updater.pubkey).toEqual(expect.any(String));
   });
 
   it("keeps development-only eval from weakening the other CSP sinks", () => {

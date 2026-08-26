@@ -74,7 +74,7 @@ strip = "debuginfo"
 
 [package]
 name = "acorn"
-version = "1.33.1"
+version = "1.33.2"
 description = "Acorn — parallel AI coding agent sessions across isolated git worktrees"
 authors = ["im-ian"]
 edition = "2021"
@@ -119,6 +119,8 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2"
 # Posted directly (not through the plugin) so a click on the banner can be
 # observed and routed back to the session that raised it.
 # 4.18 is the first release whose response API covers macOS and Windows as
