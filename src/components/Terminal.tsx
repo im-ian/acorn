@@ -43,7 +43,6 @@ import {
 import {
   ptyPixelSize,
   shouldForceCommandPtyResize,
-  xtversionReplyForParams,
 } from "../lib/terminalPtySize";
 import {
   createTerminalOutputWriter,
@@ -1416,18 +1415,6 @@ export function Terminal({
     const sendToPty = (data: string) => {
       writeToPty(sessionId, data);
     };
-    // xterm.js does not answer CSI > 0 q (XTVERSION). Grok uses that
-    // probe to treat the emulator as xterm.js and keep overlay TUIs on
-    // the non-kitty path.
-    const xtversionParserDisposable = term.parser.registerCsiHandler(
-      { prefix: ">", final: "q" },
-      (params) => {
-        const reply = xtversionReplyForParams(params);
-        if (!reply) return false;
-        sendToPty(reply);
-        return true;
-      },
-    );
     const sendUserInputToPty = (data: string) => {
       if (data.length === 0) return;
       const state = useAppStore.getState();
@@ -3255,7 +3242,6 @@ export function Terminal({
       try { cursorStyleParserDisposable.dispose(); } catch { /* ignore */ }
       try { cursorSoftResetParserDisposable.dispose(); } catch { /* ignore */ }
       try { cursorFullResetParserDisposable.dispose(); } catch { /* ignore */ }
-      try { xtversionParserDisposable.dispose(); } catch { /* ignore */ }
       container.removeAttribute("data-acorn-cursor-application-override");
       container.classList.remove(COMPOSING_CLASS);
       try { fitAddon.dispose(); } catch { /* ignore */ }
