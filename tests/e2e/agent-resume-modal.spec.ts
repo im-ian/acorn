@@ -363,6 +363,89 @@ test.describe("agent resume modal", () => {
       ]);
   });
 
+  test("auto-resume sends the resume command without opening the modal", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessions: { autoResume: true },
+          experiments: { resumeModal: false },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION]);
+    await tauri.handle("get_agent_resume_candidate", (args) => {
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind !== "claude") return null;
+      return {
+        uuid: "deadbeef-1234-5678-9abc-def012345678",
+        lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
+        preview: "Preview of the previous conversation",
+      };
+    });
+    await tauri.handle("pty_write", (args) => {
+      const w = window as unknown as {
+        __ACORN_PTY_WRITES__?: { sessionId: string; data: string }[];
+      };
+      w.__ACORN_PTY_WRITES__ = w.__ACORN_PTY_WRITES__ ?? [];
+      const input = (args ?? {}) as { sessionId?: string; data?: string };
+      const decoded = input.data
+        ? new TextDecoder().decode(
+            Uint8Array.from(atob(input.data), (c) => c.charCodeAt(0)),
+          )
+        : "";
+      w.__ACORN_PTY_WRITES__.push({
+        sessionId: input.sessionId ?? "",
+        data: decoded,
+      });
+      return undefined;
+    });
+    await tauri.handle("acknowledge_agent_resume", (args) => {
+      const w = window as unknown as { __ACORN_ACKED__?: string[] };
+      w.__ACORN_ACKED__ = w.__ACORN_ACKED__ ?? [];
+      const input = (args ?? {}) as { kind?: string; sessionId?: string };
+      if (input.kind === "claude" && input.sessionId) {
+        w.__ACORN_ACKED__.push(input.sessionId);
+      }
+      return undefined;
+    });
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("dialog", { name: /Resume previous conversation/ }),
+    ).toHaveCount(0);
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __ACORN_PTY_WRITES__?: { sessionId: string; data: string }[];
+              }
+            ).__ACORN_PTY_WRITES__ ?? [],
+        ),
+      )
+      .toEqual([
+        {
+          sessionId: SESSION.id,
+          data: `claude --resume ${CANDIDATE_UUID}\r`,
+        },
+      ]);
+
+    const acked = await page.evaluate(
+      () =>
+        (window as unknown as { __ACORN_ACKED__?: string[] }).__ACORN_ACKED__ ??
+        [],
+    );
+    expect(acked).not.toContain(SESSION.id);
+  });
+
   test("Cancel writes a shell-comment hint with the resume command", async ({
     page,
     tauri,
