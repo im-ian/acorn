@@ -25,7 +25,7 @@ AI는 강력하고 똑똑하지만, 결정과 책임은 결국 사람의 몫이�
 
 ## 개요
 
-Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok Build / Ollama / llm 등) 세션을 한 창에서 병렬로 다루기 위한 데스크톱 앱입니다. 네이티브 PTY와 채팅, 분할 Pane·Kanban·Canvas, 세션별 격리된 git worktree, 작업 요약과 진행 상태 표시를 하나의 워크스페이스에서 제공합니다.
+Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok Build / Ollama / llm 등) 세션을 한 창에서 병렬로 다루기 위한 데스크톱 앱입니다. 네이티브 PTY와 채팅, 분할 Pane·Kanban·Canvas, Graph·Loop 세션, 세션별 격리된 git worktree, 작업 요약과 진행 상태 표시를 하나의 워크스페이스에서 제공합니다.
 
 ---
 
@@ -43,6 +43,14 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
   <img width="1600" height="1000" alt="Acorn Canvas 워크스페이스" src="./assets/screenshots/canvas.png" />
   <br/>
   <sub>Canvas 워크스페이스 — 라이브 터미널을 자유롭게 배치하고 한눈에 탐색</sub>
+  <br/><br/>
+  <img width="1600" height="1000" alt="Acorn 네이티브 채팅 세션" src="./assets/screenshots/chat-session.png" />
+  <br/>
+  <sub>네이티브 채팅 — 터미널 없이 Claude / Codex / Antigravity / Grok과 대화</sub>
+  <br/><br/>
+  <img width="1600" height="1000" alt="Acorn 작업 요약" src="./assets/screenshots/work-summary.png" />
+  <br/>
+  <sub>작업 요약 — 변경 파일·대화 턴·토큰 사용량을 한 탭에서 집계</sub>
   <br/><br/>
   <img width="1600" height="1000" alt="Acorn PR 상세 모달" src="./assets/screenshots/pr-modal.png" />
   <br/>
@@ -67,7 +75,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 - Pane과 Kanban 보기를 프로젝트별로 전환·기억하고 새 프로젝트의 기본 보기 설정
 - 세션 상태와 작업 트리 diff, PR 상태를 조합해 **Idle / Working / Waiting / Review / Done**으로 자동 분류
 - 세션 검색·정렬, 단계별 체류 시간과 stall 표시, 수동 완료 처리, 열 너비 조절
-- 카드에서 터미널·채팅 팝오버 열기, 세션 이름 변경, PR 상세 확인, 새 일반·worktree·chat·control 세션 생성
+- 카드에서 터미널·채팅 팝오버 열기, 세션 이름 변경, PR 상세 확인, 새 일반·worktree·chat·control·graph·loop 세션 생성
 
 ### 🧭 Canvas 워크스페이스
 - 라이브 터미널·채팅 세션을 자유롭게 배치하고 드래그·크기 조절
@@ -79,12 +87,15 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 - 프로젝트 안에 이름 있는 워크스페이스를 만들고 사이드바 그룹핑·드래그 재정렬
 - 세션마다 별도 worktree로 동일 저장소 안전 동시 작업
 - 기존 linked worktree를 워크스페이스로 가져오거나 프로젝트 설정에서 확인·삭제
+- 프로젝트 설정에서 쓰이지 않는 worktree 삭제
 - 종료 시 worktree 정리 옵션 + 지연 삭제 실행 취소 (항상 삭제 모드 포함)
+- 사이드바 **Instant Sessions**에서 프로젝트 없이 로컬 터미널을 바로 시작
 
 ### 💻 PTY 터미널
 - 네이티브 PTY 셸 세션, 재오픈 시 스크롤백 자동 복원
 - 터미널 안의 파일 경로 클릭 → 코드 뷰어로 열기
-- URL 클릭, 줄 높이, 마지막 사용자 프롬프트 고정 등 동작 옵션
+- 파일을 터미널로 드래그하면 경로 mention으로 삽입, 클립보드 이미지는 붙여넣기
+- URL 클릭, 줄 높이, 스크롤 속도, 마지막 사용자 프롬프트 고정 등 동작 옵션
 
 ### 🤖 AI 에이전트 세션
 - 세션은 항상 네이티브 대화형 셸(`$SHELL` 또는 Windows PowerShell/cmd)로 시작 — 그 안에서 원하는 AI CLI(`claude` / `codex` / `agy` / `grok` / `ollama` / `llm` 등) 직접 실행
@@ -99,13 +110,27 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 - 사용자 메시지 수정, 응답 재생성, 이후 대화 가지 삭제
 - 원하는 메시지 시점에서 같은 worktree 또는 새 격리 worktree로 대화 fork
 
+### 🕸️ Graph session
+- 프로젝트 안에서 실행 DAG를 그리고 모든 노드를 GOAL로 연결하는 전용 세션
+- Agent / Validator / Merge / Human 노드, 병렬·순차 그룹, 의존·재시도 엣지
+- 내장 프리셋(Implement and verify, Parallel research, Approval gate)과 사용자 프리셋
+- Design에서 편집하고 Run으로 라이브 실행, Human 노드에서 승인·거절·입력
+- Claude / Codex / Antigravity / Grok 중 선택. 사이드바 또는 커맨드 팔레트 → **New Graph session**
+
+### ♾️ Loop session
+- 목표를 주면 Claude 또는 Codex가 격리 worktree에서 Plan → Implementation → Validation → Auto-fix → Self-review → Open PR → Merge를 수행
+- 단계별 정책(Automatic / Ask first / Disabled)과 모델·effort 프리셋
+- 실행 중 목표를 고치면 pause → replan → continue
+- 사이드바 또는 커맨드 팔레트 → **New Loop session**
+
 ### 💾 에이전트 대화 영속화
 - `claude` / `codex` / `agy` / `grok` 대화 UUID를 세션별로 추적해 포커스 시 이전 대화 resume 제안
+- Settings → Sessions → **Auto-resume previous conversations**를 켜면 앱 시작 시 모달 없이 idle 세션에 resume 명령을 보냄 (이미 에이전트가 돌고 있는 세션은 건너뜀)
 - 우측 패널 **History** 탭에서 프로젝트별 transcript 히스토리 확인, 더블 클릭으로 새 터미널에서 resume
 
 ### 🛏️ Background sessions
 - 앱을 종료·재시작해도 **PTY 세션 그대로 유지** — 다시 열면 화면 복원
-- 기본 ON. Settings → Services 에서 상태 확인 + Kill / Restore / Forget 제어
+- 기본 ON. Settings → Sessions 에서 상태 확인 + Restart / Clear inactive / Quit 제어
 - 상태 표시줄 아이콘 드롭다운으로 한눈에 확인
 
 ### 🛰️ Control session — 에이전트가 다른 세션 조작
@@ -137,40 +162,50 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 
 ### 🛎️ Activity center
 - 세션별 알림(입력 대기 / 완료 / 실패)을 우측 패널 Activity 탭과 상태 표시줄에서 모아 보기
+- 데스크톱 알림을 클릭하면 해당 세션으로 포커스
 - 네이티브 알림 이벤트별 토글, 히스토리 보관 기간 설정
 
 ### ⌨️ 커맨드 팔레트 + 단축키
+커맨드 팔레트에서 세션 전환, New Graph / Loop / chat session, 워크스페이스 보기 전환도 실행할 수 있습니다.
+
 | Action | Shortcut |
 | --- | --- |
 | 커맨드 팔레트 | `⌘P` |
 | 새 세션 / isolated / control | `⌘T` / `⌘⌥T` / `⌘⌥⇧T` |
 | 새 프로젝트 | `⌘⇧N` |
+| 보기 내 검색 | `⌘F` |
 | Pane 분할 (세로/가로) | `⌘D` / `⌘⇧D` |
 | Pane 크기 균등화 | `⌘⌥E` |
+| Pane 포커스 | `⌘⌥←` / `⌘⌥→` / `⌘⌥⇧↑` / `⌘⌥⇧↓` |
 | 탭 닫기 | `⌘W` |
 | 사이드바 / 메인 / 우측 패널 포커스 | `⌘1` / `⌘2` / `⌘3` |
 | 사이드바 / 우측 패널 토글 | `⌘B` / `⌘J` |
+| Files / Staged / Commits / PRs / Todos | `⌘⇧E` / `⌘⇧S` / `⌘⇧C` / `⌘⇧P` / `⌘⇧T` |
 | multi-input 토글 | `⌘⌥I` |
 | 다음/이전 세션 | `Ctrl+Tab` / `Ctrl+⇧+Tab` |
+| 다음/이전 프로젝트 | `Ctrl+⌥+Tab` / `Ctrl+⌥⇧+Tab` |
 | 최근 입력 대기 세션으로 이동 | `Ctrl+⌥]` |
+| UI 배율 | `⌘-` / `⌘=` / `⌘0` |
 | 터미널 클리어 | `⌘K` |
+| 셸 환경 다시 로드 | `⌘⇧,` |
 | 설정 | `⌘,` |
 
 전체 목록은 Settings → Shortcuts 탭에서 확인하고 원하는 조합으로 변경할 수 있습니다.
 표의 `⌘`는 Windows·Linux에서 `Ctrl`, `⌥`는 `Alt`에 해당합니다. 터미널에 포커스가 있을 때는 `Ctrl+C`가 SIGINT, `Ctrl+Shift+C`가 선택 영역 복사로 동작합니다.
 
 ### 🎛️ 설정
-- 언어 / UI 배율 / theme / 배경 이미지 / 기본 Pane·Kanban 보기
-- 터미널 폰트 fallback·프리셋, 크기·굵기·자간·줄 높이·안티앨리어싱, 상주 터미널 수
+- 언어 (English / 한국어 / 日本語 / 简体中文) / UI 배율 / 배경 이미지 / 기본 Pane·Kanban·Canvas 보기
+- Theme library — 내장 팔레트 + [acorn-themes](https://im-ian.github.io/acorn-themes/) 카탈로그 다운로드·업데이트, 사용자 CSS
+- 터미널 폰트 fallback·프리셋, 크기·굵기·자간·줄 높이·커서·스크롤 속도·안티앨리어싱, 상주 터미널 수
 - 단축키 직접 녹화·충돌 감지·개별/전체 초기화
 - AI 공급자 선택 (`claude` / `codex` / `antigravity` / `grok` / `ollama` / `llm` / 커스텀), 외부 에디터 명령
-- Background sessions 제어, 작업 중 절전 방지, 종료 경고, orphan worktree·캐시 정리
+- Background sessions 제어, 이전 대화 auto-resume, 작업 중 절전 방지, 종료 경고, orphan worktree·캐시 정리
 - macOS 보호 폴더 권한 점검·재설정
 - 프로젝트별 PR 생성 설정 (사이드바 프로젝트 → Settings)
 
 ### 📊 상태 표시줄 + 자동 업데이트
 - 메모리 + 프로세스별 Breakdown, 현재 worktree 브랜치, GitHub 계정 배지
-- 활성 Claude / Codex 세션의 토큰 사용량, Background sessions / multi-input 상태 표시
+- Claude / Codex / Grok 토큰 사용량 (Grok은 weekly 윈도우 포함), Background sessions / multi-input 상태 표시
 - macOS·Windows 자동 업데이트 — 새 버전 감지 시 배너, 적용 시점은 사용자가 선택
 - About 탭에서 현재 버전의 GitHub 릴리스 노트 확인
 
