@@ -430,6 +430,13 @@ export interface AcornSettings {
      * worktree cleanup policy.
      */
     showRestartPromptOnExit: boolean;
+    /**
+     * On launch, send each idle session's agent resume command instead of
+     * asking with the "Resume previous conversation" modal. Sessions that
+     * already have a live agent are left alone. Default off: this starts
+     * agent CLIs without a confirmation.
+     */
+    autoResume: boolean;
   };
   power: {
     /**
@@ -549,7 +556,8 @@ export interface AcornSettings {
      * On Acorn launch, probes every persisted session for an unfinished
      * agent transcript and pops a one-shot modal when the user focuses
      * one. Disable to suppress the modal entirely; marker files still get
-     * written by the persister for future debugging.
+     * written by the persister for future debugging. Sessions.autoResume
+     * still probes and dispatches the resume command without this modal.
      */
     resumeModal: boolean;
     /**
@@ -605,6 +613,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     confirmDeleteIsolatedWorktrees: true,
     confirmDeleteEmptyWorktreeWorkspaces: true,
     showRestartPromptOnExit: true,
+    autoResume: false,
   },
   power: {
     preventSleep: false,
@@ -1453,6 +1462,10 @@ function loadSettings(): AcornSettings {
             : typeof sessionsRaw.closeOnExit === "boolean"
               ? !sessionsRaw.closeOnExit
               : DEFAULT_SETTINGS.sessions.showRestartPromptOnExit,
+        autoResume:
+          typeof sessionsRaw.autoResume === "boolean"
+            ? sessionsRaw.autoResume
+            : DEFAULT_SETTINGS.sessions.autoResume,
       },
       power: {
         preventSleep:

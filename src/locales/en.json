@@ -304,6 +304,11 @@
         "hint": "Turn this off to close the tab automatically when its shell or agent exits. Worktree-backed tabs then follow the cleanup prompt settings above.",
         "checkbox": "Show restart prompt after the process exits"
       },
+      "autoResume": {
+        "label": "Auto-resume previous conversations",
+        "hint": "On launch, send each idle session's resume command instead of asking with the \"Resume previous conversation\" modal. Sessions that are already running an agent are left alone.",
+        "checkbox": "Automatically resume previous conversations at launch"
+      },
       "background": {
         "title": "Background sessions",
         "description": "The acornd daemon owns long-running PTYs so terminal sessions survive Acorn restarts."
@@ -947,7 +952,8 @@
       "controlGuidePreferenceSaveFailed": "Couldn't save the control-session guide preference.",
       "notificationClickRegistrationFailedPrefix": "Could not enable notification click handling:",
       "notificationClickActivationFailedPrefix": "Could not bring Acorn to the clicked notification:",
-      "agentResumeProbeFailed": "Failed to check previous agent conversations:"
+      "agentResumeProbeFailed": "Failed to check previous agent conversations:",
+      "agentResumeAutoFailed": "Failed to auto-resume a previous conversation:"
     }
   },
   "statusBar": {

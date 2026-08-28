@@ -56,6 +56,32 @@ test.describe("settings modal", () => {
     await expect(modal).toHaveCount(0);
   });
 
+  test("keeps session auto-resume off by default and persists opt-in", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Sessions|세션)$/ }).click();
+
+    const toggle = modal.getByRole("checkbox", {
+      name: /^(Automatically resume previous conversations at launch|실행 시 이전 대화를 자동으로 재개)$/,
+    });
+    await expect(toggle).not.toBeChecked();
+
+    await toggle.check();
+    await expect(toggle).toBeChecked();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).sessions?.autoResume : null;
+        }),
+      )
+      .toBe(true);
+  });
+
   test("keeps agent title sync off by default and persists opt-in", async ({
     page,
   }) => {
