@@ -1202,10 +1202,12 @@
     "zoomControls": "图像缩放控件",
     "zoomIn": "放大",
     "zoomOut": "缩小",
-    "resetZoom": "重置缩放"
+    "resetZoom": "重置缩放",
+    "fileDeleted": "该文件已删除。"
   },
   "codeViewer": {
     "loading": "正在加载...",
+    "fileDeleted": "该文件已删除。",
     "binaryFile": "二进制文件",
     "binaryFileBody": "{bytes} 字节 - 未显示在只读查看器中。",
     "truncated": "文件被截断为 2 MB。外部打开即可查看其余内容。",

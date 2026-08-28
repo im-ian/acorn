@@ -33,6 +33,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
+import { listen } from "@tauri-apps/api/event";
 import { api } from "../lib/api";
 import { FileViewer } from "./FileViewer";
 
@@ -49,6 +50,23 @@ async function flushScrollReport() {
   });
 }
 
+function emitFsChanged(payload: {
+  paths: string[];
+  root?: string;
+  overflow?: boolean;
+  refresh?: { kind: "root" | "subtree"; path: string } | null;
+  dotgit_changed: boolean;
+}) {
+  const calls = vi.mocked(listen).mock.calls;
+  const listener = calls[calls.length - 1]?.[1];
+  if (!listener) throw new Error("fs listener not registered");
+  listener({
+    event: "acorn:fs-changed",
+    id: 1,
+    payload,
+  });
+}
+
 describe("FileViewer", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -62,6 +80,8 @@ describe("FileViewer", () => {
     vi.mocked(api.fsReleaseAsset).mockResolvedValue();
     vi.mocked(api.fsReadFile).mockReset();
     vi.mocked(api.fsGitDiffLines).mockReset();
+    vi.mocked(listen).mockClear();
+    vi.mocked(listen).mockResolvedValue(() => {});
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
   });
 
@@ -273,5 +293,77 @@ describe("FileViewer", () => {
     expect(onViewStateChange).toHaveBeenLastCalledWith({
       code: { scrollTop: 96, scrollLeft: 14 },
     });
+  });
+
+  it("keeps an open image after the file is deleted", async () => {
+    vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({
+      size: 1024,
+      asset_path: "/private/snapshots/logo.png",
+      capability: "asset-logo",
+    });
+    vi.mocked(api.fsPrepareAsset).mockRejectedValueOnce(
+      new Error("io error: No such file or directory (os error 2)"),
+    );
+
+    await act(async () => {
+      root.render(<FileViewer path="/repo/assets/logo.png" isActive />);
+    });
+    await flushPromises();
+
+    await act(async () => {
+      emitFsChanged({
+        root: "/repo",
+        paths: ["/repo/assets/logo.png"],
+        dotgit_changed: false,
+      });
+    });
+    await flushPromises();
+
+    const image = container.querySelector<HTMLImageElement>('img[alt="logo.png"]');
+    expect(image).not.toBeNull();
+    expect(image?.src).toContain(
+      encodeURIComponent("/private/snapshots/logo.png"),
+    );
+    expect(container.textContent).toContain("This file was deleted.");
+    expect(container.textContent).not.toContain("No such file or directory");
+    expect(api.fsReleaseAsset).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-acorn-media-missing="true"]'),
+    ).not.toBeNull();
+  });
+
+  it("keeps an open text file after the file is deleted", async () => {
+    vi.mocked(api.fsReadFile).mockResolvedValueOnce({
+      content: "still on screen",
+      size: 15,
+      truncated: false,
+      binary: false,
+    });
+    vi.mocked(api.fsReadFile).mockRejectedValueOnce(
+      new Error("io error: No such file or directory (os error 2)"),
+    );
+    vi.mocked(api.fsGitDiffLines).mockResolvedValueOnce([]);
+    vi.mocked(api.fsGitDiffLines).mockRejectedValueOnce(
+      new Error("io error: No such file or directory (os error 2)"),
+    );
+
+    await act(async () => {
+      root.render(<FileViewer path="/repo/notes.md" isActive />);
+    });
+    await flushPromises();
+
+    await act(async () => {
+      emitFsChanged({
+        root: "/repo",
+        paths: ["/repo/notes.md"],
+        dotgit_changed: false,
+      });
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("still on screen");
+    expect(container.textContent).toContain("This file was deleted.");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.textContent).not.toContain("No such file or directory");
   });
 });
