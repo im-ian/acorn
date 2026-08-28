@@ -14,6 +14,7 @@ import {
   type FsChangePayload,
   type FsPrepareAssetResult,
 } from "../lib/api";
+import { isMissingPathError } from "../lib/fsErrors";
 import { basenameFromPath, type MediaFileKind } from "../lib/mediaFiles";
 import { cn } from "../lib/cn";
 import type { ScrollPosition } from "../lib/scrollPosition";
@@ -40,6 +41,7 @@ interface MediaState {
   asset: FsPrepareAssetResult | null;
   error: string | null;
   loading: boolean;
+  missing: boolean;
 }
 
 const EMPTY_STATE: MediaState = {
@@ -47,6 +49,7 @@ const EMPTY_STATE: MediaState = {
   asset: null,
   error: null,
   loading: true,
+  missing: false,
 };
 
 const IMAGE_ZOOM_MIN = 0.25;
@@ -98,9 +101,18 @@ export function MediaViewer({
           asset,
           error: null,
           loading: false,
+          missing: false,
         });
       } catch (err: unknown) {
         if (seq !== loadSeqRef.current) return;
+        if (isMissingPathError(err) && assetCapabilityRef.current) {
+          setState((current) =>
+            current.src
+              ? { ...current, error: null, loading: false, missing: true }
+              : current,
+          );
+          return;
+        }
         const previousCapability = assetCapabilityRef.current;
         assetCapabilityRef.current = null;
         if (previousCapability) void api.fsReleaseAsset(previousCapability);
@@ -109,6 +121,7 @@ export function MediaViewer({
           asset: null,
           error: err instanceof Error ? err.message : String(err),
           loading: false,
+          missing: false,
         });
       }
     },
@@ -182,38 +195,48 @@ export function MediaViewer({
   return (
     <div
       className={cn(
-        "relative flex h-full w-full items-center justify-center overflow-hidden bg-bg",
+        "relative flex h-full w-full flex-col overflow-hidden bg-bg",
         isActive ? "" : "pointer-events-none",
       )}
       data-acorn-media-viewer={kind}
       data-acorn-media-size={state.asset?.size ?? undefined}
       data-acorn-media-zoom={kind === "image" ? imageZoom : undefined}
+      data-acorn-media-missing={state.missing || undefined}
     >
-      {kind === "image" ? (
-        <>
-          <ImageZoomControls
-            zoom={imageZoom}
-            onZoomIn={() => updateImageZoom((value) => nextImageZoom(value, 1))}
-            onZoomOut={() =>
-              updateImageZoom((value) => nextImageZoom(value, -1))
-            }
-            onReset={() => updateImageZoom(() => 1)}
-          />
-          {renderMedia(
-            kind,
-            state.src,
-            title,
-            imageZoom,
-            restoreMediaScrollRef,
-            (event) =>
-              reportMediaScrollPosition(
-                scrollPositionFromEventTarget(event.currentTarget),
-              ),
-          )}
-        </>
-      ) : (
-        renderMedia(kind, state.src, title)
-      )}
+      {state.missing ? (
+        <div className="shrink-0 border-b border-border bg-bg-warning/15 px-3 py-1 text-[11px] text-fg-muted">
+          {t("mediaViewer.fileDeleted")}
+        </div>
+      ) : null}
+      <div className="relative flex min-h-0 flex-1 items-center justify-center">
+        {kind === "image" ? (
+          <>
+            <ImageZoomControls
+              zoom={imageZoom}
+              onZoomIn={() =>
+                updateImageZoom((value) => nextImageZoom(value, 1))
+              }
+              onZoomOut={() =>
+                updateImageZoom((value) => nextImageZoom(value, -1))
+              }
+              onReset={() => updateImageZoom(() => 1)}
+            />
+            {renderMedia(
+              kind,
+              state.src,
+              title,
+              imageZoom,
+              restoreMediaScrollRef,
+              (event) =>
+                reportMediaScrollPosition(
+                  scrollPositionFromEventTarget(event.currentTarget),
+                ),
+            )}
+          </>
+        ) : (
+          renderMedia(kind, state.src, title)
+        )}
+      </div>
     </div>
   );
 }

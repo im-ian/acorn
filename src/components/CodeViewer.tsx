@@ -9,6 +9,7 @@ import {
   type FsLineDiffEntry,
   type FsReadFileResult,
 } from "../lib/api";
+import { isMissingPathError } from "../lib/fsErrors";
 import { highlightCode, langFromPath } from "../lib/highlight";
 import { matchesHotkeyEvent } from "../lib/hotkeys";
 import { cn } from "../lib/cn";
@@ -48,6 +49,7 @@ interface ViewerState {
   highlightedLines: (string | null)[] | null;
   error: string | null;
   loading: boolean;
+  missing: boolean;
 }
 
 const EMPTY_STATE: ViewerState = {
@@ -55,6 +57,7 @@ const EMPTY_STATE: ViewerState = {
   highlightedLines: null,
   error: null,
   loading: true,
+  missing: false,
 };
 
 const DIFF_KIND_CLASS: Record<FsLineDiffEntry["kind"], string> = {
@@ -196,14 +199,21 @@ export function CodeViewer({
           highlightedLines: null,
           error: null,
           loading: false,
+          missing: false,
         });
       } catch (err: unknown) {
         if (seq !== loadSeqRef.current) return;
-        setState({
-          data: null,
-          highlightedLines: null,
-          error: err instanceof Error ? err.message : String(err),
-          loading: false,
+        setState((current) => {
+          if (current.data && isMissingPathError(err)) {
+            return { ...current, error: null, loading: false, missing: true };
+          }
+          return {
+            data: null,
+            highlightedLines: null,
+            error: err instanceof Error ? err.message : String(err),
+            loading: false,
+            missing: false,
+          };
         });
       }
     },
@@ -220,7 +230,13 @@ export function CodeViewer({
     } catch (err: unknown) {
       if (seq !== diffLoadSeqRef.current) return;
       setDiffLines([]);
-      setDiffError(err instanceof Error ? err.message : String(err));
+      setDiffError(
+        isMissingPathError(err)
+          ? null
+          : err instanceof Error
+            ? err.message
+            : String(err),
+      );
     }
   }, [path]);
 
@@ -453,13 +469,20 @@ export function CodeViewer({
   }
   if (state.data?.binary) {
     return (
-      <Notice
-        title={t("codeViewer.binaryFile")}
-        body={t("codeViewer.binaryFileBody").replace(
-          "{bytes}",
-          state.data.size.toLocaleString(),
-        )}
-      />
+      <div className="flex h-full w-full flex-col bg-bg">
+        {state.missing ? (
+          <div className="shrink-0 border-b border-border bg-bg-warning/15 px-3 py-1 text-[11px] text-fg-muted">
+            {t("codeViewer.fileDeleted")}
+          </div>
+        ) : null}
+        <Notice
+          title={t("codeViewer.binaryFile")}
+          body={t("codeViewer.binaryFileBody").replace(
+            "{bytes}",
+            state.data.size.toLocaleString(),
+          )}
+        />
+      </div>
     );
   }
   if (!state.data) return null;
@@ -472,6 +495,11 @@ export function CodeViewer({
         isActive ? "" : "pointer-events-none",
       )}
     >
+      {state.missing ? (
+        <div className="shrink-0 border-b border-border bg-bg-warning/15 px-3 py-1 text-[11px] text-fg-muted">
+          {t("codeViewer.fileDeleted")}
+        </div>
+      ) : null}
       {state.data.truncated ? (
         <div className="shrink-0 border-b border-border bg-bg-warning/15 px-3 py-1 text-[11px] text-fg-muted">
           {t("codeViewer.truncated")}
