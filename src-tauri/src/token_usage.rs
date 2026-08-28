@@ -18,6 +18,9 @@ const CODEX_SESSION_MAX_ENTRIES: usize = 10_000;
 const CODEX_SESSION_MAX_DEPTH: usize = 4;
 const CODEX_SESSION_TAIL_BYTES: u64 = 256 * 1024;
 const CLAUDE_RATE_LIMIT_MAX_BYTES: u64 = 64 * 1024;
+// One global log; billing lines can sit hundreds of KB behind session chatter.
+const GROK_USAGE_TAIL_BYTES: u64 = 1024 * 1024;
+const GROK_USAGE_SOURCE: &str = "~/.grok/logs/unified.jsonl";
 const CODEX_SQLITE_STDOUT_MAX_BYTES: usize = 256 * 1024;
 const CODEX_SQLITE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -45,6 +48,7 @@ pub struct AgentTokenUsageMetric {
 pub enum AgentTokenProvider {
     Codex,
     Claude,
+    Grok,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -72,8 +76,9 @@ fn read_agent_token_usage() -> AgentTokenUsageSnapshot {
     let updated_at = unix_now();
     let codex = read_codex_rate_limits();
     let claude = read_claude_rate_limits();
+    let grok = read_grok_rate_limits();
 
-    let mut metrics = Vec::with_capacity(4);
+    let mut metrics = Vec::with_capacity(6);
     push_provider_metrics(
         &mut metrics,
         AgentTokenProvider::Codex,
@@ -90,11 +95,41 @@ fn read_agent_token_usage() -> AgentTokenUsageSnapshot {
         "No Claude 5h statusline rate-limit capture found",
         "No Claude weekly statusline rate-limit capture found",
     );
+    push_grok_metrics(&mut metrics, grok);
 
     AgentTokenUsageSnapshot {
         metrics,
         updated_at,
     }
+}
+
+fn push_grok_metrics(metrics: &mut Vec<AgentTokenUsageMetric>, grok: ProviderRateLimits) {
+    // Grok's billing log only carries the weekly pool, so an empty capture
+    // should not invent a missing 5h window the way Codex/Claude do.
+    if grok.has_reported_window() {
+        push_provider_metrics(
+            metrics,
+            AgentTokenProvider::Grok,
+            grok,
+            GROK_USAGE_SOURCE,
+            "No Grok 5h rate-limit event found",
+            "No Grok weekly rate-limit event found",
+        );
+        return;
+    }
+
+    let weekly_error = grok
+        .discovery_error
+        .as_deref()
+        .unwrap_or("No Grok weekly rate-limit event found");
+    push_metric(
+        metrics,
+        AgentTokenProvider::Grok,
+        AgentTokenWindow::Weekly,
+        None,
+        GROK_USAGE_SOURCE,
+        weekly_error,
+    );
 }
 
 fn push_provider_metrics(
@@ -427,6 +462,90 @@ fn claude_rate_limit_paths() -> Vec<PathBuf> {
         );
     }
     paths
+}
+
+fn read_grok_rate_limits() -> ProviderRateLimits {
+    let Some(path) = grok_unified_log_path() else {
+        return ProviderRateLimits::default();
+    };
+    read_grok_rate_limits_from_path(&path)
+}
+
+fn grok_unified_log_path() -> Option<PathBuf> {
+    std::env::var_os("GROK_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join(".grok")))
+        .map(|root| root.join("logs").join("unified.jsonl"))
+}
+
+fn read_grok_rate_limits_from_path(path: &Path) -> ProviderRateLimits {
+    match is_plain_regular_file(path) {
+        Ok(true) => {}
+        Ok(false) => return ProviderRateLimits::default(),
+        Err(err) => {
+            return ProviderRateLimits {
+                discovery_error: Some(path_discovery_error("inspect Grok usage log", path, &err)),
+                ..ProviderRateLimits::default()
+            };
+        }
+    }
+
+    let text = match read_tail(path, GROK_USAGE_TAIL_BYTES) {
+        Ok(tail) => tail.text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return ProviderRateLimits::default();
+        }
+        Err(err) => {
+            return ProviderRateLimits {
+                discovery_error: Some(path_discovery_error("read Grok usage log", path, &err)),
+                ..ProviderRateLimits::default()
+            };
+        }
+    };
+
+    let source = render_source_path(path);
+    for line in text.lines().rev() {
+        if !line.contains("billing: fetched credits config") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(parsed) = parse_grok_credits_config(&value, &source) {
+            return parsed;
+        }
+    }
+    ProviderRateLimits::default()
+}
+
+fn parse_grok_credits_config(value: &Value, source: &str) -> Option<ProviderRateLimits> {
+    let config = value.get("ctx").and_then(|ctx| ctx.get("config"))?;
+    let used_percent = number(config.get("creditUsagePercent"))?;
+    let period = config.get("currentPeriod");
+    let period_type = period
+        .and_then(|period| period.get("type"))
+        .and_then(Value::as_str);
+    if period_type.is_some_and(|period_type| period_type != "USAGE_PERIOD_TYPE_WEEKLY") {
+        return None;
+    }
+    let reset_raw = period
+        .and_then(|period| period.get("end"))
+        .and_then(Value::as_str)
+        .or_else(|| config.get("billingPeriodEnd").and_then(Value::as_str));
+    Some(ProviderRateLimits {
+        weekly: Some(RateLimitWindow {
+            used_percent,
+            reset_at: parse_iso_unix(reset_raw),
+            source: source.to_string(),
+        }),
+        ..ProviderRateLimits::default()
+    })
+}
+
+fn parse_iso_unix(value: Option<&str>) -> Option<f64> {
+    chrono::DateTime::parse_from_rfc3339(value?)
+        .ok()
+        .map(|dt| dt.timestamp() as f64)
 }
 
 fn parse_rate_limit_window(
@@ -936,6 +1055,166 @@ mod tests {
 
         assert_eq!(window.used_percent, 10.5);
         assert_eq!(window.reset_at, Some(1779860400.0));
+    }
+
+    #[test]
+    fn parses_weekly_grok_credits_from_billing_log() {
+        let value: Value = serde_json::json!({
+            "msg": "billing: fetched credits config",
+            "ctx": {
+                "config": {
+                    "creditUsagePercent": 48.0,
+                    "currentPeriod": {
+                        "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                        "end": "2026-08-31T00:33:32.018044+00:00"
+                    }
+                }
+            }
+        });
+
+        let limits = parse_grok_credits_config(&value, "grok").unwrap();
+        let weekly = limits.weekly.unwrap();
+        assert_eq!(limits.five_hour, None);
+        assert_eq!(weekly.used_percent, 48.0);
+        assert_eq!(weekly.reset_at, Some(1_788_136_412.0));
+    }
+
+    #[test]
+    fn skips_non_weekly_grok_billing_periods() {
+        let value: Value = serde_json::json!({
+            "msg": "billing: fetched credits config",
+            "ctx": {
+                "config": {
+                    "creditUsagePercent": 12.0,
+                    "currentPeriod": {
+                        "type": "USAGE_PERIOD_TYPE_MONTHLY",
+                        "end": "2026-09-24T00:00:00Z"
+                    }
+                }
+            }
+        });
+
+        assert_eq!(parse_grok_credits_config(&value, "grok"), None);
+    }
+
+    #[test]
+    fn reads_latest_grok_billing_event_from_log_tail() {
+        let path = temp_file_path("grok-usage-tail");
+        let mut file = File::create(&path).expect("create temp file");
+        writeln!(file, r#"{{"msg":"noise"}}"#).expect("write noise");
+        writeln!(
+            file,
+            r#"{{"msg":"billing: fetched credits config","ctx":{{"config":{{"creditUsagePercent":12,"currentPeriod":{{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-08-24T00:00:00Z"}}}}}}}}"#
+        )
+        .expect("write older billing");
+        writeln!(
+            file,
+            r#"{{"msg":"billing: fetched credits config","ctx":{{"config":{{"creditUsagePercent":49,"billingPeriodEnd":"2026-08-31T00:33:32Z"}}}}}}"#
+        )
+        .expect("write latest billing");
+        drop(file);
+
+        let limits = read_grok_rate_limits_from_path(&path);
+        fs::remove_file(&path).ok();
+
+        let weekly = limits.weekly.unwrap();
+        assert_eq!(weekly.used_percent, 49.0);
+        assert_eq!(weekly.reset_at, Some(1_788_136_412.0));
+        assert!(
+            weekly.source.ends_with("grok-usage-tail.jsonl")
+                || weekly.source.contains("grok-usage-tail")
+        );
+    }
+
+    #[test]
+    fn parses_grok_rate_limits_from_large_log_tail() {
+        let path = temp_file_path("grok-usage-large-tail");
+        let mut file = File::create(&path).expect("create temp file");
+        file.write_all(&vec![b'x'; GROK_USAGE_TAIL_BYTES as usize + 1024])
+            .expect("write prefix");
+        writeln!(file).expect("end prefix line");
+        writeln!(
+            file,
+            r#"{{"msg":"billing: fetched credits config","ctx":{{"config":{{"creditUsagePercent":42,"currentPeriod":{{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-08-31T00:33:32Z"}}}}}}}}"#
+        )
+        .expect("write billing event");
+        drop(file);
+
+        let limits = read_grok_rate_limits_from_path(&path);
+        let weekly = limits.weekly.expect("weekly window");
+        assert_eq!(weekly.used_percent, 42.0);
+        assert_eq!(weekly.reset_at, Some(1_788_136_412.0));
+        let tail = read_tail(&path, GROK_USAGE_TAIL_BYTES)
+            .expect("read tail")
+            .text;
+        assert_eq!(tail.len(), GROK_USAGE_TAIL_BYTES as usize);
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn grok_without_usage_only_reports_the_weekly_window() {
+        let mut metrics = Vec::new();
+        let limits = ProviderRateLimits {
+            discovery_error: Some("permission denied while reading Grok usage".to_string()),
+            ..ProviderRateLimits::default()
+        };
+
+        push_grok_metrics(&mut metrics, limits);
+
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].provider, AgentTokenProvider::Grok);
+        assert_eq!(metrics[0].window, AgentTokenWindow::Weekly);
+        assert_eq!(
+            metrics[0].error.as_deref(),
+            Some("permission denied while reading Grok usage")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn grok_log_access_errors_are_not_reported_as_missing_usage() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempdir().expect("log root");
+        let log = root.path().join("unified.jsonl");
+        fs::write(
+            &log,
+            br#"{"msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":42}}}"#,
+        )
+        .expect("write log");
+        let original_permissions = fs::metadata(&log).unwrap().permissions();
+        fs::set_permissions(&log, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let limits = read_grok_rate_limits_from_path(&log);
+
+        fs::set_permissions(&log, original_permissions).unwrap();
+        assert!(!limits.has_reported_window());
+        let error = limits
+            .discovery_error
+            .expect("permission error must be retained");
+        assert!(error.contains("inspect Grok usage log") || error.contains("read Grok usage log"));
+        assert!(error.contains("Permission denied") || error.contains("permission denied"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn grok_usage_reader_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().expect("log root");
+        let outside = tempdir().expect("outside root");
+        let outside_file = outside.path().join("outside.jsonl");
+        fs::write(
+            &outside_file,
+            br#"{"msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":42}}}"#,
+        )
+        .expect("write outside log");
+        let linked = root.path().join("unified.jsonl");
+        symlink(&outside_file, &linked).expect("link file");
+
+        let limits = read_grok_rate_limits_from_path(&linked);
+        assert!(!limits.has_reported_window());
+        assert_eq!(limits.discovery_error, None);
     }
 
     #[test]

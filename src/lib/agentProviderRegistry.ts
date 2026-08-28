@@ -112,7 +112,7 @@ export const AGENT_PROVIDER_REGISTRY = {
       url: grokIconUrl,
       alt: "Grok",
     },
-    capabilities: ["history", "resume", "fork", "status"],
+    capabilities: ["history", "resume", "fork", "status", "tokenUsage"],
     hooks: {
       supportsHooks: false,
     },

@@ -511,7 +511,7 @@
         },
         "agentTokenUsage": {
           "label": "에이전트 토큰 사용량",
-          "description": "Codex는 로컬 rate-limit 이벤트를 읽고, Claude는 token-widget 호환 statusline 캡처를 읽습니다. 표시 중일 때 1분마다 확인합니다."
+          "description": "Codex는 로컬 rate-limit 이벤트를 읽고, Claude는 token-widget 호환 statusline 캡처를 읽고, Grok는 로컬 과금 로그를 읽습니다. 표시 중일 때 1분마다 확인합니다."
         },
         "memoryUsage": {
           "label": "메모리 사용량",
