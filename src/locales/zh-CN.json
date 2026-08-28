@@ -511,7 +511,7 @@
         },
         "agentTokenUsage": {
           "label": "智能体令牌用量",
-          "description": "Codex 读取本地速率限制事件；Claude 读取兼容令牌小组件的状态行捕获。显示时每分钟轮询一次。"
+          "description": "Codex 读取本地速率限制事件；Claude 读取兼容令牌小组件的状态行捕获；Grok 读取本地计费日志。显示时每分钟轮询一次。"
         },
         "memoryUsage": {
           "label": "内存用量",

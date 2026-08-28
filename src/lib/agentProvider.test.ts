@@ -101,6 +101,7 @@ describe("agent provider registry", () => {
       "resume",
       "fork",
       "status",
+      "tokenUsage",
     ]);
   });
 
@@ -193,8 +194,8 @@ describe("agent provider registry", () => {
     expect(providerSupportsTokenUsage("claude")).toBe(true);
     expect(providerSupportsTokenUsage("codex")).toBe(true);
     expect(providerSupportsTokenUsage("antigravity")).toBe(false);
-    expect(providerSupportsTokenUsage("grok")).toBe(false);
-    expect(AGENT_TOKEN_PROVIDER_ORDER).toEqual(["claude", "codex"]);
+    expect(providerSupportsTokenUsage("grok")).toBe(true);
+    expect(AGENT_TOKEN_PROVIDER_ORDER).toEqual(["claude", "codex", "grok"]);
     expect(providerSupportsImagePasteFallback("claude")).toBe(true);
     expect(providerSupportsImagePasteFallback("antigravity")).toBe(false);
     expect(getAgentMentionPrefix("claude")).toBe("@");

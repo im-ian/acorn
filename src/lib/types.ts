@@ -712,7 +712,7 @@ export interface MemoryUsage {
   processes: MemoryProcess[];
 }
 
-export type AgentTokenProvider = "codex" | "claude";
+export type AgentTokenProvider = "codex" | "claude" | "grok";
 export type AgentTokenWindow = "five_hour" | "weekly";
 
 export interface AgentTokenUsageMetric {

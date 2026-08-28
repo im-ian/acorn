@@ -304,6 +304,50 @@ test.describe("status bar", () => {
     await expect(footer.getByText(/88%/)).toHaveCount(0);
   });
 
+  test("shows only the weekly Grok window for an active Grok tab", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      { ...BASE_SESSION, name: "grok", agent_provider: "grok" },
+    ]);
+    await tauri.respond("get_agent_token_usage", {
+      updated_at: 1779860000,
+      metrics: [
+        {
+          provider: "grok",
+          window: "weekly",
+          used_percent: 48,
+          remaining_percent: 52,
+          reset_at: 1779930000,
+          source: "~/.grok/logs/unified.jsonl",
+          error: null,
+        },
+      ],
+    });
+
+    await page.goto("/");
+    await enableAgentTokenUsage(page);
+
+    const footer = page.locator("footer");
+    const tokenBadge = footer.getByTestId("agent-token-usage");
+    await expect(tokenBadge).toBeVisible();
+    await expect(tokenBadge).toContainText("tokens:");
+    await expect(tokenBadge).toContainText("w");
+    await expect(tokenBadge).toContainText("52%");
+    await expect(tokenBadge).not.toContainText("5h");
+    await expect(footer.getByRole("img", { name: "Grok" })).toBeVisible();
+    await expect(footer.getByText(/Codex/)).toHaveCount(0);
+    await expect(footer.getByText(/Claude/)).toHaveCount(0);
+
+    await tokenBadge.hover();
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("weekly");
+    await expect(tooltip).toContainText("52% left");
+    await expect(tooltip).not.toContainText("5h");
+  });
+
   test("hides agent token usage for non-agent tabs", async ({ page, tauri }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [{ ...BASE_SESSION, name: "shell" }]);

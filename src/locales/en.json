@@ -511,7 +511,7 @@
         },
         "agentTokenUsage": {
           "label": "Agent token usage",
-          "description": "Codex reads local rate-limit events; Claude reads a token-widget-compatible statusline capture. Polls once per minute when shown."
+          "description": "Codex reads local rate-limit events; Claude reads a token-widget-compatible statusline capture; Grok reads the local billing log. Polls once per minute when shown."
         },
         "memoryUsage": {
           "label": "Memory usage",
