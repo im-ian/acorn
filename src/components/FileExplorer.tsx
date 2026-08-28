@@ -985,13 +985,17 @@ export function FileExplorer({
       try {
         await api.fsTrash(entry.path);
         await fetchDir(parentPath(entry.path));
+        retainRecentGitStatPaths(changedPathsRef.current, [entry.path]);
+        pendingWorkingTreeRef.current = true;
+        scheduleGitStatusRefresh("user");
+        scheduleGitDiffStats();
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         setError(message);
         showToast(`${t("toasts.files.trashFailed")} ${message}`);
       }
     },
-    [fetchDir, showToast, t],
+    [fetchDir, scheduleGitDiffStats, scheduleGitStatusRefresh, showToast, t],
   );
 
   const dirtyAncestors = useMemo(

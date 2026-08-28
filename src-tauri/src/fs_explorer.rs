@@ -966,7 +966,13 @@ fn fs_git_diff_stats_scoped(
         let rel = rel_path.to_string_lossy().into_owned();
         let abs = scoped.requested.to_string_lossy().into_owned();
         match entry.kind.as_str() {
-            "added" => added.push((abs, scoped.resolved)),
+            "added" => match std::fs::symlink_metadata(&scoped.resolved) {
+                Ok(_) => added.push((abs, scoped.resolved)),
+                // The explorer can still ask for stats after trashing an
+                // untracked file; skip it instead of failing the whole batch.
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err.into()),
+            },
             "deleted" => deleted.push((abs, rel)),
             _ => diffable.push((abs, rel)),
         }
@@ -1582,9 +1588,13 @@ pub fn fs_git_diff_lines(
 
 fn fs_git_diff_lines_scoped(scope: &FsScope, path: String) -> AppResult<Vec<LineDiffEntry>> {
     let target = PathBuf::from(&path);
-    let scoped = scope.authorize_existing(&target)?;
+    let scoped = scope.authorize_existing_or_missing(&target)?;
     let target = scoped.resolved;
-    let target_metadata = std::fs::metadata(&target)?;
+    let target_metadata = match std::fs::metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
     if !target_metadata.is_file() {
         return Ok(Vec::new());
     }
@@ -3538,6 +3548,40 @@ mod tests {
     }
 
     #[test]
+    fn diff_stats_skips_missing_added_files() {
+        use git2::Repository;
+
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        Repository::init(&repo_path).unwrap();
+        let missing = repo_path.join("gone.txt");
+        let present = repo_path.join("kept.txt");
+        fs::write(&present, "a\nb\n").unwrap();
+
+        let scope = scope_for(&repo_path);
+        let stats = fs_git_diff_stats_scoped(
+            &scope,
+            repo_path.to_string_lossy().into_owned(),
+            vec![
+                GitDiffStatsRequest {
+                    path: missing.to_string_lossy().into_owned(),
+                    kind: "added".to_string(),
+                },
+                GitDiffStatsRequest {
+                    path: present.to_string_lossy().into_owned(),
+                    kind: "added".to_string(),
+                },
+            ],
+        )
+        .unwrap();
+
+        assert!(!stats.contains_key(&missing.to_string_lossy().into_owned()));
+        let kept = &stats[&present.to_string_lossy().into_owned()];
+        assert_eq!(kept.additions, 2);
+        assert_eq!(kept.deletions, 0);
+    }
+
+    #[test]
     fn diff_lines_returns_markers_for_requested_file() {
         let d = tmpdir();
         let repo_path = d.path().canonicalize().unwrap();
@@ -3619,5 +3663,23 @@ mod tests {
             .expect_err("oversized file should stop before diff generation");
 
         assert!(error.to_string().contains("diff line byte limit exceeded"));
+    }
+
+    #[test]
+    fn diff_lines_returns_empty_when_worktree_file_is_missing() {
+        use git2::Repository;
+
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        let repo = Repository::init(&repo_path).unwrap();
+        let tracked = repo_path.join("tracked.txt");
+        fs::write(&tracked, "one\ntwo\n").unwrap();
+        commit_paths(&repo, &["tracked.txt"]);
+        fs::remove_file(&tracked).unwrap();
+
+        let scope = scope_for(&repo_path);
+        let lines =
+            fs_git_diff_lines_scoped(&scope, tracked.to_string_lossy().into_owned()).unwrap();
+        assert!(lines.is_empty());
     }
 }

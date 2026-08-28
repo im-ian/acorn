@@ -1202,10 +1202,12 @@
     "zoomControls": "画像ズームコントロール",
     "zoomIn": "ズームイン",
     "zoomOut": "ズームアウト",
-    "resetZoom": "ズームをリセットする"
+    "resetZoom": "ズームをリセットする",
+    "fileDeleted": "このファイルは削除されました。"
   },
   "codeViewer": {
     "loading": "読み込み中...",
+    "fileDeleted": "このファイルは削除されました。",
     "binaryFile": "バイナリファイル",
     "binaryFileBody": "{bytes} バイト - 読み取り専用ビューアには表示されません。",
     "truncated": "ファイルは 2 MB に切り詰められました。外部から開いて残りを表示します。",

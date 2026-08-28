@@ -1202,10 +1202,12 @@
     "zoomControls": "이미지 확대/축소 컨트롤",
     "zoomIn": "확대",
     "zoomOut": "축소",
-    "resetZoom": "확대/축소 초기화"
+    "resetZoom": "확대/축소 초기화",
+    "fileDeleted": "이 파일이 삭제되었습니다."
   },
   "codeViewer": {
     "loading": "불러오는 중...",
+    "fileDeleted": "이 파일이 삭제되었습니다.",
     "binaryFile": "바이너리 파일",
     "binaryFileBody": "{bytes}바이트 - 읽기 전용 뷰어에 표시되지 않습니다.",
     "truncated": "파일이 2 MB로 잘렸습니다. 나머지는 외부에서 열어 확인하세요.",
