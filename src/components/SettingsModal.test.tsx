@@ -160,6 +160,10 @@ vi.mock("../lib/themes", () => ({
     }),
 }));
 
+vi.mock("../lib/updater", () => ({
+  canonicalReleaseUrl: () => "https://example.invalid/releases",
+}));
+
 vi.mock("../lib/updater-store", () => ({
   useUpdater: () => ({
     available: null,
@@ -1465,6 +1469,47 @@ describe("SettingsModal font controls", () => {
 
     expect(patchSessions).toHaveBeenCalledWith({
       showRestartPromptOnExit: false,
+    });
+  });
+
+  it("patches the auto-resume previous conversations toggle", async () => {
+    const patchSessions = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchSessions,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openSessionsTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const toggle = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ).find((input) =>
+      input
+        .closest("label")
+        ?.textContent?.includes(
+          "Automatically resume previous conversations at launch",
+        ),
+    );
+
+    expect(document.body.textContent).toContain(
+      "Auto-resume previous conversations",
+    );
+    expect(toggle).toBeInstanceOf(HTMLInputElement);
+    expect(toggle?.checked).toBe(false);
+
+    act(() => {
+      toggle?.click();
+    });
+
+    expect(patchSessions).toHaveBeenCalledWith({
+      autoResume: true,
     });
   });
 

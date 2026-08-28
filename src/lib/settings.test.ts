@@ -1199,6 +1199,7 @@ describe("session removal settings", () => {
       true,
     );
     expect(DEFAULT_SETTINGS.sessions.showRestartPromptOnExit).toBe(true);
+    expect(DEFAULT_SETTINGS.sessions.autoResume).toBe(false);
   });
 
   it("loads persisted session removal preferences", async () => {
@@ -1230,6 +1231,23 @@ describe("session removal settings", () => {
     expect(
       useSettings.getState().settings.sessions.showRestartPromptOnExit,
     ).toBe(false);
+    expect(useSettings.getState().settings.sessions.autoResume).toBe(false);
+  });
+
+  it("loads persisted auto-resume preference", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        sessions: {
+          autoResume: true,
+        },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.sessions.autoResume).toBe(true);
   });
 
   it("migrates persisted automatic cleanup preferences", async () => {

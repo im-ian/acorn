@@ -1223,6 +1223,22 @@ function SessionSettings() {
       >
         <div className="space-y-4">
           <Field
+            label={st(t, "settings.sessions.autoResume.label")}
+            hint={st(t, "settings.sessions.autoResume.hint")}
+          >
+            <label className="flex items-center gap-2 text-xs text-fg">
+              <input
+                type="checkbox"
+                checked={settings.sessions.autoResume}
+                onChange={(e) =>
+                  patchSessions({ autoResume: e.target.checked })
+                }
+                className="acorn-check"
+              />
+              {st(t, "settings.sessions.autoResume.checkbox")}
+            </label>
+          </Field>
+          <Field
             label={st(t, "settings.terminal.detachOffscreenTerminals.label")}
             hint={st(t, "settings.terminal.detachOffscreenTerminals.hint")}
           >

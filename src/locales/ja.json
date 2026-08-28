@@ -304,6 +304,11 @@
         "hint": "これをオフにすると、シェルまたはエージェントが終了したときにタブが自動的に閉じます。 Worktree を使用したタブは、上記のクリーンアップ プロンプト設定に従います。",
         "checkbox": "プロセス終了後に再起動プロンプトを表示する"
       },
+      "autoResume": {
+        "label": "前回の会話を自動再開",
+        "hint": "起動時に「前の会話を再開」モーダルを出さず、アイドル中のセッションへ再開コマンドを直接送ります。すでにエージェントが実行中のセッションはそのままです。",
+        "checkbox": "起動時に前回の会話を自動的に再開する"
+      },
       "background": {
         "title": "バックグラウンドセッション",
         "description": "acornd デーモンは長時間実行される PTY を所有しているため、端末セッションは Acorn の再起動後も存続します。"
@@ -947,7 +952,8 @@
       "controlGuidePreferenceSaveFailed": "コントロールセッションガイドの設定を保存できませんでした。",
       "notificationClickRegistrationFailedPrefix": "通知クリック処理を有効にできませんでした:",
       "notificationClickActivationFailedPrefix": "クリックした通知から Acorn を開けませんでした:",
-      "agentResumeProbeFailed": "以前のエージェント会話を確認できませんでした:"
+      "agentResumeProbeFailed": "以前のエージェント会話を確認できませんでした:",
+      "agentResumeAutoFailed": "前回の会話を自動再開できませんでした:"
     }
   },
   "statusBar": {

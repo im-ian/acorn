@@ -38,6 +38,10 @@ import {
 } from "./lib/api";
 import { AGENT_PROVIDER_ORDER } from "./lib/agentProviderRegistry";
 import {
+  autoResumeAgentConversation,
+  forgetCompletedAgentResumeAutoDispatch,
+} from "./lib/agentResume";
+import {
   DEFAULT_HOTKEYS,
   hotkeyBindingsFor,
   shouldUseTinykeysToggleMultiInputFallback,
@@ -514,16 +518,6 @@ function App() {
     appearance.background.applyToTerminal,
   ]);
 
-  // Probe every persisted session for a "이전 대화" candidate exactly
-  // once per Acorn launch — at mount, not on focus. The intended UX is
-  // "boot Acorn after a system off-and-on, get a one-shot prompt per
-  // session to pick up where I left off", which includes sessions that
-  // live in non-focused panes (multi-pane layouts) where `activeSessionId`
-  // alone would never surface them. Results land in `resumeCandidates`
-  // keyed by session id; the rendered modal is a pure derivation of
-  // `activeSessionId × resumeCandidates`, so dismissal only needs to
-  // drop the entry — no separate "currently shown" state to keep in
-  // sync.
   // Probe each non-busy session for a "이전 대화" candidate exactly once
   // per Acorn launch. Per-session ref dedup so the effect re-firing when
   // zustand pushes a new `sessions` array reference (boot rehydrate,
@@ -533,13 +527,19 @@ function App() {
   // by a resume prompt for the transcript it is already using. That dedup
   // is what holds the "cold boot only" UX promise: after the user finishes
   // an agent run and the persister updates its marker file, the in-memory
-  // map stays stable, so the modal never pops mid-session.
+  // map stays stable, so the modal never pops mid-session. The probe also
+  // covers non-focused panes, where `activeSessionId` alone would never
+  // surface them.
   const resumeModalEnabled = useSettings(
     (s) => s.settings.experiments.resumeModal,
   );
+  const autoResumeEnabled = useSettings((s) => s.settings.sessions.autoResume);
+  const resumeProbeEnabled = resumeModalEnabled || autoResumeEnabled;
   const primedResumeSessionsRef = useRef<Set<string>>(new Set());
   const [resumePrimeVersion, setResumePrimeVersion] = useState(0);
   const probedSessionsRef = useRef<Set<string>>(new Set());
+  const resumeCandidatesRef = useRef(resumeCandidates);
+  resumeCandidatesRef.current = resumeCandidates;
   useEffect(() => {
     const liveSessionIds = new Set(
       useAppStore.getState().sessions.map((session) => session.id),
@@ -557,9 +557,10 @@ function App() {
   }, [sessionIdsKey]);
 
   useEffect(() => {
-    if (!resumeModalEnabled) {
+    if (!resumeProbeEnabled) {
       primedResumeSessionsRef.current.clear();
       probedSessionsRef.current.clear();
+      forgetCompletedAgentResumeAutoDispatch();
       setResumeCandidates((current) =>
         current.size === 0 ? current : new Map(),
       );
@@ -584,10 +585,10 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [resumeModalEnabled, sessionIdsKey]);
+  }, [resumeProbeEnabled, sessionIdsKey]);
 
   useEffect(() => {
-    if (!resumeModalEnabled) return;
+    if (!resumeProbeEnabled) return;
     const latestById = new Map(
       useAppStore.getState().sessions.map((session) => [session.id, session]),
     );
@@ -693,6 +694,21 @@ function App() {
             return latest != null && !shouldSkipResumeProbeForSession(latest);
           });
         if (additions.length === 0) return;
+        if (useSettings.getState().settings.sessions.autoResume) {
+          void autoResumeFoundCandidates(additions).then((autoFailures) => {
+            if (autoFailures.length === 0) return;
+            reportAutoResumeFailures(autoFailures, showToast, t);
+            if (!useSettings.getState().settings.experiments.resumeModal) {
+              return;
+            }
+            setResumeCandidates((prev) => {
+              const next = new Map(prev);
+              for (const [sid, pick] of autoFailures) next.set(sid, pick);
+              return next;
+            });
+          });
+          return;
+        }
         setResumeCandidates((prev) => {
           const next = new Map(prev);
           for (const [sid, pick] of additions) next.set(sid, pick);
@@ -703,7 +719,35 @@ function App() {
         // Per-provider failures are reported above; this only catches an
         // unexpected orchestration failure. The next launch retries.
       });
-  }, [sessions, resumeModalEnabled, resumePrimeVersion, showToast, t]);
+  }, [sessions, resumeProbeEnabled, resumePrimeVersion, showToast, t]);
+
+  useEffect(() => {
+    if (!autoResumeEnabled) return;
+    const pending = [...resumeCandidatesRef.current.entries()];
+    if (pending.length === 0) return;
+    let cancelled = false;
+    void autoResumeFoundCandidates(pending).then((autoFailures) => {
+      if (cancelled) return;
+      const failedIds = new Set(
+        autoFailures.map(([sessionId]) => sessionId),
+      );
+      if (autoFailures.length > 0) {
+        reportAutoResumeFailures(autoFailures, showToast, t);
+      }
+      setResumeCandidates((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        for (const [sessionId] of pending) {
+          if (failedIds.has(sessionId) && resumeModalEnabled) continue;
+          changed = next.delete(sessionId) || changed;
+        }
+        return changed ? next : prev;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [autoResumeEnabled, resumeModalEnabled, showToast, t]);
 
   const resumeCandidate = useMemo(() => {
     if (!activeSessionId) return null;
@@ -2064,6 +2108,49 @@ function App() {
   );
 }
 
+type ResumeCandidateEntry = {
+  agent: AgentKind;
+  candidate: ResumeCandidate;
+};
+
+async function autoResumeFoundCandidates(
+  entries: ReadonlyArray<readonly [string, ResumeCandidateEntry]>,
+): Promise<Array<readonly [string, ResumeCandidateEntry, unknown]>> {
+  const failures: Array<readonly [string, ResumeCandidateEntry, unknown]> = [];
+  await Promise.all(
+    entries.map(async ([sessionId, pick]) => {
+      try {
+        await autoResumeAgentConversation({
+          sessionId,
+          agent: pick.agent,
+          uuid: pick.candidate.uuid,
+        });
+      } catch (error) {
+        failures.push([sessionId, pick, error]);
+      }
+    }),
+  );
+  return failures;
+}
+
+function reportAutoResumeFailures(
+  failures: ReadonlyArray<readonly [string, ResumeCandidateEntry, unknown]>,
+  showToast: (message: string) => void,
+  t: Translator,
+): void {
+  for (const [sessionId, pick, error] of failures) {
+    console.warn(
+      `[App] auto-resume failed for ${pick.agent} candidate on ${sessionId}`,
+      error,
+    );
+  }
+  showToast(
+    `${appText(t, "app.toast.agentResumeAutoFailed")} ${unknownErrorMessage(
+      failures[0]?.[2],
+    )}`,
+  );
+}
+
 /**
  * Decide which agent's resume candidate to show first when both are
  * non-null. Larger `lastActivityUnix` wins so the user is offered the
@@ -2072,7 +2159,7 @@ function App() {
  */
 function pickResumeCandidate(
   entries: readonly (readonly [AgentKind, ResumeCandidate | null])[],
-): { agent: AgentKind; candidate: ResumeCandidate } | null {
+): ResumeCandidateEntry | null {
   const candidates = entries
     .map(([agent, candidate]) => (candidate ? { agent, candidate } : null))
     .filter(

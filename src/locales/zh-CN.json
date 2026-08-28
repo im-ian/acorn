@@ -304,6 +304,11 @@
         "hint": "关闭后，shell 或智能体退出时会自动关闭标签页；由工作树支持的标签页仍遵循上方的清理提示设置。",
         "checkbox": "进程退出后显示重启提示"
       },
+      "autoResume": {
+        "label": "自动继续上次对话",
+        "hint": "启动时不弹出“继续上次对话”对话框，直接向空闲会话发送恢复命令。已在运行智能体的会话保持原样。",
+        "checkbox": "启动时自动继续上次对话"
+      },
       "background": {
         "title": "后台会话",
         "description": "acornd 守护进程拥有长期运行的 PTY，因此终端会话在 Acorn 重新启动后仍然存在。"
@@ -947,7 +952,8 @@
       "controlGuidePreferenceSaveFailed": "无法保存控制会话指南偏好设置。",
       "notificationClickRegistrationFailedPrefix": "无法启用通知点击处理：",
       "notificationClickActivationFailedPrefix": "无法从点击的通知打开 Acorn：",
-      "agentResumeProbeFailed": "无法检查之前的智能体对话："
+      "agentResumeProbeFailed": "无法检查之前的智能体对话：",
+      "agentResumeAutoFailed": "无法自动继续上次对话："
     }
   },
   "statusBar": {
