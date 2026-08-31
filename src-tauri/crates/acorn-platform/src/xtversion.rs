@@ -121,6 +121,15 @@ pub fn write_replies(hits: usize, writer: &mut dyn Write) {
     }
 }
 
+/// Write replies only when the caller already holds the PTY writer.
+/// Pass `mutex.try_lock()` so a busy stdin burst cannot stall the stdout
+/// reader; a late DCS reply paints into the viewport.
+pub fn write_replies_if(hits: usize, writer: Option<&mut dyn Write>) {
+    if let Some(writer) = writer {
+        write_replies(hits, writer);
+    }
+}
+
 pub fn answer_probes(probe: &mut XtversionProbe, bytes: &[u8], writer: &mut dyn Write) {
     write_replies(probe.push(bytes), writer);
 }
@@ -176,5 +185,13 @@ mod tests {
         let mut out = Vec::new();
         write_replies(0, &mut out);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn write_replies_if_skips_a_missing_writer() {
+        write_replies_if(2, None);
+        let mut out = Vec::new();
+        write_replies_if(1, Some(&mut out));
+        assert_eq!(out, XTVERSION_REPLY);
     }
 }

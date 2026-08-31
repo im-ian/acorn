@@ -470,8 +470,17 @@ fn read_loop(mut reader: Box<dyn Read + Send>, handle: Arc<PtyHandle>) {
                 let chunk = &buf[..n];
                 let hits = xtversion.push(chunk);
                 if hits > 0 {
-                    let mut writer = handle.writer.lock();
-                    acorn_platform::xtversion::write_replies(hits, writer.as_mut());
+                    // Skip when stdin already holds the writer. Waiting
+                    // stalls this stdout reader, and a late DCS reply
+                    // paints into the viewport.
+                    acorn_platform::xtversion::write_replies_if(
+                        hits,
+                        handle
+                            .writer
+                            .try_lock()
+                            .as_mut()
+                            .map(|writer| writer.as_mut() as &mut dyn Write),
+                    );
                 }
                 let span = handle.scrollback.push_tracked(chunk);
                 // Broadcast is a best-effort delivery; if no clients are
