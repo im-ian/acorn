@@ -49,9 +49,9 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, U
 mod line;
 
 pub use line::{
-    assistant_message_text, collapse_preview, latest_turn_observation, latest_turn_state,
-    parse_transcript_line, parse_transcript_value, read_tail, ParsedTranscriptLine, TailRead,
-    TranscriptRole, TurnObservation, TurnState,
+    assistant_message_text, collapse_preview, grok_tail_has_pending_followup,
+    latest_turn_observation, latest_turn_state, parse_transcript_line, parse_transcript_value,
+    read_tail, ParsedTranscriptLine, TailRead, TranscriptRole, TurnObservation, TurnState,
 };
 
 // Maximum age (mtime → now) of a transcript that will be paired with
@@ -2712,6 +2712,207 @@ fn locate_grok_transcript_in_checked(
 
 pub fn read_grok_session_summary(transcript: &Path) -> Option<GrokSessionSummary> {
     read_grok_session_summary_checked(transcript).ok().flatten()
+}
+
+const GROK_BACKGROUND_TASKS_MANIFEST: &str = "background_tasks_manifest.json";
+const GROK_BACKGROUND_TASKS_MANIFEST_MAX_BYTES: u64 = 64 * 1024;
+
+/// Live Grok *monitor* tasks live in a sibling manifest next to
+/// `updates.jsonl`. Fire-and-forget shells (dev servers) stay listed after
+/// Grok has returned to its prompt, so only monitors — which resume the
+/// agent — keep the session from flipping to WaitingForInput.
+pub fn grok_has_live_background_tasks(transcript: &Path) -> bool {
+    grok_live_background_task_count(transcript) > 0
+}
+
+const GROK_SUBAGENTS_DIR: &str = "subagents";
+const GROK_SUBAGENT_META: &str = "meta.json";
+const GROK_SUBAGENT_META_MAX_BYTES: u64 = 256 * 1024;
+const GROK_SUBAGENT_ENTRY_LIMIT: usize = 128;
+
+/// Child agents write `subagents/<id>/meta.json` with `status: "running"`
+/// while they are still in flight. The parent `updates.jsonl` tail is only
+/// 256 KiB, so a spawn line can age out before `turn_completed`.
+pub fn grok_has_running_subagents(transcript: &Path) -> bool {
+    if transcript.file_name().and_then(|name| name.to_str()) != Some("updates.jsonl") {
+        return false;
+    }
+    let Some(dir) = transcript.parent() else {
+        return false;
+    };
+    let root = dir.join(GROK_SUBAGENTS_DIR);
+    match std::fs::symlink_metadata(&root) {
+        Ok(meta) if meta.file_type().is_dir() => {}
+        _ => return false,
+    }
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return false;
+    };
+    for (index, entry) in entries.enumerate() {
+        if index >= GROK_SUBAGENT_ENTRY_LIMIT {
+            break;
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        if grok_subagent_meta_is_running(&entry.path().join(GROK_SUBAGENT_META)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn grok_subagent_meta_is_running(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta)
+            if meta.file_type().is_file()
+                && meta.len() > 0
+                && meta.len() <= GROK_SUBAGENT_META_MAX_BYTES => {}
+        _ => return false,
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    value
+        .get("status")
+        .and_then(|status| status.as_str())
+        .is_some_and(|status| status.eq_ignore_ascii_case("running"))
+}
+
+fn grok_live_background_task_count(transcript: &Path) -> usize {
+    if transcript.file_name().and_then(|name| name.to_str()) != Some("updates.jsonl") {
+        return 0;
+    }
+    let Some(dir) = transcript.parent() else {
+        return 0;
+    };
+    let path = dir.join(GROK_BACKGROUND_TASKS_MANIFEST);
+    match std::fs::symlink_metadata(&path) {
+        Ok(meta)
+            if meta.file_type().is_file()
+                && meta.len() > 0
+                && meta.len() <= GROK_BACKGROUND_TASKS_MANIFEST_MAX_BYTES => {}
+        _ => return 0,
+    }
+    let Ok(bytes) = std::fs::read(&path) else {
+        return 0;
+    };
+    grok_background_task_count_from_json(&bytes)
+}
+
+fn grok_background_task_count_from_json(bytes: &[u8]) -> usize {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return 0;
+    };
+    let tasks = value
+        .as_array()
+        .or_else(|| value.get("tasks").and_then(|value| value.as_array()))
+        .or_else(|| {
+            value
+                .get("background_tasks")
+                .and_then(|value| value.as_array())
+        })
+        .or_else(|| {
+            value
+                .get("backgroundTasks")
+                .and_then(|value| value.as_array())
+        });
+    tasks
+        .map(|tasks| {
+            tasks
+                .iter()
+                .filter(|task| grok_background_task_resumes_agent(task))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn grok_background_task_resumes_agent(task: &serde_json::Value) -> bool {
+    let kind = task
+        .get("kind")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if kind.eq_ignore_ascii_case("monitor") {
+        return true;
+    }
+    task.get("display_command")
+        .or_else(|| task.get("displayCommand"))
+        .and_then(|value| value.as_str())
+        .is_some_and(|command| command.trim_start().starts_with("[monitor]"))
+}
+
+#[cfg(test)]
+mod grok_background_task_tests {
+    use super::*;
+
+    #[test]
+    fn counts_array_and_wrapped_manifest_shapes() {
+        assert_eq!(
+            grok_background_task_count_from_json(br#"[{"task_id":"a","kind":"monitor"}]"#),
+            1
+        );
+        assert_eq!(
+            grok_background_task_count_from_json(
+                br#"{"tasks":[{"task_id":"a","kind":"monitor"},{"task_id":"b","kind":"monitor"}]}"#
+            ),
+            2
+        );
+        assert_eq!(
+            grok_background_task_count_from_json(br#"[{"task_id":"a","kind":"bash"}]"#),
+            0
+        );
+        assert_eq!(grok_background_task_count_from_json(br#"[]"#), 0);
+        assert_eq!(grok_background_task_count_from_json(br#"{}"#), 0);
+    }
+
+    #[test]
+    fn live_manifest_is_read_from_the_session_directory() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-grok-bg-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).expect("create grok session dir");
+        let transcript = dir.join("updates.jsonl");
+        std::fs::write(&transcript, "{}\n").expect("write transcript");
+        std::fs::write(
+            dir.join(GROK_BACKGROUND_TASKS_MANIFEST),
+            r#"[{"task_id":"task-1","kind":"monitor"}]"#,
+        )
+        .expect("write manifest");
+
+        assert!(grok_has_live_background_tasks(&transcript));
+        assert!(!grok_has_live_background_tasks(
+            &std::env::temp_dir().join("acorn-status-test.jsonl")
+        ));
+    }
+
+    #[test]
+    fn running_subagent_meta_is_detected_next_to_the_transcript() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-grok-sa-{}", uuid::Uuid::new_v4().simple()));
+        let child = dir.join(GROK_SUBAGENTS_DIR).join("child-1");
+        std::fs::create_dir_all(&child).expect("create subagent dir");
+        let transcript = dir.join("updates.jsonl");
+        std::fs::write(&transcript, "{}\n").expect("write transcript");
+        std::fs::write(child.join(GROK_SUBAGENT_META), r#"{"status":"running"}"#)
+            .expect("write running meta");
+
+        assert!(grok_has_running_subagents(&transcript));
+
+        std::fs::write(
+            child.join(GROK_SUBAGENT_META),
+            r#"{"status":"completed","completed_at":"t"}"#,
+        )
+        .expect("write completed meta");
+        assert!(!grok_has_running_subagents(&transcript));
+    }
 }
 
 /// Checked form of [`read_grok_session_summary`].
