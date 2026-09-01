@@ -20,8 +20,7 @@
 //!              (filename does not encode cwd, so read each candidate's
 //!              first line `payload.cwd` and match).
 //!      antigravity: scan `${ANTIGRAVITY_DIR:-~/.gemini}/antigravity*/brain/<uuid>/.system_generated/logs/transcript.jsonl`
-//!      grok: scan `${GROK_HOME:-~/.grok}/sessions/<cwd-bucket>/<uuid>/updates.jsonl`
-//!            and verify cwd/lineage in the sibling `summary.json`.
+//!      grok: `${GROK_HOME:-~/.grok}/sessions/<percent-encoded-cwd>/<uuid>/updates.jsonl` (`summary.json` cwd/lineage; recency only when this cwd has one grok, else `--resume` UUID)
 //!   3. Sort processes by start-time DESC so newer fork chains claim
 //!      newer transcripts first; an `assigned` set keeps each
 //!      transcript pinned to one session per scan.
@@ -293,6 +292,34 @@ pub fn slug_for_cwd(cwd: &Path) -> String {
     slug
 }
 
+/// Convert a filesystem cwd into Grok's session-directory bucket name.
+///
+/// Grok percent-encodes the absolute path, leaving RFC 3986 unreserved
+/// characters (`A-Z a-z 0-9 - . _ ~`) intact. `/Users/me/proj` becomes
+/// `%2FUsers%2Fme%2Fproj`.
+fn grok_cwd_bucket(cwd: &Path) -> String {
+    percent_encode_except_unreserved(&cwd.to_string_lossy())
+}
+
+fn percent_encode_except_unreserved(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for &byte in input.as_bytes() {
+        if is_rfc3986_unreserved(byte) {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn is_rfc3986_unreserved(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~'
+    )
+}
+
 /// On-demand pairing scan. `detect_session_agent` calls this every
 /// time the Fork menu opens; results are cached for `SCAN_CACHE_TTL_MS`
 /// so repeated menu opens within a short window do not multiply the
@@ -458,6 +485,8 @@ pub fn find_agent_run_transcript_checked(
             )
         }
         AgentKind::Grok => {
+            // One-shots have no process table, so sole-grok cannot be proven
+            // here. Recency stays on; the live path is what refuses to guess.
             let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
             find_recent_grok_jsonl_budgeted(
                 cwd,
@@ -786,23 +815,16 @@ fn scan_live_mappings(
                             c.kind,
                             &c.cwd,
                         ));
-                    if let Some(id) = c.explicit_transcript_id.as_deref() {
-                        if let Some(candidate) = find_grok_jsonl_for_uuid_budgeted(
-                            grok_root.as_deref(),
-                            id,
-                            &assigned,
-                            &mut grok_budget,
-                        )? {
-                            return Ok(Some(candidate));
-                        }
-                    }
-                    find_recent_grok_jsonl_budgeted(
+                    pair_live_grok_transcript(
                         &c.cwd,
                         grok_root.as_deref(),
+                        c.explicit_transcript_id.as_deref(),
+                        sole_grok_in_cwd,
                         recency_cutoff,
                         c.start_time,
                         now,
                         allow_rotation,
+                        &assigned,
                         &reserved,
                         &mut grok_budget,
                     )
@@ -1330,6 +1352,9 @@ fn grok_transcript_id_from_args(args: &[String]) -> Option<String> {
         return None;
     }
 
+    // `--continue` and `--resume <title>` are cwd-scoped guesses; recency
+    // pairing handles those only when this cwd has one grok. `--session-id`
+    // names the new conversation this process will write, so it is a pin.
     option_args.iter().enumerate().find_map(|(index, arg)| {
         let arg = arg.as_str();
         let candidate = if matches!(arg, "--resume" | "-r" | "--session-id" | "-s") {
@@ -2744,19 +2769,130 @@ fn locate_grok_transcript_in_budgeted(
 fn find_grok_jsonl_for_uuid_budgeted(
     sessions_root: Option<&Path>,
     uuid: &str,
+    cwd: Option<&Path>,
     assigned: &HashSet<PathBuf>,
     budget: &mut ProviderScanBudget,
 ) -> ProviderScanResult<Option<(PathBuf, String)>> {
     let Some(root) = sessions_root else {
         return Ok(None);
     };
-    let Some(path) = locate_grok_transcript_in_budgeted(root, uuid, budget)? else {
+    let Some(path) = locate_grok_transcript_for_pairing(root, uuid, cwd, budget)? else {
         return Ok(None);
     };
     if assigned.contains(&path) {
         return Ok(None);
     }
     Ok(Some((path, uuid.to_string())))
+}
+
+fn locate_grok_transcript_for_pairing(
+    root: &Path,
+    uuid: &str,
+    cwd: Option<&Path>,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<PathBuf>> {
+    let Some(cwd) = cwd else {
+        return locate_grok_transcript_in_budgeted(root, uuid, budget);
+    };
+    if !is_uuid_v4_shape(uuid) {
+        return Ok(None);
+    }
+    let bucket_dir = root.join(grok_cwd_bucket(cwd));
+    if let Some(path) = grok_uuid_in_bucket(&bucket_dir, uuid, cwd, budget)? {
+        return Ok(Some(path));
+    }
+    locate_grok_transcript_matching_cwd(root, uuid, cwd, budget)
+}
+
+fn grok_uuid_in_bucket(
+    bucket_dir: &Path,
+    uuid: &str,
+    cwd: &Path,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<PathBuf>> {
+    let session_dir = bucket_dir.join(uuid);
+    if !safe_is_directory(&session_dir)? {
+        return Ok(None);
+    }
+    let updates = session_dir.join("updates.jsonl");
+    budget.charge_candidate()?;
+    if safe_regular_file_metadata(&updates)?.is_none() {
+        return Ok(None);
+    }
+    let Some(summary) = read_grok_session_summary_budgeted(&session_dir, budget)? else {
+        return Ok(None);
+    };
+    if summary.id == uuid && summary.cwd == cwd && !summary.hidden && !summary.is_subagent {
+        return Ok(Some(updates));
+    }
+    Ok(None)
+}
+
+fn locate_grok_transcript_matching_cwd(
+    sessions_root: &Path,
+    uuid: &str,
+    cwd: &Path,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<PathBuf>> {
+    let Some(cwd_buckets) = safe_read_dir(sessions_root)? else {
+        return Ok(None);
+    };
+    let preferred = grok_cwd_bucket(cwd);
+    for raw_bucket in cwd_buckets {
+        budget.charge_directory_entry()?;
+        let bucket = complete_io(sessions_root, raw_bucket)?;
+        let Some(bucket_dir) = safe_directory_entry_path(&bucket)? else {
+            continue;
+        };
+        if bucket_dir.file_name().and_then(|name| name.to_str()) == Some(preferred.as_str()) {
+            continue;
+        }
+        if let Some(path) = grok_uuid_in_bucket(&bucket_dir, uuid, cwd, budget)? {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+/// Pair a live grok process to its transcript.
+///
+/// An explicit `--resume` / `--session-id` UUID always wins, scoped to this
+/// process cwd so another tab's conversation cannot be claimed. Recency is
+/// only safe when this cwd has a single grok.
+#[allow(clippy::too_many_arguments)]
+fn pair_live_grok_transcript(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    explicit_id: Option<&str>,
+    sole_grok_in_cwd: bool,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+    assigned: &HashSet<PathBuf>,
+    reserved: &HashSet<PathBuf>,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<(PathBuf, String)>> {
+    if let Some(id) = explicit_id {
+        if let Some(candidate) =
+            find_grok_jsonl_for_uuid_budgeted(sessions_root, id, Some(cwd), assigned, budget)?
+        {
+            return Ok(Some(candidate));
+        }
+    }
+    if !sole_grok_in_cwd {
+        return Ok(None);
+    }
+    find_recent_grok_jsonl_budgeted(
+        cwd,
+        sessions_root,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        reserved,
+        budget,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2773,50 +2909,24 @@ fn find_recent_grok_jsonl_budgeted(
     let Some(root) = sessions_root else {
         return Ok(None);
     };
-    let mut candidates = Vec::new();
-    let Some(cwd_buckets) = safe_read_dir(root)? else {
-        return Ok(None);
-    };
-    for raw_bucket in cwd_buckets {
-        budget.charge_directory_entry()?;
-        let bucket = complete_io(root, raw_bucket)?;
-        let Some(bucket_dir) = safe_directory_entry_path(&bucket)? else {
-            continue;
-        };
-        let Some(session_entries) = safe_read_dir(&bucket_dir)? else {
-            continue;
-        };
-        for raw_session in session_entries {
-            budget.charge_directory_entry()?;
-            let session = complete_io(&bucket_dir, raw_session)?;
-            let Some(session_dir) = safe_directory_entry_path(&session)? else {
-                continue;
-            };
-            let updates = session_dir.join("updates.jsonl");
-            if assigned.contains(&updates) {
-                continue;
-            }
-            budget.charge_candidate()?;
-            let Some(meta) = safe_regular_file_metadata(&updates)? else {
-                continue;
-            };
-            let mtime = complete_io(&updates, meta.modified())?;
-            if mtime < recency_cutoff || mtime < process_start {
-                continue;
-            }
-            let Some(summary) = read_grok_session_summary_budgeted(&session_dir, budget)? else {
-                continue;
-            };
-            if summary.cwd != cwd || summary.hidden || summary.is_subagent {
-                continue;
-            }
-            candidates.push(TranscriptCandidate {
-                path: updates,
-                birth: meta.created().unwrap_or(mtime),
-                mtime,
-                uuid: summary.id,
-            });
-        }
+    let bucket_dir = root.join(grok_cwd_bucket(cwd));
+    let mut candidates = collect_grok_transcript_candidates_in_bucket(
+        cwd,
+        &bucket_dir,
+        recency_cutoff,
+        process_start,
+        assigned,
+        budget,
+    )?;
+    if candidates.is_empty() {
+        candidates = collect_grok_transcript_candidates_by_cwd(
+            cwd,
+            root,
+            recency_cutoff,
+            process_start,
+            assigned,
+            budget,
+        )?;
     }
     Ok(pick_anchor_or_rotate(
         candidates,
@@ -2824,6 +2934,87 @@ fn find_recent_grok_jsonl_budgeted(
         now,
         allow_rotation,
     ))
+}
+
+fn collect_grok_transcript_candidates_by_cwd(
+    cwd: &Path,
+    sessions_root: &Path,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    assigned: &HashSet<PathBuf>,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Vec<TranscriptCandidate>> {
+    let mut candidates = Vec::new();
+    let Some(cwd_buckets) = safe_read_dir(sessions_root)? else {
+        return Ok(candidates);
+    };
+    let preferred = grok_cwd_bucket(cwd);
+    for raw_bucket in cwd_buckets {
+        budget.charge_directory_entry()?;
+        let bucket = complete_io(sessions_root, raw_bucket)?;
+        let Some(bucket_dir) = safe_directory_entry_path(&bucket)? else {
+            continue;
+        };
+        if bucket_dir.file_name().and_then(|name| name.to_str()) == Some(preferred.as_str()) {
+            continue;
+        }
+        let mut found = collect_grok_transcript_candidates_in_bucket(
+            cwd,
+            &bucket_dir,
+            recency_cutoff,
+            process_start,
+            assigned,
+            budget,
+        )?;
+        candidates.append(&mut found);
+    }
+    Ok(candidates)
+}
+
+fn collect_grok_transcript_candidates_in_bucket(
+    cwd: &Path,
+    bucket_dir: &Path,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    assigned: &HashSet<PathBuf>,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Vec<TranscriptCandidate>> {
+    let mut candidates = Vec::new();
+    let Some(session_entries) = safe_read_dir(bucket_dir)? else {
+        return Ok(candidates);
+    };
+    for raw_session in session_entries {
+        budget.charge_directory_entry()?;
+        let session = complete_io(bucket_dir, raw_session)?;
+        let Some(session_dir) = safe_directory_entry_path(&session)? else {
+            continue;
+        };
+        let updates = session_dir.join("updates.jsonl");
+        if assigned.contains(&updates) {
+            continue;
+        }
+        budget.charge_candidate()?;
+        let Some(meta) = safe_regular_file_metadata(&updates)? else {
+            continue;
+        };
+        let mtime = complete_io(&updates, meta.modified())?;
+        if mtime < recency_cutoff || mtime < process_start {
+            continue;
+        }
+        let Some(summary) = read_grok_session_summary_budgeted(&session_dir, budget)? else {
+            continue;
+        };
+        if summary.cwd != cwd || summary.hidden || summary.is_subagent {
+            continue;
+        }
+        candidates.push(TranscriptCandidate {
+            path: updates,
+            birth: meta.created().unwrap_or(mtime),
+            mtime,
+            uuid: summary.id,
+        });
+    }
+    Ok(candidates)
 }
 
 fn read_grok_session_summary_budgeted(
@@ -3654,6 +3845,22 @@ mod tests {
     }
 
     #[test]
+    fn grok_cwd_bucket_percent_encodes_separators_and_keeps_unreserved() {
+        assert_eq!(
+            grok_cwd_bucket(Path::new("/Users/jthefloor")),
+            "%2FUsers%2Fjthefloor"
+        );
+        assert_eq!(
+            grok_cwd_bucket(Path::new("/Users/me/proj/.acorn/worktrees/foo-bar")),
+            "%2FUsers%2Fme%2Fproj%2F.acorn%2Fworktrees%2Ffoo-bar"
+        );
+        assert_eq!(
+            grok_cwd_bucket(Path::new("/Users/me/My Project")),
+            "%2FUsers%2Fme%2FMy%20Project"
+        );
+    }
+
+    #[test]
     fn slug_for_cwd_with_dot_dirs() {
         // Claude doubles the leading dash before any `.` segment.
         assert_eq!(
@@ -4198,13 +4405,15 @@ mod tests {
         for args in [
             vec!["grok".to_string(), "--resume".to_string(), id.to_string()],
             vec!["grok".to_string(), "-r".to_string(), id.to_string()],
+            vec!["grok".to_string(), format!("--resume={id}")],
+            vec!["grok".to_string(), format!("-r{id}")],
             vec![
                 "grok".to_string(),
                 "--session-id".to_string(),
                 id.to_string(),
             ],
             vec!["grok".to_string(), "-s".to_string(), id.to_string()],
-            vec!["grok".to_string(), format!("--resume={id}")],
+            vec!["grok".to_string(), format!("--session-id={id}")],
         ] {
             assert_eq!(grok_transcript_id_from_args(&args).as_deref(), Some(id));
         }
@@ -4220,6 +4429,18 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
         assert_eq!(grok_transcript_id_from_args(&prompt), None);
+
+        for args in [
+            vec!["grok".to_string(), "--continue".to_string()],
+            vec!["grok".to_string(), "-c".to_string()],
+            vec![
+                "grok".to_string(),
+                "--resume".to_string(),
+                "ship grok support".to_string(),
+            ],
+        ] {
+            assert_eq!(grok_transcript_id_from_args(&args), None, "{args:?}");
+        }
     }
 
     #[test]
@@ -4747,6 +4968,32 @@ mod tests {
     }
 
     #[test]
+    fn logical_grok_counts_two_runtimes_and_collapses_a_wrapper() {
+        let cwd = PathBuf::from("/repo");
+        let grok_runtime = process_node("/opt/grok", "grok", &["grok"], "/repo");
+        let grok_wrapper = process_node(
+            "/bin/sh",
+            "sh",
+            &["sh", "/acorn/agent-wrappers/grok"],
+            "/repo",
+        );
+
+        let two_tabs = vec![
+            observation(1, None, grok_runtime.clone()),
+            observation(2, None, grok_runtime.clone()),
+        ];
+        let (_, _, _, grok) = logical_agent_process_counts(&two_tabs);
+        assert_eq!(grok.get(&cwd), Some(&2));
+
+        let wrapped = vec![
+            observation(10, None, grok_wrapper),
+            observation(11, Some(10), grok_runtime),
+        ];
+        let (_, _, _, grok) = logical_agent_process_counts(&wrapped);
+        assert_eq!(grok.get(&cwd), Some(&1));
+    }
+
+    #[test]
     fn process_tree_match_limit_fails_before_collecting_partial_results() {
         let root = Pid::from_u32(1);
         let first = Pid::from_u32(2);
@@ -5157,6 +5404,234 @@ mod tests {
         );
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn write_grok_session(
+        sessions_root: &Path,
+        cwd: &Path,
+        id: &str,
+        hidden: bool,
+        is_subagent: bool,
+    ) -> PathBuf {
+        use std::fs::{self, File};
+
+        let session_dir = sessions_root.join(grok_cwd_bucket(cwd)).join(id);
+        fs::create_dir_all(&session_dir).unwrap();
+        let updates = session_dir.join("updates.jsonl");
+        File::create(&updates).unwrap();
+        fs::write(
+            session_dir.join("summary.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "info": { "id": id, "cwd": cwd.display().to_string() },
+                "hidden": hidden,
+                "session_kind": if is_subagent { "subagent" } else { "main" },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        updates
+    }
+
+    #[test]
+    fn grok_recency_pairing_stays_inside_the_cwd_bucket() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-grok-bucket-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let cwd = Path::new("/repo/a");
+        let other = Path::new("/repo/b");
+        let ours = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let theirs = "0198c151-f3ee-7991-9768-741923bb6b51";
+        let ours_path = write_grok_session(&sessions, cwd, ours, false, false);
+        write_grok_session(&sessions, other, theirs, false, false);
+
+        let now = SystemTime::now();
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let found = find_recent_grok_jsonl_budgeted(
+            cwd,
+            Some(&sessions),
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            now,
+            false,
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(
+            found
+                .as_ref()
+                .map(|(path, id)| (path.as_path(), id.as_str())),
+            Some((ours_path.as_path(), ours))
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn grok_recency_falls_back_when_the_encoded_bucket_is_missing() {
+        use std::fs::{self, File};
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-grok-fallback-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let cwd = Path::new("/repo/a");
+        let id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let session_dir = sessions.join("not-the-encoded-bucket").join(id);
+        fs::create_dir_all(&session_dir).unwrap();
+        let updates = session_dir.join("updates.jsonl");
+        File::create(&updates).unwrap();
+        fs::write(
+            session_dir.join("summary.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "info": { "id": id, "cwd": cwd.display().to_string() },
+                "hidden": false,
+                "session_kind": "main",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let now = SystemTime::now();
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let found = find_recent_grok_jsonl_budgeted(
+            cwd,
+            Some(&sessions),
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            now,
+            false,
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(
+            found
+                .as_ref()
+                .map(|(path, found_id)| (path.as_path(), found_id.as_str())),
+            Some((updates.as_path(), id))
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn grok_explicit_uuid_pairing_stays_in_the_process_cwd() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-grok-uuid-cwd-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let cwd_a = Path::new("/repo/a");
+        let cwd_b = Path::new("/repo/b");
+        let id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let path_a = write_grok_session(&sessions, cwd_a, id, false, false);
+
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let from_a = find_grok_jsonl_for_uuid_budgeted(
+            Some(&sessions),
+            id,
+            Some(cwd_a),
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(
+            from_a
+                .as_ref()
+                .map(|(path, found_id)| (path.as_path(), found_id.as_str())),
+            Some((path_a.as_path(), id))
+        );
+
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let from_b = find_grok_jsonl_for_uuid_budgeted(
+            Some(&sessions),
+            id,
+            Some(cwd_b),
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(
+            from_b, None,
+            "uuid in another cwd must not pin this process"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn grok_live_pairing_requires_resume_uuid_when_cwd_has_two_groks() {
+        let root =
+            std::env::temp_dir().join(format!("acorn-grok-sole-{}", uuid::Uuid::new_v4().simple()));
+        let sessions = root.join("sessions");
+        let cwd = Path::new("/repo");
+        let ours = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let sibling = "0198c151-f3ee-7991-9768-741923bb6b51";
+        let ours_path = write_grok_session(&sessions, cwd, ours, false, false);
+        write_grok_session(&sessions, cwd, sibling, false, false);
+
+        let now = SystemTime::now();
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let guessed = pair_live_grok_transcript(
+            cwd,
+            Some(&sessions),
+            None,
+            false,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            now,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(guessed, None, "two groks in one cwd must not recency-pair");
+
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let pinned = pair_live_grok_transcript(
+            cwd,
+            Some(&sessions),
+            Some(ours),
+            false,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            now,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(
+            pinned
+                .as_ref()
+                .map(|(path, id)| (path.as_path(), id.as_str())),
+            Some((ours_path.as_path(), ours))
+        );
+
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let sole = pair_live_grok_transcript(
+            cwd,
+            Some(&sessions),
+            None,
+            true,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            now,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert!(sole.is_some(), "a sole grok may still pair by recency");
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
