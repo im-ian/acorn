@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -401,7 +402,12 @@ fn parse_grok_value(value: &Value) -> ParsedTranscriptLine {
         | "agent_message_chunk"
         | "agent_thought_chunk"
         | "tool_call"
-        | "tool_call_update" => Some(TurnState::Working),
+        | "tool_call_update"
+        | "task_backgrounded"
+        | "subagent_spawned" => Some(TurnState::Working),
+        "task_completed" | "subagent_finished" if grok_will_wake(update) => {
+            Some(TurnState::Working)
+        }
         _ => None,
     };
 
@@ -433,6 +439,63 @@ fn grok_completed_turn_state(update: &Value) -> TurnState {
     } else {
         TurnState::Ready
     }
+}
+
+fn grok_will_wake(update: &Value) -> bool {
+    update
+        .get("will_wake")
+        .or_else(|| update.get("willWake"))
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
+/// True when the Grok tail still has a subagent that has not finished.
+/// `turn_completed` can be the newest turn event while that child is still
+/// running, so status detection has to scan past it. Detached shells are
+/// ignored here: leftover dev servers would otherwise pin Working forever.
+pub fn grok_tail_has_pending_followup(tail: &str, read_full: bool) -> bool {
+    let mut spawned = HashSet::new();
+    let mut finished = HashSet::new();
+
+    for line in tail_lines_newest_first(tail, read_full) {
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        let method = value.get("method").and_then(Value::as_str).unwrap_or("");
+        if !matches!(method, "session/update" | "_x.ai/session/update") {
+            continue;
+        }
+        let Some(update) = value.pointer("/params/update") else {
+            continue;
+        };
+        let update_type = update
+            .get("sessionUpdate")
+            .or_else(|| update.get("session_update"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        match update_type {
+            "subagent_spawned" => {
+                if let Some(id) = grok_subagent_id(update) {
+                    spawned.insert(id);
+                }
+            }
+            "subagent_finished" => {
+                if let Some(id) = grok_subagent_id(update) {
+                    finished.insert(id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    spawned.difference(&finished).next().is_some()
+}
+
+fn grok_subagent_id(update: &Value) -> Option<String> {
+    string_at(Some(update), "subagent_id")
+        .or_else(|| string_at(Some(update), "subagentId"))
+        .or_else(|| string_at(Some(update), "child_session_id"))
+        .or_else(|| string_at(Some(update), "childSessionId"))
 }
 
 fn grok_content_text(content: &Value) -> Option<String> {
@@ -1502,6 +1565,77 @@ mod tests {
             classify(AgentKind::Grok, tail, true),
             Some(TurnState::Working)
         );
+    }
+
+    #[test]
+    fn grok_backgrounded_task_keeps_the_turn_working() {
+        let tail = r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1"}}}"#;
+        assert_eq!(
+            classify(AgentKind::Grok, tail, true),
+            Some(TurnState::Working)
+        );
+    }
+
+    #[test]
+    fn grok_spawned_subagent_keeps_the_turn_working() {
+        let tail = r#"{"method":"session/update","params":{"update":{"sessionUpdate":"subagent_spawned","subagent_id":"child-1"}}}"#;
+        assert_eq!(
+            classify(AgentKind::Grok, tail, true),
+            Some(TurnState::Working)
+        );
+    }
+
+    #[test]
+    fn grok_will_wake_completion_keeps_the_turn_working() {
+        let tail = concat!(
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_completed","will_wake":true,"task_snapshot":{"task_id":"task-1"}}}}"#,
+        );
+        assert_eq!(
+            classify(AgentKind::Grok, tail, true),
+            Some(TurnState::Working)
+        );
+    }
+
+    #[test]
+    fn grok_finished_background_task_does_not_override_turn_completed() {
+        let tail = concat!(
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1"}}}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_completed","will_wake":false,"task_snapshot":{"task_id":"task-1"}}}}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+        );
+        assert_eq!(
+            classify(AgentKind::Grok, tail, true),
+            Some(TurnState::Ready)
+        );
+        assert!(!grok_tail_has_pending_followup(tail, true));
+    }
+
+    #[test]
+    fn grok_detached_shell_does_not_count_as_pending_followup() {
+        let tail = concat!(
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1"}}}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+        );
+        assert_eq!(
+            classify(AgentKind::Grok, tail, true),
+            Some(TurnState::Ready)
+        );
+        assert!(!grok_tail_has_pending_followup(tail, true));
+    }
+
+    #[test]
+    fn grok_pending_subagent_survives_turn_completed() {
+        let tail = concat!(
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"subagent_spawned","subagent_id":"child-1"}}}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+        );
+        assert!(grok_tail_has_pending_followup(tail, true));
     }
 
     #[test]
