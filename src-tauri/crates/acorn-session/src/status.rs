@@ -30,7 +30,7 @@
 //!   WaitingForInput as an interrupted turn.
 //! - last `sessionUpdate=turn_completed` -> WaitingForInput while the Grok
 //!   process remains live (the TUI has returned to its prompt), unless a live
-//!   monitor or unfinished subagent is still running.
+//!   monitor or a running child agent is still in flight.
 //! - user/agent/thought chunks, tool call updates, `task_backgrounded`, and
 //!   `subagent_spawned` -> Working.
 //! - `task_completed` / `subagent_finished` with `will_wake=true` -> Working.
@@ -53,8 +53,8 @@ use std::path::{Path, PathBuf};
 use acorn_agent::AgentKind;
 use acorn_pty::ShellHint;
 use acorn_transcript::{
-    grok_has_live_background_tasks, grok_tail_has_pending_followup, latest_turn_observation,
-    read_tail, TailRead, TurnObservation, TurnState,
+    grok_has_live_background_tasks, grok_has_running_subagents, grok_tail_has_pending_followup,
+    latest_turn_observation, read_tail, TailRead, TurnObservation, TurnState,
 };
 use serde::Serialize;
 
@@ -190,7 +190,7 @@ pub fn detect_with_reason(
             timestamp,
             agent_activity_timestamp,
         }) => {
-            if kind == AgentKind::Grok && grok_has_unfinished_followup(&path, tail.as_ref()) {
+            if grok_followup_overrides_resting_status(kind, &path, tail.as_ref()) {
                 StatusDetection::new(SessionStatus::Working, None, StatusEvidence::Transcript)
                     .with_turn_timestamp(timestamp)
                     .with_agent_activity_timestamp(agent_activity_timestamp)
@@ -218,13 +218,20 @@ pub fn detect_with_reason(
             provider_turn_id,
             timestamp,
             ..
-        }) => StatusDetection::new(
-            SessionStatus::WaitingForInput,
-            Some(StatusReason::TurnInterrupted),
-            StatusEvidence::Transcript,
-        )
-        .with_completed_provider_turn_id(provider_turn_id)
-        .with_turn_timestamp(timestamp),
+        }) => {
+            if grok_followup_overrides_resting_status(kind, &path, tail.as_ref()) {
+                StatusDetection::new(SessionStatus::Working, None, StatusEvidence::Transcript)
+                    .with_turn_timestamp(timestamp)
+            } else {
+                StatusDetection::new(
+                    SessionStatus::WaitingForInput,
+                    Some(StatusReason::TurnInterrupted),
+                    StatusEvidence::Transcript,
+                )
+                .with_completed_provider_turn_id(provider_turn_id)
+                .with_turn_timestamp(timestamp)
+            }
+        }
         // Transcript exists but the tail held no turn lines; keep
         // whatever the caller previously observed instead of regressing
         // to Ready. The next poll that lands on a real turn line corrects
@@ -244,9 +251,15 @@ fn completed_turn_status(kind: AgentKind) -> SessionStatus {
     }
 }
 
-fn grok_has_unfinished_followup(path: &Path, tail: Option<&TailRead>) -> bool {
-    grok_has_live_background_tasks(path)
-        || tail.is_some_and(|tail| grok_tail_has_pending_followup(&tail.text, tail.read_full))
+fn grok_followup_overrides_resting_status(
+    kind: AgentKind,
+    path: &Path,
+    tail: Option<&TailRead>,
+) -> bool {
+    kind == AgentKind::Grok
+        && (grok_has_live_background_tasks(path)
+            || grok_has_running_subagents(path)
+            || tail.is_some_and(|tail| grok_tail_has_pending_followup(&tail.text, tail.read_full)))
 }
 
 #[cfg(test)]
@@ -858,10 +871,10 @@ mod tests {
     }
 
     #[test]
-    fn grok_cancelled_turn_stays_waiting_even_with_a_live_background_task() {
+    fn grok_cancelled_turn_stays_waiting_with_a_detached_shell() {
         let path = write_grok_session_transcript(
             r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7","stop_reason":"cancelled"}}}"#,
-            Some(r#"[{"task_id":"task-1"}]"#),
+            Some(r#"[{"task_id":"task-1","kind":"bash"}]"#),
         );
 
         let detection = detect_with_reason(
@@ -872,6 +885,60 @@ mod tests {
 
         assert_eq!(detection.status, SessionStatus::WaitingForInput);
         assert_eq!(detection.reason, Some(StatusReason::TurnInterrupted));
+    }
+
+    #[test]
+    fn grok_cancelled_turn_stays_working_with_a_live_monitor() {
+        let path = write_grok_session_transcript(
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7","stop_reason":"cancelled"}}}"#,
+            Some(r#"[{"task_id":"task-1","kind":"monitor"}]"#),
+        );
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::Working);
+        assert_eq!(detection.reason, None);
+    }
+
+    #[test]
+    fn grok_stays_working_while_a_subagent_meta_is_running() {
+        let path = write_grok_session_transcript(
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+            None,
+        );
+        write_grok_subagent_meta(&path, r#"{"status":"running"}"#);
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::Working);
+        assert_eq!(detection.reason, None);
+        assert_eq!(detection.evidence, StatusEvidence::Transcript);
+    }
+
+    #[test]
+    fn grok_cancelled_turn_stays_working_with_a_running_subagent() {
+        let path = write_grok_session_transcript(
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7","stop_reason":"cancelled"}}}"#,
+            None,
+        );
+        write_grok_subagent_meta(&path, r#"{"status":"running"}"#);
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::Working);
+        assert_eq!(detection.reason, None);
     }
 
     #[test]
@@ -921,5 +988,15 @@ mod tests {
                 .expect("write grok background manifest");
         }
         path
+    }
+
+    fn write_grok_subagent_meta(transcript: &Path, meta: &str) {
+        let dir = transcript
+            .parent()
+            .expect("grok transcript has a session dir")
+            .join("subagents")
+            .join("child-1");
+        std::fs::create_dir_all(&dir).expect("create grok subagent dir");
+        std::fs::write(dir.join("meta.json"), meta).expect("write grok subagent meta");
     }
 }

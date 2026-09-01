@@ -2725,6 +2725,69 @@ pub fn grok_has_live_background_tasks(transcript: &Path) -> bool {
     grok_live_background_task_count(transcript) > 0
 }
 
+const GROK_SUBAGENTS_DIR: &str = "subagents";
+const GROK_SUBAGENT_META: &str = "meta.json";
+const GROK_SUBAGENT_META_MAX_BYTES: u64 = 256 * 1024;
+const GROK_SUBAGENT_ENTRY_LIMIT: usize = 128;
+
+/// Child agents write `subagents/<id>/meta.json` with `status: "running"`
+/// while they are still in flight. The parent `updates.jsonl` tail is only
+/// 256 KiB, so a spawn line can age out before `turn_completed`.
+pub fn grok_has_running_subagents(transcript: &Path) -> bool {
+    if transcript.file_name().and_then(|name| name.to_str()) != Some("updates.jsonl") {
+        return false;
+    }
+    let Some(dir) = transcript.parent() else {
+        return false;
+    };
+    let root = dir.join(GROK_SUBAGENTS_DIR);
+    match std::fs::symlink_metadata(&root) {
+        Ok(meta) if meta.file_type().is_dir() => {}
+        _ => return false,
+    }
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return false;
+    };
+    for (index, entry) in entries.enumerate() {
+        if index >= GROK_SUBAGENT_ENTRY_LIMIT {
+            break;
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        if grok_subagent_meta_is_running(&entry.path().join(GROK_SUBAGENT_META)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn grok_subagent_meta_is_running(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta)
+            if meta.file_type().is_file()
+                && meta.len() > 0
+                && meta.len() <= GROK_SUBAGENT_META_MAX_BYTES => {}
+        _ => return false,
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    value
+        .get("status")
+        .and_then(|status| status.as_str())
+        .is_some_and(|status| status.eq_ignore_ascii_case("running"))
+}
+
 fn grok_live_background_task_count(transcript: &Path) -> usize {
     if transcript.file_name().and_then(|name| name.to_str()) != Some("updates.jsonl") {
         return 0;
@@ -2828,6 +2891,27 @@ mod grok_background_task_tests {
         assert!(!grok_has_live_background_tasks(
             &std::env::temp_dir().join("acorn-status-test.jsonl")
         ));
+    }
+
+    #[test]
+    fn running_subagent_meta_is_detected_next_to_the_transcript() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-grok-sa-{}", uuid::Uuid::new_v4().simple()));
+        let child = dir.join(GROK_SUBAGENTS_DIR).join("child-1");
+        std::fs::create_dir_all(&child).expect("create subagent dir");
+        let transcript = dir.join("updates.jsonl");
+        std::fs::write(&transcript, "{}\n").expect("write transcript");
+        std::fs::write(child.join(GROK_SUBAGENT_META), r#"{"status":"running"}"#)
+            .expect("write running meta");
+
+        assert!(grok_has_running_subagents(&transcript));
+
+        std::fs::write(
+            child.join(GROK_SUBAGENT_META),
+            r#"{"status":"completed","completed_at":"t"}"#,
+        )
+        .expect("write completed meta");
+        assert!(!grok_has_running_subagents(&transcript));
     }
 }
 
