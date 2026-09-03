@@ -2627,9 +2627,16 @@ test.describe("right panel: groups", () => {
     await dblclickRowRightSide(page, historyRow);
 
     await expect(title).toBeVisible();
-    await expect(page.getByRole("alert")).toContainText(
-      "Resumed from the project root instead",
-    );
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    const fallbackToast = page.getByRole("status").filter({
+      hasText: "Resumed from the project root instead",
+    });
+    await expect(fallbackToast).toBeVisible();
+    const worktreeName = historyRow.locator("span.truncate", {
+      hasText: "removed-goal",
+    });
+    await expect(worktreeName).toBeVisible();
+    await expect(worktreeName).not.toHaveClass(/line-through/);
     await expect(
       page.getByRole("dialog", { name: "Running in worktree" }),
     ).toHaveCount(0);
@@ -2642,6 +2649,10 @@ test.describe("right panel: groups", () => {
         ),
       )
       .toContain("codex resume codex-stale-worktree\r");
+
+    await fallbackToast.click();
+    await expect(fallbackToast).toHaveCount(0);
+    await expect(worktreeName).toHaveClass(/line-through/);
   });
 
   test("History run in new terminal hosts resumed sessions in the project root", async ({

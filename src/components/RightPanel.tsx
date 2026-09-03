@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type DependencyList,
   type Dispatch,
   type ReactNode,
@@ -163,6 +164,14 @@ import {
   resolveProjectScopedForRepoPath,
   scopeForSession,
 } from "../lib/sessionCreation";
+import {
+  applyDismissedHistoryWorktrees,
+  getDismissedHistoryWorktreeVersion,
+  markAgentHistoryWorktreeMissing,
+  rememberDismissedHistoryWorktree,
+  subscribeDismissedHistoryWorktrees,
+  type AgentHistoryItemIdentity,
+} from "../lib/agentHistoryWorktree";
 
 interface ExpandedDiff {
   payload: DiffPayload | null;
@@ -1360,6 +1369,30 @@ function isUnavailableHistoryWorktreeError(message: string): boolean {
   );
 }
 
+function patchCachedAgentHistoryWorktreeMissing(
+  scope: "project" | "unscoped",
+  repoPath: string | null,
+  historyLimit: number,
+  item: AgentHistoryItemIdentity,
+): void {
+  if (scope === "unscoped") {
+    const cached = rightPanelCache.getUnscopedAgentHistory(historyLimit);
+    if (!cached) return;
+    const next = markAgentHistoryWorktreeMissing(cached, item);
+    if (next !== cached) {
+      rightPanelCache.setUnscopedAgentHistory(historyLimit, next);
+    }
+    return;
+  }
+  if (!repoPath) return;
+  const cached = rightPanelCache.getAgentHistory(repoPath);
+  if (!cached) return;
+  const next = markAgentHistoryWorktreeMissing(cached, item);
+  if (next !== cached) {
+    rightPanelCache.setAgentHistory(repoPath, next);
+  }
+}
+
 function AgentHistoryTab({
   scope,
   repoPath,
@@ -1379,6 +1412,11 @@ function AgentHistoryTab({
   const adoptSessionWorktree = useAppStore((s) => s.adoptSessionWorktree);
   const setPendingTerminalInput = useAppStore((s) => s.setPendingTerminalInput);
   const historyLimit = 100;
+  const dismissedWorktreeVersion = useSyncExternalStore(
+    subscribeDismissedHistoryWorktrees,
+    getDismissedHistoryWorktreeVersion,
+    getDismissedHistoryWorktreeVersion,
+  );
   // Hydrate from the module-level cache so re-opening a project or the
   // unscoped Chats history shows its list instantly.
   const [items, setItems] = useState<AgentHistoryItem[] | null>(() =>
@@ -1443,10 +1481,10 @@ function AgentHistoryTab({
 
   const historyItems = useMemo(() => {
     if (!items) return null;
-    return [...items]
+    return [...applyDismissedHistoryWorktrees(items)]
       .sort((a, b) => b.updated_at - a.updated_at)
       .slice(0, historyLimit);
-  }, [items]);
+  }, [dismissedWorktreeVersion, items]);
   const visibleItems = useMemo(() => {
     if (!historyItems) return [];
     return providerFilter === ALL_AGENT_HISTORY_PROVIDERS
@@ -1521,7 +1559,22 @@ function AgentHistoryTab({
             );
             return;
           }
-          setError(rt(t, "rightPanel.history.worktreeFallback"));
+          const fallbackItem = item;
+          const fallbackScope = scope;
+          const fallbackRepoPath = repoPath;
+          showToast(rt(t, "rightPanel.history.worktreeFallback"), {
+            // Keep the live worktree chip until this toast expires so the
+            // row still names the missing checkout.
+            onDismiss: () => {
+              rememberDismissedHistoryWorktree(fallbackItem);
+              patchCachedAgentHistoryWorktreeMissing(
+                fallbackScope,
+                fallbackRepoPath,
+                historyLimit,
+                fallbackItem,
+              );
+            },
+          });
         } else {
           adoptedWorktree = true;
         }
