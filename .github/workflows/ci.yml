@@ -38,7 +38,19 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Audit dependencies
-        run: pnpm audit --audit-level=low
+        # npm's audit endpoint flakes with socket timeouts on GitHub runners.
+        # Retry so a registry blip cannot skip typecheck, tests, and the
+        # production bundle. Real audit findings still fail the job.
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if pnpm audit --audit-level=low; then
+              exit 0
+            fi
+            echo "pnpm audit failed on attempt ${attempt}; retrying" >&2
+            sleep $((attempt * 15))
+          done
+          exit 1
 
       - name: Type check
         run: pnpm run typecheck
