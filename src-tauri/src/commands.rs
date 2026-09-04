@@ -5285,9 +5285,7 @@ fn create_session_inner(
         if name.trim().is_empty() {
             name = project_basename(&repo);
         }
-        let base = sanitize_worktree_name(&name);
-        let (_safe_name, path) = create_unique_project_worktree(&repo, &base)?;
-        path
+        isolated_session_worktree_path(&repo, &name, cwd_path.as_deref())?
     } else {
         cwd_path.unwrap_or(selected_path)
     };
@@ -5313,6 +5311,29 @@ fn create_session_inner(
     }
     persist(state);
     Ok(enrich_session(inserted))
+}
+
+fn isolated_session_worktree_path(
+    repo: &Path,
+    name: &str,
+    cwd_path: Option<&Path>,
+) -> AppResult<PathBuf> {
+    if let Some(cwd) = cwd_path {
+        if worktree::is_linked_worktree_root(cwd) {
+            return worktree::list_worktree_paths(repo)?
+                .into_iter()
+                .find(|candidate| worktree::same_path(candidate, cwd))
+                .ok_or_else(|| {
+                    AppError::InvalidPath(format!(
+                        "worktree is not registered for the project: {}",
+                        cwd.display()
+                    ))
+                });
+        }
+    }
+    let base = sanitize_worktree_name(name);
+    let (_safe_name, path) = create_unique_project_worktree(repo, &base)?;
+    Ok(path)
 }
 
 fn validate_special_session_creation(
@@ -8592,6 +8613,29 @@ pub fn list_project_worktrees(
 ) -> AppResult<Vec<worktree::ProjectWorktreeInfo>> {
     let path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
     crate::worktree::list_worktree_infos(&path)
+}
+
+#[tauri::command]
+pub fn ensure_project_worktree_for_branch(
+    state: State<'_, AppState>,
+    repo_path: String,
+    branch: String,
+    name_hint: String,
+    create_if_missing: Option<bool>,
+    fetch_ref: Option<String>,
+) -> AppResult<worktree::EnsuredWorktree> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    let settings = project_settings::get(&repo_path)?;
+    worktree::ensure_worktree_for_branch(
+        &repo_path,
+        &branch,
+        &name_hint,
+        worktree::EnsureWorktreeOptions {
+            create_if_missing: create_if_missing.unwrap_or(false),
+            fetch_ref: fetch_ref.as_deref(),
+            base_branch: settings.settings.worktrees.base_branch.as_deref(),
+        },
+    )
 }
 
 #[tauri::command]
@@ -12233,8 +12277,8 @@ mod tests {
         authorize_existing_session_id, authorize_registered_repository,
         authorize_registered_worktree, auto_title_enabled_for_new_session,
         can_store_generated_session_title, cleanup_removed_scrollbacks_from_dir,
-        collect_memory_usage_from_roots, configured_git_identity, create_unique_worktree,
-        daemon_attach_replay_scrollback, daemon_spawn_name_for_session,
+        collect_memory_usage_from_roots, configured_git_identity, create_session_inner,
+        create_unique_worktree, daemon_attach_replay_scrollback, daemon_spawn_name_for_session,
         detach_requested_by_stale_renderer, discard_pending_session_removal_from_dir,
         ensure_new_project_destination_available, font_name_from_path,
         infer_acornd_root_from_session_pids, inject_agent_hook_env,
@@ -12363,6 +12407,52 @@ mod tests {
         );
         assert!(linked_worktree_root_for_registered_path(&state, external.path()).is_none());
         assert!(authorize_registered_worktree(&state, root.path(), external.path()).is_err());
+    }
+
+    #[test]
+    fn isolated_session_adopts_an_existing_linked_worktree_cwd() {
+        let repo_dir = unique_repo_dir("adopt-isolated-cwd");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let worktree_path =
+            crate::worktree::create_worktree(&repo_dir, "feature").expect("create linked worktree");
+        assert_eq!(
+            crate::worktree::list_worktree_paths(&repo_dir)
+                .expect("list before")
+                .len(),
+            1
+        );
+
+        let state = AppState::new();
+        state.projects.ensure(repo_dir.clone(), "demo".to_string());
+        let created = create_session_inner(
+            &state,
+            "PR work".to_string(),
+            repo_dir.clone(),
+            Some(worktree_path.clone()),
+            true,
+            SessionKind::Regular,
+            None,
+            true,
+            SessionMode::Terminal,
+            None,
+            None,
+            false,
+        )
+        .expect("create session");
+
+        assert!(created.isolated);
+        assert_eq!(
+            created.worktree_path.canonicalize().unwrap(),
+            worktree_path.canonicalize().unwrap()
+        );
+        assert_eq!(
+            crate::worktree::list_worktree_paths(&repo_dir)
+                .expect("list after")
+                .len(),
+            1
+        );
+        std::fs::remove_dir_all(&repo_dir).ok();
     }
 
     #[test]

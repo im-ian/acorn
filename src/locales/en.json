@@ -1860,7 +1860,8 @@
       "deletedFile": "File was deleted; nothing to open.",
       "notGitHubRemote": "This repo's origin is not a GitHub remote.",
       "originNotGitHub": "Origin remote is not a GitHub repository.",
-      "noAccessToSlug": "No access to {slug}."
+      "noAccessToSlug": "No access to {slug}.",
+      "startWorkFailed": "Could not start work on this item."
     },
     "menu": {
       "expandDiff": "Expand diff",
@@ -1873,6 +1874,7 @@
       "openInBrowser": "Open in browser",
       "openSession": "Open session",
       "openSessionWithName": "Open session ({name})",
+      "startWork": "Start work",
       "copyPrNumber": "Copy PR number",
       "copyIssueNumber": "Copy issue number",
       "copyUrl": "Copy URL",

@@ -1860,7 +1860,8 @@
       "deletedFile": "파일이 삭제되어 열 수 없습니다.",
       "notGitHubRemote": "이 저장소의 origin은 GitHub 원격이 아닙니다.",
       "originNotGitHub": "origin 원격은 GitHub 저장소가 아닙니다.",
-      "noAccessToSlug": "{slug}에 접근할 수 없습니다."
+      "noAccessToSlug": "{slug}에 접근할 수 없습니다.",
+      "startWorkFailed": "이 항목에서 작업을 시작하지 못했습니다."
     },
     "menu": {
       "expandDiff": "diff 확장",
@@ -1873,6 +1874,7 @@
       "openInBrowser": "브라우저에서 열기",
       "openSession": "세션 열기",
       "openSessionWithName": "세션 열기({name})",
+      "startWork": "작업 시작",
       "copyPrNumber": "PR 번호 복사",
       "copyIssueNumber": "이슈 번호 복사",
       "copyUrl": "URL 복사",
