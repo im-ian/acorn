@@ -17,7 +17,11 @@ import {
   discardRemovedWorktreesWithRetry,
   showRemovalOutcomeIssues,
 } from "../lib/operationToasts";
-import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
+import {
+  STANDARD_PR_GENERATION_PROMPT,
+  STANDARD_START_WORK_PROMPT,
+  resolveStartWorkAgentPrompt,
+} from "../lib/project-settings";
 import { basenamePath, projectRootPaths } from "../lib/projectFolders";
 import {
   sessionsUsingProjectWorktree,
@@ -59,6 +63,7 @@ export type ProjectSettingsTab =
   | "general"
   | "sources"
   | "pullRequests"
+  | "startWork"
   | "worktrees";
 
 const PROJECT_SETTINGS_TABS: Array<{
@@ -71,6 +76,7 @@ const PROJECT_SETTINGS_TABS: Array<{
     id: "pullRequests",
     labelKey: "dialogs.projectSettings.tabs.pullRequests",
   },
+  { id: "startWork", labelKey: "dialogs.projectSettings.tabs.startWork" },
   { id: "worktrees", labelKey: "dialogs.projectSettings.tabs.worktrees" },
 ];
 
@@ -118,6 +124,30 @@ function defaultProjectSettings(): ProjectSettings {
     },
     worktrees: {
       base_branch: null,
+    },
+    start_work: {
+      agent_prompt: STANDARD_START_WORK_PROMPT,
+    },
+  };
+}
+
+function hydrateProjectSettings(settings: ProjectSettings): ProjectSettings {
+  const defaults = defaultProjectSettings();
+  return {
+    ...defaults,
+    ...settings,
+    pull_requests: {
+      ...defaults.pull_requests,
+      ...settings.pull_requests,
+    },
+    worktrees: {
+      ...defaults.worktrees,
+      ...settings.worktrees,
+    },
+    start_work: {
+      agent_prompt: resolveStartWorkAgentPrompt(
+        settings.start_work?.agent_prompt,
+      ),
     },
   };
 }
@@ -359,12 +389,19 @@ export function ProjectSettingsModal({
       .then((entries) => {
         if (cancelled) return;
         const nextByRoot = Object.fromEntries(
-          entries.map(({ rootPath, record }) => [rootPath, record.settings]),
+          entries.map(({ rootPath, record }) => [
+            rootPath,
+            hydrateProjectSettings(record.settings),
+          ]),
         );
         const currentRecord = entries.find(
           ({ rootPath }) => rootPath === project.repoPath,
         )?.record;
-        setSettings(currentRecord?.settings ?? defaultProjectSettings());
+        setSettings(
+          hydrateProjectSettings(
+            currentRecord?.settings ?? defaultProjectSettings(),
+          ),
+        );
         setSettingsByRoot(nextByRoot);
         setDirtyWorktreeRoots(new Set());
         setIdentity(currentRecord?.key ?? null);
@@ -433,6 +470,7 @@ export function ProjectSettingsModal({
   }, [project?.repoPath, activeWorktreeRoot]);
 
   const prompt = settings.pull_requests.generation_prompt ?? "";
+  const startWorkPrompt = settings.start_work.agent_prompt ?? "";
   const activeRootSettings =
     settingsByRoot[activeWorktreeRoot] ??
     (activeWorktreeRoot === project?.repoPath
@@ -501,6 +539,17 @@ export function ProjectSettingsModal({
       pull_requests: {
         ...current.pull_requests,
         generation_prompt: next,
+      },
+    }));
+  }
+
+  function updateStartWorkPrompt(value: string) {
+    const next = Array.from(value).slice(0, PROMPT_MAX_CHARS).join("");
+    setSettings((current) => ({
+      ...current,
+      start_work: {
+        ...current.start_work,
+        agent_prompt: next,
       },
     }));
   }
@@ -840,6 +889,35 @@ export function ProjectSettingsModal({
                       {promptCount(
                         dt(t, "dialogs.projectSettings.promptCount"),
                         Array.from(prompt).length,
+                      )}
+                    </p>
+                  </Field>
+                </ProjectSettingsGroup>
+              ) : tab === "startWork" ? (
+                <ProjectSettingsGroup
+                  title={dt(t, "dialogs.projectSettings.startWork")}
+                  description={dt(t, "dialogs.projectSettings.startWorkHint")}
+                >
+                  <Field
+                    label={dt(t, "dialogs.projectSettings.startWorkPrompt")}
+                    hint={dt(t, "dialogs.projectSettings.startWorkPromptHint")}
+                  >
+                    <textarea
+                      value={startWorkPrompt}
+                      onChange={(e) => updateStartWorkPrompt(e.target.value)}
+                      disabled={loading || saving}
+                      rows={9}
+                      maxLength={PROMPT_MAX_CHARS}
+                      placeholder={dt(
+                        t,
+                        "dialogs.projectSettings.startWorkPromptPlaceholder",
+                      )}
+                      className="w-full resize-none rounded-md border border-input-border bg-input px-2 py-1.5 font-mono text-[11px] leading-relaxed text-fg outline-none transition focus:border-accent focus:bg-input-hover disabled:opacity-60"
+                    />
+                    <p className="text-right text-[10px] tabular-nums text-fg-muted">
+                      {promptCount(
+                        dt(t, "dialogs.projectSettings.promptCount"),
+                        Array.from(startWorkPrompt).length,
                       )}
                     </p>
                   </Field>

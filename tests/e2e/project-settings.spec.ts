@@ -417,6 +417,7 @@ test.describe("project settings", () => {
         remember_after_close: true,
         pull_requests: { generation_prompt: null },
         worktrees: { base_branch: "release/2026" },
+        start_work: { agent_prompt: null },
       },
     });
     await tauri.respond("list_project_branches", [
@@ -463,6 +464,7 @@ test.describe("project settings", () => {
           remember_after_close: true,
           pull_requests: { generation_prompt: null },
           worktrees: { base_branch: "refs/heads/develop" },
+          start_work: { agent_prompt: null },
         },
       },
     ]);
@@ -496,6 +498,7 @@ test.describe("project settings", () => {
               ? "refs/heads/release/backoffice"
               : "refs/heads/develop",
           },
+          start_work: { agent_prompt: null },
         },
       };
     });
@@ -556,6 +559,7 @@ test.describe("project settings", () => {
         remember_after_close: boolean;
         pull_requests: { generation_prompt: string };
         worktrees: { base_branch: string };
+        start_work: { agent_prompt: string | null };
       };
     }>;
     expect(calls).toEqual([
@@ -565,6 +569,7 @@ test.describe("project settings", () => {
           remember_after_close: false,
           pull_requests: { generation_prompt: "Backoffice prompt" },
           worktrees: { base_branch: "refs/heads/main" },
+          start_work: { agent_prompt: null },
         },
       },
       {
@@ -573,6 +578,7 @@ test.describe("project settings", () => {
           remember_after_close: true,
           pull_requests: { generation_prompt: "Acorn prompt" },
           worktrees: { base_branch: "refs/heads/develop" },
+          start_work: { agent_prompt: null },
         },
       },
     ]);
@@ -603,6 +609,7 @@ test.describe("project settings", () => {
         remember_after_close: true,
         pull_requests: { generation_prompt: null },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
     await tauri.respond("list_project_branches", [
@@ -647,6 +654,7 @@ test.describe("project settings", () => {
         remember_after_close: true,
         pull_requests: { generation_prompt: null },
         worktrees: { base_branch: "team/integration" },
+        start_work: { agent_prompt: null },
       },
     });
   });

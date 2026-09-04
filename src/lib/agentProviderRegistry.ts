@@ -18,6 +18,7 @@ export const AGENT_PROVIDER_REGISTRY = {
     label: "Claude",
     agentOptionLabel: "Claude Code",
     oneshotHint: "claude -p --output-format text",
+    cliCommand: "claude",
     icon: {
       kind: "mask",
       url: claudeIconUrl,
@@ -48,6 +49,7 @@ export const AGENT_PROVIDER_REGISTRY = {
     label: "Codex",
     agentOptionLabel: "Codex",
     oneshotHint: "codex exec --skip-git-repo-check",
+    cliCommand: "codex",
     icon: {
       kind: "mask",
       url: codexIconUrl,
@@ -77,6 +79,8 @@ export const AGENT_PROVIDER_REGISTRY = {
     label: "Antigravity",
     agentOptionLabel: "Antigravity",
     oneshotHint: "agy -p <prompt>",
+    cliCommand: "agy",
+    startPromptFlag: "--prompt-interactive",
     icon: {
       kind: "mask",
       url: antigravityIconUrl,
@@ -107,6 +111,7 @@ export const AGENT_PROVIDER_REGISTRY = {
     label: "Grok",
     agentOptionLabel: "Grok Build",
     oneshotHint: "grok --no-auto-update --output-format plain -p <prompt>",
+    cliCommand: "grok",
     icon: {
       kind: "mask",
       url: grokIconUrl,
@@ -225,6 +230,25 @@ export function buildAgentResumeCommand(
     throw new Error(`${definition.label} does not support session resume`);
   }
   return `${session.resumeCommandPrefix} ${sessionId}`;
+}
+
+function quotePosixSingle(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function buildAgentStartCommand(
+  provider: SessionAgentProvider,
+  prompt?: string | null,
+): string {
+  const definition = getAgentProviderDefinition(provider);
+  const trimmed = (prompt ?? "").trim().replace(/\s+/g, " ");
+  if (!trimmed) return definition.cliCommand;
+  // One PTY line: a raw newline is Enter. POSIX single quotes work in
+  // bash/zsh/fish; ANSI-C `$''` does not.
+  const quoted = quotePosixSingle(trimmed);
+  return definition.startPromptFlag
+    ? `${definition.cliCommand} ${definition.startPromptFlag} ${quoted}`
+    : `${definition.cliCommand} ${quoted}`;
 }
 
 export function buildAgentForkCommand(

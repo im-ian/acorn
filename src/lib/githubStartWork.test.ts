@@ -7,20 +7,32 @@ import {
   githubWorkSessionName,
   githubWorkSlug,
   planGithubStartWork,
+  renderGithubStartWorkPrompt,
   runGithubStartWork,
 } from "./githubStartWork";
 
 vi.mock("./api", () => ({
   api: {
     ensureProjectWorktreeForBranch: vi.fn(),
+    getProjectSettings: vi.fn(),
+    getIssueDetail: vi.fn(),
+    getPullRequestDetail: vi.fn(),
   },
 }));
 
 import { api } from "./api";
+import {
+  PREVIOUS_STANDARD_START_WORK_PROMPT,
+  STANDARD_START_WORK_PROMPT,
+  resolveStartWorkAgentPrompt,
+} from "./project-settings";
 
 const ensureProjectWorktreeForBranch = vi.mocked(
   api.ensureProjectWorktreeForBranch,
 );
+const getProjectSettings = vi.mocked(api.getProjectSettings);
+const getIssueDetail = vi.mocked(api.getIssueDetail);
+const getPullRequestDetail = vi.mocked(api.getPullRequestDetail);
 
 describe("githubWorkSlug", () => {
   it("lowercases and hyphenates ascii titles", () => {
@@ -226,11 +238,79 @@ describe("createGithubWorkSession", () => {
       "/repo",
     );
   });
+
+  it("passes the selected agent provider into session creation", async () => {
+    ensureProjectWorktreeForBranch.mockResolvedValue({
+      path: "/repo/.acorn/worktrees/issue-12",
+      branch: "issue-12-login-form",
+      created: true,
+    });
+    const createSession = vi.fn().mockResolvedValue({ id: "s-agent" });
+
+    await createGithubWorkSession(
+      createSession,
+      "/repo",
+      planGithubStartWork({
+        kind: "issue",
+        number: 12,
+        title: "Login form",
+      })!,
+      "claude",
+    );
+
+    expect(createSession).toHaveBeenCalledWith(
+      "#12 Login form",
+      "/repo",
+      true,
+      "regular",
+      "claude",
+      true,
+      "terminal",
+      undefined,
+      "/repo/.acorn/worktrees/issue-12",
+    );
+  });
+});
+
+describe("resolveStartWorkAgentPrompt", () => {
+  it("replaces the previous default and fills a missing prompt", () => {
+    expect(resolveStartWorkAgentPrompt(undefined)).toBe(
+      STANDARD_START_WORK_PROMPT,
+    );
+    expect(
+      resolveStartWorkAgentPrompt(PREVIOUS_STANDARD_START_WORK_PROMPT),
+    ).toBe(STANDARD_START_WORK_PROMPT);
+    expect(resolveStartWorkAgentPrompt(null)).toBeNull();
+    expect(resolveStartWorkAgentPrompt("Custom {url}")).toBe("Custom {url}");
+  });
+});
+
+describe("renderGithubStartWorkPrompt", () => {
+  it("substitutes known placeholders and collapses extra blank lines", () => {
+    expect(
+      renderGithubStartWorkPrompt(
+        "Work on {kind} #{number}: {title}\n\n\nURL: {url}\n\n{body}\n",
+        {
+          kind: "issue",
+          number: "12",
+          title: "Login form",
+          url: "https://github.com/acme/app/issues/12",
+          branch: "issue-12-login-form",
+          body: "Add a login form.",
+        },
+      ),
+    ).toBe(
+      "Work on issue #12: Login form\n\nURL: https://github.com/acme/app/issues/12\n\nAdd a login form.",
+    );
+  });
 });
 
 describe("runGithubStartWork", () => {
   beforeEach(() => {
     ensureProjectWorktreeForBranch.mockReset();
+    getProjectSettings.mockReset();
+    getIssueDetail.mockReset();
+    getPullRequestDetail.mockReset();
     window.localStorage.clear();
   });
 
@@ -287,5 +367,150 @@ describe("runGithubStartWork", () => {
 
     expect(result).toEqual({ ok: false, error: "disk full" });
     expect(readSessionPullRequestBranchLinks()).toEqual({});
+  });
+
+  it("queues the default agent with a rendered start-work prompt", async () => {
+    ensureProjectWorktreeForBranch.mockResolvedValue({
+      path: "/repo/.acorn/worktrees/issue-12-login-form",
+      branch: "issue-12-login-form",
+      created: true,
+    });
+    getProjectSettings.mockResolvedValue({
+      key: "path:/repo",
+      settings: {
+        remember_after_close: true,
+        pull_requests: { generation_prompt: null },
+        worktrees: { base_branch: null },
+        start_work: {
+          agent_prompt: "Fix {kind} #{number}: {title}\n\n{body}",
+        },
+      },
+    });
+    getIssueDetail.mockResolvedValue({
+      kind: "ok",
+      account: "tester",
+      detail: {
+        number: 12,
+        title: "Login form",
+        body: "Add a login form.",
+        state: "OPEN",
+        author: "im-ian",
+        url: "https://github.com/acme/app/issues/12",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        state_reason: null,
+        labels: [],
+        comments: [],
+        assignees: [],
+        milestone: null,
+      },
+    });
+    const createSession = vi.fn().mockResolvedValue({ id: "s-issue" });
+    const queueTerminalCommand = vi.fn();
+
+    const result = await runGithubStartWork({
+      repoPath: "/repo",
+      target: {
+        kind: "issue",
+        number: 12,
+        title: "Login form",
+        url: "https://github.com/acme/app/issues/12",
+      },
+      createSession,
+      consumeError: () => null,
+      agentProvider: "claude",
+      queueTerminalCommand,
+    });
+
+    expect(result).toEqual({ ok: true, session: { id: "s-issue" } });
+    expect(createSession).toHaveBeenCalledWith(
+      "#12 Login form",
+      "/repo",
+      true,
+      "regular",
+      "claude",
+      true,
+      "terminal",
+      undefined,
+      "/repo/.acorn/worktrees/issue-12-login-form",
+    );
+    expect(getIssueDetail).toHaveBeenCalledWith("/repo", 12);
+    expect(queueTerminalCommand).toHaveBeenCalledWith(
+      "s-issue",
+      "claude 'Fix issue #12: Login form Add a login form.'",
+      { agentProvider: "claude", adoptWorktreeOnExit: false },
+    );
+  });
+
+  it("starts the agent without a prompt when the project template is empty", async () => {
+    ensureProjectWorktreeForBranch.mockResolvedValue({
+      path: "/repo/.acorn/worktrees/pr-91-open",
+      branch: "feature/pr-session",
+      created: true,
+    });
+    getProjectSettings.mockResolvedValue({
+      key: "path:/repo",
+      settings: {
+        remember_after_close: true,
+        pull_requests: { generation_prompt: null },
+        worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
+      },
+    });
+    const queueTerminalCommand = vi.fn();
+
+    await runGithubStartWork({
+      repoPath: "/repo",
+      target: {
+        kind: "pr",
+        number: 91,
+        title: "Open",
+        url: "https://github.com/acme/app/pull/91",
+        headBranch: "feature/pr-session",
+      },
+      createSession: vi.fn().mockResolvedValue({ id: "s-new" }),
+      consumeError: () => null,
+      agentProvider: "codex",
+      queueTerminalCommand,
+    });
+
+    expect(getPullRequestDetail).not.toHaveBeenCalled();
+    expect(queueTerminalCommand).toHaveBeenCalledWith("s-new", "codex", {
+      agentProvider: "codex",
+      adoptWorktreeOnExit: false,
+    });
+  });
+
+  it("falls back to the standard prompt when project settings cannot be loaded", async () => {
+    ensureProjectWorktreeForBranch.mockResolvedValue({
+      path: "/repo/.acorn/worktrees/issue-12",
+      branch: "issue-12-login-form",
+      created: true,
+    });
+    getProjectSettings.mockRejectedValue(new Error("unavailable"));
+    const queueTerminalCommand = vi.fn();
+
+    await runGithubStartWork({
+      repoPath: "/repo",
+      target: { kind: "issue", number: 12, title: "Login form" },
+      createSession: vi.fn().mockResolvedValue({ id: "s-issue" }),
+      consumeError: () => null,
+      agentProvider: "grok",
+      queueTerminalCommand,
+    });
+
+    expect(STANDARD_START_WORK_PROMPT).toContain("{title}");
+    expect(STANDARD_START_WORK_PROMPT).toContain("Open that GitHub URL");
+    expect(STANDARD_START_WORK_PROMPT).not.toContain("{body}");
+    expect(getIssueDetail).not.toHaveBeenCalled();
+    expect(queueTerminalCommand).toHaveBeenCalledWith(
+      "s-issue",
+      expect.stringMatching(/^grok '/),
+      { agentProvider: "grok", adoptWorktreeOnExit: false },
+    );
+    const command = queueTerminalCommand.mock.calls[0]?.[1] as string;
+    expect(command).toContain("Login form");
+    expect(command).toContain("issue #12");
+    expect(command).toContain("Open that GitHub URL");
   });
 });
