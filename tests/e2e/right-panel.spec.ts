@@ -1161,6 +1161,623 @@ test.describe("right panel: tab switching", () => {
     await expect(
       page.locator('[data-tab-drag-handle="pr-session"]').locator(".."),
     ).toHaveClass(/acorn-tab-active-bg/);
+    await prRow.click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", { name: "Start work" }),
+    ).toHaveCount(0);
+  });
+
+  test("right-clicking a pull request can start work in a new worktree", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__sessions = w.__sessions ?? [
+        {
+          id: "s-1",
+          name: "sess",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+        },
+      ];
+      return w.__sessions;
+    });
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 91,
+          title: "Start work from the PR row",
+          state: "OPEN",
+          author: "im-ian",
+          head_branch: "feature/start-work",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/91",
+          updated_at: "2026-05-19T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.handle("ensure_project_worktree_for_branch", (args) => {
+      const w = window as unknown as { __ensureWorktreeArgs?: unknown[] };
+      w.__ensureWorktreeArgs = w.__ensureWorktreeArgs ?? [];
+      w.__ensureWorktreeArgs.push(args);
+      return {
+        path: "/tmp/demo/.acorn/worktrees/pr-91-start-work-from-the-pr-row",
+        branch: "feature/start-work",
+        created: true,
+      };
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __createSessionCalls?: unknown[];
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      const session = {
+        id: "started-pr",
+        name: (args as { name?: string }).name ?? "#91",
+        repo_path: "/tmp/demo",
+        worktree_path:
+          (args as { cwdPath?: string }).cwdPath ??
+          "/tmp/demo/.acorn/worktrees/pr-91-start-work-from-the-pr-row",
+        branch: "feature/start-work",
+        isolated: Boolean((args as { isolated?: boolean }).isolated),
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      };
+      w.__sessions = [...(w.__sessions ?? []), session];
+      return session;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "PRs" }).click();
+
+    const prRow = page
+      .getByText("Start work from the PR row")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await prRow.click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", { name: "Open session" }),
+    ).toHaveCount(0);
+    await page.getByRole("menuitem", { name: "Start work" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __createSessionCalls?: unknown[] })
+                .__createSessionCalls?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+
+    const ensureArgs = (await page.evaluate(
+      () =>
+        (window as unknown as { __ensureWorktreeArgs?: unknown[] })
+          .__ensureWorktreeArgs?.[0],
+    )) as {
+      repoPath: string;
+      branch: string;
+      nameHint: string;
+      createIfMissing: boolean;
+      fetchRef: string;
+    };
+    expect(ensureArgs).toEqual({
+      repoPath: "/tmp/demo",
+      branch: "feature/start-work",
+      nameHint: "pr-91-start-work-from-the-pr-row",
+      createIfMissing: false,
+      fetchRef: "refs/pull/91/head",
+    });
+
+    const createArgs = (await page.evaluate(
+      () =>
+        (window as unknown as { __createSessionCalls?: unknown[] })
+          .__createSessionCalls?.[0],
+    )) as {
+      name: string;
+      repoPath: string;
+      isolated: boolean;
+      cwdPath: string;
+    };
+    expect(createArgs.name).toBe("#91 Start work from the PR row");
+    expect(createArgs.repoPath).toBe("/tmp/demo");
+    expect(createArgs.isolated).toBe(true);
+    expect(createArgs.cwdPath).toBe(
+      "/tmp/demo/.acorn/worktrees/pr-91-start-work-from-the-pr-row",
+    );
+
+    await expect(
+      page.locator('[data-tab-drag-handle="started-pr"]').locator(".."),
+    ).toHaveClass(/acorn-tab-active-bg/);
+  });
+
+  test("right-clicking an issue can start work in a new worktree", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__sessions = w.__sessions ?? [
+        {
+          id: "s-1",
+          name: "sess",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+        },
+      ];
+      return w.__sessions;
+    });
+    await tauri.respond("list_issues", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 12,
+          title: "Login form",
+          state: "OPEN",
+          author: "im-ian",
+          url: "https://github.com/im-ian/acorn/issues/12",
+          created_at: "2026-05-18T00:00:00Z",
+          updated_at: "2026-05-19T00:00:00Z",
+          state_reason: null,
+          comments: 0,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.handle("ensure_project_worktree_for_branch", (args) => {
+      const w = window as unknown as { __ensureWorktreeArgs?: unknown[] };
+      w.__ensureWorktreeArgs = w.__ensureWorktreeArgs ?? [];
+      w.__ensureWorktreeArgs.push(args);
+      return {
+        path: "/tmp/demo/.acorn/worktrees/issue-12-login-form",
+        branch: "issue-12-login-form",
+        created: true,
+      };
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __createSessionCalls?: unknown[];
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      const session = {
+        id: "started-issue",
+        name: (args as { name?: string }).name ?? "#12",
+        repo_path: "/tmp/demo",
+        worktree_path:
+          (args as { cwdPath?: string }).cwdPath ??
+          "/tmp/demo/.acorn/worktrees/issue-12-login-form",
+        branch: "issue-12-login-form",
+        isolated: Boolean((args as { isolated?: boolean }).isolated),
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      };
+      w.__sessions = [...(w.__sessions ?? []), session];
+      return session;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "Issues" }).click();
+
+    const issueRow = page
+      .getByText("Login form")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await issueRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Start work" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __createSessionCalls?: unknown[] })
+                .__createSessionCalls?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+
+    const ensureArgs = (await page.evaluate(
+      () =>
+        (window as unknown as { __ensureWorktreeArgs?: unknown[] })
+          .__ensureWorktreeArgs?.[0],
+    )) as {
+      repoPath: string;
+      branch: string;
+      nameHint: string;
+      createIfMissing: boolean;
+      fetchRef?: string;
+    };
+    expect(ensureArgs).toEqual({
+      repoPath: "/tmp/demo",
+      branch: "issue-12-login-form",
+      nameHint: "issue-12-login-form",
+      createIfMissing: true,
+    });
+
+    const createArgs = (await page.evaluate(
+      () =>
+        (window as unknown as { __createSessionCalls?: unknown[] })
+          .__createSessionCalls?.[0],
+    )) as {
+      name: string;
+      isolated: boolean;
+      cwdPath: string;
+    };
+    expect(createArgs.name).toBe("#12 Login form");
+    expect(createArgs.isolated).toBe(true);
+    expect(createArgs.cwdPath).toBe(
+      "/tmp/demo/.acorn/worktrees/issue-12-login-form",
+    );
+  });
+
+  test("the pull request detail modal can start work", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__sessions = w.__sessions ?? [
+        {
+          id: "s-1",
+          name: "sess",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+        },
+      ];
+      return w.__sessions;
+    });
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 87,
+          title: "Start work from the PR modal",
+          state: "OPEN",
+          author: "im-ian",
+          head_branch: "feature/modal-start",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/87",
+          updated_at: "2026-05-19T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.respond("get_pull_request_detail", {
+      kind: "ok",
+      account: "test-account",
+      detail: {
+        number: 87,
+        title: "Start work from the PR modal",
+        body: "Loaded pull request body from gh.",
+        state: "OPEN",
+        is_draft: false,
+        author: "im-ian",
+        head_branch: "feature/modal-start",
+        base_branch: "main",
+        url: "https://github.com/im-ian/acorn/pull/87",
+        created_at: "2026-05-18T00:00:00Z",
+        updated_at: "2026-05-19T00:00:00Z",
+        merged_at: null,
+        additions: 12,
+        deletions: 3,
+        changed_files: 2,
+        mergeable: "MERGEABLE",
+        labels: [],
+        comments: [],
+        reviews: [],
+        checks: [],
+        commits: [],
+      },
+    });
+    await tauri.handle("ensure_project_worktree_for_branch", (args) => {
+      const w = window as unknown as { __ensureWorktreeArgs?: unknown[] };
+      w.__ensureWorktreeArgs = w.__ensureWorktreeArgs ?? [];
+      w.__ensureWorktreeArgs.push(args);
+      return {
+        path: "/tmp/demo/.acorn/worktrees/pr-87-start-work-from-the-pr-modal",
+        branch: "feature/modal-start",
+        created: true,
+      };
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __createSessionCalls?: unknown[];
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      const session = {
+        id: "started-pr-modal",
+        name: (args as { name?: string }).name ?? "#87",
+        repo_path: "/tmp/demo",
+        worktree_path:
+          (args as { cwdPath?: string }).cwdPath ??
+          "/tmp/demo/.acorn/worktrees/pr-87-start-work-from-the-pr-modal",
+        branch: "feature/modal-start",
+        isolated: Boolean((args as { isolated?: boolean }).isolated),
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      };
+      w.__sessions = [...(w.__sessions ?? []), session];
+      return session;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "PRs" }).click();
+    const prRow = page
+      .getByText("Start work from the PR modal")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await dblclickRowRightSide(page, prRow);
+
+    const dialog = page.locator('[role="dialog"]').filter({
+      has: page.getByRole("heading", {
+        name: "Start work from the PR modal",
+      }),
+    });
+    await expect(dialog.getByText("Loaded pull request body from gh.")).toBeVisible();
+    await dialog.getByRole("button", { name: "Start work" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __createSessionCalls?: unknown[] })
+                .__createSessionCalls?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+
+    const ensureArgs = (await page.evaluate(
+      () =>
+        (window as unknown as { __ensureWorktreeArgs?: unknown[] })
+          .__ensureWorktreeArgs?.[0],
+    )) as {
+      repoPath: string;
+      branch: string;
+      nameHint: string;
+      createIfMissing: boolean;
+      fetchRef: string;
+    };
+    expect(ensureArgs).toEqual({
+      repoPath: "/tmp/demo",
+      branch: "feature/modal-start",
+      nameHint: "pr-87-start-work-from-the-pr-modal",
+      createIfMissing: false,
+      fetchRef: "refs/pull/87/head",
+    });
+
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page.locator('[data-tab-drag-handle="started-pr-modal"]').locator(".."),
+    ).toHaveClass(/acorn-tab-active-bg/);
+  });
+
+  test("the issue detail modal can start work", async ({ page, tauri }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__sessions = w.__sessions ?? [
+        {
+          id: "s-1",
+          name: "sess",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+        },
+      ];
+      return w.__sessions;
+    });
+    await tauri.respond("list_issues", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 12,
+          title: "Start work from the issue modal",
+          state: "OPEN",
+          author: "im-ian",
+          url: "https://github.com/im-ian/acorn/issues/12",
+          created_at: "2026-05-18T00:00:00Z",
+          updated_at: "2026-05-19T00:00:00Z",
+          state_reason: null,
+          comments: 0,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.respond("get_issue_detail", {
+      kind: "ok",
+      account: "test-account",
+      detail: {
+        number: 12,
+        title: "Start work from the issue modal",
+        body: "Loaded issue body from gh.",
+        state: "OPEN",
+        author: "im-ian",
+        url: "https://github.com/im-ian/acorn/issues/12",
+        created_at: "2026-05-18T00:00:00Z",
+        updated_at: "2026-05-19T00:00:00Z",
+        state_reason: null,
+        labels: [],
+        comments: [],
+        assignees: [],
+        milestone: null,
+      },
+    });
+    await tauri.handle("ensure_project_worktree_for_branch", (args) => {
+      const w = window as unknown as { __ensureWorktreeArgs?: unknown[] };
+      w.__ensureWorktreeArgs = w.__ensureWorktreeArgs ?? [];
+      w.__ensureWorktreeArgs.push(args);
+      return {
+        path: "/tmp/demo/.acorn/worktrees/issue-12-start-work-from-the-issue-modal",
+        branch: "issue-12-start-work-from-the-issue-modal",
+        created: true,
+      };
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __createSessionCalls?: unknown[];
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      const session = {
+        id: "started-issue-modal",
+        name: (args as { name?: string }).name ?? "#12",
+        repo_path: "/tmp/demo",
+        worktree_path:
+          (args as { cwdPath?: string }).cwdPath ??
+          "/tmp/demo/.acorn/worktrees/issue-12-start-work-from-the-issue-modal",
+        branch: "issue-12-start-work-from-the-issue-modal",
+        isolated: Boolean((args as { isolated?: boolean }).isolated),
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      };
+      w.__sessions = [...(w.__sessions ?? []), session];
+      return session;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "Issues" }).click();
+    const issueRow = page
+      .getByText("Start work from the issue modal")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await dblclickRowRightSide(page, issueRow);
+
+    const dialog = page.locator('[role="dialog"]').filter({
+      has: page.getByRole("heading", {
+        name: "Start work from the issue modal",
+      }),
+    });
+    await expect(dialog.getByText("Loaded issue body from gh.")).toBeVisible();
+    await dialog.getByRole("button", { name: "Start work" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __createSessionCalls?: unknown[] })
+                .__createSessionCalls?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+
+    const ensureArgs = (await page.evaluate(
+      () =>
+        (window as unknown as { __ensureWorktreeArgs?: unknown[] })
+          .__ensureWorktreeArgs?.[0],
+    )) as {
+      repoPath: string;
+      branch: string;
+      nameHint: string;
+      createIfMissing: boolean;
+    };
+    expect(ensureArgs).toEqual({
+      repoPath: "/tmp/demo",
+      branch: "issue-12-start-work-from-the-issue-modal",
+      nameHint: "issue-12-start-work-from-the-issue-modal",
+      createIfMissing: true,
+    });
+
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page
+        .locator('[data-tab-drag-handle="started-issue-modal"]')
+        .locator(".."),
+    ).toHaveClass(/acorn-tab-active-bg/);
   });
 
   test("copies a pull request number through the native clipboard", async ({

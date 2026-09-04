@@ -1,4 +1,4 @@
-use git2::{BranchType, Repository, WorktreeAddOptions, WorktreePruneOptions};
+use git2::{BranchType, ErrorCode, Repository, WorktreeAddOptions, WorktreePruneOptions};
 use serde::Serialize;
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
@@ -302,6 +302,260 @@ pub fn create_worktree_from_base_branch(
         return Err(err.into());
     }
     Ok(target)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct EnsureWorktreeOptions<'a> {
+    pub create_if_missing: bool,
+    pub fetch_ref: Option<&'a str>,
+    pub base_branch: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EnsuredWorktree {
+    pub path: String,
+    pub branch: String,
+    pub created: bool,
+}
+
+/// Guarantee a checkout of `branch` — reuse an existing one, or add a linked
+/// worktree under `.acorn/worktrees/`. The git branch name and the worktree
+/// directory name are independent so a PR head like `feature/foo` can live in
+/// `pr-91-foo` without minting a second branch.
+pub fn ensure_worktree_for_branch(
+    repo_path: &Path,
+    branch: &str,
+    worktree_name_hint: &str,
+    options: EnsureWorktreeOptions<'_>,
+) -> AppResult<EnsuredWorktree> {
+    let branch = normalize_local_branch_name(branch)?;
+    if let Some(fetch_ref) = options.fetch_ref {
+        validate_pull_head_fetch_ref(fetch_ref)?;
+    }
+    let hint = sanitize_worktree_dir_name(worktree_name_hint);
+
+    if let Some(path) = find_checkout_for_branch(repo_path, &branch)? {
+        return Ok(ensured_worktree(path, branch, false));
+    }
+
+    materialize_local_branch(repo_path, &branch, &options)?;
+
+    if let Some(path) = find_checkout_for_branch(repo_path, &branch)? {
+        return Ok(ensured_worktree(path, branch, false));
+    }
+
+    match add_worktree_for_local_branch(repo_path, &branch, &hint) {
+        Ok(path) => Ok(ensured_worktree(path, branch, true)),
+        Err(error) => {
+            if let Some(path) = find_checkout_for_branch(repo_path, &branch)? {
+                return Ok(ensured_worktree(path, branch, false));
+            }
+            Err(error)
+        }
+    }
+}
+
+fn ensured_worktree(path: PathBuf, branch: String, created: bool) -> EnsuredWorktree {
+    EnsuredWorktree {
+        path: path.to_string_lossy().into_owned(),
+        branch,
+        created,
+    }
+}
+
+fn normalize_local_branch_name(branch: &str) -> AppResult<String> {
+    let branch = branch.trim();
+    let branch = branch.strip_prefix("refs/heads/").unwrap_or(branch).trim();
+    validate_git_branch_name(branch)?;
+    Ok(branch.to_string())
+}
+
+fn validate_git_branch_name(name: &str) -> AppResult<()> {
+    if name.is_empty() {
+        return Err(AppError::Other("branch name must not be empty".into()));
+    }
+    if name.starts_with('-')
+        || name.starts_with('/')
+        || name.ends_with('/')
+        || name.ends_with('.')
+        || name.ends_with(".lock")
+        || name.contains("..")
+        || name.contains("//")
+        || name.contains("@{")
+        || name.contains('\0')
+    {
+        return Err(AppError::Other(format!("invalid branch name: {name}")));
+    }
+    if name.bytes().any(|byte| {
+        byte.is_ascii_control()
+            || matches!(
+                byte,
+                b' ' | b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\' | b'\x7f'
+            )
+    }) {
+        return Err(AppError::Other(format!("invalid branch name: {name}")));
+    }
+    Ok(())
+}
+
+fn validate_pull_head_fetch_ref(fetch_ref: &str) -> AppResult<()> {
+    let valid = fetch_ref
+        .strip_prefix("refs/pull/")
+        .and_then(|rest| rest.strip_suffix("/head"))
+        .is_some_and(|number| {
+            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(AppError::Other(format!(
+            "unsupported fetch ref: {fetch_ref}"
+        )))
+    }
+}
+
+fn sanitize_worktree_dir_name(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.is_empty() {
+        "worktree".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn find_checkout_for_branch(repo_path: &Path, branch: &str) -> AppResult<Option<PathBuf>> {
+    let repo = ensure_repo(repo_path)?;
+    if let Some(workdir) = repo.workdir() {
+        if current_branch(workdir).ok().as_deref() == Some(branch) {
+            return Ok(Some(workdir.to_path_buf()));
+        }
+    }
+    for path in list_worktree_paths(repo_path)? {
+        if current_branch(&path).ok().as_deref() == Some(branch) {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+fn materialize_local_branch(
+    repo_path: &Path,
+    branch: &str,
+    options: &EnsureWorktreeOptions<'_>,
+) -> AppResult<()> {
+    let repo = ensure_repo(repo_path)?;
+    if repo.find_reference(&format!("refs/heads/{branch}")).is_ok() {
+        return Ok(());
+    }
+
+    let remote_ref = format!("refs/remotes/origin/{branch}");
+    if repo.find_reference(&remote_ref).is_ok() {
+        create_local_branch_from_ref(&repo, branch, &remote_ref)?;
+        return Ok(());
+    }
+    drop(repo);
+
+    if let Some(fetch_ref) = options.fetch_ref {
+        fetch_ref_into_branch(repo_path, fetch_ref, branch)?;
+        return Ok(());
+    }
+
+    if options.create_if_missing {
+        let repo = ensure_repo(repo_path)?;
+        let base = worktree_base_commit(&repo, options.base_branch)?;
+        repo.branch(branch, &base, false)?;
+        return Ok(());
+    }
+
+    Err(AppError::Other(format!("branch was not found: {branch}")))
+}
+
+fn create_local_branch_from_ref(
+    repo: &Repository,
+    branch: &str,
+    source_ref: &str,
+) -> AppResult<()> {
+    let commit = repo.find_reference(source_ref)?.peel_to_commit()?;
+    repo.branch(branch, &commit, false)?;
+    Ok(())
+}
+
+fn fetch_ref_into_branch(repo_path: &Path, fetch_ref: &str, branch: &str) -> AppResult<()> {
+    let spec = format!("{fetch_ref}:refs/heads/{branch}");
+    let output = crate::cli_resolver::run("git", |cmd| {
+        cmd.current_dir(repo_path);
+        cmd.args(["fetch", "origin", &spec]);
+    })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = stderr.trim();
+    let detail = if detail.is_empty() {
+        stdout.trim()
+    } else {
+        detail
+    };
+    Err(AppError::Other(if detail.is_empty() {
+        format!("failed to fetch {fetch_ref}")
+    } else {
+        format!("failed to fetch {fetch_ref}: {detail}")
+    }))
+}
+
+fn add_worktree_for_local_branch(repo_path: &Path, branch: &str, hint: &str) -> AppResult<PathBuf> {
+    let repo = ensure_repo(repo_path)?;
+    ensure_git_excluded(&repo).ok();
+    let (name, target) = unique_managed_worktree_target(&repo, repo_path, hint)?;
+    let branch_ref_name = format!("refs/heads/{branch}");
+    let branch_ref = repo.find_reference(&branch_ref_name)?;
+    let mut opts = WorktreeAddOptions::new();
+    opts.checkout_existing(true).reference(Some(&branch_ref));
+    repo.worktree(&name, &target, Some(&opts))?;
+    Ok(target)
+}
+
+fn unique_managed_worktree_target(
+    repo: &Repository,
+    repo_path: &Path,
+    hint: &str,
+) -> AppResult<(String, PathBuf)> {
+    let root = checked_worktree_root(repo_path, true)?;
+    let mut n = 1u32;
+    loop {
+        let name = if n == 1 {
+            hint.to_string()
+        } else {
+            format!("{hint}-{n}")
+        };
+        let target = root.join(&name);
+        let registration_taken = match repo.find_worktree(&name) {
+            Ok(_) => true,
+            Err(err) if err.code() == ErrorCode::NotFound => false,
+            Err(err) => return Err(err.into()),
+        };
+        if !target.exists() && !registration_taken {
+            return Ok((name, target));
+        }
+        if n >= 100 {
+            return Err(AppError::Other(format!(
+                "could not find a free worktree name for {hint}"
+            )));
+        }
+        n += 1;
+    }
 }
 
 pub fn validate_worktree_base_branch(repo_path: &Path, branch: &str) -> AppResult<()> {
@@ -1978,5 +2232,284 @@ mod tests {
         std::fs::remove_file(root.join(ACORN_DIR)).ok();
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&external).ok();
+    }
+
+    fn ensure_options<'a>(
+        create_if_missing: bool,
+        fetch_ref: Option<&'a str>,
+        base_branch: Option<&'a str>,
+    ) -> EnsureWorktreeOptions<'a> {
+        EnsureWorktreeOptions {
+            create_if_missing,
+            fetch_ref,
+            base_branch,
+        }
+    }
+
+    #[test]
+    fn ensure_worktree_reuses_root_when_branch_is_already_checked_out() {
+        let root = unique_temp_dir("ensure-reuse-root");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let current = current_branch(&root).expect("current branch");
+
+        let ensured = ensure_worktree_for_branch(
+            &root,
+            &current,
+            "pr-1-main",
+            ensure_options(false, None, None),
+        )
+        .expect("reuse root checkout");
+
+        assert!(!ensured.created);
+        assert_eq!(ensured.branch, current);
+        assert_eq!(
+            Path::new(&ensured.path).canonicalize().unwrap(),
+            root.canonicalize().unwrap()
+        );
+        assert!(list_worktree_paths(&root).expect("list").is_empty());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_worktree_checks_out_existing_branch_in_new_directory() {
+        let root = unique_temp_dir("ensure-existing-branch");
+        let repo = init_repo_with_tracked_file(&root);
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        repo.branch("main", &initial, false).expect("create main");
+        repo.branch("feature/pr-head", &initial, false)
+            .expect("create feature branch");
+        drop(initial);
+        checkout_branch(&repo, "main");
+        drop(repo);
+
+        let ensured = ensure_worktree_for_branch(
+            &root,
+            "feature/pr-head",
+            "pr-91-open-the-matching",
+            ensure_options(false, None, None),
+        )
+        .expect("add worktree for existing branch");
+
+        assert!(ensured.created);
+        assert_eq!(ensured.branch, "feature/pr-head");
+        let worktree_path = Path::new(&ensured.path);
+        assert_eq!(
+            worktree_path.file_name().and_then(|name| name.to_str()),
+            Some("pr-91-open-the-matching")
+        );
+        let worktree_repo = Repository::open(worktree_path).expect("open worktree");
+        assert_eq!(
+            worktree_repo
+                .head()
+                .expect("head")
+                .shorthand()
+                .expect("shorthand"),
+            "feature/pr-head"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_worktree_reuses_linked_checkout_for_the_same_branch() {
+        let root = unique_temp_dir("ensure-reuse-linked");
+        let repo = init_repo_with_tracked_file(&root);
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        repo.branch("main", &initial, false).expect("create main");
+        repo.branch("feature/shared", &initial, false)
+            .expect("create feature");
+        drop(initial);
+        checkout_branch(&repo, "main");
+        drop(repo);
+
+        let first = ensure_worktree_for_branch(
+            &root,
+            "feature/shared",
+            "pr-3-first",
+            ensure_options(false, None, None),
+        )
+        .expect("create first worktree");
+        let second = ensure_worktree_for_branch(
+            &root,
+            "feature/shared",
+            "pr-3-second",
+            ensure_options(false, None, None),
+        )
+        .expect("reuse first worktree");
+
+        assert!(first.created);
+        assert!(!second.created);
+        assert_eq!(
+            Path::new(&first.path).canonicalize().unwrap(),
+            Path::new(&second.path).canonicalize().unwrap()
+        );
+        assert_eq!(list_worktree_paths(&root).expect("list").len(), 1);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_worktree_creates_named_branch_from_base_when_missing() {
+        let root = unique_temp_dir("ensure-create-issue");
+        let repo = init_repo_with_tracked_file(&root);
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        let main_oid = initial.id();
+        repo.branch("main", &initial, false).expect("create main");
+        drop(initial);
+        checkout_branch(&repo, "main");
+        drop(repo);
+
+        let ensured = ensure_worktree_for_branch(
+            &root,
+            "issue-12-login-form",
+            "issue-12-login-form",
+            ensure_options(true, None, Some("main")),
+        )
+        .expect("create issue branch worktree");
+
+        assert!(ensured.created);
+        assert_eq!(ensured.branch, "issue-12-login-form");
+        let worktree_repo = Repository::open(&ensured.path).expect("open worktree");
+        let head = worktree_repo.head().expect("head");
+        assert_eq!(head.shorthand().expect("shorthand"), "issue-12-login-form");
+        assert_eq!(head.target(), Some(main_oid));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_worktree_errors_when_branch_is_missing_and_not_created() {
+        let root = unique_temp_dir("ensure-missing");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+
+        let error = ensure_worktree_for_branch(
+            &root,
+            "feature/missing",
+            "pr-4-missing",
+            ensure_options(false, None, None),
+        )
+        .expect_err("missing branch must fail");
+
+        assert!(error
+            .to_string()
+            .contains("branch was not found: feature/missing"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_worktree_creates_local_branch_from_origin_tracking_ref() {
+        let root = unique_temp_dir("ensure-from-origin");
+        let repo = init_repo_with_tracked_file(&root);
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        repo.branch("main", &initial, false).expect("create main");
+        repo.reference(
+            "refs/remotes/origin/feature/from-origin",
+            initial.id(),
+            false,
+            "remote tracking",
+        )
+        .expect("create origin tracking ref");
+        drop(initial);
+        checkout_branch(&repo, "main");
+        drop(repo);
+
+        let ensured = ensure_worktree_for_branch(
+            &root,
+            "feature/from-origin",
+            "pr-5-from-origin",
+            ensure_options(false, None, None),
+        )
+        .expect("create local branch from origin");
+
+        assert!(ensured.created);
+        assert_eq!(ensured.branch, "feature/from-origin");
+        let worktree_repo = Repository::open(&ensured.path).expect("open worktree");
+        assert_eq!(
+            worktree_repo
+                .head()
+                .expect("head")
+                .shorthand()
+                .expect("shorthand"),
+            "feature/from-origin"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_worktree_fetches_pull_head_into_local_branch() {
+        let origin_root = unique_temp_dir("ensure-fetch-origin");
+        let origin = init_repo_with_tracked_file(&origin_root);
+        let oid = origin
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("origin commit")
+            .id();
+        origin
+            .reference("refs/pull/91/head", oid, true, "pr head")
+            .expect("create pull head ref");
+        drop(origin);
+
+        let work_root = unique_temp_dir("ensure-fetch-work");
+        let repo = git2::build::RepoBuilder::new()
+            .clone(origin_root.to_str().expect("origin path utf8"), &work_root)
+            .expect("clone origin");
+        drop(repo);
+
+        let ensured = ensure_worktree_for_branch(
+            &work_root,
+            "feature/from-pr",
+            "pr-91-from-pr",
+            ensure_options(false, Some("refs/pull/91/head"), None),
+        )
+        .expect("fetch pull head into worktree");
+
+        assert!(ensured.created);
+        assert_eq!(ensured.branch, "feature/from-pr");
+        let worktree_repo = Repository::open(&ensured.path).expect("open worktree");
+        assert_eq!(
+            worktree_repo
+                .head()
+                .expect("head")
+                .shorthand()
+                .expect("shorthand"),
+            "feature/from-pr"
+        );
+
+        std::fs::remove_dir_all(&work_root).ok();
+        std::fs::remove_dir_all(&origin_root).ok();
+    }
+
+    #[test]
+    fn ensure_worktree_rejects_non_pull_fetch_refs() {
+        let root = unique_temp_dir("ensure-bad-fetch-ref");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+
+        let error = ensure_worktree_for_branch(
+            &root,
+            "feature/x",
+            "pr-1",
+            ensure_options(false, Some("refs/heads/main"), None),
+        )
+        .expect_err("only pull head refs are accepted");
+
+        assert!(error.to_string().contains("unsupported fetch ref"));
+        std::fs::remove_dir_all(&root).ok();
     }
 }

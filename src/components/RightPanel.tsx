@@ -64,6 +64,7 @@ import { openSafeUrl } from "../lib/safeOpenUrl";
 import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import { findSessionsForPullRequest } from "../lib/sessionContext";
 import { readSessionPullRequestBranchLinks } from "../lib/sessionPullRequestLinks";
+import { runGithubStartWork } from "../lib/githubStartWork";
 import {
   onPullRequestMutation,
   pullRequestMutationAffectsOpenContext,
@@ -2849,7 +2850,9 @@ function usePrRowActions(
   onMutated?: () => void,
 ) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
+  const createSession = useAppStore((s) => s.createSession);
   const openSessionSurface = useAppStore((s) => s.openSessionSurface);
   const [menu, setMenu] = useState<{
     x: number;
@@ -3025,7 +3028,25 @@ function usePrRowActions(
       )
     : [];
 
-  const openSessionMenuItem: ContextMenuItem =
+  async function startWork(pr: PullRequestInfo) {
+    const result = await runGithubStartWork({
+      repoPath,
+      target: {
+        kind: "pr",
+        number: pr.number,
+        title: pr.title,
+        headBranch: pr.head_branch,
+      },
+      createSession,
+      consumeError: () => useAppStore.getState().consumeError(),
+    });
+    if (result.ok) return;
+    const message = result.error ?? rt(t, "rightPanel.errors.startWorkFailed");
+    setError(message);
+    showToast(`${t("toasts.session.createFailed")} ${message}`);
+  }
+
+  const openSessionMenuItem: ContextMenuItem | null =
     matchingSessions.length === 1
       ? {
           label: rtf(t, "rightPanel.menu.openSessionWithName", {
@@ -3045,12 +3066,18 @@ function usePrRowActions(
               onClick: () => openSessionSurface(session.id),
             })),
           }
-        : {
-            label: rt(t, "rightPanel.menu.openSession"),
-            icon: <SquareTerminal size={12} />,
-            disabled: true,
-            onClick: () => undefined,
-          };
+        : null;
+
+  const startWorkMenuItem: ContextMenuItem = {
+    label: rt(t, "rightPanel.menu.startWork"),
+    icon: <Play size={12} />,
+    disabled: !menu?.pr.head_branch.trim(),
+    onClick: () => {
+      if (menu) void startWork(menu.pr);
+    },
+  };
+
+  const sessionOrStartWorkItem = openSessionMenuItem ?? startWorkMenuItem;
 
   const overlays = (
     <>
@@ -3071,7 +3098,7 @@ function usePrRowActions(
                   icon: <ExternalLink size={12} />,
                   onClick: () => void openPrInBrowser(menu.pr),
                 },
-                openSessionMenuItem,
+                sessionOrStartWorkItem,
                 { type: "separator" },
                 {
                   label: rt(t, "rightPanel.menu.copyPrNumber"),
@@ -3498,8 +3525,13 @@ function issueListStateFromCache(
   };
 }
 
-function useIssueRowActions(onOpenDetail: (number: number) => void) {
+function useIssueRowActions(
+  repoPath: string,
+  onOpenDetail: (number: number) => void,
+) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
+  const createSession = useAppStore((s) => s.createSession);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -3521,6 +3553,23 @@ function useIssueRowActions(onOpenDetail: (number: number) => void) {
     } catch (e) {
       setError(String(e));
     }
+  }
+
+  async function startWork(issue: IssueInfo) {
+    const result = await runGithubStartWork({
+      repoPath,
+      target: {
+        kind: "issue",
+        number: issue.number,
+        title: issue.title,
+      },
+      createSession,
+      consumeError: () => useAppStore.getState().consumeError(),
+    });
+    if (result.ok) return;
+    const message = result.error ?? rt(t, "rightPanel.errors.startWorkFailed");
+    setError(message);
+    showToast(`${t("toasts.session.createFailed")} ${message}`);
   }
 
   function openContextMenu(
@@ -3548,6 +3597,11 @@ function useIssueRowActions(onOpenDetail: (number: number) => void) {
                 label: rt(t, "rightPanel.menu.openInBrowser"),
                 icon: <ExternalLink size={12} />,
                 onClick: () => void openIssueInBrowser(menu.issue),
+              },
+              {
+                label: rt(t, "rightPanel.menu.startWork"),
+                icon: <Play size={12} />,
+                onClick: () => void startWork(menu.issue),
               },
               { type: "separator" },
               {
@@ -3697,7 +3751,7 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
     (number: number) => setIssueDetail({ repoPath, number }),
     [repoPath],
   );
-  const rowActions = useIssueRowActions(openIssueDetail);
+  const rowActions = useIssueRowActions(repoPath, openIssueDetail);
 
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
     if (loading) return;
@@ -5220,7 +5274,7 @@ function IssueSearchModal({
   const [loading, setLoading] = useState(false);
   const [limit, setLimit] = useState(ISSUE_PAGE_SIZE);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const rowActions = useIssueRowActions(onOpenDetail);
+  const rowActions = useIssueRowActions(repoPath ?? "", onOpenDetail);
 
   useDialogShortcuts(open !== null && !detailOpen, { onCancel: onClose });
 

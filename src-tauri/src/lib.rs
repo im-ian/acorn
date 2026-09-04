@@ -868,6 +868,7 @@ pub fn run() {
             commands::prepare_chat_session_worktree,
             commands::git_worktrees,
             commands::list_project_worktrees,
+            commands::ensure_project_worktree_for_branch,
             commands::list_project_branches,
             commands::remove_worktree,
             commands::retry_removal_cleanup,

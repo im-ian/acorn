@@ -571,6 +571,15 @@ export const tauriMockSource = `
     if (cmd === 'pty_in_worktree_all') return Promise.resolve({});
     if (cmd === 'is_path_linked_worktree') return Promise.resolve(false);
     if (cmd === 'list_project_worktrees') return Promise.resolve([]);
+    if (cmd === 'ensure_project_worktree_for_branch') {
+      const repoPath = args?.repoPath || '/tmp/demo';
+      const nameHint = args?.nameHint || 'worktree';
+      return Promise.resolve({
+        path: repoPath + '/.acorn/worktrees/' + nameHint,
+        branch: args?.branch || 'main',
+        created: true,
+      });
+    }
     if (cmd === 'list_project_branches') return Promise.resolve([]);
     if (cmd === 'remove_session' || cmd === 'remove_worktree') {
       return Promise.resolve({

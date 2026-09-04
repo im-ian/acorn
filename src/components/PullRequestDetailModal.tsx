@@ -47,6 +47,7 @@ import type {
 import { useTranslation } from "../lib/useTranslation";
 import { AuthorTag, buildProfileMenuItems } from "./AuthorTag";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
+import { GithubStartWorkButton } from "./GithubStartWorkButton";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DeleteCommentDialog } from "./DeleteCommentDialog";
 import { DiscardCommentDraftDialog } from "./DiscardCommentDraftDialog";
@@ -518,6 +519,10 @@ export function PullRequestDetailModal({
             onSubmitComment={handleSubmitComment}
             onUpdateComment={handleUpdateComment}
             onRequestDeleteComment={setDeleteCommentId}
+            onStartedWork={() => {
+              setCommentDraft("");
+              onClose();
+            }}
           />
         )
       ) : null}
@@ -604,6 +609,7 @@ function DetailBody({
   onSubmitComment,
   onUpdateComment,
   onRequestDeleteComment,
+  onStartedWork,
 }: {
   account: string;
   detail: PullRequestDetail;
@@ -628,6 +634,7 @@ function DetailBody({
   onSubmitComment: (body: string) => Promise<void>;
   onUpdateComment: (commentId: number, body: string) => Promise<void>;
   onRequestDeleteComment: (commentId: number) => void;
+  onStartedWork: () => void;
 }) {
   const t = useTranslation();
   const conversationCount = detail.comments.length + detail.reviews.length;
@@ -826,6 +833,16 @@ function DetailBody({
               <span className="mx-1 h-4 w-px bg-border" aria-hidden />
             </>
           ) : null}
+          <GithubStartWorkButton
+            repoPath={repoPath}
+            target={{
+              kind: "pr",
+              number: detail.number,
+              title: detail.title,
+              headBranch: detail.head_branch,
+            }}
+            onStarted={onStartedWork}
+          />
           <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
           <Tooltip label={dt(t, "dialogs.pullRequestDetail.openOnGithub")} side="bottom">
             <button
