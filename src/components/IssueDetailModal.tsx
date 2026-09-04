@@ -402,6 +402,7 @@ function IssueDetailBody({
               kind: "issue",
               number: detail.number,
               title: detail.title,
+              url: detail.url,
             }}
             onStarted={onStartedWork}
           />

@@ -5,6 +5,7 @@ import {
   AGENT_TOKEN_PROVIDER_ORDER,
   buildAgentForkCommand,
   buildAgentResumeCommand,
+  buildAgentStartCommand,
   collectSessionAgentProviders,
   getAgentProviderDefinition,
   inferAgentProvider,
@@ -126,6 +127,17 @@ describe("agent provider registry", () => {
     );
     expect(buildAgentResumeCommand("grok", "session-7")).toBe(
       "grok --resume session-7",
+    );
+    expect(buildAgentStartCommand("claude")).toBe("claude");
+    expect(buildAgentStartCommand("claude", "  ")).toBe("claude");
+    expect(buildAgentStartCommand("claude", "Fix login")).toBe(
+      "claude 'Fix login'",
+    );
+    expect(buildAgentStartCommand("codex", "it's\nme")).toBe(
+      "codex 'it'\\''s me'",
+    );
+    expect(buildAgentStartCommand("antigravity", "Fix login")).toBe(
+      "agy --prompt-interactive 'Fix login'",
     );
     expect(buildAgentForkCommand("grok", "session-8")).toBe(
       "grok --resume session-8 --fork-session",

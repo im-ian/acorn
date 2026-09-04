@@ -64,7 +64,7 @@ import { openSafeUrl } from "../lib/safeOpenUrl";
 import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import {
   findSessionsForGithubWork,
-  runGithubStartWork,
+  launchGithubStartWork,
 } from "../lib/githubStartWork";
 import {
   onPullRequestMutation,
@@ -2853,7 +2853,6 @@ function usePrRowActions(
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
-  const createSession = useAppStore((s) => s.createSession);
   const openSessionSurface = useAppStore((s) => s.openSessionSurface);
   const [menu, setMenu] = useState<{
     x: number;
@@ -3030,16 +3029,12 @@ function usePrRowActions(
     : [];
 
   async function startWork(pr: PullRequestInfo) {
-    const result = await runGithubStartWork({
-      repoPath,
-      target: {
-        kind: "pr",
-        number: pr.number,
-        title: pr.title,
-        headBranch: pr.head_branch,
-      },
-      createSession,
-      consumeError: () => useAppStore.getState().consumeError(),
+    const result = await launchGithubStartWork(repoPath, {
+      kind: "pr",
+      number: pr.number,
+      title: pr.title,
+      url: pr.url,
+      headBranch: pr.head_branch,
     });
     if (result.ok) return;
     const message = result.error ?? rt(t, "rightPanel.errors.startWorkFailed");
@@ -3532,7 +3527,6 @@ function useIssueRowActions(
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
-  const createSession = useAppStore((s) => s.createSession);
   const openSessionSurface = useAppStore((s) => s.openSessionSurface);
   const [menu, setMenu] = useState<{
     x: number;
@@ -3558,15 +3552,11 @@ function useIssueRowActions(
   }
 
   async function startWork(issue: IssueInfo) {
-    const result = await runGithubStartWork({
-      repoPath,
-      target: {
-        kind: "issue",
-        number: issue.number,
-        title: issue.title,
-      },
-      createSession,
-      consumeError: () => useAppStore.getState().consumeError(),
+    const result = await launchGithubStartWork(repoPath, {
+      kind: "issue",
+      number: issue.number,
+      title: issue.title,
+      url: issue.url,
     });
     if (result.ok) return;
     const message = result.error ?? rt(t, "rightPanel.errors.startWorkFailed");

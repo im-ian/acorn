@@ -839,6 +839,7 @@ function DetailBody({
               kind: "pr",
               number: detail.number,
               title: detail.title,
+              url: detail.url,
               headBranch: detail.head_branch,
             }}
             onStarted={onStartedWork}

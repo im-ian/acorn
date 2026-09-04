@@ -281,6 +281,7 @@ export const tauriMockSource = `
           remember_after_close: true,
           pull_requests: { generation_prompt: standardPrGenerationPrompt },
           worktrees: { base_branch: null },
+          start_work: { agent_prompt: null },
         },
       });
     }
@@ -291,6 +292,7 @@ export const tauriMockSource = `
           remember_after_close: true,
           pull_requests: { generation_prompt: standardPrGenerationPrompt },
           worktrees: { base_branch: null },
+          start_work: { agent_prompt: null },
         },
       });
     }

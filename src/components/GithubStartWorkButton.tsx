@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Loader2, Play, SquareTerminal } from "lucide-react";
 import {
   findSessionsForGithubWork,
-  runGithubStartWork,
+  launchGithubStartWork,
   type GithubStartWorkTarget,
 } from "../lib/githubStartWork";
 import { useToasts } from "../lib/toasts";
@@ -21,7 +21,6 @@ export function GithubStartWorkButton({
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
-  const createSession = useAppStore((s) => s.createSession);
   const openSessionSurface = useAppStore((s) => s.openSessionSurface);
   const [busy, setBusy] = useState(false);
 
@@ -42,12 +41,7 @@ export function GithubStartWorkButton({
     if (!canStart || busy) return;
     setBusy(true);
     try {
-      const result = await runGithubStartWork({
-        repoPath,
-        target,
-        createSession,
-        consumeError: () => useAppStore.getState().consumeError(),
-      });
+      const result = await launchGithubStartWork(repoPath, target);
       if (!result.ok) {
         const message =
           result.error ?? t("rightPanel.errors.startWorkFailed");

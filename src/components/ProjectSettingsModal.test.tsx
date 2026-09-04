@@ -142,6 +142,7 @@ describe("ProjectSettingsModal", () => {
           generation_prompt: "Use concise release-note style.",
         },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
     mockApi.updateProjectSettings.mockImplementation(
@@ -209,8 +210,62 @@ describe("ProjectSettingsModal", () => {
         generation_prompt: "Write Korean release notes.",
       },
       worktrees: { base_branch: null },
+      start_work: { agent_prompt: null },
     });
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("loads and saves the start work agent prompt", async () => {
+    mockApi.getProjectSettings.mockResolvedValueOnce({
+      key: "github:im-ian/acorn",
+      settings: {
+        remember_after_close: true,
+        pull_requests: { generation_prompt: null },
+        worktrees: { base_branch: null },
+        start_work: { agent_prompt: "Fix {kind} #{number}." },
+      },
+    });
+    mockApi.updateProjectSettings.mockImplementation(
+      async (_repoPath, settings) => ({
+        key: "github:im-ian/acorn",
+        settings,
+      }),
+    );
+
+    await act(async () => {
+      root.render(
+        <ProjectSettingsModal
+          project={{ name: "acorn", repoPath: "/repo/acorn" }}
+          initialTab="startWork"
+          onClose={vi.fn()}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const prompt = document.body.querySelector<HTMLTextAreaElement>("textarea");
+    expect(prompt?.value).toBe("Fix {kind} #{number}.");
+
+    await act(async () => {
+      changeTextareaValue(prompt!, "Implement {title} from {url}.");
+    });
+
+    const save = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Save");
+    expect(save).toBeDefined();
+
+    await act(async () => {
+      save!.click();
+    });
+    await flushPromises();
+
+    expect(mockApi.updateProjectSettings).toHaveBeenCalledWith("/repo/acorn", {
+      remember_after_close: true,
+      pull_requests: { generation_prompt: null },
+      worktrees: { base_branch: null },
+      start_work: { agent_prompt: "Implement {title} from {url}." },
+    });
   });
 
   it("shows the standard PR prompt while project settings are loading", async () => {
@@ -247,6 +302,7 @@ describe("ProjectSettingsModal", () => {
           generation_prompt: "Use concise release-note style.",
         },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
     mockApi.listProjectWorktrees.mockResolvedValueOnce([
@@ -344,6 +400,7 @@ describe("ProjectSettingsModal", () => {
         remember_after_close: true,
         pull_requests: { generation_prompt: null },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
     mockApi.listProjectWorktrees.mockImplementation(async (repoPath) =>
@@ -446,6 +503,7 @@ describe("ProjectSettingsModal", () => {
         remember_after_close: true,
         pull_requests: { generation_prompt: null },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
     mockApi.listProjectWorktrees.mockResolvedValue([
@@ -512,6 +570,7 @@ describe("ProjectSettingsModal", () => {
         remember_after_close: true,
         pull_requests: { generation_prompt: null },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
 
@@ -549,6 +608,7 @@ describe("ProjectSettingsModal", () => {
           generation_prompt: "Use concise release-note style.",
         },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
     mockApi.listProjectWorktrees
@@ -647,6 +707,7 @@ describe("ProjectSettingsModal", () => {
           generation_prompt: "Use concise release-note style.",
         },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
     mockApi.listProjectWorktrees.mockResolvedValue([
@@ -734,6 +795,7 @@ describe("ProjectSettingsModal", () => {
           generation_prompt: "Use concise release-note style.",
         },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
     mockApi.listProjectWorktrees.mockResolvedValue([
@@ -820,6 +882,7 @@ describe("ProjectSettingsModal", () => {
         remember_after_close: false,
         pull_requests: { generation_prompt: null },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
     useAppStore.setState({
