@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readSessionPullRequestBranchLinks } from "./sessionPullRequestLinks";
+import type { Session } from "./types";
 import {
   createGithubWorkSession,
+  findSessionsForGithubWork,
   githubWorkSessionName,
   githubWorkSlug,
   planGithubStartWork,
@@ -50,6 +52,43 @@ describe("githubWorkSessionName", () => {
 
   it("falls back to the number when the title is empty", () => {
     expect(githubWorkSessionName(12, "   ")).toBe("#12");
+  });
+});
+
+function session(id: string, overrides: Partial<Session> = {}): Session {
+  return {
+    id,
+    name: id,
+    repo_path: "/repo",
+    worktree_path: `/repo/.acorn/worktrees/${id}`,
+    branch: "main",
+    isolated: true,
+    status: "ready",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    last_message: null,
+    title_source: "default",
+    kind: "regular",
+    owner: { kind: "user" },
+    position: null,
+    in_worktree: true,
+    ...overrides,
+  };
+}
+
+describe("findSessionsForGithubWork", () => {
+  it("matches issue sessions on the planned branch name", () => {
+    const sessions = [
+      session("other", { branch: "issue-12-other" }),
+      session("hit", { branch: "issue-12-login-form" }),
+    ];
+    expect(
+      findSessionsForGithubWork(sessions, "/repo", {
+        kind: "issue",
+        number: 12,
+        title: "Login form",
+      }).map((item) => item.id),
+    ).toEqual(["hit"]);
   });
 });
 

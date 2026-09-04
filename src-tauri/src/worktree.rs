@@ -459,17 +459,18 @@ fn materialize_local_branch(
         return Ok(());
     }
 
+    if let Some(fetch_ref) = options.fetch_ref {
+        drop(repo);
+        fetch_ref_into_branch(repo_path, fetch_ref, branch)?;
+        return Ok(());
+    }
+
     let remote_ref = format!("refs/remotes/origin/{branch}");
     if repo.find_reference(&remote_ref).is_ok() {
         create_local_branch_from_ref(&repo, branch, &remote_ref)?;
         return Ok(());
     }
     drop(repo);
-
-    if let Some(fetch_ref) = options.fetch_ref {
-        fetch_ref_into_branch(repo_path, fetch_ref, branch)?;
-        return Ok(());
-    }
 
     if options.create_if_missing {
         let repo = ensure_repo(repo_path)?;
@@ -495,6 +496,8 @@ fn fetch_ref_into_branch(repo_path: &Path, fetch_ref: &str, branch: &str) -> App
     let spec = format!("{fetch_ref}:refs/heads/{branch}");
     let output = crate::cli_resolver::run("git", |cmd| {
         cmd.current_dir(repo_path);
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        cmd.env("GCM_INTERACTIVE", "never");
         cmd.args(["fetch", "origin", &spec]);
     })?;
     if output.status.success() {
@@ -2489,6 +2492,79 @@ mod tests {
                 .shorthand()
                 .expect("shorthand"),
             "feature/from-pr"
+        );
+
+        std::fs::remove_dir_all(&work_root).ok();
+        std::fs::remove_dir_all(&origin_root).ok();
+    }
+
+    #[test]
+    fn ensure_worktree_prefers_pull_head_over_origin_branch() {
+        let origin_root = unique_temp_dir("ensure-fetch-fork-origin");
+        let origin = init_repo_with_tracked_file(&origin_root);
+        let sig = git2::Signature::now("acorn-test", "test@acorn").expect("sig");
+        let first = origin
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        let first_oid = first.id();
+        origin
+            .branch("patch-1", &first, false)
+            .expect("create colliding origin branch");
+        drop(first);
+
+        std::fs::write(origin_root.join("tracked.txt"), "pr-head").expect("write pr head");
+        let tree_id = {
+            let mut idx = origin.index().expect("index");
+            idx.add_path(Path::new("tracked.txt"))
+                .expect("add pr-head file");
+            idx.write_tree().expect("write pr-head tree")
+        };
+        let tree = origin.find_tree(tree_id).expect("pr-head tree");
+        let parent = origin
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("parent");
+        let pr_oid = origin
+            .commit(Some("HEAD"), &sig, &sig, "pr head", &tree, &[&parent])
+            .expect("commit pr head");
+        drop(tree);
+        drop(parent);
+        origin
+            .reference("refs/pull/91/head", pr_oid, true, "pr head")
+            .expect("create pull head ref");
+        drop(origin);
+
+        let work_root = unique_temp_dir("ensure-fetch-fork-work");
+        let work = git2::build::RepoBuilder::new()
+            .clone(origin_root.to_str().expect("origin path utf8"), &work_root)
+            .expect("clone origin");
+        work.reference(
+            "refs/remotes/origin/patch-1",
+            first_oid,
+            true,
+            "stale origin branch",
+        )
+        .expect("pin origin/patch-1 at the first commit");
+        drop(work);
+
+        let ensured = ensure_worktree_for_branch(
+            &work_root,
+            "patch-1",
+            "pr-91-patch-1",
+            ensure_options(false, Some("refs/pull/91/head"), None),
+        )
+        .expect("fetch pull head instead of origin/patch-1");
+
+        let worktree_repo = Repository::open(&ensured.path).expect("open worktree");
+        assert_eq!(
+            worktree_repo.head().expect("head").target(),
+            Some(pr_oid),
+            "worktree must check out the pull head, not origin/patch-1",
+        );
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&ensured.path).join("tracked.txt")).unwrap(),
+            "pr-head",
         );
 
         std::fs::remove_dir_all(&work_root).ok();

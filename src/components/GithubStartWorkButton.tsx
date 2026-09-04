@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { Loader2, Play, SquareTerminal } from "lucide-react";
 import {
+  findSessionsForGithubWork,
   runGithubStartWork,
   type GithubStartWorkTarget,
 } from "../lib/githubStartWork";
-import { findSessionsForPullRequest } from "../lib/sessionContext";
-import { readSessionPullRequestBranchLinks } from "../lib/sessionPullRequestLinks";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
@@ -27,14 +26,7 @@ export function GithubStartWorkButton({
   const [busy, setBusy] = useState(false);
 
   const existing =
-    target.kind === "pr" && target.headBranch?.trim()
-      ? (findSessionsForPullRequest(
-          sessions,
-          repoPath,
-          target.headBranch,
-          readSessionPullRequestBranchLinks(),
-        )[0] ?? null)
-      : null;
+    findSessionsForGithubWork(sessions, repoPath, target)[0] ?? null;
   const canStart =
     target.kind === "issue" || Boolean(target.headBranch?.trim());
   const label = existing

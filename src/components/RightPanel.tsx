@@ -62,9 +62,10 @@ import { trimTrailingPathSeparators } from "../lib/pathUtils";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import { openSafeUrl } from "../lib/safeOpenUrl";
 import { openExternalUrlWithFeedback } from "../lib/externalOpener";
-import { findSessionsForPullRequest } from "../lib/sessionContext";
-import { readSessionPullRequestBranchLinks } from "../lib/sessionPullRequestLinks";
-import { runGithubStartWork } from "../lib/githubStartWork";
+import {
+  findSessionsForGithubWork,
+  runGithubStartWork,
+} from "../lib/githubStartWork";
 import {
   onPullRequestMutation,
   pullRequestMutationAffectsOpenContext,
@@ -3020,12 +3021,12 @@ function usePrRowActions(
   }
 
   const matchingSessions = menu
-    ? findSessionsForPullRequest(
-        sessions,
-        repoPath,
-        menu.pr.head_branch,
-        readSessionPullRequestBranchLinks(),
-      )
+    ? findSessionsForGithubWork(sessions, repoPath, {
+        kind: "pr",
+        number: menu.pr.number,
+        title: menu.pr.title,
+        headBranch: menu.pr.head_branch,
+      })
     : [];
 
   async function startWork(pr: PullRequestInfo) {
@@ -3042,7 +3043,6 @@ function usePrRowActions(
     });
     if (result.ok) return;
     const message = result.error ?? rt(t, "rightPanel.errors.startWorkFailed");
-    setError(message);
     showToast(`${t("toasts.session.createFailed")} ${message}`);
   }
 
@@ -3531,7 +3531,9 @@ function useIssueRowActions(
 ) {
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
+  const sessions = useAppStore((s) => s.sessions);
   const createSession = useAppStore((s) => s.createSession);
+  const openSessionSurface = useAppStore((s) => s.openSessionSurface);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -3568,7 +3570,6 @@ function useIssueRowActions(
     });
     if (result.ok) return;
     const message = result.error ?? rt(t, "rightPanel.errors.startWorkFailed");
-    setError(message);
     showToast(`${t("toasts.session.createFailed")} ${message}`);
   }
 
@@ -3579,6 +3580,46 @@ function useIssueRowActions(
     e.preventDefault();
     setMenu({ x: e.clientX, y: e.clientY, issue });
   }
+
+  const matchingSessions = menu
+    ? findSessionsForGithubWork(sessions, repoPath, {
+        kind: "issue",
+        number: menu.issue.number,
+        title: menu.issue.title,
+      })
+    : [];
+
+  const openSessionMenuItem: ContextMenuItem | null =
+    matchingSessions.length === 1
+      ? {
+          label: rtf(t, "rightPanel.menu.openSessionWithName", {
+            name: matchingSessions[0].name,
+          }),
+          icon: <SquareTerminal size={12} />,
+          onClick: () => openSessionSurface(matchingSessions[0].id),
+        }
+      : matchingSessions.length > 1
+        ? {
+            type: "submenu",
+            label: rt(t, "rightPanel.menu.openSession"),
+            icon: <SquareTerminal size={12} />,
+            children: matchingSessions.map((session) => ({
+              label: session.name,
+              icon: <SquareTerminal size={12} />,
+              onClick: () => openSessionSurface(session.id),
+            })),
+          }
+        : null;
+
+  const startWorkMenuItem: ContextMenuItem = {
+    label: rt(t, "rightPanel.menu.startWork"),
+    icon: <Play size={12} />,
+    onClick: () => {
+      if (menu) void startWork(menu.issue);
+    },
+  };
+
+  const sessionOrStartWorkItem = openSessionMenuItem ?? startWorkMenuItem;
 
   const overlays = (
     <ContextMenu
@@ -3598,11 +3639,7 @@ function useIssueRowActions(
                 icon: <ExternalLink size={12} />,
                 onClick: () => void openIssueInBrowser(menu.issue),
               },
-              {
-                label: rt(t, "rightPanel.menu.startWork"),
-                icon: <Play size={12} />,
-                onClick: () => void startWork(menu.issue),
-              },
+              sessionOrStartWorkItem,
               { type: "separator" },
               {
                 label: rt(t, "rightPanel.menu.copyIssueNumber"),

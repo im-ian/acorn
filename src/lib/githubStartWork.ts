@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { findSessionsForPullRequest } from "./sessionContext";
 import {
   readSessionPullRequestBranchLinks,
   writeSessionPullRequestBranchLinks,
@@ -56,6 +57,24 @@ export function githubWorkSlug(title: string): string {
 export function githubWorkSessionName(number: number, title: string): string {
   const trimmed = title.trim().replace(/\s+/g, " ");
   return trimmed ? `#${number} ${trimmed}` : `#${number}`;
+}
+
+export function findSessionsForGithubWork(
+  sessions: readonly Session[],
+  repoPath: string,
+  target: GithubStartWorkTarget,
+): Session[] {
+  if (target.kind === "pr") {
+    return findSessionsForPullRequest(
+      sessions,
+      repoPath,
+      target.headBranch ?? "",
+      readSessionPullRequestBranchLinks(),
+    );
+  }
+  const plan = planGithubStartWork(target);
+  if (!plan) return [];
+  return findSessionsForPullRequest(sessions, repoPath, plan.branch);
 }
 
 export function planGithubStartWork(
