@@ -332,6 +332,9 @@ export interface AgentProviderDefinition<
   label: string;
   agentOptionLabel: string;
   oneshotHint: string;
+  cliCommand: string;
+  /** Flag that precedes an initial interactive prompt. Omit for a positional query. */
+  startPromptFlag?: string;
   icon: AgentProviderIconMetadata;
   capabilities: readonly AgentProviderCapability[];
   hooks: AgentProviderHookMetadata;
@@ -590,10 +593,15 @@ export interface ProjectWorktreeSettings {
   base_branch: string | null;
 }
 
+export interface ProjectStartWorkSettings {
+  agent_prompt: string | null;
+}
+
 export interface ProjectSettings {
   remember_after_close: boolean;
   pull_requests: ProjectPullRequestSettings;
   worktrees: ProjectWorktreeSettings;
+  start_work: ProjectStartWorkSettings;
 }
 
 export interface ProjectSettingsRecord {

@@ -122,6 +122,7 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
         remember_after_close: true,
         pull_requests: { generation_prompt: null },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
     mockApi.listProjectWorktrees.mockResolvedValue([]);
@@ -563,6 +564,7 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
             "프로젝트 규칙대로 PR title과 comment를 한국어 릴리즈 노트 스타일로 작성해.",
         },
         worktrees: { base_branch: null },
+        start_work: { agent_prompt: null },
       },
     });
     mockApi.getPullRequestDetail.mockResolvedValueOnce({

@@ -9,11 +9,26 @@ use crate::{git_ops, persistence};
 const PROJECT_SETTINGS_FILE: &str = "project_settings.json";
 const MAX_PROJECT_SETTINGS_FILE_BYTES: u64 = 4 * 1024 * 1024;
 pub const PR_GENERATION_PROMPT_MAX_CHARS: usize = 2_000;
+pub const START_WORK_AGENT_PROMPT_MAX_CHARS: usize = 2_000;
 pub const WORKTREE_BASE_BRANCH_MAX_CHARS: usize = 255;
 pub const STANDARD_PR_GENERATION_PROMPT: &str = "Use a standard GitHub-style pull request merge message.
 - First line: Conventional Commit subject when the type is clear, e.g. feat(scope): concise summary. Keep it imperative/present tense and <=72 chars.
 - Body: 1-2 concise paragraphs explaining why the change matters, user-visible impact, and key implementation notes when useful.
 - Keep the wording specific to the PR. Avoid boilerplate, markdown headings, labels, and prompt explanations.";
+const PREVIOUS_STANDARD_START_WORK_PROMPT: &str = "Work on GitHub {kind} #{number}: {title}
+
+URL: {url}
+Branch: {branch}
+
+{body}
+
+Implement the requested change in this checkout. Follow existing project conventions. If the request is ambiguous, ask a brief clarifying question before making large changes.";
+pub const STANDARD_START_WORK_PROMPT: &str = "Work on GitHub {kind} #{number}: {title}
+
+URL: {url}
+Branch: {branch}
+
+Open that GitHub URL, read the issue or pull request, and implement the work in this checkout. Follow existing project conventions. If the request is ambiguous, ask a brief clarifying question before making large changes.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectSettings {
@@ -23,6 +38,8 @@ pub struct ProjectSettings {
     pub pull_requests: ProjectPullRequestSettings,
     #[serde(default)]
     pub worktrees: ProjectWorktreeSettings,
+    #[serde(default)]
+    pub start_work: ProjectStartWorkSettings,
 }
 
 impl Default for ProjectSettings {
@@ -31,6 +48,7 @@ impl Default for ProjectSettings {
             remember_after_close: true,
             pull_requests: ProjectPullRequestSettings::default(),
             worktrees: ProjectWorktreeSettings::default(),
+            start_work: ProjectStartWorkSettings::default(),
         }
     }
 }
@@ -53,6 +71,24 @@ impl Default for ProjectPullRequestSettings {
 pub struct ProjectWorktreeSettings {
     #[serde(default)]
     pub base_branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectStartWorkSettings {
+    #[serde(default = "default_start_work_prompt")]
+    pub agent_prompt: Option<String>,
+}
+
+impl Default for ProjectStartWorkSettings {
+    fn default() -> Self {
+        Self {
+            agent_prompt: default_start_work_prompt(),
+        }
+    }
+}
+
+fn default_start_work_prompt() -> Option<String> {
+    Some(STANDARD_START_WORK_PROMPT.to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -164,6 +200,21 @@ fn normalize_settings(mut settings: ProjectSettings) -> ProjectSettings {
                 )
             }
         });
+    settings.start_work.agent_prompt = settings.start_work.agent_prompt.and_then(|prompt| {
+        let trimmed = prompt.trim();
+        if trimmed.is_empty() {
+            None
+        } else if trimmed == PREVIOUS_STANDARD_START_WORK_PROMPT {
+            Some(STANDARD_START_WORK_PROMPT.to_string())
+        } else {
+            Some(
+                prompt
+                    .chars()
+                    .take(START_WORK_AGENT_PROMPT_MAX_CHARS)
+                    .collect(),
+            )
+        }
+    });
     settings.worktrees.base_branch = settings.worktrees.base_branch.and_then(|branch| {
         let trimmed = branch.trim();
         if trimmed.is_empty() {
@@ -202,6 +253,9 @@ mod tests {
                 worktrees: ProjectWorktreeSettings {
                     base_branch: Some("develop".to_string()),
                 },
+                start_work: ProjectStartWorkSettings {
+                    agent_prompt: Some("Fix GitHub {kind} #{number}.".to_string()),
+                },
             };
 
             let saved = update(&repo, settings).unwrap();
@@ -216,6 +270,10 @@ mod tests {
             assert_eq!(
                 loaded.settings.worktrees.base_branch.as_deref(),
                 Some("develop")
+            );
+            assert_eq!(
+                loaded.settings.start_work.agent_prompt.as_deref(),
+                Some("Fix GitHub {kind} #{number}.")
             );
         });
     }
@@ -233,6 +291,15 @@ mod tests {
                 .as_deref()
                 .unwrap_or("")
                 .contains("GitHub-style pull request"));
+            let start_work_prompt = loaded
+                .settings
+                .start_work
+                .agent_prompt
+                .as_deref()
+                .unwrap_or("");
+            assert!(start_work_prompt.contains("Work on GitHub {kind}"));
+            assert!(start_work_prompt.contains("Open that GitHub URL"));
+            assert!(!start_work_prompt.contains("{body}"));
         });
     }
 
@@ -270,6 +337,37 @@ mod tests {
         .unwrap();
 
         assert_eq!(settings.worktrees, ProjectWorktreeSettings::default());
+        assert_eq!(settings.start_work, ProjectStartWorkSettings::default());
+    }
+
+    #[test]
+    fn previous_start_work_prompt_rewrites_to_current_default() {
+        with_data_dir(|_| {
+            let repo = PathBuf::from("/tmp/acorn-settings-repo");
+
+            update(
+                &repo,
+                ProjectSettings {
+                    remember_after_close: true,
+                    pull_requests: ProjectPullRequestSettings::default(),
+                    worktrees: ProjectWorktreeSettings::default(),
+                    start_work: ProjectStartWorkSettings {
+                        agent_prompt: Some(PREVIOUS_STANDARD_START_WORK_PROMPT.to_string()),
+                    },
+                },
+            )
+            .unwrap();
+
+            assert_eq!(
+                get(&repo)
+                    .unwrap()
+                    .settings
+                    .start_work
+                    .agent_prompt
+                    .as_deref(),
+                Some(STANDARD_START_WORK_PROMPT)
+            );
+        });
     }
 
     #[test]
@@ -287,6 +385,9 @@ mod tests {
                     worktrees: ProjectWorktreeSettings {
                         base_branch: Some("   ".to_string()),
                     },
+                    start_work: ProjectStartWorkSettings {
+                        agent_prompt: Some("   ".to_string()),
+                    },
                 },
             )
             .unwrap();
@@ -296,6 +397,7 @@ mod tests {
                 None
             );
             assert_eq!(get(&repo).unwrap().settings.worktrees.base_branch, None);
+            assert_eq!(get(&repo).unwrap().settings.start_work.agent_prompt, None);
         });
     }
 
@@ -312,6 +414,7 @@ mod tests {
                     remember_after_close: false,
                     pull_requests: ProjectPullRequestSettings::default(),
                     worktrees: ProjectWorktreeSettings::default(),
+                    start_work: ProjectStartWorkSettings::default(),
                 },
             )
             .unwrap();

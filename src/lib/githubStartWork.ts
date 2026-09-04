@@ -1,17 +1,25 @@
+import {
+  buildAgentStartCommand,
+  isSessionAgentProvider,
+} from "./agentProviderRegistry";
 import { api } from "./api";
+import { resolveStartWorkAgentPrompt } from "./project-settings";
 import { findSessionsForPullRequest } from "./sessionContext";
 import {
   readSessionPullRequestBranchLinks,
   writeSessionPullRequestBranchLinks,
 } from "./sessionPullRequestLinks";
+import { useSettings } from "./settings";
 import type {
   Session,
   SessionAgentProvider,
   SessionKind,
   SessionMode,
 } from "./types";
+import { useAppStore } from "../store";
 
 const SLUG_MAX = 40;
+const START_WORK_PLACEHOLDER_RE = /\{(kind|number|title|url|branch|body)\}/g;
 
 export type GithubStartWorkKind = "pr" | "issue";
 
@@ -19,6 +27,7 @@ export interface GithubStartWorkTarget {
   kind: GithubStartWorkKind;
   number: number;
   title: string;
+  url?: string;
   headBranch?: string;
 }
 
@@ -28,6 +37,15 @@ export interface GithubStartWorkPlan {
   sessionName: string;
   createIfMissing: boolean;
   fetchRef: string | null;
+}
+
+export interface GithubStartWorkPromptVars {
+  kind: string;
+  number: string;
+  title: string;
+  url: string;
+  branch: string;
+  body: string;
 }
 
 export type GithubWorkSessionFactory = (
@@ -41,6 +59,15 @@ export type GithubWorkSessionFactory = (
   projectFolderId?: string,
   cwdPath?: string,
 ) => Promise<Session | null>;
+
+export type GithubStartWorkCommandQueue = (
+  sessionId: string,
+  command: string,
+  options?: {
+    agentProvider?: SessionAgentProvider;
+    adoptWorktreeOnExit?: boolean;
+  },
+) => void;
 
 export function githubWorkSlug(title: string): string {
   const slug = title
@@ -105,10 +132,27 @@ export function planGithubStartWork(
   };
 }
 
+function githubStartWorkKindLabel(kind: GithubStartWorkKind): string {
+  return kind === "pr" ? "pull request" : "issue";
+}
+
+export function renderGithubStartWorkPrompt(
+  template: string,
+  vars: GithubStartWorkPromptVars,
+): string {
+  const rendered = template.replace(
+    START_WORK_PLACEHOLDER_RE,
+    (match, name: keyof GithubStartWorkPromptVars) =>
+      Object.prototype.hasOwnProperty.call(vars, name) ? vars[name] : match,
+  );
+  return rendered.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export async function createGithubWorkSession(
   createSession: GithubWorkSessionFactory,
   repoPath: string,
   plan: GithubStartWorkPlan,
+  agentProvider: SessionAgentProvider | null = null,
 ): Promise<Session | null> {
   const ensured = await api.ensureProjectWorktreeForBranch(
     repoPath,
@@ -122,7 +166,7 @@ export async function createGithubWorkSession(
     repoPath,
     ensured.created,
     "regular",
-    null,
+    agentProvider,
     true,
     "terminal",
     undefined,
@@ -139,14 +183,18 @@ export async function runGithubStartWork(options: {
   target: GithubStartWorkTarget;
   createSession: GithubWorkSessionFactory;
   consumeError: () => string | null;
+  agentProvider?: SessionAgentProvider | null;
+  queueTerminalCommand?: GithubStartWorkCommandQueue;
 }): Promise<GithubStartWorkOutcome> {
   const plan = planGithubStartWork(options.target);
   if (!plan) return { ok: false, error: null };
+  const agentProvider = options.agentProvider ?? null;
   try {
     const created = await createGithubWorkSession(
       options.createSession,
       options.repoPath,
       plan,
+      agentProvider,
     );
     const storeError = options.consumeError();
     if (!created || storeError) {
@@ -164,8 +212,90 @@ export async function runGithubStartWork(options: {
         });
       }
     }
+    if (agentProvider && options.queueTerminalCommand) {
+      const command = await buildGithubStartWorkCommand(
+        options.repoPath,
+        options.target,
+        plan,
+        agentProvider,
+      );
+      options.queueTerminalCommand(created.id, command, {
+        agentProvider,
+        adoptWorktreeOnExit: false,
+      });
+    }
     return { ok: true, session: created };
   } catch (error) {
     return { ok: false, error: String(error) };
+  }
+}
+
+export async function launchGithubStartWork(
+  repoPath: string,
+  target: GithubStartWorkTarget,
+): Promise<GithubStartWorkOutcome> {
+  const selected = useSettings.getState().settings.agents.selected;
+  const agentProvider = isSessionAgentProvider(selected) ? selected : null;
+  return runGithubStartWork({
+    repoPath,
+    target,
+    createSession: (...args) =>
+      useAppStore.getState().createSession(...args),
+    consumeError: () => useAppStore.getState().consumeError(),
+    agentProvider,
+    queueTerminalCommand: (sessionId, command, queueOptions) => {
+      useAppStore
+        .getState()
+        .setPendingTerminalInput(sessionId, command, queueOptions);
+    },
+  });
+}
+
+async function buildGithubStartWorkCommand(
+  repoPath: string,
+  target: GithubStartWorkTarget,
+  plan: GithubStartWorkPlan,
+  agentProvider: SessionAgentProvider,
+): Promise<string> {
+  const template = await loadStartWorkPromptTemplate(repoPath);
+  if (!template) return buildAgentStartCommand(agentProvider);
+  const body = template.includes("{body}")
+    ? await fetchGithubStartWorkBody(repoPath, target)
+    : "";
+  const prompt = renderGithubStartWorkPrompt(template, {
+    kind: githubStartWorkKindLabel(target.kind),
+    number: String(target.number),
+    title: target.title.trim(),
+    url: target.url?.trim() ?? "",
+    branch: plan.branch,
+    body,
+  });
+  return buildAgentStartCommand(agentProvider, prompt);
+}
+
+async function loadStartWorkPromptTemplate(
+  repoPath: string,
+): Promise<string | null> {
+  try {
+    const record = await api.getProjectSettings(repoPath);
+    return resolveStartWorkAgentPrompt(record.settings.start_work?.agent_prompt);
+  } catch {
+    return resolveStartWorkAgentPrompt(undefined);
+  }
+}
+
+async function fetchGithubStartWorkBody(
+  repoPath: string,
+  target: GithubStartWorkTarget,
+): Promise<string> {
+  try {
+    if (target.kind === "issue") {
+      const listing = await api.getIssueDetail(repoPath, target.number);
+      return listing.kind === "ok" ? listing.detail.body.trim() : "";
+    }
+    const listing = await api.getPullRequestDetail(repoPath, target.number);
+    return listing.kind === "ok" ? listing.detail.body.trim() : "";
+  } catch {
+    return "";
   }
 }

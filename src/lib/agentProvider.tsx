@@ -12,6 +12,7 @@ export {
   AGENT_TOKEN_PROVIDER_ORDER,
   buildAgentForkCommand,
   buildAgentResumeCommand,
+  buildAgentStartCommand,
   getAgentMentionPrefix,
   getAgentHookProviderEnvValue,
   getAgentProviderDefinition,

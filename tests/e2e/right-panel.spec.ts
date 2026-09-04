@@ -2363,6 +2363,7 @@ test.describe("right panel: tab switching", () => {
             remember_after_close: true,
             pull_requests: { generation_prompt: null },
             worktrees: { base_branch: null },
+            start_work: { agent_prompt: null },
           },
         };
       }
