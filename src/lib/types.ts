@@ -571,6 +571,12 @@ export interface ProjectWorktree {
   modified_ms: number | null;
 }
 
+export interface EnsuredProjectWorktree {
+  path: string;
+  branch: string;
+  created: boolean;
+}
+
 export interface ProjectBranch {
   name: string;
   is_remote: boolean;

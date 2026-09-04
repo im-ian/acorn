@@ -33,6 +33,7 @@ import type {
   ProjectSettings,
   ProjectSettingsRecord,
   ProjectWorktree,
+  EnsuredProjectWorktree,
   PrStateFilter,
   PullRequestDetailListing,
   PullRequestDiffListing,
@@ -498,6 +499,31 @@ export const api = {
   },
   listProjectWorktrees(repoPath: string): Promise<ProjectWorktree[]> {
     return invoke<ProjectWorktree[]>("list_project_worktrees", { repoPath });
+  },
+  ensureProjectWorktreeForBranch(
+    repoPath: string,
+    branch: string,
+    nameHint: string,
+    createIfMissing = false,
+    fetchRef?: string | null,
+  ): Promise<EnsuredProjectWorktree> {
+    const args: {
+      repoPath: string;
+      branch: string;
+      nameHint: string;
+      createIfMissing: boolean;
+      fetchRef?: string;
+    } = {
+      repoPath,
+      branch,
+      nameHint,
+      createIfMissing,
+    };
+    if (fetchRef) args.fetchRef = fetchRef;
+    return invoke<EnsuredProjectWorktree>(
+      "ensure_project_worktree_for_branch",
+      args,
+    );
   },
   listProjectBranches(repoPath: string): Promise<ProjectBranch[]> {
     return invoke<ProjectBranch[]>("list_project_branches", { repoPath });

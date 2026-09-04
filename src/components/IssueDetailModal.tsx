@@ -22,6 +22,7 @@ import type {
 import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import { useTranslation } from "../lib/useTranslation";
 import { AuthorTag } from "./AuthorTag";
+import { GithubStartWorkButton } from "./GithubStartWorkButton";
 import { DeleteCommentDialog } from "./DeleteCommentDialog";
 import { DiscardCommentDraftDialog } from "./DiscardCommentDraftDialog";
 import { GitHubCommentEditForm } from "./GitHubCommentEditForm";
@@ -232,12 +233,17 @@ export function IssueDetailModal({
               detail={listing.detail}
               commentDraft={commentDraft}
               onCommentDraftChange={setCommentDraft}
+              repoPath={open.repoPath}
               onClose={requestClose}
               onRefresh={handleRefresh}
               refreshing={refreshing}
               onSubmitComment={handleSubmitComment}
               onUpdateComment={handleUpdateComment}
               onRequestDeleteComment={setDeleteCommentId}
+              onStartedWork={() => {
+                setCommentDraft("");
+                onClose();
+              }}
             />
           )
         ) : null}
@@ -290,23 +296,27 @@ function IssueDetailBody({
   detail,
   commentDraft,
   onCommentDraftChange,
+  repoPath,
   onClose,
   onRefresh,
   refreshing,
   onSubmitComment,
   onUpdateComment,
   onRequestDeleteComment,
+  onStartedWork,
 }: {
   account: string;
   detail: IssueDetail;
   commentDraft: string;
   onCommentDraftChange: (body: string) => void;
+  repoPath: string;
   onClose: () => void;
   onRefresh: () => void;
   refreshing: boolean;
   onSubmitComment: (body: string) => Promise<void>;
   onUpdateComment: (commentId: number, body: string) => Promise<void>;
   onRequestDeleteComment: (commentId: number) => void;
+  onStartedWork: () => void;
 }) {
   const t = useTranslation();
   const created = toUnixSeconds(detail.created_at);
@@ -386,6 +396,15 @@ function IssueDetailBody({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <GithubStartWorkButton
+            repoPath={repoPath}
+            target={{
+              kind: "issue",
+              number: detail.number,
+              title: detail.title,
+            }}
+            onStarted={onStartedWork}
+          />
           <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
           <Tooltip
             label={dt(t, "dialogs.issueDetail.openOnGithub")}

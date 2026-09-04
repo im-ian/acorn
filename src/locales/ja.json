@@ -1860,7 +1860,8 @@
       "deletedFile": "ファイルが削除されました。何も開けない。",
       "notGitHubRemote": "このリポジトリのオリジンは GitHub リモートではありません。",
       "originNotGitHub": "オリジンリモートは GitHub リポジトリではありません。",
-      "noAccessToSlug": "{slug} にアクセスできません。"
+      "noAccessToSlug": "{slug} にアクセスできません。",
+      "startWorkFailed": "この項目の作業を開始できませんでした。"
     },
     "menu": {
       "expandDiff": "差分を展開する",
@@ -1873,6 +1874,7 @@
       "openInBrowser": "ブラウザで開く",
       "openSession": "オープンセッション",
       "openSessionWithName": "セッションを開く ({name})",
+      "startWork": "作業を開始",
       "copyPrNumber": "PR番号をコピーする",
       "copyIssueNumber": "発行番号をコピーする",
       "copyUrl": "URLをコピー",
