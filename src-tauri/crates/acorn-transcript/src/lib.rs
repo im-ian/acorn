@@ -646,7 +646,14 @@ fn scan_live_mappings(
                         AgentKind::Claude => claude_resume_id_from_process(proc),
                         AgentKind::Codex => codex_resume_id_from_process(proc),
                         AgentKind::Antigravity => None,
-                        AgentKind::Grok => grok_transcript_id_from_process(proc),
+                        AgentKind::Grok => grok_transcript_id_from_process(proc).or_else(|| {
+                            grok_manifest_transcript_id(
+                                grok_root.as_deref(),
+                                process_match.pid.as_u32(),
+                                &cwd,
+                                start_time,
+                            )
+                        }),
                     };
                     let codex_resume_requested = process_match.kind == AgentKind::Codex
                         && codex_resume_requested_from_process(proc);
@@ -1370,6 +1377,70 @@ fn grok_transcript_id_from_args(args: &[String]) -> Option<String> {
             .filter(|id| is_uuid_v4_shape(id))
             .map(str::to_string)
     })
+}
+
+/// Grok's own registry of live interactive sessions, kept beside the
+/// `sessions/` tree: `{session_id, pid, cwd, opened_at}` rows written on
+/// boot and pruned on clean exit.
+const GROK_ACTIVE_SESSIONS_FILE: &str = "active_sessions.json";
+const GROK_ACTIVE_SESSIONS_MAX_BYTES: u64 = 1024 * 1024;
+
+/// The session id grok's `active_sessions.json` manifest declares for a live
+/// grok process. This pins the conversation even when several groks share one
+/// cwd and no `--resume` / `--session-id` argument names it — the case where
+/// recency pairing must give up.
+///
+/// Rows outlive the processes that wrote them, because grok does not reliably
+/// prune the manifest on exit. A row therefore only describes this process
+/// when it names this cwd *and* was opened no earlier than the process
+/// started; without the second check a recycled pid would inherit a dead
+/// session's conversation and pin the tab to the wrong transcript. A row
+/// missing `opened_at` cannot clear that bar and is skipped, which costs at
+/// worst the pairing we would not have had anyway.
+fn grok_manifest_transcript_id(
+    sessions_root: Option<&Path>,
+    pid: u32,
+    cwd: &Path,
+    process_start: SystemTime,
+) -> Option<String> {
+    let manifest = sessions_root?.parent()?.join(GROK_ACTIVE_SESSIONS_FILE);
+    let meta = std::fs::symlink_metadata(&manifest).ok()?;
+    if !meta.is_file() || meta.len() > GROK_ACTIVE_SESSIONS_MAX_BYTES {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest).ok()?).ok()?;
+    // Later rows are newer appends; walk backwards so the freshest claim on a
+    // pid wins.
+    value.as_array()?.iter().rev().find_map(|entry| {
+        if entry.get("pid")?.as_u64()? != u64::from(pid) {
+            return None;
+        }
+        if Path::new(entry.get("cwd")?.as_str()?) != cwd {
+            return None;
+        }
+        if !grok_row_opened_after(entry.get("opened_at")?.as_str()?, process_start) {
+            return None;
+        }
+        entry
+            .get("session_id")?
+            .as_str()
+            .filter(|id| is_uuid_v4_shape(id))
+            .map(str::to_string)
+    })
+}
+
+/// True when RFC 3339 `opened_at` is at or after `process_start`. Process
+/// start times arrive from the OS at second granularity, so this compares
+/// whole seconds rather than rejecting a row grok wrote in the same second it
+/// launched.
+fn grok_row_opened_after(opened_at: &str, process_start: SystemTime) -> bool {
+    let Ok(opened) = chrono::DateTime::parse_from_rfc3339(opened_at) else {
+        return false;
+    };
+    let Ok(started) = process_start.duration_since(SystemTime::UNIX_EPOCH) else {
+        return false;
+    };
+    opened.timestamp() >= started.as_secs() as i64
 }
 
 fn claude_resume_id_from_args(args: &[String]) -> Option<String> {
@@ -6057,6 +6128,68 @@ mod tests {
         )
         .unwrap();
         assert!(sole.is_some(), "a sole grok may still pair by recency");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn grok_manifest_pins_transcript_id_by_pid_and_cwd() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-grok-manifest-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let cwd = Path::new("/repo");
+        let ours = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let started = SystemTime::UNIX_EPOCH + Duration::from_secs(1_760_000_000);
+        let opened = "2025-10-09T08:53:20Z"; // the same second the process started
+        std::fs::write(
+            root.join(GROK_ACTIVE_SESSIONS_FILE),
+            serde_json::to_vec(&serde_json::json!([
+                {"session_id": "0198c151-f3ee-7991-9768-741923bb6b51", "pid": 41,
+                 "cwd": "/repo", "opened_at": opened},
+                {"session_id": ours, "pid": 42, "cwd": "/repo", "opened_at": opened},
+                {"session_id": "../../escape", "pid": 43, "cwd": "/repo", "opened_at": opened},
+                {"session_id": "0198c151-f3ee-7991-9768-741923bb6b52", "pid": 44,
+                 "cwd": "/repo", "opened_at": "2020-01-01T00:00:00Z"},
+                {"session_id": "0198c151-f3ee-7991-9768-741923bb6b53", "pid": 45, "cwd": "/repo"},
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            grok_manifest_transcript_id(Some(&sessions), 42, cwd, started).as_deref(),
+            Some(ours)
+        );
+        assert_eq!(
+            grok_manifest_transcript_id(Some(&sessions), 42, Path::new("/elsewhere"), started),
+            None,
+            "a reused pid running in another cwd must not steal the pin"
+        );
+        assert_eq!(
+            grok_manifest_transcript_id(Some(&sessions), 43, cwd, started),
+            None,
+            "a non-uuid session id must not become a path component"
+        );
+        // Grok leaves rows behind for processes that have exited, so a pid the
+        // OS recycled must not inherit the dead session's conversation.
+        assert_eq!(
+            grok_manifest_transcript_id(Some(&sessions), 44, cwd, started),
+            None,
+            "a row opened before this process started belongs to a dead grok"
+        );
+        assert_eq!(
+            grok_manifest_transcript_id(Some(&sessions), 45, cwd, started),
+            None,
+            "a row with no opened_at cannot be proven to be ours"
+        );
+        assert_eq!(
+            grok_manifest_transcript_id(Some(&sessions), 99, cwd, started),
+            None
+        );
+        assert_eq!(grok_manifest_transcript_id(None, 42, cwd, started), None);
 
         std::fs::remove_dir_all(root).unwrap();
     }
