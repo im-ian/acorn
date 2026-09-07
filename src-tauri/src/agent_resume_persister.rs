@@ -369,7 +369,8 @@ fn id_filename(kind: AgentKind) -> &'static str {
 fn cwd_filename(kind: AgentKind) -> Option<&'static str> {
     match kind {
         AgentKind::Antigravity => Some("antigravity.cwd"),
-        AgentKind::Claude | AgentKind::Codex | AgentKind::Grok => None,
+        AgentKind::Grok => Some("grok.cwd"),
+        AgentKind::Claude | AgentKind::Codex => None,
     }
 }
 
@@ -633,6 +634,17 @@ mod tests {
         }));
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn grok_and_antigravity_persist_session_cwd() {
+        assert_eq!(cwd_filename(AgentKind::Grok), Some("grok.cwd"));
+        assert_eq!(
+            cwd_filename(AgentKind::Antigravity),
+            Some("antigravity.cwd")
+        );
+        assert_eq!(cwd_filename(AgentKind::Claude), None);
+        assert_eq!(cwd_filename(AgentKind::Codex), None);
     }
 
     #[test]

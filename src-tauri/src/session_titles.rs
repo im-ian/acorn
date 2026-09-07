@@ -93,8 +93,11 @@ fn effective_prompt(prompt: Option<&str>) -> String {
     prompt.chars().take(SESSION_TITLE_PROMPT_CHARS).collect()
 }
 
-pub fn resolve_title_input(session_id: uuid::Uuid) -> Option<ResolvedTitleInput> {
-    let native_session = resolve_native_session(session_id)?;
+pub fn resolve_title_input(
+    session_id: uuid::Uuid,
+    cwd: Option<&std::path::Path>,
+) -> Option<ResolvedTitleInput> {
+    let native_session = resolve_native_session(session_id, cwd)?;
     let provider: AgentHistoryProvider = native_session.kind.into();
     let title_context = agent_history::transcript_title_context(
         provider,
@@ -224,8 +227,11 @@ pub fn generate_title(
         .ok_or_else(|| AppError::Other("AI returned an empty session title.".to_string()))
 }
 
-pub fn resolve_native_session(session_id: uuid::Uuid) -> Option<agent_resume::LiveTranscript> {
-    match agent_resume::live_transcript_checked(session_id) {
+pub fn resolve_native_session(
+    session_id: uuid::Uuid,
+    cwd: Option<&std::path::Path>,
+) -> Option<agent_resume::LiveTranscript> {
+    match agent_resume::live_transcript_with_cwd_checked(session_id, cwd) {
         Ok(Some(live)) => return Some(live),
         Ok(None) => {}
         Err(error) => {
@@ -245,7 +251,7 @@ pub fn resolve_native_session(session_id: uuid::Uuid) -> Option<agent_resume::Li
             id: session_id.to_string(),
         }),
         Err(error) => {
-            // Same treatment as the `live_transcript_checked` arm above: a
+            // Same treatment as the live transcript lookup arm above: a
             // lookup that failed is not evidence there is no transcript.
             tracing::debug!(
                 %session_id,
