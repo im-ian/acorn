@@ -50,14 +50,15 @@ mod line;
 
 pub use line::{
     assistant_message_text, collapse_preview, grok_tail_has_pending_followup,
-    latest_turn_observation, latest_turn_state, parse_transcript_line, parse_transcript_value,
-    read_tail, ParsedTranscriptLine, TailRead, TranscriptRole, TurnObservation, TurnState,
+    grok_transcript_has_pending_monitors, latest_turn_observation, latest_turn_state,
+    parse_transcript_line, parse_transcript_value, read_tail, ParsedTranscriptLine, TailRead,
+    TranscriptRole, TurnObservation, TurnState,
 };
 
 // Maximum age (mtime → now) of a transcript that will be paired with
 // a live agent process. Generous so an idle agent waiting on user
 // input still surfaces as a Fork target.
-const RECENCY_WINDOW_SECS: u64 = 24 * 60 * 60;
+pub(crate) const RECENCY_WINDOW_SECS: u64 = 24 * 60 * 60;
 
 /// How long a transcript must sit un-appended (mtime → now) before we
 /// treat it as no longer being written. Used on both sides of the
@@ -2735,12 +2736,19 @@ pub fn read_grok_session_summary(transcript: &Path) -> Option<GrokSessionSummary
 const GROK_BACKGROUND_TASKS_MANIFEST: &str = "background_tasks_manifest.json";
 const GROK_BACKGROUND_TASKS_MANIFEST_MAX_BYTES: u64 = 64 * 1024;
 
-/// Live Grok *monitor* tasks live in a sibling manifest next to
-/// `updates.jsonl`. Fire-and-forget shells (dev servers) stay listed after
-/// Grok has returned to its prompt, so only monitors — which resume the
-/// agent — keep the session from flipping to WaitingForInput.
+/// Live Grok *monitor* tasks are listed in a sibling
+/// `background_tasks_manifest.json` when Grok writes one. Unmatched
+/// `task_backgrounded` monitor events in `updates.jsonl` are an additional
+/// source — Grok still returns to its prompt (and writes `turn_completed`)
+/// while a monitor is in flight, and often omits the sibling file. A monitor
+/// whose log is missing or older than [`RECENCY_WINDOW_SECS`] is treated as
+/// dead, because `updates.jsonl` is append-only and would otherwise pin
+/// Working forever. Fire-and-forget shells stay listed in the manifest after
+/// the prompt returns, so only monitors keep the session from flipping to
+/// WaitingForInput.
 pub fn grok_has_live_background_tasks(transcript: &Path) -> bool {
     grok_live_background_task_count(transcript) > 0
+        || grok_transcript_has_pending_monitors(transcript)
 }
 
 const GROK_SUBAGENTS_DIR: &str = "subagents";
@@ -2848,24 +2856,10 @@ fn grok_background_task_count_from_json(bytes: &[u8]) -> usize {
         .map(|tasks| {
             tasks
                 .iter()
-                .filter(|task| grok_background_task_resumes_agent(task))
+                .filter(|task| line::grok_background_task_resumes_agent(task))
                 .count()
         })
         .unwrap_or(0)
-}
-
-fn grok_background_task_resumes_agent(task: &serde_json::Value) -> bool {
-    let kind = task
-        .get("kind")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    if kind.eq_ignore_ascii_case("monitor") {
-        return true;
-    }
-    task.get("display_command")
-        .or_else(|| task.get("displayCommand"))
-        .and_then(|value| value.as_str())
-        .is_some_and(|command| command.trim_start().starts_with("[monitor]"))
 }
 
 #[cfg(test)]
@@ -2888,8 +2882,55 @@ mod grok_background_task_tests {
             grok_background_task_count_from_json(br#"[{"task_id":"a","kind":"bash"}]"#),
             0
         );
+        assert_eq!(
+            grok_background_task_count_from_json(
+                br#"[{"task_id":"a","monitor_description":"Watch PR 699"}]"#
+            ),
+            1
+        );
         assert_eq!(grok_background_task_count_from_json(br#"[]"#), 0);
         assert_eq!(grok_background_task_count_from_json(br#"{}"#), 0);
+    }
+
+    #[test]
+    fn transcript_monitor_without_manifest_is_still_live() {
+        let (transcript, _log) = write_grok_transcript_monitor(false);
+
+        assert!(grok_has_live_background_tasks(&transcript));
+        assert!(grok_transcript_has_pending_monitors(&transcript));
+    }
+
+    #[test]
+    fn stale_transcript_monitor_log_is_not_live() {
+        let (transcript, _log) = write_grok_transcript_monitor(true);
+
+        assert!(!grok_has_live_background_tasks(&transcript));
+        assert!(!grok_transcript_has_pending_monitors(&transcript));
+    }
+
+    #[test]
+    fn completed_transcript_monitor_is_not_live() {
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-grok-bg-done-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).expect("create grok session dir");
+        let transcript = dir.join("updates.jsonl");
+        std::fs::write(
+            &transcript,
+            concat!(
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1","kind":"monitor"}}}"#,
+                "\n",
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_completed","task_snapshot":{"task_id":"task-1"}}}}"#,
+                "\n",
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+                "\n",
+            ),
+        )
+        .expect("write transcript");
+
+        assert!(!grok_has_live_background_tasks(&transcript));
+        assert!(!grok_transcript_has_pending_monitors(&transcript));
     }
 
     #[test]
@@ -2930,6 +2971,40 @@ mod grok_background_task_tests {
         )
         .expect("write completed meta");
         assert!(!grok_has_running_subagents(&transcript));
+    }
+
+    fn write_grok_transcript_monitor(stale: bool) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-grok-bg-transcript-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(dir.join("terminal")).expect("create grok session dir");
+        let log = dir.join("terminal").join("monitor-call-task-1.log");
+        std::fs::write(&log, "event\n").expect("write grok monitor log");
+        if stale {
+            let old = std::time::SystemTime::now()
+                - std::time::Duration::from_secs(RECENCY_WINDOW_SECS + 3600);
+            let file = std::fs::File::options()
+                .write(true)
+                .open(&log)
+                .expect("open grok monitor log");
+            file.set_times(std::fs::FileTimes::new().set_modified(old))
+                .expect("stale grok monitor mtime");
+        }
+        let log_json = serde_json::to_string(&log.to_string_lossy().as_ref()).expect("json path");
+        let transcript = dir.join("updates.jsonl");
+        let backgrounded = format!(
+            r#"{{"method":"session/update","params":{{"update":{{"sessionUpdate":"task_backgrounded","task_id":"task-1","monitor_description":"Watch PR 699","output_file":{log_json}}}}}}}"#
+        );
+        std::fs::write(
+            &transcript,
+            format!(
+                "{backgrounded}\n{}\n",
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#
+            ),
+        )
+        .expect("write transcript");
+        (transcript, log)
     }
 }
 

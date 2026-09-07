@@ -30,7 +30,9 @@
 //!   WaitingForInput as an interrupted turn.
 //! - last `sessionUpdate=turn_completed` -> WaitingForInput while the Grok
 //!   process remains live (the TUI has returned to its prompt), unless a live
-//!   monitor or a running child agent is still in flight.
+//!   monitor or a running child agent is still in flight. Monitors come from
+//!   `background_tasks_manifest.json` or unmatched `task_backgrounded` events
+//!   in `updates.jsonl` whose log is still recent.
 //! - user/agent/thought chunks, tool call updates, `task_backgrounded`, and
 //!   `subagent_spawned` -> Working.
 //! - `task_completed` / `subagent_finished` with `will_wake=true` -> Working.
@@ -257,9 +259,9 @@ fn grok_followup_overrides_resting_status(
     tail: Option<&TailRead>,
 ) -> bool {
     kind == AgentKind::Grok
-        && (grok_has_live_background_tasks(path)
-            || grok_has_running_subagents(path)
-            || tail.is_some_and(|tail| grok_tail_has_pending_followup(&tail.text, tail.read_full)))
+        && (grok_has_running_subagents(path)
+            || tail.is_some_and(|tail| grok_tail_has_pending_followup(&tail.text, tail.read_full))
+            || grok_has_live_background_tasks(path))
 }
 
 #[cfg(test)]
@@ -800,6 +802,94 @@ mod tests {
     }
 
     #[test]
+    fn grok_stays_working_while_a_transcript_monitor_is_live_without_a_manifest() {
+        let path = write_grok_monitor_transcript(false, false);
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::Working);
+        assert_eq!(detection.reason, None);
+        assert_eq!(detection.evidence, StatusEvidence::Transcript);
+    }
+
+    #[test]
+    fn grok_stays_working_when_a_transcript_monitor_ages_out_of_the_tail() {
+        let path = write_grok_monitor_transcript(false, true);
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::Working);
+        assert_eq!(detection.reason, None);
+        assert_eq!(detection.evidence, StatusEvidence::Transcript);
+    }
+
+    #[test]
+    fn grok_stale_transcript_monitor_log_still_waits_after_turn_completed() {
+        let path = write_grok_monitor_transcript(true, false);
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::WaitingForInput);
+        assert_eq!(detection.reason, Some(StatusReason::TurnComplete));
+    }
+
+    #[test]
+    fn grok_missing_transcript_monitor_log_still_waits_after_turn_completed() {
+        let path = write_grok_session_transcript(
+            concat!(
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1","monitor_description":"Watch PR 699"}}}"#,
+                "\n",
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+            ),
+            None,
+        );
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::WaitingForInput);
+        assert_eq!(detection.reason, Some(StatusReason::TurnComplete));
+    }
+
+    #[test]
+    fn grok_completed_transcript_monitor_still_waits_after_turn_completed() {
+        let path = write_grok_session_transcript(
+            concat!(
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1","monitor_description":"Watch PR 699"}}}"#,
+                "\n",
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_completed","will_wake":false,"task_snapshot":{"task_id":"task-1"}}}}"#,
+                "\n",
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+            ),
+            None,
+        );
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::WaitingForInput);
+        assert_eq!(detection.reason, Some(StatusReason::TurnComplete));
+    }
+
+    #[test]
     fn grok_stays_working_while_a_subagent_is_still_running() {
         let path = write_status_transcript(concat!(
             r#"{"method":"session/update","params":{"update":{"sessionUpdate":"subagent_spawned","subagent_id":"child-1"}}}"#,
@@ -972,6 +1062,42 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("acorn-status-test-{}.jsonl", uuid::Uuid::new_v4()));
         std::fs::write(&path, body).expect("write status transcript");
+        path
+    }
+
+    fn write_grok_monitor_transcript(stale: bool, pad_past_tail: bool) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-status-grok-mon-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(dir.join("terminal")).expect("create grok session dir");
+        let log = dir.join("terminal").join("monitor-call-task-1.log");
+        std::fs::write(&log, "event\n").expect("write grok monitor log");
+        if stale {
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 60 * 60);
+            let file = std::fs::File::options()
+                .write(true)
+                .open(&log)
+                .expect("open grok monitor log");
+            file.set_times(std::fs::FileTimes::new().set_modified(old))
+                .expect("stale grok monitor mtime");
+        }
+        let log_json = serde_json::to_string(&log.to_string_lossy().as_ref()).expect("json path");
+        let backgrounded = format!(
+            r#"{{"method":"session/update","params":{{"update":{{"sessionUpdate":"task_backgrounded","task_id":"task-1","monitor_description":"Watch PR 699","output_file":{log_json}}}}}}}"#
+        );
+        let completed = r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#;
+        let body = if pad_past_tail {
+            let padding = format!(
+                r#"{{"method":"session/update","params":{{"update":{{"sessionUpdate":"hook_execution","pad":"{}"}}}}}}"#,
+                "x".repeat(300_000)
+            );
+            format!("{backgrounded}\n{padding}\n{completed}")
+        } else {
+            format!("{backgrounded}\n{completed}")
+        };
+        let path = dir.join("updates.jsonl");
+        std::fs::write(&path, body).expect("write grok transcript");
         path
     }
 
