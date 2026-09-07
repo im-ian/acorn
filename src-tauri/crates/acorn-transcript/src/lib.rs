@@ -646,7 +646,13 @@ fn scan_live_mappings(
                         AgentKind::Claude => claude_resume_id_from_process(proc),
                         AgentKind::Codex => codex_resume_id_from_process(proc),
                         AgentKind::Antigravity => None,
-                        AgentKind::Grok => grok_transcript_id_from_process(proc),
+                        AgentKind::Grok => grok_transcript_id_from_process(proc).or_else(|| {
+                            grok_manifest_transcript_id(
+                                grok_root.as_deref(),
+                                process_match.pid.as_u32(),
+                                &cwd,
+                            )
+                        }),
                     };
                     let codex_resume_requested = process_match.kind == AgentKind::Codex
                         && codex_resume_requested_from_process(proc);
@@ -1367,6 +1373,45 @@ fn grok_transcript_id_from_args(args: &[String]) -> Option<String> {
                 .or_else(|| arg.strip_prefix("-s").filter(|value| !value.is_empty()))
         };
         candidate
+            .filter(|id| is_uuid_v4_shape(id))
+            .map(str::to_string)
+    })
+}
+
+/// Grok's own registry of live interactive sessions, kept beside the
+/// `sessions/` tree: `{session_id, pid, cwd, opened_at}` rows written on
+/// boot and pruned on clean exit.
+const GROK_ACTIVE_SESSIONS_FILE: &str = "active_sessions.json";
+const GROK_ACTIVE_SESSIONS_MAX_BYTES: u64 = 1024 * 1024;
+
+/// The session id grok's `active_sessions.json` manifest declares for a live
+/// grok process. This pins the conversation even when several groks share one
+/// cwd and no `--resume` / `--session-id` argument names it — the case where
+/// recency pairing must give up. The cwd cross-check rejects a stale row
+/// whose pid the OS has since reused for an unrelated grok.
+fn grok_manifest_transcript_id(
+    sessions_root: Option<&Path>,
+    pid: u32,
+    cwd: &Path,
+) -> Option<String> {
+    let manifest = sessions_root?.parent()?.join(GROK_ACTIVE_SESSIONS_FILE);
+    let meta = std::fs::symlink_metadata(&manifest).ok()?;
+    if !meta.is_file() || meta.len() > GROK_ACTIVE_SESSIONS_MAX_BYTES {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest).ok()?).ok()?;
+    // Later rows are newer appends; walk backwards so the freshest claim on a
+    // pid wins.
+    value.as_array()?.iter().rev().find_map(|entry| {
+        if entry.get("pid")?.as_u64()? != u64::from(pid) {
+            return None;
+        }
+        if Path::new(entry.get("cwd")?.as_str()?) != cwd {
+            return None;
+        }
+        entry
+            .get("session_id")?
+            .as_str()
             .filter(|id| is_uuid_v4_shape(id))
             .map(str::to_string)
     })
@@ -6057,6 +6102,47 @@ mod tests {
         )
         .unwrap();
         assert!(sole.is_some(), "a sole grok may still pair by recency");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn grok_manifest_pins_transcript_id_by_pid_and_cwd() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-grok-manifest-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let cwd = Path::new("/repo");
+        let ours = "0198c151-f3ee-7991-9768-741923bb6b50";
+        std::fs::write(
+            root.join(GROK_ACTIVE_SESSIONS_FILE),
+            serde_json::to_vec(&serde_json::json!([
+                {"session_id": "0198c151-f3ee-7991-9768-741923bb6b51", "pid": 41, "cwd": "/repo"},
+                {"session_id": ours, "pid": 42, "cwd": "/repo"},
+                {"session_id": "../../escape", "pid": 43, "cwd": "/repo"},
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            grok_manifest_transcript_id(Some(&sessions), 42, cwd).as_deref(),
+            Some(ours)
+        );
+        assert_eq!(
+            grok_manifest_transcript_id(Some(&sessions), 42, Path::new("/elsewhere")),
+            None,
+            "a reused pid running in another cwd must not steal the pin"
+        );
+        assert_eq!(
+            grok_manifest_transcript_id(Some(&sessions), 43, cwd),
+            None,
+            "a non-uuid session id must not become a path component"
+        );
+        assert_eq!(grok_manifest_transcript_id(Some(&sessions), 99, cwd), None);
+        assert_eq!(grok_manifest_transcript_id(None, 42, cwd), None);
 
         std::fs::remove_dir_all(root).unwrap();
     }
