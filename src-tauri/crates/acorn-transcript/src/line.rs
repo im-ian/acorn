@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -461,7 +461,8 @@ pub fn grok_tail_has_pending_followup(tail: &str, read_full: bool) -> bool {
 /// Grok often writes `turn_completed` while a monitor is still running, and
 /// does not always persist that monitor into `background_tasks_manifest.json`.
 /// The 256 KiB status tail can also drop the original `task_backgrounded`
-/// line, so this walks `updates.jsonl` for unmatched monitor tasks.
+/// line, so this walks `updates.jsonl` for unmatched monitor tasks whose log
+/// is still recent.
 pub fn grok_transcript_has_pending_monitors(transcript: &Path) -> bool {
     if transcript.file_name().and_then(|name| name.to_str()) != Some("updates.jsonl") {
         return false;
@@ -473,41 +474,47 @@ pub fn grok_transcript_has_pending_monitors(transcript: &Path) -> bool {
 }
 
 fn grok_pending_monitors_from_reader(reader: impl Read) -> bool {
-    let mut spawned = HashSet::new();
+    let mut spawned = HashMap::new();
     let mut finished = HashSet::new();
     let mut reader = BufReader::new(reader);
-    let mut line = String::new();
+    let mut buf = Vec::new();
     loop {
-        line.clear();
-        match reader.read_line(&mut line) {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
             Ok(0) => break,
             Ok(_) => {}
             Err(_) => break,
         }
+        let line = String::from_utf8_lossy(&buf);
         if !line.contains("task_backgrounded") && !line.contains("task_completed") {
             continue;
         }
         grok_record_followup_line(line.trim(), false, &mut spawned, &mut finished);
     }
-    spawned.difference(&finished).next().is_some()
+    grok_has_unfinished_followup(&spawned, &finished)
 }
 
 fn grok_pending_followup_from_lines<'a>(
     lines: impl Iterator<Item = &'a str>,
     include_subagents: bool,
 ) -> bool {
-    let mut spawned = HashSet::new();
+    let mut spawned = HashMap::new();
     let mut finished = HashSet::new();
     for line in lines {
         grok_record_followup_line(line, include_subagents, &mut spawned, &mut finished);
     }
-    spawned.difference(&finished).next().is_some()
+    grok_has_unfinished_followup(&spawned, &finished)
+}
+
+enum FollowupKind {
+    Subagent,
+    Monitor { output_file: Option<String> },
 }
 
 fn grok_record_followup_line(
     line: &str,
     include_subagents: bool,
-    spawned: &mut HashSet<String>,
+    spawned: &mut HashMap<String, FollowupKind>,
     finished: &mut HashSet<String>,
 ) {
     let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
@@ -536,13 +543,13 @@ fn grok_apply_followup_event(
     update_type: &str,
     update: &Value,
     include_subagents: bool,
-    spawned: &mut HashSet<String>,
+    spawned: &mut HashMap<String, FollowupKind>,
     finished: &mut HashSet<String>,
 ) {
     match update_type {
         "subagent_spawned" if include_subagents => {
             if let Some(id) = grok_subagent_id(update) {
-                spawned.insert(id);
+                spawned.entry(id).or_insert(FollowupKind::Subagent);
             }
         }
         "subagent_finished" if include_subagents => {
@@ -553,7 +560,9 @@ fn grok_apply_followup_event(
         "task_backgrounded" => {
             if grok_background_task_resumes_agent(update) {
                 if let Some(id) = grok_task_id(update) {
-                    spawned.insert(id);
+                    spawned.entry(id).or_insert(FollowupKind::Monitor {
+                        output_file: grok_task_output_file(update),
+                    });
                 }
             }
         }
@@ -564,6 +573,54 @@ fn grok_apply_followup_event(
         }
         _ => {}
     }
+}
+
+fn grok_has_unfinished_followup(
+    spawned: &HashMap<String, FollowupKind>,
+    finished: &HashSet<String>,
+) -> bool {
+    spawned.iter().any(|(id, kind)| {
+        if finished.contains(id) {
+            return false;
+        }
+        match kind {
+            FollowupKind::Subagent => true,
+            FollowupKind::Monitor { output_file } => {
+                grok_monitor_log_is_recent(output_file.as_deref())
+            }
+        }
+    })
+}
+
+/// Live monitors keep appending to `output_file`. `updates.jsonl` is
+/// append-only, so a monitor that exited without `task_completed` would
+/// otherwise pin Working forever; a missing or stale log is treated as dead.
+fn grok_monitor_log_is_recent(output_file: Option<&str>) -> bool {
+    let Some(path) = output_file.map(Path::new) else {
+        return false;
+    };
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !meta.file_type().is_file() {
+        return false;
+    }
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    match modified.elapsed() {
+        Ok(age) => age.as_secs() <= crate::RECENCY_WINDOW_SECS,
+        Err(_) => true,
+    }
+}
+
+fn grok_task_output_file(update: &Value) -> Option<String> {
+    string_at(Some(update), "output_file")
+        .or_else(|| string_at(Some(update), "outputFile"))
+        .or_else(|| string_at(update.get("task_snapshot"), "output_file"))
+        .or_else(|| string_at(update.get("task_snapshot"), "outputFile"))
+        .or_else(|| string_at(update.get("taskSnapshot"), "output_file"))
+        .or_else(|| string_at(update.get("taskSnapshot"), "outputFile"))
 }
 
 pub(crate) fn grok_background_task_resumes_agent(task: &Value) -> bool {
@@ -1761,28 +1818,38 @@ mod tests {
 
     #[test]
     fn grok_pending_monitor_survives_turn_completed() {
-        let tail = concat!(
-            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1","monitor_description":"Watch PR 699"}}}"#,
-            "\n",
-            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
-        );
-        assert!(grok_tail_has_pending_followup(tail, true));
+        let tail = grok_monitor_tail(MonitorLogAge::Recent);
+        assert!(grok_tail_has_pending_followup(&tail, true));
     }
 
     #[test]
-    fn grok_monitor_kind_and_output_file_count_as_pending_followup() {
-        let kind = concat!(
+    fn grok_monitor_without_a_recent_log_is_not_pending() {
+        let kind_only = concat!(
             r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1","kind":"monitor"}}}"#,
             "\n",
             r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
         );
-        let output_file = concat!(
-            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-2","output_file":"/tmp/terminal/monitor-call-abc-1.log"}}}"#,
+        let missing_log = concat!(
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-2","output_file":"/tmp/acorn-missing-monitor-call-abc-1.log"}}}"#,
             "\n",
             r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
         );
-        assert!(grok_tail_has_pending_followup(kind, true));
-        assert!(grok_tail_has_pending_followup(output_file, true));
+        assert!(!grok_tail_has_pending_followup(kind_only, true));
+        assert!(!grok_tail_has_pending_followup(missing_log, true));
+        assert!(!grok_tail_has_pending_followup(
+            &grok_monitor_tail(MonitorLogAge::Stale),
+            true
+        ));
+    }
+
+    #[test]
+    fn grok_real_bash_background_shape_is_not_pending_followup() {
+        let tail = concat!(
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1","command":"npm run dev","cwd":"/tmp","description":"Start vite","output_file":"/tmp/terminal/call-abc-1.log"}}}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+        );
+        assert!(!grok_tail_has_pending_followup(tail, true));
     }
 
     #[test]
@@ -1795,6 +1862,34 @@ mod tests {
             r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
         );
         assert!(!grok_tail_has_pending_followup(tail, true));
+    }
+
+    enum MonitorLogAge {
+        Recent,
+        Stale,
+    }
+
+    fn grok_monitor_tail(age: MonitorLogAge) -> String {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-grok-mon-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).expect("create grok monitor dir");
+        let log = dir.join("monitor-call-task-1.log");
+        std::fs::write(&log, "event\n").expect("write grok monitor log");
+        if matches!(age, MonitorLogAge::Stale) {
+            let old = std::time::SystemTime::now()
+                - std::time::Duration::from_secs(crate::RECENCY_WINDOW_SECS + 3600);
+            let file = std::fs::File::options()
+                .write(true)
+                .open(&log)
+                .expect("open grok monitor log");
+            file.set_times(std::fs::FileTimes::new().set_modified(old))
+                .expect("stale grok monitor mtime");
+        }
+        let log_json = serde_json::to_string(&log.to_string_lossy().as_ref()).expect("json path");
+        format!(
+            r#"{{"method":"session/update","params":{{"update":{{"sessionUpdate":"task_backgrounded","task_id":"task-1","monitor_description":"Watch PR 699","output_file":{log_json}}}}}}}"#
+        ) + "\n"
+            + r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#
     }
 
     #[test]
