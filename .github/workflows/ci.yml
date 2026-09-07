@@ -398,6 +398,39 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  rust-tests:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          workspaces: src-tauri
+          shared-key: linux-x86_64
+          cache-on-failure: true
+
+      # Agent-to-transcript pairing decides which JSONL a live claude/codex/
+      # antigravity/grok process owns; getting it wrong silently breaks tab
+      # titles and resume. It is pure host-filesystem logic with no Tauri or
+      # sidecar dependency, so it runs without a frontend build. The Windows
+      # job covers the transport crates; no job compiled this one.
+      - name: Test transcript pairing
+        run: >-
+          cargo test --manifest-path src-tauri/Cargo.toml --locked
+          -p acorn-transcript
+
   rustfmt:
     name: Rust format
     runs-on: ubuntu-latest
