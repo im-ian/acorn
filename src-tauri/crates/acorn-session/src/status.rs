@@ -30,7 +30,9 @@
 //!   WaitingForInput as an interrupted turn.
 //! - last `sessionUpdate=turn_completed` -> WaitingForInput while the Grok
 //!   process remains live (the TUI has returned to its prompt), unless a live
-//!   monitor or a running child agent is still in flight.
+//!   monitor or a running child agent is still in flight. Monitors come from
+//!   `background_tasks_manifest.json` or unmatched `task_backgrounded` events
+//!   in `updates.jsonl` when Grok omitted the sibling manifest.
 //! - user/agent/thought chunks, tool call updates, `task_backgrounded`, and
 //!   `subagent_spawned` -> Working.
 //! - `task_completed` / `subagent_finished` with `will_wake=true` -> Working.
@@ -797,6 +799,73 @@ mod tests {
         assert_eq!(detection.status, SessionStatus::Working);
         assert_eq!(detection.reason, None);
         assert_eq!(detection.evidence, StatusEvidence::Transcript);
+    }
+
+    #[test]
+    fn grok_stays_working_while_a_transcript_monitor_is_live_without_a_manifest() {
+        let path = write_grok_session_transcript(
+            concat!(
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1","monitor_description":"Watch PR 699"}}}"#,
+                "\n",
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+            ),
+            None,
+        );
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::Working);
+        assert_eq!(detection.reason, None);
+        assert_eq!(detection.evidence, StatusEvidence::Transcript);
+    }
+
+    #[test]
+    fn grok_stays_working_when_a_transcript_monitor_ages_out_of_the_tail() {
+        let backgrounded = r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1","monitor_description":"Watch PR 699"}}}"#;
+        let padding = format!(
+            r#"{{"method":"session/update","params":{{"update":{{"sessionUpdate":"hook_execution","pad":"{}"}}}}}}"#,
+            "x".repeat(300_000)
+        );
+        let completed = r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#;
+        let path =
+            write_grok_session_transcript(&format!("{backgrounded}\n{padding}\n{completed}"), None);
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::Working);
+        assert_eq!(detection.reason, None);
+        assert_eq!(detection.evidence, StatusEvidence::Transcript);
+    }
+
+    #[test]
+    fn grok_completed_transcript_monitor_still_waits_after_turn_completed() {
+        let path = write_grok_session_transcript(
+            concat!(
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_backgrounded","task_id":"task-1","monitor_description":"Watch PR 699"}}}"#,
+                "\n",
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"task_completed","will_wake":false,"task_snapshot":{"task_id":"task-1"}}}}"#,
+                "\n",
+                r#"{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-7"}}}"#,
+            ),
+            None,
+        );
+
+        let detection = detect_with_reason(
+            Some((path, AgentKind::Grok)),
+            SessionStatus::Working,
+            Some(ShellHint::Running),
+        );
+
+        assert_eq!(detection.status, SessionStatus::WaitingForInput);
+        assert_eq!(detection.reason, Some(StatusReason::TurnComplete));
     }
 
     #[test]
