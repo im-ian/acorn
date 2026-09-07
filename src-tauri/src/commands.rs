@@ -4881,7 +4881,10 @@ fn enrich_session(mut s: Session) -> Session {
         s.branch = branch;
     }
     s.in_worktree = worktree::is_linked_worktree_root(&s.worktree_path);
-    match crate::agent_resume::live_transcript_checked(s.id) {
+    match crate::agent_resume::live_transcript_with_cwd_checked(
+        s.id,
+        Some(s.worktree_path.as_path()),
+    ) {
         Ok(live) => {
             s.agent_transcript_id = live.as_ref().map(|transcript| transcript.id.clone());
         }
@@ -7947,7 +7950,9 @@ pub fn rename_session(
     let native_session = (sync_agent_session_titles
         && current.kind == SessionKind::Regular
         && current.mode == SessionMode::Terminal)
-        .then(|| crate::session_titles::resolve_native_session(id))
+        .then(|| {
+            crate::session_titles::resolve_native_session(id, Some(current.worktree_path.as_path()))
+        })
         .flatten();
     let updated = state.sessions.rename(&id, trimmed)?;
     persist(&state);
@@ -8160,7 +8165,10 @@ fn resolve_title_input_for_session(
     if session.mode == SessionMode::Chat {
         crate::session_titles::resolve_chat_title_input(id)
     } else {
-        Ok(crate::session_titles::resolve_title_input(id))
+        Ok(crate::session_titles::resolve_title_input(
+            id,
+            Some(session.worktree_path.as_path()),
+        ))
     }
 }
 
@@ -10395,10 +10403,17 @@ fn detect_session_statuses_blocking(
             // marker. A nested peer agent from another provider can update its
             // own marker while the parent agent is still the session owner.
             let live_result = match parsed_id {
-                Some(uuid) => match live_agent_kind {
-                    Some(kind) => agent_resume::live_transcript_for_kind_checked(uuid, kind),
-                    None => agent_resume::live_transcript_checked(uuid),
-                },
+                Some(uuid) => {
+                    let cwd = session.as_ref().map(|s| s.worktree_path.as_path());
+                    match live_agent_kind {
+                        Some(kind) => {
+                            agent_resume::live_transcript_for_kind_with_cwd_checked(
+                                uuid, kind, cwd,
+                            )
+                        }
+                        None => agent_resume::live_transcript_with_cwd_checked(uuid, cwd),
+                    }
+                }
                 None => Ok(None),
             };
             let mut transcript_lookup_failed = false;

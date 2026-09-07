@@ -19,6 +19,7 @@
 //! antigravity.cwd          # Acorn worktree cwd fallback for cwd-less brain transcripts
 //! antigravity.id.acknowledged
 //! grok.id                  # bare session UUID
+//! grok.cwd                 # Acorn worktree cwd so locate can skip scanning every grok bucket
 //! grok.id.acknowledged
 //! ```
 //!
@@ -50,6 +51,7 @@ const CODEX_ID_ACK_FILE: &str = "codex.id.acknowledged";
 const ANTIGRAVITY_ID_FILE: &str = "antigravity.id";
 const ANTIGRAVITY_ID_ACK_FILE: &str = "antigravity.id.acknowledged";
 const GROK_ID_FILE: &str = "grok.id";
+const GROK_CWD_FILE: &str = "grok.cwd";
 const GROK_ID_ACK_FILE: &str = "grok.id.acknowledged";
 
 pub(crate) const PROVIDER_MARKER_MAX_BYTES: usize = 128;
@@ -340,34 +342,44 @@ pub struct LiveTranscript {
 /// matching transcript. Returns `Ok(None)` when no marker is present or every
 /// marker points to a transcript that no longer exists.
 ///
+/// For grok, `cwd` (the session worktree, else `grok.cwd`) opens the
+/// cwd-encoded transcript bucket directly instead of scanning every session.
+///
 /// When multiple provider markers exist, the marker file with the
 /// newer mtime wins — that matches the persister's behaviour of only
 /// touching a marker when the live UUID rotates, so "most recently
 /// written marker" is "the agent the session was last paired with".
-pub fn live_transcript_checked(session_id: uuid::Uuid) -> io::Result<Option<LiveTranscript>> {
+pub fn live_transcript_with_cwd_checked(
+    session_id: uuid::Uuid,
+    cwd: Option<&Path>,
+) -> io::Result<Option<LiveTranscript>> {
     let base = acorn_daemon::paths::data_dir()?;
-    live_transcript_at_checked(&base, session_id)
+    live_transcript_at_checked(&base, session_id, cwd)
 }
 
 /// Resolve only the marker for `kind`. Status polling uses this when the
 /// current PTY tree already tells us which live provider owns the tab, so a
 /// nested peer agent from another provider cannot steal the session status.
-pub fn live_transcript_for_kind_checked(
+pub fn live_transcript_for_kind_with_cwd_checked(
     session_id: uuid::Uuid,
     kind: AgentKind,
+    cwd: Option<&Path>,
 ) -> io::Result<Option<LiveTranscript>> {
     let base = acorn_daemon::paths::data_dir()?;
-    live_transcript_for_kind_at_checked(&base, session_id, kind)
+    live_transcript_for_kind_at_checked(&base, session_id, kind, cwd)
 }
 
 #[cfg(test)]
 fn live_transcript_at(base: &Path, session_id: uuid::Uuid) -> Option<LiveTranscript> {
-    live_transcript_at_checked(base, session_id).ok().flatten()
+    live_transcript_at_checked(base, session_id, None)
+        .ok()
+        .flatten()
 }
 
 fn live_transcript_at_checked(
     base: &Path,
     session_id: uuid::Uuid,
+    cwd: Option<&Path>,
 ) -> io::Result<Option<LiveTranscript>> {
     let Some(dir) = session_state_dir_if_exists_at(base, session_id)? else {
         return Ok(None);
@@ -385,7 +397,10 @@ fn live_transcript_at_checked(
     }
     markers.sort_by(|a, b| b.1.modified.cmp(&a.1.modified));
     for (kind, marker) in markers {
-        if let Some(path) = locate_transcript_checked(kind, &marker.text)? {
+        let locate_cwd = grok_locate_cwd(&dir, kind, cwd)?;
+        if let Some(path) =
+            locate_transcript_with_cwd_checked(kind, &marker.text, locate_cwd.as_deref())?
+        {
             return Ok(Some(LiveTranscript {
                 id: marker.text,
                 path,
@@ -400,16 +415,18 @@ fn live_transcript_for_kind_at_checked(
     base: &Path,
     session_id: uuid::Uuid,
     kind: AgentKind,
+    cwd: Option<&Path>,
 ) -> io::Result<Option<LiveTranscript>> {
     let Some(dir) = session_state_dir_if_exists_at(base, session_id)? else {
         return Ok(None);
     };
-    live_transcript_for_kind_in_dir_checked(&dir, kind)
+    live_transcript_for_kind_in_dir_checked(&dir, kind, cwd)
 }
 
 fn live_transcript_for_kind_in_dir_checked(
     dir: &Path,
     kind: AgentKind,
+    cwd: Option<&Path>,
 ) -> io::Result<Option<LiveTranscript>> {
     let file = match kind {
         AgentKind::Claude => CLAUDE_ID_FILE,
@@ -420,7 +437,9 @@ fn live_transcript_for_kind_in_dir_checked(
     let Some(marker) = read_provider_marker(&dir.join(file))? else {
         return Ok(None);
     };
-    let Some(path) = locate_transcript_checked(kind, &marker.text)? else {
+    let locate_cwd = grok_locate_cwd(dir, kind, cwd)?;
+    let Some(path) = locate_transcript_with_cwd_checked(kind, &marker.text, locate_cwd.as_deref())?
+    else {
         return Ok(None);
     };
     Ok(Some(LiveTranscript {
@@ -428,6 +447,31 @@ fn live_transcript_for_kind_in_dir_checked(
         path,
         kind,
     }))
+}
+
+fn grok_locate_cwd(
+    dir: &Path,
+    kind: AgentKind,
+    extra: Option<&Path>,
+) -> io::Result<Option<PathBuf>> {
+    if kind != AgentKind::Grok {
+        return Ok(None);
+    }
+    if let Some(cwd) = extra.filter(|cwd| !cwd.as_os_str().is_empty()) {
+        return Ok(Some(cwd.to_path_buf()));
+    }
+    read_cwd_marker(&dir.join(GROK_CWD_FILE))
+}
+
+fn read_cwd_marker(path: &Path) -> io::Result<Option<PathBuf>> {
+    let Some(snapshot) = read_state_text_with_limit(path, AGENT_CWD_MAX_BYTES)? else {
+        return Ok(None);
+    };
+    let trimmed = snapshot.text.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(PathBuf::from(trimmed)))
 }
 
 #[cfg(test)]
@@ -584,6 +628,14 @@ pub(crate) fn locate_transcript_checked(
     kind: AgentKind,
     uuid: &str,
 ) -> io::Result<Option<PathBuf>> {
+    locate_transcript_with_cwd_checked(kind, uuid, None)
+}
+
+fn locate_transcript_with_cwd_checked(
+    kind: AgentKind,
+    uuid: &str,
+    cwd: Option<&Path>,
+) -> io::Result<Option<PathBuf>> {
     let uuid = normalize_provider_id(uuid)?;
     match kind {
         AgentKind::Claude => crate::todos::locate_transcript_for(&uuid).map_err(app_io_error),
@@ -593,7 +645,12 @@ pub(crate) fn locate_transcript_checked(
         AgentKind::Antigravity => open_antigravity_transcript_snapshot_checked(&uuid)
             .map(|snapshot| snapshot.map(|snapshot| snapshot.path)),
         AgentKind::Grok => {
-            acorn_transcript::locate_grok_transcript_checked(&uuid).map_err(io::Error::from)
+            if let Some(cwd) = cwd {
+                acorn_transcript::locate_grok_transcript_for_cwd_checked(&uuid, cwd)
+                    .map_err(io::Error::from)
+            } else {
+                acorn_transcript::locate_grok_transcript_checked(&uuid).map_err(io::Error::from)
+            }
         }
     }
 }
@@ -1638,7 +1695,7 @@ mod tests {
     fn live_transcript_returns_none_when_no_marker_dir() {
         let base = ScratchDir::new("live-empty");
         let sid = uuid::Uuid::new_v4();
-        assert!(live_transcript_at_checked(base.path(), sid)
+        assert!(live_transcript_at_checked(base.path(), sid, None)
             .unwrap()
             .is_none());
         assert!(live_transcript_at(base.path(), sid).is_none());
@@ -1664,7 +1721,7 @@ mod tests {
             .join(CODEX_ID_FILE);
         fs::set_permissions(&marker, fs::Permissions::from_mode(0o000)).unwrap();
         let permission_bits_enforced = fs::File::open(&marker).is_err();
-        let checked = live_transcript_at_checked(base.path(), sid);
+        let checked = live_transcript_at_checked(base.path(), sid, None);
         let legacy = live_transcript_at(base.path(), sid);
         fs::set_permissions(&marker, fs::Permissions::from_mode(0o600)).unwrap();
 

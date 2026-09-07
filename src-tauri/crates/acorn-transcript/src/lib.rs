@@ -2694,6 +2694,24 @@ pub fn locate_grok_transcript_checked(uuid: &str) -> ProviderScanResult<Option<P
     locate_grok_transcript_in_budgeted(&root, uuid, &mut budget)
 }
 
+/// Locate a Grok transcript by UUID, preferring the cwd-encoded bucket.
+///
+/// Isolated worktree sessions pin grok to a unique cwd. Looking there first
+/// avoids walking every cwd bucket and racing grok's live `summary.json` rewrite.
+pub fn locate_grok_transcript_for_cwd_checked(
+    uuid: &str,
+    cwd: &Path,
+) -> ProviderScanResult<Option<PathBuf>> {
+    let Some(root) = grok_sessions_root() else {
+        return Ok(None);
+    };
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    if let Some(path) = locate_grok_transcript_for_pairing(&root, uuid, Some(cwd), &mut budget)? {
+        return Ok(Some(path));
+    }
+    locate_grok_transcript_in_budgeted(&root, uuid, &mut budget)
+}
+
 #[cfg(test)]
 fn locate_grok_transcript_in(sessions_root: &Path, uuid: &str) -> Option<PathBuf> {
     locate_grok_transcript_in_checked(sessions_root, uuid)
@@ -2957,11 +2975,10 @@ fn locate_grok_transcript_in_budgeted(
         if safe_regular_file_metadata(&updates)?.is_none() {
             continue;
         }
-        let Some(summary) = read_grok_session_summary_budgeted(&session_dir, budget)? else {
-            continue;
-        };
-        if summary.id == uuid && !summary.hidden && !summary.is_subagent {
-            return Ok(Some(updates));
+        if let Some(path) =
+            grok_visible_transcript(&session_dir, uuid, None, true, updates, budget)?
+        {
+            return Ok(Some(path));
         }
     }
     Ok(None)
@@ -2999,7 +3016,7 @@ fn locate_grok_transcript_for_pairing(
         return Ok(None);
     }
     let bucket_dir = root.join(grok_cwd_bucket(cwd));
-    if let Some(path) = grok_uuid_in_bucket(&bucket_dir, uuid, cwd, budget)? {
+    if let Some(path) = grok_uuid_in_bucket(&bucket_dir, uuid, cwd, true, budget)? {
         return Ok(Some(path));
     }
     locate_grok_transcript_matching_cwd(root, uuid, cwd, budget)
@@ -3009,6 +3026,7 @@ fn grok_uuid_in_bucket(
     bucket_dir: &Path,
     uuid: &str,
     cwd: &Path,
+    allow_unreadable_summary: bool,
     budget: &mut ProviderScanBudget,
 ) -> ProviderScanResult<Option<PathBuf>> {
     let session_dir = bucket_dir.join(uuid);
@@ -3020,13 +3038,39 @@ fn grok_uuid_in_bucket(
     if safe_regular_file_metadata(&updates)?.is_none() {
         return Ok(None);
     }
-    let Some(summary) = read_grok_session_summary_budgeted(&session_dir, budget)? else {
-        return Ok(None);
-    };
-    if summary.id == uuid && summary.cwd == cwd && !summary.hidden && !summary.is_subagent {
-        return Ok(Some(updates));
+    grok_visible_transcript(
+        &session_dir,
+        uuid,
+        Some(cwd),
+        allow_unreadable_summary,
+        updates,
+        budget,
+    )
+}
+
+fn grok_visible_transcript(
+    session_dir: &Path,
+    uuid: &str,
+    cwd: Option<&Path>,
+    allow_unreadable_summary: bool,
+    updates: PathBuf,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<Option<PathBuf>> {
+    match read_grok_session_summary_budgeted(session_dir, budget)? {
+        Some(summary) => {
+            let cwd_ok = cwd.map_or(true, |cwd| summary.cwd == cwd);
+            if summary.id == uuid && cwd_ok && !summary.hidden && !summary.is_subagent {
+                Ok(Some(updates))
+            } else {
+                Ok(None)
+            }
+        }
+        // The preferred cwd bucket already encodes this process cwd, so a
+        // mid-write summary is not proof the UUID is hidden. Other buckets
+        // still need a parsed cwd match so --resume cannot claim a sibling.
+        None if allow_unreadable_summary => Ok(Some(updates)),
+        None => Ok(None),
     }
-    Ok(None)
 }
 
 fn locate_grok_transcript_matching_cwd(
@@ -3048,7 +3092,7 @@ fn locate_grok_transcript_matching_cwd(
         if bucket_dir.file_name().and_then(|name| name.to_str()) == Some(preferred.as_str()) {
             continue;
         }
-        if let Some(path) = grok_uuid_in_bucket(&bucket_dir, uuid, cwd, budget)? {
+        if let Some(path) = grok_uuid_in_bucket(&bucket_dir, uuid, cwd, false, budget)? {
             return Ok(Some(path));
         }
     }
@@ -3288,10 +3332,37 @@ fn read_bounded_json_value(
     path: &Path,
     budget: &mut ProviderScanBudget,
 ) -> ProviderScanResult<Option<serde_json::Value>> {
+    const ATTEMPTS: usize = 4;
+    for attempt in 0..ATTEMPTS {
+        match read_bounded_json_value_attempt(path, budget)? {
+            BoundedJsonRead::Missing => return Ok(None),
+            BoundedJsonRead::Value(value) => return Ok(Some(value)),
+            BoundedJsonRead::Unstable => {
+                if attempt + 1 < ATTEMPTS {
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                return Ok(None);
+            }
+        }
+    }
+    Ok(None)
+}
+
+enum BoundedJsonRead {
+    Missing,
+    Unstable,
+    Value(serde_json::Value),
+}
+
+fn read_bounded_json_value_attempt(
+    path: &Path,
+    budget: &mut ProviderScanBudget,
+) -> ProviderScanResult<BoundedJsonRead> {
     use std::io::Read;
 
     let Some(meta) = safe_regular_file_metadata(path)? else {
-        return Ok(None);
+        return Ok(BoundedJsonRead::Missing);
     };
     let max_bytes = budget.limits.head_bytes;
     if max_bytes == 0 || meta.len() > max_bytes as u64 {
@@ -3300,11 +3371,11 @@ fn read_bounded_json_value(
     budget.charge_head_open()?;
     let file = complete_io(path, std::fs::File::open(path))?;
     let opened = complete_io(path, file.metadata())?;
-    if !opened.file_type().is_file()
-        || opened.len() > max_bytes as u64
-        || !same_file_metadata(&meta, &opened)
-    {
+    if !opened.file_type().is_file() || opened.len() > max_bytes as u64 {
         return Err(ProviderScanError::LimitExceeded);
+    }
+    if !same_file_metadata(&meta, &opened) {
+        return Ok(BoundedJsonRead::Unstable);
     }
     let mut bytes = Vec::with_capacity(opened.len() as usize);
     complete_io(
@@ -3314,7 +3385,10 @@ fn read_bounded_json_value(
     if bytes.len() > max_bytes {
         return Err(ProviderScanError::LimitExceeded);
     }
-    Ok(serde_json::from_slice(&bytes).ok())
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => Ok(BoundedJsonRead::Value(value)),
+        Err(_) => Ok(BoundedJsonRead::Unstable),
+    }
 }
 
 fn safe_antigravity_transcript_path(
@@ -5607,6 +5681,34 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn locates_grok_transcript_when_summary_json_is_unreadable() {
+        use std::fs::{self, File};
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-grok-summary-race-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let session_dir = sessions.join("encoded-cwd").join(id);
+        fs::create_dir_all(&session_dir).unwrap();
+        let transcript = session_dir.join("updates.jsonl");
+        File::create(&transcript).unwrap();
+        fs::write(session_dir.join("summary.json"), b"{").unwrap();
+
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        assert_eq!(
+            locate_grok_transcript_in_budgeted(&sessions, id, &mut budget)
+                .unwrap()
+                .as_deref(),
+            Some(transcript.as_path()),
+            "a mid-write summary must not hide a UUID-named grok transcript"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn write_grok_session(
         sessions_root: &Path,
         cwd: &Path,
@@ -5762,6 +5864,55 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn grok_unreadable_summary_is_not_claimed_from_another_cwd() {
+        use std::fs;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-grok-unread-cwd-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let cwd_a = Path::new("/repo/a");
+        let cwd_b = Path::new("/repo/b");
+        let id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let path_a = write_grok_session(&sessions, cwd_a, id, false, false);
+        fs::write(path_a.parent().unwrap().join("summary.json"), b"{").unwrap();
+
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let from_a = find_grok_jsonl_for_uuid_budgeted(
+            Some(&sessions),
+            id,
+            Some(cwd_a),
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(
+            from_a
+                .as_ref()
+                .map(|(path, found_id)| (path.as_path(), found_id.as_str())),
+            Some((path_a.as_path(), id)),
+            "the preferred cwd bucket may keep a UUID whose summary is mid-write"
+        );
+
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let from_b = find_grok_jsonl_for_uuid_budgeted(
+            Some(&sessions),
+            id,
+            Some(cwd_b),
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(
+            from_b, None,
+            "an unreadable summary in another cwd must not pin this process"
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
