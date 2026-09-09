@@ -802,4 +802,65 @@ test.describe("pane / sidebar shortcuts", () => {
       page.getByText(/Drop a tab here or double-click/i),
     ).toBeVisible();
   });
+
+  test("right-click minimize collapses a tab to an icon and survives reload", async ({
+    page,
+    tauri,
+  }) => {
+    const beta = {
+      ...SESSION,
+      id: "s-2",
+      name: "beta",
+      created_at: "2026-01-01T00:00:01Z",
+      updated_at: "2026-01-01T00:00:06Z",
+    };
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION, beta]);
+
+    await page.goto("/");
+
+    await page
+      .locator('[data-testid="sidebar"]')
+      .getByRole("button", { name: /^alpha main · Ready/ })
+      .first()
+      .click();
+
+    const betaTab = page.locator('[data-pane-tab-strip] [data-pane-tab="s-2"]');
+    await expect(betaTab).toBeVisible();
+    await expect(betaTab).not.toHaveAttribute("data-tab-minimized", "true");
+    await expect(betaTab.getByText("beta", { exact: true })).toBeVisible();
+
+    await betaTab.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Minimize Tab" }).click();
+
+    await expect(betaTab).toHaveAttribute("data-tab-minimized", "true");
+    await expect(betaTab.getByText("beta", { exact: true })).toHaveCount(0);
+    await expect(betaTab.locator("[data-tab-close-button]")).toHaveCount(0);
+    const box = await betaTab.boundingBox();
+    expect(box).not.toBeNull();
+    expect(Math.abs((box?.width ?? 0) - (box?.height ?? 0))).toBeLessThan(4);
+
+    const alphaTab = page.locator('[data-pane-tab-strip] [data-pane-tab="s-1"]');
+    await expect
+      .poll(async () => {
+        const betaBox = await betaTab.boundingBox();
+        const alphaBox = await alphaTab.boundingBox();
+        if (!betaBox || !alphaBox) return false;
+        return betaBox.x < alphaBox.x;
+      })
+      .toBe(true);
+
+    await page.reload();
+
+    const restored = page.locator(
+      '[data-pane-tab-strip] [data-pane-tab="s-2"]',
+    );
+    await expect(restored).toHaveAttribute("data-tab-minimized", "true");
+    await expect(restored.getByText("beta", { exact: true })).toHaveCount(0);
+
+    await restored.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Expand Tab" }).click();
+    await expect(restored).not.toHaveAttribute("data-tab-minimized", "true");
+    await expect(restored.getByText("beta", { exact: true })).toBeVisible();
+  });
 });
