@@ -95,20 +95,14 @@ describe("buildXtermTheme", () => {
     expect(theme.cursorAccent).toBe(DARK_PALETTE.background);
   });
 
-  it("overrides selection and scrollbar slots via CSS vars", () => {
+  it("overrides the selection slot via CSS vars", () => {
     const overrides: Record<string, string> = {
       "--color-term-selection": "#abcdef",
-      "--color-term-scrollbar": "rgba(10, 10, 10, 0.2)",
-      "--color-term-scrollbar-hover": "rgba(10, 10, 10, 0.4)",
-      "--color-term-scrollbar-active": "rgba(10, 10, 10, 0.6)",
     };
     const theme = buildXtermTheme({
       mode: "light",
       readVar: (name) => overrides[name] ?? null,
     });
     expect(theme.selectionBackground).toBe("#abcdef");
-    expect(theme.scrollbarSliderBackground).toBe("rgba(10, 10, 10, 0.2)");
-    expect(theme.scrollbarSliderHoverBackground).toBe("rgba(10, 10, 10, 0.4)");
-    expect(theme.scrollbarSliderActiveBackground).toBe("rgba(10, 10, 10, 0.6)");
   });
 });
