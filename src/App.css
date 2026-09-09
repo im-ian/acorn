@@ -176,6 +176,8 @@
 
 .acorn-terminal .xterm-viewport {
   background-color: transparent !important;
+  /* xterm.css sets overflow-y: scroll on this unused node. */
+  overflow: hidden !important;
 }
 
 /* The native cursor stays at the pre-composition buffer position, underneath
@@ -342,13 +344,9 @@
   opacity: 0.55;
 }
 
-.acorn-terminal .xterm-scrollable-element > .scrollbar.vertical {
-  width: 6px !important;
-}
-
-.acorn-terminal .xterm-scrollable-element > .scrollbar.vertical > .slider {
-  width: 6px !important;
-  border-radius: 4px;
+/* Overlay thumb intercepts clicks into the terminal. */
+.acorn-terminal .xterm-scrollable-element > .scrollbar {
+  display: none !important;
 }
 
 .acorn-terminal[data-acorn-font-smoothing="system"],
@@ -585,10 +583,6 @@ textarea,
 .acorn-terminal,
 .acorn-terminal * {
   cursor: text;
-}
-
-.acorn-terminal .xterm-viewport {
-  cursor: default;
 }
 
 .acorn-selectable {
