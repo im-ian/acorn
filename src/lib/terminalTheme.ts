@@ -24,9 +24,6 @@ export interface TerminalPalette {
   background: string;
   foreground: string;
   selectionBackground: string;
-  scrollbarSliderBackground: string;
-  scrollbarSliderHoverBackground: string;
-  scrollbarSliderActiveBackground: string;
   ansi: Record<AnsiName, string>;
 }
 
@@ -37,9 +34,6 @@ export const DARK_PALETTE: TerminalPalette = {
   background: "#1f2326",
   foreground: "#ededed",
   selectionBackground: "#3a3f44",
-  scrollbarSliderBackground: "rgba(255, 255, 255, 0.08)",
-  scrollbarSliderHoverBackground: "rgba(255, 255, 255, 0.16)",
-  scrollbarSliderActiveBackground: "rgba(255, 255, 255, 0.24)",
   ansi: {
     black: "#1f2326",
     red: "#e06c75",
@@ -69,9 +63,6 @@ export const LIGHT_PALETTE: TerminalPalette = {
   background: "#ffffff",
   foreground: "#1a1d20",
   selectionBackground: "#bcd6f7",
-  scrollbarSliderBackground: "rgba(0, 0, 0, 0.10)",
-  scrollbarSliderHoverBackground: "rgba(0, 0, 0, 0.18)",
-  scrollbarSliderActiveBackground: "rgba(0, 0, 0, 0.26)",
   ansi: {
     black: "#1a1d20",
     red: "#cf222e",
@@ -135,9 +126,6 @@ const ANSI_CSS_VARS: Record<AnsiName, string> = {
 };
 
 const SELECTION_VAR = "--color-term-selection";
-const SCROLLBAR_VAR = "--color-term-scrollbar";
-const SCROLLBAR_HOVER_VAR = "--color-term-scrollbar-hover";
-const SCROLLBAR_ACTIVE_VAR = "--color-term-scrollbar-active";
 const BG_VAR = "--color-terminal-bg";
 const FG_VAR = "--color-terminal-fg";
 
@@ -180,18 +168,6 @@ export function buildXtermTheme({
     cursor: foreground,
     cursorAccent: background,
     selectionBackground: pick(SELECTION_VAR, palette.selectionBackground),
-    scrollbarSliderBackground: pick(
-      SCROLLBAR_VAR,
-      palette.scrollbarSliderBackground,
-    ),
-    scrollbarSliderHoverBackground: pick(
-      SCROLLBAR_HOVER_VAR,
-      palette.scrollbarSliderHoverBackground,
-    ),
-    scrollbarSliderActiveBackground: pick(
-      SCROLLBAR_ACTIVE_VAR,
-      palette.scrollbarSliderActiveBackground,
-    ),
     ...ansi,
   };
 }
