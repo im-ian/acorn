@@ -39,6 +39,13 @@ import {
   updateSplitSizesInLayout,
 } from "./lib/layout";
 import {
+  applyTabMinimized,
+  clampTabInsertIndex,
+  mergeMinimizedTabIds,
+  normalizeMinimizedTabIds,
+  stackMinimizedTabIds,
+} from "./lib/paneTabs";
+import {
   activeSessionIdFromTabId,
   codeWorkspaceTabViewStateEqual,
   isRestorableWorkspaceTab,
@@ -349,6 +356,8 @@ export interface PaneState {
   activeTabId: string | null;
   /** Oldest -> newest activation order for tabs still known to this pane. */
   activationHistory?: string[];
+  /** Tab ids rendered as icon-only squares on the left of this pane. */
+  minimizedTabIds?: string[];
 }
 
 export interface ProjectWorkspace {
@@ -522,6 +531,7 @@ interface AppStateModel {
   closeFocusedTab: () => void;
   closePane: (paneId: PaneId) => void;
   moveTab: (args: MoveTabArgs) => void;
+  setTabMinimized: (tabId: string, minimized: boolean) => void;
   createSession: (
     name: string,
     repoPath: string,
@@ -677,6 +687,19 @@ function emptyPane(id: PaneId): PaneState {
   return { id, tabIds: [], activeTabId: null, activationHistory: [] };
 }
 
+function withMinimizedTabIds(
+  pane: PaneState,
+  tabIds: readonly string[],
+  source: unknown = pane.minimizedTabIds,
+): PaneState {
+  const { minimizedTabIds: _dropped, ...rest } = pane;
+  const minimizedTabIds = normalizeMinimizedTabIds(source, tabIds);
+  const stacked = stackMinimizedTabIds(tabIds, minimizedTabIds);
+  return minimizedTabIds.length > 0
+    ? { ...rest, tabIds: stacked, minimizedTabIds }
+    : { ...rest, tabIds: stacked };
+}
+
 type PersistedPaneState = Partial<PaneState> & {
   sessionIds?: string[];
   activeSessionId?: string | null;
@@ -753,11 +776,17 @@ function normalizePaneState(
         : null;
   const safeActiveTabId =
     activeTabId && tabIds.includes(activeTabId) ? activeTabId : null;
+  const minimizedTabIds = normalizeMinimizedTabIds(
+    pane?.minimizedTabIds,
+    tabIds,
+  );
+  const stacked = stackMinimizedTabIds(tabIds, minimizedTabIds);
   return {
     id,
-    tabIds,
+    tabIds: stacked,
     activeTabId: safeActiveTabId,
-    activationHistory: activationHistoryFor(pane, tabIds, safeActiveTabId),
+    activationHistory: activationHistoryFor(pane, stacked, safeActiveTabId),
+    ...(minimizedTabIds.length > 0 ? { minimizedTabIds } : {}),
   };
 }
 
@@ -967,11 +996,17 @@ function reconcileWorkspace(
       existing.activeTabId && filtered.includes(existing.activeTabId)
         ? existing.activeTabId
         : preferredTabId(existing, filtered);
+    const minimizedTabIds = normalizeMinimizedTabIds(
+      existing.minimizedTabIds,
+      filtered,
+    );
+    const stacked = stackMinimizedTabIds(filtered, minimizedTabIds);
     newPanes[pid] = {
       id: pid,
-      tabIds: filtered,
+      tabIds: stacked,
       activeTabId: active,
-      activationHistory: activationHistoryFor(existing, filtered, active),
+      activationHistory: activationHistoryFor(existing, stacked, active),
+      ...(minimizedTabIds.length > 0 ? { minimizedTabIds } : {}),
     };
   }
 
@@ -1592,8 +1627,7 @@ function applySessionPlacementIntent(
     changed = true;
     const tabIds = pane.tabIds.filter((id) => id !== sessionId);
     newPanes[pid as PaneId] = {
-      ...pane,
-      tabIds,
+      ...withMinimizedTabIds(pane, tabIds),
       activeTabId:
         pane.activeTabId === sessionId
           ? tabIds[tabIds.length - 1] ?? null
@@ -1603,7 +1637,12 @@ function applySessionPlacementIntent(
 
   const targetAfterRemoval = newPanes[placement.paneId] ?? targetPane;
   const targetIds = [...targetAfterRemoval.tabIds];
-  const insertAt = insertionIndexForPlacement(targetIds, placement);
+  const insertAt = clampTabInsertIndex(
+    targetIds,
+    targetAfterRemoval.minimizedTabIds ?? [],
+    false,
+    insertionIndexForPlacement(targetIds, placement),
+  );
   targetIds.splice(insertAt, 0, sessionId);
   changed =
     changed ||
@@ -1616,10 +1655,7 @@ function applySessionPlacementIntent(
     ...ws,
     panes: {
       ...newPanes,
-      [placement.paneId]: {
-        ...targetAfterRemoval,
-        tabIds: targetIds,
-      },
+      [placement.paneId]: withMinimizedTabIds(targetAfterRemoval, targetIds),
     },
   };
   const workspaces = { ...s.workspaces, [placement.projectFolderId]: newWs };
@@ -2840,22 +2876,36 @@ export const useAppStore = create<AppStateModel>()(
         const fallback = surviving[0] ?? ROOT_PANE_ID;
         if (newPanes[fallback] && pane.tabIds.length > 0) {
           const target = newPanes[fallback];
-          const mergedTabIds = [...target.tabIds, ...pane.tabIds];
+          const combinedTabIds = [...target.tabIds, ...pane.tabIds];
+          const mergedMinimized = mergeMinimizedTabIds(
+            target.minimizedTabIds,
+            pane.minimizedTabIds,
+            combinedTabIds,
+          );
+          const mergedTabIds = stackMinimizedTabIds(
+            combinedTabIds,
+            mergedMinimized,
+          );
           const mergedActive = target.activeTabId ?? pane.activeTabId;
           newPanes[fallback] = {
-            ...target,
-            tabIds: mergedTabIds,
-            activeTabId: mergedActive,
-            activationHistory: activationHistoryFor(
+            ...withMinimizedTabIds(
               {
-                activationHistory: [
-                  ...(pane.activationHistory ?? []),
-                  ...(target.activationHistory ?? []),
-                ],
+                ...target,
+                activationHistory: activationHistoryFor(
+                  {
+                    activationHistory: [
+                      ...(pane.activationHistory ?? []),
+                      ...(target.activationHistory ?? []),
+                    ],
+                  },
+                  mergedTabIds,
+                  mergedActive,
+                ),
               },
               mergedTabIds,
-              mergedActive,
+              mergedMinimized,
             ),
+            activeTabId: mergedActive,
           };
         }
         return {
@@ -2877,6 +2927,9 @@ export const useAppStore = create<AppStateModel>()(
         if (!fromPane || !fromPane.tabIds.includes(args.tabId))
           return ws;
 
+        const wasMinimized = Boolean(
+          fromPane.minimizedTabIds?.includes(args.tabId),
+        );
         const srcTabIds = fromPane.tabIds.filter(
           (id) => id !== args.tabId,
         );
@@ -2892,8 +2945,7 @@ export const useAppStore = create<AppStateModel>()(
         let newPanes: Record<PaneId, PaneState> = {
           ...ws.panes,
           [args.fromPaneId]: {
-            ...fromPane,
-            tabIds: srcTabIds,
+            ...withMinimizedTabIds(fromPane, srcTabIds),
             activeTabId: srcActive,
             activationHistory: activationHistoryFor(
               { ...fromPane, activationHistory: srcActivationHistory },
@@ -2923,16 +2975,29 @@ export const useAppStore = create<AppStateModel>()(
         const toPane = newPanes[toPaneId];
         if (!toPane) return ws;
 
-        const safeIndex =
+        const remainingMinimized = toPane.minimizedTabIds ?? [];
+        const requestedIndex =
           typeof args.toIndex === "number"
             ? Math.max(0, Math.min(args.toIndex, toPane.tabIds.length))
-            : toPane.tabIds.length;
+            : wasMinimized
+              ? remainingMinimized.length
+              : toPane.tabIds.length;
+        const safeIndex = clampTabInsertIndex(
+          toPane.tabIds,
+          remainingMinimized,
+          wasMinimized,
+          requestedIndex,
+        );
         const targetIds = [...toPane.tabIds];
         targetIds.splice(safeIndex, 0, args.tabId);
-        newPanes[toPaneId] = {
-          ...activatePaneTab(toPane, args.tabId),
-          tabIds: targetIds,
-        };
+        const destMinimized = wasMinimized
+          ? [...remainingMinimized, args.tabId]
+          : remainingMinimized;
+        newPanes[toPaneId] = withMinimizedTabIds(
+          activatePaneTab(toPane, args.tabId),
+          targetIds,
+          destMinimized,
+        );
 
         const totalPanes = Object.keys(newPanes).length;
         if (
@@ -2952,6 +3017,39 @@ export const useAppStore = create<AppStateModel>()(
           layout: newLayout,
           panes: newPanes,
           focusedPaneId: toPaneId,
+        };
+      });
+      return patch ?? s;
+    });
+  },
+
+  setTabMinimized(tabId, minimized) {
+    set((s) => {
+      const patch = updateActiveWorkspace(s, (ws) => {
+        const paneId = findPaneContainingTab(ws.panes, tabId);
+        if (!paneId) return ws;
+        const pane = ws.panes[paneId];
+        const next = applyTabMinimized(
+          pane.tabIds,
+          pane.minimizedTabIds ?? [],
+          tabId,
+          minimized,
+        );
+        const currentMinimized = pane.minimizedTabIds ?? [];
+        if (
+          next.tabIds.length === pane.tabIds.length &&
+          next.tabIds.every((id, index) => id === pane.tabIds[index]) &&
+          next.minimizedTabIds.length === currentMinimized.length &&
+          next.minimizedTabIds.every((id, index) => id === currentMinimized[index])
+        ) {
+          return ws;
+        }
+        return {
+          ...ws,
+          panes: {
+            ...ws.panes,
+            [paneId]: withMinimizedTabIds(pane, next.tabIds, next.minimizedTabIds),
+          },
         };
       });
       return patch ?? s;
@@ -4279,8 +4377,7 @@ export const useAppStore = create<AppStateModel>()(
               ? preferredTabId({ activationHistory }, ids)
               : pane.activeTabId;
           newPanes[pid as PaneId] = {
-            ...pane,
-            tabIds: ids,
+            ...withMinimizedTabIds(pane, ids),
             activeTabId: nextActive,
             activationHistory: activationHistoryFor(
               { ...pane, activationHistory },
@@ -4433,8 +4530,7 @@ export const useAppStore = create<AppStateModel>()(
                 ? normalized.activeTabId
                 : ids[ids.length - 1] ?? null;
             newPanes[pid as PaneId] = {
-              ...normalized,
-              tabIds: ids,
+              ...withMinimizedTabIds(normalized, ids),
               activeTabId: active,
               activationHistory: activationHistoryFor(normalized, ids, active),
             };
