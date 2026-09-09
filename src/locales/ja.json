@@ -1665,6 +1665,8 @@
       "forkAntigravityInNewWorktree": "新しいワークツリーのフォーク反重力",
       "forkGrokSession": "Grok セッションをフォーク",
       "forkGrokInNewWorktree": "新しいワークツリーで Grok をフォーク",
+      "minimizeTab": "タブを最小化",
+      "expandTab": "タブを展開",
       "splitRight": "右に分割",
       "splitDown": "スプリットダウン",
       "equalizePaneSizes": "ペインのサイズを均等化する",

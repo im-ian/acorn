@@ -14,7 +14,9 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  Maximize2,
   MessageSquareText,
+  Minimize2,
   Pencil,
   PencilLine,
   Sparkles,
@@ -26,6 +28,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  Fragment,
   Suspense,
   lazy,
   useCallback,
@@ -71,6 +74,7 @@ import {
   type HotkeyId,
 } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
+import { clampTabInsertIndex } from "../lib/paneTabs";
 import { basename } from "../lib/pathUtils";
 import {
   useSettings,
@@ -589,6 +593,7 @@ export function Pane({ paneId }: PaneProps) {
           onFork={(parent, kind, parentAgentId, isolated) => {
             void forkSession(parent, kind, parentAgentId, isolated);
           }}
+          minimizedTabIds={pane?.minimizedTabIds ?? []}
         />
       ) : null}
       <div
@@ -883,6 +888,7 @@ interface TabStripProps {
     parentAgentId: string,
     isolated: boolean,
   ) => void;
+  minimizedTabIds: readonly string[];
 }
 
 function TabStrip({
@@ -895,11 +901,19 @@ function TabStrip({
   onNewTab,
   onSplitTab,
   onFork,
+  minimizedTabIds,
 }: TabStripProps) {
   const [insertIndex, setInsertIndex] = useState<number | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const tabDrag = useWorkspaceTabDragSession();
+  const sourcePanes = useAppStore((s) => s.panes);
+  const insertingMinimized = Boolean(
+    tabDrag &&
+      sourcePanes[tabDrag.payload.fromPaneId]?.minimizedTabIds?.includes(
+        tabDrag.payload.tabId,
+      ),
+  );
 
   const computeInsertIndex = useCallback((clientX: number): number => {
     let idx = tabs.length;
@@ -912,8 +926,13 @@ function TabStrip({
         break;
       }
     }
-    return idx;
-  }, [tabs]);
+    return clampTabInsertIndex(
+      tabs.map((tab) => tab.id),
+      minimizedTabIds,
+      insertingMinimized,
+      idx,
+    );
+  }, [insertingMinimized, minimizedTabIds, tabs]);
 
   useEffect(() => {
     return registerTabStripFileDropTarget(
@@ -958,37 +977,49 @@ function TabStrip({
       data-pane-tab-strip={paneId}
       className="acorn-no-scrollbar relative flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-1 pt-px"
     >
-      {tabs.map((tab, i) => (
-        <TabItem
-          key={tab.id}
-          tab={tab}
-          paneId={paneId}
-          active={tab.id === activeId}
-          insertBefore={insertIndex === i}
-          onSelect={() => onSelect(tab.id)}
-          onClose={() => onClose(tab.id)}
-          onCloseOthers={() => {
-            for (const t of tabs) {
-              if (t.id !== tab.id) onClose(t.id);
-            }
-          }}
-          onCloseAll={() => {
-            for (const t of tabs) onClose(t.id);
-          }}
-          onSplitTab={(direction) => onSplitTab(tab.id, direction)}
-          onFork={
-            tab.kind === "session"
-              ? (kind, parentAgentId, isolated) =>
-                  onFork(tab.session, kind, parentAgentId, isolated)
-              : undefined
-          }
-          siblingCount={tabs.length}
-          registerRef={(el) => {
-            if (el) tabRefs.current.set(tab.id, el);
-            else tabRefs.current.delete(tab.id);
-          }}
-        />
-      ))}
+      {tabs.map((tab, i) => {
+        const minimized = minimizedTabIds.includes(tab.id);
+        const nextMinimized = minimizedTabIds.includes(tabs[i + 1]?.id ?? "");
+        return (
+          <Fragment key={tab.id}>
+            <TabItem
+              tab={tab}
+              paneId={paneId}
+              active={tab.id === activeId}
+              minimized={minimized}
+              insertBefore={insertIndex === i}
+              onSelect={() => onSelect(tab.id)}
+              onClose={() => onClose(tab.id)}
+              onCloseOthers={() => {
+                for (const t of tabs) {
+                  if (t.id !== tab.id) onClose(t.id);
+                }
+              }}
+              onCloseAll={() => {
+                for (const t of tabs) onClose(t.id);
+              }}
+              onSplitTab={(direction) => onSplitTab(tab.id, direction)}
+              onFork={
+                tab.kind === "session"
+                  ? (kind, parentAgentId, isolated) =>
+                      onFork(tab.session, kind, parentAgentId, isolated)
+                  : undefined
+              }
+              siblingCount={tabs.length}
+              registerRef={(el) => {
+                if (el) tabRefs.current.set(tab.id, el);
+                else tabRefs.current.delete(tab.id);
+              }}
+            />
+            {minimized && !nextMinimized && i < tabs.length - 1 ? (
+              <span
+                className="mx-0.5 my-1.5 w-px self-stretch bg-border"
+                aria-hidden
+              />
+            ) : null}
+          </Fragment>
+        );
+      })}
       {insertIndex === tabs.length ? (
         <span className="my-1 w-0.5 self-stretch bg-accent" aria-hidden />
       ) : null}
@@ -1026,10 +1057,94 @@ function fileTabIcon(path: string) {
   }
 }
 
+function TabGlyph({
+  tab,
+  session,
+  agentProvider,
+  isGeneratingTitle,
+  generatingLabel,
+  compact,
+}: {
+  tab: PaneTab;
+  session: Session | null;
+  agentProvider: SessionAgentProvider | null;
+  isGeneratingTitle: boolean;
+  generatingLabel: string;
+  compact: boolean;
+}) {
+  const iconSize = compact ? 14 : 12;
+  const statusClass = session ? STATUS_ICON[session.status] : undefined;
+  if (isGeneratingTitle) {
+    return <SessionTitleGeneratingIndicator label={generatingLabel} />;
+  }
+  if (tab.kind === "work-summary") {
+    return (
+      <BarChart3
+        size={iconSize}
+        className="pointer-events-none shrink-0 text-accent"
+      />
+    );
+  }
+  if (session?.graph) {
+    return (
+      <Waypoints
+        size={iconSize}
+        className={cn("pointer-events-none shrink-0", statusClass)}
+      />
+    );
+  }
+  if (session?.goal) {
+    return (
+      <Sparkles
+        size={iconSize}
+        className={cn("pointer-events-none shrink-0", statusClass)}
+      />
+    );
+  }
+  if (session?.mode === "chat") {
+    return (
+      <MessageSquareText
+        size={iconSize}
+        className={cn("pointer-events-none shrink-0", statusClass)}
+      />
+    );
+  }
+  if (agentProvider) {
+    return (
+      <AgentProviderIcon
+        provider={agentProvider}
+        className={cn(
+          "pointer-events-none",
+          compact ? "size-3.5" : "size-2.5",
+          statusClass,
+        )}
+      />
+    );
+  }
+  if (tab.kind === "code") {
+    const TabFileIcon = fileTabIcon(tab.path);
+    return (
+      <TabFileIcon
+        size={iconSize}
+        className="pointer-events-none shrink-0 text-fg-muted"
+      />
+    );
+  }
+  return (
+    <StatusDot
+      tone={session ? SESSION_STATUS_TONE[session.status] : "neutral"}
+      size={compact ? "md" : "sm"}
+      pulse={session?.status === "working"}
+      className={cn("pointer-events-none", !session && "opacity-70")}
+    />
+  );
+}
+
 interface TabItemProps {
   tab: PaneTab;
   paneId: PaneId;
   active: boolean;
+  minimized: boolean;
   insertBefore: boolean;
   onSelect: () => void;
   onClose: () => void;
@@ -1049,6 +1164,7 @@ function TabItem({
   tab,
   paneId,
   active,
+  minimized,
   insertBefore,
   onSelect,
   onClose,
@@ -1069,6 +1185,7 @@ function TabItem({
     session ? Boolean(s.silencedSessionIds[session.id]) : false,
   );
   const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
+  const setTabMinimized = useAppStore((s) => s.setTabMinimized);
   const isGeneratingTitle = useAppStore((s) =>
     session ? Boolean(s.generatingSessionTitleIds[session.id]) : false,
   );
@@ -1101,6 +1218,7 @@ function TabItem({
   const editorConfigured = editorCommand.trim().length > 0;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [editing, setEditing] = useState(false);
+  const showMinimized = minimized && !editing;
   const pendingDragCleanupRef = useRef<(() => void) | null>(null);
   const suppressNextClickRef = useRef(false);
   const tabDrag = useWorkspaceTabDragSession();
@@ -1326,6 +1444,14 @@ function TabItem({
       : []),
     paneContextMenuGroupTitle(t, "layout"),
     {
+      label: paneT(
+        t,
+        minimized ? "pane.menu.expandTab" : "pane.menu.minimizeTab",
+      ),
+      icon: minimized ? <Maximize2 size={12} /> : <Minimize2 size={12} />,
+      onClick: () => setTabMinimized(tab.id, !minimized),
+    },
+    {
       label: paneT(t, "pane.menu.splitRight"),
       icon: <SplitSquareHorizontal size={12} />,
       shortcut: shortcutLabel(shortcuts, "splitVertical"),
@@ -1463,6 +1589,7 @@ function TabItem({
         onClick={editing ? undefined : onSelect}
         onDoubleClick={(e) => {
           e.stopPropagation();
+          if (showMinimized) return;
           if (canRename) setEditing(true);
         }}
         onContextMenu={(e) => {
@@ -1483,8 +1610,14 @@ function TabItem({
             onSelect();
           }
         }}
+        data-pane-tab={tab.id}
+        data-tab-minimized={showMinimized ? "true" : undefined}
+        aria-label={showMinimized ? tab.title : undefined}
         className={cn(
-          "group relative flex h-7 min-w-[96px] shrink-0 cursor-pointer select-none items-center rounded-md pr-0.5 text-[13px] leading-5 transition",
+          "group relative flex shrink-0 cursor-pointer select-none items-center rounded-md text-[13px] leading-5 transition",
+          showMinimized
+            ? "size-7 justify-center"
+            : "h-7 min-w-[96px] pr-0.5",
           isDraggingThisTab && "opacity-40",
           active
             ? "acorn-tab-active-bg text-fg"
@@ -1492,84 +1625,109 @@ function TabItem({
         )}
       >
         <div
-          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch pl-2"
+          className={
+            showMinimized
+              ? "flex size-full items-center justify-center"
+              : "flex min-w-0 flex-1 items-center gap-1.5 self-stretch pl-2"
+          }
           data-tab-drag-handle={tab.id}
         >
-          {isGeneratingTitle ? (
+          {showMinimized ? (
+            <Tooltip
+              label={tab.title}
+              side="bottom"
+              className="flex size-full items-center justify-center"
+            >
+              <TabGlyph
+                tab={tab}
+                session={session}
+                agentProvider={agentProvider}
+                isGeneratingTitle={isGeneratingTitle}
+                generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
+                compact
+              />
+            </Tooltip>
+          ) : isGeneratingTitle ? (
             <SessionTitleGeneratingIndicator
               label={paneT(t, "pane.aria.generatingSessionTitle")}
             />
           ) : tab.kind === "work-summary" ? (
             <Tooltip label={paneT(t, "pane.aria.workSummary")} side="bottom">
-              <BarChart3
-                size={12}
-                className="pointer-events-none shrink-0 text-accent"
+              <TabGlyph
+                tab={tab}
+                session={session}
+                agentProvider={agentProvider}
+                isGeneratingTitle={false}
+                generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
+                compact={false}
               />
             </Tooltip>
           ) : session?.graph ? (
             <Tooltip label={t("graphSession.label")} side="bottom">
-              <Waypoints
-                size={12}
-                className={cn(
-                  "pointer-events-none shrink-0",
-                  session && STATUS_ICON[session.status],
-                )}
+              <TabGlyph
+                tab={tab}
+                session={session}
+                agentProvider={agentProvider}
+                isGeneratingTitle={false}
+                generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
+                compact={false}
               />
             </Tooltip>
           ) : session?.goal ? (
             <Tooltip label={paneT(t, "pane.aria.goalSession")} side="bottom">
-              <Sparkles
-                size={12}
-                className={cn(
-                  "pointer-events-none shrink-0",
-                  session && STATUS_ICON[session.status],
-                )}
+              <TabGlyph
+                tab={tab}
+                session={session}
+                agentProvider={agentProvider}
+                isGeneratingTitle={false}
+                generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
+                compact={false}
               />
             </Tooltip>
           ) : session?.mode === "chat" ? (
             <Tooltip label={paneT(t, "pane.aria.chatSession")} side="bottom">
-              <MessageSquareText
-                size={12}
-                className={cn(
-                  "pointer-events-none shrink-0",
-                  session && STATUS_ICON[session.status],
-                )}
+              <TabGlyph
+                tab={tab}
+                session={session}
+                agentProvider={agentProvider}
+                isGeneratingTitle={false}
+                generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
+                compact={false}
               />
             </Tooltip>
           ) : agentProvider ? (
             <Tooltip label={agentProvider} side="bottom">
-              <AgentProviderIcon
-                provider={agentProvider}
-                className={cn(
-                  "pointer-events-none size-2.5",
-                  session && STATUS_ICON[session.status],
-                )}
+              <TabGlyph
+                tab={tab}
+                session={session}
+                agentProvider={agentProvider}
+                isGeneratingTitle={false}
+                generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
+                compact={false}
               />
             </Tooltip>
           ) : tab.kind === "code" ? (
             <Tooltip label={tabPath} side="bottom">
-              {(() => {
-                const TabFileIcon = fileTabIcon(tab.path);
-                return (
-                  <TabFileIcon
-                    size={12}
-                    className="pointer-events-none shrink-0 text-fg-muted"
-                  />
-                );
-              })()}
+              <TabGlyph
+                tab={tab}
+                session={session}
+                agentProvider={agentProvider}
+                isGeneratingTitle={false}
+                generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
+                compact={false}
+              />
             </Tooltip>
           ) : (
-            <StatusDot
-              tone={session ? SESSION_STATUS_TONE[session.status] : "neutral"}
-              size="sm"
-              pulse={session?.status === "working"}
-              className={cn(
-                "pointer-events-none",
-                !session && "opacity-70",
-              )}
+            <TabGlyph
+              tab={tab}
+              session={session}
+              agentProvider={agentProvider}
+              isGeneratingTitle={false}
+              generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
+              compact={false}
             />
           )}
-          {editing ? (
+          {showMinimized ? null : editing ? (
             <TabRenameInput
               initial={tab.title}
               onSubmit={async (next) => {
@@ -1591,21 +1749,21 @@ function TabItem({
               {tab.title}
             </span>
           )}
-          {showWorktreeIcon ? (
+          {showMinimized || !showWorktreeIcon ? null : (
             <GitBranch
               size={10}
               className="pointer-events-none shrink-0 text-fg-muted"
               aria-label={paneT(t, "pane.aria.worktree")}
             />
-          ) : null}
-          {session?.kind === "control" ? (
+          )}
+          {showMinimized || session?.kind !== "control" ? null : (
             <Bot
               size={10}
               className="pointer-events-none shrink-0 text-accent"
               aria-label={paneT(t, "pane.aria.controlSession")}
             />
-          ) : null}
-          {sessionSilenced ? (
+          )}
+          {showMinimized || !sessionSilenced ? null : (
             <span
               className="pointer-events-none inline-flex shrink-0 text-fg-muted"
               aria-label={paneT(t, "pane.aria.notificationsSilenced")}
@@ -1613,51 +1771,53 @@ function TabItem({
             >
               <BellOff size={10} aria-hidden />
             </span>
-          ) : null}
+          )}
         </div>
-        <Tooltip
-          label={
-            session
-              ? paneT(t, "pane.aria.closeSession")
-              : paneT(t, "pane.aria.closeTab")
-          }
-          shortcut={shortcutLabel(shortcuts, "closeTab")}
-          side="bottom"
-        >
-          <button
-            type="button"
-            aria-label={
+        {showMinimized ? null : (
+          <Tooltip
+            label={
               session
                 ? paneT(t, "pane.aria.closeSession")
                 : paneT(t, "pane.aria.closeTab")
             }
-            data-tab-close-button={tab.id}
-            draggable={false}
-            onPointerDown={(e) => {
-              e.stopPropagation();
-            }}
-            onMouseDown={(e) => {
-              e.stopPropagation();
-            }}
-            onDragStart={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
-            onKeyDown={(e) => e.stopPropagation()}
-            className={cn(
-              "ml-0.5 flex size-6 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
-              active
-                ? "opacity-70 hover:opacity-100"
-                : "opacity-0 group-hover:opacity-70 hover:opacity-100",
-            )}
+            shortcut={shortcutLabel(shortcuts, "closeTab")}
+            side="bottom"
           >
-            <X size={11} />
-          </button>
-        </Tooltip>
+            <button
+              type="button"
+              aria-label={
+                session
+                  ? paneT(t, "pane.aria.closeSession")
+                  : paneT(t, "pane.aria.closeTab")
+              }
+              data-tab-close-button={tab.id}
+              draggable={false}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+              }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+              }}
+              onDragStart={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose();
+              }}
+              onKeyDown={(e) => e.stopPropagation()}
+              className={cn(
+                "ml-0.5 flex size-6 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
+                active
+                  ? "opacity-70 hover:opacity-100"
+                  : "opacity-0 group-hover:opacity-70 hover:opacity-100",
+              )}
+            >
+              <X size={11} />
+            </button>
+          </Tooltip>
+        )}
         {isDraggingThisTab ? (
           <WorkspaceTabDragGhost
             drag={tabDrag}
@@ -1667,6 +1827,7 @@ function TabItem({
             isGeneratingTitle={isGeneratingTitle}
             generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
             showWorktreeIcon={showWorktreeIcon}
+            minimized={showMinimized}
           />
         ) : null}
       </div>
@@ -1689,6 +1850,7 @@ function WorkspaceTabDragGhost({
   isGeneratingTitle,
   generatingLabel,
   showWorktreeIcon,
+  minimized,
 }: {
   drag: WorkspaceTabDragSession;
   tab: PaneTab;
@@ -1697,13 +1859,17 @@ function WorkspaceTabDragGhost({
   isGeneratingTitle: boolean;
   generatingLabel: string;
   showWorktreeIcon: boolean;
+  minimized: boolean;
 }) {
   return createPortal(
     <div
       aria-hidden
       className={cn(
-        "pointer-events-none fixed z-[9999] flex items-center gap-1.5 border px-3 text-[13px] leading-5 text-fg opacity-95 shadow-2xl",
+        "pointer-events-none fixed z-[9999] flex items-center border text-[13px] leading-5 text-fg opacity-95 shadow-2xl",
         "border-border bg-bg-elevated",
+        minimized
+          ? "justify-center"
+          : "gap-1.5 px-3",
       )}
       style={{
         left: drag.pointer.x - drag.offset.x,
@@ -1712,58 +1878,29 @@ function WorkspaceTabDragGhost({
         height: drag.sourceRect.height,
       }}
     >
-      {isGeneratingTitle ? (
-        <SessionTitleGeneratingIndicator label={generatingLabel} />
-      ) : session?.mode === "chat" ? (
-        <MessageSquareText
-          size={12}
-          className={cn(
-            "pointer-events-none shrink-0",
-            session && STATUS_ICON[session.status],
-          )}
-        />
-      ) : agentProvider ? (
-        <AgentProviderIcon
-          provider={agentProvider}
-          className={cn(
-            "pointer-events-none size-2.5",
-            session && STATUS_ICON[session.status],
-          )}
-        />
-      ) : tab.kind === "code" ? (
-        (() => {
-          const TabFileIcon = fileTabIcon(tab.path);
-          return (
-            <TabFileIcon
-              size={11}
-              className="pointer-events-none shrink-0 text-fg-muted"
-            />
-          );
-        })()
-      ) : (
-        <StatusDot
-          tone={session ? SESSION_STATUS_TONE[session.status] : "neutral"}
-          size="sm"
-          pulse={session?.status === "working"}
-          className={cn(
-            "pointer-events-none",
-            !session && "opacity-70",
-          )}
-        />
+      <TabGlyph
+        tab={tab}
+        session={session}
+        agentProvider={agentProvider}
+        isGeneratingTitle={isGeneratingTitle}
+        generatingLabel={generatingLabel}
+        compact={minimized}
+      />
+      {minimized ? null : (
+        <span className="min-w-0 truncate">{drag.title}</span>
       )}
-      <span className="min-w-0 truncate">{drag.title}</span>
-      {showWorktreeIcon ? (
+      {minimized || !showWorktreeIcon ? null : (
         <GitBranch
           size={10}
           className="pointer-events-none shrink-0 text-fg-muted"
         />
-      ) : null}
-      {session?.kind === "control" ? (
+      )}
+      {minimized || session?.kind !== "control" ? null : (
         <Bot
           size={10}
           className="pointer-events-none shrink-0 text-accent"
         />
-      ) : null}
+      )}
     </div>,
     document.body,
   );

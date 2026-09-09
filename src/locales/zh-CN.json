@@ -1665,6 +1665,8 @@
       "forkAntigravityInNewWorktree": "在新工作树中派生 Antigravity",
       "forkGrokSession": "派生 Grok 会话",
       "forkGrokInNewWorktree": "在新工作树中派生 Grok",
+      "minimizeTab": "最小化标签页",
+      "expandTab": "展开标签页",
       "splitRight": "向右拆分",
       "splitDown": "向下拆分",
       "equalizePaneSizes": "均衡窗格大小",

@@ -2311,6 +2311,144 @@ describe("moveTab", () => {
   });
 });
 
+describe("setTabMinimized", () => {
+  it("clusters a minimized tab on the left and keeps it after session refresh", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A), session("a3", REPO_A)],
+    );
+    const paneId = useAppStore.getState().focusedPaneId;
+    expect(useAppStore.getState().panes[paneId].tabIds).toEqual([
+      "a1",
+      "a2",
+      "a3",
+    ]);
+
+    useAppStore.getState().setTabMinimized("a3", true);
+
+    let pane = useAppStore.getState().panes[paneId];
+    expect(pane.tabIds).toEqual(["a3", "a1", "a2"]);
+    expect(pane.minimizedTabIds).toEqual(["a3"]);
+
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    mockApi.listSessions.mockResolvedValueOnce([
+      session("a1", REPO_A),
+      session("a2", REPO_A),
+      session("a3", REPO_A),
+    ]);
+    await useAppStore.getState().refreshSessions();
+
+    pane = useAppStore.getState().panes[paneId];
+    expect(pane.tabIds).toEqual(["a3", "a1", "a2"]);
+    expect(pane.minimizedTabIds).toEqual(["a3"]);
+
+    useAppStore.getState().setTabMinimized("a3", false);
+    pane = useAppStore.getState().panes[paneId];
+    expect(pane.tabIds).toEqual(["a3", "a1", "a2"]);
+    expect(pane.minimizedTabIds).toBeUndefined();
+  });
+
+  it("keeps minimized state when the tab moves to another pane", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+    useAppStore.getState().setTabMinimized("a2", true);
+    useAppStore.getState().splitFocusedPane("horizontal");
+    const fromPaneId = Object.keys(useAppStore.getState().panes).find(
+      (pid) => useAppStore.getState().panes[pid].tabIds.includes("a2"),
+    )!;
+    const toPaneId = useAppStore.getState().focusedPaneId;
+    expect(fromPaneId).not.toBe(toPaneId);
+
+    useAppStore.getState().moveTab({
+      tabId: "a2",
+      fromPaneId,
+      toPaneId,
+    });
+
+    const dest = useAppStore.getState().panes[toPaneId];
+    expect(dest.tabIds).toEqual(["a2"]);
+    expect(dest.minimizedTabIds).toEqual(["a2"]);
+    expect(
+      useAppStore.getState().panes[fromPaneId].minimizedTabIds,
+    ).toBeUndefined();
+  });
+
+  it("keeps expanded tabs after pins when moving into a pane at index 0", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A), session("a3", REPO_A)],
+    );
+    useAppStore.getState().setTabMinimized("a1", true);
+    useAppStore.getState().setTabMinimized("a3", true);
+    useAppStore.getState().splitFocusedPane("horizontal");
+    const sourcePaneId = Object.keys(useAppStore.getState().panes).find(
+      (pid) => useAppStore.getState().panes[pid].tabIds.includes("a1"),
+    )!;
+    const destPaneId = useAppStore.getState().focusedPaneId;
+    useAppStore.getState().moveTab({
+      tabId: "a3",
+      fromPaneId: sourcePaneId,
+      toPaneId: destPaneId,
+    });
+    useAppStore.getState().moveTab({
+      tabId: "a2",
+      fromPaneId: sourcePaneId,
+      toPaneId: destPaneId,
+      toIndex: 0,
+    });
+
+    const dest = useAppStore.getState().panes[destPaneId];
+    expect(dest.tabIds).toEqual(["a3", "a2"]);
+    expect(dest.minimizedTabIds).toEqual(["a3"]);
+  });
+
+  it("merges minimized tabs to the left when closing a pane", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A), session("a3", REPO_A)],
+    );
+    useAppStore.getState().setTabMinimized("a1", true);
+    useAppStore.getState().splitFocusedPane("horizontal");
+    const sourcePaneId = Object.keys(useAppStore.getState().panes).find(
+      (pid) => useAppStore.getState().panes[pid].tabIds.includes("a1"),
+    )!;
+    const destPaneId = useAppStore.getState().focusedPaneId;
+    useAppStore.getState().moveTab({
+      tabId: "a2",
+      fromPaneId: sourcePaneId,
+      toPaneId: destPaneId,
+    });
+    useAppStore.getState().setTabMinimized("a2", true);
+    useAppStore.getState().closePane(destPaneId);
+
+    const surviving = useAppStore.getState().panes[sourcePaneId];
+    expect(surviving.tabIds).toEqual(["a1", "a2", "a3"]);
+    expect(surviving.minimizedTabIds).toEqual(["a1", "a2"]);
+  });
+
+  it("places a new session after the pin group, not between pins", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    const a3 = session("a3", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2, a3]);
+    useAppStore.getState().setTabMinimized("a1", true);
+    useAppStore.getState().setTabMinimized("a2", true);
+    useAppStore.getState().selectSession("a1");
+
+    const created = session("a4", REPO_A);
+    mockApi.createSession.mockResolvedValueOnce(created);
+    mockApi.listSessions.mockResolvedValueOnce([a1, a2, a3, created]);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    await useAppStore.getState().createSession("new", REPO_A);
+
+    const pane = useAppStore.getState().panes[useAppStore.getState().focusedPaneId];
+    expect(pane.tabIds).toEqual(["a1", "a2", "a4", "a3"]);
+    expect(pane.minimizedTabIds).toEqual(["a1", "a2"]);
+  });
+});
+
 describe("closePane", () => {
   it("merges the closed pane's sessions into the surviving pane", async () => {
     await seed(

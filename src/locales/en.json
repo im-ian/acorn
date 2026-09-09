@@ -1665,6 +1665,8 @@
       "forkAntigravityInNewWorktree": "Fork Antigravity in New Worktree",
       "forkGrokSession": "Fork Grok Session",
       "forkGrokInNewWorktree": "Fork Grok in New Worktree",
+      "minimizeTab": "Minimize Tab",
+      "expandTab": "Expand Tab",
       "splitRight": "Split Right",
       "splitDown": "Split Down",
       "equalizePaneSizes": "Equalize Pane Sizes",

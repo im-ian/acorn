@@ -1665,6 +1665,8 @@
       "forkAntigravityInNewWorktree": "새 워크트리에 Antigravity 포크",
       "forkGrokSession": "Grok 세션 포크",
       "forkGrokInNewWorktree": "새 워크트리에 Grok 포크",
+      "minimizeTab": "탭 최소화",
+      "expandTab": "탭 확장",
       "splitRight": "오른쪽으로 분할",
       "splitDown": "아래로 분할",
       "equalizePaneSizes": "패널 크기 균등화",
