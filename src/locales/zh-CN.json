@@ -1323,6 +1323,8 @@
       "openWorkSummary": "打开工作摘要",
       "silenceNotifications": "静音通知",
       "resumeNotifications": "恢复通知",
+      "minimizeTab": "最小化标签页",
+      "expandTab": "展开标签页",
       "forkClaudeSession": "派生 Claude 会话",
       "forkSession": "派生会话",
       "forkClaudeInNewWorktree": "在新工作树中派生 Claude",
@@ -1384,7 +1386,8 @@
       "controlSession": "控制会话",
       "chatSession": "聊天会话",
       "generatingSessionTitle": "生成会话标题",
-      "notificationsSilenced": "通知已静音"
+      "notificationsSilenced": "通知已静音",
+      "minimizedSessions": "已最小化的会话"
     },
     "localTerminals": {
       "title": "即时会话",

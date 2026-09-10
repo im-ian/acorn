@@ -2524,6 +2524,29 @@ describe("setTabMinimized", () => {
     expect(pane.tabIds).toEqual(["a1", "a2", "a4", "a3"]);
     expect(pane.minimizedTabIds).toEqual(["a1", "a2"]);
   });
+
+  it("minimizes a tab in a non-active workspace without switching projects", async () => {
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [session("a1", REPO_A), session("b1", REPO_B), session("b2", REPO_B)],
+    );
+    useAppStore.getState().selectSession("a1");
+    expect(useAppStore.getState().activeProject).toBe(REPO_A);
+
+    useAppStore.getState().setTabMinimized("b2", true);
+
+    expect(useAppStore.getState().activeProject).toBe(REPO_A);
+    expect(
+      useAppStore.getState().panes[useAppStore.getState().focusedPaneId]
+        .minimizedTabIds,
+    ).toBeUndefined();
+    const pane = useAppStore.getState().workspaces[REPO_B]?.panes;
+    const owner = Object.values(pane ?? {}).find((candidate) =>
+      candidate.tabIds.includes("b2"),
+    );
+    expect(owner?.minimizedTabIds).toEqual(["b2"]);
+    expect(owner?.tabIds[0]).toBe("b2");
+  });
 });
 
 describe("closePane", () => {
