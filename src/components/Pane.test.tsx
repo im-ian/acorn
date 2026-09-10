@@ -1422,6 +1422,49 @@ describe("Pane empty state", () => {
     expect(useAppStore.getState().activeTabId).toBe(second.id);
   });
 
+  it("focuses the terminal of a tab selected from the tab strip", async () => {
+    const first = session("tab-focus-first");
+    const second = session("tab-focus-second");
+    seedActivePaneWithTabs([first, second], first.id);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+    // Drain frames queued by earlier tests so only this click's dispatch
+    // reaches the listener below.
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+
+    const focused: string[] = [];
+    const onFocusSession = (event: Event) => {
+      focused.push(
+        (event as CustomEvent<{ sessionId: string }>).detail.sessionId,
+      );
+    };
+    window.addEventListener("acorn:focus-session", onFocusSession);
+    try {
+      const secondTab = container
+        .querySelector(`[data-tab-drag-handle="${second.id}"]`)
+        ?.closest('[role="button"]');
+      expect(secondTab).toBeInstanceOf(HTMLElement);
+
+      act(() => {
+        secondTab!.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+    } finally {
+      window.removeEventListener("acorn:focus-session", onFocusSession);
+    }
+
+    expect(useAppStore.getState().activeTabId).toBe(second.id);
+    expect(focused).toEqual([second.id]);
+  });
+
   it("starts tab drag from the title text area without native draggable", () => {
     const active = session("active-session");
     seedActivePaneWithTab(active);

@@ -212,6 +212,7 @@ export function Pane({ paneId }: PaneProps) {
   const focusedPaneId = useAppStore((s) => s.focusedPaneId);
   const setFocusedPane = useAppStore((s) => s.setFocusedPane);
   const selectTab = useAppStore((s) => s.selectTab);
+  const selectSession = useAppStore((s) => s.selectSession);
   const createSession = useAppStore((s) => s.createSession);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const closeWorkspaceTab = useAppStore((s) => s.closeWorkspaceTab);
@@ -562,7 +563,13 @@ export function Pane({ paneId }: PaneProps) {
           activeId={active?.id ?? null}
           onSelect={(id) => {
             setFocusedPane(paneId);
-            selectTab(id);
+            // `selectSession` — not the raw `selectTab` — so the shown
+            // terminal also takes keyboard focus. Switching tabs moves the
+            // outgoing session's portal slot into limbo, which blurs its
+            // helper textarea; without the focus dispatch nothing refocuses
+            // the incoming terminal and the next keystroke goes nowhere
+            // until the user clicks into the terminal body.
+            selectSession(id);
           }}
           onClose={(id) => {
             const tab = tabs.find((t) => t.id === id);
