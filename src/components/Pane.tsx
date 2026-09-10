@@ -561,7 +561,7 @@ export function Pane({ paneId }: PaneProps) {
           paneId={paneId}
           tabs={tabs}
           activeId={active?.id ?? null}
-          onSelect={(id) => {
+          onSelect={(id, options) => {
             setFocusedPane(paneId);
             // `selectSession` — not the raw `selectTab` — so the shown
             // terminal also takes keyboard focus. Switching tabs moves the
@@ -569,7 +569,13 @@ export function Pane({ paneId }: PaneProps) {
             // helper textarea; without the focus dispatch nothing refocuses
             // the incoming terminal and the next keystroke goes nowhere
             // until the user clicks into the terminal body.
-            selectSession(id);
+            //
+            // Right-click activation opts out: the context menu does not trap
+            // focus, so a focused xterm would swallow the keys aimed at the
+            // menu — Escape would close it *and* interrupt the agent running
+            // in the session the user only meant to right-click.
+            if (options?.focusTerminal === false) selectTab(id);
+            else selectSession(id);
           }}
           onClose={(id) => {
             const tab = tabs.find((t) => t.id === id);
@@ -877,11 +883,20 @@ function rectContainsPoint(rect: DOMRect, point: PointerPoint): boolean {
   );
 }
 
+/**
+ * Tab activation carries whether the shown terminal should also take keyboard
+ * focus. Click and Enter/Space focus it; right-click only activates, because
+ * the context menu that follows does not trap focus.
+ */
+interface TabSelectOptions {
+  focusTerminal?: boolean;
+}
+
 interface TabStripProps {
   paneId: PaneId;
   tabs: PaneTab[];
   activeId: string | null;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, options?: TabSelectOptions) => void;
   onClose: (id: string) => void;
   onDropReorder: (
     payload: { tabId: string; fromPaneId: PaneId },
@@ -995,7 +1010,7 @@ function TabStrip({
               active={tab.id === activeId}
               minimized={minimized}
               insertBefore={insertIndex === i}
-              onSelect={() => onSelect(tab.id)}
+              onSelect={(options) => onSelect(tab.id, options)}
               onClose={() => onClose(tab.id)}
               onCloseOthers={() => {
                 for (const t of tabs) {
@@ -1153,7 +1168,7 @@ interface TabItemProps {
   active: boolean;
   minimized: boolean;
   insertBefore: boolean;
-  onSelect: () => void;
+  onSelect: (options?: TabSelectOptions) => void;
   onClose: () => void;
   onCloseOthers: () => void;
   onCloseAll: () => void;
@@ -1593,7 +1608,7 @@ function TabItem({
             e.stopPropagation();
           }
         }}
-        onClick={editing ? undefined : onSelect}
+        onClick={editing ? undefined : () => onSelect()}
         onDoubleClick={(e) => {
           e.stopPropagation();
           if (showMinimized) return;
@@ -1604,7 +1619,7 @@ function TabItem({
           e.stopPropagation();
           // Activate the tab on right-click so the visible context matches the
           // menu target — mirrors VS Code / browser tab behavior.
-          if (!active) onSelect();
+          if (!active) onSelect({ focusTerminal: false });
           setMenu({ x: e.clientX, y: e.clientY });
         }}
         onKeyDown={(e) => {

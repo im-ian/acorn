@@ -1465,6 +1465,54 @@ describe("Pane empty state", () => {
     expect(focused).toEqual([second.id]);
   });
 
+  it("activates a right-clicked tab without focusing its terminal", async () => {
+    const first = session("tab-menu-first");
+    const second = session("tab-menu-second");
+    seedActivePaneWithTabs([first, second], first.id);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+
+    const focused: string[] = [];
+    const onFocusSession = (event: Event) => {
+      focused.push(
+        (event as CustomEvent<{ sessionId: string }>).detail.sessionId,
+      );
+    };
+    window.addEventListener("acorn:focus-session", onFocusSession);
+    try {
+      const secondTab = container
+        .querySelector(`[data-tab-drag-handle="${second.id}"]`)
+        ?.closest('[role="button"]');
+      expect(secondTab).toBeInstanceOf(HTMLElement);
+
+      act(() => {
+        secondTab!.dispatchEvent(
+          new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: 40,
+            clientY: 50,
+          }),
+        );
+      });
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+    } finally {
+      window.removeEventListener("acorn:focus-session", onFocusSession);
+    }
+
+    // The menu opens over the newly active tab, and the context menu does not
+    // trap focus — a focused xterm would eat the keys aimed at the menu.
+    expect(useAppStore.getState().activeTabId).toBe(second.id);
+    expect(focused).toEqual([]);
+  });
+
   it("starts tab drag from the title text area without native draggable", () => {
     const active = session("active-session");
     seedActivePaneWithTab(active);
