@@ -1323,6 +1323,8 @@
       "openWorkSummary": "オープンワークの概要",
       "silenceNotifications": "通知をサイレントにする",
       "resumeNotifications": "再開通知",
+      "minimizeTab": "タブを最小化",
+      "expandTab": "タブを展開",
       "forkClaudeSession": "フォーク・クロード・セッション",
       "forkSession": "フォークセッション",
       "forkClaudeInNewWorktree": "新しいワークツリーのフォーク クロード",
@@ -1384,7 +1386,8 @@
       "controlSession": "コントロールセッション",
       "chatSession": "チャットセッション",
       "generatingSessionTitle": "セッションタイトルの生成",
-      "notificationsSilenced": "通知をサイレントにしました"
+      "notificationsSilenced": "通知をサイレントにしました",
+      "minimizedSessions": "最小化されたセッション"
     },
     "localTerminals": {
       "title": "インスタントセッション",

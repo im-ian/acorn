@@ -5,6 +5,8 @@ import {
   isPriorityDropAllowed,
   orderSessionsByPriority,
   orderProjectTopLevelItems,
+  partitionProjectTopLevelItems,
+  partitionSidebarSessions,
   planProjectTopLevelDrag,
   refuseCrossPriorityGroupDrop,
 } from "./sidebarProjectItems";
@@ -492,5 +494,50 @@ describe("sidebar project items", () => {
       "needs",
       "working",
     ]);
+  });
+
+  it("parks minimized sessions without reordering within each group", () => {
+    const sessions = [
+      session("a"),
+      session("b"),
+      session("c"),
+      session("d"),
+    ];
+    expect(
+      partitionSidebarSessions(sessions, new Set(["c", "a"])),
+    ).toEqual({
+      minimized: [sessions[0], sessions[2]],
+      expanded: [sessions[1], sessions[3]],
+    });
+  });
+
+  it("parks minimized top-level sessions and leaves folders in place", () => {
+    const ready = session("ready");
+    const pinned = session("pinned");
+    const items = buildProjectTopLevelItems(
+      {
+        repoPath: "/repo/app",
+        name: "app",
+        sessions: [ready, pinned],
+        folders: [
+          {
+            folder: makeDefaultProjectFolder("/repo/app"),
+            sessions: [ready, pinned],
+          },
+          folderGroup("feature", [session("other")]),
+        ],
+      },
+      [],
+    );
+    const { minimizedSessions, rest } = partitionProjectTopLevelItems(
+      items,
+      new Set(["pinned"]),
+    );
+    expect(minimizedSessions.map((item) => item.session.id)).toEqual(["pinned"]);
+    expect(
+      rest.map((item) =>
+        item.type === "session" ? item.session.id : item.folderGroup.folder.id,
+      ),
+    ).toEqual(["ready", "feature"]);
   });
 });

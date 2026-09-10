@@ -18,7 +18,9 @@ import {
   GitPullRequest,
   Home,
   LayoutPanelLeft,
+  Maximize2,
   MessageSquareText,
+  Minimize2,
   MoreHorizontal,
   Pencil,
   PencilLine,
@@ -153,6 +155,8 @@ import {
   buildDragPriorityIndex,
   buildProjectTopLevelItems,
   orderSessionsByPriority,
+  partitionProjectTopLevelItems,
+  partitionSidebarSessions,
   planProjectTopLevelDrag,
   refuseCrossPriorityGroupDrop,
   type ProjectTopLevelFolderItem,
@@ -179,6 +183,10 @@ import {
   planTitleClick,
   type ProjectClickPlan,
 } from "../lib/sidebar-actions";
+import {
+  collectMinimizedTabIds,
+  isTabMinimizedInWorkspaces,
+} from "../lib/paneTabs";
 import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import type {
   Session,
@@ -273,6 +281,45 @@ type SidebarContextMenuGroup =
   | "open"
   | "copy"
   | "danger";
+
+function minimizeSessionMenuItem(
+  t: Translator,
+  minimized: boolean,
+  onToggle: () => void,
+): ContextMenuItem {
+  return {
+    label: sidebarText(
+      t,
+      minimized ? "sidebar.actions.expandTab" : "sidebar.actions.minimizeTab",
+    ),
+    icon: minimized ? <Maximize2 size={12} /> : <Minimize2 size={12} />,
+    onClick: onToggle,
+  };
+}
+
+function useMinimizedTabIdSet(): Set<string> {
+  const workspaces = useAppStore((s) => s.workspaces);
+  return useMemo(() => collectMinimizedTabIds(workspaces), [workspaces]);
+}
+
+function MinimizedSessionStrip({ children }: { children: ReactNode }) {
+  const t = useTranslation();
+  return (
+    <li className="px-0.5 py-0.5">
+      <ul
+        data-sidebar-minimized-strip=""
+        className="flex flex-wrap gap-0.5"
+        aria-label={sidebarText(t, "sidebar.aria.minimizedSessions")}
+      >
+        {children}
+      </ul>
+    </li>
+  );
+}
+
+function SessionListDivider() {
+  return <li className="mx-1.5 my-0.5 h-px bg-border" aria-hidden />;
+}
 
 function contextMenuGroupTitle(
   t: Translator,
@@ -1816,9 +1863,19 @@ function SessionRowPreview({
     sessionDisplay.metadata,
   );
   const agentProvider = resolveSessionAgentProvider(session);
+  const minimized = useAppStore((s) =>
+    isTabMinimizedInWorkspaces(s.workspaces, session.id),
+  );
 
   return (
-    <div className="flex w-full items-start gap-1.5 rounded-md bg-bg-elevated/95 px-2 py-1 shadow-lg ring-1 ring-border/60">
+    <div
+      className={cn(
+        "flex rounded-md bg-bg-elevated/95 shadow-lg ring-1 ring-border/60",
+        minimized
+          ? "size-7 items-center justify-center"
+          : "w-full items-start gap-1.5 px-2 py-1",
+      )}
+    >
       <SessionStatusMarker
         session={session}
         agentProvider={agentProvider}
@@ -1827,16 +1884,18 @@ function SessionRowPreview({
         chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
         goalLabel={sidebarText(t, "sidebar.aria.goalSession")}
       />
-      <SessionRowLabel
-        editing={false}
-        session={session}
-        titleText={titleText}
-        metadataText={metadataText}
-        currentPullRequest={null}
-        t={t}
-        onSubmitRename={() => undefined}
-        onCancelRename={() => undefined}
-      />
+      {minimized ? null : (
+        <SessionRowLabel
+          editing={false}
+          session={session}
+          titleText={titleText}
+          metadataText={metadataText}
+          currentPullRequest={null}
+          t={t}
+          onSubmitRename={() => undefined}
+          onCancelRename={() => undefined}
+        />
+      )}
     </div>
   );
 }
@@ -2489,6 +2548,11 @@ function ProjectGroupView({
       ),
     [prioritizeNeedsInputTabs, project, topLevelOrder],
   );
+  const minimizedIds = useMinimizedTabIdSet();
+  const { minimizedSessions, rest: restTopLevelItems } = useMemo(
+    () => partitionProjectTopLevelItems(topLevelItems, minimizedIds),
+    [minimizedIds, topLevelItems],
+  );
   const topLevelItemIds = useMemo(
     () => topLevelItems.map((item) => item.id),
     [topLevelItems],
@@ -2739,7 +2803,8 @@ function ProjectGroupView({
                 {sidebarText(t, "sidebar.emptyProject.createSession")}
               </li>
             ) : (
-              topLevelItems.map((item) =>
+              <>
+              {restTopLevelItems.map((item) =>
                 item.type === "session" ? (
                   <SessionRow
                     key={item.id}
@@ -2807,7 +2872,29 @@ function ProjectGroupView({
                     onMoveSessionToFolder={onMoveSessionToFolder}
                   />
                 ),
-              )
+              )}
+              {minimizedSessions.length > 0 && restTopLevelItems.length > 0 ? (
+                <SessionListDivider />
+              ) : null}
+              {minimizedSessions.length > 0 ? (
+                <MinimizedSessionStrip>
+                  {minimizedSessions.map((item) => (
+                    <SessionRow
+                      key={item.id}
+                      session={item.session}
+                      active={item.session.id === activeSessionId}
+                      onSelect={() =>
+                        onSelectSession(item.folderId, item.session.id)
+                      }
+                      onRemove={() => onRemoveSession(item.session)}
+                      projectFolders={projectFoldersForRows}
+                      currentProjectFolderId={item.folderId}
+                      onMoveToProjectFolder={onMoveSessionToFolder}
+                    />
+                  ))}
+                </MinimizedSessionStrip>
+              ) : null}
+              </>
             )}
           </SortableContext>
           {!defaultFolderGroup && namedFolderGroups.length === 0 ? (
@@ -2926,6 +3013,11 @@ function ProjectFolderView({
     () =>
       orderSessionsByPriority(folderGroup.sessions, prioritizeNeedsInputTabs),
     [folderGroup.sessions, prioritizeNeedsInputTabs],
+  );
+  const minimizedIds = useMinimizedTabIdSet();
+  const { minimized: minimizedSessions, expanded: expandedSessions } = useMemo(
+    () => partitionSidebarSessions(orderedSessions, minimizedIds),
+    [minimizedIds, orderedSessions],
   );
   const sessionIds = useMemo(
     () => orderedSessions.map((s) => sessionDragId(s.id)),
@@ -3299,18 +3391,39 @@ function ProjectFolderView({
                 {sidebarText(t, "sidebar.emptyProjectFolder.noSessions")}
               </li>
             ) : (
-              orderedSessions.map((session) => (
-                <SessionRow
-                  key={session.id}
-                  session={session}
-                  active={session.id === activeSessionId}
-                  onSelect={() => onSelectSession(session.id)}
-                  onRemove={() => onRemoveSession(session)}
-                  projectFolders={projectFolders}
-                  currentProjectFolderId={folder.id}
-                  onMoveToProjectFolder={onMoveSessionToFolder}
-                />
-              ))
+              <>
+                {expandedSessions.map((session) => (
+                  <SessionRow
+                    key={session.id}
+                    session={session}
+                    active={session.id === activeSessionId}
+                    onSelect={() => onSelectSession(session.id)}
+                    onRemove={() => onRemoveSession(session)}
+                    projectFolders={projectFolders}
+                    currentProjectFolderId={folder.id}
+                    onMoveToProjectFolder={onMoveSessionToFolder}
+                  />
+                ))}
+                {minimizedSessions.length > 0 && expandedSessions.length > 0 ? (
+                  <SessionListDivider />
+                ) : null}
+                {minimizedSessions.length > 0 ? (
+                  <MinimizedSessionStrip>
+                    {minimizedSessions.map((session) => (
+                      <SessionRow
+                        key={session.id}
+                        session={session}
+                        active={session.id === activeSessionId}
+                        onSelect={() => onSelectSession(session.id)}
+                        onRemove={() => onRemoveSession(session)}
+                        projectFolders={projectFolders}
+                        currentProjectFolderId={folder.id}
+                        onMoveToProjectFolder={onMoveSessionToFolder}
+                      />
+                    ))}
+                  </MinimizedSessionStrip>
+                ) : null}
+              </>
             )}
           </ul>
         </SortableContext>
@@ -3350,6 +3463,10 @@ function SessionRow({
     Boolean(s.silencedSessionIds[session.id]),
   );
   const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
+  const setTabMinimized = useAppStore((s) => s.setTabMinimized);
+  const minimized = useAppStore((s) =>
+    isTabMinimizedInWorkspaces(s.workspaces, session.id),
+  );
   const createSession = useAppStore((s) => s.createSession);
   const selectSession = useAppStore((s) => s.selectSession);
   const requestArchiveSession = useAppStore((s) => s.requestArchiveSession);
@@ -3412,6 +3529,7 @@ function SessionRow({
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [agent, setAgent] = useState<SessionAgentDetection | null>(null);
+  const showMinimized = minimized && !editing;
   const {
     attributes,
     listeners,
@@ -3633,6 +3751,9 @@ function SessionRow({
       icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
       onClick: () => setSessionSilenced(session.id, !sessionSilenced),
     },
+    minimizeSessionMenuItem(t, minimized, () =>
+      setTabMinimized(session.id, !minimized),
+    ),
     ...(forkItems.length > 0
       ? [contextMenuGroupTitle(t, "fork"), ...forkItems]
       : []),
@@ -3721,6 +3842,7 @@ function SessionRow({
       }}
       onDoubleClick={(e) => {
         e.stopPropagation();
+        if (showMinimized) return;
         if (canRename) setEditing(true);
       }}
       onKeyDown={(e) => {
@@ -3745,14 +3867,20 @@ function SessionRow({
         e.stopPropagation();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
+      data-sidebar-session={session.id}
+      data-session-minimized={showMinimized ? "true" : undefined}
+      aria-label={showMinimized ? titleText : undefined}
       className={listRowClassName({
-        density: "sidebar",
+        density: showMinimized ? "none" : "sidebar",
         interactive: true,
         selected: active,
         selectedClassName: "acorn-tab-active-bg text-fg shadow-sm",
         surface: "sidebar",
         className: cn(
-          "group flex w-full cursor-pointer items-start gap-1.5 text-left",
+          "group flex cursor-pointer text-left",
+          showMinimized
+            ? "size-7 items-center justify-center"
+            : "w-full items-start gap-1.5",
           isDragging && "opacity-40",
         ),
       })}
@@ -3765,63 +3893,73 @@ function SessionRow({
         chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
         goalLabel={sidebarText(t, "sidebar.aria.goalSession")}
       />
-      <SessionRowLabel
-        editing={editing}
-        session={session}
-        titleText={titleText}
-        metadataText={metadataText}
-        currentPullRequest={currentPullRequest}
-        hideWorktreeIcon={hideWorkspaceDuplicateContext}
-        t={t}
-        onSubmitRename={async (next) => {
-          setEditing(false);
-          if (canRename && next && next !== session.name) {
-            await renameSession(session.id, next);
-            const error = useAppStore.getState().consumeError();
-            if (error) showToast(`${t("toasts.session.renameFailed")} ${error}`);
-          }
-        }}
-        onCancelRename={() => setEditing(false)}
-      />
-      <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
-        <button
-          type="button"
-          aria-label={sidebarText(t, "sidebar.actions.archiveSession")}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            requestArchiveSession(session.id);
+      {showMinimized ? null : (
+        <SessionRowLabel
+          editing={editing}
+          session={session}
+          titleText={titleText}
+          metadataText={metadataText}
+          currentPullRequest={currentPullRequest}
+          hideWorktreeIcon={hideWorkspaceDuplicateContext}
+          t={t}
+          onSubmitRename={async (next) => {
+            setEditing(false);
+            if (canRename && next && next !== session.name) {
+              await renameSession(session.id, next);
+              const error = useAppStore.getState().consumeError();
+              if (error) showToast(`${t("toasts.session.renameFailed")} ${error}`);
+            }
           }}
-          onKeyDown={(e) => e.stopPropagation()}
-          className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-        >
-          <Archive size={12} />
-        </button>
-        <button
-          type="button"
-          aria-label={sidebarText(t, "sidebar.actions.removeSession")}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          onKeyDown={(e) => e.stopPropagation()}
-          className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
-        >
-          <Trash2 size={12} />
-        </button>
-      </div>
+          onCancelRename={() => setEditing(false)}
+        />
+      )}
+      {showMinimized ? null : (
+        <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
+          <button
+            type="button"
+            aria-label={sidebarText(t, "sidebar.actions.archiveSession")}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              requestArchiveSession(session.id);
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <Archive size={12} />
+          </button>
+          <button
+            type="button"
+            aria-label={sidebarText(t, "sidebar.actions.removeSession")}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      )}
     </div>
   );
 
+  const tooltipLabel = hoverDetails ?? (showMinimized ? titleText : null);
+
   return (
-    <li ref={setNodeRef} style={style}>
-      {hoverDetails ? (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={showMinimized ? "w-fit" : undefined}
+    >
+      {tooltipLabel ? (
         <Tooltip
-          label={hoverDetails}
+          label={tooltipLabel}
           side="right"
-          multiline
-          className="flex! w-full"
+          multiline={Boolean(hoverDetails)}
+          className={showMinimized ? "flex!" : "flex! w-full"}
         >
           {row}
         </Tooltip>
@@ -4299,6 +4437,11 @@ function LocalTerminalArea({
     () => sessions.map((s) => sessionDragId(s.id)),
     [sessions],
   );
+  const minimizedIds = useMinimizedTabIdSet();
+  const { minimized: minimizedSessions, expanded: expandedSessions } = useMemo(
+    () => partitionSidebarSessions(sessions, minimizedIds),
+    [minimizedIds, sessions],
+  );
 
   return (
     <section
@@ -4372,7 +4515,7 @@ function LocalTerminalArea({
                 text: "none",
               })}
             >
-              {sessions.map((session) => (
+              {expandedSessions.map((session) => (
                 <LocalSessionRow
                   key={session.id}
                   session={session}
@@ -4381,6 +4524,22 @@ function LocalTerminalArea({
                   onRemove={() => onRemoveSession(session)}
                 />
               ))}
+              {minimizedSessions.length > 0 && expandedSessions.length > 0 ? (
+                <SessionListDivider />
+              ) : null}
+              {minimizedSessions.length > 0 ? (
+                <MinimizedSessionStrip>
+                  {minimizedSessions.map((session) => (
+                    <LocalSessionRow
+                      key={session.id}
+                      session={session}
+                      active={session.id === activeSessionId}
+                      onSelect={() => onSelectSession(session.id)}
+                      onRemove={() => onRemoveSession(session)}
+                    />
+                  ))}
+                </MinimizedSessionStrip>
+              ) : null}
             </ul>
           </SortableContext>
         </div>
@@ -4858,6 +5017,11 @@ function LocalWorkspaceView({
     () => folderGroup.sessions.map((session) => sessionDragId(session.id)),
     [folderGroup.sessions],
   );
+  const minimizedIds = useMinimizedTabIdSet();
+  const { minimized: minimizedSessions, expanded: expandedSessions } = useMemo(
+    () => partitionSidebarSessions(folderGroup.sessions, minimizedIds),
+    [folderGroup.sessions, minimizedIds],
+  );
   const workspaceLabel = workspacePathLabel(folder);
 
   function submitRename(next: string) {
@@ -5065,18 +5229,39 @@ function LocalWorkspaceView({
                 {sidebarText(t, "sidebar.emptyProjectFolder.noSessions")}
               </li>
             ) : (
-              folderGroup.sessions.map((session) => (
-                <SessionRow
-                  key={session.id}
-                  session={session}
-                  active={session.id === activeSessionId}
-                  onSelect={() => onSelectSession(session.id)}
-                  onRemove={() => onRemoveSession(session)}
-                  projectFolders={projectFolders}
-                  currentProjectFolderId={folder.id}
-                  onMoveToProjectFolder={onMoveSessionToFolder}
-                />
-              ))
+              <>
+                {expandedSessions.map((session) => (
+                  <SessionRow
+                    key={session.id}
+                    session={session}
+                    active={session.id === activeSessionId}
+                    onSelect={() => onSelectSession(session.id)}
+                    onRemove={() => onRemoveSession(session)}
+                    projectFolders={projectFolders}
+                    currentProjectFolderId={folder.id}
+                    onMoveToProjectFolder={onMoveSessionToFolder}
+                  />
+                ))}
+                {minimizedSessions.length > 0 && expandedSessions.length > 0 ? (
+                  <SessionListDivider />
+                ) : null}
+                {minimizedSessions.length > 0 ? (
+                  <MinimizedSessionStrip>
+                    {minimizedSessions.map((session) => (
+                      <SessionRow
+                        key={session.id}
+                        session={session}
+                        active={session.id === activeSessionId}
+                        onSelect={() => onSelectSession(session.id)}
+                        onRemove={() => onRemoveSession(session)}
+                        projectFolders={projectFolders}
+                        currentProjectFolderId={folder.id}
+                        onMoveToProjectFolder={onMoveSessionToFolder}
+                      />
+                    ))}
+                  </MinimizedSessionStrip>
+                ) : null}
+              </>
             )}
           </ul>
         </SortableContext>
@@ -5111,6 +5296,10 @@ function LocalSessionRow({
     Boolean(s.silencedSessionIds[session.id]),
   );
   const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
+  const setTabMinimized = useAppStore((s) => s.setTabMinimized);
+  const minimized = useAppStore((s) =>
+    isTabMinimizedInWorkspaces(s.workspaces, session.id),
+  );
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
   const currentPullRequest = useCurrentPullRequest(session);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
@@ -5136,6 +5325,7 @@ function LocalSessionRow({
   );
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const showMinimized = minimized && !editing;
   const {
     attributes,
     listeners,
@@ -5204,6 +5394,9 @@ function LocalSessionRow({
       icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
       onClick: () => setSessionSilenced(session.id, !sessionSilenced),
     },
+    minimizeSessionMenuItem(t, minimized, () =>
+      setTabMinimized(session.id, !minimized),
+    ),
     ...(canCreateWorktreeWorkspace
       ? [
           { type: "separator" as const },
@@ -5263,6 +5456,7 @@ function LocalSessionRow({
       }}
       onDoubleClick={(e) => {
         e.stopPropagation();
+        if (showMinimized) return;
         if (canRename) setEditing(true);
       }}
       onKeyDown={(e) => {
@@ -5287,14 +5481,20 @@ function LocalSessionRow({
         e.stopPropagation();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
+      data-sidebar-session={session.id}
+      data-session-minimized={showMinimized ? "true" : undefined}
+      aria-label={showMinimized ? titleText : undefined}
       className={listRowClassName({
-        density: "sidebar",
+        density: showMinimized ? "none" : "sidebar",
         interactive: true,
         selected: active,
         selectedClassName: "acorn-tab-active-bg text-fg shadow-sm",
         surface: "sidebar",
         className: cn(
-          "group flex w-full cursor-pointer items-start gap-1.5 text-left",
+          "group flex cursor-pointer text-left",
+          showMinimized
+            ? "size-7 items-center justify-center"
+            : "w-full items-start gap-1.5",
           isDragging && "opacity-40",
         ),
       })}
@@ -5307,62 +5507,72 @@ function LocalSessionRow({
         chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
         goalLabel={sidebarText(t, "sidebar.aria.goalSession")}
       />
-      <SessionRowLabel
-        editing={editing}
-        session={session}
-        titleText={titleText}
-        metadataText={metadataText}
-        currentPullRequest={currentPullRequest}
-        t={t}
-        onSubmitRename={async (next) => {
-          setEditing(false);
-          if (canRename && next && next !== session.name) {
-            await renameSession(session.id, next);
-            const error = useAppStore.getState().consumeError();
-            if (error) showToast(`${t("toasts.session.renameFailed")} ${error}`);
-          }
-        }}
-        onCancelRename={() => setEditing(false)}
-      />
-      <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
-        <button
-          type="button"
-          aria-label={sidebarText(t, "sidebar.actions.archiveSession")}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            requestArchiveSession(session.id);
+      {showMinimized ? null : (
+        <SessionRowLabel
+          editing={editing}
+          session={session}
+          titleText={titleText}
+          metadataText={metadataText}
+          currentPullRequest={currentPullRequest}
+          t={t}
+          onSubmitRename={async (next) => {
+            setEditing(false);
+            if (canRename && next && next !== session.name) {
+              await renameSession(session.id, next);
+              const error = useAppStore.getState().consumeError();
+              if (error) showToast(`${t("toasts.session.renameFailed")} ${error}`);
+            }
           }}
-          onKeyDown={(e) => e.stopPropagation()}
-          className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-        >
-          <Archive size={12} />
-        </button>
-        <button
-          type="button"
-          aria-label={sidebarText(t, "sidebar.actions.removeSession")}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          onKeyDown={(e) => e.stopPropagation()}
-          className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
-        >
-          <Trash2 size={12} />
-        </button>
-      </div>
+          onCancelRename={() => setEditing(false)}
+        />
+      )}
+      {showMinimized ? null : (
+        <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
+          <button
+            type="button"
+            aria-label={sidebarText(t, "sidebar.actions.archiveSession")}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              requestArchiveSession(session.id);
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <Archive size={12} />
+          </button>
+          <button
+            type="button"
+            aria-label={sidebarText(t, "sidebar.actions.removeSession")}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      )}
     </div>
   );
 
+  const tooltipLabel = hoverDetails ?? (showMinimized ? titleText : null);
+
   return (
-    <li ref={setNodeRef} style={style}>
-      {hoverDetails ? (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={showMinimized ? "w-fit" : undefined}
+    >
+      {tooltipLabel ? (
         <Tooltip
-          label={hoverDetails}
+          label={tooltipLabel}
           side="right"
-          multiline
-          className="flex! w-full"
+          multiline={Boolean(hoverDetails)}
+          className={showMinimized ? "flex!" : "flex! w-full"}
         >
           {row}
         </Tooltip>

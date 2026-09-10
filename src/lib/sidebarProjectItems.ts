@@ -231,6 +231,38 @@ export function orderSessionsByPriority(
   return stablePartition(sessions, hasPriorityStatus);
 }
 
+export function partitionSidebarSessions(
+  sessions: readonly Session[],
+  minimizedIds: ReadonlySet<string>,
+): { minimized: Session[]; expanded: Session[] } {
+  const minimized: Session[] = [];
+  const expanded: Session[] = [];
+  for (const session of sessions) {
+    if (minimizedIds.has(session.id)) minimized.push(session);
+    else expanded.push(session);
+  }
+  return { minimized, expanded };
+}
+
+export function partitionProjectTopLevelItems(
+  items: readonly ProjectTopLevelItem[],
+  minimizedIds: ReadonlySet<string>,
+): {
+  minimizedSessions: ProjectTopLevelSessionItem[];
+  rest: ProjectTopLevelItem[];
+} {
+  const minimizedSessions: ProjectTopLevelSessionItem[] = [];
+  const rest: ProjectTopLevelItem[] = [];
+  for (const item of items) {
+    if (item.type === "session" && minimizedIds.has(item.session.id)) {
+      minimizedSessions.push(item);
+    } else {
+      rest.push(item);
+    }
+  }
+  return { minimizedSessions, rest };
+}
+
 function orderItemsByPriority(
   items: readonly ProjectTopLevelItem[],
 ): ProjectTopLevelItem[] {

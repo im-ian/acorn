@@ -100,3 +100,28 @@ export function mergeMinimizedTabIds(
   ];
   return normalizeMinimizedTabIds(merged, tabIds);
 }
+
+export function collectMinimizedTabIds(
+  workspaces: Record<
+    string,
+    { panes: Record<string, { minimizedTabIds?: readonly string[] }> }
+  >,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const workspace of Object.values(workspaces)) {
+    for (const pane of Object.values(workspace.panes)) {
+      for (const id of pane.minimizedTabIds ?? []) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+export function isTabMinimizedInWorkspaces(
+  workspaces: Record<
+    string,
+    { panes: Record<string, { minimizedTabIds?: readonly string[] }> }
+  >,
+  tabId: string,
+): boolean {
+  return collectMinimizedTabIds(workspaces).has(tabId);
+}
