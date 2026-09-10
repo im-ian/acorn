@@ -116,6 +116,39 @@ describe("session status polling schedule", () => {
     ).toEqual(["active", "working", "new"]);
   });
 
+  it("skips archived sessions from due, immediate, and delay schedules", () => {
+    const now = 60_000;
+    const parked = session("parked", "working", {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    const live = session("live", "ready");
+    const lastPolledAt = new Map<string, number>();
+
+    expect(
+      selectDueSessionStatusPollIds({
+        sessions: [parked, live],
+        activeSessionId: "parked",
+        lastPolledAt,
+        now,
+      }),
+    ).toEqual(["live"]);
+    expect(
+      selectImmediateSessionStatusPollIds({
+        sessions: [parked, live],
+        activeSessionId: "parked",
+        lastPolledAt,
+      }),
+    ).toEqual(["live"]);
+    expect(
+      nextSessionStatusPollDelayMs({
+        sessions: [parked],
+        activeSessionId: "parked",
+        lastPolledAt,
+        now,
+      }),
+    ).toBeNull();
+  });
+
   it("returns the delay until the next session becomes due", () => {
     const now = 60_000;
     const sessions = [

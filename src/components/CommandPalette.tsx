@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Command, useCommandState } from "cmdk";
 import {
   AlertCircle,
+  Archive,
   Bell,
   Bot,
   Columns3,
@@ -35,6 +36,11 @@ import {
   buildSessionCreateRequest,
   resolveActiveSessionScope,
 } from "../lib/sessionCreation";
+import {
+  archivedSessions,
+  isArchivedSession,
+  liveSessions,
+} from "../lib/sessionArchive";
 import { suggestDefaultSessionName } from "../lib/sessionName";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
@@ -105,7 +111,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   // Derived once per render — sessions array identity is stable from zustand
   // until the underlying list actually changes.
-  const sessionItems = useMemo(() => sessions, [sessions]);
+  const sessionItems = useMemo(() => liveSessions(sessions), [sessions]);
+  const archivedItems = useMemo(
+    () => archivedSessions(sessions),
+    [sessions],
+  );
   const unreadNotifications = useMemo(
     () => notifications.filter((notification) => !notification.readAt),
     [notifications],
@@ -228,7 +238,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     }
   }
 
-  function handleSelectSession(id: string) {
+  async function handleSelectSession(id: string) {
+    const session = useAppStore.getState().sessions.find(
+      (candidate) => candidate.id === id,
+    );
+    if (session && isArchivedSession(session)) {
+      const resumed = await useAppStore.getState().resumeSession(id);
+      const error = useAppStore.getState().consumeError();
+      if (!resumed || error) {
+        useToasts.getState().show(
+          `${t("toasts.session.resumeFailed")} ${error ?? ""}`.trim(),
+        );
+      }
+      close();
+      return;
+    }
     useAppStore.getState().openSessionSurface(id);
     close();
   }
@@ -440,12 +464,34 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               <Command.Item
                 key={`switch-${session.id}`}
                 value={`switch ${session.name} ${session.branch}`}
-                onSelect={() => handleSelectSession(session.id)}
+                onSelect={() => void handleSelectSession(session.id)}
                 keywords={[session.name, session.branch]}
               >
                 <Sparkles size={14} className="text-fg-muted" />
                 <span className="truncate">
                   {cpt(t, "commandPalette.commands.switchSessionPrefix")}{" "}
+                  {session.name}
+                </span>
+                <span className="ml-auto truncate text-xs text-fg-muted/80">
+                  {session.branch}
+                </span>
+              </Command.Item>
+            ))}
+          </Command.Group>
+        ) : null}
+
+        {archivedItems.length > 0 ? (
+          <Command.Group heading={cpt(t, "commandPalette.groups.archived")}>
+            {archivedItems.map((session) => (
+              <Command.Item
+                key={`resume-${session.id}`}
+                value={`resume ${session.name} ${session.branch} archived`}
+                onSelect={() => void handleSelectSession(session.id)}
+                keywords={[session.name, session.branch, "archive", "resume"]}
+              >
+                <Archive size={14} className="text-fg-muted" />
+                <span className="truncate">
+                  {cpt(t, "commandPalette.commands.resumeSessionPrefix")}{" "}
                   {session.name}
                 </span>
                 <span className="ml-auto truncate text-xs text-fg-muted/80">
@@ -595,9 +641,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
         <ShakeTreeItem onSelect={handleShakeTree} t={t} />
 
-        {sessionItems.length > 0 ? (
+        {sessions.length > 0 ? (
           <Command.Group heading={cpt(t, "commandPalette.groups.dangerZone")}>
-            {sessionItems.map((session) => (
+            {sessions.map((session) => (
               <Command.Item
                 key={`remove-${session.id}`}
                 value={`remove ${session.name}`}

@@ -1,3 +1,4 @@
+import { isArchivedSession } from "./sessionArchive";
 import type { Session, SessionStatus } from "./types";
 
 export const ACTIVE_SESSION_STATUS_POLL_INTERVAL_MS = 1000;
@@ -48,6 +49,7 @@ export function selectDueSessionStatusPollIds({
 }: PollScheduleArgs): string[] {
   return sessions
     .filter((session) => {
+      if (isArchivedSession(session)) return false;
       const last = lastPolledAt.get(session.id);
       if (last === undefined) return true;
       const interval = sessionStatusPollIntervalMs(session, activeSessionId);
@@ -65,9 +67,10 @@ export function selectImmediateSessionStatusPollIds({
   return sessions
     .filter(
       (session) =>
-        session.id === activeSessionId ||
-        !lastPolledAt.has(session.id) ||
-        (includeVolatile && isVolatileSession(session)),
+        !isArchivedSession(session) &&
+        (session.id === activeSessionId ||
+          !lastPolledAt.has(session.id) ||
+          (includeVolatile && isVolatileSession(session))),
     )
     .map((session) => session.id);
 }
@@ -78,10 +81,11 @@ export function nextSessionStatusPollDelayMs({
   lastPolledAt,
   now,
 }: PollScheduleArgs): number | null {
-  if (sessions.length === 0) return null;
+  const live = sessions.filter((session) => !isArchivedSession(session));
+  if (live.length === 0) return null;
 
   let nextDelay = STABLE_SESSION_STATUS_POLL_INTERVAL_MS;
-  for (const session of sessions) {
+  for (const session of live) {
     const last = lastPolledAt.get(session.id);
     if (last === undefined) return 0;
 

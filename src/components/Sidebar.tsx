@@ -1,5 +1,6 @@
 import {
   Activity,
+  Archive,
   BarChart3,
   Bell,
   BellOff,
@@ -27,6 +28,7 @@ import {
   Waypoints,
   Tag,
   Trash2,
+  Undo2,
   X,
 } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
@@ -124,6 +126,10 @@ import {
   showStoreResultToast,
   showWorktreeRemovalToast,
 } from "../lib/operationToasts";
+import {
+  archivedLocalSessions,
+  archivedSessionsForProject,
+} from "../lib/sessionArchive";
 import {
   buildLocalSessions,
 } from "../lib/sessionGrouping";
@@ -2241,6 +2247,15 @@ function ProjectGroupView({
   const hasMultipleProjectRoots = (sourcePaths?.length ?? 0) > 0;
   const showToast = useToasts((s) => s.show);
   const projects = useAppStore((s) => s.projects);
+  const allSessions = useAppStore((s) => s.sessions);
+  const archived = useMemo(() => {
+    const rootIndex = buildProjectRootIndex(projects);
+    return archivedSessionsForProject(
+      allSessions,
+      project.repoPath,
+      rootIndex,
+    );
+  }, [allSessions, project.repoPath, projects]);
   const convertProjectToSourceFolder = useAppStore(
     (s) => s.convertProjectToSourceFolder,
   );
@@ -2691,6 +2706,7 @@ function ProjectGroupView({
         }
       />
       {!collapsed ? (
+        <>
         <ul
           className={listBoxClassName({
             layout: "flex",
@@ -2805,6 +2821,11 @@ function ProjectGroupView({
             </li>
           ) : null}
         </ul>
+          <ArchivedSessionsSection
+            sessions={archived}
+            onRemove={onRemoveSession}
+          />
+        </>
       ) : null}
     </li>
   );
@@ -3331,6 +3352,7 @@ function SessionRow({
   const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
   const createSession = useAppStore((s) => s.createSession);
   const selectSession = useAppStore((s) => s.selectSession);
+  const requestArchiveSession = useAppStore((s) => s.requestArchiveSession);
   const setPendingTerminalInput = useAppStore(
     (s) => s.setPendingTerminalInput,
   );
@@ -3672,6 +3694,11 @@ function SessionRow({
         },
       ],
     },
+    {
+      label: sidebarText(t, "sidebar.actions.archiveSessionMenu"),
+      icon: <Archive size={12} />,
+      onClick: () => requestArchiveSession(session.id),
+    },
     contextMenuGroupTitle(t, "danger"),
     {
       label: sidebarText(t, "sidebar.actions.removeSessionMenu"),
@@ -3759,6 +3786,19 @@ function SessionRow({
       <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
         <button
           type="button"
+          aria-label={sidebarText(t, "sidebar.actions.archiveSession")}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            requestArchiveSession(session.id);
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+        >
+          <Archive size={12} />
+        </button>
+        <button
+          type="button"
           aria-label={sidebarText(t, "sidebar.actions.removeSession")}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
@@ -3794,6 +3834,177 @@ function SessionRow({
         y={menu?.y ?? 0}
         onClose={() => setMenu(null)}
         items={sessionMenuItems}
+      />
+    </li>
+  );
+}
+
+function ArchivedSessionsSection({
+  sessions,
+  onRemove,
+}: {
+  sessions: Session[];
+  onRemove: (session: Session) => void;
+}) {
+  const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
+  const resumeSession = useAppStore((s) => s.resumeSession);
+  const [expanded, setExpanded] = useState(false);
+  if (sessions.length === 0) return null;
+
+  async function resume(session: Session) {
+    const resumed = await resumeSession(session.id);
+    const error = useAppStore.getState().consumeError();
+    if (!resumed || error) {
+      showToast(`${t("toasts.session.resumeFailed")} ${error ?? ""}`.trim());
+    }
+  }
+
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-1 rounded px-2 py-1 text-left text-[11px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+      >
+        <ChevronRight
+          size={12}
+          className={cn("shrink-0 transition", expanded && "rotate-90")}
+        />
+        <span className="truncate">
+          {sidebarText(t, "sidebar.archived.title")}
+        </span>
+        <span className="ml-auto tabular-nums">{sessions.length}</span>
+      </button>
+      {expanded ? (
+        <ul
+          className={listBoxClassName({
+            layout: "flex",
+            inset: "nested",
+            text: "none",
+            className: "ml-2 border-l border-border",
+          })}
+        >
+          {sessions.map((session) => (
+            <ArchivedSessionRow
+              key={session.id}
+              session={session}
+              onResume={() => void resume(session)}
+              onRemove={() => onRemove(session)}
+            />
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function ArchivedSessionRow({
+  session,
+  onResume,
+  onRemove,
+}: {
+  session: Session;
+  onResume: () => void;
+  onRemove: () => void;
+}) {
+  const t = useTranslation();
+  const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  const titleText = resolveSessionTitle(session, sessionDisplay.title);
+  const metadataText = composeSessionMetadata(t, session, sessionDisplay.metadata);
+  const agentProvider = resolveSessionAgentProvider(session);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const menuItems: ContextMenuItem[] = [
+    {
+      label: sidebarText(t, "sidebar.actions.resumeSessionMenu"),
+      icon: <Undo2 size={12} />,
+      onClick: onResume,
+    },
+    contextMenuGroupTitle(t, "danger"),
+    {
+      label: sidebarText(t, "sidebar.actions.removeSessionMenu"),
+      icon: <Trash2 size={12} />,
+      onClick: onRemove,
+    },
+  ];
+
+  return (
+    <li>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onResume}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onResume();
+          }
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+        className={listRowClassName({
+          density: "sidebar",
+          interactive: true,
+          surface: "sidebar",
+          className:
+            "group flex w-full cursor-pointer items-start gap-1.5 text-left text-fg-muted",
+        })}
+      >
+        <SessionStatusMarker
+          session={session}
+          agentProvider={agentProvider}
+          isGeneratingTitle={false}
+          generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+          chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
+          goalLabel={sidebarText(t, "sidebar.aria.goalSession")}
+        />
+        <SessionRowLabel
+          editing={false}
+          session={session}
+          titleText={titleText}
+          metadataText={metadataText}
+          currentPullRequest={null}
+          t={t}
+          onSubmitRename={() => undefined}
+          onCancelRename={() => undefined}
+        />
+        <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
+          <button
+            type="button"
+            aria-label={sidebarText(t, "sidebar.actions.resumeSession")}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onResume();
+            }}
+            className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <Undo2 size={12} />
+          </button>
+          <button
+            type="button"
+            aria-label={sidebarText(t, "sidebar.actions.removeSession")}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      </div>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        onClose={() => setMenu(null)}
+        items={menuItems}
       />
     </li>
   );
@@ -4070,6 +4281,11 @@ function LocalTerminalArea({
     () => groups.flatMap((group) => group.sessions),
     [groups],
   );
+  const allSessions = useAppStore((s) => s.sessions);
+  const archived = useMemo(
+    () => archivedLocalSessions(allSessions),
+    [allSessions],
+  );
   const hasNamedWorkspaces = groups.some((group) =>
     group.folders.some((folderGroup) =>
       !isDefaultProjectFolder(folderGroup.folder),
@@ -4245,6 +4461,10 @@ function LocalTerminalArea({
           })}
         </ul>
       ) : null}
+      <ArchivedSessionsSection
+        sessions={archived}
+        onRemove={onRemoveSession}
+      />
       <div
         role="button"
         tabIndex={0}
@@ -4886,6 +5106,7 @@ function LocalSessionRow({
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
+  const requestArchiveSession = useAppStore((s) => s.requestArchiveSession);
   const sessionSilenced = useAppStore((s) =>
     Boolean(s.silencedSessionIds[session.id]),
   );
@@ -5017,6 +5238,11 @@ function LocalSessionRow({
       : []),
     { type: "separator" },
     {
+      label: sidebarText(t, "sidebar.actions.archiveSessionMenu"),
+      icon: <Archive size={12} />,
+      onClick: () => requestArchiveSession(session.id),
+    },
+    {
       label: sidebarText(t, "sidebar.actions.removeSessionMenu"),
       icon: <Trash2 size={12} />,
       onClick: onRemove,
@@ -5098,26 +5324,34 @@ function LocalSessionRow({
         }}
         onCancelRename={() => setEditing(false)}
       />
-      <span
-        role="button"
-        aria-label={sidebarText(t, "sidebar.actions.removeSession")}
-        tabIndex={0}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
+      <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
+        <button
+          type="button"
+          aria-label={sidebarText(t, "sidebar.actions.archiveSession")}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            requestArchiveSession(session.id);
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+        >
+          <Archive size={12} />
+        </button>
+        <button
+          type="button"
+          aria-label={sidebarText(t, "sidebar.actions.removeSession")}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
             e.stopPropagation();
             onRemove();
-          }
-        }}
-        className="ml-auto hidden shrink-0 rounded p-1 text-fg-muted transition hover:text-danger group-hover:inline-flex"
-      >
-        <Trash2 size={12} />
-      </span>
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
     </div>
   );
 

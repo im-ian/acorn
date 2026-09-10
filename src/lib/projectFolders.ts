@@ -1,3 +1,4 @@
+import { isArchivedSession } from "./sessionArchive";
 import type { Project, Session } from "./types";
 import {
   basename,
@@ -220,6 +221,7 @@ export function buildProjectFolderGroups(
   }
 
   for (const session of projectSessions) {
+    if (isArchivedSession(session)) continue;
     const groupRepoPath = resolveProjectRootPath(rootIndex, session.repo_path);
     let group = map.get(groupRepoPath);
     if (!group) {
@@ -298,6 +300,7 @@ export function buildLocalSessionFolderGroups(
         sessions: [],
       };
       for (const session of localSessions) {
+        if (isArchivedSession(session)) continue;
         if (session.repo_path !== repoPath) continue;
         const folderId = resolveProjectFolderIdForSession(
           folders,

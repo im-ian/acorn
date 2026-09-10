@@ -363,6 +363,8 @@ export interface Session {
   status_started_at?: string | null;
   created_at: string;
   updated_at: string;
+  /** When set, the session is parked and hidden from the live workspace. */
+  archived_at?: string | null;
   last_message: string | null;
   /** Ephemeral transcript/chat preview for the latest user turn. */
   last_user_message?: string | null;

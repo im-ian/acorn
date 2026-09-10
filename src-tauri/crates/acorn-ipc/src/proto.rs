@@ -191,6 +191,8 @@ pub struct SessionSummary {
     pub kind: String,
     pub owner: String,
     pub status: String,
+    #[serde(default)]
+    pub archived: bool,
     pub owned_by_me: bool,
     /// True when the source session itself is the one being described —
     /// the CLI uses this to render an arrow / current-session marker.

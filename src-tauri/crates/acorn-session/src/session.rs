@@ -458,6 +458,10 @@ pub struct Session {
     pub status: SessionStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// When set, the session is parked: hidden from the live workspace and
+    /// without a PTY. The worktree path stays so resume can restore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<DateTime<Utc>>,
     pub last_message: Option<String>,
     #[serde(default = "default_title_source_for_existing_sessions")]
     pub title_source: SessionTitleSource,
@@ -561,6 +565,7 @@ impl Session {
             status: SessionStatus::Ready,
             created_at: now,
             updated_at: now,
+            archived_at: None,
             last_message: None,
             title_source: SessionTitleSource::Default,
             auto_title_enabled: Some(false),
@@ -1562,6 +1567,30 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
+    pub fn archive(&self, id: &Uuid, branch: Option<String>) -> SessionResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        if let Some(branch) = branch.filter(|value| !value.trim().is_empty()) {
+            entry.branch = branch;
+        }
+        let now = Utc::now();
+        entry.archived_at = Some(now);
+        entry.updated_at = now;
+        Ok(entry.clone())
+    }
+
+    pub fn unarchive(&self, id: &Uuid) -> SessionResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        entry.archived_at = None;
+        entry.updated_at = Utc::now();
+        Ok(entry.clone())
+    }
+
     /// Re-point a session at its main repo and clear `isolated` when the
     /// linked worktree has disappeared from disk (typically: agent exit
     /// pruned the worktree but the session row still references it). Keeps
@@ -2431,6 +2460,40 @@ mod tests {
         let restored: Session = serde_json::from_value(json).expect("session deserializes");
 
         assert_eq!(restored.graph, None);
+    }
+
+    #[test]
+    fn persisted_sessions_without_archived_at_load_as_live() {
+        let mut json =
+            serde_json::to_value(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false))
+                .expect("session serializes");
+        json.as_object_mut()
+            .expect("session json is an object")
+            .remove("archived_at");
+
+        let restored: Session = serde_json::from_value(json).expect("session deserializes");
+
+        assert_eq!(restored.archived_at, None);
+    }
+
+    #[test]
+    fn archive_snapshots_branch_and_unarchive_clears_the_flag() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session(
+            "/tmp/acorn-repo",
+            "/tmp/acorn-repo/.acorn/worktrees/feature",
+            true,
+        ));
+
+        let archived = store
+            .archive(&session.id, Some("feature".to_string()))
+            .expect("session exists");
+        assert!(archived.archived_at.is_some());
+        assert_eq!(archived.branch, "feature");
+
+        let live = store.unarchive(&session.id).expect("session exists");
+        assert_eq!(live.archived_at, None);
+        assert_eq!(live.branch, "feature");
     }
 
     #[test]

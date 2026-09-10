@@ -331,8 +331,11 @@ function App() {
   const layout = useAppStore((s) => s.layout);
   const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const pendingRemoveId = useAppStore((s) => s.pendingRemoveId);
+  const pendingArchiveId = useAppStore((s) => s.pendingArchiveId);
   const pendingRemoveProject = useAppStore((s) => s.pendingRemoveProject);
   const clearPendingRemove = useAppStore((s) => s.clearPendingRemove);
+  const clearPendingArchive = useAppStore((s) => s.clearPendingArchive);
+  const archiveSession = useAppStore((s) => s.archiveSession);
   const clearPendingRemoveProject = useAppStore(
     (s) => s.clearPendingRemoveProject,
   );
@@ -353,6 +356,8 @@ function App() {
   const shortcuts = settings.shortcuts;
   const preventSleep = settings.power.preventSleep;
   const pendingRemove = sessions.find((s) => s.id === pendingRemoveId) ?? null;
+  const pendingArchive =
+    sessions.find((s) => s.id === pendingArchiveId) ?? null;
   const pendingProject =
     projects.find((p) => p.repo_path === pendingRemoveProject) ?? null;
   // Closing a project closes every root it spans, so the confirmation has to
@@ -384,6 +389,11 @@ function App() {
     pendingRemove.status === "working" &&
     settings.sessions.warnBeforeClosingRunning &&
     runningCloseWarningConfirmedId !== pendingRemove.id;
+  const pendingArchiveNeedsRunningWarning =
+    pendingArchive !== null &&
+    pendingArchive.status === "working" &&
+    settings.sessions.warnBeforeClosingRunning &&
+    runningCloseWarningConfirmedId !== pendingArchive.id;
   const pendingRemoveSkipsDialog =
     pendingRemove !== null &&
     !pendingRemoveNeedsRunningWarning &&
@@ -1312,11 +1322,16 @@ function App() {
   useEffect(() => {
     if (
       runningCloseWarningConfirmedId !== null &&
-      pendingRemove?.id !== runningCloseWarningConfirmedId
+      pendingRemove?.id !== runningCloseWarningConfirmedId &&
+      pendingArchive?.id !== runningCloseWarningConfirmedId
     ) {
       setRunningCloseWarningConfirmedId(null);
     }
-  }, [pendingRemove?.id, runningCloseWarningConfirmedId]);
+  }, [
+    pendingArchive?.id,
+    pendingRemove?.id,
+    runningCloseWarningConfirmedId,
+  ]);
 
   // Skip the confirmation dialog when Settings gives a deterministic removal:
   // shared worktree workspace sessions keep the worktree, plain sessions can
@@ -1380,6 +1395,28 @@ function App() {
     projectFolders,
     removeSession,
     sessions,
+    showStoreOperationToast,
+  ]);
+
+  const archiveInFlightIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingArchive) {
+      archiveInFlightIdRef.current = null;
+      return;
+    }
+    if (pendingArchiveNeedsRunningWarning) return;
+    if (archiveInFlightIdRef.current === pendingArchive.id) return;
+    archiveInFlightIdRef.current = pendingArchive.id;
+    const targetId = pendingArchive.id;
+    clearPendingArchive();
+    void archiveSession(targetId).then(() => {
+      showStoreOperationToast(null, "toasts.session.archiveFailed");
+    });
+  }, [
+    archiveSession,
+    clearPendingArchive,
+    pendingArchive,
+    pendingArchiveNeedsRunningWarning,
     showStoreOperationToast,
   ]);
 
@@ -2021,14 +2058,25 @@ function App() {
         }}
       />
       <RunningSessionCloseWarningDialog
-        session={pendingRemoveNeedsRunningWarning ? pendingRemove : null}
+        session={
+          pendingRemoveNeedsRunningWarning
+            ? pendingRemove
+            : pendingArchiveNeedsRunningWarning
+              ? pendingArchive
+              : null
+        }
         onCancel={() => {
           setRunningCloseWarningConfirmedId(null);
           clearPendingRemove();
+          clearPendingArchive();
         }}
         onContinue={() => {
-          if (pendingRemove) {
+          if (pendingRemoveNeedsRunningWarning && pendingRemove) {
             setRunningCloseWarningConfirmedId(pendingRemove.id);
+            return;
+          }
+          if (pendingArchive) {
+            setRunningCloseWarningConfirmedId(pendingArchive.id);
           }
         }}
       />

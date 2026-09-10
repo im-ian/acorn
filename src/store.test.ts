@@ -25,6 +25,8 @@ vi.mock("./lib/api", () => {
       ),
       ptyInWorktreeAll: vi.fn(async () => ({} as Record<string, boolean>)),
       createSession: vi.fn(async () => ({}) as Session),
+      archiveSession: vi.fn(async () => ({}) as Session),
+      resumeSession: vi.fn(async () => ({}) as Session),
       removeSession: vi.fn(async () => ({
         result: null,
         removedSessionIds: [],
@@ -232,6 +234,7 @@ function resetStore(): void {
       loading: false,
       error: null,
       pendingRemoveId: null,
+      pendingArchiveId: null,
       pendingRemoveProject: null,
       sessionsLoadedCleanly: true,
       sessionListInitialized: false,
@@ -285,6 +288,8 @@ beforeEach(() => {
   mockApi.listProjects.mockResolvedValue([]);
   mockApi.detectSessionStatuses.mockResolvedValue([]);
   mockApi.removeSession.mockResolvedValue(removalOutcome(null));
+  mockApi.archiveSession.mockResolvedValue({} as Session);
+  mockApi.resumeSession.mockResolvedValue({} as Session);
   mockApi.removeWorktree.mockResolvedValue(removalOutcome(null));
   mockApi.removeProject.mockResolvedValue(removalOutcome([]));
   mockApi.loadChatSessionState.mockResolvedValue({
@@ -1712,6 +1717,78 @@ describe("workspace tabs", () => {
     expect(s.activeTabId).toBe(readmeTabId);
     expect(s.activeSessionId).toBeNull();
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", readmeTabId]);
+  });
+});
+
+describe("archiveSession", () => {
+  it("drops the tab immediately and keeps the session row", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2]);
+    useAppStore.getState().selectSession("a1");
+
+    const pending = deferred<Session>();
+    mockApi.archiveSession.mockReturnValueOnce(pending.promise);
+    const archived = {
+      ...a1,
+      archived_at: "2026-04-01T00:00:00Z",
+    };
+    mockApi.listSessions.mockResolvedValue([archived, a2]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    const archive = useAppStore.getState().archiveSession("a1");
+
+    expect(mockApi.archiveSession).toHaveBeenCalledWith("a1");
+    expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual([
+      "a1",
+      "a2",
+    ]);
+    expect(useAppStore.getState().sessions[0]?.archived_at).toBeTruthy();
+    expect(useAppStore.getState().panes.root.tabIds).toEqual(["a2"]);
+    expect(useAppStore.getState().activeSessionId).toBe("a2");
+
+    pending.resolve(archived);
+    await archive;
+    expect(useAppStore.getState().panes.root.tabIds).toEqual(["a2"]);
+    expect(useAppStore.getState().sessions).toHaveLength(2);
+  });
+});
+
+describe("selectSession", () => {
+  it("does not reinsert an archived session as a workspace tab", async () => {
+    const parked = session("a1", REPO_A, {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [parked, a2]);
+
+    useAppStore.getState().selectSession("a1");
+
+    expect(useAppStore.getState().panes.root.tabIds).toEqual(["a2"]);
+    expect(useAppStore.getState().activeSessionId).toBe("a2");
+  });
+});
+
+describe("resumeSession", () => {
+  it("reopens the same session id after the backend unarchives it", async () => {
+    const parked = session("a1", REPO_A, {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [parked, a2]);
+    expect(useAppStore.getState().panes.root.tabIds).toEqual(["a2"]);
+
+    const live = { ...parked, archived_at: null };
+    mockApi.resumeSession.mockResolvedValueOnce(live);
+    mockApi.listSessions.mockResolvedValue([live, a2]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    const resumed = await useAppStore.getState().resumeSession("a1");
+
+    expect(mockApi.resumeSession).toHaveBeenCalledWith("a1");
+    expect(resumed?.id).toBe("a1");
+    expect(useAppStore.getState().panes.root.tabIds).toContain("a1");
+    expect(useAppStore.getState().activeSessionId).toBe("a1");
   });
 });
 

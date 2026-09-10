@@ -135,6 +135,27 @@ describe("project folders", () => {
     expect(groups[0].folders[1].sessions.map((s) => s.id)).toEqual(["s1", "s2"]);
   });
 
+  it("omits archived sessions from live folder groups", () => {
+    const repoPath = "/repo/app";
+    const groups = buildProjectFolderGroups(
+      [project(repoPath)],
+      [
+        session("live", repoPath),
+        session("parked", repoPath, {
+          archived_at: "2026-04-01T00:00:00Z",
+        }),
+      ],
+      {
+        [repoPath]: [makeDefaultProjectFolder(repoPath)],
+      },
+    );
+
+    expect(groups[0].sessions.map((item) => item.id)).toEqual(["live"]);
+    expect(groups[0].folders[0].sessions.map((item) => item.id)).toEqual([
+      "live",
+    ]);
+  });
+
   it("groups sessions into matching worktree workspaces without explicit assignments", () => {
     const repoPath = "/repo/app";
     const worktreePath = "/repo/app/.acorn/worktrees/app-worktree-123";

@@ -284,6 +284,7 @@ pub fn daemon_adopt_session(
         status: acorn_session::SessionStatus::Ready,
         created_at: now,
         updated_at: now,
+        archived_at: None,
         last_message: None,
         title_source: acorn_session::SessionTitleSource::Manual,
         auto_title_enabled: Some(false),
