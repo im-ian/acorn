@@ -591,6 +591,18 @@ export const tauriMockSource = `
         retryToken: null,
       });
     }
+    if (cmd === 'archive_session') {
+      return Promise.resolve({
+        id: args?.id,
+        archived_at: '2026-04-01T00:00:00Z',
+      });
+    }
+    if (cmd === 'resume_session') {
+      return Promise.resolve({
+        id: args?.id,
+        archived_at: null,
+      });
+    }
     if (cmd === 'remove_project') {
       return Promise.resolve({
         result: [],

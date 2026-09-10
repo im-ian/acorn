@@ -4850,6 +4850,9 @@ pub fn list_sessions(state: State<'_, AppState>) -> Vec<Session> {
 fn reconcile_stale_worktrees(state: &AppState) {
     let mut dirty = false;
     for session in state.sessions.list() {
+        if session.archived_at.is_some() {
+            continue;
+        }
         if session.worktree_path == session.repo_path {
             continue;
         }
@@ -7830,6 +7833,49 @@ pub async fn remove_session(
     };
     persist_removal_state(&app_state, &mut progress);
     Ok(progress.into_outcome(&app_state, result, removed_session_ids, None))
+}
+
+#[tauri::command]
+pub async fn archive_session(state: State<'_, AppState>, id: String) -> AppResult<Session> {
+    archive_session_inner(state.inner().clone(), id).await
+}
+
+async fn archive_session_inner(state: AppState, id: String) -> AppResult<Session> {
+    let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
+    let session = state.sessions.get(&id)?;
+    if session.archived_at.is_some() {
+        return Ok(enrich_session(session));
+    }
+    let branch = worktree::current_branch(&session.worktree_path).ok();
+    terminate_session_runtime_blocking(state.clone(), id).await?;
+    let updated = state.sessions.archive(&id, branch)?;
+    persist(&state);
+    Ok(enrich_session(updated))
+}
+
+#[tauri::command]
+pub fn resume_session(state: State<'_, AppState>, id: String) -> AppResult<Session> {
+    resume_session_inner(state.inner(), id)
+}
+
+fn resume_session_inner(state: &AppState, id: String) -> AppResult<Session> {
+    let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
+    let session = state.sessions.get(&id)?;
+    if session.archived_at.is_none() {
+        return Ok(enrich_session(session));
+    }
+    let restored_path = worktree::restore_session_worktree(
+        &session.repo_path,
+        &session.worktree_path,
+        &session.branch,
+        session.isolated,
+    )?;
+    if restored_path != session.worktree_path {
+        state.sessions.update_worktree_path(&id, restored_path)?;
+    }
+    let updated = state.sessions.unarchive(&id)?;
+    persist(&state);
+    Ok(enrich_session(updated))
 }
 
 #[tauri::command]
@@ -12289,7 +12335,7 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        authorize_existing_session_id, authorize_registered_repository,
+        archive_session_inner, authorize_existing_session_id, authorize_registered_repository,
         authorize_registered_worktree, auto_title_enabled_for_new_session,
         can_store_generated_session_title, cleanup_removed_scrollbacks_from_dir,
         collect_memory_usage_from_roots, configured_git_identity, create_session_inner,
@@ -12299,11 +12345,12 @@ mod tests {
         infer_acornd_root_from_session_pids, inject_agent_hook_env,
         linked_worktree_root_for_registered_path, memory_root_pids, normalize_session_goal,
         normalize_session_graph, poll_defers_to_hook, project_creation_git_error,
-        pty_io_uses_daemon, remove_linked_worktree_at_path, restore_pending_session_removal,
-        retry_removal_cleanup_inner, seed_initial_commit, should_remove_local_project_mirror,
-        should_route_session_to_daemon, terminate_session_runtime, validate_display_name,
-        validate_editor_command, validate_new_project_name, validate_pty_caller_env,
-        ChatProviderAdapter, ProcessMemorySnapshot, RemovalProgress, MAX_PTY_WORKSPACE_NAME_BYTES,
+        pty_io_uses_daemon, reconcile_stale_worktrees, remove_linked_worktree_at_path,
+        restore_pending_session_removal, resume_session_inner, retry_removal_cleanup_inner,
+        seed_initial_commit, should_remove_local_project_mirror, should_route_session_to_daemon,
+        terminate_session_runtime, validate_display_name, validate_editor_command,
+        validate_new_project_name, validate_pty_caller_env, ChatProviderAdapter,
+        ProcessMemorySnapshot, RemovalProgress, MAX_PTY_WORKSPACE_NAME_BYTES,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingRemovalStep, PendingSessionRemoval};
@@ -12467,6 +12514,115 @@ mod tests {
                 .len(),
             1
         );
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn stale_worktree_reconcile_skips_archived_sessions() {
+        let repo_dir = unique_repo_dir("archive-stale-worktree");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let state = AppState::new();
+        state.projects.ensure(repo_dir.clone(), "demo".to_string());
+        let missing = repo_dir.join(".acorn").join("worktrees").join("gone");
+        let mut session = Session::new(
+            "parked".to_string(),
+            repo_dir.clone(),
+            missing.clone(),
+            "feature".to_string(),
+            true,
+            SessionKind::Regular,
+        );
+        session.archived_at = Some(chrono::Utc::now());
+        let inserted = state.sessions.insert(session);
+
+        reconcile_stale_worktrees(&state);
+
+        let listed = state.sessions.get(&inserted.id).expect("session remains");
+        assert_eq!(listed.worktree_path, missing);
+        assert!(listed.isolated);
+        assert!(listed.archived_at.is_some());
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn archive_session_parks_the_row_without_deleting_the_worktree() {
+        let repo_dir = unique_repo_dir("archive-keep-worktree");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let worktree_path =
+            crate::worktree::create_worktree(&repo_dir, "parked").expect("create linked worktree");
+        let state = AppState::new();
+        state.projects.ensure(repo_dir.clone(), "demo".to_string());
+        let created = create_session_inner(
+            &state,
+            "parked".to_string(),
+            repo_dir.clone(),
+            Some(worktree_path.clone()),
+            true,
+            SessionKind::Regular,
+            None,
+            true,
+            SessionMode::Terminal,
+            None,
+            None,
+            false,
+        )
+        .expect("create session");
+
+        let archived = tauri::async_runtime::block_on(archive_session_inner(
+            state.clone(),
+            created.id.to_string(),
+        ))
+        .expect("archive session");
+
+        assert!(archived.archived_at.is_some());
+        assert!(worktree_path.exists());
+        assert_eq!(
+            archived.worktree_path.canonicalize().unwrap(),
+            worktree_path.canonicalize().unwrap()
+        );
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn resume_session_restores_a_missing_worktree_and_clears_archive() {
+        let repo_dir = unique_repo_dir("resume-restore-worktree");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let worktree_path =
+            crate::worktree::create_worktree(&repo_dir, "parked").expect("create linked worktree");
+        let state = AppState::new();
+        state.projects.ensure(repo_dir.clone(), "demo".to_string());
+        let created = create_session_inner(
+            &state,
+            "parked".to_string(),
+            repo_dir.clone(),
+            Some(worktree_path.clone()),
+            true,
+            SessionKind::Regular,
+            None,
+            true,
+            SessionMode::Terminal,
+            None,
+            None,
+            false,
+        )
+        .expect("create session");
+        tauri::async_runtime::block_on(archive_session_inner(
+            state.clone(),
+            created.id.to_string(),
+        ))
+        .expect("archive session");
+        std::fs::remove_dir_all(&worktree_path).expect("delete checkout");
+
+        let resumed = resume_session_inner(&state, created.id.to_string()).expect("resume session");
+
+        assert!(resumed.archived_at.is_none());
+        assert!(resumed.worktree_path.exists());
+        assert!(crate::worktree::is_linked_worktree_root(
+            &resumed.worktree_path
+        ));
         std::fs::remove_dir_all(&repo_dir).ok();
     }
 

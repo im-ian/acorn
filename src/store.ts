@@ -92,6 +92,7 @@ import {
   type ProjectFoldersByRepo,
   type SessionFolderAssignments,
 } from "./lib/projectFolders";
+import { isArchivedSession } from "./lib/sessionArchive";
 import { canRegenerateSessionTitle } from "./lib/sessionTitle";
 import {
   summarizeTokenUsage,
@@ -453,6 +454,7 @@ interface AppStateModel {
   loading: boolean;
   error: string | null;
   pendingRemoveId: string | null;
+  pendingArchiveId: string | null;
   pendingRemoveProject: string | null;
   /**
    * A picked source folder another project owns, awaiting the user's go-ahead
@@ -553,6 +555,8 @@ interface AppStateModel {
     id: string,
     removeWorktree?: boolean,
   ) => Promise<SessionRemovalOutcome | null>;
+  archiveSession: (id: string) => Promise<Session | null>;
+  resumeSession: (id: string) => Promise<Session | null>;
   renameSession: (id: string, name: string) => Promise<void>;
   generateSessionTitle: (
     id: string,
@@ -563,6 +567,8 @@ interface AppStateModel {
   adoptSessionWorktree: (id: string, worktreePath: string) => Promise<void>;
   requestRemoveSession: (id: string) => void;
   clearPendingRemove: () => void;
+  requestArchiveSession: (id: string) => void;
+  clearPendingArchive: () => void;
   cycleTab: (direction: 1 | -1) => void;
   selectLatestNeedsInputSession: () => boolean;
   cycleProject: (direction: 1 | -1) => void;
@@ -1093,6 +1099,7 @@ function reconcileWorkspaces(
     }
   }
   for (const session of sessions) {
+    if (isArchivedSession(session)) continue;
     if (session.project_scoped === false) {
       const folders = nextProjectFolders[session.repo_path] ?? [];
       const folderId =
@@ -1334,11 +1341,22 @@ function latestNeedsInputSessionId(
   for (const notification of state.sessionNotifications) {
     if (notification.kind !== "waiting_for_input") continue;
     const session = sessionsById.get(notification.sessionId);
-    if (session?.status === "waiting_for_input") return session.id;
+    if (
+      session &&
+      !isArchivedSession(session) &&
+      session.status === "waiting_for_input"
+    ) {
+      return session.id;
+    }
   }
   for (let index = state.sessions.length - 1; index >= 0; index -= 1) {
     const session = state.sessions[index];
-    if (session.status === "waiting_for_input") return session.id;
+    if (
+      !isArchivedSession(session) &&
+      session.status === "waiting_for_input"
+    ) {
+      return session.id;
+    }
   }
   return null;
 }
@@ -1741,6 +1759,7 @@ export const useAppStore = create<AppStateModel>()(
     return error;
   },
   pendingRemoveId: null,
+  pendingArchiveId: null,
   pendingRemoveProject: null,
   pendingSourceMerge: null,
   sessionsLoadedCleanly: true,
@@ -2013,9 +2032,12 @@ export const useAppStore = create<AppStateModel>()(
           pendingStatusPollAll = false;
           pendingStatusPollIds.clear();
 
-          const sessionIds = new Set(get().sessions.map((s) => s.id));
+          const liveSessions = get().sessions.filter(
+            (session) => !isArchivedSession(session),
+          );
+          const sessionIds = new Set(liveSessions.map((s) => s.id));
           const idsToPoll = Array.from(
-            new Set(queuedIds ?? get().sessions.map((s) => s.id)),
+            new Set(queuedIds ?? liveSessions.map((s) => s.id)),
           ).filter((id) => sessionIds.has(id));
           if (idsToPoll.length === 0) continue;
 
@@ -2255,7 +2277,7 @@ export const useAppStore = create<AppStateModel>()(
 
       // Find session, switch active project to its repo, set active in pane.
       const session = s.sessions.find((x) => x.id === id);
-      if (!session) return s;
+      if (!session || isArchivedSession(session)) return s;
 
       const folders = s.projectFolders[session.repo_path] ?? [];
       const targetProjectFolderId = resolveProjectFolderIdForSession(
@@ -2330,7 +2352,8 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   openSessionSurface(id, options) {
-    if (!get().sessions.some((session) => session.id === id)) return false;
+    const session = get().sessions.find((candidate) => candidate.id === id);
+    if (!session || isArchivedSession(session)) return false;
 
     get().selectSession(id);
     const state = get();
@@ -3365,6 +3388,82 @@ export const useAppStore = create<AppStateModel>()(
     }
   },
 
+  async archiveSession(id) {
+    const target = get().sessions.find((session) => session.id === id);
+    if (!target) return null;
+    if (isArchivedSession(target)) return target;
+
+    const archivedAt = new Date().toISOString();
+    set((s) => {
+      const sessions = s.sessions.map((session) =>
+        session.id === id ? { ...session, archived_at: archivedAt } : session,
+      );
+      const reconciled = reconcileWorkspaces(
+        sessions,
+        s.projects,
+        s.projectFolders,
+        s.sessionFolderIds,
+        s.workspaces,
+        s.activeProject,
+        s.activeProjectFolderId,
+        true,
+      );
+      return {
+        sessions,
+        error: null,
+        terminalPopupSessionId:
+          s.terminalPopupSessionId === id ? null : s.terminalPopupSessionId,
+        workspaces: reconciled.workspaces,
+        projectFolders: reconciled.projectFolders,
+        sessionFolderIds: reconciled.sessionFolderIds,
+        activeProject: reconciled.activeProject,
+        activeProjectFolderId: reconciled.activeProjectFolderId,
+        ...mirrorActive(
+          reconciled.workspaces,
+          reconciled.activeProjectFolderId,
+          {
+            sessions,
+            projects: s.projects,
+            projectFolders: reconciled.projectFolders,
+            activeProject: reconciled.activeProject,
+          },
+        ),
+      };
+    });
+
+    try {
+      const updated = await api.archiveSession(id);
+      await get().refreshAll();
+      set({ error: null });
+      return updated;
+    } catch (e) {
+      const message = errorMessage(e);
+      await get().refreshAll();
+      set({ error: message });
+      return null;
+    }
+  },
+
+  async resumeSession(id) {
+    const target = get().sessions.find((session) => session.id === id);
+    if (!target) return null;
+    if (!isArchivedSession(target)) {
+      get().openSessionSurface(id);
+      return target;
+    }
+
+    try {
+      const updated = await api.resumeSession(id);
+      await get().refreshAll();
+      set({ error: null });
+      get().openSessionSurface(id);
+      return updated;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
+    }
+  },
+
   async renameSession(id, name) {
     if (get().generatingSessionTitleIds[id]) return;
 
@@ -3447,6 +3546,14 @@ export const useAppStore = create<AppStateModel>()(
 
   clearPendingRemove() {
     set({ pendingRemoveId: null });
+  },
+
+  requestArchiveSession(id) {
+    set({ pendingArchiveId: id });
+  },
+
+  clearPendingArchive() {
+    set({ pendingArchiveId: null });
   },
 
   async addProjectAt(name, roots) {

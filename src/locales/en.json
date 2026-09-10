@@ -9,6 +9,8 @@
     "session": {
       "createFailed": "Failed to create session:",
       "removeFailed": "Failed to remove session:",
+      "archiveFailed": "Failed to archive session:",
+      "resumeFailed": "Failed to resume session:",
       "worktreeRemoved": "Worktree deleted from disk.",
       "worktreeRemovedUndo": "Removing {name} worktree in {seconds}s. Undo",
       "worktreeRestored": "Worktree restored.",
@@ -1342,7 +1344,15 @@
       "copyTranscriptPath": "Copy Transcript Path",
       "remove": "Remove",
       "removeSession": "Remove session",
-      "removeSessionMenu": "Remove Session"
+      "removeSessionMenu": "Remove Session",
+      "archiveSession": "Archive session",
+      "archiveSessionMenu": "Archive Session",
+      "resumeSession": "Resume session",
+      "resumeSessionMenu": "Resume Session"
+    },
+    "archived": {
+      "title": "Archived",
+      "empty": "No archived sessions"
     },
     "contextMenu": {
       "session": "Session",
@@ -2614,6 +2624,7 @@
     "groups": {
       "sessions": "Sessions",
       "switchSession": "Switch session",
+      "archived": "Archived",
       "activity": "Unread activity",
       "view": "View",
       "terminal": "Terminal",
@@ -2631,6 +2642,7 @@
       "addExistingProject": "Add existing project",
       "refreshSessions": "Refresh sessions",
       "switchSessionPrefix": "Switch to",
+      "resumeSessionPrefix": "Resume",
       "viewTodos": "View Todos",
       "viewCommits": "View Commits",
       "viewStaged": "View Staged",

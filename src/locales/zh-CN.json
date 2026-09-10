@@ -9,6 +9,8 @@
     "session": {
       "createFailed": "无法创建会话：",
       "removeFailed": "无法删除会话：",
+      "archiveFailed": "无法归档会话：",
+      "resumeFailed": "无法恢复会话：",
       "worktreeRemoved": "工作树从磁盘中删除。",
       "worktreeRemovedUndo": "将在 {seconds} 秒后删除 {name} 工作树。撤销",
       "worktreeRestored": "工作树已恢复。",
@@ -1342,7 +1344,15 @@
       "copyTranscriptPath": "复制对话记录路径",
       "remove": "删除",
       "removeSession": "删除会话",
-      "removeSessionMenu": "删除会话"
+      "removeSessionMenu": "删除会话",
+      "archiveSession": "归档会话",
+      "archiveSessionMenu": "归档会话",
+      "resumeSession": "恢复会话",
+      "resumeSessionMenu": "恢复会话"
+    },
+    "archived": {
+      "title": "已归档",
+      "empty": "没有已归档的会话"
     },
     "contextMenu": {
       "session": "会话",
@@ -2614,6 +2624,7 @@
     "groups": {
       "sessions": "会话",
       "switchSession": "切换会话",
+      "archived": "已归档",
       "activity": "未读活动",
       "view": "查看",
       "terminal": "终端",
@@ -2631,6 +2642,7 @@
       "addExistingProject": "添加现有项目",
       "refreshSessions": "刷新会话",
       "switchSessionPrefix": "切换到",
+      "resumeSessionPrefix": "恢复",
       "viewTodos": "查看待办事项",
       "viewCommits": "查看提交",
       "viewStaged": "查看已暂存",
