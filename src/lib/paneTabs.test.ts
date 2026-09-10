@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   applyTabMinimized,
   clampTabInsertIndex,
+  collectMinimizedTabIds,
+  isTabMinimizedInWorkspaces,
   mergeMinimizedTabIds,
   normalizeMinimizedTabIds,
   partitionTabIds,
@@ -97,5 +99,34 @@ describe("partition and merge", () => {
     expect(
       mergeMinimizedTabIds(["a"], ["c", "a"], ["a", "b", "c"]),
     ).toEqual(["a", "c"]);
+  });
+});
+
+describe("isTabMinimizedInWorkspaces", () => {
+  it("finds a minimized tab in any workspace pane", () => {
+    expect(
+      isTabMinimizedInWorkspaces(
+        {
+          a: { panes: { p1: { minimizedTabIds: ["x"] } } },
+          b: { panes: { p2: { minimizedTabIds: ["y"] } } },
+        },
+        "y",
+      ),
+    ).toBe(true);
+    expect(
+      isTabMinimizedInWorkspaces(
+        { a: { panes: { p1: { minimizedTabIds: ["x"] } } } },
+        "missing",
+      ),
+    ).toBe(false);
+  });
+
+  it("collects unique minimized ids across panes", () => {
+    expect([
+      ...collectMinimizedTabIds({
+        a: { panes: { p1: { minimizedTabIds: ["x", "y"] } } },
+        b: { panes: { p2: { minimizedTabIds: ["y", "z"] } } },
+      }),
+    ]).toEqual(["x", "y", "z"]);
   });
 });

@@ -3048,34 +3048,48 @@ export const useAppStore = create<AppStateModel>()(
 
   setTabMinimized(tabId, minimized) {
     set((s) => {
-      const patch = updateActiveWorkspace(s, (ws) => {
-        const paneId = findPaneContainingTab(ws.panes, tabId);
-        if (!paneId) return ws;
-        const pane = ws.panes[paneId];
-        const next = applyTabMinimized(
-          pane.tabIds,
-          pane.minimizedTabIds ?? [],
-          tabId,
-          minimized,
-        );
-        const currentMinimized = pane.minimizedTabIds ?? [];
-        if (
-          next.tabIds.length === pane.tabIds.length &&
-          next.tabIds.every((id, index) => id === pane.tabIds[index]) &&
-          next.minimizedTabIds.length === currentMinimized.length &&
-          next.minimizedTabIds.every((id, index) => id === currentMinimized[index])
-        ) {
-          return ws;
-        }
-        return {
+      const owner = findTabOwner(s, tabId);
+      if (!owner) return s;
+      const ws = s.workspaces[owner.projectFolderId];
+      if (!ws) return s;
+      const pane = ws.panes[owner.paneId];
+      if (!pane) return s;
+      const next = applyTabMinimized(
+        pane.tabIds,
+        pane.minimizedTabIds ?? [],
+        tabId,
+        minimized,
+      );
+      const currentMinimized = pane.minimizedTabIds ?? [];
+      if (
+        next.tabIds.length === pane.tabIds.length &&
+        next.tabIds.every((id, index) => id === pane.tabIds[index]) &&
+        next.minimizedTabIds.length === currentMinimized.length &&
+        next.minimizedTabIds.every((id, index) => id === currentMinimized[index])
+      ) {
+        return s;
+      }
+      const workspaces = {
+        ...s.workspaces,
+        [owner.projectFolderId]: {
           ...ws,
           panes: {
             ...ws.panes,
-            [paneId]: withMinimizedTabIds(pane, next.tabIds, next.minimizedTabIds),
+            [owner.paneId]: withMinimizedTabIds(
+              pane,
+              next.tabIds,
+              next.minimizedTabIds,
+            ),
           },
-        };
-      });
-      return patch ?? s;
+        },
+      };
+      if (activeWorkspaceId(s) !== owner.projectFolderId) {
+        return { workspaces };
+      }
+      return {
+        workspaces,
+        ...mirrorActive(workspaces, owner.projectFolderId, s),
+      };
     });
   },
 

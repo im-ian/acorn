@@ -1323,6 +1323,8 @@
       "openWorkSummary": "Open Work Summary",
       "silenceNotifications": "Silence Notifications",
       "resumeNotifications": "Resume Notifications",
+      "minimizeTab": "Minimize Tab",
+      "expandTab": "Expand Tab",
       "forkClaudeSession": "Fork Claude Session",
       "forkSession": "Fork Session",
       "forkClaudeInNewWorktree": "Fork Claude in New Worktree",
@@ -1384,7 +1386,8 @@
       "controlSession": "control session",
       "chatSession": "chat session",
       "generatingSessionTitle": "Generating session title",
-      "notificationsSilenced": "Notifications silenced"
+      "notificationsSilenced": "Notifications silenced",
+      "minimizedSessions": "Minimized sessions"
     },
     "localTerminals": {
       "title": "Instant Sessions",

@@ -291,6 +291,9 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(menu).toContainText("Open");
     await expect(menu).toContainText("Copy");
     await expect(menu).toContainText("Danger");
+    await expect(
+      page.getByRole("menuitem", { name: "Minimize Tab" }),
+    ).toBeVisible();
     await expect(menu).not.toContainText("Equalize Pane Sizes");
     await expect(menu).not.toContainText("Duplicate Session");
     await expect(menu).not.toContainText("Remove Others in Project");
