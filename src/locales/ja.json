@@ -9,6 +9,8 @@
     "session": {
       "createFailed": "セッションの作成に失敗しました:",
       "removeFailed": "セッションを削除できませんでした:",
+      "archiveFailed": "セッションをアーカイブできませんでした:",
+      "resumeFailed": "セッションを再開できませんでした:",
       "worktreeRemoved": "ワークツリーがディスクから削除されました。",
       "worktreeRemovedUndo": "{seconds}s の {name} ワークツリーを削除しています。元に戻す",
       "worktreeRestored": "ワークツリーが復元されました。",
@@ -1342,7 +1344,15 @@
       "copyTranscriptPath": "トランスクリプトのパスをコピー",
       "remove": "削除",
       "removeSession": "セッションを削除する",
-      "removeSessionMenu": "セッションの削除"
+      "removeSessionMenu": "セッションの削除",
+      "archiveSession": "セッションをアーカイブ",
+      "archiveSessionMenu": "セッションをアーカイブ",
+      "resumeSession": "セッションを再開",
+      "resumeSessionMenu": "セッションを再開"
+    },
+    "archived": {
+      "title": "アーカイブ済み",
+      "empty": "アーカイブされたセッションはありません"
     },
     "contextMenu": {
       "session": "セッション",
@@ -2614,6 +2624,7 @@
     "groups": {
       "sessions": "セッション",
       "switchSession": "セッションの切り替え",
+      "archived": "アーカイブ済み",
       "activity": "未読アクティビティ",
       "view": "見る",
       "terminal": "ターミナル",
@@ -2631,6 +2642,7 @@
       "addExistingProject": "既存のプロジェクトを追加する",
       "refreshSessions": "セッションを更新する",
       "switchSessionPrefix": "に切り替えます",
+      "resumeSessionPrefix": "再開",
       "viewTodos": "Todo を表示する",
       "viewCommits": "コミットの表示",
       "viewStaged": "ステージングされたビュー",

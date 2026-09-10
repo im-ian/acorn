@@ -234,6 +234,12 @@ export const api = {
   ): Promise<SessionRemovalOutcome> {
     return invoke<SessionRemovalOutcome>("remove_session", { id, removeWorktree });
   },
+  archiveSession(id: string): Promise<Session> {
+    return invoke<Session>("archive_session", { id });
+  },
+  resumeSession(id: string): Promise<Session> {
+    return invoke<Session>("resume_session", { id });
+  },
   setSessionStatus(id: string, status: SessionStatus): Promise<Session> {
     return invoke<Session>("set_session_status", { id, status });
   },

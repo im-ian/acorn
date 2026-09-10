@@ -738,7 +738,7 @@ fn print_sessions(sessions: &[SessionSummary]) {
                 terminal_safe_field(&session.name),
                 terminal_safe_field(&session.kind),
                 terminal_safe_field(&session.owner),
-                terminal_safe_field(&session.status),
+                terminal_safe_field(&session_status_label(session)),
                 terminal_safe_field(printable_workspace_path(session)),
                 terminal_safe_field(&session.branch),
             )
@@ -804,6 +804,14 @@ fn print_sessions(sessions: &[SessionSummary]) {
             workspace = row.5,
             branch = row.6,
         );
+    }
+}
+
+fn session_status_label(session: &SessionSummary) -> String {
+    if session.archived {
+        format!("{} (archived)", session.status)
+    } else {
+        session.status.clone()
     }
 }
 

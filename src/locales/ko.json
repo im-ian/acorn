@@ -9,6 +9,8 @@
     "session": {
       "createFailed": "세션을 만들지 못했습니다:",
       "removeFailed": "세션을 제거하지 못했습니다:",
+      "archiveFailed": "세션을 보관하지 못했습니다:",
+      "resumeFailed": "세션을 다시 열지 못했습니다:",
       "worktreeRemoved": "디스크에서 워크트리를 삭제했습니다.",
       "worktreeRemovedUndo": "{seconds}초 후 {name} 워크트리를 제거합니다. 실행 취소",
       "worktreeRestored": "워크트리를 복구했습니다.",
@@ -1342,7 +1344,15 @@
       "copyTranscriptPath": "트랜스크립트 경로 복사",
       "remove": "제거",
       "removeSession": "세션 제거",
-      "removeSessionMenu": "세션 제거"
+      "removeSessionMenu": "세션 제거",
+      "archiveSession": "세션 보관",
+      "archiveSessionMenu": "세션 보관",
+      "resumeSession": "세션 다시 열기",
+      "resumeSessionMenu": "세션 다시 열기"
+    },
+    "archived": {
+      "title": "보관됨",
+      "empty": "보관한 세션이 없습니다"
     },
     "contextMenu": {
       "session": "세션",
@@ -2614,6 +2624,7 @@
     "groups": {
       "sessions": "세션",
       "switchSession": "세션 전환",
+      "archived": "보관됨",
       "activity": "새 활동",
       "view": "보기",
       "terminal": "터미널",
@@ -2631,6 +2642,7 @@
       "addExistingProject": "기존 프로젝트 추가",
       "refreshSessions": "세션 새로고침",
       "switchSessionPrefix": "전환:",
+      "resumeSessionPrefix": "다시 열기",
       "viewTodos": "할 일 보기",
       "viewCommits": "커밋 보기",
       "viewStaged": "스테이징 보기",
