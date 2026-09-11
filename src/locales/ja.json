@@ -1639,6 +1639,14 @@
     }
   },
   "pane": {
+    "archivedRestore": {
+      "title": "このセッションを復元しますか？",
+      "body": "アーカイブされたセッションです。復元するとライブ端末で作業を続けられます。",
+      "restore": "復元",
+      "restoring": "復元中...",
+      "remove": "削除",
+      "ariaLabel": "アーカイブセッションのプレビュー"
+    },
     "empty": {
       "dropTabOrDoubleClick": "ここにタブをドロップするか、ダブルクリックしてセッションを開始します",
       "createProject": "プロジェクトを作成して開始します。ここをダブルクリックします。"
@@ -2184,6 +2192,7 @@
       "filesIn": "のファイル",
       "willNotBeTouched": "触れられないだろう。",
       "keepSharedWorktree": "このワークツリーはワークスペースによって共有され、ディスク上に保持されます。",
+      "keepArchivedWorktree": "アーカイブされたセッションは再開できるようワークツリーを保持します。削除する前にセッションを再開するか、先にセッションを削除してください。",
       "dontAskAgain": "二度と質問しないでください ([設定] → [セッション] に切り替えます)",
       "autoDeleteIsolatedWorktreesNextTime": "次回確認せずにスタンドアロンの分離ワークツリーを削除します",
       "keepWorktree": "削除のみ",
@@ -2318,6 +2327,7 @@
       "removeWorktree": "削除",
       "removeWorktreeAria": "{name} ワークツリーを削除します",
       "removeWorktreeBlockedByOtherSessions": "ワークツリーを削除する前に、このワークツリーを使用している他のセッションを閉じてください。",
+      "removeWorktreeBlockedByArchivedSession": "アーカイブされたセッションがこのワークツリーを使用しています。削除する前にそのセッションを再開するか、先に削除してください。",
       "confirmRemoveDialog": "ワークツリーの削除",
       "confirmRemoveTitle": "{name} を削除しますか?",
       "confirmRemoveBody": "これにより、リンクされた git worktree ディレクトリがディスクから削除されます。これを使用するセッションは、メイン プロジェクトから再度開く必要がある場合があります。",

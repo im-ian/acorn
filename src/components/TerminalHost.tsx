@@ -191,6 +191,7 @@ function visibleTerminalSessionIdKey(state: AppStateSnapshot): string {
     }
   }
   if (state.terminalPopupSessionId) ids.push(state.terminalPopupSessionId);
+  if (state.archivedPreviewSessionId) ids.push(state.archivedPreviewSessionId);
   return [...new Set(ids)].sort().join(SESSION_ID_KEY_SEPARATOR);
 }
 
@@ -200,6 +201,9 @@ function visibleTerminalTargetKey(
 ): string | null {
   if (state.terminalPopupSessionId === sessionId) {
     return `popover:${sessionId}`;
+  }
+  if (state.archivedPreviewSessionId === sessionId) {
+    return `archived-preview:${sessionId}`;
   }
   const workspaceId = activeWorkspaceId(state);
   if (!workspaceId) return null;
@@ -227,6 +231,12 @@ function terminalDestinationForTargetKey(
       `[data-terminal-popover-body="${cssEscape(sessionId)}"]`,
     ) as HTMLElement | null;
   }
+  if (targetKey.startsWith("archived-preview:")) {
+    const sessionId = targetKey.slice("archived-preview:".length);
+    return document.querySelector(
+      `[data-archived-preview-body="${cssEscape(sessionId)}"]`,
+    ) as HTMLElement | null;
+  }
   if (targetKey.startsWith("canvas:")) {
     const sessionId = targetKey.slice("canvas:".length);
     return document.querySelector(
@@ -243,7 +253,10 @@ function terminalDestinationForTargetKey(
 }
 
 function terminalTargetIsPopover(targetKey: string | null): boolean {
-  return Boolean(targetKey?.startsWith("popover:"));
+  return Boolean(
+    targetKey?.startsWith("popover:") ||
+      targetKey?.startsWith("archived-preview:"),
+  );
 }
 
 function terminalTargetIsCanvas(targetKey: string | null): boolean {
@@ -289,7 +302,8 @@ function PortaledTerminal({ session }: { session: Session }) {
       ? true
       : terminalTargetIsCanvas(visibleTargetKey)
         ? state.activeSessionId === session.id
-      : isSessionInFocusedPane(session.id, state.panes, state.focusedPaneId),
+      : state.archivedPreviewSessionId === session.id ||
+        isSessionInFocusedPane(session.id, state.panes, state.focusedPaneId),
   );
   const workspaceKey = useAppStore((state) =>
     workspaceContextKeyForSession(state, session.id),

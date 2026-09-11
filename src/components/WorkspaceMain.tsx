@@ -130,6 +130,7 @@ import {
   type WorkspaceViewMode,
 } from "../store";
 import { IconButton, StatusDot, type StatusTone } from "./ui";
+import { ArchivedSessionPreviewModal } from "./ArchivedSessionPreviewModal";
 import { ChatPane } from "./ChatPane";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { FileViewer } from "./FileViewer";
@@ -304,6 +305,7 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
       >
         <LayoutRenderer node={layout} />
       </div>
+      <ArchivedSessionPreviewModal />
     </div>
   );
 }

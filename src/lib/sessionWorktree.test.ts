@@ -11,6 +11,7 @@ import {
   sessionsUsingProjectWorktree,
   sessionsUsingWorktreePath,
   shouldAutoDeleteSessionWorktree,
+  worktreeWorkspaceIsOccupied,
 } from "./sessionWorktree";
 
 function session(overrides: Partial<Session> = {}): Session {
@@ -138,6 +139,33 @@ describe("worktree deletion policy", () => {
     });
 
     expect(canDeleteSessionWorktree(target, foldersByRepo)).toBe(true);
+    expect(shouldAutoDeleteSessionWorktree(target, foldersByRepo)).toBe(false);
+  });
+
+  it("treats archived sessions as occupying a worktree workspace", () => {
+    const parked = session({
+      archived_at: "2026-04-01T00:00:00Z",
+      worktree_path: "/repo/.acorn/worktrees/shared",
+    });
+
+    expect(
+      worktreeWorkspaceIsOccupied(
+        [parked],
+        "/repo",
+        "/repo/.acorn/worktrees/shared",
+      ),
+    ).toBe(true);
+    expect(worktreeWorkspaceIsOccupied([parked], "/repo", "/repo")).toBe(false);
+  });
+
+  it("does not delete a worktree while the session is archived", () => {
+    const target = session({
+      isolated: true,
+      worktree_path: "/repo/.acorn/worktrees/solo",
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+
+    expect(canDeleteSessionWorktree(target, foldersByRepo)).toBe(false);
     expect(shouldAutoDeleteSessionWorktree(target, foldersByRepo)).toBe(false);
   });
 });

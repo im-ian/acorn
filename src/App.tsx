@@ -120,6 +120,7 @@ import {
   retainSessionMapEntries,
 } from "./lib/sessionTracking";
 import { projectRootPaths } from "./lib/projectFolders";
+import { isArchivedSession } from "./lib/sessionArchive";
 import { useAppStore } from "./store";
 import type { TranslationKey, Translator } from "./lib/i18n";
 import type { Session } from "./lib/types";
@@ -285,6 +286,10 @@ function focusKanbanSessionCard(sessionId: string) {
 
 function closeTerminalPopoverFromHotkey(): boolean {
   const state = useAppStore.getState();
+  if (state.archivedPreviewSessionId) {
+    state.dismissArchivedPreview();
+    return true;
+  }
   const sessionId = state.terminalPopupSessionId;
   if (!sessionId) return false;
   state.closeTerminalPopup();
@@ -378,7 +383,10 @@ function App() {
       : 0;
   const pendingRemoveHasOwnedSessions = pendingRemoveOwnedSessionCount > 0;
   const pendingRemoveKeepsSharedWorktree =
-    pendingRemoveRecordedWorktree && !pendingRemoveCanDeleteWorktree;
+    pendingRemoveRecordedWorktree &&
+    !pendingRemoveCanDeleteWorktree &&
+    pendingRemove !== null &&
+    !isArchivedSession(pendingRemove);
   const pendingRemoveAutoDeletesWorktree =
     pendingRemove !== null &&
     shouldAutoDeleteSessionWorktree(pendingRemove, projectFolders, sessions);
@@ -548,6 +556,7 @@ function App() {
   const primedResumeSessionsRef = useRef<Set<string>>(new Set());
   const [resumePrimeVersion, setResumePrimeVersion] = useState(0);
   const probedSessionsRef = useRef<Set<string>>(new Set());
+  const previouslyArchivedSessionIdsRef = useRef<Set<string>>(new Set());
   const resumeCandidatesRef = useRef(resumeCandidates);
   resumeCandidatesRef.current = resumeCandidates;
   useEffect(() => {
@@ -628,6 +637,18 @@ function App() {
         return changed ? next : prev;
       });
     }
+    const archivedIds = new Set(
+      effectiveSessions
+        .filter(isArchivedSession)
+        .map((session) => session.id),
+    );
+    if (!autoResumeEnabled) {
+      for (const id of previouslyArchivedSessionIdsRef.current) {
+        if (!archivedIds.has(id)) probedSessionsRef.current.add(id);
+      }
+    }
+    previouslyArchivedSessionIdsRef.current = archivedIds;
+
     const toProbe = effectiveSessions
       .filter(
         (session) =>
@@ -729,7 +750,14 @@ function App() {
         // Per-provider failures are reported above; this only catches an
         // unexpected orchestration failure. The next launch retries.
       });
-  }, [sessions, resumeProbeEnabled, resumePrimeVersion, showToast, t]);
+  }, [
+    autoResumeEnabled,
+    sessions,
+    resumeProbeEnabled,
+    resumePrimeVersion,
+    showToast,
+    t,
+  ]);
 
   useEffect(() => {
     if (!autoResumeEnabled) return;
@@ -1346,7 +1374,11 @@ function App() {
       projectFolders,
       sessions,
     );
-    if (recordedWorktree && !canDeleteWorktree) {
+    if (
+      recordedWorktree &&
+      !canDeleteWorktree &&
+      !isArchivedSession(pendingRemove)
+    ) {
       clearPendingRemove();
       void removeSession(pendingRemove.id, false).then((outcome) => {
         showStoreOperationToast(null, "toasts.session.removeFailed");
@@ -2219,9 +2251,10 @@ function pickResumeCandidate(
 }
 
 function shouldSkipResumeProbeForSession(
-  session: Pick<Session, "status" | "agent_provider">,
+  session: Pick<Session, "status" | "agent_provider" | "archived_at">,
 ): boolean {
   return (
+    isArchivedSession(session) ||
     session.agent_provider != null ||
     session.status === "working" ||
     session.status === "waiting_for_input"

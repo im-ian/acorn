@@ -110,6 +110,10 @@ const ROOT_PANE_ID: PaneId = "root";
 const SESSION_TITLE_GENERATING_MIN_MS = 900;
 const WORKTREE_IN_USE_BY_OTHER_SESSIONS =
   "Close other sessions using this worktree before removing it.";
+const WORKTREE_HELD_BY_ARCHIVED_SESSION =
+  "Resume or permanently remove the archived session using this worktree before deleting it.";
+const SESSION_IS_ARCHIVED =
+  "Cannot start a terminal or adopt a worktree for an archived session.";
 
 let statusPollRunning = false;
 let statusPollChain: Promise<void> | null = null;
@@ -419,6 +423,11 @@ interface AppStateModel {
   focusedPaneId: PaneId;
   activeTabId: string | null;
   activeSessionId: string | null;
+  /**
+   * Archived session shown in the focused pane without a tab chip.
+   * Selecting any live tab, project, or folder dismisses it.
+   */
+  archivedPreviewSessionId: string | null;
   workspaceViewMode: WorkspaceViewMode;
   terminalPopupSessionId: string | null;
   consumeError: () => string | null;
@@ -527,6 +536,7 @@ interface AppStateModel {
   ) => void;
   openTerminalPopup: (sessionId: string) => void;
   closeTerminalPopup: () => void;
+  dismissArchivedPreview: () => void;
   focusAdjacentPane: (direction: PaneFocusDirection) => void;
   setPaneSplitSizes: (splitId: string, sizes: readonly number[]) => void;
   splitFocusedPane: (direction: Direction) => void;
@@ -962,6 +972,29 @@ function mirrorActive(
   };
 }
 
+function retainedArchivedPreviewSessionId(
+  sessions: readonly Session[],
+  previewId: string | null | undefined,
+): string | null {
+  if (!previewId) return null;
+  const session = sessions.find((item) => item.id === previewId);
+  return session && isArchivedSession(session) ? previewId : null;
+}
+
+function withArchivedPreview(
+  mirrored: ReturnType<typeof mirrorActive>,
+  previewId: string | null,
+): ReturnType<typeof mirrorActive> & { archivedPreviewSessionId: string | null } {
+  if (!previewId) {
+    return { ...mirrored, archivedPreviewSessionId: null };
+  }
+  return {
+    ...mirrored,
+    archivedPreviewSessionId: previewId,
+    activeSessionId: previewId,
+  };
+}
+
 /**
  * Reconcile a single project's pane state with that project's session list.
  * New sessions land in the focused pane. Removed sessions are dropped.
@@ -1026,6 +1059,7 @@ function reconcileWorkspace(
     if (!newPanes[target]) newPanes[target] = emptyPane(target);
   }
   for (const s of sessions) {
+    if (isArchivedSession(s)) continue;
     if (!assigned.has(s.id)) {
       const pane = newPanes[target];
       newPanes[target] = {
@@ -1740,6 +1774,7 @@ export const useAppStore = create<AppStateModel>()(
   focusedPaneId: ROOT_PANE_ID,
   activeTabId: null,
   activeSessionId: null,
+  archivedPreviewSessionId: null,
   workspaceViewMode: defaultWorkspaceViewMode(),
   terminalPopupSessionId: null,
 
@@ -1889,15 +1924,21 @@ export const useAppStore = create<AppStateModel>()(
           sessionFolderIds: reconciled.sessionFolderIds,
           activeProject: reconciled.activeProject,
           activeProjectFolderId: reconciled.activeProjectFolderId,
-          ...mirrorActive(
-            reconciled.workspaces,
-            reconciled.activeProjectFolderId,
-            {
-              sessions: s.sessions,
-              projects,
-              projectFolders: reconciled.projectFolders,
-              activeProject: reconciled.activeProject,
-            },
+          ...withArchivedPreview(
+            mirrorActive(
+              reconciled.workspaces,
+              reconciled.activeProjectFolderId,
+              {
+                sessions: s.sessions,
+                projects,
+                projectFolders: reconciled.projectFolders,
+                activeProject: reconciled.activeProject,
+              },
+            ),
+            retainedArchivedPreviewSessionId(
+              s.sessions,
+              s.archivedPreviewSessionId,
+            ),
           ),
         };
       });
@@ -1979,15 +2020,21 @@ export const useAppStore = create<AppStateModel>()(
         sessionFolderIds: reconciled.sessionFolderIds,
         activeProject: reconciled.activeProject,
         activeProjectFolderId: reconciled.activeProjectFolderId,
-        ...mirrorActive(
-          reconciled.workspaces,
-          reconciled.activeProjectFolderId,
-          {
+        ...withArchivedPreview(
+          mirrorActive(
+            reconciled.workspaces,
+            reconciled.activeProjectFolderId,
+            {
+              sessions,
+              projects,
+              projectFolders: reconciled.projectFolders,
+              activeProject: reconciled.activeProject,
+            },
+          ),
+          retainedArchivedPreviewSessionId(
             sessions,
-            projects,
-            projectFolders: reconciled.projectFolders,
-            activeProject: reconciled.activeProject,
-          },
+            s.archivedPreviewSessionId,
+          ),
         ),
       };
       return applyKnownSessionPlacementIntents(nextState);
@@ -2243,7 +2290,10 @@ export const useAppStore = create<AppStateModel>()(
             },
           };
         });
-        return patch ?? s;
+        if (!patch) {
+          return s.archivedPreviewSessionId ? { archivedPreviewSessionId: null } : s;
+        }
+        return { ...patch, archivedPreviewSessionId: null };
       }
 
       if (isWorkspaceTabId(id)) {
@@ -2268,6 +2318,7 @@ export const useAppStore = create<AppStateModel>()(
           workspaces,
           activeProject,
           activeProjectFolderId: owner.projectFolderId,
+          archivedPreviewSessionId: null,
           ...mirrorActive(workspaces, owner.projectFolderId, {
             ...s,
             activeProject,
@@ -2277,7 +2328,36 @@ export const useAppStore = create<AppStateModel>()(
 
       // Find session, switch active project to its repo, set active in pane.
       const session = s.sessions.find((x) => x.id === id);
-      if (!session || isArchivedSession(session)) return s;
+      if (!session) return s;
+      if (isArchivedSession(session)) {
+        const folders = s.projectFolders[session.repo_path] ?? [];
+        const targetProjectFolderId = resolveProjectFolderIdForSession(
+          folders,
+          session,
+          s.sessionFolderIds,
+        );
+        const workspaceId = s.workspaces[targetProjectFolderId]
+          ? targetProjectFolderId
+          : defaultProjectFolderId(session.repo_path);
+        const ws = s.workspaces[workspaceId];
+        if (!ws) {
+          return {
+            archivedPreviewSessionId: session.id,
+            activeSessionId: session.id,
+            activeProject: session.repo_path,
+          };
+        }
+        return {
+          archivedPreviewSessionId: session.id,
+          activeProject: session.repo_path,
+          activeProjectFolderId: workspaceId,
+          ...mirrorActive(s.workspaces, workspaceId, {
+            ...s,
+            activeProject: session.repo_path,
+          }),
+          activeSessionId: session.id,
+        };
+      }
 
       const folders = s.projectFolders[session.repo_path] ?? [];
       const targetProjectFolderId = resolveProjectFolderIdForSession(
@@ -2316,6 +2396,7 @@ export const useAppStore = create<AppStateModel>()(
         workspaces,
         activeProject: session.repo_path,
         activeProjectFolderId: workspaceId,
+        archivedPreviewSessionId: null,
         ...mirrorActive(workspaces, workspaceId, {
           ...s,
           activeProject: session.repo_path,
@@ -2353,11 +2434,16 @@ export const useAppStore = create<AppStateModel>()(
 
   openSessionSurface(id, options) {
     const session = get().sessions.find((candidate) => candidate.id === id);
-    if (!session || isArchivedSession(session)) return false;
+    if (!session) return false;
 
     get().selectSession(id);
     const state = get();
     if (state.activeSessionId !== id) return false;
+
+    if (isArchivedSession(session)) {
+      state.closeTerminalPopup();
+      return true;
+    }
 
     if (state.workspaceViewMode === "kanban") {
       state.openTerminalPopup(id);
@@ -2397,6 +2483,7 @@ export const useAppStore = create<AppStateModel>()(
       return {
         activeProject: null,
         activeProjectFolderId: null,
+        archivedPreviewSessionId: null,
         ...fallbackEmptyMirror(),
       };
     });
@@ -2451,6 +2538,7 @@ export const useAppStore = create<AppStateModel>()(
         projectFolders,
         activeProject: repoPath,
         activeProjectFolderId: folderId,
+        archivedPreviewSessionId: null,
         ...mirrorActive(workspaces, folderId, {
           ...s,
           projectFolders,
@@ -2483,6 +2571,7 @@ export const useAppStore = create<AppStateModel>()(
         workspaces,
         activeProject: folder.repoPath,
         activeProjectFolderId: folder.id,
+        archivedPreviewSessionId: null,
         ...mirrorActive(workspaces, folder.id, {
           ...s,
           activeProject: folder.repoPath,
@@ -2762,6 +2851,14 @@ export const useAppStore = create<AppStateModel>()(
     set({ terminalPopupSessionId: null });
   },
 
+  dismissArchivedPreview() {
+    if (!get().archivedPreviewSessionId) return;
+    set((s) => ({
+      archivedPreviewSessionId: null,
+      ...mirrorActive(s.workspaces, s.activeProjectFolderId, s),
+    }));
+  },
+
   focusAdjacentPane(direction) {
     set((s) => {
       const patch = updateActiveWorkspace(s, (ws) => {
@@ -2875,6 +2972,10 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   closeFocusedTab() {
+    if (get().archivedPreviewSessionId) {
+      get().dismissArchivedPreview();
+      return;
+    }
     const { activeTabId } = get();
     if (!activeTabId) return;
     if (isWorkspaceTabId(activeTabId)) {
@@ -3295,11 +3396,19 @@ export const useAppStore = create<AppStateModel>()(
     if (removeWorktree) {
       const state = get();
       if (target) {
+        if (isArchivedSession(target)) {
+          set({ error: WORKTREE_HELD_BY_ARCHIVED_SESSION });
+          return null;
+        }
         const otherSessions = otherSessionsUsingWorktreePath(
           state.sessions,
           target.worktree_path,
           target.id,
         ).filter((session) => !removalIds.has(session.id));
+        if (otherSessions.some((session) => isArchivedSession(session))) {
+          set({ error: WORKTREE_HELD_BY_ARCHIVED_SESSION });
+          return null;
+        }
         if (otherSessions.length > 0) {
           set({ error: WORKTREE_IN_USE_BY_OTHER_SESSIONS });
           return null;
@@ -3361,15 +3470,21 @@ export const useAppStore = create<AppStateModel>()(
         sessionFolderIds: reconciled.sessionFolderIds,
         activeProject: reconciled.activeProject,
         activeProjectFolderId: reconciled.activeProjectFolderId,
-        ...mirrorActive(
-          reconciled.workspaces,
-          reconciled.activeProjectFolderId,
-          {
+        ...withArchivedPreview(
+          mirrorActive(
+            reconciled.workspaces,
+            reconciled.activeProjectFolderId,
+            {
+              sessions,
+              projects: s.projects,
+              projectFolders: reconciled.projectFolders,
+              activeProject: reconciled.activeProject,
+            },
+          ),
+          retainedArchivedPreviewSessionId(
             sessions,
-            projects: s.projects,
-            projectFolders: reconciled.projectFolders,
-            activeProject: reconciled.activeProject,
-          },
+            s.archivedPreviewSessionId,
+          ),
         ),
       };
     });
@@ -3408,9 +3523,12 @@ export const useAppStore = create<AppStateModel>()(
     if (isArchivedSession(target)) return target;
 
     const archivedAt = new Date().toISOString();
+    const cascadeIds = sessionRemovalCascadeIds(get().sessions, target);
     set((s) => {
       const sessions = s.sessions.map((session) =>
-        session.id === id ? { ...session, archived_at: archivedAt } : session,
+        cascadeIds.has(session.id)
+          ? { ...session, archived_at: session.archived_at ?? archivedAt }
+          : session,
       );
       const reconciled = reconcileWorkspaces(
         sessions,
@@ -3422,6 +3540,9 @@ export const useAppStore = create<AppStateModel>()(
         s.activeProjectFolderId,
         true,
       );
+      const previewId = cascadeIds.has(s.activeSessionId ?? "")
+        ? id
+        : retainedArchivedPreviewSessionId(sessions, s.archivedPreviewSessionId);
       return {
         sessions,
         error: null,
@@ -3432,15 +3553,18 @@ export const useAppStore = create<AppStateModel>()(
         sessionFolderIds: reconciled.sessionFolderIds,
         activeProject: reconciled.activeProject,
         activeProjectFolderId: reconciled.activeProjectFolderId,
-        ...mirrorActive(
-          reconciled.workspaces,
-          reconciled.activeProjectFolderId,
-          {
-            sessions,
-            projects: s.projects,
-            projectFolders: reconciled.projectFolders,
-            activeProject: reconciled.activeProject,
-          },
+        ...withArchivedPreview(
+          mirrorActive(
+            reconciled.workspaces,
+            reconciled.activeProjectFolderId,
+            {
+              sessions,
+              projects: s.projects,
+              projectFolders: reconciled.projectFolders,
+              activeProject: reconciled.activeProject,
+            },
+          ),
+          previewId,
         ),
       };
     });
@@ -3545,6 +3669,11 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   async adoptSessionWorktree(id, worktreePath) {
+    const target = get().sessions.find((session) => session.id === id);
+    if (target && isArchivedSession(target)) {
+      set({ error: SESSION_IS_ARCHIVED });
+      return;
+    }
     try {
       await api.updateSessionWorktree(id, worktreePath);
       await get().refreshSessions();
@@ -3838,6 +3967,14 @@ export const useAppStore = create<AppStateModel>()(
           targetSessions[0]?.id === state.activeSessionId);
       const removingRequiredSessions =
         targetSessions.length === 0 || removeSessions;
+      const archivedOccupants = sessionsUsingWorktreePath(
+        state.sessions,
+        worktreePath,
+      ).filter(isArchivedSession);
+      if (archivedOccupants.length > 0) {
+        set({ error: WORKTREE_HELD_BY_ARCHIVED_SESSION });
+        throw new Error(WORKTREE_HELD_BY_ARCHIVED_SESSION);
+      }
       if (
         sessionsOutsideProject.length > 0 ||
         !canRemoveSessions ||

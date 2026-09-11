@@ -43,6 +43,10 @@ use tauri_plugin_dialog::DialogExt;
 const CHAT_SESSION_STATE_CHANGED_EVENT: &str = "acorn:chat-session-state-changed";
 const WORKTREE_IN_USE_BY_OTHER_SESSIONS: &str =
     "Close other sessions using this worktree before removing it.";
+const WORKTREE_HELD_BY_ARCHIVED_SESSION: &str =
+    "Resume or permanently remove the archived session using this worktree before deleting it.";
+const SESSION_IS_ARCHIVED: &str =
+    "Cannot start a terminal or adopt a worktree for an archived session.";
 const CODEX_TOOL_PROCESS_START_TOLERANCE: std::time::Duration = std::time::Duration::from_secs(1);
 const MAX_CODEX_REPAIR_TAIL_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_CLAUDE_FORK_PROJECT_ENTRIES: usize = 10_000;
@@ -7605,6 +7609,28 @@ fn ensure_no_sessions_using_worktree_path_except_ids(
     Ok(())
 }
 
+fn ensure_session_is_live(session: &Session) -> AppResult<()> {
+    if session.archived_at.is_some() {
+        return Err(AppError::Other(SESSION_IS_ARCHIVED.to_string()));
+    }
+    Ok(())
+}
+
+fn ensure_worktree_not_held_by_archived_session(
+    state: &AppState,
+    worktree_path: &Path,
+) -> AppResult<()> {
+    let held = sessions_using_worktree_path(state, worktree_path)
+        .iter()
+        .any(|session| session.archived_at.is_some());
+    if held {
+        return Err(AppError::Other(
+            WORKTREE_HELD_BY_ARCHIVED_SESSION.to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn worktree_path_used_outside_project(
     state: &AppState,
     repo_path: &Path,
@@ -7767,6 +7793,7 @@ pub async fn remove_session(
         .map(|session| session.id)
         .collect();
     if remove_worktree.unwrap_or(false) {
+        ensure_worktree_not_held_by_archived_session(&app_state, &session.worktree_path)?;
         ensure_no_sessions_using_worktree_path_except_ids(
             &app_state,
             &session.worktree_path,
@@ -7843,12 +7870,27 @@ pub async fn archive_session(state: State<'_, AppState>, id: String) -> AppResul
 async fn archive_session_inner(state: AppState, id: String) -> AppResult<Session> {
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = state.sessions.get(&id)?;
-    if session.archived_at.is_some() {
+    let sessions_to_archive = session_removal_cascade(&state, &session);
+    if sessions_to_archive
+        .iter()
+        .all(|candidate| candidate.archived_at.is_some())
+    {
         return Ok(enrich_session(session));
     }
-    let branch = worktree::current_branch(&session.worktree_path).ok();
-    terminate_session_runtime_blocking(state.clone(), id).await?;
-    let updated = state.sessions.archive(&id, branch)?;
+    for candidate in &sessions_to_archive {
+        terminate_session_runtime_blocking(state.clone(), candidate.id).await?;
+    }
+    let mut updated = session;
+    for candidate in &sessions_to_archive {
+        if candidate.archived_at.is_some() {
+            continue;
+        }
+        let branch = worktree::current_branch(&candidate.worktree_path).ok();
+        let next = state.sessions.archive(&candidate.id, branch)?;
+        if next.id == id {
+            updated = next;
+        }
+    }
     persist(&state);
     Ok(enrich_session(updated))
 }
@@ -7864,17 +7906,39 @@ fn resume_session_inner(state: &AppState, id: String) -> AppResult<Session> {
     if session.archived_at.is_none() {
         return Ok(enrich_session(session));
     }
-    let restored_path = worktree::restore_session_worktree(
-        &session.repo_path,
-        &session.worktree_path,
-        &session.branch,
-        session.isolated,
-    )?;
-    if restored_path != session.worktree_path {
-        state.sessions.update_worktree_path(&id, restored_path)?;
+    let mut to_resume = vec![session];
+    if to_resume[0].kind == SessionKind::Control {
+        to_resume.extend(
+            state
+                .sessions
+                .list_control_owned_descendants(id)
+                .into_iter()
+                .filter(|candidate| candidate.archived_at.is_some()),
+        );
     }
-    let updated = state.sessions.unarchive(&id)?;
+    for candidate in &to_resume {
+        let restored_path = worktree::restore_session_worktree(
+            &candidate.repo_path,
+            &candidate.worktree_path,
+            &candidate.branch,
+            candidate.isolated,
+        )?;
+        if restored_path != candidate.worktree_path {
+            state
+                .sessions
+                .update_worktree_path(&candidate.id, restored_path)?;
+        }
+    }
+    let mut updated = None;
+    for candidate in &to_resume {
+        let next = state.sessions.unarchive(&candidate.id)?;
+        if next.id == id {
+            updated = Some(next);
+        }
+    }
     persist(&state);
+    let updated = updated
+        .ok_or_else(|| AppError::Other("resumed session is missing from the store".to_string()))?;
     Ok(enrich_session(updated))
 }
 
@@ -8256,6 +8320,7 @@ pub fn update_session_worktree(
     let id = parse_id(&id)?;
     let path = PathBuf::from(worktree_path);
     let session = state.sessions.get(&id)?;
+    ensure_session_is_live(&session)?;
     if session.project_scoped == false {
         return Err(AppError::InvalidPath(
             "local sessions cannot adopt project worktrees".into(),
@@ -8288,6 +8353,7 @@ pub fn prepare_chat_session_worktree(
     session_id: String,
 ) -> AppResult<Session> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
+    ensure_session_is_live(&session)?;
     if session.project_scoped == false {
         return Err(AppError::InvalidPath(
             "local chat sessions cannot create project worktrees".into(),
@@ -8715,6 +8781,16 @@ pub async fn remove_worktree(
         Path::new(&worktree_path),
     )?;
     let remove_sessions = remove_sessions.unwrap_or(false);
+    remove_worktree_inner(app_state, repo_path, worktree_path, remove_sessions).await
+}
+
+async fn remove_worktree_inner(
+    app_state: AppState,
+    repo_path: PathBuf,
+    worktree_path: PathBuf,
+    remove_sessions: bool,
+) -> AppResult<RemovalOutcome<Option<worktree::RemovedWorktree>>> {
+    ensure_worktree_not_held_by_archived_session(&app_state, &worktree_path)?;
     if remove_sessions {
         let matching_sessions = sessions_using_worktree_path(&app_state, &worktree_path);
         if matching_sessions.len() > 1
@@ -8926,6 +9002,10 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let session = state.sessions.get(&id)?;
+    if session.archived_at.is_some() {
+        terminate_session_pty(&state, &id);
+        return Err(AppError::Other(SESSION_IS_ARCHIVED.to_string()));
+    }
     let cwd = authorize_session_cwd(&state, &session, &PathBuf::from(cwd))?;
     let output_token = output_token.or_else(|| state.pty_output.current_token(&id));
     // Either an in-process PTY or a daemon-side stream attachment for
@@ -12346,11 +12426,11 @@ mod tests {
         linked_worktree_root_for_registered_path, memory_root_pids, normalize_session_goal,
         normalize_session_graph, poll_defers_to_hook, project_creation_git_error,
         pty_io_uses_daemon, reconcile_stale_worktrees, remove_linked_worktree_at_path,
-        restore_pending_session_removal, resume_session_inner, retry_removal_cleanup_inner,
-        seed_initial_commit, should_remove_local_project_mirror, should_route_session_to_daemon,
-        terminate_session_runtime, validate_display_name, validate_editor_command,
-        validate_new_project_name, validate_pty_caller_env, ChatProviderAdapter,
-        ProcessMemorySnapshot, RemovalProgress, MAX_PTY_WORKSPACE_NAME_BYTES,
+        remove_worktree_inner, restore_pending_session_removal, resume_session_inner,
+        retry_removal_cleanup_inner, seed_initial_commit, should_remove_local_project_mirror,
+        should_route_session_to_daemon, terminate_session_runtime, validate_display_name,
+        validate_editor_command, validate_new_project_name, validate_pty_caller_env,
+        ChatProviderAdapter, ProcessMemorySnapshot, RemovalProgress, MAX_PTY_WORKSPACE_NAME_BYTES,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingRemovalStep, PendingSessionRemoval};
@@ -12360,7 +12440,7 @@ mod tests {
         Session, SessionAgentProvider, SessionGoal, SessionGoalModelConfig, SessionGoalPolicies,
         SessionGoalPreset, SessionGoalProgress, SessionGoalStagePolicy, SessionGraph,
         SessionGraphAgent, SessionGraphCanvas, SessionGraphNodePosition, SessionKind, SessionMode,
-        SessionTitleSource, WorkGraphGroupDirection,
+        SessionOwner, SessionTitleSource, WorkGraphGroupDirection,
     };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -12623,6 +12703,133 @@ mod tests {
         assert!(crate::worktree::is_linked_worktree_root(
             &resumed.worktree_path
         ));
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn archive_session_parks_control_owned_descendants() {
+        let repo_dir = unique_repo_dir("archive-control-cascade");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let worktree_path =
+            crate::worktree::create_worktree(&repo_dir, "shared").expect("create linked worktree");
+        let state = AppState::new();
+        state.projects.ensure(repo_dir.clone(), "demo".to_string());
+        let mut control = Session::new(
+            "control".to_string(),
+            repo_dir.clone(),
+            worktree_path.clone(),
+            "shared".to_string(),
+            true,
+            SessionKind::Control,
+        );
+        control.in_worktree = true;
+        let control = state.sessions.insert(control);
+        let mut worker = Session::new(
+            "worker".to_string(),
+            repo_dir.clone(),
+            worktree_path.clone(),
+            "shared".to_string(),
+            true,
+            SessionKind::Regular,
+        );
+        worker.owner = SessionOwner::control(control.id);
+        worker.in_worktree = true;
+        let worker = state.sessions.insert(worker);
+
+        tauri::async_runtime::block_on(archive_session_inner(
+            state.clone(),
+            control.id.to_string(),
+        ))
+        .expect("archive control session");
+
+        assert!(state
+            .sessions
+            .get(&control.id)
+            .unwrap()
+            .archived_at
+            .is_some());
+        assert!(state
+            .sessions
+            .get(&worker.id)
+            .unwrap()
+            .archived_at
+            .is_some());
+
+        resume_session_inner(&state, control.id.to_string()).expect("resume control session");
+        assert!(state
+            .sessions
+            .get(&control.id)
+            .unwrap()
+            .archived_at
+            .is_none());
+        assert!(state
+            .sessions
+            .get(&worker.id)
+            .unwrap()
+            .archived_at
+            .is_none());
+
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn remove_worktree_rejects_an_archived_session_occupant() {
+        let repo_dir = unique_repo_dir("archive-block-worktree-delete");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let worktree_path =
+            crate::worktree::create_worktree(&repo_dir, "parked").expect("create linked worktree");
+        let state = AppState::new();
+        state.projects.ensure(repo_dir.clone(), "demo".to_string());
+        let created = create_session_inner(
+            &state,
+            "parked".to_string(),
+            repo_dir.clone(),
+            Some(worktree_path.clone()),
+            true,
+            SessionKind::Regular,
+            None,
+            true,
+            SessionMode::Terminal,
+            None,
+            None,
+            false,
+        )
+        .expect("create session");
+        tauri::async_runtime::block_on(archive_session_inner(
+            state.clone(),
+            created.id.to_string(),
+        ))
+        .expect("archive session");
+
+        let err = tauri::async_runtime::block_on(remove_worktree_inner(
+            state.clone(),
+            repo_dir.clone(),
+            worktree_path.clone(),
+            false,
+        ))
+        .expect_err("archived occupant must block worktree deletion");
+        assert_eq!(err.to_string(), super::WORKTREE_HELD_BY_ARCHIVED_SESSION);
+        assert!(worktree_path.exists());
+        assert!(state
+            .sessions
+            .get(&created.id)
+            .unwrap()
+            .archived_at
+            .is_some());
+
+        let err = tauri::async_runtime::block_on(remove_worktree_inner(
+            state.clone(),
+            repo_dir.clone(),
+            worktree_path.clone(),
+            true,
+        ))
+        .expect_err("remove_sessions must not delete an archived occupant");
+        assert_eq!(err.to_string(), super::WORKTREE_HELD_BY_ARCHIVED_SESSION);
+        assert!(worktree_path.exists());
+        assert!(state.sessions.get(&created.id).is_ok());
+
         std::fs::remove_dir_all(&repo_dir).ok();
     }
 

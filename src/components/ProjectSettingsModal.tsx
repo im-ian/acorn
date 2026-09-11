@@ -23,6 +23,7 @@ import {
   resolveStartWorkAgentPrompt,
 } from "../lib/project-settings";
 import { basenamePath, projectRootPaths } from "../lib/projectFolders";
+import { isArchivedSession } from "../lib/sessionArchive";
 import {
   sessionsUsingProjectWorktree,
   sessionsUsingWorktreePath,
@@ -190,7 +191,10 @@ function blockingSessionsForProjectWorktree(
   );
   const targetIds = new Set(targetSessions.map((session) => session.id));
   return sessionsUsingWorktreePath(sessions, worktreePath).filter(
-    (session) => !targetIds.has(session.id) || session.id !== activeSessionId,
+    (session) =>
+      isArchivedSession(session) ||
+      !targetIds.has(session.id) ||
+      session.id !== activeSessionId,
   );
 }
 
@@ -1371,13 +1375,21 @@ function ProjectWorktreeList({
               worktree.path,
             );
             const sessionCount = usedBySessions.length;
+            const removeBlockedByArchivedSessions = usedBySessions.some(
+              isArchivedSession,
+            );
             const removeBlockedByOtherSessions =
+              removeBlockedByArchivedSessions ||
               blockingSessionsForProjectWorktree(
                 sessions,
                 worktree.rootPath,
                 worktree.path,
                 activeSessionId,
               ).length > 0;
+            const removeBlockedReason: DialogTranslationKey =
+              removeBlockedByArchivedSessions
+                ? "dialogs.projectSettings.removeWorktreeBlockedByArchivedSession"
+                : "dialogs.projectSettings.removeWorktreeBlockedByOtherSessions";
             return (
               <li key={`${worktree.rootPath}:${worktree.path}`} className="px-3 py-2">
                 <div className="flex items-start justify-between gap-3">
@@ -1417,10 +1429,7 @@ function ProjectWorktreeList({
                     ) : null}
                     {removeBlockedByOtherSessions ? (
                       <p className="text-[11px] text-fg-muted">
-                        {dt(
-                          t,
-                          "dialogs.projectSettings.removeWorktreeBlockedByOtherSessions",
-                        )}
+                        {dt(t, removeBlockedReason)}
                       </p>
                     ) : null}
                   </div>
@@ -1432,10 +1441,7 @@ function ProjectWorktreeList({
                     )}
                     title={
                       removeBlockedByOtherSessions
-                        ? dt(
-                            t,
-                            "dialogs.projectSettings.removeWorktreeBlockedByOtherSessions",
-                          )
+                        ? dt(t, removeBlockedReason)
                         : undefined
                     }
                     onClick={() => onRequestRemove(worktree)}
