@@ -1675,8 +1675,9 @@ export function Terminal({
       const cell = core?._renderService?.dimensions?.css?.cell;
       return cell ? { width: cell.width, height: cell.height } : null;
     };
-    /** Columns the terminal would spend on `text` — 2 per Hangul syllable. */
-    const stringCellWidth = (text: string): number => {
+    /** Columns the terminal would spend on `text` — 2 per Hangul syllable.
+     *  `null` when the measurement is unavailable. */
+    const stringCellWidth = (text: string): number | null => {
       type UnicodeService = { getStringCellWidth?: (value: string) => number };
       const core = (
         term as unknown as {
@@ -1688,9 +1689,12 @@ export function Terminal({
       )._core;
       const unicode = core?.unicodeService ?? core?._unicodeService;
       try {
-        return unicode?.getStringCellWidth?.(text) ?? 0;
+        return unicode?.getStringCellWidth?.(text) ?? null;
       } catch {
-        return 0;
+        // Undocumented internals — an xterm bump can move or remove them.
+        // `null` means "unknown", which callers must not confuse with the
+        // legitimate 0 of a combining mark.
+        return null;
       }
     };
     const compositionTextView = document.createElement("span");
@@ -1721,17 +1725,42 @@ export function Terminal({
         pendingCommitTimer = null;
       }
     };
-    /** Drop the hold once the cursor leaves the cell it was committed from —
-     *  the echo landed, or the TUI redrew somewhere else. */
+    /**
+     * Release the part of the hold the buffer has taken over. Echoes arrive
+     * per syllable, so a cursor advance of N columns retires exactly the
+     * leading N columns of held text — dropping the whole hold there would
+     * reopen the gap for syllables still in flight. Anything that does not
+     * line up (cursor moved backwards, changed row, or landed mid-syllable)
+     * is a redraw rather than an echo: drop everything, which is the safe
+     * direction since the held text is only ever a visual bridge.
+     */
     const dropEchoedPendingCommit = () => {
       if (!pendingCommit) return;
       const buf = term.buffer.active;
-      if (
-        buf.cursorX !== pendingCommit.x ||
-        buf.baseY + buf.cursorY !== pendingCommit.y
-      ) {
+      const advanced = buf.cursorX - pendingCommit.x;
+      if (buf.baseY + buf.cursorY !== pendingCommit.y || advanced < 0) {
         clearPendingCommit();
+        return;
       }
+      if (advanced === 0) return;
+      let columns = 0;
+      let retired = 0;
+      for (const char of pendingCommit.text) {
+        if (columns >= advanced) break;
+        const width = stringCellWidth(char);
+        if (width === null) {
+          clearPendingCommit();
+          return;
+        }
+        columns += width;
+        retired += char.length;
+      }
+      const rest = pendingCommit.text.slice(retired);
+      if (columns !== advanced || rest.length === 0) {
+        clearPendingCommit();
+        return;
+      }
+      pendingCommit = { text: rest, x: buf.cursorX, y: pendingCommit.y };
     };
     const positionComposing = () => {
       if (!compositionView) return;
@@ -1771,13 +1800,22 @@ export function Terminal({
       if (!cellDims) {
         compositionTextView.textContent = text;
         compositionTextView.style.marginRight = "";
+        compositionTextView.style.letterSpacing = "";
         return;
       }
       const cells: HTMLElement[] = [];
       for (const char of text) {
         const columns = stringCellWidth(char);
+        if (columns === null) {
+          // Widths unavailable — plain text beats cramming the whole preview
+          // into one cell-sized box.
+          compositionTextView.textContent = text;
+          compositionTextView.style.marginRight = "";
+          compositionTextView.style.letterSpacing = "";
+          return;
+        }
         const previous = cells[cells.length - 1];
-        if (columns <= 0 && previous) {
+        if (columns === 0 && previous) {
           previous.textContent = `${previous.textContent ?? ""}${char}`;
           continue;
         }
@@ -1787,6 +1825,10 @@ export function Terminal({
         cell.style.width = `${Math.max(1, columns) * cellDims.width}px`;
         cells.push(cell);
       }
+      // The cell width already carries the configured letter spacing; the
+      // composition view applies it again for the cloned tail runs, which
+      // need it. Neutralise it over the explicit boxes.
+      compositionTextView.style.letterSpacing = "0";
       compositionTextView.replaceChildren(...cells);
       // Negative margin pulls the caret — the next inline box — back inside
       // the grid without disturbing the glyph spacing before it.
@@ -1897,10 +1939,11 @@ export function Terminal({
         y: buf.baseY + buf.cursorY,
       };
       // A PTY that never echoes (dead shell, password prompt) would otherwise
-      // leave the held text painted forever.
-      if (pendingCommitTimer !== null) {
-        window.clearTimeout(pendingCommitTimer);
-      }
+      // leave the held text painted forever. The ceiling runs from the first
+      // held syllable: restarting it per commit would let continuous typing
+      // into a silent app extend the hold — and the hidden native cursor that
+      // comes with it — indefinitely.
+      if (pendingCommitTimer !== null) return;
       pendingCommitTimer = window.setTimeout(() => {
         pendingCommitTimer = null;
         pendingCommit = null;
@@ -2739,10 +2782,14 @@ export function Terminal({
     // xterm fires render/scroll/cursor-move separately for the same repaint,
     // and each rebuild of the overlay measures the source row (a forced
     // layout). Coalesce them into one recompute per frame.
-    let repositionFrame: number | null = null;
+    let repositionPending = false;
     const repositionComposingNow = () => {
-      repositionFrame = null;
-      if (!compositionView || !compositionView.classList.contains("active")) {
+      repositionPending = false;
+      if (
+        disposed ||
+        !compositionView ||
+        !compositionView.classList.contains("active")
+      ) {
         return;
       }
       syncComposing();
@@ -2752,11 +2799,16 @@ export function Terminal({
       // exactly what got us here — keystroke-driven rebuilds in between reuse
       // the measurements.
       invalidateTerminalLineTailCache(lineTailCache);
-      if (repositionFrame !== null) return;
+      if (repositionPending) return;
       if (!compositionView || !compositionView.classList.contains("active")) {
         return;
       }
-      repositionFrame = requestAnimationFrame(repositionComposingNow);
+      // A microtask, not a frame: xterm already fires these from inside its
+      // own render callback, so deferring to the next frame would leave the
+      // overlay a frame behind a scroll. This still collapses the
+      // render/scroll/cursor-move burst for one repaint into a single pass.
+      repositionPending = true;
+      queueMicrotask(repositionComposingNow);
     };
     const renderDisposable = term.onRender(repositionComposing);
     // PTY output that arrives while the user is mid-composition can scroll
@@ -3452,10 +3504,7 @@ export function Terminal({
       container.removeAttribute("data-acorn-cursor-application-override");
       container.classList.remove(COMPOSING_CLASS);
       clearPendingCommit();
-      if (repositionFrame !== null) {
-        cancelAnimationFrame(repositionFrame);
-        repositionFrame = null;
-      }
+      repositionPending = false;
       try { fitAddon.dispose(); } catch { /* ignore */ }
       try { serializeAddon.dispose(); } catch { /* ignore */ }
       term.dispose();

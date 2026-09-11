@@ -192,7 +192,7 @@ async function emitPtyOutput(page: Page, text: string): Promise<void> {
   await page.evaluate((output) => {
     const w = window as unknown as {
       __imeOutputChannelId?: number;
-      __imeOutputIndex?: number;
+      __imeOutputIndexByChannel?: Record<number, number>;
       [key: string]: unknown;
     };
     const id = w.__imeOutputChannelId;
@@ -201,10 +201,13 @@ async function emitPtyOutput(page: Page, text: string): Promise<void> {
       | ((payload: { index: number; message: number[] }) => void)
       | undefined;
     if (!callback) throw new Error("IME output callback missing");
-    // Tauri's Channel reorders by `index` and parks anything it has already
-    // delivered — a second emit reusing 0 would never reach the terminal.
-    const index = w.__imeOutputIndex ?? 0;
-    w.__imeOutputIndex = index + 1;
+    // Tauri's Channel reorders by `index` and parks anything out of sequence.
+    // The sequence is per channel: a terminal remount re-subscribes with a
+    // fresh one that expects to start at 0 again, so carrying a single global
+    // counter across it parks every later emit forever.
+    const sequences = (w.__imeOutputIndexByChannel ??= {});
+    const index = sequences[id] ?? 0;
+    sequences[id] = index + 1;
     callback({
       index,
       message: Array.from(new TextEncoder().encode(output)),
@@ -382,6 +385,12 @@ test.describe("terminal: IME (PR #104 regression)", () => {
       },
     ]);
     await emitPtyOutput(page, "한");
+    // Wait on the echo reaching the buffer, not on the overlay clearing — the
+    // hold also expires on its own ceiling, which would let the cursor be
+    // measured before it ever advanced.
+    await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
+      "> 한",
+    );
     await expect(page.locator(".composition-view.active")).toHaveCount(0);
 
     const realCursorLeft = await page.evaluate(() => {
@@ -398,7 +407,9 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     // glyph's natural advance instead lands materially further short, so the
     // caret would visibly jump outward on every echo.
     expect(realCursorLeft - composing.snapped).toBeCloseTo(2, 0);
-    expect(realCursorLeft - composing.naturalAdvance).toBeGreaterThan(3);
+    // Not asserted as a magnitude: how far short the raw glyph advance falls
+    // depends on the CJK font the test browser happens to resolve.
+    expect(composing.naturalAdvance).toBeLessThanOrEqual(composing.snapped);
   });
 
   test("committed syllables stay painted until the PTY echo lands", async ({
@@ -460,6 +471,53 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     const writes = await getWrites(page);
     expect(countToken(writes, "안")).toBe(1);
     expect(countToken(writes, "녕")).toBe(1);
+  });
+
+  test("a partial echo releases only the syllables the buffer took over", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+    await emitPtyOutput(page, "> ");
+    await expect(page.locator(".xterm-rows")).toContainText(">");
+
+    const commit = (syllable: string) => [
+      { type: "keydown" as const, key: "Process", keyCode: 229 },
+      {
+        type: "input" as const,
+        inputType: "insertCompositionText",
+        data: syllable,
+        taValue: syllable,
+      },
+      {
+        type: "input" as const,
+        inputType: "insertFromComposition",
+        data: syllable,
+        taValue: syllable,
+      },
+    ];
+
+    await runIme(page, commit("안"));
+    await runIme(page, commit("녕"));
+    expect(await imeOverlayText(page)).toBe("안녕");
+
+    // Only the first syllable comes back. Dropping the whole hold here would
+    // strand 녕 in neither the overlay nor the buffer until its own echo —
+    // exactly the gap the hold exists to close.
+    await emitPtyOutput(page, "안");
+    await expect.poll(() => imeOverlayText(page)).toBe("녕");
+    // `.xterm-rows` alone also matches the overlay's tail view while the
+    // composition is live.
+    await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
+      "> 안",
+    );
+
+    await emitPtyOutput(page, "녕");
+    await expect(page.locator(".composition-view.active")).toHaveCount(0);
+    await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
+      "> 안녕",
+    );
   });
 
   test("composition cursor follows an application-owned DECSCUSR shape", async ({

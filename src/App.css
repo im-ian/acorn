@@ -187,8 +187,9 @@
   opacity: 0 !important;
 }
 
-/* Inline-block so the cell-grid `min-width` set in Terminal.tsx applies; the
-   caret anchor then starts on the same cell boundary the real cursor uses. */
+/* Inline-block so the per-character cell boxes Terminal.tsx builds lay out on
+   one line; the caret anchor then starts on the cell boundary the real cursor
+   uses, less the inset applied there. */
 .acorn-terminal
   .composition-view
   .acorn-ime-composition-text {
