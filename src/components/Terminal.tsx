@@ -1672,6 +1672,24 @@ export function Terminal({
       const cell = core?._renderService?.dimensions?.css?.cell;
       return cell ? { width: cell.width, height: cell.height } : null;
     };
+    /** Columns the terminal would spend on `text` — 2 per Hangul syllable. */
+    const stringCellWidth = (text: string): number => {
+      type UnicodeService = { getStringCellWidth?: (value: string) => number };
+      const core = (
+        term as unknown as {
+          _core?: {
+            unicodeService?: UnicodeService;
+            _unicodeService?: UnicodeService;
+          };
+        }
+      )._core;
+      const unicode = core?.unicodeService ?? core?._unicodeService;
+      try {
+        return unicode?.getStringCellWidth?.(text) ?? 0;
+      } catch {
+        return 0;
+      }
+    };
     const compositionTextView = document.createElement("span");
     compositionTextView.className = "acorn-ime-composition-text";
     const compositionCursorView = document.createElement("span");
@@ -1746,6 +1764,16 @@ export function Terminal({
     const renderComposing = (text: string) => {
       if (!compositionView || text.length === 0) return;
       compositionTextView.textContent = text;
+      // Snap the preview to the terminal's cell grid. A Hangul syllable spends
+      // two columns, but the raw glyph advance is usually narrower than two
+      // cells, which parked the caret marker tight against the glyph instead
+      // of on the cell boundary the real cursor would sit at. `min-width` so a
+      // font whose glyphs run wider than their cells still pushes the caret
+      // out rather than colliding with it.
+      const cellDims = getCellDims();
+      const columns = stringCellWidth(text);
+      compositionTextView.style.minWidth =
+        cellDims && columns > 0 ? `${columns * cellDims.width}px` : "";
       // Until the PTY receives a committed composition, its buffer still has
       // the text under and after the cursor in the old position. Mirror that
       // tail after the preview so mid-line composition reads as insertion.

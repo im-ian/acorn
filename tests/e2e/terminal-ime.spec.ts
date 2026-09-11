@@ -283,6 +283,10 @@ test.describe("terminal: IME (PR #104 regression)", () => {
       );
       return {
         childClasses: children.map((child) => child.className),
+        cellWidth: Number.parseFloat(
+          getComputedStyle(element).getPropertyValue("--acorn-ime-cell-width"),
+        ),
+        textWidth: textRect.width,
         markerBackground: marker.backgroundColor,
         markerHeight: Number.parseFloat(marker.height),
         markerWidth: Number.parseFloat(marker.width),
@@ -305,6 +309,11 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(cursorLayout.markerHeight).toBeGreaterThan(0);
     expect(cursorLayout.nativeCursorOpacity).toBe("0");
     expect(cursorLayout.cursorAnchorWidth).toBe(0);
+    // "한" spends two terminal columns; the preview must claim both so the
+    // caret lands on the cell boundary instead of hugging the glyph.
+    expect(cursorLayout.textWidth).toBeGreaterThanOrEqual(
+      2 * cursorLayout.cellWidth - 0.5,
+    );
     expect(cursorLayout.cursorAfterText).toBeLessThan(0.5);
     expect(cursorLayout.tailAfterCursor).toBeLessThan(0.5);
 
