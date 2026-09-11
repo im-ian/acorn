@@ -43,6 +43,7 @@ import { pathRelativeToCwd } from "../lib/fileMention";
 import { writeClipboardText } from "../lib/clipboardText";
 import { EDIT_AUTONOMOUS_GOAL_SESSION_EVENT } from "../lib/autonomousGoal";
 import { useDialogShortcuts } from "../lib/dialog";
+import { isArchivedSession } from "../lib/sessionArchive";
 import { useAppStore } from "../store";
 import { useTranslation } from "../lib/useTranslation";
 import {
@@ -719,7 +720,9 @@ export function ChatPane({
   const hasRunningMessages = messages.some(
     (message) => message.status === "pending" || message.status === "streaming",
   );
-  const composerIsCentered = !loading && !error && !hasMessages;
+  const archived = Boolean(session && isArchivedSession(session));
+  const composerIsCentered =
+    !archived && !loading && !error && !hasMessages;
   const showEmptyComposerTitle =
     composerIsCentered && !sending && !hasRunningMessages;
   const sourceRepoPath = session?.repo_path ?? repoPath;
@@ -916,7 +919,7 @@ export function ChatPane({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (sending) return;
+    if (sending || archived) return;
     const submittedDraft = draft;
     const submittedAttachments = attachments;
     const content = composeChatMessageContent(
@@ -1610,6 +1613,7 @@ export function ChatPane({
           </button>
         </Tooltip>
       ) : null}
+      {archived ? null : (
       <form
         data-chat-composer={composerIsCentered ? "centered" : "bottom"}
         className={`relative bg-bg px-2 py-2 transition-opacity duration-200 ease-out will-change-opacity ${
@@ -1777,7 +1781,8 @@ export function ChatPane({
           </div>
         </div>
       </form>
-      {session?.graph && !graphReplyAllowed ? (
+      )}
+      {session?.graph && !graphReplyAllowed && !archived ? (
         <div className="shrink-0 border-t border-border bg-bg px-4 py-3 text-center text-[11px] text-fg-muted">
           {t("graphSession.runFromDesign")}
         </div>

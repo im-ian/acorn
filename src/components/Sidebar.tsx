@@ -117,7 +117,9 @@ import {
 import { suggestDefaultSessionName } from "../lib/sessionName";
 import {
   hasRecordedWorktree,
+  sessionsUsingProjectWorktree,
   shouldAutoDeleteSessionWorktree,
+  worktreeWorkspaceIsOccupied,
 } from "../lib/sessionWorktree";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
@@ -763,6 +765,16 @@ export function Sidebar() {
     if (!folderGroup) return;
     if (folderGroup.sessions.length === 0) {
       if (isWorktreeWorkspace(folderGroup.folder)) {
+        if (
+          worktreeWorkspaceIsOccupied(
+            sessions,
+            folderGroup.folder.repoPath,
+            folderGroup.folder.cwdPath,
+          )
+        ) {
+          setPendingRemoveProjectFolderId(folderGroup.folder.id);
+          return;
+        }
         if (deleteEmptyWorktreeWorkspacesWithoutPrompt) {
           void removeProjectFolderAndWorktree(folderGroup.folder);
         } else {
@@ -1743,7 +1755,17 @@ export function Sidebar() {
       />
       <RemoveProjectFolderDialog
         folder={pendingRemoveProjectFolderGroup?.folder ?? null}
-        sessions={pendingRemoveProjectFolderGroup?.sessions ?? []}
+        sessions={
+          pendingRemoveProjectFolderGroup
+            ? isWorktreeWorkspace(pendingRemoveProjectFolderGroup.folder)
+              ? sessionsUsingProjectWorktree(
+                  sessions,
+                  pendingRemoveProjectFolderGroup.folder.repoPath,
+                  pendingRemoveProjectFolderGroup.folder.cwdPath,
+                )
+              : pendingRemoveProjectFolderGroup.sessions
+            : []
+        }
         worktreeWorkspace={Boolean(
           pendingRemoveProjectFolderGroup &&
             isWorktreeWorkspace(pendingRemoveProjectFolderGroup.folder),
@@ -3987,8 +4009,13 @@ function ArchivedSessionsSection({
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const resumeSession = useAppStore((s) => s.resumeSession);
+  const openSessionSurface = useAppStore((s) => s.openSessionSurface);
   const [expanded, setExpanded] = useState(false);
   if (sessions.length === 0) return null;
+
+  function openPreview(session: Session) {
+    openSessionSurface(session.id);
+  }
 
   async function resume(session: Session) {
     const resumed = await resumeSession(session.id);
@@ -4028,6 +4055,7 @@ function ArchivedSessionsSection({
             <ArchivedSessionRow
               key={session.id}
               session={session}
+              onOpen={() => openPreview(session)}
               onResume={() => void resume(session)}
               onRemove={() => onRemove(session)}
             />
@@ -4040,10 +4068,12 @@ function ArchivedSessionsSection({
 
 function ArchivedSessionRow({
   session,
+  onOpen,
   onResume,
   onRemove,
 }: {
   session: Session;
+  onOpen: () => void;
   onResume: () => void;
   onRemove: () => void;
 }) {
@@ -4072,11 +4102,11 @@ function ArchivedSessionRow({
       <div
         role="button"
         tabIndex={0}
-        onClick={onResume}
+        onClick={onOpen}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            onResume();
+            onOpen();
           }
         }}
         onContextMenu={(e) => {

@@ -1639,6 +1639,14 @@
     }
   },
   "pane": {
+    "archivedRestore": {
+      "title": "Restore this session?",
+      "body": "This session is archived. Restore it to continue in a live terminal.",
+      "restore": "Restore",
+      "restoring": "Restoring...",
+      "remove": "Remove",
+      "ariaLabel": "Archived session preview"
+    },
     "empty": {
       "dropTabOrDoubleClick": "Drop a tab here or double-click to start a session",
       "createProject": "Create a project to get started. Double-click here."
@@ -2184,6 +2192,7 @@
       "filesIn": "Files in",
       "willNotBeTouched": "will not be touched.",
       "keepSharedWorktree": "This worktree is shared by a workspace and will be kept on disk.",
+      "keepArchivedWorktree": "Archived sessions keep their worktree so they can be resumed. Remove the session first, or resume it before deleting the worktree.",
       "dontAskAgain": "Don't ask again (toggle in Settings → Sessions)",
       "autoDeleteIsolatedWorktreesNextTime": "Delete standalone isolated worktrees without asking next time",
       "keepWorktree": "Remove only",
@@ -2318,6 +2327,7 @@
       "removeWorktree": "Remove",
       "removeWorktreeAria": "Remove {name} worktree",
       "removeWorktreeBlockedByOtherSessions": "Close other sessions using this worktree before removing it.",
+      "removeWorktreeBlockedByArchivedSession": "An archived session is using this worktree. Resume or permanently remove that session before deleting it.",
       "confirmRemoveDialog": "Delete worktree",
       "confirmRemoveTitle": "Delete {name}?",
       "confirmRemoveBody": "This removes the linked git worktree directory from disk. Sessions using it may need to be reopened from the main project.",
