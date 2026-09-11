@@ -203,12 +203,6 @@ jobs:
             throw "Windows debug sidecar build failed"
           }
 
-      # NSIS / updater packaging lives in the release workflow. Sidecars
-      # above satisfy tauri-build's externalBin existence check; this
-      # type-checks the Tauri crate and every `cfg(windows)` test module.
-      - name: Type check Rust workspace
-        run: cargo check --manifest-path src-tauri/Cargo.toml --locked --workspace --all-targets
-
       - name: Smoke detached acornd lifecycle
         shell: pwsh
         run: |
@@ -360,6 +354,14 @@ jobs:
           # code at 2 ("not running"). Do not let pwsh report that expected
           # status as the workflow step's exit code.
           $global:LASTEXITCODE = 0
+
+      # NSIS / updater packaging lives in the release workflow. Sidecars
+      # above satisfy tauri-build's externalBin existence check; this
+      # type-checks the Tauri crate and every `cfg(windows)` test module.
+      # Run after the detach smoke so a check failure still leaves the
+      # Windows lifecycle signal in the same job.
+      - name: Type check Rust workspace
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked --workspace --all-targets
 
   rust-tests:
     name: Rust tests
