@@ -667,6 +667,12 @@
         "closeTab": {
           "label": "关闭当前标签页"
         },
+        "minimizeTab": {
+          "label": "最小化当前标签页"
+        },
+        "expandTab": {
+          "label": "还原最小化的标签页"
+        },
         "closeEmptyPane": {
           "label": "关闭空窗格",
           "description": "仅当聚焦的窗格没有标签页时才有效。"

@@ -314,6 +314,14 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
         labelKey: "settings.shortcuts.items.closeTab.label",
       },
       {
+        id: "minimizeTab",
+        labelKey: "settings.shortcuts.items.minimizeTab.label",
+      },
+      {
+        id: "expandTab",
+        labelKey: "settings.shortcuts.items.expandTab.label",
+      },
+      {
         id: "closeEmptyPane",
         labelKey: "settings.shortcuts.items.closeEmptyPane.label",
         descriptionKey: "settings.shortcuts.items.closeEmptyPane.description",
