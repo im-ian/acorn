@@ -120,6 +120,7 @@ import {
   retainSessionMapEntries,
 } from "./lib/sessionTracking";
 import { projectRootPaths } from "./lib/projectFolders";
+import { isArchivedSession } from "./lib/sessionArchive";
 import { useAppStore } from "./store";
 import type { TranslationKey, Translator } from "./lib/i18n";
 import type { Session } from "./lib/types";
@@ -285,6 +286,10 @@ function focusKanbanSessionCard(sessionId: string) {
 
 function closeTerminalPopoverFromHotkey(): boolean {
   const state = useAppStore.getState();
+  if (state.archivedPreviewSessionId) {
+    state.dismissArchivedPreview();
+    return true;
+  }
   const sessionId = state.terminalPopupSessionId;
   if (!sessionId) return false;
   state.closeTerminalPopup();
@@ -331,8 +336,11 @@ function App() {
   const layout = useAppStore((s) => s.layout);
   const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const pendingRemoveId = useAppStore((s) => s.pendingRemoveId);
+  const pendingArchiveId = useAppStore((s) => s.pendingArchiveId);
   const pendingRemoveProject = useAppStore((s) => s.pendingRemoveProject);
   const clearPendingRemove = useAppStore((s) => s.clearPendingRemove);
+  const clearPendingArchive = useAppStore((s) => s.clearPendingArchive);
+  const archiveSession = useAppStore((s) => s.archiveSession);
   const clearPendingRemoveProject = useAppStore(
     (s) => s.clearPendingRemoveProject,
   );
@@ -353,6 +361,8 @@ function App() {
   const shortcuts = settings.shortcuts;
   const preventSleep = settings.power.preventSleep;
   const pendingRemove = sessions.find((s) => s.id === pendingRemoveId) ?? null;
+  const pendingArchive =
+    sessions.find((s) => s.id === pendingArchiveId) ?? null;
   const pendingProject =
     projects.find((p) => p.repo_path === pendingRemoveProject) ?? null;
   // Closing a project closes every root it spans, so the confirmation has to
@@ -373,7 +383,10 @@ function App() {
       : 0;
   const pendingRemoveHasOwnedSessions = pendingRemoveOwnedSessionCount > 0;
   const pendingRemoveKeepsSharedWorktree =
-    pendingRemoveRecordedWorktree && !pendingRemoveCanDeleteWorktree;
+    pendingRemoveRecordedWorktree &&
+    !pendingRemoveCanDeleteWorktree &&
+    pendingRemove !== null &&
+    !isArchivedSession(pendingRemove);
   const pendingRemoveAutoDeletesWorktree =
     pendingRemove !== null &&
     shouldAutoDeleteSessionWorktree(pendingRemove, projectFolders, sessions);
@@ -384,6 +397,11 @@ function App() {
     pendingRemove.status === "working" &&
     settings.sessions.warnBeforeClosingRunning &&
     runningCloseWarningConfirmedId !== pendingRemove.id;
+  const pendingArchiveNeedsRunningWarning =
+    pendingArchive !== null &&
+    pendingArchive.status === "working" &&
+    settings.sessions.warnBeforeClosingRunning &&
+    runningCloseWarningConfirmedId !== pendingArchive.id;
   const pendingRemoveSkipsDialog =
     pendingRemove !== null &&
     !pendingRemoveNeedsRunningWarning &&
@@ -538,6 +556,7 @@ function App() {
   const primedResumeSessionsRef = useRef<Set<string>>(new Set());
   const [resumePrimeVersion, setResumePrimeVersion] = useState(0);
   const probedSessionsRef = useRef<Set<string>>(new Set());
+  const previouslyArchivedSessionIdsRef = useRef<Set<string>>(new Set());
   const resumeCandidatesRef = useRef(resumeCandidates);
   resumeCandidatesRef.current = resumeCandidates;
   useEffect(() => {
@@ -618,6 +637,18 @@ function App() {
         return changed ? next : prev;
       });
     }
+    const archivedIds = new Set(
+      effectiveSessions
+        .filter(isArchivedSession)
+        .map((session) => session.id),
+    );
+    if (!autoResumeEnabled) {
+      for (const id of previouslyArchivedSessionIdsRef.current) {
+        if (!archivedIds.has(id)) probedSessionsRef.current.add(id);
+      }
+    }
+    previouslyArchivedSessionIdsRef.current = archivedIds;
+
     const toProbe = effectiveSessions
       .filter(
         (session) =>
@@ -719,7 +750,14 @@ function App() {
         // Per-provider failures are reported above; this only catches an
         // unexpected orchestration failure. The next launch retries.
       });
-  }, [sessions, resumeProbeEnabled, resumePrimeVersion, showToast, t]);
+  }, [
+    autoResumeEnabled,
+    sessions,
+    resumeProbeEnabled,
+    resumePrimeVersion,
+    showToast,
+    t,
+  ]);
 
   useEffect(() => {
     if (!autoResumeEnabled) return;
@@ -1312,11 +1350,16 @@ function App() {
   useEffect(() => {
     if (
       runningCloseWarningConfirmedId !== null &&
-      pendingRemove?.id !== runningCloseWarningConfirmedId
+      pendingRemove?.id !== runningCloseWarningConfirmedId &&
+      pendingArchive?.id !== runningCloseWarningConfirmedId
     ) {
       setRunningCloseWarningConfirmedId(null);
     }
-  }, [pendingRemove?.id, runningCloseWarningConfirmedId]);
+  }, [
+    pendingArchive?.id,
+    pendingRemove?.id,
+    runningCloseWarningConfirmedId,
+  ]);
 
   // Skip the confirmation dialog when Settings gives a deterministic removal:
   // shared worktree workspace sessions keep the worktree, plain sessions can
@@ -1331,7 +1374,11 @@ function App() {
       projectFolders,
       sessions,
     );
-    if (recordedWorktree && !canDeleteWorktree) {
+    if (
+      recordedWorktree &&
+      !canDeleteWorktree &&
+      !isArchivedSession(pendingRemove)
+    ) {
       clearPendingRemove();
       void removeSession(pendingRemove.id, false).then((outcome) => {
         showStoreOperationToast(null, "toasts.session.removeFailed");
@@ -1380,6 +1427,28 @@ function App() {
     projectFolders,
     removeSession,
     sessions,
+    showStoreOperationToast,
+  ]);
+
+  const archiveInFlightIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingArchive) {
+      archiveInFlightIdRef.current = null;
+      return;
+    }
+    if (pendingArchiveNeedsRunningWarning) return;
+    if (archiveInFlightIdRef.current === pendingArchive.id) return;
+    archiveInFlightIdRef.current = pendingArchive.id;
+    const targetId = pendingArchive.id;
+    clearPendingArchive();
+    void archiveSession(targetId).then(() => {
+      showStoreOperationToast(null, "toasts.session.archiveFailed");
+    });
+  }, [
+    archiveSession,
+    clearPendingArchive,
+    pendingArchive,
+    pendingArchiveNeedsRunningWarning,
     showStoreOperationToast,
   ]);
 
@@ -2034,14 +2103,25 @@ function App() {
         }}
       />
       <RunningSessionCloseWarningDialog
-        session={pendingRemoveNeedsRunningWarning ? pendingRemove : null}
+        session={
+          pendingRemoveNeedsRunningWarning
+            ? pendingRemove
+            : pendingArchiveNeedsRunningWarning
+              ? pendingArchive
+              : null
+        }
         onCancel={() => {
           setRunningCloseWarningConfirmedId(null);
           clearPendingRemove();
+          clearPendingArchive();
         }}
         onContinue={() => {
-          if (pendingRemove) {
+          if (pendingRemoveNeedsRunningWarning && pendingRemove) {
             setRunningCloseWarningConfirmedId(pendingRemove.id);
+            return;
+          }
+          if (pendingArchive) {
+            setRunningCloseWarningConfirmedId(pendingArchive.id);
           }
         }}
       />
@@ -2184,9 +2264,10 @@ function pickResumeCandidate(
 }
 
 function shouldSkipResumeProbeForSession(
-  session: Pick<Session, "status" | "agent_provider">,
+  session: Pick<Session, "status" | "agent_provider" | "archived_at">,
 ): boolean {
   return (
+    isArchivedSession(session) ||
     session.agent_provider != null ||
     session.status === "working" ||
     session.status === "waiting_for_input"

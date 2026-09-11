@@ -522,12 +522,143 @@ fn add_worktree_for_local_branch(repo_path: &Path, branch: &str, hint: &str) -> 
     let repo = ensure_repo(repo_path)?;
     ensure_git_excluded(&repo).ok();
     let (name, target) = unique_managed_worktree_target(&repo, repo_path, hint)?;
+    add_linked_worktree(&repo, branch, &name, &target)
+}
+
+fn add_worktree_at_path(repo_path: &Path, branch: &str, target: &Path) -> AppResult<PathBuf> {
+    if target.exists() {
+        return Err(AppError::InvalidPath(format!(
+            "worktree path already exists: {}",
+            target.display()
+        )));
+    }
+    let repo = ensure_repo(repo_path)?;
+    ensure_git_excluded(&repo).ok();
+    prune_registered_worktree_at_path(&repo, target)?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let hint = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("worktree");
+    let name = unique_worktree_registration_name(&repo, &sanitize_worktree_dir_name(hint))?;
+    add_linked_worktree(&repo, branch, &name, target)
+}
+
+fn add_linked_worktree(
+    repo: &Repository,
+    branch: &str,
+    name: &str,
+    target: &Path,
+) -> AppResult<PathBuf> {
     let branch_ref_name = format!("refs/heads/{branch}");
     let branch_ref = repo.find_reference(&branch_ref_name)?;
     let mut opts = WorktreeAddOptions::new();
     opts.checkout_existing(true).reference(Some(&branch_ref));
-    repo.worktree(&name, &target, Some(&opts))?;
-    Ok(target)
+    repo.worktree(name, target, Some(&opts))?;
+    Ok(target.to_path_buf())
+}
+
+fn unique_worktree_registration_name(repo: &Repository, hint: &str) -> AppResult<String> {
+    let mut n = 1u32;
+    loop {
+        let name = if n == 1 {
+            hint.to_string()
+        } else {
+            format!("{hint}-{n}")
+        };
+        match repo.find_worktree(&name) {
+            Ok(_) => {}
+            Err(err) if err.code() == ErrorCode::NotFound => return Ok(name),
+            Err(err) => return Err(err.into()),
+        }
+        if n >= 100 {
+            return Err(AppError::Other(format!(
+                "could not find a free worktree name for {hint}"
+            )));
+        }
+        n += 1;
+    }
+}
+
+/// Recreate a parked session's linked worktree, preferring the original path.
+pub fn restore_session_worktree(
+    repo_path: &Path,
+    worktree_path: &Path,
+    branch: &str,
+    isolated: bool,
+) -> AppResult<PathBuf> {
+    if same_path(worktree_path, repo_path) && !isolated {
+        if !repo_path.exists() {
+            return Err(AppError::InvalidPath(format!(
+                "repository path does not exist: {}",
+                repo_path.display()
+            )));
+        }
+        return Ok(worktree_path.to_path_buf());
+    }
+
+    let branch = normalize_local_branch_name(branch)?;
+    if worktree_path.exists() {
+        if !is_linked_worktree_root(worktree_path) {
+            return Err(AppError::InvalidPath(format!(
+                "cannot restore session worktree: {} exists but is not a linked git worktree",
+                worktree_path.display()
+            )));
+        }
+        checkout_local_branch_at_path(worktree_path, &branch)?;
+        return Ok(worktree_path.to_path_buf());
+    }
+
+    materialize_local_branch(
+        repo_path,
+        &branch,
+        &EnsureWorktreeOptions {
+            create_if_missing: false,
+            fetch_ref: None,
+            base_branch: None,
+        },
+    )?;
+
+    if let Ok(path) = add_worktree_at_path(repo_path, &branch, worktree_path) {
+        return Ok(path);
+    }
+
+    // Never reuse another checkout of `branch` (including the main repo).
+    // A collision here means the recorded path is gone and git will not
+    // check the branch out a second time.
+    let hint = worktree_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("worktree");
+    add_worktree_for_local_branch(repo_path, &branch, hint)
+}
+
+fn checkout_local_branch_at_path(path: &Path, branch: &str) -> AppResult<()> {
+    if current_branch(path).ok().as_deref() == Some(branch) {
+        return Ok(());
+    }
+    let repo = ensure_repo(path)?;
+    let refname = format!("refs/heads/{branch}");
+    let object = repo
+        .find_reference(&refname)
+        .map_err(|error| {
+            AppError::Other(format!(
+                "recorded branch {branch} is missing at {}: {error}",
+                path.display()
+            ))
+        })?
+        .peel_to_commit()?
+        .into_object();
+    repo.checkout_tree(&object, None).map_err(|error| {
+        AppError::Other(format!(
+            "cannot check out recorded branch {branch} at {}: {error}",
+            path.display()
+        ))
+    })?;
+    repo.set_head(&refname)?;
+    Ok(())
 }
 
 fn unique_managed_worktree_target(
@@ -2235,6 +2366,187 @@ mod tests {
         std::fs::remove_file(root.join(ACORN_DIR)).ok();
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&external).ok();
+    }
+
+    #[test]
+    fn restore_session_worktree_recreates_the_original_path() {
+        let root = unique_temp_dir("restore-original");
+        let repo = init_repo_with_tracked_file(&root);
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        repo.branch("feature", &initial, false)
+            .expect("create feature branch");
+        drop(initial);
+        drop(repo);
+
+        let worktree_path = worktree_root(&root).join("parked");
+        add_worktree_at_path(&root, "feature", &worktree_path).expect("create parked worktree");
+        std::fs::remove_dir_all(&worktree_path).expect("delete checkout");
+        assert!(!worktree_path.exists());
+
+        let restored = restore_session_worktree(&root, &worktree_path, "feature", true)
+            .expect("restore worktree");
+
+        assert_eq!(
+            restored.canonicalize().unwrap(),
+            worktree_path.canonicalize().unwrap()
+        );
+        assert!(is_linked_worktree_root(&restored));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn restore_session_worktree_keeps_an_existing_linked_checkout() {
+        let root = unique_temp_dir("restore-existing");
+        let repo = init_repo_with_tracked_file(&root);
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        repo.branch("feature", &initial, false)
+            .expect("create feature branch");
+        drop(initial);
+        drop(repo);
+
+        let worktree_path = worktree_root(&root).join("parked");
+        add_worktree_at_path(&root, "feature", &worktree_path).expect("create parked worktree");
+
+        let restored = restore_session_worktree(&root, &worktree_path, "feature", true)
+            .expect("keep existing worktree");
+
+        assert_eq!(
+            restored.canonicalize().unwrap(),
+            worktree_path.canonicalize().unwrap()
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn restore_session_worktree_fails_when_the_branch_is_gone() {
+        let root = unique_temp_dir("restore-missing-branch");
+        let repo = init_repo_with_tracked_file(&root);
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        repo.branch("feature", &initial, false)
+            .expect("create feature branch");
+        drop(initial);
+
+        let worktree_path = worktree_root(&root).join("parked");
+        add_worktree_at_path(&root, "feature", &worktree_path).expect("create parked worktree");
+        std::fs::remove_dir_all(&worktree_path).expect("delete checkout");
+        prune_registered_worktree_at_path(&repo, &worktree_path).expect("prune stale registration");
+        repo.find_branch("feature", BranchType::Local)
+            .expect("find feature")
+            .delete()
+            .expect("delete feature");
+        drop(repo);
+
+        let error = restore_session_worktree(&root, &worktree_path, "feature", true)
+            .expect_err("missing branch cannot be restored");
+        assert!(matches!(error, AppError::Other(_)));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn restore_session_worktree_rejects_a_non_linked_path() {
+        let root = unique_temp_dir("restore-occupied");
+        let repo = init_repo_with_tracked_file(&root);
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        repo.branch("feature", &initial, false)
+            .expect("create feature branch");
+        drop(initial);
+        drop(repo);
+
+        let worktree_path = worktree_root(&root).join("parked");
+        add_worktree_at_path(&root, "feature", &worktree_path).expect("create parked worktree");
+        std::fs::remove_dir_all(&worktree_path).expect("delete checkout");
+        std::fs::create_dir_all(&worktree_path).expect("occupy original path");
+        std::fs::write(worktree_path.join("blocker.txt"), "occupied").expect("block path");
+
+        let error = restore_session_worktree(&root, &worktree_path, "feature", true)
+            .expect_err("occupied non-worktree path must not be abandoned");
+        assert!(matches!(error, AppError::InvalidPath(_)));
+        assert_eq!(
+            std::fs::read_to_string(worktree_path.join("blocker.txt")).unwrap(),
+            "occupied"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn restore_session_worktree_checks_out_the_recorded_branch() {
+        let root = unique_temp_dir("restore-wrong-branch");
+        let repo = init_repo_with_tracked_file(&root);
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        repo.branch("feature", &initial, false)
+            .expect("create feature branch");
+        repo.branch("other", &initial, false)
+            .expect("create other branch");
+        drop(initial);
+        drop(repo);
+
+        let worktree_path = worktree_root(&root).join("parked");
+        add_worktree_at_path(&root, "feature", &worktree_path).expect("create parked worktree");
+        let parked = Repository::open(&worktree_path).expect("open parked worktree");
+        checkout_branch(&parked, "other");
+        drop(parked);
+        assert_eq!(current_branch(&worktree_path).unwrap(), "other");
+
+        let restored = restore_session_worktree(&root, &worktree_path, "feature", true)
+            .expect("check out recorded branch");
+
+        assert_eq!(
+            restored.canonicalize().unwrap(),
+            worktree_path.canonicalize().unwrap()
+        );
+        assert_eq!(current_branch(&worktree_path).unwrap(), "feature");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn restore_session_worktree_does_not_reuse_the_main_checkout() {
+        let root = unique_temp_dir("restore-no-reuse-root");
+        let repo = init_repo_with_tracked_file(&root);
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        repo.branch("feature", &initial, false)
+            .expect("create feature branch");
+        checkout_branch(&repo, "feature");
+        drop(initial);
+        drop(repo);
+
+        let worktree_path = worktree_root(&root).join("parked");
+        match restore_session_worktree(&root, &worktree_path, "feature", true) {
+            Ok(restored) => {
+                assert!(is_linked_worktree_root(&restored));
+                assert_ne!(
+                    restored.canonicalize().unwrap(),
+                    root.canonicalize().unwrap()
+                );
+            }
+            Err(_) => {
+                assert!(!worktree_path.exists() || !is_linked_worktree_root(&worktree_path));
+            }
+        }
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     fn ensure_options<'a>(

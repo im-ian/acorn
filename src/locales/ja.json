@@ -9,6 +9,8 @@
     "session": {
       "createFailed": "セッションの作成に失敗しました:",
       "removeFailed": "セッションを削除できませんでした:",
+      "archiveFailed": "セッションをアーカイブできませんでした:",
+      "resumeFailed": "セッションを再開できませんでした:",
       "worktreeRemoved": "ワークツリーがディスクから削除されました。",
       "worktreeRemovedUndo": "{seconds}s の {name} ワークツリーを削除しています。元に戻す",
       "worktreeRestored": "ワークツリーが復元されました。",
@@ -1327,6 +1329,8 @@
       "openWorkSummary": "オープンワークの概要",
       "silenceNotifications": "通知をサイレントにする",
       "resumeNotifications": "再開通知",
+      "minimizeTab": "タブを最小化",
+      "expandTab": "タブを展開",
       "forkClaudeSession": "フォーク・クロード・セッション",
       "forkSession": "フォークセッション",
       "forkClaudeInNewWorktree": "新しいワークツリーのフォーク クロード",
@@ -1348,7 +1352,15 @@
       "copyTranscriptPath": "トランスクリプトのパスをコピー",
       "remove": "削除",
       "removeSession": "セッションを削除する",
-      "removeSessionMenu": "セッションの削除"
+      "removeSessionMenu": "セッションの削除",
+      "archiveSession": "セッションをアーカイブ",
+      "archiveSessionMenu": "セッションをアーカイブ",
+      "resumeSession": "セッションを再開",
+      "resumeSessionMenu": "セッションを再開"
+    },
+    "archived": {
+      "title": "アーカイブ済み",
+      "empty": "アーカイブされたセッションはありません"
     },
     "contextMenu": {
       "session": "セッション",
@@ -1380,7 +1392,8 @@
       "controlSession": "コントロールセッション",
       "chatSession": "チャットセッション",
       "generatingSessionTitle": "セッションタイトルの生成",
-      "notificationsSilenced": "通知をサイレントにしました"
+      "notificationsSilenced": "通知をサイレントにしました",
+      "minimizedSessions": "最小化されたセッション"
     },
     "localTerminals": {
       "title": "インスタントセッション",
@@ -1632,6 +1645,14 @@
     }
   },
   "pane": {
+    "archivedRestore": {
+      "title": "このセッションを復元しますか？",
+      "body": "アーカイブされたセッションです。復元するとライブ端末で作業を続けられます。",
+      "restore": "復元",
+      "restoring": "復元中...",
+      "remove": "削除",
+      "ariaLabel": "アーカイブセッションのプレビュー"
+    },
     "empty": {
       "dropTabOrDoubleClick": "ここにタブをドロップするか、ダブルクリックしてセッションを開始します",
       "createProject": "プロジェクトを作成して開始します。ここをダブルクリックします。"
@@ -2177,6 +2198,7 @@
       "filesIn": "のファイル",
       "willNotBeTouched": "触れられないだろう。",
       "keepSharedWorktree": "このワークツリーはワークスペースによって共有され、ディスク上に保持されます。",
+      "keepArchivedWorktree": "アーカイブされたセッションは再開できるようワークツリーを保持します。削除する前にセッションを再開するか、先にセッションを削除してください。",
       "dontAskAgain": "二度と質問しないでください ([設定] → [セッション] に切り替えます)",
       "autoDeleteIsolatedWorktreesNextTime": "次回確認せずにスタンドアロンの分離ワークツリーを削除します",
       "keepWorktree": "削除のみ",
@@ -2311,6 +2333,7 @@
       "removeWorktree": "削除",
       "removeWorktreeAria": "{name} ワークツリーを削除します",
       "removeWorktreeBlockedByOtherSessions": "ワークツリーを削除する前に、このワークツリーを使用している他のセッションを閉じてください。",
+      "removeWorktreeBlockedByArchivedSession": "アーカイブされたセッションがこのワークツリーを使用しています。削除する前にそのセッションを再開するか、先に削除してください。",
       "confirmRemoveDialog": "ワークツリーの削除",
       "confirmRemoveTitle": "{name} を削除しますか?",
       "confirmRemoveBody": "これにより、リンクされた git worktree ディレクトリがディスクから削除されます。これを使用するセッションは、メイン プロジェクトから再度開く必要がある場合があります。",
@@ -2620,6 +2643,7 @@
     "groups": {
       "sessions": "セッション",
       "switchSession": "セッションの切り替え",
+      "archived": "アーカイブ済み",
       "activity": "未読アクティビティ",
       "view": "見る",
       "terminal": "ターミナル",
@@ -2637,6 +2661,7 @@
       "addExistingProject": "既存のプロジェクトを追加する",
       "refreshSessions": "セッションを更新する",
       "switchSessionPrefix": "に切り替えます",
+      "resumeSessionPrefix": "再開",
       "viewTodos": "Todo を表示する",
       "viewCommits": "コミットの表示",
       "viewStaged": "ステージングされたビュー",

@@ -123,6 +123,31 @@ export function hasClipboardImagePayload(
   return false;
 }
 
+// Sequences xterm emits on its data channel that are terminal protocol
+// replies rather than keyboard input: SGR/X10 mouse reports, focus in/out,
+// OSC query responses (e.g. background color), DA/DECRPM reports, and
+// cursor-position reports. A mouse-tracking TUI streams motion reports
+// continuously, so treating these as user input cancelled the deferred
+// image-paste fallback whenever the pointer moved — and let the one paste
+// that survived land late, after an unrelated gesture.
+const TERMINAL_PROTOCOL_REPLY_RE = new RegExp(
+  "^(?:" +
+    [
+      "\\x1b\\[<\\d+;\\d+;\\d+[Mm]", // SGR mouse report
+      "\\x1b\\[M[\\s\\S]{3}", // legacy X10 mouse report
+      "\\x1b\\[[IO]", // focus in / focus out
+      "\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)", // OSC response
+      "\\x1b\\[[?>][\\d;]*c", // primary/secondary DA response
+      "\\x1b\\[\\?[\\d;]*\\$y", // DECRPM response
+      "\\x1b\\[\\d+;\\d+R", // cursor position report
+    ].join("|") +
+    ")+$",
+);
+
+export function isTerminalProtocolReply(data: string): boolean {
+  return data.length > 0 && TERMINAL_PROTOCOL_REPLY_RE.test(data);
+}
+
 export function terminalPasteAction({
   text,
   hasImagePayload,

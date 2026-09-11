@@ -738,6 +738,7 @@ fn handle_list_sessions(source: &Session, sessions: &SessionStore) -> Response {
                 },
                 owner: s.owner.label(),
                 status: format!("{:?}", s.status).to_lowercase(),
+                archived: s.archived_at.is_some(),
                 owned_by_me,
             }
         })

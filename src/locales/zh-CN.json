@@ -9,6 +9,8 @@
     "session": {
       "createFailed": "无法创建会话：",
       "removeFailed": "无法删除会话：",
+      "archiveFailed": "无法归档会话：",
+      "resumeFailed": "无法恢复会话：",
       "worktreeRemoved": "工作树从磁盘中删除。",
       "worktreeRemovedUndo": "将在 {seconds} 秒后删除 {name} 工作树。撤销",
       "worktreeRestored": "工作树已恢复。",
@@ -1327,6 +1329,8 @@
       "openWorkSummary": "打开工作摘要",
       "silenceNotifications": "静音通知",
       "resumeNotifications": "恢复通知",
+      "minimizeTab": "最小化标签页",
+      "expandTab": "展开标签页",
       "forkClaudeSession": "派生 Claude 会话",
       "forkSession": "派生会话",
       "forkClaudeInNewWorktree": "在新工作树中派生 Claude",
@@ -1348,7 +1352,15 @@
       "copyTranscriptPath": "复制对话记录路径",
       "remove": "删除",
       "removeSession": "删除会话",
-      "removeSessionMenu": "删除会话"
+      "removeSessionMenu": "删除会话",
+      "archiveSession": "归档会话",
+      "archiveSessionMenu": "归档会话",
+      "resumeSession": "恢复会话",
+      "resumeSessionMenu": "恢复会话"
+    },
+    "archived": {
+      "title": "已归档",
+      "empty": "没有已归档的会话"
     },
     "contextMenu": {
       "session": "会话",
@@ -1380,7 +1392,8 @@
       "controlSession": "控制会话",
       "chatSession": "聊天会话",
       "generatingSessionTitle": "生成会话标题",
-      "notificationsSilenced": "通知已静音"
+      "notificationsSilenced": "通知已静音",
+      "minimizedSessions": "已最小化的会话"
     },
     "localTerminals": {
       "title": "即时会话",
@@ -1632,6 +1645,14 @@
     }
   },
   "pane": {
+    "archivedRestore": {
+      "title": "要恢复此会话吗？",
+      "body": "此会话已归档。恢复后可在实时终端中继续工作。",
+      "restore": "恢复",
+      "restoring": "正在恢复...",
+      "remove": "删除",
+      "ariaLabel": "已归档会话预览"
+    },
     "empty": {
       "dropTabOrDoubleClick": "将标签页拖放到此处或双击启动会话",
       "createProject": "创建项目开始。双击此处。"
@@ -2177,6 +2198,7 @@
       "filesIn": "以下位置中的文件",
       "willNotBeTouched": "不会受到影响。",
       "keepSharedWorktree": "此工作树由工作区共享，并将保留在磁盘上。",
+      "keepArchivedWorktree": "已归档会话会保留工作树以便恢复。请先恢复或删除该会话，然后再删除工作树。",
       "dontAskAgain": "不要再询问（在设置 → 会话中切换）",
       "autoDeleteIsolatedWorktreesNextTime": "删除独立的隔离工作树，下次无需询问",
       "keepWorktree": "仅删除",
@@ -2311,6 +2333,7 @@
       "removeWorktree": "删除",
       "removeWorktreeAria": "删除 {name} 工作树",
       "removeWorktreeBlockedByOtherSessions": "在删除之前关闭使用此工作树的其他会话。",
+      "removeWorktreeBlockedByArchivedSession": "已归档会话正在使用此工作树。请先恢复或永久删除该会话，然后再删除工作树。",
       "confirmRemoveDialog": "删除工作树",
       "confirmRemoveTitle": "删除 {name}？",
       "confirmRemoveBody": "这会从磁盘删除链接的 Git 工作树目录。使用它的会话可能需要从主项目重新打开。",
@@ -2620,6 +2643,7 @@
     "groups": {
       "sessions": "会话",
       "switchSession": "切换会话",
+      "archived": "已归档",
       "activity": "未读活动",
       "view": "查看",
       "terminal": "终端",
@@ -2637,6 +2661,7 @@
       "addExistingProject": "添加现有项目",
       "refreshSessions": "刷新会话",
       "switchSessionPrefix": "切换到",
+      "resumeSessionPrefix": "恢复",
       "viewTodos": "查看待办事项",
       "viewCommits": "查看提交",
       "viewStaged": "查看已暂存",

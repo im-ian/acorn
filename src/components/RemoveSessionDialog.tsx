@@ -4,6 +4,7 @@ import type { Session } from "../lib/types";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
+import { isArchivedSession } from "../lib/sessionArchive";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
 import { Button, Modal, ModalFooter, ModalHeader } from "./ui";
@@ -123,7 +124,9 @@ export function RemoveSessionDialog({
                 <p className="text-xs text-fg-muted">
                   {canDeleteWorktree
                     ? dt(t, "dialogs.removeSession.deleteWorktreeQuestion")
-                    : dt(t, "dialogs.removeSession.keepSharedWorktree")}
+                    : isArchivedSession(session)
+                      ? dt(t, "dialogs.removeSession.keepArchivedWorktree")
+                      : dt(t, "dialogs.removeSession.keepSharedWorktree")}
                 </p>
               </div>
             ) : (

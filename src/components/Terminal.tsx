@@ -87,6 +87,7 @@ import {
   AGENT_IMAGE_PASTE_CONTROL,
   getClipboardImageFile,
   hasClipboardImagePayload,
+  isTerminalProtocolReply,
   terminalPasteAction,
   type ClipboardImageFile,
 } from "../lib/terminalPaste";
@@ -129,6 +130,7 @@ import {
   type WorktreeAdoptionIntent,
 } from "../lib/worktreeAdoption";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
+import { isArchivedSession } from "../lib/sessionArchive";
 import { useAppStore, type PendingTerminalInput } from "../store";
 import { StickyUserPrompt } from "./StickyUserPrompt";
 import { FloatingTooltip, Tooltip, type TooltipAnchorRect } from "./Tooltip";
@@ -1423,6 +1425,10 @@ export function Terminal({
         : [sessionId];
       const targetIds = targets.length > 0 ? targets : [sessionId];
       for (const targetId of targetIds) {
+        const target = state.sessions.find(
+          (candidate) => candidate.id === targetId,
+        );
+        if (target && isArchivedSession(target)) continue;
         writeToPty(targetId, data);
       }
     };
@@ -1431,7 +1437,9 @@ export function Terminal({
     // reached the PTY as input". PTY *output* must not bump this:
     // a busy agent (spinner, streaming) emits output continuously, and
     // counting it cancelled every deferred image paste while an agent
-    // was running.
+    // was running. Terminal protocol replies (mouse reports, focus
+    // events, query responses) also flow through onData and must not
+    // bump it either — see `isTerminalProtocolReply`.
     let terminalInputVersion = 0;
     let imagePasteFallbackTimer: number | null = null;
     let imagePasteFallbackSerial = 0;
@@ -2532,7 +2540,14 @@ export function Terminal({
     );
 
     const inputDisposable = term.onData((data: string) => {
-      terminalInputVersion += 1;
+      // Mouse reports, focus events, and query replies also arrive through
+      // onData but are terminal protocol chatter, not user input. Counting
+      // them cancelled the deferred image paste whenever the pointer moved
+      // over a mouse-tracking TUI (Claude/Codex/Grok emit motion reports
+      // continuously), and the retry that finally survived attached the
+      // image late — right after an unrelated gesture such as the
+      // right-click selection paste.
+      if (!isTerminalProtocolReply(data)) terminalInputVersion += 1;
       sendUserInputToPty(data);
       if (data.includes("\r") || data.includes("\n")) {
         commandSizeSyncScheduler.schedule();
@@ -2756,6 +2771,10 @@ export function Terminal({
 
     async function spawnPty() {
       if (disposed || spawnInFlight) return;
+      const session = useAppStore
+        .getState()
+        .sessions.find((candidate) => candidate.id === sessionId);
+      if (session && isArchivedSession(session)) return;
       spawnInFlight = true;
       try {
         ptyReady = false;
@@ -2989,6 +3008,12 @@ export function Terminal({
             }
             if (disposed) return;
             worktreeAdoptionIntent = { kind: "none" };
+            const session =
+              useAppStore
+                .getState()
+                .sessions.find((candidate) => candidate.id === sessionId) ??
+              null;
+            if (session && isArchivedSession(session)) return;
             if (adoptedPath) {
               const name = adoptedPath.split("/").pop() || adoptedPath;
               await useAppStore
@@ -3022,6 +3047,7 @@ export function Terminal({
               const session =
                 store.sessions.find((candidate) => candidate.id === sessionId) ??
                 null;
+              if (session && isArchivedSession(session)) return;
               if (session && hasRecordedWorktree(session)) {
                 store.requestRemoveSession(sessionId);
               } else {
@@ -3177,6 +3203,21 @@ export function Terminal({
 
       if (disposed) return;
       await spawnPty();
+      if (disposed) return;
+
+      const unsubArchiveResume = useAppStore.subscribe((state, prev) => {
+        const current = state.sessions.find(
+          (candidate) => candidate.id === sessionId,
+        );
+        const previous = prev.sessions.find(
+          (candidate) => candidate.id === sessionId,
+        );
+        if (!current || !previous) return;
+        if (isArchivedSession(previous) && !isArchivedSession(current)) {
+          void spawnPty();
+        }
+      });
+      unlistenFns.push(unsubArchiveResume);
     })();
 
     // Scrollback persistence is event-driven, not periodic:

@@ -25,6 +25,9 @@ vi.mock("./lib/api", () => {
       ),
       ptyInWorktreeAll: vi.fn(async () => ({} as Record<string, boolean>)),
       createSession: vi.fn(async () => ({}) as Session),
+      archiveSession: vi.fn(async () => ({}) as Session),
+      resumeSession: vi.fn(async () => ({}) as Session),
+      updateSessionWorktree: vi.fn(async () => ({}) as Session),
       removeSession: vi.fn(async () => ({
         result: null,
         removedSessionIds: [],
@@ -232,6 +235,7 @@ function resetStore(): void {
       loading: false,
       error: null,
       pendingRemoveId: null,
+      pendingArchiveId: null,
       pendingRemoveProject: null,
       sessionsLoadedCleanly: true,
       sessionListInitialized: false,
@@ -285,6 +289,8 @@ beforeEach(() => {
   mockApi.listProjects.mockResolvedValue([]);
   mockApi.detectSessionStatuses.mockResolvedValue([]);
   mockApi.removeSession.mockResolvedValue(removalOutcome(null));
+  mockApi.archiveSession.mockResolvedValue({} as Session);
+  mockApi.resumeSession.mockResolvedValue({} as Session);
   mockApi.removeWorktree.mockResolvedValue(removalOutcome(null));
   mockApi.removeProject.mockResolvedValue(removalOutcome([]));
   mockApi.loadChatSessionState.mockResolvedValue({
@@ -1715,6 +1721,163 @@ describe("workspace tabs", () => {
   });
 });
 
+describe("archiveSession", () => {
+  it("drops the tab immediately and keeps the session row", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2]);
+    useAppStore.getState().selectSession("a1");
+
+    const pending = deferred<Session>();
+    mockApi.archiveSession.mockReturnValueOnce(pending.promise);
+    const archived = {
+      ...a1,
+      archived_at: "2026-04-01T00:00:00Z",
+    };
+    mockApi.listSessions.mockResolvedValue([archived, a2]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    const archive = useAppStore.getState().archiveSession("a1");
+
+    expect(mockApi.archiveSession).toHaveBeenCalledWith("a1");
+    expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual([
+      "a1",
+      "a2",
+    ]);
+    expect(useAppStore.getState().sessions[0]?.archived_at).toBeTruthy();
+    expect(useAppStore.getState().panes.root.tabIds).toEqual(["a2"]);
+    expect(useAppStore.getState().archivedPreviewSessionId).toBe("a1");
+    expect(useAppStore.getState().activeSessionId).toBe("a1");
+
+    pending.resolve(archived);
+    await archive;
+    expect(useAppStore.getState().panes.root.tabIds).toEqual(["a2"]);
+    expect(useAppStore.getState().archivedPreviewSessionId).toBe("a1");
+    expect(useAppStore.getState().sessions).toHaveLength(2);
+  });
+
+  it("parks control-owned descendants with the controller", async () => {
+    const ctl = session("ctl", REPO_A, { kind: "control" });
+    const worker = session("worker", REPO_A, {
+      owner: { kind: "control", session_id: "ctl" },
+    });
+    const other = session("other", REPO_A);
+    await seed([project(REPO_A, 0)], [ctl, worker, other]);
+
+    const archivedCtl = { ...ctl, archived_at: "2026-04-01T00:00:00Z" };
+    const archivedWorker = { ...worker, archived_at: "2026-04-01T00:00:00Z" };
+    mockApi.archiveSession.mockResolvedValueOnce(archivedCtl);
+    mockApi.listSessions.mockResolvedValue([
+      archivedCtl,
+      archivedWorker,
+      other,
+    ]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    await useAppStore.getState().archiveSession("ctl");
+
+    const state = useAppStore.getState();
+    expect(state.sessions.find((item) => item.id === "ctl")?.archived_at).toBeTruthy();
+    expect(
+      state.sessions.find((item) => item.id === "worker")?.archived_at,
+    ).toBeTruthy();
+    expect(state.sessions.find((item) => item.id === "other")?.archived_at).toBeFalsy();
+    expect(state.panes.root.tabIds).not.toContain("ctl");
+    expect(state.panes.root.tabIds).not.toContain("worker");
+  });
+});
+
+describe("adoptSessionWorktree", () => {
+  it("refuses to adopt a worktree onto an archived session", async () => {
+    const parked = session("a1", REPO_A, {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    await seed([project(REPO_A, 0)], [parked]);
+
+    await useAppStore
+      .getState()
+      .adoptSessionWorktree("a1", `${REPO_A}/.acorn/worktrees/other`);
+
+    expect(mockApi.updateSessionWorktree).not.toHaveBeenCalled();
+    expect(useAppStore.getState().error).toBe(
+      "Cannot start a terminal or adopt a worktree for an archived session.",
+    );
+  });
+});
+
+describe("selectSession", () => {
+  it("opens an archived session as a tabless preview without resuming", async () => {
+    const parked = session("a1", REPO_A, {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [parked, a2]);
+
+    useAppStore.getState().selectSession("a1");
+
+    expect(useAppStore.getState().panes.root.tabIds).toEqual(["a2"]);
+    expect(useAppStore.getState().archivedPreviewSessionId).toBe("a1");
+    expect(useAppStore.getState().activeSessionId).toBe("a1");
+    expect(mockApi.resumeSession).not.toHaveBeenCalled();
+  });
+
+  it("closes the archived preview when selecting another tab", async () => {
+    const parked = session("a1", REPO_A, {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [parked, a2]);
+    useAppStore.getState().selectSession("a1");
+    expect(useAppStore.getState().archivedPreviewSessionId).toBe("a1");
+
+    useAppStore.getState().selectSession("a2");
+
+    expect(useAppStore.getState().archivedPreviewSessionId).toBeNull();
+    expect(useAppStore.getState().activeSessionId).toBe("a2");
+    expect(useAppStore.getState().panes.root.tabIds).toEqual(["a2"]);
+  });
+
+  it("dismisses the archived preview without resuming", async () => {
+    const parked = session("a1", REPO_A, {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [parked, a2]);
+    useAppStore.getState().selectSession("a1");
+    expect(useAppStore.getState().archivedPreviewSessionId).toBe("a1");
+
+    useAppStore.getState().dismissArchivedPreview();
+
+    expect(useAppStore.getState().archivedPreviewSessionId).toBeNull();
+    expect(useAppStore.getState().activeSessionId).toBe("a2");
+    expect(mockApi.resumeSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("resumeSession", () => {
+  it("reopens the same session id after the backend unarchives it", async () => {
+    const parked = session("a1", REPO_A, {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [parked, a2]);
+    expect(useAppStore.getState().panes.root.tabIds).toEqual(["a2"]);
+
+    const live = { ...parked, archived_at: null };
+    mockApi.resumeSession.mockResolvedValueOnce(live);
+    mockApi.listSessions.mockResolvedValue([live, a2]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    const resumed = await useAppStore.getState().resumeSession("a1");
+
+    expect(mockApi.resumeSession).toHaveBeenCalledWith("a1");
+    expect(resumed?.id).toBe("a1");
+    expect(useAppStore.getState().archivedPreviewSessionId).toBeNull();
+    expect(useAppStore.getState().panes.root.tabIds).toContain("a1");
+    expect(useAppStore.getState().activeSessionId).toBe("a1");
+  });
+});
+
 describe("removeSession", () => {
   it("removes the tab locally before the backend worktree delete finishes", async () => {
     const a1 = session("a1", REPO_A, {
@@ -1785,6 +1948,25 @@ describe("removeSession", () => {
     expect(s.error).toBe("delete failed");
     expect(s.sessions.map((session) => session.id)).toEqual(["a1"]);
     expect(s.activeSessionId).toBe("a1");
+  });
+
+  it("refuses to delete a worktree while the session is archived", async () => {
+    const worktreePath = `${REPO_A}/.worktrees/parked`;
+    const parked = session("a1", REPO_A, {
+      isolated: true,
+      worktree_path: worktreePath,
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    await seed([project(REPO_A, 0)], [parked]);
+
+    const removed = await useAppStore.getState().removeSession("a1", true);
+
+    expect(removed).toBeNull();
+    expect(mockApi.removeSession).not.toHaveBeenCalled();
+    expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual(["a1"]);
+    expect(useAppStore.getState().error).toBe(
+      "Resume or permanently remove the archived session using this worktree before deleting it.",
+    );
   });
 
   it("refuses to delete a worktree while another session still uses it", async () => {
@@ -2446,6 +2628,29 @@ describe("setTabMinimized", () => {
     const pane = useAppStore.getState().panes[useAppStore.getState().focusedPaneId];
     expect(pane.tabIds).toEqual(["a1", "a2", "a4", "a3"]);
     expect(pane.minimizedTabIds).toEqual(["a1", "a2"]);
+  });
+
+  it("minimizes a tab in a non-active workspace without switching projects", async () => {
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [session("a1", REPO_A), session("b1", REPO_B), session("b2", REPO_B)],
+    );
+    useAppStore.getState().selectSession("a1");
+    expect(useAppStore.getState().activeProject).toBe(REPO_A);
+
+    useAppStore.getState().setTabMinimized("b2", true);
+
+    expect(useAppStore.getState().activeProject).toBe(REPO_A);
+    expect(
+      useAppStore.getState().panes[useAppStore.getState().focusedPaneId]
+        .minimizedTabIds,
+    ).toBeUndefined();
+    const pane = useAppStore.getState().workspaces[REPO_B]?.panes;
+    const owner = Object.values(pane ?? {}).find((candidate) =>
+      candidate.tabIds.includes("b2"),
+    );
+    expect(owner?.minimizedTabIds).toEqual(["b2"]);
+    expect(owner?.tabIds[0]).toBe("b2");
   });
 });
 
@@ -3591,6 +3796,32 @@ describe("removeProjectWorktree", () => {
       ),
     ).toBe(false);
     expect(state.workspaces[folder!.id]).toBeUndefined();
+  });
+
+  it("refuses to delete a worktree while an archived session uses it", async () => {
+    const worktreePath = `${REPO_B}/.acorn/worktrees/feature-alpha`;
+    const repo = project(REPO_B, 0);
+    await seed(
+      [repo],
+      [
+        session("b1", REPO_B, {
+          worktree_path: worktreePath,
+          in_worktree: true,
+          archived_at: "2026-04-01T00:00:00Z",
+        }),
+      ],
+    );
+
+    await expect(
+      useAppStore.getState().removeProjectWorktree(REPO_B, worktreePath, true),
+    ).rejects.toThrow("archived session using this worktree");
+
+    const state = useAppStore.getState();
+    expect(mockApi.removeWorktree).not.toHaveBeenCalled();
+    expect(state.sessions.map((candidate) => candidate.id)).toEqual(["b1"]);
+    expect(state.error).toBe(
+      "Resume or permanently remove the archived session using this worktree before deleting it.",
+    );
   });
 
   it("refuses to delete a worktree while another session uses it", async () => {

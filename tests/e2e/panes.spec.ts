@@ -836,6 +836,16 @@ test.describe("pane / sidebar shortcuts", () => {
     await expect(betaTab).toHaveAttribute("data-tab-minimized", "true");
     await expect(betaTab.getByText("beta", { exact: true })).toHaveCount(0);
     await expect(betaTab.locator("[data-tab-close-button]")).toHaveCount(0);
+    const betaSidebar = page.locator(
+      '[data-testid="sidebar"] [data-sidebar-session="s-2"]',
+    );
+    await expect(betaSidebar).toHaveAttribute("data-session-minimized", "true");
+    await expect(betaSidebar.getByText("beta", { exact: true })).toHaveCount(0);
+    await expect(
+      page.locator(
+        '[data-testid="sidebar"] [data-sidebar-minimized-strip] [data-sidebar-session="s-2"]',
+      ),
+    ).toBeVisible();
     const box = await betaTab.boundingBox();
     expect(box).not.toBeNull();
     expect(Math.abs((box?.width ?? 0) - (box?.height ?? 0))).toBeLessThan(4);
@@ -864,6 +874,80 @@ test.describe("pane / sidebar shortcuts", () => {
     await expect(restored.getByText("beta", { exact: true })).toBeVisible();
   });
 
+  test("sidebar right-click minimize collapses the session row and pane tab", async ({
+    page,
+    tauri,
+  }) => {
+    const beta = {
+      ...SESSION,
+      id: "s-2",
+      name: "beta",
+      created_at: "2026-01-01T00:00:01Z",
+      updated_at: "2026-01-01T00:00:06Z",
+    };
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION, beta]);
+
+    await page.goto("/");
+
+    await page
+      .locator('[data-testid="sidebar"]')
+      .getByRole("button", { name: /^alpha main · Ready/ })
+      .first()
+      .click();
+
+    const betaRow = page.locator(
+      '[data-testid="sidebar"] [data-sidebar-session="s-2"]',
+    );
+    const betaTab = page.locator('[data-pane-tab-strip] [data-pane-tab="s-2"]');
+    await expect(betaRow).toBeVisible();
+    await expect(betaRow).not.toHaveAttribute("data-session-minimized", "true");
+    await expect(betaRow.getByText("beta", { exact: true })).toBeVisible();
+
+    await betaRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Minimize Tab" }).click();
+
+    await expect(betaRow).toHaveAttribute("data-session-minimized", "true");
+    await expect(betaRow.getByText("beta", { exact: true })).toHaveCount(0);
+    await expect(
+      page.locator(
+        '[data-testid="sidebar"] [data-sidebar-minimized-strip] [data-sidebar-session="s-2"]',
+      ),
+    ).toBeVisible();
+    const alphaRow = page.locator(
+      '[data-testid="sidebar"] [data-sidebar-session="s-1"]',
+    );
+    await expect
+      .poll(async () => {
+        const betaBox = await betaRow.boundingBox();
+        const alphaBox = await alphaRow.boundingBox();
+        if (!betaBox || !alphaBox) return false;
+        return betaBox.y > alphaBox.y;
+      })
+      .toBe(true);
+    await expect(betaTab).toHaveAttribute("data-tab-minimized", "true");
+    await expect(betaTab.getByText("beta", { exact: true })).toHaveCount(0);
+
+    await page.reload();
+
+    const restoredRow = page.locator(
+      '[data-testid="sidebar"] [data-sidebar-session="s-2"]',
+    );
+    await expect(restoredRow).toHaveAttribute("data-session-minimized", "true");
+    await expect(restoredRow.getByText("beta", { exact: true })).toHaveCount(0);
+
+    await restoredRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Expand Tab" }).click();
+    await expect(restoredRow).not.toHaveAttribute(
+      "data-session-minimized",
+      "true",
+    );
+    await expect(restoredRow.getByText("beta", { exact: true })).toBeVisible();
+    await expect(
+      page.locator('[data-pane-tab-strip] [data-pane-tab="s-2"]'),
+    ).not.toHaveAttribute("data-tab-minimized", "true");
+  });
+
   test("minimize and restore shortcuts collapse and expand the focused tab", async ({
     page,
     tauri,
@@ -887,12 +971,21 @@ test.describe("pane / sidebar shortcuts", () => {
       .click();
 
     const betaTab = page.locator('[data-pane-tab-strip] [data-pane-tab="s-2"]');
+    const betaRow = page.locator(
+      '[data-testid="sidebar"] [data-sidebar-session="s-2"]',
+    );
     await expect(betaTab).toBeVisible();
     await betaTab.click();
 
     await pressHotkey(page, { mod: true, shift: true, key: "m" });
     await expect(betaTab).toHaveAttribute("data-tab-minimized", "true");
     await expect(betaTab.getByText("beta", { exact: true })).toHaveCount(0);
+    await expect(betaRow).toHaveAttribute("data-session-minimized", "true");
+    await expect(
+      page.locator(
+        '[data-testid="sidebar"] [data-sidebar-minimized-strip] [data-sidebar-session="s-2"]',
+      ),
+    ).toBeVisible();
 
     await betaTab.click({ button: "right" });
     await expect(
@@ -903,5 +996,6 @@ test.describe("pane / sidebar shortcuts", () => {
     await pressHotkey(page, { mod: true, alt: true, key: "m" });
     await expect(betaTab).not.toHaveAttribute("data-tab-minimized", "true");
     await expect(betaTab.getByText("beta", { exact: true })).toBeVisible();
+    await expect(betaRow).not.toHaveAttribute("data-session-minimized", "true");
   });
 });

@@ -291,6 +291,9 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(menu).toContainText("Open");
     await expect(menu).toContainText("Copy");
     await expect(menu).toContainText("Danger");
+    await expect(
+      page.getByRole("menuitem", { name: "Minimize Tab" }),
+    ).toBeVisible();
     await expect(menu).not.toContainText("Equalize Pane Sizes");
     await expect(menu).not.toContainText("Duplicate Session");
     await expect(menu).not.toContainText("Remove Others in Project");
@@ -3351,8 +3354,9 @@ test.describe("sidebar: project lifecycle", () => {
     const terminalRow = instant.getByRole("button", { name: /^terminal-2\b/ });
     const terminalBox = await terminalRow.boundingBox();
     expect(terminalBox).not.toBeNull();
+    // Hit the title, not the trailing archive/remove actions.
     await page.mouse.click(
-      terminalBox!.x + terminalBox!.width - 40,
+      terminalBox!.x + Math.min(48, terminalBox!.width / 3),
       terminalBox!.y + terminalBox!.height / 2,
     );
 
