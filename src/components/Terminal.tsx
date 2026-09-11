@@ -87,6 +87,7 @@ import {
   AGENT_IMAGE_PASTE_CONTROL,
   getClipboardImageFile,
   hasClipboardImagePayload,
+  isTerminalProtocolReply,
   terminalPasteAction,
   type ClipboardImageFile,
 } from "../lib/terminalPaste";
@@ -1431,7 +1432,9 @@ export function Terminal({
     // reached the PTY as input". PTY *output* must not bump this:
     // a busy agent (spinner, streaming) emits output continuously, and
     // counting it cancelled every deferred image paste while an agent
-    // was running.
+    // was running. Terminal protocol replies (mouse reports, focus
+    // events, query responses) also flow through onData and must not
+    // bump it either — see `isTerminalProtocolReply`.
     let terminalInputVersion = 0;
     let imagePasteFallbackTimer: number | null = null;
     let imagePasteFallbackSerial = 0;
@@ -2532,7 +2535,14 @@ export function Terminal({
     );
 
     const inputDisposable = term.onData((data: string) => {
-      terminalInputVersion += 1;
+      // Mouse reports, focus events, and query replies also arrive through
+      // onData but are terminal protocol chatter, not user input. Counting
+      // them cancelled the deferred image paste whenever the pointer moved
+      // over a mouse-tracking TUI (Claude/Codex/Grok emit motion reports
+      // continuously), and the retry that finally survived attached the
+      // image late — right after an unrelated gesture such as the
+      // right-click selection paste.
+      if (!isTerminalProtocolReply(data)) terminalInputVersion += 1;
       sendUserInputToPty(data);
       if (data.includes("\r") || data.includes("\n")) {
         commandSizeSyncScheduler.schedule();
