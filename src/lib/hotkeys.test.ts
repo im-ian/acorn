@@ -191,6 +191,13 @@ describe("resolveHotkeys", () => {
     expect(DEFAULT_HOTKEYS.renameItem).toBe("F2");
   });
 
+  it("keeps tab minimize and restore off the native window-minimize chord", () => {
+    expect(DEFAULT_HOTKEYS.minimizeTab).toBe("$mod+Shift+m");
+    expect(DEFAULT_HOTKEYS.expandTab).toBe("$mod+Alt+KeyM");
+    expect(DEFAULT_HOTKEYS.minimizeTab).not.toBe("$mod+m");
+    expect(DEFAULT_HOTKEYS.expandTab).not.toBe("$mod+m");
+  });
+
   it("keeps the persisted commits binding unchanged for contextual terminal routing", () => {
     expect(DEFAULT_HOTKEYS.toggleCommits).toBe("$mod+Shift+c");
     expect(

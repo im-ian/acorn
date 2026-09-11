@@ -1658,6 +1658,11 @@ function App() {
       }
       toggleMultiInput();
     };
+    const setActiveTabMinimized = (minimized: boolean) => {
+      const { activeTabId } = useAppStore.getState();
+      if (!activeTabId) return;
+      useAppStore.getState().setTabMinimized(activeTabId, minimized);
+    };
 
     const next: HotkeyBindings = {
       [shortcuts.openPalette]: (e: KeyboardEvent) => {
@@ -1825,6 +1830,14 @@ function App() {
         e.preventDefault();
         if (closeTerminalPopoverFromHotkey()) return;
         useAppStore.getState().closeFocusedTab();
+      },
+      [shortcuts.minimizeTab]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        setActiveTabMinimized(true);
+      },
+      [shortcuts.expandTab]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        setActiveTabMinimized(false);
       },
       [shortcuts.nextTab]: (e: KeyboardEvent) => {
         e.preventDefault();

@@ -665,6 +665,12 @@
         "closeTab": {
           "label": "Close focused tab"
         },
+        "minimizeTab": {
+          "label": "Minimize focused tab"
+        },
+        "expandTab": {
+          "label": "Restore minimized tab"
+        },
         "closeEmptyPane": {
           "label": "Close empty pane",
           "description": "Only works when the focused pane has no tabs."

@@ -665,6 +665,12 @@
         "closeTab": {
           "label": "フォーカスされたタブを閉じる"
         },
+        "minimizeTab": {
+          "label": "フォーカスされたタブを最小化"
+        },
+        "expandTab": {
+          "label": "最小化されたタブを復元"
+        },
         "closeEmptyPane": {
           "label": "空のペインを閉じる",
           "description": "フォーカスされたペインにタブがない場合にのみ機能します。"

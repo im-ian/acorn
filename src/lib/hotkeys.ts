@@ -45,6 +45,10 @@ export const DEFAULT_HOTKEYS = {
   splitHorizontal: "$mod+Shift+d",
   equalizePanes: "$mod+Alt+KeyE",
   closeTab: "$mod+w",
+  // Cmd+M is the native Window > Minimize accelerator, so tab
+  // minimize/restore sit on Shift/Alt variants of M instead.
+  minimizeTab: "$mod+Shift+m",
+  expandTab: "$mod+Alt+KeyM",
   closeEmptyPane: "Escape",
   openSettings: "$mod+Comma",
   // Mirrors Ghostty's "Reload Config" gesture. Dotfile env values
