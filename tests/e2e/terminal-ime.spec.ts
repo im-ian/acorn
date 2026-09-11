@@ -334,6 +334,69 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     await expect(imeCursor).toHaveCount(0);
   });
 
+  test("the composing caret sits where the real cursor will land", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+    await emitPtyOutput(page, "> ");
+    await expect(page.locator(".xterm-rows")).toContainText(">");
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+    // Measure the caret as rendered, and again with the cell-grid width
+    // removed — the difference is what the preview would be off by if it laid
+    // the syllable out at the font's natural advance.
+    const composing = await page.evaluate(() => {
+      const text = document.querySelector<HTMLElement>(
+        ".acorn-ime-composition-text",
+      );
+      const caret = document.querySelector<HTMLElement>(
+        ".acorn-ime-composition-cursor",
+      );
+      if (!text || !caret) throw new Error("IME overlay nodes missing");
+      const snapped = caret.getBoundingClientRect().left;
+      const cellGridWidth = text.style.minWidth;
+      text.style.minWidth = "";
+      const naturalAdvance = caret.getBoundingClientRect().left;
+      text.style.minWidth = cellGridWidth;
+      return { snapped, naturalAdvance };
+    });
+
+    await runIme(page, [
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+    await emitPtyOutput(page, "한");
+    await expect(page.locator(".composition-view.active")).toHaveCount(0);
+
+    const realCursorLeft = await page.evaluate(() => {
+      const cursor = document.querySelector<HTMLElement>(
+        ".acorn-terminal .xterm-cursor",
+      );
+      if (!cursor) throw new Error("terminal cursor missing");
+      return cursor.getBoundingClientRect().left;
+    });
+
+    // The whole point: committing must not shift the caret. A preview laid out
+    // at the glyph's natural advance lands short of the cell boundary, so the
+    // caret would jump outward once the echo arrives — once per syllable.
+    expect(Math.abs(composing.snapped - realCursorLeft)).toBeLessThan(1);
+    expect(realCursorLeft - composing.naturalAdvance).toBeGreaterThan(1);
+  });
+
   test("committed syllables stay painted until the PTY echo lands", async ({
     page,
     tauri,
