@@ -1,5 +1,6 @@
-import type { Session } from "./types";
 import type { ProjectFoldersByRepo } from "./projectFolders";
+import { isArchivedSession } from "./sessionArchive";
+import type { Session } from "./types";
 
 export function hasRecordedWorktree(session: Session): boolean {
   return session.isolated || session.in_worktree;
@@ -23,6 +24,14 @@ export function sessionsUsingProjectWorktree(
       sameWorkspacePath(session.repo_path, repoPath) &&
       sameWorkspacePath(session.worktree_path, worktreePath),
   );
+}
+
+export function worktreeWorkspaceIsOccupied(
+  sessions: readonly Session[],
+  repoPath: string,
+  worktreePath: string,
+): boolean {
+  return sessionsUsingProjectWorktree(sessions, repoPath, worktreePath).length > 0;
 }
 
 export function sessionsUsingWorktreePath(
@@ -107,6 +116,7 @@ export function canDeleteSessionWorktree(
   foldersByRepo: ProjectFoldersByRepo,
   sessions: readonly Session[] = [session],
 ): boolean {
+  if (isArchivedSession(session)) return false;
   const removalIds = sessionRemovalCascadeIds(sessions, session);
   return (
     hasRecordedWorktree(session) &&
