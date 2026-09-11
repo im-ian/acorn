@@ -1764,25 +1764,48 @@ export function Terminal({
         );
       }
     };
+    /** Paint `text` one cell-sized box per character. Zero-width characters
+     *  (combining marks) ride along with the character they modify. */
+    const renderComposingCells = (text: string) => {
+      const cellDims = getCellDims();
+      if (!cellDims) {
+        compositionTextView.textContent = text;
+        compositionTextView.style.marginRight = "";
+        return;
+      }
+      const cells: HTMLElement[] = [];
+      for (const char of text) {
+        const columns = stringCellWidth(char);
+        const previous = cells[cells.length - 1];
+        if (columns <= 0 && previous) {
+          previous.textContent = `${previous.textContent ?? ""}${char}`;
+          continue;
+        }
+        const cell = document.createElement("span");
+        cell.textContent = char;
+        cell.style.display = "inline-block";
+        cell.style.width = `${Math.max(1, columns) * cellDims.width}px`;
+        cells.push(cell);
+      }
+      compositionTextView.replaceChildren(...cells);
+      // Negative margin pulls the caret — the next inline box — back inside
+      // the grid without disturbing the glyph spacing before it.
+      compositionTextView.style.marginRight = `${-CARET_CELL_GRID_INSET_PX}px`;
+    };
     const renderComposing = (text: string) => {
       if (!compositionView || text.length === 0) return;
-      compositionTextView.textContent = text;
-      // Snap the preview to the terminal's cell grid. A Hangul syllable spends
-      // two columns, but the raw glyph advance is usually narrower than two
-      // cells, which parked the caret marker tight against the glyph instead
-      // of near the cell boundary the real cursor sits at. `min-width` so a
-      // font whose glyphs run wider than their cells still pushes the caret
-      // out rather than colliding with it.
+      // Lay the preview out on the terminal's cell grid. A Hangul syllable
+      // spends two columns but its glyph advance is usually narrower, so raw
+      // text bunches to the left and the caret lands short of where the real
+      // cursor will be. xterm solves this on its own rows with a per-span
+      // `letter-spacing`; giving each character a cell-sized box is the same
+      // idea and stays correct when the preview mixes widths, or holds several
+      // syllables at once because typing outran the echo.
       //
-      // The inset holds the caret just inside that boundary: dead-on reads as
-      // detached from the syllable being composed. Tuned by eye against the
-      // app's default terminal font — `CARET_CELL_GRID_INSET_PX` is the knob.
-      const cellDims = getCellDims();
-      const columns = stringCellWidth(text);
-      compositionTextView.style.minWidth =
-        cellDims && columns > 0
-          ? `${Math.max(0, columns * cellDims.width - CARET_CELL_GRID_INSET_PX)}px`
-          : "";
+      // The inset then holds the caret just inside the boundary: dead-on reads
+      // as detached from the syllable. Tuned by eye against the app's default
+      // terminal font — `CARET_CELL_GRID_INSET_PX` is the knob.
+      renderComposingCells(text);
       // Until the PTY receives a committed composition, its buffer still has
       // the text under and after the cursor in the old position. Mirror that
       // tail after the preview so mid-line composition reads as insertion.
