@@ -166,6 +166,19 @@ function countToken(writes: string[], token: string): number {
   return n;
 }
 
+/** Text currently painted by the IME overlay ("" when it is torn down). */
+async function imeOverlayText(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const view = document.querySelector<HTMLElement>(
+      ".composition-view.active",
+    );
+    return (
+      view?.querySelector<HTMLElement>(".acorn-ime-composition-text")
+        ?.textContent ?? ""
+    );
+  });
+}
+
 async function emitPtyOutput(page: Page, text: string): Promise<void> {
   await expect
     .poll(() =>
@@ -179,6 +192,7 @@ async function emitPtyOutput(page: Page, text: string): Promise<void> {
   await page.evaluate((output) => {
     const w = window as unknown as {
       __imeOutputChannelId?: number;
+      __imeOutputIndex?: number;
       [key: string]: unknown;
     };
     const id = w.__imeOutputChannelId;
@@ -187,8 +201,12 @@ async function emitPtyOutput(page: Page, text: string): Promise<void> {
       | ((payload: { index: number; message: number[] }) => void)
       | undefined;
     if (!callback) throw new Error("IME output callback missing");
+    // Tauri's Channel reorders by `index` and parks anything it has already
+    // delivered — a second emit reusing 0 would never reach the terminal.
+    const index = w.__imeOutputIndex ?? 0;
+    w.__imeOutputIndex = index + 1;
     callback({
-      index: 0,
+      index,
       message: Array.from(new TextEncoder().encode(output)),
     });
   }, text);
@@ -298,10 +316,59 @@ test.describe("terminal: IME (PR #104 regression)", () => {
         taValue: "한",
       },
     ]);
+    // The commit only sends the syllable; the overlay holds it until the echo
+    // hands ownership to the xterm buffer.
+    await emitPtyOutput(page, "한");
     await expect(page.locator(".acorn-terminal")).not.toHaveClass(
       /acorn-terminal-composing/,
     );
     await expect(imeCursor).toHaveCount(0);
+  });
+
+  test("committed syllables stay painted until the PTY echo lands", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+    await emitPtyOutput(page, "› ");
+    await expect(page.locator(".xterm-rows")).toContainText("›");
+
+    const commit = (syllable: string) => [
+      { type: "keydown" as const, key: "Process", keyCode: 229 },
+      {
+        type: "input" as const,
+        inputType: "insertCompositionText",
+        data: syllable,
+        taValue: syllable,
+      },
+      {
+        type: "input" as const,
+        inputType: "insertFromComposition",
+        data: syllable,
+        taValue: syllable,
+      },
+    ];
+
+    // Without the hold, a committed syllable exists in neither the overlay nor
+    // the buffer for a full IPC round trip — the "one syllable behind" gap.
+    await runIme(page, commit("안"));
+    expect(await imeOverlayText(page)).toBe("안");
+
+    // Typing faster than the echo must accumulate against the same cell, not
+    // replace the syllable already in flight.
+    await runIme(page, commit("녕"));
+    expect(await imeOverlayText(page)).toBe("안녕");
+
+    // The echo advances the cursor off the committed cell: the buffer now owns
+    // the glyphs, so the overlay must let go instead of double-painting them.
+    await emitPtyOutput(page, "안녕");
+    await expect(page.locator(".composition-view.active")).toHaveCount(0);
+    await expect(page.locator(".xterm-rows")).toContainText("› 안녕");
+
+    const writes = await getWrites(page);
+    expect(countToken(writes, "안")).toBe(1);
+    expect(countToken(writes, "녕")).toBe(1);
   });
 
   test("composition cursor follows an application-owned DECSCUSR shape", async ({
