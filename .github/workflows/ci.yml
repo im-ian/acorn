@@ -58,9 +58,11 @@ jobs:
       - name: Unit tests
         run: pnpm run test
 
-      - name: Build
-        # Type checking already ran above. Build only the production bundle
-        # so this job does not check the same TypeScript graph twice.
+      - name: Production bundle
+        # tsc already ran above. Vite still has to resolve CSS, assets, and
+        # plugin output that typecheck never sees; the compile itself is a
+        # few seconds. Native installer bundles belong to the release
+        # workflow, not pull-request CI.
         run: pnpm run build:frontend
 
   e2e:
@@ -134,12 +136,11 @@ jobs:
             test-results/
           retention-days: 7
 
-  windows-nsis:
-    name: Windows x64 NSIS smoke
+  windows-native:
+    name: Windows native
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 30
     env:
-      WINDOWS_TARGET: x86_64-pc-windows-msvc
       CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout
@@ -193,49 +194,13 @@ jobs:
             throw "Windows native contract tests failed"
           }
 
-          pnpm run dev:sidecar
-          if ($LASTEXITCODE -ne 0) {
-            throw "Windows debug sidecar build failed"
-          }
-
-      - name: Build frontend
-        run: pnpm run build:frontend
-
-      # A throwaway updater key lets pull requests exercise Tauri's real
-      # createUpdaterArtifacts path without exposing release secrets. Its
-      # signature intentionally cannot update a production Acorn install.
-      - name: Build and inspect NSIS updater artifacts
+      - name: Build debug sidecars
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $keyPath = Join-Path $env:RUNNER_TEMP "acorn-ci-updater.key"
-          try {
-            pnpm exec tauri signer generate --ci --force --write-keys $keyPath --password "ci-smoke"
-            if ($LASTEXITCODE -ne 0) {
-              throw "failed to generate the ephemeral updater key"
-            }
-
-            # The updater bundler consumes the key contents, not the signer
-            # command's separate TAURI_SIGNING_PRIVATE_KEY_PATH variable.
-            $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath $keyPath -Raw
-            $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "ci-smoke"
-            # Pass the override by path because PowerShell's native argument
-            # marshalling strips the quotes from an inline JSON value.
-            pnpm run tauri build --target $env:WINDOWS_TARGET --bundles nsis --config src-tauri/tauri.release-ci.conf.json -- --profile release-ci --locked
-            if ($LASTEXITCODE -ne 0) {
-              throw "Windows Tauri build failed"
-            }
-
-            $bundleDir = "src-tauri/target/$env:WINDOWS_TARGET/release-ci/bundle"
-            New-Item -ItemType Directory -Force -Path staged | Out-Null
-            node scripts/release-artifacts.mjs stage-windows $bundleDir staged x86_64
-            if ($LASTEXITCODE -ne 0) {
-              throw "Windows artifact staging failed"
-            }
-            Get-ChildItem -LiteralPath staged
-          }
-          finally {
-            Remove-Item -LiteralPath @($keyPath, "${keyPath}.pub") -Force -ErrorAction SilentlyContinue
+          pnpm run dev:sidecar
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows debug sidecar build failed"
           }
 
       - name: Smoke detached acornd lifecycle
@@ -243,7 +208,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $PSNativeCommandUseErrorActionPreference = $false
-          $acornd = "src-tauri/target/$env:WINDOWS_TARGET/release-ci/acornd.exe"
+          $acornd = "src-tauri/target/debug/acornd.exe"
           $smokeDataDir = Join-Path $env:RUNNER_TEMP "acorn-daemon-smoke-$([guid]::NewGuid().ToString('N'))"
           $previousDataDir = [Environment]::GetEnvironmentVariable("ACORN_DATA_DIR", "Process")
           $daemonLaunched = $false
@@ -252,10 +217,10 @@ jobs:
 
           try {
             if (!(Test-Path -LiteralPath $acornd -PathType Leaf)) {
-              throw "release-ci acornd.exe is missing: $acornd"
+              throw "debug acornd.exe is missing: $acornd"
             }
             if ((Get-Item -LiteralPath $acornd).Length -eq 0) {
-              throw "release-ci acornd.exe is empty: $acornd"
+              throw "debug acornd.exe is empty: $acornd"
             }
 
             New-Item -ItemType Directory -Force -Path $smokeDataDir | Out-Null
@@ -304,7 +269,7 @@ jobs:
 
             # The public shutdown CLI is intentionally absent: a same-user
             # process must not be able to terminate the user's daemon. This
-            # isolated smoke records the exact release binary's process set
+            # isolated smoke records the exact debug sidecar's process set
             # before launch and may stop only the single new matching process.
             # Do not read daemon.pid here: Windows intentionally denies reads
             # through a competing handle while the singleton lock is held.
@@ -390,18 +355,18 @@ jobs:
           # status as the workflow step's exit code.
           $global:LASTEXITCODE = 0
 
-      - name: Upload NSIS smoke artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: windows-nsis-smoke-do-not-publish
-          path: staged/**
-          if-no-files-found: error
-          retention-days: 1
+      # NSIS / updater packaging lives in the release workflow. Sidecars
+      # above satisfy tauri-build's externalBin existence check; this
+      # type-checks the Tauri crate and every `cfg(windows)` test module.
+      # Run after the detach smoke so a check failure still leaves the
+      # Windows lifecycle signal in the same job.
+      - name: Type check Rust workspace
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked --workspace --all-targets
 
   rust-tests:
     name: Rust tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       CARGO_INCREMENTAL: "0"
     steps:
@@ -421,15 +386,49 @@ jobs:
           shared-key: linux-x86_64
           cache-on-failure: true
 
-      # Agent-to-transcript pairing decides which JSONL a live claude/codex/
-      # antigravity/grok process owns; getting it wrong silently breaks tab
-      # titles and resume. It is pure host-filesystem logic with no Tauri or
-      # sidecar dependency, so it runs without a frontend build. The Windows
-      # job covers the transport crates; no job compiled this one.
-      - name: Test transcript pairing
+      # pkg-config needs these headers to type-check the Tauri crate. The
+      # release workflow still produces the real installers; this job only
+      # compiles.
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libxdo-dev
+
+      # tauri-build refuses to compile the app crate until externalBin
+      # paths exist. Empty files are enough for cargo check; the Windows
+      # job stages real debug sidecars because it also smokes acornd.
+      - name: Stage sidecar placeholders
+        run: |
+          set -euo pipefail
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          mkdir -p src-tauri/binaries
+          : > "src-tauri/binaries/acorn-ipc-${host}"
+          : > "src-tauri/binaries/acornd-${host}"
+
+      - name: Type check Rust workspace
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked --workspace --all-targets
+
+      # Host-side crates that do not need a display. `cfg(windows)` coverage
+      # stays in the Windows native job; this run exercises the unix side of
+      # the same crates plus transcript pairing and updater verification.
+      - name: Test host-side crates
         run: >-
           cargo test --manifest-path src-tauri/Cargo.toml --locked
+          -p acorn-agent
+          -p acorn-paths
+          -p acorn-platform
           -p acorn-transcript
+          -p acorn-local-ipc
+          -p acorn-ipc
+          -p acorn-daemon
+          -p acorn-updater-verify
 
   rustfmt:
     name: Rust format

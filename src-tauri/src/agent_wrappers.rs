@@ -3850,6 +3850,7 @@ cat >/dev/null
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn antigravity_subagent_stop_emits_no_transition() {
         let base = ScratchDir::new("agy-events");
