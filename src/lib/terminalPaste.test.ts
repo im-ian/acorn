@@ -3,6 +3,7 @@ import {
   AGENT_IMAGE_PASTE_CONTROL,
   getClipboardImageFile,
   hasClipboardImagePayload,
+  isTerminalProtocolReply,
   terminalPasteAction,
   type ClipboardImageFile,
 } from "./terminalPaste";
@@ -56,6 +57,38 @@ describe("terminalPasteAction", () => {
         normalizeUnicodeSpaces: false,
       }),
     ).toEqual({ kind: "pasteText", text: "pnpm\u00a0run\u202fdev" });
+  });
+});
+
+describe("isTerminalProtocolReply", () => {
+  it.each([
+    ["SGR mouse motion report", "\x1b[<35;55;34M"],
+    ["SGR wheel report", "\x1b[<65;55;34M"],
+    ["SGR button release report", "\x1b[<0;27;40m"],
+    ["concatenated SGR reports", "\x1b[<35;1;1M\x1b[<35;2;1M"],
+    ["legacy X10 mouse report", "\x1b[M @B"],
+    ["focus in", "\x1b[I"],
+    ["focus out", "\x1b[O"],
+    ["OSC color query response (ST)", "\x1b]11;rgb:ffff/ffff/ffff\x1b\\"],
+    ["OSC color query response (BEL)", "\x1b]11;rgb:0000/0000/0000\x07"],
+    ["primary DA response", "\x1b[?1;2c"],
+    ["secondary DA response", "\x1b[>0;276;0c"],
+    ["DECRPM response", "\x1b[?2026;2$y"],
+    ["cursor position report", "\x1b[24;80R"],
+  ])("treats %s as protocol chatter", (_label, data) => {
+    expect(isTerminalProtocolReply(data)).toBe(true);
+  });
+
+  it.each([
+    ["plain text", "a"],
+    ["enter", "\r"],
+    ["ctrl+c", "\x03"],
+    ["arrow key", "\x1b[A"],
+    ["bracketed paste", "\x1b[200~hello\x1b[201~"],
+    ["mouse report followed by typed text", "\x1b[<35;1;1Mhello"],
+    ["empty string", ""],
+  ])("keeps %s counted as user input", (_label, data) => {
+    expect(isTerminalProtocolReply(data)).toBe(false);
   });
 });
 
