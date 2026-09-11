@@ -1471,6 +1471,10 @@ function TabItem({
         minimized ? "pane.menu.expandTab" : "pane.menu.minimizeTab",
       ),
       icon: minimized ? <Maximize2 size={12} /> : <Minimize2 size={12} />,
+      shortcut: shortcutLabel(
+        shortcuts,
+        minimized ? "expandTab" : "minimizeTab",
+      ),
       onClick: () => setTabMinimized(tab.id, !minimized),
     },
     {

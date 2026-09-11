@@ -667,6 +667,12 @@
         "closeTab": {
           "label": "포커스된 탭 닫기"
         },
+        "minimizeTab": {
+          "label": "포커스된 탭 최소화"
+        },
+        "expandTab": {
+          "label": "최소화된 탭 복구"
+        },
         "closeEmptyPane": {
           "label": "빈 Pane 닫기",
           "description": "포커스된 Pane에 탭이 없을 때만 작동합니다."

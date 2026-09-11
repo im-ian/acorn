@@ -288,6 +288,7 @@ function minimizeSessionMenuItem(
   t: Translator,
   minimized: boolean,
   onToggle: () => void,
+  shortcut: string,
 ): ContextMenuItem {
   return {
     label: sidebarText(
@@ -295,6 +296,7 @@ function minimizeSessionMenuItem(
       minimized ? "sidebar.actions.expandTab" : "sidebar.actions.minimizeTab",
     ),
     icon: minimized ? <Maximize2 size={12} /> : <Minimize2 size={12} />,
+    shortcut,
     onClick: onToggle,
   };
 }
@@ -3497,6 +3499,7 @@ function SessionRow({
   );
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
   const agentDetectionFailurePrefix = t(
     "toasts.session.agentDetectionFailed",
@@ -3773,8 +3776,11 @@ function SessionRow({
       icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
       onClick: () => setSessionSilenced(session.id, !sessionSilenced),
     },
-    minimizeSessionMenuItem(t, minimized, () =>
-      setTabMinimized(session.id, !minimized),
+    minimizeSessionMenuItem(
+      t,
+      minimized,
+      () => setTabMinimized(session.id, !minimized),
+      formatHotkey(shortcuts[minimized ? "expandTab" : "minimizeTab"]),
     ),
     ...(forkItems.length > 0
       ? [contextMenuGroupTitle(t, "fork"), ...forkItems]
@@ -5331,6 +5337,7 @@ function LocalSessionRow({
     isTabMinimizedInWorkspaces(s.workspaces, session.id),
   );
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
   const currentPullRequest = useCurrentPullRequest(session);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
   const metadataText = composeSessionMetadata(
@@ -5424,8 +5431,11 @@ function LocalSessionRow({
       icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
       onClick: () => setSessionSilenced(session.id, !sessionSilenced),
     },
-    minimizeSessionMenuItem(t, minimized, () =>
-      setTabMinimized(session.id, !minimized),
+    minimizeSessionMenuItem(
+      t,
+      minimized,
+      () => setTabMinimized(session.id, !minimized),
+      formatHotkey(shortcuts[minimized ? "expandTab" : "minimizeTab"]),
     ),
     ...(canCreateWorktreeWorkspace
       ? [
