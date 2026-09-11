@@ -217,6 +217,9 @@ const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
 const SCROLL_TO_BOTTOM_VISIBLE_ROWS = 10;
 const COMPOSING_CLASS = "acorn-terminal-composing";
+/** How far inside the cell boundary the IME caret marker sits. See
+ *  `renderComposing` — purely visual, the PTY still gets full-width cells. */
+const CARET_CELL_GRID_INSET_PX = 2;
 // xterm briefly leaves and re-enters hovered links when refreshed rows repaint.
 const LINK_TOOLTIP_HIDE_GRACE_MS = 80;
 
@@ -1767,13 +1770,19 @@ export function Terminal({
       // Snap the preview to the terminal's cell grid. A Hangul syllable spends
       // two columns, but the raw glyph advance is usually narrower than two
       // cells, which parked the caret marker tight against the glyph instead
-      // of on the cell boundary the real cursor would sit at. `min-width` so a
+      // of near the cell boundary the real cursor sits at. `min-width` so a
       // font whose glyphs run wider than their cells still pushes the caret
       // out rather than colliding with it.
+      //
+      // The inset holds the caret just inside that boundary: dead-on reads as
+      // detached from the syllable being composed. Tuned by eye against the
+      // app's default terminal font — `CARET_CELL_GRID_INSET_PX` is the knob.
       const cellDims = getCellDims();
       const columns = stringCellWidth(text);
       compositionTextView.style.minWidth =
-        cellDims && columns > 0 ? `${columns * cellDims.width}px` : "";
+        cellDims && columns > 0
+          ? `${Math.max(0, columns * cellDims.width - CARET_CELL_GRID_INSET_PX)}px`
+          : "";
       // Until the PTY receives a committed composition, its buffer still has
       // the text under and after the cursor in the old position. Mirror that
       // tail after the preview so mid-line composition reads as insertion.

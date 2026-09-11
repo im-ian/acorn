@@ -309,10 +309,10 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(cursorLayout.markerHeight).toBeGreaterThan(0);
     expect(cursorLayout.nativeCursorOpacity).toBe("0");
     expect(cursorLayout.cursorAnchorWidth).toBe(0);
-    // "한" spends two terminal columns; the preview must claim both so the
-    // caret lands on the cell boundary instead of hugging the glyph.
+    // "한" spends two terminal columns; the preview claims both (less the
+    // 2px caret inset) instead of collapsing to the glyph's own advance.
     expect(cursorLayout.textWidth).toBeGreaterThanOrEqual(
-      2 * cursorLayout.cellWidth - 0.5,
+      2 * cursorLayout.cellWidth - 2.5,
     );
     expect(cursorLayout.cursorAfterText).toBeLessThan(0.5);
     expect(cursorLayout.tailAfterCursor).toBeLessThan(0.5);
@@ -390,11 +390,13 @@ test.describe("terminal: IME (PR #104 regression)", () => {
       return cursor.getBoundingClientRect().left;
     });
 
-    // The whole point: committing must not shift the caret. A preview laid out
-    // at the glyph's natural advance lands short of the cell boundary, so the
-    // caret would jump outward once the echo arrives — once per syllable.
-    expect(Math.abs(composing.snapped - realCursorLeft)).toBeLessThan(1);
-    expect(realCursorLeft - composing.naturalAdvance).toBeGreaterThan(1);
+    // Committing must barely shift the caret. The preview tracks the cell
+    // boundary the real cursor lands on, held 2px inside it so the marker
+    // still reads as attached to the syllable. Laying the preview out at the
+    // glyph's natural advance instead lands materially further short, so the
+    // caret would visibly jump outward on every echo.
+    expect(realCursorLeft - composing.snapped).toBeCloseTo(2, 0);
+    expect(realCursorLeft - composing.naturalAdvance).toBeGreaterThan(3);
   });
 
   test("committed syllables stay painted until the PTY echo lands", async ({
