@@ -187,6 +187,16 @@
   opacity: 0 !important;
 }
 
+/* Inline-block so the per-character cell boxes Terminal.tsx builds lay out on
+   one line; the caret anchor then starts on the cell boundary the real cursor
+   uses, less the inset applied there. */
+.acorn-terminal
+  .composition-view
+  .acorn-ime-composition-text {
+  display: inline-block;
+  vertical-align: top;
+}
+
 .acorn-terminal
   .composition-view
   .acorn-ime-composition-cursor {

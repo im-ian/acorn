@@ -219,6 +219,9 @@ const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
 const SCROLL_TO_BOTTOM_VISIBLE_ROWS = 10;
 const COMPOSING_CLASS = "acorn-terminal-composing";
+/** How far inside the cell boundary the IME caret marker sits. See
+ *  `renderComposing` — purely visual, the PTY still gets full-width cells. */
+const CARET_CELL_GRID_INSET_PX = 2;
 // xterm briefly leaves and re-enters hovered links when refreshed rows repaint.
 const LINK_TOOLTIP_HIDE_GRACE_MS = 80;
 
@@ -306,10 +309,47 @@ function terminalLineTailEndColumn(term: XTerm): number {
   return buffer.cursorX;
 }
 
+/**
+ * Row-geometry cache for `renderTerminalLineTail`.
+ *
+ * Measuring the source row forces a synchronous layout, and the tail is
+ * re-rendered several times per IME keystroke (WKWebView fires
+ * `insertCompositionText` + `insertText` for one jamo). The span rects only
+ * change when xterm repaints or the viewport scrolls, so hold them until
+ * `invalidateTerminalLineTailCache` is called from those events.
+ */
+interface TerminalLineTailCache {
+  row: HTMLElement | null;
+  cols: number;
+  rowLeft: number;
+  rowWidth: number;
+  spans: Array<{ span: HTMLElement; left: number; right: number }>;
+}
+
+function createTerminalLineTailCache(): TerminalLineTailCache {
+  return { row: null, cols: 0, rowLeft: 0, rowWidth: 0, spans: [] };
+}
+
+function invalidateTerminalLineTailCache(cache: TerminalLineTailCache): void {
+  cache.row = null;
+  cache.spans = [];
+}
+
+/** Attribute-only identity of a cloned span; `outerHTML` on the hot path
+ *  serialised the whole node once per cell for the same comparison. */
+function tailRunStyleKey(element: HTMLElement): string {
+  let key = "";
+  for (const attribute of Array.from(element.attributes)) {
+    key += `${attribute.name}=${attribute.value} `;
+  }
+  return key;
+}
+
 function renderTerminalLineTail(
   term: XTerm,
   container: HTMLElement,
   tailView: HTMLElement,
+  cache: TerminalLineTailCache,
 ): void {
   const buffer = term.buffer.active;
   const line = buffer.getLine(buffer.baseY + buffer.cursorY);
@@ -329,11 +369,21 @@ function renderTerminalLineTail(
   // Reuse the DOM renderer's resolved spans instead of reimplementing xterm's
   // ANSI, true-color, inverse, dim, and decoration rules. The cloned text is
   // rebuilt from buffer cells so only the tail at/after the cursor is shown.
-  const sourceSpans = Array.from(
-    sourceRow.querySelectorAll<HTMLElement>("span"),
-  ).map((span) => ({ span, rect: span.getBoundingClientRect() }));
-  const rowRect = sourceRow.getBoundingClientRect();
-  const renderedCellWidth = rowRect.width / term.cols;
+  if (cache.row !== sourceRow || cache.cols !== term.cols) {
+    const rowRect = sourceRow.getBoundingClientRect();
+    cache.row = sourceRow;
+    cache.cols = term.cols;
+    cache.rowLeft = rowRect.left;
+    cache.rowWidth = rowRect.width;
+    cache.spans = Array.from(
+      sourceRow.querySelectorAll<HTMLElement>("span"),
+    ).map((span) => {
+      const rect = span.getBoundingClientRect();
+      return { span, left: rect.left, right: rect.right };
+    });
+  }
+  const sourceSpans = cache.spans;
+  const renderedCellWidth = cache.rowWidth / term.cols;
   if (renderedCellWidth <= 0 || sourceSpans.length === 0) {
     tailView.textContent = line.translateToString(true, buffer.cursorX);
     return;
@@ -342,6 +392,10 @@ function renderTerminalLineTail(
   const fragment = document.createDocumentFragment();
   let previousStyleKey = "";
   let previousClone: HTMLElement | null = null;
+  // `cellCenter` grows monotonically with `column`, so the matching span can
+  // only move forward — a rescan from the start per cell made this O(cells ×
+  // spans) on a full-width line.
+  let spanIndex = 0;
   for (let column = buffer.cursorX; column < endColumn; ) {
     const cell = line.getCell(column);
     if (!cell) break;
@@ -359,12 +413,16 @@ function renderTerminalLineTail(
         : " ";
 
     const cellCenter =
-      rowRect.left + (column + width / 2) * renderedCellWidth;
+      cache.rowLeft + (column + width / 2) * renderedCellWidth;
+    while (
+      spanIndex < sourceSpans.length &&
+      cellCenter >= sourceSpans[spanIndex].right + 0.5
+    ) {
+      spanIndex += 1;
+    }
+    const candidate = sourceSpans[spanIndex];
     const source =
-      sourceSpans.find(
-        ({ rect }) =>
-          rect.left - 0.5 <= cellCenter && cellCenter < rect.right + 0.5,
-      )?.span ?? null;
+      candidate && candidate.left - 0.5 <= cellCenter ? candidate.span : null;
     const clone = source
       ? (source.cloneNode(false) as HTMLElement)
       : document.createElement("span");
@@ -378,7 +436,7 @@ function renderTerminalLineTail(
     }
     clone.removeAttribute("id");
     clone.classList.add("acorn-ime-tail-run");
-    const styleKey = clone.outerHTML;
+    const styleKey = tailRunStyleKey(clone);
     if (previousClone && previousStyleKey === styleKey) {
       previousClone.textContent = `${previousClone.textContent ?? ""}${text}`;
     } else {
@@ -1625,6 +1683,28 @@ export function Terminal({
       const cell = core?._renderService?.dimensions?.css?.cell;
       return cell ? { width: cell.width, height: cell.height } : null;
     };
+    /** Columns the terminal would spend on `text` — 2 per Hangul syllable.
+     *  `null` when the measurement is unavailable. */
+    const stringCellWidth = (text: string): number | null => {
+      type UnicodeService = { getStringCellWidth?: (value: string) => number };
+      const core = (
+        term as unknown as {
+          _core?: {
+            unicodeService?: UnicodeService;
+            _unicodeService?: UnicodeService;
+          };
+        }
+      )._core;
+      const unicode = core?.unicodeService ?? core?._unicodeService;
+      try {
+        return unicode?.getStringCellWidth?.(text) ?? null;
+      } catch {
+        // Undocumented internals — an xterm bump can move or remove them.
+        // `null` means "unknown", which callers must not confuse with the
+        // legitimate 0 of a combining mark.
+        return null;
+      }
+    };
     const compositionTextView = document.createElement("span");
     compositionTextView.className = "acorn-ime-composition-text";
     const compositionCursorView = document.createElement("span");
@@ -1632,8 +1712,64 @@ export function Terminal({
     compositionCursorView.setAttribute("aria-hidden", "true");
     const compositionTailView = document.createElement("span");
     compositionTailView.className = "acorn-ime-line-tail xterm-rows";
+    const lineTailCache = createTerminalLineTailCache();
     let composingText = "";
 
+    // A committed syllable is sent to the PTY but does not appear on screen
+    // until the agent echoes it back — one IPC round trip plus a TUI redraw
+    // later. Clearing the overlay at commit time leaves that syllable in
+    // neither the overlay nor the xterm buffer for the whole window, which is
+    // the "typing is one syllable behind" feel. Keep it painted at the cell it
+    // was committed from; the echo advances the cursor, which is exactly when
+    // the buffer takes ownership and the hold can drop.
+    const PENDING_COMMIT_MAX_MS = 400;
+    let pendingCommit: { text: string; x: number; y: number } | null = null;
+    let pendingCommitTimer: number | null = null;
+
+    const clearPendingCommit = () => {
+      pendingCommit = null;
+      if (pendingCommitTimer !== null) {
+        window.clearTimeout(pendingCommitTimer);
+        pendingCommitTimer = null;
+      }
+    };
+    /**
+     * Release the part of the hold the buffer has taken over. Echoes arrive
+     * per syllable, so a cursor advance of N columns retires exactly the
+     * leading N columns of held text — dropping the whole hold there would
+     * reopen the gap for syllables still in flight. Anything that does not
+     * line up (cursor moved backwards, changed row, or landed mid-syllable)
+     * is a redraw rather than an echo: drop everything, which is the safe
+     * direction since the held text is only ever a visual bridge.
+     */
+    const dropEchoedPendingCommit = () => {
+      if (!pendingCommit) return;
+      const buf = term.buffer.active;
+      const advanced = buf.cursorX - pendingCommit.x;
+      if (buf.baseY + buf.cursorY !== pendingCommit.y || advanced < 0) {
+        clearPendingCommit();
+        return;
+      }
+      if (advanced === 0) return;
+      let columns = 0;
+      let retired = 0;
+      for (const char of pendingCommit.text) {
+        if (columns >= advanced) break;
+        const width = stringCellWidth(char);
+        if (width === null) {
+          clearPendingCommit();
+          return;
+        }
+        columns += width;
+        retired += char.length;
+      }
+      const rest = pendingCommit.text.slice(retired);
+      if (columns !== advanced || rest.length === 0) {
+        clearPendingCommit();
+        return;
+      }
+      pendingCommit = { text: rest, x: buf.cursorX, y: pendingCommit.y };
+    };
     const positionComposing = () => {
       if (!compositionView) return;
       const cell = getCellDims();
@@ -1665,13 +1801,70 @@ export function Terminal({
         );
       }
     };
-    const renderComposing = () => {
-      if (!compositionView || composingText.length === 0) return;
-      compositionTextView.textContent = composingText;
+    /** Paint `text` one cell-sized box per character. Zero-width characters
+     *  (combining marks) ride along with the character they modify. */
+    const renderComposingCells = (text: string) => {
+      const cellDims = getCellDims();
+      if (!cellDims) {
+        compositionTextView.textContent = text;
+        compositionTextView.style.marginRight = "";
+        compositionTextView.style.letterSpacing = "";
+        return;
+      }
+      const cells: HTMLElement[] = [];
+      for (const char of text) {
+        const columns = stringCellWidth(char);
+        if (columns === null) {
+          // Widths unavailable — plain text beats cramming the whole preview
+          // into one cell-sized box.
+          compositionTextView.textContent = text;
+          compositionTextView.style.marginRight = "";
+          compositionTextView.style.letterSpacing = "";
+          return;
+        }
+        const previous = cells[cells.length - 1];
+        if (columns === 0 && previous) {
+          previous.textContent = `${previous.textContent ?? ""}${char}`;
+          continue;
+        }
+        const cell = document.createElement("span");
+        cell.textContent = char;
+        cell.style.display = "inline-block";
+        cell.style.width = `${Math.max(1, columns) * cellDims.width}px`;
+        cells.push(cell);
+      }
+      // The cell width already carries the configured letter spacing; the
+      // composition view applies it again for the cloned tail runs, which
+      // need it. Neutralise it over the explicit boxes.
+      compositionTextView.style.letterSpacing = "0";
+      compositionTextView.replaceChildren(...cells);
+      // Negative margin pulls the caret — the next inline box — back inside
+      // the grid without disturbing the glyph spacing before it.
+      compositionTextView.style.marginRight = `${-CARET_CELL_GRID_INSET_PX}px`;
+    };
+    const renderComposing = (text: string) => {
+      if (!compositionView || text.length === 0) return;
+      // Lay the preview out on the terminal's cell grid. A Hangul syllable
+      // spends two columns but its glyph advance is usually narrower, so raw
+      // text bunches to the left and the caret lands short of where the real
+      // cursor will be. xterm solves this on its own rows with a per-span
+      // `letter-spacing`; giving each character a cell-sized box is the same
+      // idea and stays correct when the preview mixes widths, or holds several
+      // syllables at once because typing outran the echo.
+      //
+      // The inset then holds the caret just inside the boundary: dead-on reads
+      // as detached from the syllable. Tuned by eye against the app's default
+      // terminal font — `CARET_CELL_GRID_INSET_PX` is the knob.
+      renderComposingCells(text);
       // Until the PTY receives a committed composition, its buffer still has
       // the text under and after the cursor in the old position. Mirror that
       // tail after the preview so mid-line composition reads as insertion.
-      renderTerminalLineTail(term, container, compositionTailView);
+      renderTerminalLineTail(
+        term,
+        container,
+        compositionTailView,
+        lineTailCache,
+      );
       compositionCursorView.dataset.acornImeCursorStyle =
         cursorApplicationStyle ??
         useSettings.getState().settings.terminal.cursorStyle;
@@ -1709,24 +1902,61 @@ export function Terminal({
         compositionView.style.backgroundColor = background;
       }
     };
-    const hideComposing = () => {
-      composingText = "";
-      container.classList.remove(COMPOSING_CLASS);
+    /**
+     * Single owner of the overlay's visible state: the syllable still being
+     * composed, prefixed by any committed syllable whose echo has not landed
+     * yet. Empty on both counts tears the overlay down.
+     */
+    const syncComposing = (): void => {
       if (!compositionView) return;
-      compositionView.classList.remove("active");
-      compositionView.replaceChildren();
-    };
-    const showComposing = (text: string) => {
-      if (!compositionView) return;
+      dropEchoedPendingCommit();
+      const text = `${pendingCommit?.text ?? ""}${composingText}`;
       if (text.length === 0) {
-        hideComposing();
+        container.classList.remove(COMPOSING_CLASS);
+        compositionView.classList.remove("active");
+        compositionView.replaceChildren();
         return;
       }
-      composingText = text;
       container.classList.add(COMPOSING_CLASS);
-      renderComposing();
+      renderComposing(text);
       positionComposing();
       compositionView.classList.add("active");
+    };
+    /** Ends the live preview. The overlay survives while a committed syllable
+     *  is still in flight to the PTY. */
+    const hideComposing = () => {
+      composingText = "";
+      syncComposing();
+    };
+    const showComposing = (text: string) => {
+      composingText = text;
+      syncComposing();
+    };
+
+    const holdCommittedText = (text: string) => {
+      if (text.length === 0) return;
+      // Typing faster than the echo commits several syllables against the
+      // same cell. Whatever survives this call is still anchored there, so
+      // append rather than replace — dropping the earlier syllable would
+      // reopen the very gap this hold exists to cover.
+      dropEchoedPendingCommit();
+      const buf = term.buffer.active;
+      pendingCommit = {
+        text: `${pendingCommit?.text ?? ""}${text}`,
+        x: buf.cursorX,
+        y: buf.baseY + buf.cursorY,
+      };
+      // A PTY that never echoes (dead shell, password prompt) would otherwise
+      // leave the held text painted forever. The ceiling runs from the first
+      // held syllable: restarting it per commit would let continuous typing
+      // into a silent app extend the hold — and the hidden native cursor that
+      // comes with it — indefinitely.
+      if (pendingCommitTimer !== null) return;
+      pendingCommitTimer = window.setTimeout(() => {
+        pendingCommitTimer = null;
+        pendingCommit = null;
+        syncComposing();
+      }, PENDING_COMMIT_MAX_MS);
     };
 
     // WKWebView delivers a single Korean syllable across a mix of
@@ -1767,7 +1997,10 @@ export function Terminal({
         ? ta.value.slice(sentPrefix.length)
         : "";
       const data = tail || explicit || "";
-      if (data) sendUserInputToPty(data);
+      if (data) {
+        sendUserInputToPty(data);
+        holdCommittedText(data);
+      }
       if (ta) ta.value = "";
       sentPrefix = "";
       composing = false;
@@ -1889,7 +2122,9 @@ export function Terminal({
           }
           const committedEnd = value.length - newCharLen;
           if (committedEnd > sentPrefix.length) {
-            sendUserInputToPty(value.slice(sentPrefix.length, committedEnd));
+            const committed = value.slice(sentPrefix.length, committedEnd);
+            sendUserInputToPty(committed);
+            holdCommittedText(committed);
             sentPrefix = value.slice(0, committedEnd);
           }
           showComposing(value.slice(sentPrefix.length));
@@ -2559,12 +2794,36 @@ export function Terminal({
     // term.write); without this, the preview stays painted at the previous
     // cursor cell and visually appears one column to the left of the new
     // cursor until the user types again.
+    // xterm fires render/scroll/cursor-move separately for the same repaint,
+    // and each rebuild of the overlay measures the source row (a forced
+    // layout). Coalesce them into one recompute per frame.
+    let repositionPending = false;
+    const repositionComposingNow = () => {
+      repositionPending = false;
+      if (
+        disposed ||
+        !compositionView ||
+        !compositionView.classList.contains("active")
+      ) {
+        return;
+      }
+      syncComposing();
+    };
     const repositionComposing = () => {
+      // Row geometry only moves when xterm repaints or scrolls, which is
+      // exactly what got us here — keystroke-driven rebuilds in between reuse
+      // the measurements.
+      invalidateTerminalLineTailCache(lineTailCache);
+      if (repositionPending) return;
       if (!compositionView || !compositionView.classList.contains("active")) {
         return;
       }
-      renderComposing();
-      positionComposing();
+      // A microtask, not a frame: xterm already fires these from inside its
+      // own render callback, so deferring to the next frame would leave the
+      // overlay a frame behind a scroll. This still collapses the
+      // render/scroll/cursor-move burst for one repaint into a single pass.
+      repositionPending = true;
+      queueMicrotask(repositionComposingNow);
     };
     const renderDisposable = term.onRender(repositionComposing);
     // PTY output that arrives while the user is mid-composition can scroll
@@ -3285,6 +3544,8 @@ export function Terminal({
       try { cursorFullResetParserDisposable.dispose(); } catch { /* ignore */ }
       container.removeAttribute("data-acorn-cursor-application-override");
       container.classList.remove(COMPOSING_CLASS);
+      clearPendingCommit();
+      repositionPending = false;
       try { fitAddon.dispose(); } catch { /* ignore */ }
       try { serializeAddon.dispose(); } catch { /* ignore */ }
       term.dispose();

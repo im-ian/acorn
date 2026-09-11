@@ -166,6 +166,19 @@ function countToken(writes: string[], token: string): number {
   return n;
 }
 
+/** Text currently painted by the IME overlay ("" when it is torn down). */
+async function imeOverlayText(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const view = document.querySelector<HTMLElement>(
+      ".composition-view.active",
+    );
+    return (
+      view?.querySelector<HTMLElement>(".acorn-ime-composition-text")
+        ?.textContent ?? ""
+    );
+  });
+}
+
 async function emitPtyOutput(page: Page, text: string): Promise<void> {
   await expect
     .poll(() =>
@@ -179,6 +192,7 @@ async function emitPtyOutput(page: Page, text: string): Promise<void> {
   await page.evaluate((output) => {
     const w = window as unknown as {
       __imeOutputChannelId?: number;
+      __imeOutputIndexByChannel?: Record<number, number>;
       [key: string]: unknown;
     };
     const id = w.__imeOutputChannelId;
@@ -187,8 +201,15 @@ async function emitPtyOutput(page: Page, text: string): Promise<void> {
       | ((payload: { index: number; message: number[] }) => void)
       | undefined;
     if (!callback) throw new Error("IME output callback missing");
+    // Tauri's Channel reorders by `index` and parks anything out of sequence.
+    // The sequence is per channel: a terminal remount re-subscribes with a
+    // fresh one that expects to start at 0 again, so carrying a single global
+    // counter across it parks every later emit forever.
+    const sequences = (w.__imeOutputIndexByChannel ??= {});
+    const index = sequences[id] ?? 0;
+    sequences[id] = index + 1;
     callback({
-      index: 0,
+      index,
       message: Array.from(new TextEncoder().encode(output)),
     });
   }, text);
@@ -265,6 +286,10 @@ test.describe("terminal: IME (PR #104 regression)", () => {
       );
       return {
         childClasses: children.map((child) => child.className),
+        cellWidth: Number.parseFloat(
+          getComputedStyle(element).getPropertyValue("--acorn-ime-cell-width"),
+        ),
+        textWidth: textRect.width,
         markerBackground: marker.backgroundColor,
         markerHeight: Number.parseFloat(marker.height),
         markerWidth: Number.parseFloat(marker.width),
@@ -287,7 +312,11 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(cursorLayout.markerHeight).toBeGreaterThan(0);
     expect(cursorLayout.nativeCursorOpacity).toBe("0");
     expect(cursorLayout.cursorAnchorWidth).toBe(0);
-    expect(cursorLayout.cursorAfterText).toBeLessThan(0.5);
+    // "한" spends two terminal columns; the preview lays it out on that grid
+    // instead of collapsing to the glyph's own advance.
+    expect(cursorLayout.textWidth).toBeCloseTo(2 * cursorLayout.cellWidth, 0);
+    // The caret sits one inset inside the text box's trailing cell edge.
+    expect(cursorLayout.cursorAfterText).toBeCloseTo(2, 0);
     expect(cursorLayout.tailAfterCursor).toBeLessThan(0.5);
 
     await runIme(page, [
@@ -298,10 +327,197 @@ test.describe("terminal: IME (PR #104 regression)", () => {
         taValue: "한",
       },
     ]);
+    // The commit only sends the syllable; the overlay holds it until the echo
+    // hands ownership to the xterm buffer.
+    await emitPtyOutput(page, "한");
     await expect(page.locator(".acorn-terminal")).not.toHaveClass(
       /acorn-terminal-composing/,
     );
     await expect(imeCursor).toHaveCount(0);
+  });
+
+  test("the composing caret sits where the real cursor will land", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+    await emitPtyOutput(page, "> ");
+    await expect(page.locator(".xterm-rows")).toContainText(">");
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+    // Measure the caret as rendered, and again with the cell-grid width
+    // removed — the difference is what the preview would be off by if it laid
+    // the syllable out at the font's natural advance.
+    const composing = await page.evaluate(() => {
+      const text = document.querySelector<HTMLElement>(
+        ".acorn-ime-composition-text",
+      );
+      const caret = document.querySelector<HTMLElement>(
+        ".acorn-ime-composition-cursor",
+      );
+      if (!text || !caret) throw new Error("IME overlay nodes missing");
+      const snapped = caret.getBoundingClientRect().left;
+      const cellMarkup = text.innerHTML;
+      const inset = text.style.marginRight;
+      text.style.marginRight = "";
+      text.textContent = text.textContent ?? "";
+      const naturalAdvance = caret.getBoundingClientRect().left;
+      text.innerHTML = cellMarkup;
+      text.style.marginRight = inset;
+      return { snapped, naturalAdvance };
+    });
+
+    await runIme(page, [
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+    await emitPtyOutput(page, "한");
+    // Wait on the echo reaching the buffer, not on the overlay clearing — the
+    // hold also expires on its own ceiling, which would let the cursor be
+    // measured before it ever advanced.
+    await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
+      "> 한",
+    );
+    await expect(page.locator(".composition-view.active")).toHaveCount(0);
+
+    const realCursorLeft = await page.evaluate(() => {
+      const cursor = document.querySelector<HTMLElement>(
+        ".acorn-terminal .xterm-cursor",
+      );
+      if (!cursor) throw new Error("terminal cursor missing");
+      return cursor.getBoundingClientRect().left;
+    });
+
+    // Committing must barely shift the caret. The preview tracks the cell
+    // boundary the real cursor lands on, held 2px inside it so the marker
+    // still reads as attached to the syllable. Laying the preview out at the
+    // glyph's natural advance instead lands materially further short, so the
+    // caret would visibly jump outward on every echo.
+    expect(realCursorLeft - composing.snapped).toBeCloseTo(2, 0);
+    // Not asserted as a magnitude: how far short the raw glyph advance falls
+    // depends on the CJK font the test browser happens to resolve.
+    expect(composing.naturalAdvance).toBeLessThanOrEqual(composing.snapped);
+  });
+
+  test("committed syllables stay painted until the PTY echo lands", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+    await emitPtyOutput(page, "› ");
+    await expect(page.locator(".xterm-rows")).toContainText("›");
+
+    const commit = (syllable: string) => [
+      { type: "keydown" as const, key: "Process", keyCode: 229 },
+      {
+        type: "input" as const,
+        inputType: "insertCompositionText",
+        data: syllable,
+        taValue: syllable,
+      },
+      {
+        type: "input" as const,
+        inputType: "insertFromComposition",
+        data: syllable,
+        taValue: syllable,
+      },
+    ];
+
+    // Without the hold, a committed syllable exists in neither the overlay nor
+    // the buffer for a full IPC round trip — the "one syllable behind" gap.
+    await runIme(page, commit("안"));
+    expect(await imeOverlayText(page)).toBe("안");
+
+    // Typing faster than the echo must accumulate against the same cell, not
+    // replace the syllable already in flight.
+    await runIme(page, commit("녕"));
+    expect(await imeOverlayText(page)).toBe("안녕");
+    // Two held syllables span four columns. Laid out as raw text they would
+    // bunch to the left of the box and drift away from the committed text.
+    const heldLayout = await page.evaluate(() => {
+      const view = document.querySelector<HTMLElement>(".composition-view")!;
+      const text = view.querySelector<HTMLElement>(
+        ".acorn-ime-composition-text",
+      )!;
+      return {
+        width: text.getBoundingClientRect().width,
+        cellWidth: Number.parseFloat(
+          getComputedStyle(view).getPropertyValue("--acorn-ime-cell-width"),
+        ),
+      };
+    });
+    expect(heldLayout.width).toBeCloseTo(4 * heldLayout.cellWidth, 0);
+
+    // The echo advances the cursor off the committed cell: the buffer now owns
+    // the glyphs, so the overlay must let go instead of double-painting them.
+    await emitPtyOutput(page, "안녕");
+    await expect(page.locator(".composition-view.active")).toHaveCount(0);
+    await expect(page.locator(".xterm-rows")).toContainText("› 안녕");
+
+    const writes = await getWrites(page);
+    expect(countToken(writes, "안")).toBe(1);
+    expect(countToken(writes, "녕")).toBe(1);
+  });
+
+  test("a partial echo releases only the syllables the buffer took over", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+    await emitPtyOutput(page, "> ");
+    await expect(page.locator(".xterm-rows")).toContainText(">");
+
+    const commit = (syllable: string) => [
+      { type: "keydown" as const, key: "Process", keyCode: 229 },
+      {
+        type: "input" as const,
+        inputType: "insertCompositionText",
+        data: syllable,
+        taValue: syllable,
+      },
+      {
+        type: "input" as const,
+        inputType: "insertFromComposition",
+        data: syllable,
+        taValue: syllable,
+      },
+    ];
+
+    await runIme(page, commit("안"));
+    await runIme(page, commit("녕"));
+    expect(await imeOverlayText(page)).toBe("안녕");
+
+    // Only the first syllable comes back. Dropping the whole hold here would
+    // strand 녕 in neither the overlay nor the buffer until its own echo —
+    // exactly the gap the hold exists to close.
+    await emitPtyOutput(page, "안");
+    await expect.poll(() => imeOverlayText(page)).toBe("녕");
+    // `.xterm-rows` alone also matches the overlay's tail view while the
+    // composition is live.
+    await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
+      "> 안",
+    );
+
+    await emitPtyOutput(page, "녕");
+    await expect(page.locator(".composition-view.active")).toHaveCount(0);
+    await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
+      "> 안녕",
+    );
   });
 
   test("composition cursor follows an application-owned DECSCUSR shape", async ({
