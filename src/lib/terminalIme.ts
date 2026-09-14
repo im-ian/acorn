@@ -94,8 +94,14 @@ export function isHangulCompositionAdvance(previous: string, next: string): bool
  */
 export function shouldFlushReplacedHangul(previous: string, next: string): boolean {
   if (!previous || previous === next) return false;
-  if (isHangulDecomposition(previous, next)) return false;
   if (isHangulCompositionAdvance(previous, next)) return false;
+  if (next.length === 0) {
+    // Finished syllable being cleared (next composition's
+    // deleteCompositionText). Incomplete jamo is teardown, not a commit.
+    // Backspace vs next-syllable delete is the caller's imeDeleting check.
+    return !isHangulJamoOnly(previous);
+  }
+  if (isHangulDecomposition(previous, next)) return false;
   return true;
 }
 

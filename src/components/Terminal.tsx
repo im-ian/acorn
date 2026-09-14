@@ -1998,13 +1998,28 @@ export function Terminal({
     /** Ends the live preview. The overlay survives while a committed syllable
      *  is still in flight to the PTY. */
     const hideComposing = () => {
+      flushIfReplacedBy("");
       composingText = "";
+      flushedPreview = "";
       syncComposing();
       armPendingCommitTimeout();
     };
     const showComposing = (text: string) => {
+      if (text !== composingText) flushedPreview = "";
       composingText = text;
       syncComposing();
+    };
+
+    const flushIfReplacedBy = (next: string) => {
+      if (imeDeleting) return;
+      if (!shouldFlushReplacedHangul(composingText, next)) return;
+      if (composingText === flushedPreview) return;
+      const committed = normalizeHangulCommit(composingText);
+      if (!committed) return;
+      sendUserInputToPty(committed);
+      lastCommitted = committed;
+      holdCommittedText(committed);
+      flushedPreview = composingText;
     };
 
     const armPendingCommitTimeout = () => {
@@ -2060,6 +2075,7 @@ export function Terminal({
     // syllable becomes a no-op.
     let sentPrefix = "";
     let lastCommitted = "";
+    let flushedPreview = "";
     let lastKeyCode229 = false;
     let composing = false;
     // Still gates insertFromComposition / insertText cancel. Backspace
@@ -2125,6 +2141,7 @@ export function Terminal({
       if (data) {
         sendUserInputToPty(data);
         lastCommitted = data;
+        flushedPreview = composingText;
         // Jamo are preview-only in the overlay until a terminator confirms
         // them. They still go to the PTY so ㅋㅋㅋ commits; the hold is what
         // parks a leftover ㅇ on screen after backspace.
@@ -2217,6 +2234,9 @@ export function Terminal({
             if (imeDeleting) dropHoldMatchingPreview();
             composing = false;
             hideComposing();
+          } else {
+            flushIfReplacedBy(next);
+            showComposing(next);
           }
           ev.stopImmediatePropagation();
           return;
@@ -2232,15 +2252,7 @@ export function Terminal({
           if (ta) {
             if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
             const next = ta.value.slice(sentPrefix.length);
-            if (
-              !imeDeleting &&
-              shouldFlushReplacedHangul(composingText, next)
-            ) {
-              const committed = normalizeHangulCommit(composingText);
-              sendUserInputToPty(committed);
-              lastCommitted = committed;
-              holdCommittedText(committed);
-            }
+            flushIfReplacedBy(next);
             if (
               imeDeleting &&
               next &&
@@ -2395,15 +2407,7 @@ export function Terminal({
             if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
             const next =
               ta.value.slice(sentPrefix.length) || ev.data || "";
-            if (
-              !imeDeleting &&
-              shouldFlushReplacedHangul(composingText, next)
-            ) {
-              const committed = normalizeHangulCommit(composingText);
-              sendUserInputToPty(committed);
-              lastCommitted = committed;
-              holdCommittedText(committed);
-            }
+            flushIfReplacedBy(next);
             showComposing(next);
             ev.stopImmediatePropagation();
             return;

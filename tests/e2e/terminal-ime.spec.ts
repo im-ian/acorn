@@ -1495,6 +1495,83 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(writes).toContain("\x05");
   });
 
+  test("deleteCompositionText between syllables does not drop 사 from 사랑", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Production WKWebView: finish 사, deleteCompositionText clears the
+    // textarea, then 랑 starts. The empty delete must flush 사 or the
+    // PTY only ever sees even syllables (사랑하게 될꺼야 → 랑게꺼).
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertReplacementText",
+        data: "사",
+        taValue: "사",
+      },
+      {
+        type: "input",
+        inputType: "deleteCompositionText",
+        data: "",
+        taValue: "",
+      },
+      {
+        type: "input",
+        inputType: "insertReplacementText",
+        data: "랑",
+        taValue: "랑",
+      },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(countToken(writes, "사")).toBe(1);
+    expect(countToken(writes, "랑")).toBe(0);
+    expect(await imeOverlayText(page)).toContain("랑");
+  });
+
+  test("사랑하게 via replacement+delete sends every syllable", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    const syllable = (char: string, clearFirst: boolean) => [
+      ...(clearFirst
+        ? [
+            {
+              type: "input" as const,
+              inputType: "deleteCompositionText",
+              data: "",
+              taValue: "",
+            },
+          ]
+        : []),
+      { type: "keydown" as const, key: "Process", keyCode: 229 },
+      {
+        type: "input" as const,
+        inputType: "insertReplacementText",
+        data: char,
+        taValue: char,
+      },
+    ];
+
+    await runIme(page, [
+      ...syllable("사", false),
+      ...syllable("랑", true),
+      ...syllable("하", true),
+      ...syllable("게", true),
+    ]);
+
+    const writes = await getWrites(page);
+    expect(writes.join("")).toBe("사랑하");
+    expect(await imeOverlayText(page)).toContain("게");
+  });
+
   test("insertReplacementText 안 → 녕 flushes the previous syllable", async ({
     page,
     tauri,

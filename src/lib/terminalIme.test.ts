@@ -75,6 +75,12 @@ describe("shouldFlushReplacedHangul", () => {
     expect(shouldFlushReplacedHangul("안", "ㅇ")).toBe(false);
     expect(shouldFlushReplacedHangul("안", "안")).toBe(false);
     expect(shouldFlushReplacedHangul("", "안")).toBe(false);
+    expect(shouldFlushReplacedHangul("ㅎ", "")).toBe(false);
+  });
+
+  it("flushes a finished syllable when the textarea is cleared", () => {
+    expect(shouldFlushReplacedHangul("사", "")).toBe(true);
+    expect(shouldFlushReplacedHangul("랑", "")).toBe(true);
   });
 });
 
