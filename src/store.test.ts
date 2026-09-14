@@ -4031,14 +4031,6 @@ describe("reorderProjectSources", () => {
 });
 
 describe("createSession", () => {
-  // Each control-session test reaches into localStorage; clear it so
-  // an earlier test's "don't show again" flag does not leak forward.
-  const guideKey = "acorn:control-guide-dismissed-v1";
-
-  beforeEach(() => {
-    window.localStorage.removeItem(guideKey);
-  });
-
   it("defaults the kind to regular when the caller omits it", async () => {
     mockApi.createSession.mockResolvedValueOnce(session("new", REPO_A));
     await useAppStore.getState().createSession("foo", REPO_A);
@@ -4156,90 +4148,6 @@ describe("createSession", () => {
     expect(state.workspaceViewMode).toBe("kanban");
     expect(state.activeSessionId).toBe("chat");
     expect(state.terminalPopupSessionId).toBe("chat");
-  });
-
-  it("emits the guide event the first time a control session is created", async () => {
-    const events: Event[] = [];
-    const listener = (e: Event) => events.push(e);
-    window.addEventListener("acorn:show-control-guide", listener);
-    try {
-      mockApi.createSession.mockResolvedValueOnce(
-        session("ctl", REPO_A, { kind: "control" }),
-      );
-      await useAppStore
-        .getState()
-        .createSession("ctl", REPO_A, false, "control");
-      expect(events).toHaveLength(1);
-    } finally {
-      window.removeEventListener("acorn:show-control-guide", listener);
-    }
-  });
-
-  it("keeps a created control session when the guide preference is inaccessible", async () => {
-    const events: Event[] = [];
-    const listener = (event: Event) => events.push(event);
-    const originalGetItem = Storage.prototype.getItem;
-    const storageError = new DOMException("storage blocked", "SecurityError");
-    const getItem = vi
-      .spyOn(Storage.prototype, "getItem")
-      .mockImplementation(function (this: Storage, key: string) {
-        if (key === guideKey) throw storageError;
-        return originalGetItem.call(this, key);
-      });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    window.addEventListener("acorn:show-control-guide", listener);
-    try {
-      mockApi.createSession.mockResolvedValueOnce(
-        session("ctl", REPO_A, { kind: "control" }),
-      );
-
-      const created = await useAppStore
-        .getState()
-        .createSession("ctl", REPO_A, false, "control");
-
-      expect(created?.id).toBe("ctl");
-      expect(useAppStore.getState().error).toBeNull();
-      expect(events).toHaveLength(1);
-      expect(warn).toHaveBeenCalledWith(
-        "[store] control guide preference read failed",
-        storageError,
-      );
-    } finally {
-      window.removeEventListener("acorn:show-control-guide", listener);
-      getItem.mockRestore();
-      warn.mockRestore();
-    }
-  });
-
-  it("suppresses the guide event when the dismissed flag is set", async () => {
-    window.localStorage.setItem(guideKey, "1");
-    const events: Event[] = [];
-    const listener = (e: Event) => events.push(e);
-    window.addEventListener("acorn:show-control-guide", listener);
-    try {
-      mockApi.createSession.mockResolvedValueOnce(
-        session("ctl", REPO_A, { kind: "control" }),
-      );
-      await useAppStore
-        .getState()
-        .createSession("ctl", REPO_A, false, "control");
-      expect(events).toHaveLength(0);
-    } finally {
-      window.removeEventListener("acorn:show-control-guide", listener);
-    }
-  });
-
-  it("does not emit the guide event for regular sessions", async () => {
-    const events: Event[] = [];
-    const listener = (e: Event) => events.push(e);
-    window.addEventListener("acorn:show-control-guide", listener);
-    try {
-      mockApi.createSession.mockResolvedValueOnce(session("reg", REPO_A));
-      await useAppStore.getState().createSession("reg", REPO_A);
-      expect(events).toHaveLength(0);
-    } finally {
-      window.removeEventListener("acorn:show-control-guide", listener);
-    }
   });
 
   it("inserts the new tab right after the previously-active tab", async () => {

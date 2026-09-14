@@ -2,9 +2,8 @@
 //!
 //! Run from inside an Acorn PTY: the spawning code in `commands::pty_spawn`
 //! injects Acorn identity/path environment so this binary can locate the
-//! server and identify itself without flags. Commands require a control source
-//! session created explicitly by Acorn; repository code in a regular session
-//! cannot promote itself.
+//! server and identify itself without flags. Any live Acorn session in the
+//! same project may drive siblings.
 //!
 //! Exits non-zero on protocol errors so it composes cleanly in shell scripts;
 //! the exit code maps the server's `ErrorCode` so callers can branch on the
@@ -42,8 +41,8 @@ const IPC_IO_POLL_INTERVAL: Duration = Duration::from_millis(5);
     about = "Talk to a running Acorn app from inside an Acorn terminal.",
     long_about = "acorn-ipc speaks to the in-app server over private local \
                   IPC. Acorn terminals export session identity and endpoint \
-                  paths into their PTY environment. Acorn must create the \
-                  terminal as a control session before commands are authorized."
+                  paths into their PTY environment. Any live Acorn session in \
+                  the same project may drive siblings."
 )]
 struct Cli {
     /// Print responses as raw JSON instead of the default table/text. Useful
@@ -72,11 +71,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Confirm that this Acorn terminal already has control authority.
+    /// Confirm that this Acorn terminal is authorized for IPC.
     PromoteSelf,
-    /// Print the Acorn control-session context an agent should load.
+    /// Print the Acorn session IPC context an agent should load.
     Context,
-    /// List the sessions in your project, including this control session.
+    /// List the sessions in your project, including this session.
     ListSessions,
     /// List frontend workspaces in your project.
     ListWorkspaces,
@@ -106,8 +105,8 @@ enum Command {
         /// command across two lines and never run it.
         #[arg(long)]
         enter: bool,
-        /// Allow touching a user-owned session or one owned by another control
-        /// session. Use only for direct user requests.
+        /// Accepted for compatibility. Sibling actions in the same project
+        /// no longer require this flag.
         #[arg(long = "allow-foreign")]
         allow_foreign: bool,
     },
@@ -119,8 +118,8 @@ enum Command {
         /// Max bytes to fetch from the session's tail buffer (server cap: 4 MiB).
         #[arg(long, default_value_t = 65_536)]
         max_bytes: usize,
-        /// Allow reading a user-owned session or one owned by another control
-        /// session. Use only for direct user requests.
+        /// Accepted for compatibility. Sibling actions in the same project
+        /// no longer require this flag.
         #[arg(long = "allow-foreign")]
         allow_foreign: bool,
     },
@@ -149,12 +148,12 @@ enum Command {
         /// UUID of the target session.
         #[arg(short = 't', long = "target")]
         target: String,
-        /// Allow focusing a user-owned session or one owned by another control
-        /// session. Use only for direct user requests.
+        /// Accepted for compatibility. Sibling actions in the same project
+        /// no longer require this flag.
         #[arg(long = "allow-foreign")]
         allow_foreign: bool,
     },
-    /// Close this control session and every session it owns. The server
+    /// Close this session and every session it owns. The server
     /// acknowledges the request before terminating the caller's PTY tree.
     CloseSelf,
     /// Kill a session (close the PTY, drop the session from state).
@@ -162,8 +161,8 @@ enum Command {
         /// UUID of the target session.
         #[arg(short = 't', long = "target")]
         target: String,
-        /// Allow killing a user-owned session or one owned by another control
-        /// session. Use only for direct user requests.
+        /// Accepted for compatibility. Sibling actions in the same project
+        /// no longer require this flag.
         #[arg(long = "allow-foreign")]
         allow_foreign: bool,
     },
@@ -705,12 +704,12 @@ fn render(response: &Response, json: bool) -> ExitCode {
         } => {
             if *already_control {
                 println!(
-                    "session {} is already a control session",
+                    "session {} is already authorized for acorn-ipc",
                     terminal_safe_field(session_id)
                 );
             } else {
                 println!(
-                    "promoted session {} to control session",
+                    "session {} is authorized for acorn-ipc",
                     terminal_safe_field(session_id)
                 );
             }

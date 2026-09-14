@@ -141,7 +141,7 @@ test.describe("workspace canvas mode", () => {
         name: "New control session",
         exact: true,
       }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(
       page.getByRole("menuitem", { name: "New chat session", exact: true }),
     ).toBeVisible();

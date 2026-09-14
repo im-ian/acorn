@@ -1261,7 +1261,6 @@ describe("SettingsModal font controls", () => {
 
     expect(bodyText).toContain("Reset all shortcuts");
     expect(bodyText).toContain("Open command palette");
-    expect(bodyText).toContain("New control session");
     expect(bodyText).toContain("Latest needs-input tab");
     expect(bodyText).toContain("Focus pane to the left");
     expect(bodyText).toContain("Focus pane to the right");

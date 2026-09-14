@@ -55,10 +55,6 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
   <img width="1600" height="1000" alt="Acorn PR 상세 모달" src="./assets/screenshots/pr-modal.png" />
   <br/>
   <sub>PR 상세 모달 — 체크 상태 + 변경 사항 + 머지 옵션</sub>
-  <br/><br/>
-  <img width="1200" height="786" alt="Acorn Control session 데모" src="./assets/screenshots/control-session.gif" />
-  <br/>
-  <sub>Control session — `acorn-ipc`로 다른 세션 조작</sub>
 </div>
 
 ---
@@ -75,7 +71,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 - Pane과 Kanban 보기를 프로젝트별로 전환·기억하고 새 프로젝트의 기본 보기 설정
 - 세션 상태와 작업 트리 diff, PR 상태를 조합해 **Idle / Working / Waiting / Review / Done**으로 자동 분류
 - 세션 검색·정렬, 단계별 체류 시간과 stall 표시, 수동 완료 처리, 열 너비 조절
-- 카드에서 터미널·채팅 팝오버 열기, 세션 이름 변경, PR 상세 확인, 새 일반·worktree·chat·control·graph·loop 세션 생성
+- 카드에서 터미널·채팅 팝오버 열기, 세션 이름 변경, PR 상세 확인, 새 일반·worktree·chat·graph·loop 세션 생성
 
 ### 🧭 Canvas 워크스페이스
 - 라이브 터미널·채팅 세션을 자유롭게 배치하고 드래그·크기 조절
@@ -133,10 +129,10 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 - 기본 ON. Settings → Sessions 에서 상태 확인 + Restart / Clear inactive / Quit 제어
 - 상태 표시줄 아이콘 드롭다운으로 한눈에 확인
 
-### 🛰️ Control session — 에이전트가 다른 세션 조작
-- 한 세션 안의 AI가 같은 프로젝트의 다른 세션을 직접 조작 (입력 전송, 화면 읽기, 새 세션 생성, 선택, 종료)
-- 시작: `⌘⌥⇧T`(macOS) / `Ctrl+Alt+Shift+T`(Windows·Linux) 또는 커맨드 팔레트 → **New control session**
-- 자세한 사용법 + 보안 모델: [`docs/CONTROL_SESSIONS.md`](docs/CONTROL_SESSIONS.md)
+### 🛰️ Session IPC — 에이전트가 다른 세션 조작
+- 어떤 Acorn 세션 안의 AI든 같은 프로젝트의 다른 세션을 직접 조작 (입력 전송, 화면 읽기, 새 세션 생성, 선택, 종료)
+- 터미널에서 `acorn-ipc list-sessions` / `send-keys` / `read-buffer` 로 사용
+- 자세한 사용법 + 보안 모델: [`docs/SESSION_IPC.md`](docs/SESSION_IPC.md)
 - 플랫폼: macOS / Windows / Linux
 
 ### 🎯 우측 패널
@@ -171,7 +167,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 | Action | Shortcut |
 | --- | --- |
 | 커맨드 팔레트 | `⌘P` |
-| 새 세션 / isolated / control | `⌘T` / `⌘⌥T` / `⌘⌥⇧T` |
+| 새 세션 / isolated | `⌘T` / `⌘⌥T` |
 | 새 프로젝트 | `⌘⇧N` |
 | 보기 내 검색 | `⌘F` |
 | Pane 분할 (세로/가로) | `⌘D` / `⌘⇧D` |

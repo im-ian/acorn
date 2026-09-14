@@ -1,7 +1,7 @@
 //! `acorn-ipc` IPC server wiring.
 //!
 //! The wire protocol, socket-path resolver, bundled-CLI PATH helpers,
-//! and control-session primer live in the standalone `acorn-ipc` crate
+//! and session IPC primer live in the standalone `acorn-ipc` crate
 //! so the CLI binary can link against them without dragging in the
 //! host app's module graph.
 //!

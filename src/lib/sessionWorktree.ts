@@ -71,8 +71,6 @@ export function sessionRemovalCascadeIds(
   target: Session,
 ): Set<string> {
   const ids = new Set<string>([target.id]);
-  if (target.kind !== "control") return ids;
-
   const frontier = [target.id];
   while (frontier.length > 0) {
     const ownerId = frontier.pop();

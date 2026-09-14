@@ -12,8 +12,7 @@ function basename(path: string): string {
  *
  * Isolated sessions follow a `{repo}-worktree-{city}` convention because
  * each one maps to a linked git worktree at `.acorn/worktrees/<name>/`.
- * Control sessions get a `control-` prefix so they sort into their own
- * namespace. Regular sessions use a stable placeholder tab name and get a
+ * Regular sessions use a stable placeholder tab name and get a
  * numeric suffix starting at `-1` on collision.
  *
  * The generated isolated name is still only a candidate; the Rust backend's
@@ -23,7 +22,7 @@ function basename(path: string): string {
 export function suggestSessionName(
   repoPath: string,
   existing: Session[],
-  kind: SessionKind = "regular",
+  _kind: SessionKind = "regular",
   isolated: boolean = false,
 ): string {
   const taken = new Set(existing.map((s) => s.name));
@@ -38,16 +37,7 @@ export function suggestSessionName(
     while (taken.has(`${candidate}-${n}`)) n++;
     return `${candidate}-${n}`;
   }
-  if (kind !== "control") {
-    return suggestDefaultSessionName(existing);
-  }
-  const base = `control-${basename(repoPath)}`;
-  let candidate = base;
-  let n = 2;
-  while (taken.has(candidate)) {
-    candidate = `${base}-${n++}`;
-  }
-  return candidate;
+  return suggestDefaultSessionName(existing);
 }
 
 export function suggestDefaultSessionName(existing: Session[]): string {

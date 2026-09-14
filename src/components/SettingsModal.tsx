@@ -216,10 +216,6 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
         labelKey: "settings.shortcuts.items.newIsolatedSession.label",
       },
       {
-        id: "newControlSession",
-        labelKey: "settings.shortcuts.items.newControlSession.label",
-      },
-      {
         id: "addProject",
         labelKey: "settings.shortcuts.items.addProject.label",
       },

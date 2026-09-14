@@ -364,7 +364,7 @@ export function StatusBar() {
         {/* Left: aggregate counters about acorn itself — total sessions and
             the active session's lifecycle status. The IPC and daemon
             buttons sit first so the user can recover from a dead
-            control-session socket or a stopped daemon without leaving
+            IPC socket or a stopped daemon without leaving
             the main view. */}
         <ServicesStatusButton />
         {showSessionActivity ? <SessionNotificationsButton /> : null}

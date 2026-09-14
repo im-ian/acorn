@@ -7,7 +7,7 @@
 //! 1. Spawn a new PTY when asked.
 //! 2. Tell the app what PTYs it currently holds (so the app can reconcile
 //!    its DB on boot and offer adoption for daemon-owned live sessions).
-//! 3. Scope `acornd` CLI ops by project (a control session in project A
+//! 3. Scope `acornd` CLI ops by project (a session in project A
 //!    cannot see sessions from project B).
 //!
 //! Anything else (timestamps for ordering, last-message previews, etc.)

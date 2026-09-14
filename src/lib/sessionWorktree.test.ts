@@ -104,7 +104,6 @@ describe("worktree deletion policy", () => {
   it("allows worktree deletion when only control-owned workers share it", () => {
     const target = session({
       id: "control",
-      kind: "control",
       isolated: true,
       worktree_path: "/repo/.acorn/worktrees/solo",
     });
@@ -172,7 +171,7 @@ describe("worktree deletion policy", () => {
 
 describe("sessionRemovalCascadeIds", () => {
   it("includes nested control-owned descendants", () => {
-    const control = session({ id: "control", kind: "control" });
+    const control = session({ id: "control" });
     const worker = session({
       id: "worker",
       owner: { kind: "control", session_id: "control" },

@@ -58,8 +58,8 @@ notification-only updater를 기본 경계로 사용한다. OS publisher 인증�
 
 1. Renderer → Tauri host: invoke payload는 길이·형식·등록 프로젝트 범위를 다시
    검증한다. WebView 자체를 filesystem/command 권한 주체로 보지 않는다.
-2. Host → PTY/agent: 제한된 환경만 주입한다. Control session에만 IPC capability를
-   부여하고 passive AI에는 모든 `ACORN_*`를 제거한다.
+2. Host → PTY/agent: 제한된 환경만 주입한다. 모든 세션 PTY에 IPC identity를
+   부여하고, 호출은 live session·capability·PID ancestry·project scope로 묶는다.
 3. PTY → IPC/daemon: socket path/UUID만으로 신뢰하지 않고 kernel peer PID,
    executable, process ancestry, live session, capability, project scope를 결합한다.
 4. Filesystem → renderer: descriptor로 연 regular file을 bounded snapshot으로 복사한
@@ -113,7 +113,7 @@ flowchart LR
 | --- | --- |
 | 프로젝트 및 worktree 파일 | 권한 범위, 기밀성, 무결성, symlink 안전성 |
 | 사용자 shell/PTY | 명령 무결성, 세션 격리, 가용성 |
-| Control session capability | 비밀성, 세션·프로세스·프로젝트 바인딩, 폐기 가능성 |
+| Session IPC capability | 비밀성, 세션·프로세스·프로젝트 바인딩, 폐기 가능성 |
 | Daemon auth token/socket/lock | 단일 인스턴스, endpoint authenticity, 전역 권한 격리 |
 | GitHub tokens/계정 | argv·로그·캐시 비노출, 정확한 repo scope |
 | Transcript/chat/state/scrollback | bounded parsing, atomicity, lifecycle freshness |
@@ -158,10 +158,10 @@ flowchart LR
 
 ## Top abuse paths
 
-1. **Repo process → Control session 사칭 → 다른 세션 명령 실행**
+1. **Repo process → 세션 사칭 → 다른 세션 명령 실행**
 
-   UUID만으로는 부족하고 Control kind, live PTY, kernel peer ancestry, capability,
-   project scope를 모두 만족해야 한다. 일반 세션 self-promotion은 불가하다.
+   UUID만으로는 부족하고 live PTY, kernel peer ancestry, capability,
+   project scope를 모두 만족해야 한다. 소켓 밖 같은 사용자 프로세스는 거절된다.
 
 2. **가짜 `acornd` socket → 앱의 세션/입력 탈취**
 

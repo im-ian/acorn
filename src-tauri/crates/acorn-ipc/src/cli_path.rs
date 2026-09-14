@@ -1,11 +1,10 @@
-//! Bundled `acorn-ipc` CLI discovery for control-session PTYs.
+//! Bundled `acorn-ipc` CLI discovery for Acorn PTYs.
 //!
 //! Acorn ships a copy of `acorn-ipc` next to the main app binary via
-//! Tauri's `externalBin` mechanism. For control sessions, we prepend that
-//! directory onto the PTY's `PATH` so the agent inside can just type
-//! `acorn-ipc list-sessions` instead of resorting to an absolute path or
-//! relying on a user-installed shim. Regular (non-control) sessions never
-//! receive this addition — they stay sandboxed from the IPC surface.
+//! Tauri's `externalBin` mechanism. Every session PTY prepends that
+//! directory onto `PATH` so the agent inside can type
+//! `acorn-ipc list-sessions` instead of an absolute path or a
+//! user-installed shim.
 //!
 //! In `tauri dev` the same `current_exe().parent()` resolves to
 //! `src-tauri/target/debug/`, where

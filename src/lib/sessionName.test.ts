@@ -57,12 +57,6 @@ describe("suggestSessionName", () => {
     );
   });
 
-  it("prefixes control sessions to keep them in their own namespace", () => {
-    expect(suggestSessionName("/Users/x/acorn", [], "control")).toBe(
-      "control-acorn",
-    );
-  });
-
   it("uses `{repo}-worktree-{city}` for isolated sessions", () => {
     mockRandomUuid("00000000-0000-4000-8000-000000000000");
 

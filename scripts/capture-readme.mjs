@@ -7,7 +7,7 @@ const SCENES = [
   "canvas",
   "pr-modal",
   "chat-session",
-  "control-session",
+  "session-ipc",
   "staged-diff",
   "agent-history",
   "work-summary",

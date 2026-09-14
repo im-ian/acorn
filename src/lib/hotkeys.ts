@@ -14,10 +14,6 @@ export const DEFAULT_HOTKEYS = {
   // so the literal-letter form never fires. The `KeyT` form falls back
   // to `event.code`, which Option does not perturb.
   newIsolatedSession: "$mod+Alt+KeyT",
-  // "Control session" — extends the new-session family. Future PRs add the
-  // `acorn-ipc` CLI so this kind of session can drive sibling sessions; the
-  // hotkey lives next to the other terminal-creation bindings for symmetry.
-  newControlSession: "$mod+Alt+Shift+KeyT",
   addProject: "$mod+Shift+n",
   findInView: "$mod+f",
   renameItem: "F2",

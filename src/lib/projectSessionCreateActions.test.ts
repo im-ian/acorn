@@ -16,7 +16,6 @@ describe("PROJECT_SESSION_CREATE_ACTIONS", () => {
       terminal: "newSession",
       isolated: "newIsolatedSession",
       chat: undefined,
-      control: "newControlSession",
     });
   });
 
@@ -35,6 +34,6 @@ describe("PROJECT_SESSION_CREATE_ACTIONS", () => {
       PROJECT_SESSION_CREATE_ACTIONS.filter(
         (action) => action.flow === "direct",
       ),
-    ).toHaveLength(4);
+    ).toHaveLength(3);
   });
 });

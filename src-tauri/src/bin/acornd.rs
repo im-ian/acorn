@@ -299,10 +299,7 @@ fn run_list_sessions() -> ExitCode {
             }
             println!("{:36}  {:6}  {:6}  name", "id", "kind", "state");
             for s in sessions {
-                let kind = match s.kind {
-                    daemon::protocol::SessionKind::Regular => "reg",
-                    daemon::protocol::SessionKind::Control => "ctrl",
-                };
+                let kind = "reg";
                 let state = if s.alive { "alive" } else { "dead" };
                 println!(
                     "{:36}  {:6}  {:6}  {}",

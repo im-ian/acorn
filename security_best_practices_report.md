@@ -38,7 +38,7 @@ PTY·AI CLI 연동, 파일·트랜스크립트 처리, GitHub 연동, 설치·�
 
 ### SBP-001 — 로컬 IPC의 세션 사칭과 권한 상승
 
-- 이전 위험: 같은 사용자로 실행되는 프로세스가 세션 UUID만 알면 제어 세션으로
+- 이전 위험: 같은 사용자로 실행되는 프로세스가 세션 UUID만 알면
   자신을 승격하거나 다른 프로젝트 세션에 명령을 보낼 수 있었다.
 - 등급: Critical.
 - 상태: **Resolved**, 동일 UID 디버거/주입 한계는 SBP-013에 별도 기록.
@@ -49,9 +49,9 @@ PTY·AI CLI 연동, 파일·트랜스크립트 처리, GitHub 연동, 설치·�
     (`src-tauri/src/ipc/server.rs:490-522`).
   - 커널이 보고한 peer PID, 실제 실행 파일, PTY 루트의 프로세스 조상을 함께
     검증한다 (`src-tauri/src/ipc/server.rs:237-292`).
-  - 일반 세션의 self-promotion을 제거하고 Acorn UI가 만든 Control 세션만 명령
-    권한을 가진다. 대상 조회·명령은 같은 프로젝트로 제한된다
-    (`src-tauri/src/ipc/server.rs:550-613`, `docs/CONTROL_SESSIONS.md:316-355`).
+  - 세션 UUID만으로는 부족하고 live session, per-PTY capability, kernel peer
+    ancestry, project scope를 함께 요구한다. 대상 조회·명령은 같은 프로젝트로 제한된다
+    (`src-tauri/src/ipc/server.rs:550-613`, `docs/SESSION_IPC.md`).
   - 요청/응답 프레임과 연결 수, 읽기/쓰기 시간을 제한했다
     (`src-tauri/crates/acorn-ipc/src/proto.rs:23-28`,
     `src-tauri/crates/acorn-ipc/src/bin/acorn-ipc.rs:499-588`).

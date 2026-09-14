@@ -1,20 +1,11 @@
-//! Generates the "control session primer" — a short system-prompt blurb
-//! that teaches an agent invoked inside a control session about the
+//! Generates the session IPC primer — a short system-prompt blurb that
+//! teaches an agent invoked inside an Acorn terminal about the
 //! `acorn-ipc` CLI, its env vars, and the commands it can issue.
 //!
-//! The primer is delivered two ways at PTY spawn time:
-//!
-//!   1. A `<cwd>/.acorn-control.md` marker file written unconditionally
-//!      for every control session. Agents that read project-local docs
-//!      (Claude Code follows CLAUDE.md, Aider follows .aider config, …)
-//!      can discover it; humans `cat`-ing the file get the same content.
-//!      This is the primary delivery channel because Acorn always spawns the
-//!      selected native shell — the user invokes the agent from inside.
-//!   2. Per-agent CLI flag injection, kept as a dormant fallback: if
-//!      the selected shell itself ever resolves to a recognised agent (Claude
-//!      Code's `--append-system-prompt`, llm CLI's `-s`) the primer is
-//!      threaded into argv at spawn time. For ordinary shells the
-//!      `AgentFlavor::Unknown` branch is a no-op.
+//! Agents reload this text with `acorn-ipc context`. A dormant fallback
+//! injects the same text into recognised agent CLIs (`--append-system-prompt`
+//! / `llm -s`) if `$SHELL` itself ever resolves to those binaries. For
+//! ordinary shells that branch is a no-op.
 //!
 //! The primer deliberately contains no runtime paths or names. Repository and
 //! socket paths can contain attacker-controlled text, and interpolating them
@@ -47,15 +38,15 @@ impl AgentFlavor {
     }
 }
 
-/// Build the static control-session primer. Kept short on purpose — every byte
+/// Build the static session IPC primer. Kept short on purpose — every byte
 /// goes into every agent call's system prompt. Runtime identity and endpoint
 /// values stay in the Acorn-owned environment instead of being interpolated
 /// into trusted instructions.
 pub fn primer() -> &'static str {
-    "You are running inside an Acorn \"control session\". You can orchestrate \
-         other terminal sessions in the same project via the `acorn-ipc` \
-         CLI. The user does not need to know that `acorn-ipc` exists; treat it as \
-         your local control tool.\n\
+    "You are running inside an Acorn session. You can orchestrate other \
+         terminal sessions in the same project via the `acorn-ipc` CLI. The \
+         user does not need to know that `acorn-ipc` exists; treat it as your \
+         local control tool.\n\
          \n\
          Your session id: $ACORN_SESSION_ID\n\
          IPC socket:      $ACORN_IPC_SOCKET\n\
@@ -68,34 +59,30 @@ pub fn primer() -> &'static str {
          interpret that as a new Acorn sibling terminal session in this project \
          unless they clearly mean a new chat conversation.\n\
          - Sessions you create with `acorn-ipc new-session` are owned by this \
-         controller by default. Only operate on sessions where `list-sessions` \
-         shows MINE=yes unless the user explicitly asks you to touch another \
-         session.\n\
+         session by default (`owned_by_me`). Any sibling in this project is \
+         reachable; `owned_by_me` is metadata, not an access gate.\n\
          - To create a session in this exact Acorn workspace, pass \
          `--workspace current`. To target a path explicitly, pass \
          `--workspace <absolute path>`.\n\
          - To discover named workspaces first, run `acorn-ipc list-workspaces --json` \
          and pass both the returned `workspace_path` and `id` to \
          `new-session --workspace <path> --workspace-id <id>`.\n\
-         - Do not repurpose, send input to, read from, focus, or kill user-owned \
-         sessions or sessions owned by another control session unless the user \
-         made that direct request; then pass `--allow-foreign`.\n\
          - Use `close-self` only as the final action after the requested work, \
          verification, delivery, and completion report are all finished. It \
-         closes this controller and every session it owns.\n\
+         closes this session and every session it owns.\n\
          \n\
          Available commands (project-scoped — other projects are not reachable):\n\
          \n\
-           acorn-ipc promote-self                       # idempotent; already promoted\n\
+           acorn-ipc promote-self                       # idempotent compatibility probe\n\
            acorn-ipc context                             # print this context\n\
            acorn-ipc list-sessions                       # see siblings + self\n\
            acorn-ipc list-workspaces                     # see frontend workspaces\n\
            acorn-ipc new-session   <name> [--workspace current|PATH] [--workspace-id ID] [--isolated] [--owner me|user]\n\
-           acorn-ipc send-keys     -t <uuid> --data '…' --enter [--allow-foreign]\n\
-           acorn-ipc read-buffer   -t <uuid> [--max-bytes N] [--allow-foreign]\n\
-           acorn-ipc select-session -t <uuid> [--allow-foreign]\n\
-           acorn-ipc close-self                         # final action; closes this controller\n\
-           acorn-ipc kill-session  -t <uuid> [--allow-foreign]\n\
+           acorn-ipc send-keys     -t <uuid> --data '…' --enter\n\
+           acorn-ipc read-buffer   -t <uuid> [--max-bytes N]\n\
+           acorn-ipc select-session -t <uuid>\n\
+           acorn-ipc close-self                         # final action; closes this session and its owned workers\n\
+           acorn-ipc kill-session  -t <uuid>\n\
          \n\
          The newer `acornd` CLI talks to the same project graph via the\n\
          background daemon (currently rolling out). `acornd list-sessions`,\n\
@@ -104,7 +91,7 @@ pub fn primer() -> &'static str {
          Tips:\n\
          - Pass `--json` to `acorn-ipc` for machine-parseable output.\n\
          - Prefer delegating CPU-bound or long-running work to sibling sessions \
-         instead of running it serially here; this seat is the orchestrator.\n\
+         instead of running it serially here.\n\
          - `read-buffer` after a `send-keys` may need a brief wait — the sibling \
          is a real PTY, not a synchronous RPC."
 }
@@ -112,8 +99,7 @@ pub fn primer() -> &'static str {
 /// Augment `(command, args)` with the agent-specific flag that injects the
 /// primer into the spawned agent's system prompt. Returns the modified
 /// `args` vector. For unknown flavors the args are returned unchanged —
-/// those agents still see the env vars and the `.acorn-control.md`
-/// marker, just not an in-system-prompt nudge.
+/// those agents still see the env vars, just not an in-system-prompt nudge.
 pub fn inject_primer_args(flavor: AgentFlavor, args: Vec<String>, primer: &str) -> Vec<String> {
     match flavor {
         AgentFlavor::Claude => prepend(args, &["--append-system-prompt", primer]),

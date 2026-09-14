@@ -83,7 +83,6 @@ describe("session title helpers", () => {
         }),
       ),
     ).toBe(true);
-    expect(canGenerateSessionTitle(session({ kind: "control" }))).toBe(false);
     expect(
       canGenerateSessionTitle(
         session({ owner: { kind: "control", session_id: "control-1" } }),
@@ -108,9 +107,6 @@ describe("session title helpers", () => {
         }),
       ),
     ).toBe(true);
-    expect(canForceGenerateSessionTitle(session({ kind: "control" }))).toBe(
-      false,
-    );
     expect(
       canForceGenerateSessionTitle(
         session({ owner: { kind: "control", session_id: "control-1" } }),
@@ -180,9 +176,11 @@ describe("session title helpers", () => {
         }),
       ),
     ).toBe(false);
-    expect(canRegenerateSessionTitle(session({ kind: "control" }))).toBe(
-      false,
-    );
+    expect(
+      canRegenerateSessionTitle(
+        session({ owner: { kind: "control", session_id: "control-1" } }),
+      ),
+    ).toBe(false);
   });
 
   it("uses the global automatic title setting for terminal sessions and always allows chat sessions", () => {
