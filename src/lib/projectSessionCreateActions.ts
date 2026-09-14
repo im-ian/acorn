@@ -10,8 +10,7 @@ export type ProjectSessionCreateActionId =
   | "graph"
   | "terminal"
   | "isolated"
-  | "chat"
-  | "control";
+  | "chat";
 
 interface ProjectSessionCreateActionBase {
   id: ProjectSessionCreateActionId;
@@ -95,24 +94,12 @@ const CHAT_ACTION = {
   hotkeyId: undefined,
 } as const satisfies DirectProjectSessionCreateAction;
 
-const CONTROL_ACTION = {
-  flow: "direct",
-  id: "control",
-  labelKey: "sidebar.actions.newControlSession",
-  ariaKey: "sidebar.aria.newControlSessionInProject",
-  isolated: false,
-  kind: "control",
-  mode: "terminal",
-  hotkeyId: "newControlSession",
-} as const satisfies DirectProjectSessionCreateAction;
-
 export const PROJECT_SESSION_CREATE_ACTIONS = [
   GOAL_ACTION,
   GRAPH_ACTION,
   TERMINAL_ACTION,
   ISOLATED_ACTION,
   CHAT_ACTION,
-  CONTROL_ACTION,
 ] as const satisfies readonly ProjectSessionCreateAction[];
 
 export type ProjectSessionCreateMenuItem =
@@ -126,6 +113,4 @@ export const PROJECT_SESSION_CREATE_MENU = [
   { type: "action", action: TERMINAL_ACTION },
   { type: "action", action: ISOLATED_ACTION },
   { type: "action", action: CHAT_ACTION },
-  { type: "separator" },
-  { type: "action", action: CONTROL_ACTION },
 ] as const satisfies readonly ProjectSessionCreateMenuItem[];

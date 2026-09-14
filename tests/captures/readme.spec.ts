@@ -11,7 +11,7 @@ const DEFAULT_SCENES = [
   "canvas",
   "pr-modal",
   "chat-session",
-  "control-session",
+  "session-ipc",
   "staged-diff",
   "agent-history",
   "work-summary",
@@ -188,8 +188,8 @@ const scenes: CaptureScene[] = [
     },
   },
   {
-    name: "control-session",
-    file: "control-session.png",
+    name: "session-ipc",
+    file: "session-ipc.png",
     prepare: async (page) => {
       const controlPane = page.locator('[data-pane-body="control-left"]');
       const uiPane = page.locator('[data-pane-body="control-right-top"]');
@@ -281,7 +281,7 @@ const scenes: CaptureScene[] = [
         );
       });
       await expect(page.getByRole("dialog")).toBeVisible();
-      await expect(page.getByText("New control session")).toBeVisible();
+      await expect(page.getByText("New isolated session")).toBeVisible();
     },
   },
 ];
@@ -361,7 +361,7 @@ async function bootCapturePage(page: Page, sceneName: SceneName) {
   const expectedSidebarSession =
     sceneName === "chat-session"
       ? /Chat handoff review/
-      : sceneName === "control-session"
+      : sceneName === "session-ipc"
         ? /control-orchestrator/
         : sceneName === "kanban"
           ? /kanban-capture/
@@ -512,7 +512,7 @@ function appWorkspace(sceneName: SceneName) {
     };
   }
 
-  if (sceneName === "control-session") {
+  if (sceneName === "session-ipc") {
     return {
       layout: {
         kind: "split",
@@ -1430,8 +1430,8 @@ function captureMockHandlersSource(sceneName: SceneName) {
       }
       if (id === "control-orchestrator") {
         return [
-          "$ acorn-ipc promote --self",
-          "promoted control-orchestrator to control session",
+          "$ acorn-ipc promote-self",
+          "session control-orchestrator is already authorized for acorn-ipc",
           "",
           "$ acorn-ipc list-sessions",
           "ui-worker       running   codex",
@@ -1773,7 +1773,7 @@ function seedSessions(sceneName: SceneName) {
     ];
   }
 
-  if (sceneName === "control-session") {
+  if (sceneName === "session-ipc") {
     const controlOwner = {
       kind: "control" as const,
       session_id: "control-orchestrator",
@@ -1788,7 +1788,6 @@ function seedSessions(sceneName: SceneName) {
           status: "working",
           agent: "codex",
           position: 0,
-          kind: "control",
         },
       ),
       session("ui-worker", "ui-worker", REPOS.app, "feature/pane-dnd", {

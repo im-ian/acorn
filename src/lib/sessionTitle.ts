@@ -42,10 +42,7 @@ export function canGenerateSessionTitle(session: Session): boolean {
 }
 
 export function canForceGenerateSessionTitle(session: Session): boolean {
-  return (
-    (session.kind ?? "regular") === "regular" &&
-    (session.owner?.kind ?? "user") === "user"
-  );
+  return (session.owner?.kind ?? "user") === "user";
 }
 
 export function canRegenerateSessionTitle(session: Session): boolean {

@@ -985,8 +985,7 @@ function KanbanBoard({
 type KanbanActionEvent =
   | "acorn:new-session"
   | "acorn:new-isolated-session"
-  | "acorn:new-chat-session"
-  | "acorn:new-control-session";
+  | "acorn:new-chat-session";
 
 const KANBAN_CREATE_ACTION_EVENTS: Record<
   DirectProjectSessionCreateAction["id"],
@@ -995,7 +994,6 @@ const KANBAN_CREATE_ACTION_EVENTS: Record<
   terminal: "acorn:new-session",
   isolated: "acorn:new-isolated-session",
   chat: "acorn:new-chat-session",
-  control: "acorn:new-control-session",
 };
 
 function dispatchKanbanAction(action: ProjectSessionCreateAction) {
@@ -1024,8 +1022,6 @@ function kanbanSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
       return <GitBranch size={12} />;
     case "chat":
       return <MessageSquareText size={12} />;
-    case "control":
-      return <Bot size={12} />;
   }
 }
 
@@ -1730,12 +1726,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
             >
               {worktreeName}
             </span>
-            {session.kind === "control" ? (
-              <>
-                <span className="text-fg-muted/45">|</span>
-                <Bot size={10} className="shrink-0 text-accent" />
-              </>
-            ) : null}
             {dwellLabel ? (
               <span
                 className="ml-auto flex shrink-0 items-center gap-1 pl-1"
@@ -2923,12 +2913,7 @@ function WorkspaceSessionIcon({
   className?: string;
 }) {
   const agentProvider = resolveSessionAgentProvider(session);
-  const fallbackKind =
-    session.kind === "control"
-      ? "control"
-      : session.mode === "chat"
-        ? "chat"
-        : "terminal";
+  const fallbackKind = session.mode === "chat" ? "chat" : "terminal";
   const isMedium = size === "md";
   const primaryClassName = cn(
     isMedium ? "size-6 rounded-md" : "size-5 rounded",
@@ -2967,8 +2952,6 @@ function WorkspaceSessionIcon({
             provider={agentProvider}
             className={isMedium ? "size-3.5" : "size-3"}
           />
-        ) : fallbackKind === "control" ? (
-          <Bot size={isMedium ? 14 : 12} />
         ) : fallbackKind === "chat" ? (
           <MessageSquareText size={isMedium ? 14 : 12} />
         ) : (

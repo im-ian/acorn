@@ -630,7 +630,7 @@ test.describe("sidebar: project lifecycle", () => {
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
         title_source: "manual",
-        kind: "control",
+        kind: "regular",
         mode: "terminal",
         owner: { kind: "user" },
         position: 0,
@@ -660,10 +660,8 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(tooltip).toContainText("Status");
     await expect(tooltip).toContainText("Ready");
     await expect(tooltip).toContainText("Agent turn complete");
-    await expect(tooltip).toContainText("Kind");
-    await expect(tooltip).toContainText("Control session");
     await expect(tooltip).toContainText("Isolated worktree");
-    await expect(tooltip.locator("svg")).toHaveCount(6);
+    await expect(tooltip.locator("svg")).toHaveCount(5);
   });
 
   test("session context menu copies transcript paths and surfaces clipboard denial", async ({
@@ -1385,7 +1383,7 @@ test.describe("sidebar: project lifecycle", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "New control session", exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(page.getByRole("menu")).toContainText("Session");
     await page
       .getByRole("menuitem", { name: "New chat session", exact: true })
@@ -1443,7 +1441,7 @@ test.describe("sidebar: project lifecycle", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "New control session", exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await page
       .getByRole("menuitem", {
         name: "New worktree session",
@@ -2599,7 +2597,7 @@ test.describe("sidebar: project lifecycle", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "New control session", exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await page.keyboard.press("Escape");
 
     await dragBetween(page, worktreeSession, root);
@@ -3044,9 +3042,6 @@ test.describe("sidebar: project lifecycle", () => {
       "New Graph session",
       "New chat session",
     ]);
-    expect(menuLabels[6]).toMatch(
-      /^New control session(?:⌥⇧⌘T|Ctrl\+Alt\+Shift\+T)$/,
-    );
     await expect(
       page.getByRole("menuitem", { name: "New session" }),
     ).toHaveCount(0);
@@ -3064,7 +3059,7 @@ test.describe("sidebar: project lifecycle", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "New control session" }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(
       page.getByRole("menuitem", { name: "New workspace", exact: true }),
     ).toBeVisible();
@@ -3422,7 +3417,7 @@ test.describe("sidebar: project lifecycle", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
-        kind: "control",
+        kind: "regular",
         owner: { kind: "user" },
         position: null,
         in_worktree: true,
@@ -3437,7 +3432,7 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(chats.getByLabel("worktree", { exact: true })).toBeVisible();
     await expect(
       chats.getByLabel("control session", { exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(
       chats.getByRole("button", { name: /codex/i }),
     ).toBeVisible();

@@ -314,10 +314,10 @@
         "description": "acornd デーモンは長時間実行される PTY を所有しているため、端末セッションは Acorn の再起動後も存続します。"
       },
       "controlCli": {
-        "label": "制御セッション (acorn-ipc CLI)",
+        "label": "acorn-ipc CLI",
         "errorHint": "インストールステータスをクエリできませんでした。",
         "loadingHint": "インストール ステータスを読み込んでいます...",
-        "hint": "コントロール セッションは、acorn-ipc CLI を介して兄弟にコマンドをディスパッチできます。 CLI はアプリに同梱されています。任意の端末から使用するには、それを $PATH にシンボリックリンクします。",
+        "hint": "どの Acorn 端末からも acorn-ipc CLI で兄弟セッションにコマンドを送れます。 CLI はアプリに同梱されています。任意の端末から使用するには、それを $PATH にシンボリックリンクします。",
         "windowsHint": "同梱の acorn-ipc CLI は Acorn ターミナル内の PATH に自動的に追加されます。システム全体の shim は必要ありません。",
         "bundledBinary": "バンドルされたバイナリ",
         "found": "見つかりました",
@@ -598,9 +598,6 @@
         },
         "newIsolatedSession": {
           "label": "新しい分離セッション"
-        },
-        "newControlSession": {
-          "label": "新しいコントロールセッション"
         },
         "addProject": {
           "label": "プロジェクトの追加"
@@ -949,7 +946,6 @@
       "shellEnvironmentReloaded": "シェル環境がリロードされました。新しいセッションを開いて適用します。",
       "shellEnvironmentReloadFailed": "シェル環境のリロードに失敗しました。",
       "preventSleepSyncFailedPrefix": "スリープ防止設定を適用できませんでした:",
-      "controlGuidePreferenceSaveFailed": "コントロールセッションガイドの設定を保存できませんでした。",
       "notificationClickRegistrationFailedPrefix": "通知クリック処理を有効にできませんでした:",
       "notificationClickActivationFailedPrefix": "クリックした通知から Acorn を開けませんでした:",
       "agentResumeProbeFailed": "以前のエージェント会話を確認できませんでした:",
@@ -1046,7 +1042,7 @@
       },
       "ipc": {
         "label": "IPCサーバー",
-        "description": "コントロールセッション <-> アプリソケット"
+        "description": "セッション <-> アプリソケット"
       },
       "daemon": {
         "label": "ドングリデーモン",
@@ -1113,7 +1109,6 @@
         "newSession": "新しいセッション",
         "newWorktreeSession": "新しいワークツリー",
         "newChatSession": "新しいチャット",
-        "newControlSession": "制御",
         "markAsDone": "完了としてマークする",
         "restoreFromDone": "完了から復元する"
       },
@@ -1281,7 +1276,6 @@
       "selectExistingProject": "既存のプロジェクトを選択します",
       "selectSourceFolder": "ソースフォルダーを選択",
       "selectIsolatedRepository": "git リポジトリ (分離されたワークツリー) を選択します",
-      "selectControlDirectory": "ディレクトリを選択します (コントロール セッション)",
       "selectDirectory": "ディレクトリを選択してください"
     },
     "projects": {
@@ -1301,7 +1295,6 @@
       "newChatSession": "新しいチャットセッション",
       "newAutonomousGoalSession": "新しい Loop セッション",
       "newGraphSession": "新しい Graph セッション",
-      "newControlSession": "新しいコントロールセッション",
       "newProjectFolder": "新しいワークスペース",
       "newProjectFolderWithWorktree": "新しいワークツリーワークスペース",
       "addProjectSourceFolder": "ソースフォルダーを追加",
@@ -1366,12 +1359,10 @@
       "newIsolatedSessionInProject": "このプロジェクトの新しいワークツリー セッション",
       "newIsolatedSessionInProjectFolder": "このワークスペースの新しいワークツリー セッション",
       "newChatSessionInProject": "このプロジェクトの新しいチャット セッション",
-      "newControlSessionInProject": "このプロジェクトの新しいコントロール セッション",
       "goalSession": "Loop セッション",
       "dragToReorderSession": "ドラッグしてセッションを並べ替えます",
       "localTerminalSessions": "ローカル端末セッション",
       "worktree": "ワークツリー",
-      "controlSession": "コントロールセッション",
       "chatSession": "チャットセッション",
       "generatingSessionTitle": "セッションタイトルの生成",
       "notificationsSilenced": "通知をサイレントにしました"
@@ -1419,8 +1410,6 @@
       "openPullRequest": "オープンPR",
       "processes": "プロセス",
       "status": "ステータス",
-      "kind": "種類",
-      "controlSession": "コントロールセッション",
       "isolatedWorktree": "分離されたワークツリー"
     }
   },
@@ -1632,7 +1621,6 @@
     },
     "aria": {
       "worktree": "ワークツリー",
-      "controlSession": "コントロールセッション",
       "chatSession": "チャットセッション",
       "goalSession": "Loop セッション",
       "workSummary": "作品概要",
@@ -2166,7 +2154,7 @@
       "isolatedWorktree": "これは分離されたワークツリーです。",
       "linkedWorktree": "このセッションは、リンクされた git ワークツリーを使用しています。",
       "ownedSessionsWillBeRemovedPrefix": "これも削除されます",
-      "ownedSessionsWillBeRemovedSuffix": "コントロールが所有するセッション。",
+      "ownedSessionsWillBeRemovedSuffix": "所有するセッション。",
       "deleteWorktreeQuestion": "セッションのみを削除しますか、それともディスクからワークツリーも削除しますか?",
       "filesIn": "のファイル",
       "willNotBeTouched": "触れられないだろう。",
@@ -2388,16 +2376,6 @@
       "hoursAgo": "1時間前",
       "dayAgo": "1日前",
       "daysAgo": "数日前"
-    },
-    "controlSessionGuide": {
-      "title": "コントロールセッション",
-      "subtitle": "このプロジェクトの他のセッションを駆動するターミナル",
-      "bodyIntro": "コントロール セッションは、単一の場所から端末間で作業を調整するための今後の方法であり、同じプロジェクト内の兄弟にコマンドをディスパッチする必要があるエージェントやスクリプトにとって便利です。",
-      "pointKeystrokes": "このプロジェクト内の任意のセッションにキーストロークを送信します。",
-      "pointListSessions": "他のセッションとそのステータスをリストします。",
-      "pointReadOutput": "ターゲット セッションから最近の出力を読み取ります。",
-      "createdPrefix": "コントロール セッションを作成しました。の",
-      "createdSuffix": "これを駆動する CLI は次のアップデートで同梱されます。それまでは、このターミナルは通常のシェルのように動作し始めます。"
     },
     "folderPermissionWarmup": {
       "title": "今すぐフォルダーのアクセス許可を確認しますか?",
@@ -2623,7 +2601,6 @@
     "commands": {
       "newSession": "新しいセッション",
       "newIsolatedSession": "新しい分離セッション",
-      "newControlSession": "新しいコントロールセッション",
       "newChatSession": "新しいチャットセッション",
       "newAutonomousGoalSession": "新しい Loop セッション",
       "newGraphSession": "新しい Graph セッション",
@@ -2690,8 +2667,7 @@
       "disabled": "デーモンが無効になっています - セッションは従来のインプロセス パスによって管理されます。",
       "notRunning": "デーモンが実行されていません。",
       "loading": "読み込み中...",
-      "empty": "ライブセッションは追跡されません。",
-      "controlSession": "コントロールセッション"
+      "empty": "ライブセッションは追跡されません。"
     },
     "actions": {
       "killPty": "PTYを殺す",

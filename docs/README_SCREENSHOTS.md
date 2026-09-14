@@ -29,7 +29,7 @@ Available scenes:
 - `canvas` -> `canvas.png`
 - `pr-modal` -> `pr-modal.png`
 - `chat-session` -> `chat-session.png`
-- `control-session` -> `control-session.png`
+- `session-ipc` -> `session-ipc.png`
 - `staged-diff` -> `staged-diff.png`
 - `agent-history` -> `agent-history.png`
 - `work-summary` -> `work-summary.png`

@@ -40,8 +40,8 @@ pub struct Hello {
     pub protocol_version_major: u32,
     pub protocol_version_minor: u32,
     pub role: ClientRole,
-    /// Source session id when this connection originates from inside a
-    /// control session's PTY (set via `ACORN_SESSION_ID`). Absent for app
+    /// Source session id when this connection originates from inside an
+    /// Acorn session PTY (set via `ACORN_SESSION_ID`). Absent for app
     /// connections.
     #[serde(default)]
     pub source_session_id: Option<Uuid>,
@@ -203,13 +203,12 @@ pub struct SpawnSpec {
     pub pixel_width: u16,
     #[serde(default)]
     pub pixel_height: u16,
-    /// Session classification (regular / control). Mirrors the
-    /// `SessionKind` enum in `acorn_session`. The daemon preserves it
-    /// in metadata so reattach can re-augment the env on respawn.
+    /// Session classification. Mirrors `SessionKind` in `acorn_session`.
+    /// Preserved for wire compatibility; it is not an authorization gate.
     #[serde(default)]
     pub kind: SessionKind,
     /// Repository path the session belongs to. The daemon uses this to
-    /// scope `acornd` CLI ops (control sessions can only see siblings in
+    /// scope `acornd` CLI ops (a session can only see siblings in
     /// the same project) without pulling in the app's full project model.
     #[serde(default)]
     pub repo_path: Option<std::path::PathBuf>,

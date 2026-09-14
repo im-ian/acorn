@@ -575,7 +575,12 @@ pub fn load_sessions_with_status() -> AppResult<(Vec<Session>, bool)> {
     };
 
     match serde_json::from_slice::<Vec<Session>>(&bytes) {
-        Ok(sessions) => {
+        Ok(mut sessions) => {
+            for session in &mut sessions {
+                if session.kind == acorn_session::SessionKind::Control {
+                    session.kind = acorn_session::SessionKind::Regular;
+                }
+            }
             tracing::info!(count = sessions.len(), "loaded sessions from disk");
             Ok((sessions, true))
         }

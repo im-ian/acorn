@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::daemon_bridge::BridgeError;
 use crate::state::AppState;
-use acorn_daemon::protocol::{AgentKind, ErrorCode, SessionKind};
+use acorn_daemon::protocol::{AgentKind, ErrorCode};
 
 /// JSON shape for `daemon_status` — what the StatusBar indicator and the
 /// Settings → Background sessions panel render.
@@ -166,10 +166,7 @@ pub fn daemon_list_sessions(
         .map(|s| DaemonSessionSummary {
             id: s.id.to_string(),
             name: s.name,
-            kind: match s.kind {
-                SessionKind::Regular => "regular".into(),
-                SessionKind::Control => "control".into(),
-            },
+            kind: "regular".into(),
             alive: s.alive,
             cwd: s.cwd.map(|p| p.display().to_string()),
             repo_path: s.repo_path.map(|p| p.display().to_string()),
@@ -267,10 +264,7 @@ pub fn daemon_adopt_session(
         .map_err(|error| error.to_string())?;
     let branch = summary.branch.clone().unwrap_or_default();
 
-    let kind = match summary.kind {
-        acorn_daemon::protocol::SessionKind::Regular => acorn_session::SessionKind::Regular,
-        acorn_daemon::protocol::SessionKind::Control => acorn_session::SessionKind::Control,
-    };
+    let kind = acorn_session::SessionKind::Regular;
 
     let now = chrono::Utc::now();
     let session = acorn_session::Session {

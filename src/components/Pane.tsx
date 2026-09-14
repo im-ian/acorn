@@ -1,5 +1,4 @@
 import {
-  Bot,
   BarChart3,
   Bell,
   BellOff,
@@ -1756,13 +1755,6 @@ function TabItem({
               aria-label={paneT(t, "pane.aria.worktree")}
             />
           )}
-          {showMinimized || session?.kind !== "control" ? null : (
-            <Bot
-              size={10}
-              className="pointer-events-none shrink-0 text-accent"
-              aria-label={paneT(t, "pane.aria.controlSession")}
-            />
-          )}
           {showMinimized || !sessionSilenced ? null : (
             <span
               className="pointer-events-none inline-flex shrink-0 text-fg-muted"
@@ -1893,12 +1885,6 @@ function WorkspaceTabDragGhost({
         <GitBranch
           size={10}
           className="pointer-events-none shrink-0 text-fg-muted"
-        />
-      )}
-      {minimized || session?.kind !== "control" ? null : (
-        <Bot
-          size={10}
-          className="pointer-events-none shrink-0 text-accent"
         />
       )}
     </div>,

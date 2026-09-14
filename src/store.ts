@@ -24,7 +24,6 @@ import type {
   SessionStatus,
 } from "./lib/types";
 import { commandRequestsWorktreeAdoption } from "./lib/worktreeAdoption";
-import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideModal";
 import {
   type Direction,
   type LayoutNode,
@@ -119,16 +118,6 @@ let activeStatusPollIds = new Set<string>();
 let refreshSessionsSeq = 0;
 let sessionPlacementSeq = 0;
 
-function shouldShowControlSessionGuide(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return !window.localStorage.getItem(CONTROL_GUIDE_DISMISSED_KEY);
-  } catch (error) {
-    console.warn("[store] control guide preference read failed", error);
-    return true;
-  }
-}
-
 function sessionProcessSummariesEqual(
   a: readonly SessionProcessSummary[],
   b: readonly SessionProcessSummary[],
@@ -142,6 +131,11 @@ function sessionProcessSummariesEqual(
   );
 }
 
+function coerceLegacySessionKind(session: Session): Session {
+  if (session.kind !== "control") return session;
+  return { ...session, kind: "regular" };
+}
+
 function mergeRefreshedSessionRuntimeState(
   refreshedSessions: Session[],
   currentSessions: Session[],
@@ -151,7 +145,7 @@ function mergeRefreshedSessionRuntimeState(
   );
   return refreshedSessions.map((refreshed) => {
     const current = currentById.get(refreshed.id);
-    if (!current) return refreshed;
+    if (!current) return coerceLegacySessionKind(refreshed);
 
     const merged = { ...refreshed };
     const hasOwn = <K extends keyof Session>(session: Session, key: K) =>
@@ -184,7 +178,7 @@ function mergeRefreshedSessionRuntimeState(
     ) {
       merged.branch = current.branch;
     }
-    return merged;
+    return coerceLegacySessionKind(merged);
   });
 }
 
@@ -3137,6 +3131,7 @@ export const useAppStore = create<AppStateModel>()(
                 cwdPath,
               );
       }
+      created = coerceLegacySessionKind(created);
       createdId = created.id;
       const assignedFolderId = placement?.projectFolderId;
       const assignCreatedToFolder = (reconcile: boolean) => {
@@ -3223,11 +3218,6 @@ export const useAppStore = create<AppStateModel>()(
             useSettings.getState().settings.interface
               .openKanbanTerminalOnSessionCreate);
         if (shouldOpenSurface) get().openTerminalPopup(created.id);
-      }
-      // First-run guidance for control sessions. Gated on a localStorage
-      // flag so power users only see it once. App.tsx hosts the modal.
-      if (kind === "control" && shouldShowControlSessionGuide()) {
-        window.dispatchEvent(new CustomEvent("acorn:show-control-guide"));
       }
       return created;
     } catch (e) {

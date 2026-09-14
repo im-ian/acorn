@@ -4453,7 +4453,7 @@ fn folder_permission_error(
 /// Inspect the runtime environment for the `acorn-ipc` CLI: where the
 /// app-bundled binary lives, whether it exists yet, and whether the user
 /// has already installed a shim into one of the standard `$PATH` locations.
-/// Used by the Sessions tab's "Control sessions" section to render an
+/// Used by the Sessions tab's "acorn-ipc CLI" section to render an
 /// install hint with a copyable shell command.
 #[tauri::command]
 pub fn get_acorn_ipc_status(state: State<'_, AppState>) -> AcornIpcStatus {
@@ -4577,7 +4577,7 @@ pub fn trash_agent_history_transcript(
 }
 
 /// Stop the running IPC listener (if any) and spawn a fresh one. Used by
-/// the Settings → Control sessions "Restart" button when the socket has
+/// the Settings → Sessions "Restart" button when the socket has
 /// gone stale (e.g. socket file removed under the app's feet). The signal
 /// → poll → exit cycle takes up to `ACCEPT_POLL_INTERVAL_MS`; we wait
 /// twice that before rebinding so the previous listener has dropped its
@@ -4877,6 +4877,9 @@ fn reconcile_stale_worktrees(state: &AppState) {
 /// store. Called on every Session leaving the backend so the frontend
 /// sees fresh values without a second round-trip.
 fn enrich_session(mut s: Session) -> Session {
+    if s.kind == SessionKind::Control {
+        s.kind = SessionKind::Regular;
+    }
     if let Ok(branch) = worktree::current_branch(&s.worktree_path) {
         s.branch = branch;
     }
@@ -5299,11 +5302,7 @@ fn create_session_inner(
     let branch = worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
     let mut session = Session::new(name, repo.clone(), worktree_path, branch, isolated, kind);
     session.project_scoped = project_scoped;
-    session.auto_title_enabled = Some(auto_title_enabled_for_new_session(
-        kind,
-        mode,
-        agent_provider,
-    ));
+    session.auto_title_enabled = Some(auto_title_enabled_for_new_session(mode, agent_provider));
     session.agent_provider = agent_provider;
     session.mode = mode;
     session.goal = goal;
@@ -5604,11 +5603,10 @@ pub async fn get_goal_agent_capabilities(
 }
 
 fn auto_title_enabled_for_new_session(
-    kind: SessionKind,
     mode: SessionMode,
     agent_provider: Option<SessionAgentProvider>,
 ) -> bool {
-    kind == SessionKind::Regular && (mode == SessionMode::Chat || agent_provider.is_some())
+    mode == SessionMode::Chat || agent_provider.is_some()
 }
 
 #[tauri::command]
@@ -7491,11 +7489,9 @@ async fn terminate_session_runtime_blocking(state: AppState, id: Uuid) -> AppRes
 pub(crate) fn session_removal_cascade(state: &AppState, session: &Session) -> Vec<Session> {
     let mut sessions = vec![session.clone()];
     let mut seen = HashSet::from([session.id]);
-    if session.kind == SessionKind::Control {
-        for owned in state.sessions.list_control_owned_descendants(session.id) {
-            if seen.insert(owned.id) {
-                sessions.push(owned);
-            }
+    for owned in state.sessions.list_control_owned_descendants(session.id) {
+        if seen.insert(owned.id) {
+            sessions.push(owned);
         }
     }
     sessions
@@ -7944,7 +7940,7 @@ pub fn rename_session(
     let current = state.sessions.get(&id)?;
     if matches!(current.owner, SessionOwner::Control { .. }) {
         return Err(AppError::Other(
-            "control-session owned tabs cannot be renamed".to_string(),
+            "sessions owned by another session cannot be renamed".to_string(),
         ));
     }
     let native_session = (sync_agent_session_titles
@@ -8896,11 +8892,10 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
     let resolved_command = shell.program.to_string_lossy().into_owned();
     let shell_kind = shell.kind;
     let resolved_args = shell.args;
-    // Inject Acorn session identity and CLI reachability. Privileged IPC
-    // commands remain server-gated to sessions Acorn created as Control;
-    // repository code inside a regular terminal cannot self-promote.
+    // Inject Acorn session identity and CLI reachability. IPC commands are
+    // server-gated to a live source session plus PTY ancestry and capability.
     let mut effective_env = validate_pty_caller_env(env)?;
-    let mut primed_args = resolved_args;
+    let primed_args = resolved_args;
 
     // PTY children get the same SHELL/HOME their dotfiles expect to
     // see. portable-pty inherits these from Acorn's own env in
@@ -9053,32 +9048,20 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
 
     let agent_hooks = state.agent_hooks.lock().clone();
     inject_agent_hook_env(&mut effective_env, &session, agent_hooks.as_deref());
-    if session.kind == SessionKind::Control {
+    effective_env
+        .entry("ACORN_SESSION_ID".to_string())
+        .or_insert_with(|| session.id.to_string());
+    // Daemon socket for the `acornd` CLI. Coexists with
+    // `ACORN_IPC_SOCKET`: scripts that call `acorn-ipc` reach
+    // the in-process server, while `acornd <subcommand>`
+    // reaches the daemon. The two transports manage different
+    // session graphs today (daemon vs in-process); they
+    // converge when `pty_spawn` itself routes through the
+    // daemon.
+    if let Ok(daemon_sock) = acorn_daemon::paths::control_socket_path() {
         effective_env
-            .entry("ACORN_SESSION_ID".to_string())
-            .or_insert_with(|| session.id.to_string());
-        // Daemon socket for the `acornd` CLI. Coexists with
-        // `ACORN_IPC_SOCKET`: scripts that call `acorn-ipc` reach
-        // the in-process server, while `acornd <subcommand>`
-        // reaches the daemon. The two transports manage different
-        // session graphs today (daemon vs in-process); they
-        // converge when `pty_spawn` itself routes through the
-        // daemon.
-        if let Ok(daemon_sock) = acorn_daemon::paths::control_socket_path() {
-            effective_env
-                .entry("ACORN_DAEMON_SOCKET".to_string())
-                .or_insert_with(|| daemon_sock.display().to_string());
-        }
-        // Drop the primer in a worktree-local marker file so whichever
-        // agent the user invokes inside the shell can read the IPC
-        // protocol. `inject_primer_args` is a no-op while `$SHELL` is
-        // an ordinary shell (`AgentFlavor::Unknown`) and only takes
-        // effect on the rare configuration where `$SHELL` itself
-        // resolves to a recognised agent binary.
-        let primer = acorn_ipc::primer::primer();
-        let flavor = acorn_ipc::primer::AgentFlavor::detect(&resolved_command);
-        primed_args = acorn_ipc::primer::inject_primer_args(flavor, primed_args, primer);
-        write_control_marker(&cwd, primer);
+            .entry("ACORN_DAEMON_SOCKET".to_string())
+            .or_insert_with(|| daemon_sock.display().to_string());
     }
 
     // Daemon path — when the killswitch is on, route exclusively through
@@ -9169,9 +9152,8 @@ fn spawn_via_daemon<R: Runtime + 'static>(
     }
 
     // Resolve the session row's persisted daemon metadata. Missing
-    // session is treated as a new spawn — control sessions get their
-    // own env/argv augmentation up-stack, so this branch only handles
-    // the daemon ↔ stream wiring.
+    // session is treated as a new spawn — env/argv augmentation happens
+    // up-stack, so this branch only handles the daemon ↔ stream wiring.
     let session = state.sessions.get(&id).ok();
     let session_kind = session
         .as_ref()
@@ -9299,44 +9281,6 @@ fn daemon_spawn_name_for_session(session: Option<&Session>, id: Uuid) -> String 
         return name.to_string();
     }
     id.to_string()
-}
-
-/// Drop a `<cwd>/.acorn-control.md` marker every time a control session
-/// PTY spawns. The file is small (<2 KiB) and overwritten on each spawn
-/// so the substituted session-id / socket-path always match the running
-/// PTY. Best-effort: a write failure is logged but does not abort spawn,
-/// since the env vars carry enough state for `acorn-ipc` itself; this
-/// marker exists so whichever agent the user later invokes can read the
-/// protocol from a project-local file.
-fn write_control_marker(cwd: &std::path::Path, primer: &str) {
-    let path = cwd.join(".acorn-control.md");
-    let body = format!(
-        "<!-- generated by Acorn on every control-session PTY spawn. \
-         Safe to commit-ignore. -->\n\n# Control session\n\n{primer}\n",
-    );
-    if let Err(err) = replace_control_marker(cwd, &path, body.as_bytes()) {
-        tracing::warn!(
-            path = %path.display(),
-            error = %err,
-            "failed to write .acorn-control.md marker",
-        );
-    }
-}
-
-fn replace_control_marker(cwd: &Path, path: &Path, body: &[u8]) -> io::Result<()> {
-    // The destination is repository-controlled and may already be a symlink or
-    // hard link. Write to an unpredictable create-new file in the same
-    // directory, then atomically replace the directory entry so the marker
-    // write never follows that link to another file.
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".acorn-control.md.")
-        .suffix(".tmp")
-        .tempfile_in(cwd)?;
-    temporary.write_all(body)?;
-    temporary
-        .persist(path)
-        .map_err(|persist_error| persist_error.error)?;
-    Ok(())
 }
 
 #[tauri::command]
@@ -16848,25 +16792,14 @@ mod tests {
     #[test]
     fn auto_title_is_enabled_only_for_new_agent_and_chat_sessions() {
         assert!(!auto_title_enabled_for_new_session(
-            SessionKind::Regular,
             SessionMode::Terminal,
             None,
         ));
         assert!(auto_title_enabled_for_new_session(
-            SessionKind::Regular,
             SessionMode::Terminal,
             Some(SessionAgentProvider::Codex),
         ));
-        assert!(auto_title_enabled_for_new_session(
-            SessionKind::Regular,
-            SessionMode::Chat,
-            None,
-        ));
-        assert!(!auto_title_enabled_for_new_session(
-            SessionKind::Control,
-            SessionMode::Chat,
-            Some(SessionAgentProvider::Codex),
-        ));
+        assert!(auto_title_enabled_for_new_session(SessionMode::Chat, None,));
     }
 
     #[test]
@@ -18059,72 +17992,6 @@ mod tests {
             .path()
             .join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl"))
             .exists());
-    }
-
-    #[test]
-    fn control_marker_is_atomically_created_and_replaced() {
-        let directory = tempfile::tempdir().expect("temporary control cwd");
-        let marker = directory.path().join(".acorn-control.md");
-
-        super::write_control_marker(directory.path(), "first primer");
-        assert!(std::fs::read_to_string(&marker)
-            .expect("read first marker")
-            .contains("first primer"));
-
-        super::write_control_marker(directory.path(), "second primer");
-        let body = std::fs::read_to_string(&marker).expect("read replaced marker");
-        assert!(body.contains("second primer"));
-        assert!(!body.contains("first primer"));
-        assert!(std::fs::read_dir(directory.path())
-            .expect("list control cwd")
-            .flatten()
-            .all(|entry| !entry.file_name().to_string_lossy().ends_with(".tmp")));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn control_marker_replacement_does_not_follow_a_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let directory = tempfile::tempdir().expect("temporary control cwd");
-        let outside = tempfile::NamedTempFile::new().expect("outside sentinel");
-        std::fs::write(outside.path(), "outside sentinel").expect("write sentinel");
-        let marker = directory.path().join(".acorn-control.md");
-        symlink(outside.path(), &marker).expect("symlink marker");
-
-        super::write_control_marker(directory.path(), "trusted primer");
-
-        assert_eq!(
-            std::fs::read_to_string(outside.path()).expect("read sentinel"),
-            "outside sentinel"
-        );
-        assert!(std::fs::symlink_metadata(&marker)
-            .expect("marker metadata")
-            .file_type()
-            .is_file());
-        assert!(std::fs::read_to_string(&marker)
-            .expect("read marker")
-            .contains("trusted primer"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn control_marker_replacement_does_not_modify_a_hard_link_peer() {
-        let directory = tempfile::tempdir().expect("temporary control cwd");
-        let outside = tempfile::NamedTempFile::new().expect("outside sentinel");
-        std::fs::write(outside.path(), "outside sentinel").expect("write sentinel");
-        let marker = directory.path().join(".acorn-control.md");
-        std::fs::hard_link(outside.path(), &marker).expect("hard-link marker");
-
-        super::write_control_marker(directory.path(), "trusted primer");
-
-        assert_eq!(
-            std::fs::read_to_string(outside.path()).expect("read sentinel"),
-            "outside sentinel"
-        );
-        assert!(std::fs::read_to_string(&marker)
-            .expect("read marker")
-            .contains("trusted primer"));
     }
 
     #[test]

@@ -3,7 +3,7 @@ import { Command, useCommandState } from "cmdk";
 import {
   AlertCircle,
   Bell,
-  Bot,
+  Cable,
   Columns3,
   FolderOpen,
   FolderPlus,
@@ -125,11 +125,6 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   function handleNewIsolatedSession() {
     window.dispatchEvent(new CustomEvent("acorn:new-isolated-session"));
-    close();
-  }
-
-  function handleNewControlSession() {
-    window.dispatchEvent(new CustomEvent("acorn:new-control-session"));
     close();
   }
 
@@ -365,17 +360,6 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             </span>
           </Command.Item>
           <Command.Item
-            value="new-control-session"
-            onSelect={handleNewControlSession}
-            keywords={["control", "ipc", "dispatcher", "orchestrator"]}
-          >
-            <Bot size={14} className="text-accent" />
-            <span>{cpt(t, "commandPalette.commands.newControlSession")}</span>
-            <span className="ml-auto truncate text-xs text-fg-muted/80">
-              ⌥⇧⌘T
-            </span>
-          </Command.Item>
-          <Command.Item
             value="new-chat-session"
             onSelect={handleNewChatSession}
             keywords={["chat", "conversation", "messages"]}
@@ -580,7 +564,6 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             onSelect={() => void handleRestartIpc()}
             keywords={[
               "ipc",
-              "control",
               "socket",
               "acorn-ipc",
               "restart",
@@ -588,7 +571,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               "server",
             ]}
           >
-            <Bot size={14} className="text-accent" />
+            <Cable size={14} className="text-accent" />
             <span>{cpt(t, "commandPalette.commands.restartIpcServer")}</span>
           </Command.Item>
         </Command.Group>

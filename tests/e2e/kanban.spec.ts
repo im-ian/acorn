@@ -736,16 +736,13 @@ test.describe("workspace kanban mode", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("menuitem", { name: "New control session" }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(
       page.getByRole("menuitem", { name: "New worktree session" }).locator("kbd"),
     ).not.toBeEmpty();
     await expect(
       page.getByRole("menuitem", { name: "New chat session" }).locator("kbd"),
     ).toHaveCount(0);
-    await expect(
-      page.getByRole("menuitem", { name: "New control session" }).locator("kbd"),
-    ).not.toBeEmpty();
     await page.keyboard.press("Escape");
 
     await expect(

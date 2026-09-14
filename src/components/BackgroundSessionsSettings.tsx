@@ -6,7 +6,6 @@ import {
   RefreshCcw,
   Loader2,
   AlertTriangle,
-  Bot,
   Folder,
   GitBranch,
   Hash,
@@ -530,20 +529,6 @@ function SessionsList({
                         t("backgroundSessions.relativeTime.ago"),
                       )}
                     </span>
-                  </Tooltip>
-                ) : null}
-                {s.kind === "control" ? (
-                  <Tooltip
-                    label={t("backgroundSessions.sessions.controlSession")}
-                    side="top"
-                  >
-                    <Bot
-                      size={12}
-                      className="shrink-0 text-fg-muted"
-                      aria-label={t(
-                        "backgroundSessions.sessions.controlSession",
-                      )}
-                    />
                   </Tooltip>
                 ) : null}
               </span>

@@ -9,7 +9,7 @@
 //! * **Worker threads block on socket I/O** with std `BufReader` /
 //!   `BufWriter`. The daemon is intentionally NOT built on tokio: the
 //!   total connection count is bounded by attached Acorn clients +
-//!   control-session CLI invocations (single-digit normally) and the
+//!   session CLI invocations (single-digit normally) and the
 //!   per-connection work is dominated by PTY syscalls, which are
 //!   blocking anyway via `portable-pty`. Tokio would add a runtime and
 //!   buy nothing here.
@@ -701,8 +701,8 @@ impl Daemon {
                 .registry
                 .get(&source_id)
                 .ok_or_else(|| "source daemon session is not live".to_string())?;
-            if !source.alive || source.kind != super::protocol::SessionKind::Control {
-                return Err("source daemon session is not a live control session".into());
+            if !source.alive {
+                return Err("source daemon session is not live".into());
             }
             let capability = hello
                 .session_capability
@@ -764,7 +764,7 @@ impl Daemon {
                 }
                 if matches!(payload, ControlPayload::Status | ControlPayload::Shutdown) {
                     return Some(unauthorized(
-                        "a control session cannot query or mutate daemon-global state",
+                        "a session CLI cannot query or mutate daemon-global state",
                     ));
                 }
                 let target_id = match payload {
@@ -789,9 +789,7 @@ impl Daemon {
                     ControlPayload::KillSession { .. } | ControlPayload::ForgetSession { .. }
                 ) && target_id == source_id
                 {
-                    return Some(unauthorized(
-                        "refusing to destroy the source control session",
-                    ));
+                    return Some(unauthorized("refusing to destroy the source session"));
                 }
                 let Some(source) = self.registry.get(&source_id) else {
                     return Some(unauthorized("source daemon session disappeared"));

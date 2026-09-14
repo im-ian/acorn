@@ -314,10 +314,10 @@
         "description": "acornd 守护进程拥有长期运行的 PTY，因此终端会话在 Acorn 重新启动后仍然存在。"
       },
       "controlCli": {
-        "label": "控制会话 (acorn-ipc CLI)",
+        "label": "acorn-ipc CLI",
         "errorHint": "无法查询安装状态。",
         "loadingHint": "正在加载安装状态...",
-        "hint": "控制会话可通过 acorn-ipc CLI 向同级会话分派命令。该 CLI 随应用提供；将其符号链接到 $PATH 后即可从任意终端使用。",
+        "hint": "任何 Acorn 终端都可通过 acorn-ipc CLI 向同级会话分派命令。该 CLI 随应用提供；将其符号链接到 $PATH 后即可从任意终端使用。",
         "windowsHint": "捆绑的 acorn-ipc CLI 会自动添加到 Acorn 终端内的 PATH，无需安装系统级 shim。",
         "bundledBinary": "捆绑可执行文件",
         "found": "已找到",
@@ -598,9 +598,6 @@
         },
         "newIsolatedSession": {
           "label": "新建隔离会话"
-        },
-        "newControlSession": {
-          "label": "新建控制会话"
         },
         "addProject": {
           "label": "添加项目"
@@ -949,7 +946,6 @@
       "shellEnvironmentReloaded": "shell 环境已重新加载。请打开新会话以应用更改。",
       "shellEnvironmentReloadFailed": "无法重新加载 shell 环境。",
       "preventSleepSyncFailedPrefix": "无法应用防止睡眠设置：",
-      "controlGuidePreferenceSaveFailed": "无法保存控制会话指南偏好设置。",
       "notificationClickRegistrationFailedPrefix": "无法启用通知点击处理：",
       "notificationClickActivationFailedPrefix": "无法从点击的通知打开 Acorn：",
       "agentResumeProbeFailed": "无法检查之前的智能体对话：",
@@ -1046,7 +1042,7 @@
       },
       "ipc": {
         "label": "IPC 服务器",
-        "description": "控制会话 ↔ 应用套接字"
+        "description": "会话 ↔ 应用套接字"
       },
       "daemon": {
         "label": "acornd 守护进程",
@@ -1113,7 +1109,6 @@
         "newSession": "新建会话",
         "newWorktreeSession": "新建工作树",
         "newChatSession": "新聊天",
-        "newControlSession": "控制",
         "markAsDone": "标记为完成",
         "restoreFromDone": "从完成中恢复"
       },
@@ -1281,7 +1276,6 @@
       "selectExistingProject": "选择现有的项目",
       "selectSourceFolder": "选择源文件夹",
       "selectIsolatedRepository": "选择 Git 仓库 (隔离工作树)",
-      "selectControlDirectory": "选择目录（控制会话）",
       "selectDirectory": "选择目录"
     },
     "projects": {
@@ -1301,7 +1295,6 @@
       "newChatSession": "新聊天会话",
       "newAutonomousGoalSession": "新建 Loop 会话",
       "newGraphSession": "新建 Graph 会话",
-      "newControlSession": "新建控制会话",
       "newProjectFolder": "新建工作区",
       "newProjectFolderWithWorktree": "新建工作树工作区",
       "addProjectSourceFolder": "添加源文件夹",
@@ -1366,12 +1359,10 @@
       "newIsolatedSessionInProject": "此项目中的新工作树会话",
       "newIsolatedSessionInProjectFolder": "此工作区中的新工作树会话",
       "newChatSessionInProject": "此项目中的新聊天会话",
-      "newControlSessionInProject": "此项目中的新控制会话",
       "goalSession": "Loop 会话",
       "dragToReorderSession": "拖动以重新排序会话",
       "localTerminalSessions": "本地终端会话",
       "worktree": "工作树",
-      "controlSession": "控制会话",
       "chatSession": "聊天会话",
       "generatingSessionTitle": "生成会话标题",
       "notificationsSilenced": "通知已静音"
@@ -1419,8 +1410,6 @@
       "openPullRequest": "打开 PR",
       "processes": "进程",
       "status": "状态",
-      "kind": "类型",
-      "controlSession": "控制会话",
       "isolatedWorktree": "隔离工作树"
     }
   },
@@ -1632,7 +1621,6 @@
     },
     "aria": {
       "worktree": "工作树",
-      "controlSession": "控制会话",
       "chatSession": "聊天会话",
       "goalSession": "Loop 会话",
       "workSummary": "工作总结",
@@ -2166,7 +2154,7 @@
       "isolatedWorktree": "这是隔离工作树：",
       "linkedWorktree": "此会话使用链接的 Git 工作树：",
       "ownedSessionsWillBeRemovedPrefix": "这也将删除",
-      "ownedSessionsWillBeRemovedSuffix": "个由控制会话创建的会话。",
+      "ownedSessionsWillBeRemovedSuffix": "个由该会话创建的会话。",
       "deleteWorktreeQuestion": "仅删除会话，还是同时从磁盘中删除工作树？",
       "filesIn": "以下位置中的文件",
       "willNotBeTouched": "不会受到影响。",
@@ -2388,16 +2376,6 @@
       "hoursAgo": "小时前",
       "dayAgo": "一天前",
       "daysAgo": "几天前"
-    },
-    "controlSessionGuide": {
-      "title": "控制会话",
-      "subtitle": "一个终端驱动此项目中的其他会话",
-      "bodyIntro": "控制会话是一项即将推出的功能，可从一处协调多个终端；适合需要向同一项目内其他会话分派命令的智能体和脚本。",
-      "pointKeystrokes": "将击键发送到此项目中的任何会话。",
-      "pointListSessions": "列出其他会话及其状态。",
-      "pointReadOutput": "读取目标会话的最新输出。",
-      "createdPrefix": "您刚刚创建了控制会话。用于驱动它的",
-      "createdSuffix": "CLI 将在下次更新中提供；在此之前，该终端会像普通 shell 一样启动。"
     },
     "folderPermissionWarmup": {
       "title": "现在检查文件夹权限吗？",
@@ -2623,7 +2601,6 @@
     "commands": {
       "newSession": "新建会话",
       "newIsolatedSession": "新建隔离会话",
-      "newControlSession": "新建控制会话",
       "newChatSession": "新聊天会话",
       "newAutonomousGoalSession": "新建 Loop 会话",
       "newGraphSession": "新建 Graph 会话",
@@ -2690,8 +2667,7 @@
       "disabled": "守护进程已禁用；会话由旧的进程内路径管理。",
       "notRunning": "守护进程未运行。",
       "loading": "正在加载...",
-      "empty": "未跟踪任何活动会话。",
-      "controlSession": "控制会话"
+      "empty": "未跟踪任何活动会话。"
     },
     "actions": {
       "killPty": "终止 PTY",
