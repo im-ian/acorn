@@ -37,6 +37,12 @@ import {
   terminalStringCellWidth,
 } from "../lib/terminal-cjk-cell-width-addon";
 import {
+  compositionRemainderAfterCommit,
+  isHangulDecomposition,
+  isHangulJamoOnly,
+  normalizeHangulCommit,
+} from "../lib/terminalIme";
+import {
   createTerminalRepaintScheduler,
   createTerminalVisibilityRepaintObserver,
   repaintTerminalViewport,
@@ -297,46 +303,6 @@ function terminalCellDims(term: XTerm): { width: number; height: number } | null
   const core = (term as unknown as TerminalRenderInternals)._core;
   const cell = core?._renderService?.dimensions?.css?.cell;
   return cell ? { width: cell.width, height: cell.height } : null;
-}
-
-/** Text that should stay in the IME overlay after `committed` is flushed.
- *  WKWebView often starts the next Hangul syllable (and fires
- *  `insertCompositionText`) before `insertFromComposition` for the previous
- *  one. The textarea/`preview` then already hold `하` while we are still
- *  committing `녕` — that remainder must not be cleared. */
-/** Choseong/jungseong/jongseong and compatibility jamo (ㅇ, ㄱ, ㅏ, …).
- *  A lone jamo `insertFromComposition` is composition teardown — backspace
- *  or click-away — not a confirmed syllable. Holding it is what leaves ㅇ
- *  on screen until the echo timer fires. */
-function isHangulJamoOnly(text: string): boolean {
-  if (text.length === 0) return false;
-  return [...text].every((char) => {
-    const cp = char.codePointAt(0);
-    if (cp === undefined) return false;
-    return (
-      (cp >= 0x1100 && cp <= 0x11ff) ||
-      (cp >= 0x3130 && cp <= 0x318f) ||
-      (cp >= 0xa960 && cp <= 0xa97f) ||
-      (cp >= 0xd7b0 && cp <= 0xd7ff)
-    );
-  });
-}
-
-function compositionRemainderAfterCommit(
-  live: string,
-  sentPrefix: string,
-  committed: string,
-  preview: string,
-): string {
-  if (!committed) return "";
-  const afterPrefix = live.startsWith(sentPrefix)
-    ? live.slice(sentPrefix.length)
-    : live;
-  const source = afterPrefix || preview;
-  if (!source || source === committed) return "";
-  const at = source.lastIndexOf(committed);
-  if (at >= 0) return source.slice(at + committed.length);
-  return source;
 }
 
 function terminalLineTailEndColumn(term: XTerm): number {
@@ -2056,8 +2022,9 @@ export function Terminal({
     };
 
     const holdCommittedText = (text: string) => {
-      if (text.length === 0) return;
-      if (isHangulJamoOnly(text)) return;
+      const normalized = normalizeHangulCommit(text);
+      if (normalized.length === 0) return;
+      if (isHangulJamoOnly(normalized)) return;
       // Typing faster than the echo commits several syllables against the
       // same cell. Whatever survives this call is still anchored there, so
       // append rather than replace — dropping the earlier syllable would
@@ -2065,7 +2032,7 @@ export function Terminal({
       dropEchoedPendingCommit();
       const buf = term.buffer.active;
       pendingCommit = {
-        text: `${pendingCommit?.text ?? ""}${text}`,
+        text: `${pendingCommit?.text ?? ""}${normalized}`,
         x: pendingCommit?.x ?? buf.cursorX,
         y: pendingCommit?.y ?? buf.baseY + buf.cursorY,
       };
@@ -2091,6 +2058,7 @@ export function Terminal({
     // idempotent `commitComposition()` — a second call for the same
     // syllable becomes a no-op.
     let sentPrefix = "";
+    let lastCommitted = "";
     let lastKeyCode229 = false;
     let composing = false;
     // Still gates insertFromComposition / insertText cancel. Backspace
@@ -2152,11 +2120,13 @@ export function Terminal({
         live.length > sentPrefix.length ? live.slice(sentPrefix.length) : "";
       // `insertFromComposition` names the syllable being flushed. Prefer it
       // over the textarea tail — the tail may already be the next jamo.
-      const data = explicit ? explicit : tail;
+      const data = normalizeHangulCommit(explicit ? explicit : tail);
       if (data) {
         sendUserInputToPty(data);
-        // Jamo are preview-only until a terminator (space/enter) confirms
-        // them. insertFromComposition("ㅇ") after backspace is teardown.
+        lastCommitted = data;
+        // Jamo are preview-only in the overlay until a terminator confirms
+        // them. They still go to the PTY so ㅋㅋㅋ commits; the hold is what
+        // parks a leftover ㅇ on screen after backspace.
         if (!isHangulJamoOnly(data)) {
           holdCommittedText(data);
         }
@@ -2223,6 +2193,12 @@ export function Terminal({
             hideComposing();
             ev.stopImmediatePropagation();
             return;
+          }
+          if (
+            imeDeleting &&
+            !isHangulDecomposition(composingText, preview)
+          ) {
+            imeDeleting = false;
           }
           composing = true;
           showComposing(preview);
@@ -2293,16 +2269,23 @@ export function Terminal({
           const isIme =
             lastKeyCode229 || (!!ev.data && CJK_DATA_RE.test(ev.data));
           if (isIme && imeDeleting) {
-            const preview = previewTail();
-            if (preview.length === 0) {
-              dropHoldMatchingPreview();
-              composing = false;
-              hideComposing();
+            if (
+              ev.data &&
+              !isHangulDecomposition(composingText || previewTail(), ev.data)
+            ) {
+              imeDeleting = false;
             } else {
-              showComposing(preview);
+              const preview = previewTail();
+              if (preview.length === 0) {
+                dropHoldMatchingPreview();
+                composing = false;
+                hideComposing();
+              } else {
+                showComposing(preview);
+              }
+              ev.stopImmediatePropagation();
+              return;
             }
-            ev.stopImmediatePropagation();
-            return;
           }
           if (!isIme) {
             // Plain ASCII. xterm's keypress already emitted it; we
@@ -2326,8 +2309,11 @@ export function Terminal({
           }
           const committedEnd = value.length - newCharLen;
           if (committedEnd > sentPrefix.length) {
-            const committed = value.slice(sentPrefix.length, committedEnd);
+            const committed = normalizeHangulCommit(
+              value.slice(sentPrefix.length, committedEnd),
+            );
             sendUserInputToPty(committed);
+            lastCommitted = committed;
             holdCommittedText(committed);
             sentPrefix = value.slice(0, committedEnd);
           }
@@ -2341,34 +2327,35 @@ export function Terminal({
           // if a terminator-keydown or insertText already flushed this
           // syllable, skip so we do not send the next jamo and wipe its
           // preview.
+          const committed = normalizeHangulCommit(ev.data ?? "");
           if (imeDeleting) {
-            dropHoldMatchingPreview();
-            const next = previewTail();
-            if (next.length === 0) {
-              composing = false;
-              hideComposing();
+            if (
+              committed &&
+              !isHangulJamoOnly(committed) &&
+              !isHangulDecomposition(
+                composingText || previewTail(),
+                committed,
+              )
+            ) {
+              imeDeleting = false;
             } else {
-              showComposing(next);
+              dropHoldMatchingPreview();
+              const next = previewTail();
+              if (next.length === 0) {
+                composing = false;
+                hideComposing();
+              } else {
+                showComposing(next);
+              }
+              ev.stopImmediatePropagation();
+              return;
             }
-            ev.stopImmediatePropagation();
-            return;
           }
-          const committed = ev.data ?? "";
           if (
             committed &&
-            pendingCommit?.text.endsWith(committed) &&
+            lastCommitted.endsWith(committed) &&
             composingText !== committed
           ) {
-            ev.stopImmediatePropagation();
-            return;
-          }
-          // Lone jamo compositionend is preview teardown (backspace of 안
-          // → ㅇ → empty), not a confirmed character. Committing it parks
-          // ㅇ in the echo-hold until the timer — the "lingering ㅇ".
-          if (isHangulJamoOnly(committed)) {
-            dropHoldMatchingPreview();
-            composing = false;
-            hideComposing();
             ev.stopImmediatePropagation();
             return;
           }

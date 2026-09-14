@@ -1314,6 +1314,141 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(await imeOverlayText(page)).toBe("");
     await expect(page.locator(".composition-view.active")).toHaveCount(0);
     const writes = await getWrites(page);
+    // Confirmed jamo (ㅋㅋㅋ, click-away ㅇ) must reach the PTY. The overlay
+    // hold is what lingered; a PTY write of ㅇ is normal IME confirm.
+    expect(writes).toContain("ㅇ");
+  });
+
+  test("NFD Hangul syllable still commits as a precomposed character", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    const nfdAn = "안".normalize("NFD");
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: nfdAn,
+        taValue: nfdAn,
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: nfdAn,
+        taValue: "",
+      },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(countToken(writes, "안")).toBe(1);
+    expect(writes.join("")).not.toContain(nfdAn);
+  });
+
+  test("ㅋㅋㅋ via insertFromComposition commits each jamo", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    const jamo = (char: string) =>
+      [
+        { type: "keydown" as const, key: "Process", keyCode: 229 },
+        {
+          type: "input" as const,
+          inputType: "insertCompositionText",
+          data: char,
+          taValue: char,
+        },
+        {
+          type: "input" as const,
+          inputType: "insertFromComposition",
+          data: char,
+          taValue: "",
+        },
+      ];
+
+    await runIme(page, [...jamo("ㅋ"), ...jamo("ㅋ"), ...jamo("ㅋ")]);
+
+    const writes = await getWrites(page);
+    expect(countToken(writes, "ㅋ")).toBe(3);
+    expect(await imeOverlayText(page)).toBe("");
+  });
+
+  test("나나 commits the repeated syllable twice", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    const syllable = (char: string) =>
+      [
+        { type: "keydown" as const, key: "Process", keyCode: 229 },
+        {
+          type: "input" as const,
+          inputType: "insertCompositionText",
+          data: char,
+          taValue: char,
+        },
+        {
+          type: "input" as const,
+          inputType: "insertFromComposition",
+          data: char,
+          taValue: "",
+        },
+      ];
+
+    await runIme(page, [...syllable("나"), ...syllable("나")]);
+
+    const writes = await getWrites(page);
+    expect(countToken(writes, "나")).toBe(2);
+  });
+
+  test("after decomposing 안 to ㅇ, typing 아 still commits", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "안",
+        taValue: "안",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "ㅇ",
+        taValue: "ㅇ",
+      },
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "아",
+        taValue: "아",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "아",
+        taValue: "",
+      },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(countToken(writes, "아")).toBe(1);
+    expect(writes).not.toContain("안");
     expect(writes).not.toContain("ㅇ");
   });
 
