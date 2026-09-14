@@ -36,10 +36,9 @@ export interface SessionNotification {
 }
 
 /**
- * Distinguishes ordinary terminal sessions from "control" sessions. Control
- * sessions are the entry point for the `acorn-ipc` CLI, which lets them
- * dispatch commands to other sessions in the same project. Persisted
- * sessions without this field load as `"regular"` from the backend.
+ * Persisted session classification. `"control"` remains for older
+ * `sessions.json` rows and is treated as `"regular"` at load/list time.
+ * Any live session can drive siblings via `acorn-ipc`.
  */
 export type SessionKind = "regular" | "control";
 

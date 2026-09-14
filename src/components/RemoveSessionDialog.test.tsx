@@ -63,11 +63,11 @@ describe("RemoveSessionDialog", () => {
     return onClose;
   }
 
-  it("warns when control-owned sessions will also be removed", () => {
+  it("warns when owned sessions will also be removed", () => {
     renderDialog(session({ kind: "control" }), true, 2);
 
     expect(document.body.textContent).toContain(
-      "This will also remove 2 control-owned session(s).",
+      "This will also remove 2 owned session(s).",
     );
   });
 

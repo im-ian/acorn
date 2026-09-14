@@ -1,5 +1,4 @@
 import {
-  Bot,
   ChevronDown,
   CircleHelp,
   CirclePlus,
@@ -175,8 +174,6 @@ function canvasSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
       return <CirclePlus size={12} />;
     case "isolated":
       return <GitBranch size={12} />;
-    case "control":
-      return <Bot size={12} />;
     case "chat":
       return <MessageSquareText size={12} />;
   }
@@ -196,9 +193,7 @@ function dispatchCanvasSessionCreate(action: ProjectSessionCreateAction) {
       ? "acorn:new-session"
       : action.id === "isolated"
         ? "acorn:new-isolated-session"
-        : action.id === "control"
-          ? "acorn:new-control-session"
-          : "acorn:new-chat-session";
+        : "acorn:new-chat-session";
   if (eventName) window.dispatchEvent(new CustomEvent(eventName));
 }
 

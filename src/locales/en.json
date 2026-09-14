@@ -316,10 +316,10 @@
         "description": "The acornd daemon owns long-running PTYs so terminal sessions survive Acorn restarts."
       },
       "controlCli": {
-        "label": "Control sessions (acorn-ipc CLI)",
+        "label": "acorn-ipc CLI",
         "errorHint": "Could not query install status.",
         "loadingHint": "Loading install status...",
-        "hint": "Control sessions can dispatch commands to siblings via the acorn-ipc CLI. The CLI ships next to the app; symlink it into your $PATH to use it from any terminal.",
+        "hint": "Any Acorn terminal can dispatch commands to siblings via the acorn-ipc CLI. The CLI ships next to the app; symlink it into your $PATH to use it from any terminal.",
         "windowsHint": "The bundled acorn-ipc CLI is automatically added to PATH inside Acorn terminals. No system-wide shim is required.",
         "bundledBinary": "Bundled binary",
         "found": "found",
@@ -600,9 +600,6 @@
         },
         "newIsolatedSession": {
           "label": "New isolated session"
-        },
-        "newControlSession": {
-          "label": "New control session"
         },
         "addProject": {
           "label": "Add project"
@@ -957,7 +954,6 @@
       "shellEnvironmentReloaded": "Shell environment reloaded. Open a new session to apply.",
       "shellEnvironmentReloadFailed": "Failed to reload shell environment.",
       "preventSleepSyncFailedPrefix": "Could not apply the keep-awake setting:",
-      "controlGuidePreferenceSaveFailed": "Couldn't save the control-session guide preference.",
       "notificationClickRegistrationFailedPrefix": "Could not enable notification click handling:",
       "notificationClickActivationFailedPrefix": "Could not bring Acorn to the clicked notification:",
       "agentResumeProbeFailed": "Failed to check previous agent conversations:",
@@ -1054,7 +1050,7 @@
       },
       "ipc": {
         "label": "IPC server",
-        "description": "control-session <-> app socket"
+        "description": "session <-> app socket"
       },
       "daemon": {
         "label": "acornd daemon",
@@ -1121,7 +1117,6 @@
         "newSession": "New session",
         "newWorktreeSession": "New worktree",
         "newChatSession": "New chat",
-        "newControlSession": "Control",
         "markAsDone": "Mark as done",
         "restoreFromDone": "Restore from done"
       },
@@ -1289,7 +1284,6 @@
       "selectExistingProject": "Select an existing project",
       "selectSourceFolder": "Select a source folder",
       "selectIsolatedRepository": "Select a git repository (isolated worktree)",
-      "selectControlDirectory": "Select a directory (control session)",
       "selectDirectory": "Select a directory"
     },
     "projects": {
@@ -1309,7 +1303,6 @@
       "newChatSession": "New chat session",
       "newAutonomousGoalSession": "New Loop session",
       "newGraphSession": "New Graph session",
-      "newControlSession": "New control session",
       "newProjectFolder": "New workspace",
       "newProjectFolderWithWorktree": "New worktree workspace",
       "addProjectSourceFolder": "Add source folder",
@@ -1384,12 +1377,10 @@
       "newIsolatedSessionInProject": "New worktree session in this project",
       "newIsolatedSessionInProjectFolder": "New worktree session in this workspace",
       "newChatSessionInProject": "New chat session in this project",
-      "newControlSessionInProject": "New control session in this project",
       "goalSession": "Loop session",
       "dragToReorderSession": "Drag to reorder session",
       "localTerminalSessions": "Local terminal sessions",
       "worktree": "worktree",
-      "controlSession": "control session",
       "chatSession": "chat session",
       "generatingSessionTitle": "Generating session title",
       "notificationsSilenced": "Notifications silenced",
@@ -1438,8 +1429,6 @@
       "openPullRequest": "Open PR",
       "processes": "Processes",
       "status": "Status",
-      "kind": "Kind",
-      "controlSession": "Control session",
       "isolatedWorktree": "Isolated worktree"
     }
   },
@@ -1659,7 +1648,6 @@
     },
     "aria": {
       "worktree": "worktree",
-      "controlSession": "control session",
       "chatSession": "chat session",
       "goalSession": "Loop session",
       "workSummary": "work summary",
@@ -2193,7 +2181,7 @@
       "isolatedWorktree": "This is an isolated worktree:",
       "linkedWorktree": "This session is using a linked git worktree:",
       "ownedSessionsWillBeRemovedPrefix": "This will also remove",
-      "ownedSessionsWillBeRemovedSuffix": "control-owned session(s).",
+      "ownedSessionsWillBeRemovedSuffix": "owned session(s).",
       "deleteWorktreeQuestion": "Remove the session only, or also delete the worktree from disk?",
       "filesIn": "Files in",
       "willNotBeTouched": "will not be touched.",
@@ -2417,16 +2405,6 @@
       "hoursAgo": "hr ago",
       "dayAgo": "day ago",
       "daysAgo": "days ago"
-    },
-    "controlSessionGuide": {
-      "title": "Control session",
-      "subtitle": "A terminal that drives other sessions in this project",
-      "bodyIntro": "Control sessions are an upcoming way to coordinate work across terminals from a single place - handy for agents and scripts that need to dispatch commands to siblings in the same project.",
-      "pointKeystrokes": "Send keystrokes to any session in this project.",
-      "pointListSessions": "List the other sessions and their status.",
-      "pointReadOutput": "Read recent output from a target session.",
-      "createdPrefix": "You just created a control session. The",
-      "createdSuffix": "CLI that drives it ships in the next update; this terminal will start behaving like a regular shell until then."
     },
     "folderPermissionWarmup": {
       "title": "Check folder permissions now?",
@@ -2653,7 +2631,6 @@
     "commands": {
       "newSession": "New session",
       "newIsolatedSession": "New isolated session",
-      "newControlSession": "New control session",
       "newChatSession": "New chat session",
       "newAutonomousGoalSession": "New Loop session",
       "newGraphSession": "New Graph session",
@@ -2721,8 +2698,7 @@
       "disabled": "Daemon disabled - sessions are managed by the legacy in-process path.",
       "notRunning": "Daemon is not running.",
       "loading": "Loading...",
-      "empty": "No live sessions tracked.",
-      "controlSession": "Control session"
+      "empty": "No live sessions tracked."
     },
     "actions": {
       "killPty": "Kill PTY",

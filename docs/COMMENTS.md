@@ -146,10 +146,9 @@ Same rules apply, with one addition: doc comments on exported public surface (ty
 ```ts
 // GOOD — caller-facing invariant
 /**
- * Distinguishes ordinary terminal sessions from "control" sessions, which
- * (via the `acorn-ipc` CLI) can drive other sessions in the same project.
- * Defaults to `Regular` so existing persisted sessions without this field
- * load cleanly.
+ * Persisted session classification. `"control"` remains for older
+ * `sessions.json` rows and is treated as `"regular"` at load/list time.
+ * Any live session can drive siblings via `acorn-ipc`.
  */
 export type SessionKind = ...
 
