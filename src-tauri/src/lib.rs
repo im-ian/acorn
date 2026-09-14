@@ -857,6 +857,7 @@ pub fn run() {
             commands::pty_subscribe_output,
             commands::pty_unsubscribe_output,
             commands::pty_write,
+            commands::pty_reset_dec_modes,
             commands::pty_resize,
             commands::pty_kill,
             commands::pty_detach,

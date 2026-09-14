@@ -9008,13 +9008,20 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
     }
     let cwd = authorize_session_cwd(&state, &session, &PathBuf::from(cwd))?;
     let output_token = output_token.or_else(|| state.pty_output.current_token(&id));
-    // Either an in-process PTY or a daemon-side stream attachment for
-    // this session already exists — caller hit `pty_spawn` twice (e.g.
-    // StrictMode double mount), nothing to do.
-    if state.pty.contains(&id)
-        || state
-            .stream_registry
-            .attachment_matches_output_token(&id, output_token)
+    // A live in-process PTY means this is a remount, not a new shell.
+    // Push remembered mouse/paste CSI into the fresh xterm; the child
+    // will not re-send those modes itself.
+    if state.pty.contains(&id) {
+        let prelude = state.pty.dec_mode_prelude(&id);
+        if !prelude.is_empty() {
+            let event = format!("pty:output:{id}");
+            state.pty_output.send_or_emit(&app, &event, &id, &prelude);
+        }
+        return Ok(());
+    }
+    if state
+        .stream_registry
+        .attachment_matches_output_token(&id, output_token)
     {
         return Ok(());
     }
@@ -9484,6 +9491,24 @@ pub fn pty_unsubscribe_output(
     let id = parse_id(&session_id)?;
     state.pty_output.unsubscribe(&id, token);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn pty_reset_dec_modes(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
+    let id = parse_id(&session_id)?;
+    let state = state.inner().clone();
+    run_blocking("pty_reset_dec_modes", move || {
+        if pty_io_uses_daemon(&state, id) {
+            state
+                .daemon_bridge
+                .reset_dec_modes(id)
+                .map_err(|e| AppError::Pty(e.to_string()))?;
+        } else {
+            state.pty.reset_dec_modes(&id);
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]

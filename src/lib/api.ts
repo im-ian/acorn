@@ -1215,6 +1215,9 @@ export const api = {
   ptyWrite(sessionId: string, data: string): Promise<void> {
     return enqueuePtyWrite(sessionId, data);
   },
+  ptyResetDecModes(sessionId: string): Promise<void> {
+    return invoke<void>("pty_reset_dec_modes", { sessionId });
+  },
   flushPtyWrite(sessionId?: string): Promise<void> {
     return flushQueuedPtyWrite(sessionId);
   },

@@ -82,7 +82,12 @@ import {
   cancelPendingTerminalPtyDisposal,
   scheduleTerminalPtyDisposal,
 } from "../lib/terminalPtyDisposal";
-import { planTerminalRestore } from "../lib/terminalRestorePlan";
+import {
+  assumeDaemonAliveForRestore,
+  isDaemonEnabledFromStorage,
+  MOUSE_PASTE_RESET_CSI,
+  planTerminalRestore,
+} from "../lib/terminalRestorePlan";
 import {
   AGENT_IMAGE_PASTE_CONTROL,
   getClipboardImageFile,
@@ -2926,7 +2931,11 @@ export function Terminal({
       const detail = (e as CustomEvent<{ sessionId: string }>).detail;
       if (!detail || detail.sessionId !== sessionId) return;
       term.clear();
+      term.write(MOUSE_PASTE_RESET_CSI);
       clearRememberedTerminalScrollback(sessionId);
+      void api.ptyResetDecModes(sessionId).catch(() => {
+        // Older daemons do not implement this RPC; xterm is already reset.
+      });
       // Sticky-prompt banner watches the buffer for `> ` lines; after a
       // clear there are none, so explicitly schedule a dispatch so the
       // banner picks up the now-empty state without waiting for the
@@ -3368,11 +3377,19 @@ export function Terminal({
       try {
         const daemonSessions = await api.daemonListSessions();
         if (disposed) return;
-        daemonSessionAliveAtMount = daemonSessions.some(
-          (session) => session.id === sessionId && session.alive,
-        );
+        daemonSessionAliveAtMount = assumeDaemonAliveForRestore({
+          listedAlive: daemonSessions.some(
+            (session) => session.id === sessionId && session.alive,
+          ),
+          listFailed: false,
+          daemonEnabled: isDaemonEnabledFromStorage(),
+        });
       } catch {
-        daemonSessionAliveAtMount = false;
+        daemonSessionAliveAtMount = assumeDaemonAliveForRestore({
+          listedAlive: false,
+          listFailed: true,
+          daemonEnabled: isDaemonEnabledFromStorage(),
+        });
       }
 
       // Restore the xterm-rendered disk snapshot before spawning so the user
@@ -3429,16 +3446,12 @@ export function Terminal({
           // Listing each mode explicitly makes the post-restore state
           // deterministic regardless of what the snapshot ended in.
           const RESETS =
-            "\x1b[r" +     // DECSTBM full-screen scroll region
-            "\x1b[?7h" +   // DECAWM auto-wrap on
-            "\x1b[?25h" +  // DECTCEM cursor visible
-            "\x1b[0 q" +   // DECSCUSR cursor back to the user default
-            "\x1b[?2004l" + // bracketed paste off
-            "\x1b[?1000l" + // X11 mouse tracking off
-            "\x1b[?1002l" + // mouse btn-event tracking off
-            "\x1b[?1003l" + // mouse any-event tracking off
-            "\x1b[?1006l" + // SGR mouse mode off
-            "\r"; //          park cursor at column 0
+            "\x1b[r" + // DECSTBM full-screen scroll region
+            "\x1b[?7h" + // DECAWM auto-wrap on
+            "\x1b[?25h" + // DECTCEM cursor visible
+            "\x1b[0 q" + // DECSCUSR cursor back to the user default
+            MOUSE_PASTE_RESET_CSI +
+            "\r"; // park cursor at column 0
           await writeAndDrain(RESETS);
           if (disposed) return;
           // Leave room for the new shell prompt without adding a visible
