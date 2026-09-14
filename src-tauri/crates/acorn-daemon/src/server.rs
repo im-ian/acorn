@@ -583,10 +583,15 @@ impl Daemon {
         if attach.replay_scrollback {
             if let Some(snap) = self.pty.scrollback_snapshot(&attach.session_id) {
                 replayed_until = snap.end_seq;
-                let frame = StreamFrame::Output {
-                    data_b64: base64_encode(&snap.bytes),
-                };
-                write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
+                // A live overlay TUI's ring is cursor-addressed paints. Dumping
+                // it into a fresh xterm reconstructs mid-frame garbage; the
+                // child still owns the real screen and redraws on SIGWINCH.
+                if !self.pty.mouse_tracking_active(&attach.session_id) {
+                    let frame = StreamFrame::Output {
+                        data_b64: base64_encode(&snap.bytes),
+                    };
+                    write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
+                }
             }
         }
 

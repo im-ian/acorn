@@ -24,7 +24,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use acorn_platform::dec_modes::DecModeTracker;
+use acorn_platform::dec_modes::{DecModeTracker, MouseProtocol};
 use acorn_platform::process::ProcessTree;
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -418,6 +418,14 @@ impl PtyManager {
         if let Some(handle) = self.handles.get(id) {
             handle.dec_modes.lock().reset();
         }
+    }
+
+    /// Overlay TUIs enable mouse tracking for their lifetime. Their ring is
+    /// paint history, not scrollback, so attach should skip the dump.
+    pub fn mouse_tracking_active(&self, id: &Uuid) -> bool {
+        self.handles
+            .get(id)
+            .is_some_and(|r| r.value().dec_modes.lock().modes().mouse != MouseProtocol::None)
     }
 }
 
