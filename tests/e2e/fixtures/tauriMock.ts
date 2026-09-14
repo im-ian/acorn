@@ -654,6 +654,7 @@ export const tauriMockSource = `
       return Promise.resolve({ supported: true, enabled: !!args?.enabled });
     }
     if (cmd === 'pty_write') return Promise.resolve(undefined);
+    if (cmd === 'pty_reset_dec_modes') return Promise.resolve(undefined);
     // File explorer. No real fs in E2E — default to an empty listing so
     // the panel renders without errors. Tests that need real entries
     // override these via window.__ACORN_MOCK_HANDLERS__.
