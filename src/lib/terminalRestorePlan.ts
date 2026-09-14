@@ -1,5 +1,36 @@
 export type TerminalRestoreSource = "handoff" | "disk";
 
+// CSI that turns off mouse tracking, SGR encoding, and bracketed paste
+// in xterm without touching alt-screen. Cmd+K uses this as the escape
+// hatch when a crashed TUI left those modes stuck on.
+export const MOUSE_PASTE_RESET_CSI =
+  "\x1b[?2004l\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l";
+
+export function isDaemonEnabledFromStorage(
+  read: () => string | null = () => {
+    try {
+      return window.localStorage.getItem("acorn:daemon-enabled");
+    } catch {
+      return null;
+    }
+  },
+): boolean {
+  return read() !== "false";
+}
+
+export function assumeDaemonAliveForRestore({
+  listedAlive,
+  listFailed,
+  daemonEnabled,
+}: {
+  listedAlive: boolean;
+  listFailed: boolean;
+  daemonEnabled: boolean;
+}): boolean {
+  if (listedAlive) return true;
+  return listFailed && daemonEnabled;
+}
+
 export interface TerminalRestorePlan {
   snapshot: string | null;
   source: TerminalRestoreSource | null;

@@ -24,6 +24,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use acorn_platform::dec_modes::DecModeTracker;
 use acorn_platform::process::ProcessTree;
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -93,6 +94,9 @@ struct PtyHandle {
     /// active stream subscribers can still emit the exit status after the
     /// daemon registry row has detached.
     exit_code: Arc<Mutex<Option<i32>>>,
+    /// Last DEC private modes observed on stdout. Replay rings drop the
+    /// startup CSI; attach prepends this prelude into xterm only.
+    dec_modes: Mutex<DecModeTracker>,
 }
 
 pub struct PtySubscription {
@@ -239,6 +243,7 @@ impl PtyManager {
             output_tx: output_tx.clone(),
             scrollback: scrollback.clone(),
             exit_code,
+            dec_modes: Mutex::new(DecModeTracker::default()),
         });
 
         self.handles.insert(session_id, Arc::clone(&handle));
@@ -399,6 +404,21 @@ impl PtyManager {
     pub fn contains(&self, id: &Uuid) -> bool {
         self.handles.contains_key(id)
     }
+
+    /// CSI that restores mouse/paste modes on a fresh xterm. Empty when
+    /// the child never enabled them (or they were reset).
+    pub fn dec_mode_prelude(&self, id: &Uuid) -> Vec<u8> {
+        self.handles
+            .get(id)
+            .map(|r| r.value().dec_modes.lock().prelude())
+            .unwrap_or_default()
+    }
+
+    pub fn reset_dec_modes(&self, id: &Uuid) {
+        if let Some(handle) = self.handles.get(id) {
+            handle.dec_modes.lock().reset();
+        }
+    }
 }
 
 impl Drop for PtyManager {
@@ -468,6 +488,7 @@ fn read_loop(mut reader: Box<dyn Read + Send>, handle: Arc<PtyHandle>) {
             Ok(0) => break, // EOF
             Ok(n) => {
                 let chunk = &buf[..n];
+                handle.dec_modes.lock().push(chunk);
                 let hits = xtversion.push(chunk);
                 if hits > 0 {
                     // Skip when stdin already holds the writer. Waiting

@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use acorn_platform::dec_modes::DecModeTracker;
 use acorn_platform::process::ProcessTree;
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -149,6 +150,9 @@ struct PtyHandle {
     /// Capped at `TAIL_BUFFER_CAP` — older bytes are dropped from the
     /// front when the cap is hit.
     tail_buf: Mutex<VecDeque<u8>>,
+    /// Last DEC private modes observed on stdout. Re-emitted into a
+    /// remounted xterm when spawn short-circuits on a live PTY.
+    dec_modes: Mutex<DecModeTracker>,
 }
 
 /// Manages all live PTY sessions for the application.
@@ -252,6 +256,7 @@ impl PtyManager {
             had_child: AtomicBool::new(false),
             needs_input_until: Mutex::new(None),
             tail_buf: Mutex::new(VecDeque::with_capacity(READ_BUFFER_SIZE)),
+            dec_modes: Mutex::new(DecModeTracker::default()),
         });
 
         self.handles.insert(session_id, Arc::clone(&handle));
@@ -351,6 +356,19 @@ impl PtyManager {
         self.handles.contains_key(session_id)
     }
 
+    pub fn dec_mode_prelude(&self, session_id: &Uuid) -> Vec<u8> {
+        self.handles
+            .get(session_id)
+            .map(|h| h.dec_modes.lock().prelude())
+            .unwrap_or_default()
+    }
+
+    pub fn reset_dec_modes(&self, session_id: &Uuid) {
+        if let Some(handle) = self.handles.get(session_id) {
+            handle.dec_modes.lock().reset();
+        }
+    }
+
     /// PID of the immediate PTY child for a session, if known. Used by the
     /// frontend to discover the actual current working directory of the
     /// running process (and any descendants), so the right panel can follow
@@ -422,6 +440,7 @@ fn read_loop(
             Ok(0) => break, // EOF — child closed the slave
             Ok(n) => {
                 let chunk = &buf[..n];
+                handle.dec_modes.lock().push(chunk);
                 let hits = xtversion.push(chunk);
                 if hits > 0 {
                     // Skip when stdin already holds the writer. Waiting

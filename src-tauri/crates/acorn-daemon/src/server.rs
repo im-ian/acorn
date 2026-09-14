@@ -479,6 +479,10 @@ impl Daemon {
                 self.shutdown_flag.store(true, Ordering::SeqCst);
                 ControlResult::Ack
             }
+            ControlPayload::ResetDecModes { target_session_id } => {
+                self.pty.reset_dec_modes(&target_session_id);
+                ControlResult::Ack
+            }
         };
         ControlResponse {
             seq: req.seq,
@@ -566,6 +570,16 @@ impl Daemon {
         // replay, avoiding both the old snapshot->subscribe gap and duplicate
         // bytes.
         let mut replayed_until = 0;
+        // Restore mouse/paste on the fresh xterm even when the ring is not
+        // replayed — a local snapshot restore may have just turned those
+        // modes off. Never written into the ring.
+        let prelude = self.pty.dec_mode_prelude(&attach.session_id);
+        if !prelude.is_empty() {
+            let frame = StreamFrame::Output {
+                data_b64: base64_encode(&prelude),
+            };
+            write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
+        }
         if attach.replay_scrollback {
             if let Some(snap) = self.pty.scrollback_snapshot(&attach.session_id) {
                 replayed_until = snap.end_seq;
@@ -778,7 +792,8 @@ impl Daemon {
                         target_session_id, ..
                     }
                     | ControlPayload::KillSession { target_session_id }
-                    | ControlPayload::ForgetSession { target_session_id } => {
+                    | ControlPayload::ForgetSession { target_session_id }
+                    | ControlPayload::ResetDecModes { target_session_id } => {
                         Some(*target_session_id)
                     }
                     _ => None,

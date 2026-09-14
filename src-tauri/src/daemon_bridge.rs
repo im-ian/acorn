@@ -573,6 +573,15 @@ impl DaemonBridge {
             .and_then(|s| s.pid)
     }
 
+    pub fn reset_dec_modes(&self, target: Uuid) -> BridgeResult<()> {
+        match Self::unpack_error(self.call(ControlPayload::ResetDecModes {
+            target_session_id: target,
+        })?)? {
+            ControlResult::Ack => Ok(()),
+            other => Err(unexpected(other)),
+        }
+    }
+
     pub fn send_input(&self, target: Uuid, bytes: &[u8]) -> BridgeResult<()> {
         let data_b64 = base64_encode(bytes);
         match Self::unpack_error(self.call(ControlPayload::SendInput {
