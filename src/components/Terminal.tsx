@@ -41,6 +41,7 @@ import {
   isHangulDecomposition,
   isHangulJamoOnly,
   normalizeHangulCommit,
+  shouldFlushReplacedHangul,
 } from "../lib/terminalIme";
 import {
   createTerminalRepaintScheduler,
@@ -2222,16 +2223,32 @@ export function Terminal({
         }
 
         case "insertReplacementText": {
-          // Trailing char being recomposed in place. Preview only — never
-          // commit here, the next insertText / insertFromComposition /
-          // terminator-keydown carries the commit.
+          // WKWebView Korean IME on the production custom protocol often
+          // never fires insertFromComposition. The textarea is replaced
+          // with the next syllable (안 → 녕) and the previous one must
+          // flush here. HTTP `tauri dev` usually still gets the composition
+          // event, so the lastCommitted guard below de-dupes that path.
           composing = true;
           if (ta) {
-            // Stale sentPrefix detection: if textarea no longer starts
-            // with the prefix we tracked, a non-IME keystroke (Space,
-            // Ctrl+C, …) reset the textarea between compositions.
             if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
-            showComposing(ta.value.slice(sentPrefix.length));
+            const next = ta.value.slice(sentPrefix.length);
+            if (
+              !imeDeleting &&
+              shouldFlushReplacedHangul(composingText, next)
+            ) {
+              const committed = normalizeHangulCommit(composingText);
+              sendUserInputToPty(committed);
+              lastCommitted = committed;
+              holdCommittedText(committed);
+            }
+            if (
+              imeDeleting &&
+              next &&
+              !isHangulDecomposition(composingText, next)
+            ) {
+              imeDeleting = false;
+            }
+            showComposing(next);
           }
           ev.stopImmediatePropagation();
           return;
@@ -2364,9 +2381,36 @@ export function Terminal({
           return;
         }
 
-        default:
+        default: {
+          // Production WKWebView on tauri:// / https://tauri.localhost
+          // sometimes omits inputType on `input` while still filling
+          // the helper textarea. Treat that like a replacement so Hangul
+          // does not fall into hideComposing() and vanish.
+          const inferredIme =
+            lastKeyCode229 ||
+            composing ||
+            (!!ev.data && CJK_DATA_RE.test(ev.data));
+          if (inferredIme && ta) {
+            composing = true;
+            if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
+            const next =
+              ta.value.slice(sentPrefix.length) || ev.data || "";
+            if (
+              !imeDeleting &&
+              shouldFlushReplacedHangul(composingText, next)
+            ) {
+              const committed = normalizeHangulCommit(composingText);
+              sendUserInputToPty(committed);
+              lastCommitted = committed;
+              holdCommittedText(committed);
+            }
+            showComposing(next);
+            ev.stopImmediatePropagation();
+            return;
+          }
           hideComposing();
           return;
+        }
       }
     };
 

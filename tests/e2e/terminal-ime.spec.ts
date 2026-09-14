@@ -1495,6 +1495,73 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(writes).toContain("\x05");
   });
 
+  test("insertReplacementText 안 → 녕 flushes the previous syllable", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Production WKWebView on the custom protocol often never fires
+    // insertFromComposition. It replaces the helper textarea in place.
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertReplacementText",
+        data: "안",
+        taValue: "안",
+      },
+      {
+        type: "input",
+        inputType: "insertReplacementText",
+        data: "녕",
+        taValue: "녕",
+      },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(countToken(writes, "안")).toBe(1);
+    expect(countToken(writes, "녕")).toBe(0);
+    expect(await imeOverlayText(page)).toContain("녕");
+  });
+
+  test("insertReplacementText ㅎ → 하 → 한 does not flush mid-syllable", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertReplacementText",
+        data: "ㅎ",
+        taValue: "ㅎ",
+      },
+      {
+        type: "input",
+        inputType: "insertReplacementText",
+        data: "하",
+        taValue: "하",
+      },
+      {
+        type: "input",
+        inputType: "insertReplacementText",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(writes).not.toContain("ㅎ");
+    expect(writes).not.toContain("하");
+    expect(writes).not.toContain("한");
+    expect(await imeOverlayText(page)).toContain("한");
+  });
+
   test("Two sequential Korean syllables (안 → 녕) each commit exactly once", async ({
     page,
     tauri,

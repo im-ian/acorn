@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   compositionRemainderAfterCommit,
+  isHangulCompositionAdvance,
   isHangulDecomposition,
   isHangulJamoOnly,
   normalizeHangulCommit,
+  shouldFlushReplacedHangul,
 } from "./terminalIme";
 
 describe("isHangulJamoOnly", () => {
@@ -41,6 +43,38 @@ describe("isHangulDecomposition", () => {
 
   it("treats emptying the preview as decomposition", () => {
     expect(isHangulDecomposition("ㅇ", "")).toBe(true);
+  });
+});
+
+describe("isHangulCompositionAdvance", () => {
+  it("treats jamo growing into a syllable as the same composition", () => {
+    expect(isHangulCompositionAdvance("ㅎ", "하")).toBe(true);
+    expect(isHangulCompositionAdvance("하", "한")).toBe(true);
+    expect(isHangulCompositionAdvance("ㅇ", "아")).toBe(true);
+    expect(isHangulCompositionAdvance("아", "안")).toBe(true);
+  });
+
+  it("rejects a new syllable or a different jamo", () => {
+    expect(isHangulCompositionAdvance("안", "녕")).toBe(false);
+    expect(isHangulCompositionAdvance("ㅋ", "ㅎ")).toBe(false);
+    expect(isHangulCompositionAdvance("안", "ㅋ")).toBe(false);
+  });
+});
+
+describe("shouldFlushReplacedHangul", () => {
+  it("flushes a finished syllable replaced by the next one", () => {
+    expect(shouldFlushReplacedHangul("안", "녕")).toBe(true);
+    expect(shouldFlushReplacedHangul("안", "ㄴ")).toBe(true);
+    expect(shouldFlushReplacedHangul("ㅋ", "ㅎ")).toBe(true);
+  });
+
+  it("does not flush in-composition growth or backspace", () => {
+    expect(shouldFlushReplacedHangul("ㅎ", "하")).toBe(false);
+    expect(shouldFlushReplacedHangul("하", "한")).toBe(false);
+    expect(shouldFlushReplacedHangul("한", "하")).toBe(false);
+    expect(shouldFlushReplacedHangul("안", "ㅇ")).toBe(false);
+    expect(shouldFlushReplacedHangul("안", "안")).toBe(false);
+    expect(shouldFlushReplacedHangul("", "안")).toBe(false);
   });
 });
 

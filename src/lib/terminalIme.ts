@@ -63,6 +63,42 @@ export function isHangulDecomposition(previous: string, next: string): boolean {
   );
 }
 
+/**
+ * True when `next` is the same composition growing (ㅎ→하→한, ㅇ→아→안).
+ * Production WKWebView delivers that as `insertReplacementText` and must
+ * not flush the previous preview.
+ */
+export function isHangulCompositionAdvance(previous: string, next: string): boolean {
+  if (!previous || !next) return false;
+  const prevNfc = previous.normalize("NFC");
+  const nextNfc = next.normalize("NFC");
+  if (prevNfc === nextNfc) return true;
+  const prevNfd = prevNfc.normalize("NFD");
+  const nextNfd = nextNfc.normalize("NFD");
+  if (nextNfd.startsWith(prevNfd) && nextNfd.length > prevNfd.length) {
+    return true;
+  }
+  return (
+    isHangulJamoOnly(prevNfc) &&
+    !isHangulJamoOnly(nextNfc) &&
+    choseongIndex(prevNfc) !== null &&
+    choseongIndex(prevNfc) === choseongIndex(nextNfc)
+  );
+}
+
+/**
+ * True when WKWebView replaced the helper textarea with a new Hangul
+ * composition and the previous preview is a finished syllable that never
+ * got `insertFromComposition`. Custom-protocol production builds often
+ * skip that event; HTTP `tauri dev` usually does not.
+ */
+export function shouldFlushReplacedHangul(previous: string, next: string): boolean {
+  if (!previous || previous === next) return false;
+  if (isHangulDecomposition(previous, next)) return false;
+  if (isHangulCompositionAdvance(previous, next)) return false;
+  return true;
+}
+
 /** Precompose conjoining jamo so the PTY receives 안, not ᄋ+ᅡ+ᆫ. */
 export function normalizeHangulCommit(text: string): string {
   if (/[\u1100-\u11FF\uA960-\uA97F\uD7B0-\uD7FF]/u.test(text)) {
