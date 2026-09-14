@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ptyPixelSize,
   shouldForceCommandPtyResize,
+  sigwinchPulseSize,
 } from "./terminalPtySize";
 
 function term(type: string, mouseTrackingMode: string) {
@@ -24,6 +25,51 @@ describe("shouldForceCommandPtyResize", () => {
     expect(shouldForceCommandPtyResize(term("normal", "any"))).toBe(false);
     expect(shouldForceCommandPtyResize(term("normal", "vt200"))).toBe(false);
     expect(shouldForceCommandPtyResize(term("normal", "drag"))).toBe(false);
+  });
+});
+
+describe("sigwinchPulseSize", () => {
+  it("shrinks a row when the grid is taller than one line", () => {
+    expect(
+      sigwinchPulseSize({
+        cols: 120,
+        rows: 40,
+        pixelWidth: 960,
+        pixelHeight: 800,
+      }),
+    ).toEqual({
+      cols: 120,
+      rows: 39,
+      pixelWidth: 960,
+      pixelHeight: 780,
+    });
+  });
+
+  it("shrinks a column on a single-row grid", () => {
+    expect(
+      sigwinchPulseSize({
+        cols: 80,
+        rows: 1,
+        pixelWidth: 640,
+        pixelHeight: 17,
+      }),
+    ).toEqual({
+      cols: 79,
+      rows: 1,
+      pixelWidth: 632,
+      pixelHeight: 17,
+    });
+  });
+
+  it("returns null when the grid cannot shrink", () => {
+    expect(
+      sigwinchPulseSize({
+        cols: 1,
+        rows: 1,
+        pixelWidth: 8,
+        pixelHeight: 17,
+      }),
+    ).toBeNull();
   });
 });
 

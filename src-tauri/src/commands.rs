@@ -9346,6 +9346,15 @@ fn spawn_via_daemon<R: Runtime + 'static>(
                 "daemon stream attach failed: {e}; retry the attachment instead of starting a duplicate local PTY"
             )
         })?;
+        // Same-size TIOCSWINSZ is a no-op in the tty driver, so a remount
+        // at the current pane geometry never delivers SIGWINCH. Step the
+        // size down and back so a live TUI redraws onto the new xterm.
+        if cols > 0 && rows > 0 {
+            if let Some((pulse_cols, pulse_rows)) = sigwinch_pulse_size(cols, rows) {
+                let _ = bridge.resize(id, pulse_cols, pulse_rows, 0, 0);
+            }
+            let _ = bridge.resize(id, cols, rows, pixel_width, pixel_height);
+        }
         return Ok(());
     }
 
@@ -9410,6 +9419,16 @@ fn spawn_via_daemon<R: Runtime + 'static>(
             "daemon stream attach failed: {e}; retry the attachment instead of starting a duplicate local PTY"
         )
     })
+}
+
+fn sigwinch_pulse_size(cols: u16, rows: u16) -> Option<(u16, u16)> {
+    if rows > 1 {
+        Some((cols, rows - 1))
+    } else if cols > 1 {
+        Some((cols - 1, rows))
+    } else {
+        None
+    }
 }
 
 fn daemon_attach_replay_scrollback(freshly_spawned: bool, requested_replay: bool) -> bool {
@@ -12453,9 +12472,10 @@ mod tests {
         pty_io_uses_daemon, reconcile_stale_worktrees, remove_linked_worktree_at_path,
         remove_worktree_inner, restore_pending_session_removal, resume_session_inner,
         retry_removal_cleanup_inner, seed_initial_commit, should_remove_local_project_mirror,
-        should_route_session_to_daemon, terminate_session_runtime, validate_display_name,
-        validate_editor_command, validate_new_project_name, validate_pty_caller_env,
-        ChatProviderAdapter, ProcessMemorySnapshot, RemovalProgress, MAX_PTY_WORKSPACE_NAME_BYTES,
+        should_route_session_to_daemon, sigwinch_pulse_size, terminate_session_runtime,
+        validate_display_name, validate_editor_command, validate_new_project_name,
+        validate_pty_caller_env, ChatProviderAdapter, ProcessMemorySnapshot, RemovalProgress,
+        MAX_PTY_WORKSPACE_NAME_BYTES,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingRemovalStep, PendingSessionRemoval};
@@ -16995,6 +17015,13 @@ mod tests {
     fn existing_daemon_attach_honors_frontend_replay_plan() {
         assert!(daemon_attach_replay_scrollback(false, true));
         assert!(!daemon_attach_replay_scrollback(false, false));
+    }
+
+    #[test]
+    fn sigwinch_pulse_changes_geometry() {
+        assert_eq!(sigwinch_pulse_size(120, 40), Some((120, 39)));
+        assert_eq!(sigwinch_pulse_size(120, 1), Some((119, 1)));
+        assert_eq!(sigwinch_pulse_size(1, 1), None);
     }
 
     #[test]
