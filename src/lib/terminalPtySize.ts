@@ -14,6 +14,40 @@ export function shouldForceCommandPtyResize(term: {
   );
 }
 
+export type PtyGridSize = {
+  cols: number;
+  rows: number;
+  pixelWidth: number;
+  pixelHeight: number;
+};
+
+/** One-cell shrink used to force a tty SIGWINCH when geometry is unchanged. */
+export function sigwinchPulseSize(size: PtyGridSize): PtyGridSize | null {
+  if (size.rows > 1) {
+    const rows = size.rows - 1;
+    return {
+      ...size,
+      rows,
+      pixelHeight:
+        size.pixelHeight > 0
+          ? Math.max(1, Math.round((size.pixelHeight * rows) / size.rows))
+          : 0,
+    };
+  }
+  if (size.cols > 1) {
+    const cols = size.cols - 1;
+    return {
+      ...size,
+      cols,
+      pixelWidth:
+        size.pixelWidth > 0
+          ? Math.max(1, Math.round((size.pixelWidth * cols) / size.cols))
+          : 0,
+    };
+  }
+  return null;
+}
+
 export function ptyPixelSize(
   cols: number,
   rows: number,

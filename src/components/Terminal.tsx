@@ -43,6 +43,7 @@ import {
 import {
   ptyPixelSize,
   shouldForceCommandPtyResize,
+  sigwinchPulseSize,
 } from "../lib/terminalPtySize";
 import {
   createTerminalOutputWriter,
@@ -3476,6 +3477,28 @@ export function Terminal({
       if (disposed) return;
       await spawnPty();
       if (disposed) return;
+      // Same-size TIOCSWINSZ is a no-op in the tty driver. Step the live
+      // PTY down and back so a remounted overlay TUI redraws onto this xterm.
+      if (daemonSessionAliveAtMount) {
+        const size = currentPtySize();
+        const pulse = sigwinchPulseSize(size);
+        if (pulse) {
+          lastPtyResize = pulse;
+          try {
+            await invoke("pty_resize", {
+              sessionId,
+              cols: pulse.cols,
+              rows: pulse.rows,
+              pixelWidth: pulse.pixelWidth,
+              pixelHeight: pulse.pixelHeight,
+            });
+          } catch (err) {
+            console.error("[Terminal] pty_resize failed", err);
+          }
+          if (disposed) return;
+        }
+        sendPtyResize(true, size);
+      }
 
       const unsubArchiveResume = useAppStore.subscribe((state, prev) => {
         const current = state.sessions.find(
