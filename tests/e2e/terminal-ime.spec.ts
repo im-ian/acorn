@@ -298,7 +298,8 @@ test.describe("terminal: IME (PR #104 regression)", () => {
           : null,
         cursorAnchorWidth: cursorRect.width,
         cursorAfterText: Math.abs(cursorRect.left - textRect.right),
-        tailAfterCursor: Math.abs(tailRect.left - cursorRect.left),
+        tailAtOrigin: Math.abs(tailRect.left - textRect.left),
+        markerLeft: Number.parseFloat(marker.left),
       };
     });
 
@@ -315,9 +316,11 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     // "한" spends two terminal columns; the preview lays it out on that grid
     // instead of collapsing to the glyph's own advance.
     expect(cursorLayout.textWidth).toBeCloseTo(2 * cursorLayout.cellWidth, 0);
-    // The caret sits one inset inside the text box's trailing cell edge.
-    expect(cursorLayout.cursorAfterText).toBeCloseTo(2, 0);
-    expect(cursorLayout.tailAfterCursor).toBeLessThan(0.5);
+    // Caret follows the composing cells. The cloned tail is pinned at the
+    // overlay origin so TUI chrome (`│`) does not slide with Hangul width.
+    expect(cursorLayout.cursorAfterText).toBeLessThan(0.5);
+    expect(cursorLayout.tailAtOrigin).toBeLessThan(0.5);
+    expect(cursorLayout.markerLeft).toBeCloseTo(-2, 0);
 
     await runIme(page, [
       {
@@ -367,12 +370,9 @@ test.describe("terminal: IME (PR #104 regression)", () => {
       if (!text || !caret) throw new Error("IME overlay nodes missing");
       const snapped = caret.getBoundingClientRect().left;
       const cellMarkup = text.innerHTML;
-      const inset = text.style.marginRight;
-      text.style.marginRight = "";
       text.textContent = text.textContent ?? "";
       const naturalAdvance = caret.getBoundingClientRect().left;
       text.innerHTML = cellMarkup;
-      text.style.marginRight = inset;
       return { snapped, naturalAdvance };
     });
 
@@ -401,12 +401,12 @@ test.describe("terminal: IME (PR #104 regression)", () => {
       return cursor.getBoundingClientRect().left;
     });
 
-    // Committing must barely shift the caret. The preview tracks the cell
-    // boundary the real cursor lands on, held 2px inside it so the marker
-    // still reads as attached to the syllable. Laying the preview out at the
-    // glyph's natural advance instead lands materially further short, so the
-    // caret would visibly jump outward on every echo.
-    expect(realCursorLeft - composing.snapped).toBeCloseTo(2, 0);
+    // The caret *anchor* tracks the cell boundary the real cursor lands on,
+    // so committing does not jump the cloned tail. The marker sits 2px inside
+    // that boundary via ::after. Laying the preview out at the glyph's
+    // natural advance instead lands short, so the caret would visibly jump
+    // outward on every echo.
+    expect(realCursorLeft - composing.snapped).toBeCloseTo(0, 0);
     // Not asserted as a magnitude: how far short the raw glyph advance falls
     // depends on the CJK font the test browser happens to resolve.
     expect(composing.naturalAdvance).toBeLessThanOrEqual(composing.snapped);
@@ -473,6 +473,43 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(countToken(writes, "녕")).toBe(1);
   });
 
+  test("hold stays while the next syllable is still composing", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "안",
+        taValue: "안",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "안",
+        taValue: "",
+      },
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "녕",
+        taValue: "녕",
+      },
+    ]);
+    expect(await imeOverlayText(page)).toBe("안녕");
+
+    // Old ceiling was 400ms from the first commit and cleared 안 while 녕
+    // was still being composed, so the caret jumped back to the TUI cursor.
+    await page.waitForTimeout(600);
+    expect(await imeOverlayText(page)).toBe("안녕");
+  });
+
   test("a partial echo releases only the syllables the buffer took over", async ({
     page,
     tauri,
@@ -518,6 +555,58 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
       "> 안녕",
     );
+  });
+
+  test("composing Hangul does not slide a TUI right border inward", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Grok/Codex/Claude-style chrome: rounded corners on adjacent rows, `│`
+    // on the cursor line. Normal buffer — overlay TUIs do not have to enter
+    // the alternate screen.
+    await emitPtyOutput(page, "╭────╮\r\n│    │\r\n╰────╯\x1b[2;2H");
+    await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
+      "╭────╮",
+    );
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "한",
+        taValue: "한",
+      },
+    ]);
+
+    const composition = page.locator(".composition-view.active");
+    await expect(composition.locator(".acorn-ime-composition-text")).toHaveText(
+      "한",
+    );
+    await expect(composition.locator(".acorn-ime-line-tail")).toContainText("│");
+
+    const layout = await composition.evaluate((element) => {
+      const text = element.querySelector<HTMLElement>(
+        ".acorn-ime-composition-text",
+      );
+      const tail = element.querySelector<HTMLElement>(".acorn-ime-line-tail");
+      if (!text || !tail) throw new Error("IME overlay nodes missing");
+      return {
+        tailAtOrigin: Math.abs(
+          tail.getBoundingClientRect().left - text.getBoundingClientRect().left,
+        ),
+        textWidth: text.getBoundingClientRect().width,
+        cellWidth: Number.parseFloat(
+          getComputedStyle(element).getPropertyValue("--acorn-ime-cell-width"),
+        ),
+      };
+    });
+    // Tail starts at the cursor column, not after the 2-cell Hangul box.
+    expect(layout.tailAtOrigin).toBeLessThan(0.5);
+    expect(layout.textWidth).toBeCloseTo(2 * layout.cellWidth, 0);
   });
 
   test("composition cursor follows an application-owned DECSCUSR shape", async ({
@@ -863,6 +952,371 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(writes).not.toContain("이");
   });
 
+  test("backspacing the last jamo clears the overlay immediately", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // 안 → ㅇ → empty. The last Backspace used to be treated as a terminator
+    // that committed ㅇ into the pending-commit hold, so the glyph lingered
+    // until the hold timer (400ms) fired.
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "안",
+        taValue: "안",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "ㅇ",
+        taValue: "ㅇ",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "",
+        taValue: "",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "ㅇ",
+        taValue: "",
+      },
+    ]);
+
+    expect(await imeOverlayText(page)).toBe("");
+    await expect(page.locator(".composition-view.active")).toHaveCount(0);
+    const writes = await getWrites(page);
+    expect(writes).not.toContain("안");
+    expect(writes).not.toContain("ㅇ");
+    expect(writes).not.toContain("\x7f");
+  });
+
+  test("insertFromComposition after IME backspace does not hold the last jamo", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Real WKWebView order: Backspace while the textarea still holds ㅇ,
+    // then insertFromComposition("ㅇ"), then an empty preview. Committing
+    // that compositionend parks ㅇ in the echo-hold until the timer.
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "안",
+        taValue: "안",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "ㅇ",
+        taValue: "ㅇ",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "ㅇ",
+        taValue: "ㅇ",
+      },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "",
+        taValue: "",
+      },
+    ]);
+
+    expect(await imeOverlayText(page)).toBe("");
+    await expect(page.locator(".composition-view.active")).toHaveCount(0);
+    const writes = await getWrites(page);
+    expect(writes).not.toContain("안");
+    expect(writes).not.toContain("ㅇ");
+  });
+
+  test("plain Backspace after IME compositionend does not hold the last jamo", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // After the last jamo is gone, WKWebView may deliver a normal
+    // Backspace (keyCode 8). That used to hit the terminator path and
+    // commitComposition(), parking ㅇ in the 2s echo-hold.
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "ㅇ",
+        taValue: "ㅇ",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      { type: "keydown", key: "Backspace", keyCode: 8 },
+    ]);
+
+    expect(await imeOverlayText(page)).toBe("");
+    await expect(page.locator(".composition-view.active")).toHaveCount(0);
+    const writes = await getWrites(page);
+    expect(writes).not.toContain("ㅇ");
+  });
+
+  test("Backspace after IME preview is empty deletes the echoed syllable", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // 안녕하세요 already in the buffer (TUI echo). Decomposing a leftover
+    // ㅇ must not leave imeDeleting sticky — the next Backspace has to
+    // emit \x7f so 세 can delete.
+    await emitPtyOutput(page, "안녕하세요");
+    await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
+      "안녕하세요",
+    );
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "ㅇ",
+        taValue: "ㅇ",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "",
+        taValue: "",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 8 },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(writes).toContain("\x7f");
+  });
+
+  test("Backspace after decomposing 요 reaches PTY despite leftover ta.value", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Incremental insertText leaves committed syllables in the helper
+    // textarea. After 안녕하세요, ta.value is "안녕하세" + composing "요".
+    // Treating !!ta.value as a live preview would swallow the Backspace
+    // that should delete echoed 세.
+    const syllable = (soFar: string, next: string) =>
+      [
+        { type: "keydown" as const, key: "Process", keyCode: 229 },
+        {
+          type: "input" as const,
+          inputType: "insertText",
+          data: next,
+          taValue: soFar + next,
+        },
+      ];
+
+    await runIme(page, [
+      ...syllable("", "안"),
+      ...syllable("안", "녕"),
+      ...syllable("안녕", "하"),
+      ...syllable("안녕하", "세"),
+      ...syllable("안녕하세", "요"),
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "ㅇ",
+        taValue: "안녕하세ㅇ",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "",
+        taValue: "안녕하세",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 8 },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(writes.join("")).toContain("\x7f");
+  });
+
+  test("unmarked trailing jamo from insertReplacementText does not swallow later Backspaces", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Real WKWebView stream (captured 2026-09-14): backspacing 요 fires
+    // insertReplacementText("ㅇ") and ENDS the composition — the ㅇ stays
+    // in the textarea as plain unmarked text, and every following
+    // Backspace arrives as keyCode 8 with NO input event. The swallow
+    // must consume the tail from the textarea, or previewTail() stays
+    // non-empty and 안녕하세요 never deletes past 요.
+    const syllable = (soFar: string, next: string) =>
+      [
+        { type: "keydown" as const, key: "Process", keyCode: 229 },
+        {
+          type: "input" as const,
+          inputType: "insertText",
+          data: next,
+          taValue: soFar + next,
+        },
+      ];
+
+    await runIme(page, [
+      ...syllable("", "안"),
+      ...syllable("안", "녕"),
+      ...syllable("안녕", "하"),
+      ...syllable("안녕하", "세"),
+      ...syllable("안녕하세", "요"),
+      // 요 → ㅇ decomposition: the replacement input precedes its keydown.
+      {
+        type: "input",
+        inputType: "insertReplacementText",
+        data: "ㅇ",
+        taValue: "안녕하세ㅇ",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertReplacementText",
+        data: "ㅇ",
+        taValue: "안녕하세ㅇ",
+      },
+      // Composition is over; the rest are plain keyCode-8 Backspaces with
+      // no input events. First one consumes the leftover ㅇ preview.
+      { type: "keydown", key: "Backspace", keyCode: 8 },
+      { type: "keydown", key: "Backspace", keyCode: 8 },
+      { type: "keydown", key: "Backspace", keyCode: 8 },
+      { type: "keydown", key: "Backspace", keyCode: 8 },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(countToken(writes, "\x7f")).toBe(3);
+  });
+
+  test("held Backspace keeps deleting past 요 when keydowns stay keyCode 229", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // xterm's CompositionHelper drops every keyCode-229 keydown, so after
+    // composition teardown the handler must emit DEL itself — otherwise
+    // holding Backspace deletes 요 and then goes dead (세/하/녕 survive).
+    const syllable = (soFar: string, next: string) =>
+      [
+        { type: "keydown" as const, key: "Process", keyCode: 229 },
+        {
+          type: "input" as const,
+          inputType: "insertText",
+          data: next,
+          taValue: soFar + next,
+        },
+      ];
+
+    await runIme(page, [
+      ...syllable("", "안"),
+      ...syllable("안", "녕"),
+      ...syllable("안녕", "하"),
+      ...syllable("안녕하", "세"),
+      ...syllable("안녕하세", "요"),
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "ㅇ",
+        taValue: "안녕하세ㅇ",
+      },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "",
+        taValue: "안녕하세",
+      },
+      // Auto-repeat continues with the IME keyCode; no input events follow.
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+      { type: "keydown", key: "Backspace", keyCode: 229 },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(countToken(writes, "\x7f")).toBe(3);
+  });
+
+  test("Alt+Backspace outside composition keeps xterm's ESC DEL mapping", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Word-delete must reach xterm untouched — the IME DEL takeover only
+    // owns the plain keyCode-229 case.
+    await runIme(page, [
+      { type: "keydown", key: "Backspace", keyCode: 8, alt: true },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(writes.join("")).toContain("\x1b\x7f");
+    expect(countToken(writes, "\x7f")).toBe(1);
+  });
+
+  test("insertFromComposition of a lone jamo does not echo-hold it", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // WKWebView can fire compositionend(ㅇ) with no Backspace keydown
+    // first. That used to commit+hold ㅇ until PENDING_COMMIT_MAX_MS.
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "ㅇ",
+        taValue: "ㅇ",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "ㅇ",
+        taValue: "",
+      },
+    ]);
+
+    expect(await imeOverlayText(page)).toBe("");
+    await expect(page.locator(".composition-view.active")).toHaveCount(0);
+    const writes = await getWrites(page);
+    expect(writes).not.toContain("ㅇ");
+  });
+
   test("Shift+Enter sends LF, not CR", async ({ page, tauri }) => {
     await seed(tauri);
     await activateTerminal(page);
@@ -958,6 +1412,96 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     // into the next composition's textarea-tail slice.
     expect(joined).not.toContain("안녕안");
     expect(joined).not.toContain("녕녕");
+  });
+
+  test("chained Hangul keeps the next syllable in the overlay (안녕하)", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // WKWebView often starts the next syllable before it commits the
+    // previous one: insertCompositionText("하") then
+    // insertFromComposition("녕"). The overlay must still show 하.
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "안",
+        taValue: "안",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "안",
+        taValue: "",
+      },
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "녕",
+        taValue: "녕",
+      },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "하",
+        taValue: "하",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "녕",
+        taValue: "하",
+      },
+    ]);
+
+    expect(await imeOverlayText(page)).toContain("하");
+    const writes = await getWrites(page);
+    expect(countToken(writes, "안")).toBe(1);
+    expect(countToken(writes, "녕")).toBe(1);
+    expect(countToken(writes, "하")).toBe(0);
+  });
+
+  test("late insertFromComposition after insertText does not flush the next jamo", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Family B: insertText commits 녕 and previews 하, then Family A's
+    // insertFromComposition("녕") arrives. Must not PTY-write 하 or clear it.
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertText",
+        data: "녕",
+        taValue: "녕",
+      },
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertText",
+        data: "하",
+        taValue: "녕하",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "녕",
+        taValue: "하",
+      },
+    ]);
+
+    expect(await imeOverlayText(page)).toContain("하");
+    const writes = await getWrites(page);
+    expect(countToken(writes, "녕")).toBe(1);
+    expect(countToken(writes, "하")).toBe(0);
   });
 
   test("있 → space → 안 — syllable + terminator + next composition all clean", async ({

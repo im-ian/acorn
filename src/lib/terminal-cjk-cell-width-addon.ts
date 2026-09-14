@@ -44,10 +44,33 @@ interface TerminalInternals {
         value?: DomRenderer;
       };
     };
+    unicodeService?: {
+      getStringCellWidth?: (text: string) => number;
+    };
     _unicodeService?: {
       getStringCellWidth?: (text: string) => number;
     };
   };
+}
+
+/** Columns the terminal would spend on `text` — 2 per Hangul syllable.
+ *  `null` when the measurement is unavailable. Single owner of the
+ *  undocumented `_core.unicodeService` reach; keep every caller here so an
+ *  xterm bump has one place to chase. */
+export function terminalStringCellWidth(
+  term: unknown,
+  text: string,
+): number | null {
+  const core = (term as TerminalInternals)._core;
+  const unicode = core?.unicodeService ?? core?._unicodeService;
+  try {
+    return unicode?.getStringCellWidth?.(text) ?? null;
+  } catch {
+    // Undocumented internals — an xterm bump can move or remove them.
+    // `null` means "unknown", which callers must not confuse with the
+    // legitimate 0 of a combining mark.
+    return null;
+  }
 }
 
 const CELL_WIDTH_EPSILON = 0.25;
