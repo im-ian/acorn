@@ -37,6 +37,12 @@ import {
   terminalStringCellWidth,
 } from "../lib/terminal-cjk-cell-width-addon";
 import {
+  compositionRemainderAfterCommit,
+  isHangulDecomposition,
+  isHangulJamoOnly,
+  normalizeHangulCommit,
+} from "../lib/terminalIme";
+import {
   createTerminalRepaintScheduler,
   createTerminalVisibilityRepaintObserver,
   repaintTerminalViewport,
@@ -297,46 +303,6 @@ function terminalCellDims(term: XTerm): { width: number; height: number } | null
   const core = (term as unknown as TerminalRenderInternals)._core;
   const cell = core?._renderService?.dimensions?.css?.cell;
   return cell ? { width: cell.width, height: cell.height } : null;
-}
-
-/** Text that should stay in the IME overlay after `committed` is flushed.
- *  WKWebView often starts the next Hangul syllable (and fires
- *  `insertCompositionText`) before `insertFromComposition` for the previous
- *  one. The textarea/`preview` then already hold `하` while we are still
- *  committing `녕` — that remainder must not be cleared. */
-/** Choseong/jungseong/jongseong and compatibility jamo (ㅇ, ㄱ, ㅏ, …).
- *  A lone jamo `insertFromComposition` is composition teardown — backspace
- *  or click-away — not a confirmed syllable. Holding it is what leaves ㅇ
- *  on screen until the echo timer fires. */
-function isHangulJamoOnly(text: string): boolean {
-  if (text.length === 0) return false;
-  return [...text].every((char) => {
-    const cp = char.codePointAt(0);
-    if (cp === undefined) return false;
-    return (
-      (cp >= 0x1100 && cp <= 0x11ff) ||
-      (cp >= 0x3130 && cp <= 0x318f) ||
-      (cp >= 0xa960 && cp <= 0xa97f) ||
-      (cp >= 0xd7b0 && cp <= 0xd7ff)
-    );
-  });
-}
-
-function compositionRemainderAfterCommit(
-  live: string,
-  sentPrefix: string,
-  committed: string,
-  preview: string,
-): string {
-  if (!committed) return "";
-  const afterPrefix = live.startsWith(sentPrefix)
-    ? live.slice(sentPrefix.length)
-    : live;
-  const source = afterPrefix || preview;
-  if (!source || source === committed) return "";
-  const at = source.lastIndexOf(committed);
-  if (at >= 0) return source.slice(at + committed.length);
-  return source;
 }
 
 function terminalLineTailEndColumn(term: XTerm): number {
@@ -1813,6 +1779,21 @@ export function Terminal({
      * is a redraw rather than an echo: drop everything, which is the safe
      * direction since the held text is only ever a visual bridge.
      */
+    /** True once the buffer itself shows the held text at the cell it was
+     *  committed from — the echo has landed and owns those cells. */
+    const heldTextIsInBuffer = (): boolean => {
+      if (!pendingCommit) return false;
+      const line = term.buffer.active.getLine(pendingCommit.y);
+      if (!line) return false;
+      let column = pendingCommit.x;
+      for (const char of pendingCommit.text) {
+        const cell = line.getCell(column);
+        if (!cell || cell.getChars() !== char) return false;
+        column += Math.max(1, cell.getWidth());
+      }
+      return true;
+    };
+
     const dropEchoedPendingCommit = () => {
       if (!pendingCommit) return;
       const buf = term.buffer.active;
@@ -1821,7 +1802,17 @@ export function Terminal({
         clearPendingCommit();
         return;
       }
-      if (advanced === 0) return;
+      if (advanced === 0) {
+        // The cursor sitting on the commit cell usually means the echo has
+        // not landed yet — but it also happens when the echo landed and then
+        // moved the cursor back, which is what any cursor-movement key the
+        // user sends right after a syllable does (type 안, press ArrowLeft).
+        // Ask the buffer instead of inferring from the delta: once it shows
+        // the held text the hold is stale, and painting it anyway hides the
+        // real line — 안 then 녕 renders 안녕 over a buffer reading 녕안.
+        if (heldTextIsInBuffer()) clearPendingCommit();
+        return;
+      }
       let columns = 0;
       let retired = 0;
       for (const char of pendingCommit.text) {
@@ -1933,6 +1924,46 @@ export function Terminal({
       compositionTextView.replaceChildren(...cells);
       return totalColumns;
     };
+    /**
+     * Columns of blank buffer right after the cursor, capped at `max`.
+     *
+     * The cloned tail is painted *at* the cursor column rather than after the
+     * preview, so a TUI's fixed-width box keeps its right border on the same
+     * column while a syllable is being composed. The composing cells are then
+     * drawn over the tail's first columns, which only stays truthful while
+     * those columns are empty. Mid-line in a shell they hold real text, and
+     * covering it makes the character under the cursor vanish — type 안, move
+     * left, compose 녕, and 안 disappears behind it. Cover the blanks, shift
+     * the rest right the way the line will actually shift once the syllable
+     * lands.
+     */
+    const leadingBlankTailColumns = (max: number): number => {
+      if (max <= 0) return 0;
+      const buffer = term.buffer.active;
+      const line = buffer.getLine(buffer.baseY + buffer.cursorY);
+      if (!line) return max;
+      let columns = 0;
+      let column = buffer.cursorX;
+      while (columns < max) {
+        const cell = line.getCell(column);
+        if (!cell) return max;
+        // The trailing half of a wide glyph renders no column of its own —
+        // `renderTerminalLineTail` skips it, so counting it here would cover
+        // one column more than the tail actually draws and clip a real
+        // character out of the preview.
+        if (cell.getWidth() === 0) {
+          column += 1;
+          continue;
+        }
+        const chars = cell.getChars();
+        if (chars.length > 0 && chars !== " ") break;
+        const width = cell.getWidth();
+        columns += width;
+        column += width;
+      }
+      return Math.min(columns, max);
+    };
+
     const renderComposing = (text: string) => {
       if (!compositionView || text.length === 0) return;
       // Lay the preview out on the terminal's cell grid. A Hangul syllable
@@ -1970,10 +2001,18 @@ export function Terminal({
         compositionTailView,
       );
       const composedWidth = getCellDims()?.width;
-      compositionTailView.style.clipPath =
-        composedColumns > 0 && composedWidth
-          ? `inset(0 0 0 ${composedColumns * composedWidth}px)`
-          : "";
+      if (composedColumns > 0 && composedWidth) {
+        const covered = leadingBlankTailColumns(composedColumns);
+        compositionTailView.style.clipPath = `inset(0 0 0 ${
+          covered * composedWidth
+        }px)`;
+        compositionTailView.style.left = `${
+          (composedColumns - covered) * composedWidth
+        }px`;
+      } else {
+        compositionTailView.style.clipPath = "";
+        compositionTailView.style.left = "";
+      }
 
       // Sync font with the current xterm options so the preview uses the
       // user's configured terminal font/size, not the default sans inherited
@@ -2040,6 +2079,35 @@ export function Terminal({
       syncComposing();
     };
 
+    /**
+     * Flush whatever the textarea has finalized ahead of the marked run.
+     *
+     * `ev.data` is the marked text the IME is still editing, so everything
+     * before it in `ta.value` is committed. Shared by `insertText` and
+     * `insertReplacementText` — both carry the same shape, they differ only
+     * in whether the marked run grew or was replaced in place.
+     *
+     * Deliberately a textarea diff rather than a judgement about whether the
+     * syllable "advanced": Korean NFD keeps a jongseong cluster as a single
+     * character (갑 = 갑, 값 = 값), so 갑 → 값 is neither a prefix
+     * extension nor a prefix truncation. Classifying transitions that way
+     * flushes a syllable still being composed — 반갑습니다 → 반갑값갑습니다.
+     */
+    const commitFinalizedPrefix = (value: string, markedLength: number) => {
+      if (imeDeleting) return;
+      const committedEnd = value.length - markedLength;
+      if (committedEnd <= sentPrefix.length) return;
+      const committed = normalizeHangulCommit(
+        value.slice(sentPrefix.length, committedEnd),
+      );
+      if (!committed) return;
+      sendUserInputToPty(committed);
+      lastCommitted = committed;
+      committedThisComposition = true;
+      holdCommittedText(committed);
+      sentPrefix = value.slice(0, committedEnd);
+    };
+
     const armPendingCommitTimeout = () => {
       if (pendingCommitTimer !== null || !pendingCommit) return;
       pendingCommitTimer = window.setTimeout(() => {
@@ -2056,8 +2124,9 @@ export function Terminal({
     };
 
     const holdCommittedText = (text: string) => {
-      if (text.length === 0) return;
-      if (isHangulJamoOnly(text)) return;
+      const normalized = normalizeHangulCommit(text);
+      if (normalized.length === 0) return;
+      if (isHangulJamoOnly(normalized)) return;
       // Typing faster than the echo commits several syllables against the
       // same cell. Whatever survives this call is still anchored there, so
       // append rather than replace — dropping the earlier syllable would
@@ -2065,7 +2134,7 @@ export function Terminal({
       dropEchoedPendingCommit();
       const buf = term.buffer.active;
       pendingCommit = {
-        text: `${pendingCommit?.text ?? ""}${text}`,
+        text: `${pendingCommit?.text ?? ""}${normalized}`,
         x: pendingCommit?.x ?? buf.cursorX,
         y: pendingCommit?.y ?? buf.baseY + buf.cursorY,
       };
@@ -2091,6 +2160,14 @@ export function Terminal({
     // idempotent `commitComposition()` — a second call for the same
     // syllable becomes a no-op.
     let sentPrefix = "";
+    let lastCommitted = "";
+    // Whether the composition currently in flight has already been flushed.
+    // A terminator (space/Enter) commits from `keydown`, and WebKit still
+    // delivers `insertFromComposition` for the same syllable afterwards —
+    // without this that late event commits a second time (안녕하세요 요).
+    // `composing` used to double as this flag, which is why the commit path
+    // and the teardown path kept fighting over it.
+    let committedThisComposition = false;
     let lastKeyCode229 = false;
     let composing = false;
     // Still gates insertFromComposition / insertText cancel. Backspace
@@ -2136,6 +2213,12 @@ export function Terminal({
       }
     };
 
+    /** Comparison form for textarea text vs. an already-committed syllable:
+     *  WebKit may hand back NFD, or a NO-BREAK SPACE where the commit carried
+     *  a plain one. */
+    const canonicalImeText = (text: string): string =>
+      normalizeShellCommandWhitespace(text).normalize("NFC");
+
     const commitComposition = (explicit?: string) => {
       if (!composing) return;
       if (imeDeleting) {
@@ -2152,11 +2235,14 @@ export function Terminal({
         live.length > sentPrefix.length ? live.slice(sentPrefix.length) : "";
       // `insertFromComposition` names the syllable being flushed. Prefer it
       // over the textarea tail — the tail may already be the next jamo.
-      const data = explicit ? explicit : tail;
+      const data = normalizeHangulCommit(explicit ? explicit : tail);
       if (data) {
         sendUserInputToPty(data);
-        // Jamo are preview-only until a terminator (space/enter) confirms
-        // them. insertFromComposition("ㅇ") after backspace is teardown.
+        lastCommitted = data;
+        committedThisComposition = true;
+        // Jamo are preview-only in the overlay until a terminator confirms
+        // them. They still go to the PTY so ㅋㅋㅋ commits; the hold is what
+        // parks a leftover ㅇ on screen after backspace.
         if (!isHangulJamoOnly(data)) {
           holdCommittedText(data);
         }
@@ -2224,6 +2310,16 @@ export function Terminal({
             ev.stopImmediatePropagation();
             return;
           }
+          if (
+            imeDeleting &&
+            !isHangulDecomposition(composingText, preview)
+          ) {
+            imeDeleting = false;
+          }
+          // A live preview means the IME is composing something that has not
+          // been flushed yet — including the second 나 of 나나, which is a
+          // fresh composition rather than a duplicate of the first.
+          committedThisComposition = false;
           composing = true;
           showComposing(preview);
           ev.stopImmediatePropagation();
@@ -2231,30 +2327,58 @@ export function Terminal({
         }
 
         case "deleteCompositionText": {
+          // WebKit strips the marked text immediately before
+          // `insertFromComposition` hands over the finished syllable, so this
+          // is a preview clear, not the end of the composition. Tearing
+          // `composing` down here makes that commit hit the `!composing`
+          // guard and the syllable never reaches the PTY. It only lands on
+          // syllables whose textarea happens to empty out, which is why the
+          // loss alternates: 반갑습니다 arrives as 갑니다.
           const next = ta
             ? ta.value.length > sentPrefix.length
               ? ta.value.slice(sentPrefix.length)
               : ""
             : "";
           if (next.length === 0) {
-            if (imeDeleting) dropHoldMatchingPreview();
-            composing = false;
+            // Backspacing the last jamo is the one case where the composition
+            // really is over and no commit follows.
+            if (imeDeleting) {
+              dropHoldMatchingPreview();
+              composing = false;
+            }
             hideComposing();
+          } else {
+            showComposing(next);
           }
           ev.stopImmediatePropagation();
           return;
         }
 
         case "insertReplacementText": {
-          // Trailing char being recomposed in place. Preview only — never
-          // commit here, the next insertText / insertFromComposition /
-          // terminator-keydown carries the commit.
+          // The marked run recomposed in place (갑 → 값 → 갑). Anything the
+          // textarea holds *before* `ev.data` is finalized and must flush —
+          // WKWebView never fires insertFromComposition here, so this is the
+          // only commit point until a terminator.
           composing = true;
           if (ta) {
-            // Stale sentPrefix detection: if textarea no longer starts
-            // with the prefix we tracked, a non-IME keystroke (Space,
-            // Ctrl+C, …) reset the textarea between compositions.
             if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
+            const next = ta.value.slice(sentPrefix.length);
+            // Resolve the backspace flag first: a replacement that is not the
+            // IME shrinking the current syllable ends the delete, and the
+            // commit below is gated on `imeDeleting`.
+            if (
+              imeDeleting &&
+              next &&
+              !isHangulDecomposition(composingText, next)
+            ) {
+              imeDeleting = false;
+            }
+            // `ev.data` is the marked run. Null data names no marked run, and
+            // treating that as "nothing is marked" would flush the syllable
+            // still being composed.
+            if (ev.data != null) {
+              commitFinalizedPrefix(ta.value, ev.data.length);
+            }
             showComposing(ta.value.slice(sentPrefix.length));
           }
           ev.stopImmediatePropagation();
@@ -2293,16 +2417,23 @@ export function Terminal({
           const isIme =
             lastKeyCode229 || (!!ev.data && CJK_DATA_RE.test(ev.data));
           if (isIme && imeDeleting) {
-            const preview = previewTail();
-            if (preview.length === 0) {
-              dropHoldMatchingPreview();
-              composing = false;
-              hideComposing();
+            if (
+              ev.data &&
+              !isHangulDecomposition(composingText || previewTail(), ev.data)
+            ) {
+              imeDeleting = false;
             } else {
-              showComposing(preview);
+              const preview = previewTail();
+              if (preview.length === 0) {
+                dropHoldMatchingPreview();
+                composing = false;
+                hideComposing();
+              } else {
+                showComposing(preview);
+              }
+              ev.stopImmediatePropagation();
+              return;
             }
-            ev.stopImmediatePropagation();
-            return;
           }
           if (!isIme) {
             // Plain ASCII. xterm's keypress already emitted it; we
@@ -2324,13 +2455,7 @@ export function Terminal({
           if (!value.startsWith(sentPrefix)) {
             sentPrefix = value.slice(0, Math.max(0, value.length - newCharLen));
           }
-          const committedEnd = value.length - newCharLen;
-          if (committedEnd > sentPrefix.length) {
-            const committed = value.slice(sentPrefix.length, committedEnd);
-            sendUserInputToPty(committed);
-            holdCommittedText(committed);
-            sentPrefix = value.slice(0, committedEnd);
-          }
+          commitFinalizedPrefix(value, newCharLen);
           showComposing(value.slice(sentPrefix.length));
           ev.stopImmediatePropagation();
           return;
@@ -2341,34 +2466,55 @@ export function Terminal({
           // if a terminator-keydown or insertText already flushed this
           // syllable, skip so we do not send the next jamo and wipe its
           // preview.
+          const committed = normalizeHangulCommit(ev.data ?? "");
           if (imeDeleting) {
-            dropHoldMatchingPreview();
-            const next = previewTail();
-            if (next.length === 0) {
-              composing = false;
-              hideComposing();
+            if (
+              committed &&
+              !isHangulJamoOnly(committed) &&
+              !isHangulDecomposition(
+                composingText || previewTail(),
+                committed,
+              )
+            ) {
+              imeDeleting = false;
             } else {
-              showComposing(next);
+              dropHoldMatchingPreview();
+              const next = previewTail();
+              if (next.length === 0) {
+                composing = false;
+                hideComposing();
+              } else {
+                showComposing(next);
+              }
+              ev.stopImmediatePropagation();
+              return;
             }
-            ev.stopImmediatePropagation();
-            return;
           }
-          const committed = ev.data ?? "";
+          // Skip only a syllable this very composition already flushed — a
+          // terminator-keydown or the textarea diff beat this event to it.
+          // Keying off `lastCommitted` alone would read the second 나 of 나나
+          // as a duplicate and drop it; `composingText !== committed` keeps
+          // that case out, because a repeat arrives with its own live preview
+          // while an already-flushed syllable does not.
           if (
             committed &&
-            pendingCommit?.text.endsWith(committed) &&
+            committedThisComposition &&
+            lastCommitted.endsWith(committed) &&
             composingText !== committed
           ) {
-            ev.stopImmediatePropagation();
-            return;
-          }
-          // Lone jamo compositionend is preview teardown (backspace of 안
-          // → ㅇ → empty), not a confirmed character. Committing it parks
-          // ㅇ in the echo-hold until the timer — the "lingering ㅇ".
-          if (isHangulJamoOnly(committed)) {
-            dropHoldMatchingPreview();
-            composing = false;
-            hideComposing();
+            // xterm's keyCode-229 keydown schedules a deferred textarea diff.
+            // This event refills the helper textarea with the syllable we just
+            // flushed, so leaving it there lets that timer emit it again. The
+            // textarea copy can be NFD or carry a NO-BREAK SPACE where
+            // `committed` has a plain one, so compare canonically; anything
+            // else is the next composition's preview and must survive.
+            if (
+              ta &&
+              canonicalImeText(ta.value.slice(sentPrefix.length)) ===
+                canonicalImeText(committed)
+            ) {
+              ta.value = sentPrefix;
+            }
             ev.stopImmediatePropagation();
             return;
           }
@@ -2377,9 +2523,27 @@ export function Terminal({
           return;
         }
 
-        default:
+        default: {
+          // Production WKWebView on tauri:// / https://tauri.localhost
+          // sometimes omits inputType on `input` while still filling
+          // the helper textarea. Treat that like a replacement so Hangul
+          // does not fall into hideComposing() and vanish.
+          const inferredIme =
+            lastKeyCode229 ||
+            composing ||
+            (!!ev.data && CJK_DATA_RE.test(ev.data));
+          if (inferredIme && ta) {
+            composing = true;
+            if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
+            const next =
+              ta.value.slice(sentPrefix.length) || ev.data || "";
+            showComposing(next);
+            ev.stopImmediatePropagation();
+            return;
+          }
           hideComposing();
           return;
+        }
       }
     };
 
@@ -3001,6 +3165,15 @@ export function Terminal({
     // partial commits, and final commit through `commitComposition()`,
     // so xterm's path is pure duplication.
     const swallowComposition = (e: Event) => {
+      // `deleteCompositionText` deliberately leaves `composing` set, because
+      // the commit still follows it. A composition that ends *without* one —
+      // click-away, an IME switch, a cancelled run — would otherwise leave the
+      // flag stuck, and `composing` also widens the `default:` input branch to
+      // swallow unrelated input types. `insertFromComposition` always lands
+      // before `compositionend`, so the commit has had its turn by now.
+      if (e.type === "compositionend") {
+        composing = false;
+      }
       e.stopImmediatePropagation();
     };
     container.addEventListener("compositionstart", swallowComposition, true);
