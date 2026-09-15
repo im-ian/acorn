@@ -235,7 +235,7 @@ const COMPOSING_CLASS = "acorn-terminal-composing";
 /** How far inside the cell boundary the IME caret *marker* sits. Applied to
  *  the `::after` only — pulling the caret's layout box would also drag the
  *  cloned line tail, which is the TUI chrome after the cursor. */
-const CARET_CELL_GRID_INSET_PX = 2;
+const CARET_CELL_GRID_INSET_PX = 1;
 // xterm briefly leaves and re-enters hovered links when refreshed rows repaint.
 const LINK_TOOLTIP_HIDE_GRACE_MS = 80;
 
@@ -1865,8 +1865,8 @@ export function Terminal({
           `${cell.height}px`,
         );
         compositionView.style.setProperty(
-          "--acorn-ime-caret-inset",
-          `${CARET_CELL_GRID_INSET_PX}px`,
+          "--acorn-ime-caret-left",
+          `${-CARET_CELL_GRID_INSET_PX}px`,
         );
       }
     };
@@ -1974,10 +1974,10 @@ export function Terminal({
       // idea and stays correct when the preview mixes widths, or holds several
       // syllables at once because typing outran the echo.
       //
-      // The caret *marker* then sits just inside that boundary (`::after`
-      // inset): dead-on reads as detached from the syllable. The caret's
-      // layout box stays on the grid so the cloned tail — TUI chrome after
-      // the cursor — does not shift. `CARET_CELL_GRID_INSET_PX` is the knob.
+      // Tuck the marker into the composing cell so a 3px pill does not read
+      // as detached from the syllable. The caret's layout box stays on the
+      // grid so the cloned tail — TUI chrome after the cursor — does not
+      // shift. `CARET_CELL_GRID_INSET_PX` is the knob.
       const composedColumns = renderComposingCells(text);
       // The buffer still has the text under and after the cursor. Paint that
       // tail at the cursor column so a TUI right border (`│`) stays on the
