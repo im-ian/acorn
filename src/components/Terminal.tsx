@@ -1779,6 +1779,21 @@ export function Terminal({
      * is a redraw rather than an echo: drop everything, which is the safe
      * direction since the held text is only ever a visual bridge.
      */
+    /** True once the buffer itself shows the held text at the cell it was
+     *  committed from — the echo has landed and owns those cells. */
+    const heldTextIsInBuffer = (): boolean => {
+      if (!pendingCommit) return false;
+      const line = term.buffer.active.getLine(pendingCommit.y);
+      if (!line) return false;
+      let column = pendingCommit.x;
+      for (const char of pendingCommit.text) {
+        const cell = line.getCell(column);
+        if (!cell || cell.getChars() !== char) return false;
+        column += Math.max(1, cell.getWidth());
+      }
+      return true;
+    };
+
     const dropEchoedPendingCommit = () => {
       if (!pendingCommit) return;
       const buf = term.buffer.active;
@@ -1787,7 +1802,17 @@ export function Terminal({
         clearPendingCommit();
         return;
       }
-      if (advanced === 0) return;
+      if (advanced === 0) {
+        // The cursor sitting on the commit cell usually means the echo has
+        // not landed yet — but it also happens when the echo landed and then
+        // moved the cursor back, which is what any cursor-movement key the
+        // user sends right after a syllable does (type 안, press ArrowLeft).
+        // Ask the buffer instead of inferring from the delta: once it shows
+        // the held text the hold is stale, and painting it anyway hides the
+        // real line — 안 then 녕 renders 안녕 over a buffer reading 녕안.
+        if (heldTextIsInBuffer()) clearPendingCommit();
+        return;
+      }
       let columns = 0;
       let retired = 0;
       for (const char of pendingCommit.text) {

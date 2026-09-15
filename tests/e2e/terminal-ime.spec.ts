@@ -1623,6 +1623,46 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(joined.replace(/[^가-힣]/gu, "")).toBe("안녕하세요");
   });
 
+  test("a cursor move back onto the commit cell releases the echo hold", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Type 안, press ArrowLeft, type 녕. The shell echoes 안 (cursor +2) and
+    // then the arrow puts the cursor back on the commit cell, so the hold's
+    // cursor-delta test sees `advanced === 0` and reads it as "echo has not
+    // landed". The overlay then paints the stale 안 in front of the live 녕
+    // and the line reads 안녕 while the buffer really holds 녕안 — the lie
+    // only clears on the next cursor move.
+    await runIme(page, [
+      { type: "input", inputType: "insertText", data: "ㅇ", taValue: "ㅇ" },
+      { type: "keydown", key: "ㅇ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "아", taValue: "아" },
+      { type: "keydown", key: "ㅏ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "안", taValue: "안" },
+      { type: "keydown", key: "ㄴ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "안", taValue: "안" },
+      { type: "keydown", key: "ArrowLeft", keyCode: 37 },
+    ]);
+
+    // 안 echoes back, then the ArrowLeft returns the cursor to the cell it was
+    // committed from.
+    await emitPtyOutput(page, "안\u001b[2D");
+
+    await runIme(page, [
+      { type: "input", inputType: "insertText", data: "ㄴ", taValue: "ㄴ" },
+      { type: "keydown", key: "ㄴ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "녀", taValue: "녀" },
+      { type: "keydown", key: "ㅕ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "녕", taValue: "녕" },
+    ]);
+
+    // The buffer owns 안 now, so the overlay must show only the live syllable.
+    await expect.poll(() => imeOverlayText(page)).toBe("녕");
+  });
+
   test("Shift+Enter sends LF, not CR", async ({ page, tauri }) => {
     await seed(tauri);
     await activateTerminal(page);
