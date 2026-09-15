@@ -341,7 +341,7 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(cursorLayout.textWidth).toBeCloseTo(2 * cursorLayout.cellWidth, 0);
     // Caret follows the composing cells.
     expect(cursorLayout.cursorAfterText).toBeLessThan(0.5);
-    expect(cursorLayout.markerLeft).toBeCloseTo(-2, 0);
+    expect(cursorLayout.markerLeft).toBeCloseTo(-1, 0);
     // The cloned tail is painted at the cursor column and the composing cells
     // are drawn over its first columns, so pinning it at the overlay origin
     // hides whatever really sits under the cursor — here 트. It stays pinned
@@ -430,7 +430,7 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     });
 
     // The caret *anchor* tracks the cell boundary the real cursor lands on,
-    // so committing does not jump the cloned tail. The marker sits 2px inside
+    // so committing does not jump the cloned tail. The marker sits 1px inside
     // that boundary via ::after. Laying the preview out at the glyph's
     // natural advance instead lands short, so the caret would visibly jump
     // outward on every echo.

@@ -555,6 +555,11 @@ function makePillCursorAssertion(
       .toBe("3px");
     await expect
       .poll(async () =>
+        activeCursor.evaluate((el) => getComputedStyle(el, "::after").left),
+      )
+      .toBe("-1px");
+    await expect
+      .poll(async () =>
         activeCursor.evaluate(
           (el) => getComputedStyle(el, "::after").borderRadius,
         ),
