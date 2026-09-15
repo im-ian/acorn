@@ -230,7 +230,7 @@
   content: "";
   display: block;
   height: 100%;
-  left: calc(-1 * var(--acorn-ime-caret-inset, 2px));
+  left: var(--acorn-ime-caret-left, -1px);
   pointer-events: none;
   position: absolute;
   top: 0;
@@ -256,8 +256,8 @@
   background: currentColor;
   bottom: 0;
   height: 1px;
-  /* Full-cell-wide markers must stay anchored at the cell boundary; the
-     base rule's caret-inset shift is for the thin edge markers only. */
+  /* Full-cell markers stay at left: 0; the base rule's left offset is for
+     the thin edge markers only. */
   left: 0;
   top: auto;
 }
@@ -331,7 +331,7 @@
   content: "";
   display: block;
   height: 100%;
-  left: 0;
+  left: -1px;
   position: absolute;
   top: 0;
   width: 3px;
