@@ -1924,6 +1924,38 @@ export function Terminal({
       compositionTextView.replaceChildren(...cells);
       return totalColumns;
     };
+    /**
+     * Columns of blank buffer right after the cursor, capped at `max`.
+     *
+     * The cloned tail is painted *at* the cursor column rather than after the
+     * preview, so a TUI's fixed-width box keeps its right border on the same
+     * column while a syllable is being composed. The composing cells are then
+     * drawn over the tail's first columns, which only stays truthful while
+     * those columns are empty. Mid-line in a shell they hold real text, and
+     * covering it makes the character under the cursor vanish — type 안, move
+     * left, compose 녕, and 안 disappears behind it. Cover the blanks, shift
+     * the rest right the way the line will actually shift once the syllable
+     * lands.
+     */
+    const leadingBlankTailColumns = (max: number): number => {
+      if (max <= 0) return 0;
+      const buffer = term.buffer.active;
+      const line = buffer.getLine(buffer.baseY + buffer.cursorY);
+      if (!line) return max;
+      let columns = 0;
+      let column = buffer.cursorX;
+      while (columns < max) {
+        const cell = line.getCell(column);
+        if (!cell) return max;
+        const chars = cell.getChars();
+        if (chars.length > 0 && chars !== " ") break;
+        const width = Math.max(1, cell.getWidth());
+        columns += width;
+        column += width;
+      }
+      return Math.min(columns, max);
+    };
+
     const renderComposing = (text: string) => {
       if (!compositionView || text.length === 0) return;
       // Lay the preview out on the terminal's cell grid. A Hangul syllable
@@ -1961,10 +1993,18 @@ export function Terminal({
         compositionTailView,
       );
       const composedWidth = getCellDims()?.width;
-      compositionTailView.style.clipPath =
-        composedColumns > 0 && composedWidth
-          ? `inset(0 0 0 ${composedColumns * composedWidth}px)`
-          : "";
+      if (composedColumns > 0 && composedWidth) {
+        const covered = leadingBlankTailColumns(composedColumns);
+        compositionTailView.style.clipPath = `inset(0 0 0 ${
+          covered * composedWidth
+        }px)`;
+        compositionTailView.style.left = `${
+          (composedColumns - covered) * composedWidth
+        }px`;
+      } else {
+        compositionTailView.style.clipPath = "";
+        compositionTailView.style.left = "";
+      }
 
       // Sync font with the current xterm options so the preview uses the
       // user's configured terminal font/size, not the default sans inherited
@@ -2055,6 +2095,7 @@ export function Terminal({
       if (!committed) return;
       sendUserInputToPty(committed);
       lastCommitted = committed;
+      committedThisComposition = true;
       holdCommittedText(committed);
       sentPrefix = value.slice(0, committedEnd);
     };
@@ -2112,6 +2153,13 @@ export function Terminal({
     // syllable becomes a no-op.
     let sentPrefix = "";
     let lastCommitted = "";
+    // Whether the composition currently in flight has already been flushed.
+    // A terminator (space/Enter) commits from `keydown`, and WebKit still
+    // delivers `insertFromComposition` for the same syllable afterwards —
+    // without this that late event commits a second time (안녕하세요 요).
+    // `composing` used to double as this flag, which is why the commit path
+    // and the teardown path kept fighting over it.
+    let committedThisComposition = false;
     let lastKeyCode229 = false;
     let composing = false;
     // Still gates insertFromComposition / insertText cancel. Backspace
@@ -2177,6 +2225,7 @@ export function Terminal({
       if (data) {
         sendUserInputToPty(data);
         lastCommitted = data;
+        committedThisComposition = true;
         // Jamo are preview-only in the overlay until a terminator confirms
         // them. They still go to the PTY so ㅋㅋㅋ commits; the hold is what
         // parks a leftover ㅇ on screen after backspace.
@@ -2253,6 +2302,10 @@ export function Terminal({
           ) {
             imeDeleting = false;
           }
+          // A live preview means the IME is composing something that has not
+          // been flushed yet — including the second 나 of 나나, which is a
+          // fresh composition rather than a duplicate of the first.
+          committedThisComposition = false;
           composing = true;
           showComposing(preview);
           ev.stopImmediatePropagation();
@@ -2260,14 +2313,25 @@ export function Terminal({
         }
 
         case "deleteCompositionText": {
+          // WebKit strips the marked text immediately before
+          // `insertFromComposition` hands over the finished syllable, so this
+          // is a preview clear, not the end of the composition. Tearing
+          // `composing` down here makes that commit hit the `!composing`
+          // guard and the syllable never reaches the PTY. It only lands on
+          // syllables whose textarea happens to empty out, which is why the
+          // loss alternates: 반갑습니다 arrives as 갑니다.
           const next = ta
             ? ta.value.length > sentPrefix.length
               ? ta.value.slice(sentPrefix.length)
               : ""
             : "";
           if (next.length === 0) {
-            if (imeDeleting) dropHoldMatchingPreview();
-            composing = false;
+            // Backspacing the last jamo is the one case where the composition
+            // really is over and no commit follows.
+            if (imeDeleting) {
+              dropHoldMatchingPreview();
+              composing = false;
+            }
             hideComposing();
           } else {
             showComposing(next);
@@ -2369,16 +2433,7 @@ export function Terminal({
           if (!value.startsWith(sentPrefix)) {
             sentPrefix = value.slice(0, Math.max(0, value.length - newCharLen));
           }
-          const committedEnd = value.length - newCharLen;
-          if (committedEnd > sentPrefix.length) {
-            const committed = normalizeHangulCommit(
-              value.slice(sentPrefix.length, committedEnd),
-            );
-            sendUserInputToPty(committed);
-            lastCommitted = committed;
-            holdCommittedText(committed);
-            sentPrefix = value.slice(0, committedEnd);
-          }
+          commitFinalizedPrefix(value, newCharLen);
           showComposing(value.slice(sentPrefix.length));
           ev.stopImmediatePropagation();
           return;
@@ -2413,11 +2468,24 @@ export function Terminal({
               return;
             }
           }
+          // Skip only a syllable this very composition already flushed — a
+          // terminator-keydown or the textarea diff beat this event to it.
+          // Keying off `lastCommitted` alone instead would read the second 나
+          // of 나나 as a duplicate and drop it.
           if (
             committed &&
-            lastCommitted.endsWith(committed) &&
-            composingText !== committed
+            committedThisComposition &&
+            lastCommitted.endsWith(committed)
           ) {
+            // xterm's keyCode-229 keydown schedules a deferred textarea diff.
+            // This event refills the helper textarea with the syllable we just
+            // flushed, so leaving it there makes that timer emit it a second
+            // time — 안녕하세요 arrives as 안녕하세요 요. Only drop it when the
+            // textarea holds exactly what was committed; anything else is the
+            // next composition's preview and must survive.
+            if (ta && ta.value.slice(sentPrefix.length) === committed) {
+              ta.value = sentPrefix;
+            }
             ev.stopImmediatePropagation();
             return;
           }

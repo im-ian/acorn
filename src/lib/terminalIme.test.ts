@@ -65,4 +65,17 @@ describe("compositionRemainderAfterCommit", () => {
   it("clears when the committed text is the whole preview", () => {
     expect(compositionRemainderAfterCommit("안", "", "안", "안")).toBe("");
   });
+
+  it("matches a NO-BREAK SPACE textarea against a plain-space commit", () => {
+    // The IME folds the terminator into the composition and
+    // `insertFromComposition` delivers it as U+0020, while WebKit leaves
+    // U+00A0 in the helper textarea for the same character. Comparing raw
+    // leaves the whole value as "remainder", so the composition never closes
+    // and the terminator keydown commits it twice (안녕하세요 요).
+    expect(compositionRemainderAfterCommit("요\u00a0", "", "요 ", "")).toBe("");
+  });
+
+  it("still reports a genuinely different trailing composition", () => {
+    expect(compositionRemainderAfterCommit("안하", "", "안", "")).toBe("하");
+  });
 });

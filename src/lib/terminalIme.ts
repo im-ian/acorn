@@ -1,3 +1,5 @@
+import { normalizeShellCommandWhitespace } from "./shellCommandWhitespace";
+
 /** Choseong/jungseong/jongseong and compatibility jamo (ㅇ, ㄱ, ㅏ, …). */
 const JAMO_RANGES: Array<[number, number]> = [
   [0x1100, 0x11ff],
@@ -87,8 +89,18 @@ export function compositionRemainderAfterCommit(
     ? live.slice(sentPrefix.length)
     : live;
   const source = afterPrefix || preview;
-  if (!source || source === committed) return "";
-  const at = source.lastIndexOf(committed);
-  if (at >= 0) return source.slice(at + committed.length);
+  if (!source) return "";
+  // The IME folds a terminator into the composition and hands it over as a
+  // plain space in `insertFromComposition`, while WebKit leaves a NO-BREAK
+  // SPACE in the helper textarea for the same character. Comparing raw, the
+  // committed text is not found in `live`, the whole thing reads as leftover,
+  // and the composition never closes — the terminator keydown then commits it
+  // a second time (안녕하세요 요). Match on normalised whitespace; the
+  // substitution is per character, so offsets still index the original.
+  const haystack = normalizeShellCommandWhitespace(source);
+  const needle = normalizeShellCommandWhitespace(committed);
+  if (haystack === needle) return "";
+  const at = haystack.lastIndexOf(needle);
+  if (at >= 0) return source.slice(at + needle.length);
   return source;
 }

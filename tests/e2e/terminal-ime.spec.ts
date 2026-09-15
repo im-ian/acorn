@@ -22,6 +22,8 @@ interface ImeKeydown {
   type: "keydown";
   key: string;
   keyCode?: number;
+  /** Pre-set the textarea, as the browser does before dispatching the key. */
+  taValue?: string;
   shift?: boolean;
   meta?: boolean;
   ctrl?: boolean;
@@ -109,6 +111,7 @@ async function runIme(page: Page, steps: ImeStep[]): Promise<void> {
     if (!ta) throw new Error("xterm helper textarea missing");
     for (const ev of events) {
       if (ev.type === "keydown") {
+        if (ev.taValue !== undefined) ta.value = ev.taValue;
         ta.dispatchEvent(
           new KeyboardEvent("keydown", {
             key: ev.key,
@@ -176,6 +179,26 @@ async function imeOverlayText(page: Page): Promise<string> {
       view?.querySelector<HTMLElement>(".acorn-ime-composition-text")
         ?.textContent ?? ""
     );
+  });
+}
+
+/** Inline geometry of the cloned line-tail inside the composition overlay. */
+async function imeTailBox(
+  page: Page,
+): Promise<{ text: string; left: string; clipLeft: string }> {
+  return page.evaluate(() => {
+    const tail = document.querySelector<HTMLElement>(
+      ".composition-view.active .acorn-ime-line-tail",
+    );
+    const clipPath = tail?.style.clipPath ?? "";
+    // `inset(0 0 0 0px)` is normalised to `inset(0px)`, so read the last
+    // length rather than matching the string the code wrote.
+    const parts = clipPath.replace(/inset\(|\)/g, "").trim().split(/\s+/);
+    return {
+      text: tail?.textContent ?? "",
+      left: tail?.style.left ?? "",
+      clipLeft: clipPath ? (parts[parts.length - 1] ?? "") : "",
+    };
   });
 }
 
@@ -316,11 +339,16 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     // "한" spends two terminal columns; the preview lays it out on that grid
     // instead of collapsing to the glyph's own advance.
     expect(cursorLayout.textWidth).toBeCloseTo(2 * cursorLayout.cellWidth, 0);
-    // Caret follows the composing cells. The cloned tail is pinned at the
-    // overlay origin so TUI chrome (`│`) does not slide with Hangul width.
+    // Caret follows the composing cells.
     expect(cursorLayout.cursorAfterText).toBeLessThan(0.5);
-    expect(cursorLayout.tailAtOrigin).toBeLessThan(0.5);
     expect(cursorLayout.markerLeft).toBeCloseTo(-2, 0);
+    // The cloned tail is painted at the cursor column and the composing cells
+    // are drawn over its first columns, so pinning it at the overlay origin
+    // hides whatever really sits under the cursor — here 트. It stays pinned
+    // only while those columns are blank (a TUI box, covered by the test
+    // below); with real text there it shifts by the composed width, which is
+    // how the line will actually shift once 한 lands.
+    expect(cursorLayout.tailAtOrigin).toBeCloseTo(2 * cursorLayout.cellWidth, 0);
 
     await runIme(page, [
       {
@@ -1661,6 +1689,211 @@ test.describe("terminal: IME (PR #104 regression)", () => {
 
     // The buffer owns 안 now, so the overlay must show only the live syllable.
     await expect.poll(() => imeOverlayText(page)).toBe("녕");
+  });
+
+  test("mid-line composition shifts the tail instead of covering it", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // 안 on the line with the cursor sitting back on it, then compose 녕.
+    // The tail is painted at the cursor column and the composing cells go on
+    // top, so covering its first columns hides the 안 that is really there.
+    await emitPtyOutput(page, "안\u001b[2D");
+    await runIme(page, [
+      { type: "input", inputType: "insertText", data: "ㄴ", taValue: "ㄴ" },
+      { type: "keydown", key: "ㄴ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "녀", taValue: "녀" },
+      { type: "keydown", key: "ㅕ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "녕", taValue: "녕" },
+    ]);
+
+    const tail = await imeTailBox(page);
+    expect(tail.text).toContain("안");
+    // Nothing covered — the two columns after the cursor hold 안, not blanks.
+    expect(parseFloat(tail.clipLeft)).toBe(0);
+    // ...and it moves right by the composed width, the way the real line will.
+    expect(parseFloat(tail.left)).toBeGreaterThan(0);
+  });
+
+  test("composing over blank tail columns still pins a TUI border", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // A TUI input box: blanks after the cursor, border far to the right. Those
+    // blanks must stay covered and the tail must NOT shift, or the border
+    // slides off the column the rows above and below draw it on.
+    await emitPtyOutput(page, "\u001b[1;1H│    │\u001b[1;3H");
+    await runIme(page, [
+      { type: "input", inputType: "insertText", data: "ㄴ", taValue: "ㄴ" },
+      { type: "keydown", key: "ㄴ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "녕", taValue: "녕" },
+    ]);
+
+    const tail = await imeTailBox(page);
+    expect(tail.left === "" || parseFloat(tail.left) === 0).toBe(true);
+    expect(parseFloat(tail.clipLeft)).toBeGreaterThan(0);
+  });
+
+  // Verbatim capture from the installed RELEASE build (2026-09-15). The .app
+  // bundle gets a different WebKit IME integration than the bare
+  // `target/debug/acorn` binary `tauri dev` runs: composition events fire,
+  // input arrives as insertCompositionText / deleteCompositionText /
+  // insertFromComposition, and the textarea is emptied per syllable instead of
+  // accumulating the run. Both shapes ship, so both must commit.
+  test("release-build trace: 반갑습니다 commits every syllable", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    const syllable = (
+      previews: Array<[string, string]>,
+      deleteTa: string,
+      committed: string,
+      committedTa: string,
+    ): ImeStep[] => [
+      ...previews.flatMap(([data, taValue]): ImeStep[] => [
+        { type: "input", inputType: "insertCompositionText", data, taValue },
+        { type: "keydown", key: "Process", keyCode: 229 },
+      ]),
+      {
+        type: "input",
+        inputType: "deleteCompositionText",
+        data: null,
+        taValue: deleteTa,
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: committed,
+        taValue: committedTa,
+      },
+    ];
+
+    await runIme(page, [
+      // 반 — the textarea empties on deleteCompositionText, which is the case
+      // that used to kill the commit.
+      ...syllable(
+        [["ㅂ", "ㅂ"], ["바", "바"], ["반", "반"], ["반", "반"]],
+        "",
+        "반",
+        "반",
+      ),
+      // 갑 — leftover text in the textarea, the case that survived.
+      ...syllable(
+        [["ㄱ", "반ㄱ"], ["가", "반가"], ["갑", "반갑"], ["값", "반값"], ["갑", "반갑"]],
+        "반",
+        "갑",
+        "반갑",
+      ),
+      ...syllable([["스", "스"], ["습", "습"], ["습", "습"]], "", "습", "습"),
+      ...syllable(
+        [["ㄴ", "습ㄴ"], ["니", "습니"], ["닏", "습닏"], ["니", "습니"]],
+        "습",
+        "니",
+        "습니",
+      ),
+      ...syllable([["다", "다"], ["다", "다"]], "", "다", "다"),
+    ]);
+
+    const joined = (await getWrites(page)).join("");
+    expect(joined.replace(/[^가-힣]/gu, "")).toBe("반갑습니다");
+  });
+
+  test("release-build trace: a repeated syllable commits twice", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // 나나 through the release shape. The insertFromComposition de-dupe keyed
+    // off the previously committed syllable, so the second 나 read as a
+    // duplicate of the first and never reached the PTY.
+    await runIme(page, [
+      { type: "input", inputType: "insertCompositionText", data: "ㄴ", taValue: "ㄴ" },
+      { type: "keydown", key: "Process", keyCode: 229 },
+      { type: "input", inputType: "insertCompositionText", data: "나", taValue: "나" },
+      { type: "keydown", key: "Process", keyCode: 229 },
+      { type: "input", inputType: "deleteCompositionText", data: null, taValue: "" },
+      { type: "input", inputType: "insertFromComposition", data: "나", taValue: "나" },
+      { type: "input", inputType: "insertCompositionText", data: "ㄴ", taValue: "ㄴ" },
+      { type: "keydown", key: "Process", keyCode: 229 },
+      { type: "input", inputType: "insertCompositionText", data: "나", taValue: "나" },
+      { type: "keydown", key: "Process", keyCode: 229 },
+      { type: "input", inputType: "deleteCompositionText", data: null, taValue: "" },
+      { type: "input", inputType: "insertFromComposition", data: "나", taValue: "나" },
+    ]);
+
+    const joined = (await getWrites(page)).join("");
+    expect(joined.replace(/[^가-힣]/gu, "")).toBe("나나");
+  });
+
+  test("release-build trace: terminator then late insertFromComposition sends once", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // 요 + space in the release shape. The terminator keydown flushes 요, then
+    // WebKit still delivers deleteCompositionText + insertFromComposition for
+    // the same syllable. That late pair must not commit again — 안녕하세요
+    // arrived as 안녕하세요 요.
+    await runIme(page, [
+      { type: "input", inputType: "insertCompositionText", data: "요", taValue: "요" },
+      { type: "keydown", key: "Process", keyCode: 229 },
+      { type: "keydown", key: " ", keyCode: 229 },
+      { type: "input", inputType: "deleteCompositionText", data: null, taValue: "" },
+      { type: "input", inputType: "insertFromComposition", data: "요", taValue: "요" },
+    ]);
+
+    const joined = (await getWrites(page)).join("");
+    expect(joined.replace(/[^가-힣]/gu, "")).toBe("요");
+  });
+
+  test("release-build trace: IME-folded terminator commits once", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Verbatim capture, byte for byte. The Korean IME folds the space into the
+    // composition and `insertFromComposition` hands it over with a PLAIN space
+    // (U+0020), while WebKit leaves a NO-BREAK SPACE (U+00A0) in the helper
+    // textarea for that same character. Comparing them raw, the committed text
+    // is not found in the textarea, the whole value reads as leftover, the
+    // composition never closes, and the terminator keydown commits it again —
+    // 안녕하세요 arrived as 안녕하세요 요.
+    await runIme(page, [
+      { type: "input", inputType: "insertCompositionText", data: "요", taValue: "요" },
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "요\u00a0",
+        taValue: "요\u00a0",
+      },
+      { type: "input", inputType: "deleteCompositionText", data: null, taValue: "" },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "요 ",
+        taValue: "요\u00a0",
+      },
+      { type: "keydown", key: " ", keyCode: 229, taValue: "요\u00a0" },
+    ]);
+
+    const joined = (await getWrites(page)).join("");
+    expect(joined.replace(/[^가-힣]/gu, "")).toBe("요");
   });
 
   test("Shift+Enter sends LF, not CR", async ({ page, tauri }) => {
