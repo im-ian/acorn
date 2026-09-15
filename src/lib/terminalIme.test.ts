@@ -78,4 +78,15 @@ describe("compositionRemainderAfterCommit", () => {
   it("still reports a genuinely different trailing composition", () => {
     expect(compositionRemainderAfterCommit("안하", "", "안", "")).toBe("하");
   });
+
+  it("matches a decomposed textarea against a precomposed commit", () => {
+    // `normalizeHangulCommit` precomposes what goes to the PTY, but the
+    // textarea/preview keep whatever WebKit wrote — which can be NFD. Compared
+    // raw the syllable is not found, the composition never closes, and the
+    // terminator commits it twice.
+    const nfd = "안".normalize("NFD");
+    expect(compositionRemainderAfterCommit("", "", "안", nfd)).toBe("");
+    expect(compositionRemainderAfterCommit(nfd, "", "안", nfd)).toBe("");
+    expect(compositionRemainderAfterCommit(`${nfd}하`, "", "안", "")).toBe("하");
+  });
 });

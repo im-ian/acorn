@@ -1947,9 +1947,17 @@ export function Terminal({
       while (columns < max) {
         const cell = line.getCell(column);
         if (!cell) return max;
+        // The trailing half of a wide glyph renders no column of its own —
+        // `renderTerminalLineTail` skips it, so counting it here would cover
+        // one column more than the tail actually draws and clip a real
+        // character out of the preview.
+        if (cell.getWidth() === 0) {
+          column += 1;
+          continue;
+        }
         const chars = cell.getChars();
         if (chars.length > 0 && chars !== " ") break;
-        const width = Math.max(1, cell.getWidth());
+        const width = cell.getWidth();
         columns += width;
         column += width;
       }
@@ -2205,6 +2213,12 @@ export function Terminal({
       }
     };
 
+    /** Comparison form for textarea text vs. an already-committed syllable:
+     *  WebKit may hand back NFD, or a NO-BREAK SPACE where the commit carried
+     *  a plain one. */
+    const canonicalImeText = (text: string): string =>
+      normalizeShellCommandWhitespace(text).normalize("NFC");
+
     const commitComposition = (explicit?: string) => {
       if (!composing) return;
       if (imeDeleting) {
@@ -2348,8 +2362,10 @@ export function Terminal({
           composing = true;
           if (ta) {
             if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
-            commitFinalizedPrefix(ta.value, ev.data?.length ?? 0);
             const next = ta.value.slice(sentPrefix.length);
+            // Resolve the backspace flag first: a replacement that is not the
+            // IME shrinking the current syllable ends the delete, and the
+            // commit below is gated on `imeDeleting`.
             if (
               imeDeleting &&
               next &&
@@ -2357,7 +2373,13 @@ export function Terminal({
             ) {
               imeDeleting = false;
             }
-            showComposing(next);
+            // `ev.data` is the marked run. Null data names no marked run, and
+            // treating that as "nothing is marked" would flush the syllable
+            // still being composed.
+            if (ev.data != null) {
+              commitFinalizedPrefix(ta.value, ev.data.length);
+            }
+            showComposing(ta.value.slice(sentPrefix.length));
           }
           ev.stopImmediatePropagation();
           return;
@@ -2470,20 +2492,27 @@ export function Terminal({
           }
           // Skip only a syllable this very composition already flushed — a
           // terminator-keydown or the textarea diff beat this event to it.
-          // Keying off `lastCommitted` alone instead would read the second 나
-          // of 나나 as a duplicate and drop it.
+          // Keying off `lastCommitted` alone would read the second 나 of 나나
+          // as a duplicate and drop it; `composingText !== committed` keeps
+          // that case out, because a repeat arrives with its own live preview
+          // while an already-flushed syllable does not.
           if (
             committed &&
             committedThisComposition &&
-            lastCommitted.endsWith(committed)
+            lastCommitted.endsWith(committed) &&
+            composingText !== committed
           ) {
             // xterm's keyCode-229 keydown schedules a deferred textarea diff.
             // This event refills the helper textarea with the syllable we just
-            // flushed, so leaving it there makes that timer emit it a second
-            // time — 안녕하세요 arrives as 안녕하세요 요. Only drop it when the
-            // textarea holds exactly what was committed; anything else is the
-            // next composition's preview and must survive.
-            if (ta && ta.value.slice(sentPrefix.length) === committed) {
+            // flushed, so leaving it there lets that timer emit it again. The
+            // textarea copy can be NFD or carry a NO-BREAK SPACE where
+            // `committed` has a plain one, so compare canonically; anything
+            // else is the next composition's preview and must survive.
+            if (
+              ta &&
+              canonicalImeText(ta.value.slice(sentPrefix.length)) ===
+                canonicalImeText(committed)
+            ) {
               ta.value = sentPrefix;
             }
             ev.stopImmediatePropagation();
@@ -3136,6 +3165,15 @@ export function Terminal({
     // partial commits, and final commit through `commitComposition()`,
     // so xterm's path is pure duplication.
     const swallowComposition = (e: Event) => {
+      // `deleteCompositionText` deliberately leaves `composing` set, because
+      // the commit still follows it. A composition that ends *without* one —
+      // click-away, an IME switch, a cancelled run — would otherwise leave the
+      // flag stuck, and `composing` also widens the `default:` input branch to
+      // swallow unrelated input types. `insertFromComposition` always lands
+      // before `compositionend`, so the commit has had its turn by now.
+      if (e.type === "compositionend") {
+        composing = false;
+      }
       e.stopImmediatePropagation();
     };
     container.addEventListener("compositionstart", swallowComposition, true);

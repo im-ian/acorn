@@ -90,17 +90,28 @@ export function compositionRemainderAfterCommit(
     : live;
   const source = afterPrefix || preview;
   if (!source) return "";
-  // The IME folds a terminator into the composition and hands it over as a
-  // plain space in `insertFromComposition`, while WebKit leaves a NO-BREAK
-  // SPACE in the helper textarea for the same character. Comparing raw, the
-  // committed text is not found in `live`, the whole thing reads as leftover,
-  // and the composition never closes — the terminator keydown then commits it
-  // a second time (안녕하세요 요). Match on normalised whitespace; the
-  // substitution is per character, so offsets still index the original.
-  const haystack = normalizeShellCommandWhitespace(source);
-  const needle = normalizeShellCommandWhitespace(committed);
+  // `committed` reaches here already precomposed, while `live`/`preview` are
+  // whatever WebKit left in the textarea — which differs for the same
+  // character in two ways: it may be NFD (ᄋ+ᅡ+ᆫ vs 안), and a terminator the
+  // IME folded into the composition comes through as a plain space here but a
+  // NO-BREAK SPACE there. Compared raw, the committed text is simply not
+  // found, the whole value reads as leftover, the composition never closes,
+  // and the terminator keydown commits it a second time — 안녕하세요 요.
+  //
+  // Match on a canonical form of both. NFC changes lengths, so the remainder
+  // is sliced out of the canonical source rather than the original; that is
+  // the form the rest of the commit path wants anyway. A source that genuinely
+  // does not contain the committed text is a different composition and is
+  // handed back untouched.
+  const haystack = canonical(source);
+  const needle = canonical(committed);
   if (haystack === needle) return "";
   const at = haystack.lastIndexOf(needle);
-  if (at >= 0) return source.slice(at + needle.length);
+  if (at >= 0) return haystack.slice(at + needle.length);
   return source;
+}
+
+/** Comparison form for textarea text vs. an already-committed syllable. */
+function canonical(text: string): string {
+  return normalizeShellCommandWhitespace(text).normalize("NFC");
 }
