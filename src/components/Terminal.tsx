@@ -41,7 +41,6 @@ import {
   isHangulDecomposition,
   isHangulJamoOnly,
   normalizeHangulCommit,
-  shouldFlushReplacedHangul,
 } from "../lib/terminalIme";
 import {
   createTerminalRepaintScheduler,
@@ -1998,28 +1997,41 @@ export function Terminal({
     /** Ends the live preview. The overlay survives while a committed syllable
      *  is still in flight to the PTY. */
     const hideComposing = () => {
-      flushIfReplacedBy("");
       composingText = "";
-      flushedPreview = "";
       syncComposing();
       armPendingCommitTimeout();
     };
     const showComposing = (text: string) => {
-      if (text !== composingText) flushedPreview = "";
       composingText = text;
       syncComposing();
     };
 
-    const flushIfReplacedBy = (next: string) => {
+    /**
+     * Flush whatever the textarea has finalized ahead of the marked run.
+     *
+     * `ev.data` is the marked text the IME is still editing, so everything
+     * before it in `ta.value` is committed. Shared by `insertText` and
+     * `insertReplacementText` — both carry the same shape, they differ only
+     * in whether the marked run grew or was replaced in place.
+     *
+     * Deliberately a textarea diff rather than a judgement about whether the
+     * syllable "advanced": Korean NFD keeps a jongseong cluster as a single
+     * character (갑 = 갑, 값 = 값), so 갑 → 값 is neither a prefix
+     * extension nor a prefix truncation. Classifying transitions that way
+     * flushes a syllable still being composed — 반갑습니다 → 반갑값갑습니다.
+     */
+    const commitFinalizedPrefix = (value: string, markedLength: number) => {
       if (imeDeleting) return;
-      if (!shouldFlushReplacedHangul(composingText, next)) return;
-      if (composingText === flushedPreview) return;
-      const committed = normalizeHangulCommit(composingText);
+      const committedEnd = value.length - markedLength;
+      if (committedEnd <= sentPrefix.length) return;
+      const committed = normalizeHangulCommit(
+        value.slice(sentPrefix.length, committedEnd),
+      );
       if (!committed) return;
       sendUserInputToPty(committed);
       lastCommitted = committed;
       holdCommittedText(committed);
-      flushedPreview = composingText;
+      sentPrefix = value.slice(0, committedEnd);
     };
 
     const armPendingCommitTimeout = () => {
@@ -2075,7 +2087,6 @@ export function Terminal({
     // syllable becomes a no-op.
     let sentPrefix = "";
     let lastCommitted = "";
-    let flushedPreview = "";
     let lastKeyCode229 = false;
     let composing = false;
     // Still gates insertFromComposition / insertText cancel. Backspace
@@ -2141,7 +2152,6 @@ export function Terminal({
       if (data) {
         sendUserInputToPty(data);
         lastCommitted = data;
-        flushedPreview = composingText;
         // Jamo are preview-only in the overlay until a terminator confirms
         // them. They still go to the PTY so ㅋㅋㅋ commits; the hold is what
         // parks a leftover ㅇ on screen after backspace.
@@ -2235,7 +2245,6 @@ export function Terminal({
             composing = false;
             hideComposing();
           } else {
-            flushIfReplacedBy(next);
             showComposing(next);
           }
           ev.stopImmediatePropagation();
@@ -2243,16 +2252,15 @@ export function Terminal({
         }
 
         case "insertReplacementText": {
-          // WKWebView Korean IME on the production custom protocol often
-          // never fires insertFromComposition. The textarea is replaced
-          // with the next syllable (안 → 녕) and the previous one must
-          // flush here. HTTP `tauri dev` usually still gets the composition
-          // event, so the lastCommitted guard below de-dupes that path.
+          // The marked run recomposed in place (갑 → 값 → 갑). Anything the
+          // textarea holds *before* `ev.data` is finalized and must flush —
+          // WKWebView never fires insertFromComposition here, so this is the
+          // only commit point until a terminator.
           composing = true;
           if (ta) {
             if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
+            commitFinalizedPrefix(ta.value, ev.data?.length ?? 0);
             const next = ta.value.slice(sentPrefix.length);
-            flushIfReplacedBy(next);
             if (
               imeDeleting &&
               next &&
@@ -2407,7 +2415,6 @@ export function Terminal({
             if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
             const next =
               ta.value.slice(sentPrefix.length) || ev.data || "";
-            flushIfReplacedBy(next);
             showComposing(next);
             ev.stopImmediatePropagation();
             return;

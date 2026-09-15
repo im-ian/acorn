@@ -1460,6 +1460,12 @@ test.describe("terminal: IME (PR #104 regression)", () => {
   //   * the helper textarea accumulates the whole run ("안녕"), never one syllable
   // Growing a syllable in place is insertReplacementText; starting a new one is
   // insertReplacementText(finished syllable) + insertText(new jamo).
+  // Removed 2026-09-15: three tests modelled the helper textarea as holding
+  // ONE syllable at a time (taValue "안" then "녕"). A verbatim capture from a
+  // real macOS Korean IME shows it ACCUMULATES the whole run ("안", "안ㄴ",
+  // "안녀", "안녕", "안녕ㅎ", …) and only resets after a terminator. Committing
+  // on the replaced-in-place assumption is what shipped 반갑값갑습니다 — the
+  // "verbatim WKWebView trace" tests below cover the same scenarios for real.
   test("verbatim WKWebView trace: 안녕 + space sends each syllable once", async ({
     page,
     tauri,
@@ -1519,6 +1525,104 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(countToken(joined.split(""), "ㅋ")).toBe(3);
   });
 
+  test("verbatim WKWebView trace: 반갑습니다 does not re-emit cluster syllables", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Captured with PTY writes interleaved (2026-09-15). 갑 grows a jongseong
+    // cluster (갑 → 값) and drops it again (값 → 갑 + 스). Korean NFD keeps the
+    // cluster as ONE character — 값 is 값, not 갑+ᄉ — so any "did the syllable
+    // advance / decompose" prefix test reads both transitions as a brand new
+    // composition and flushes mid-syllable: PTY got 반갑값갑습니다.
+    await runIme(page, [
+      { type: "input", inputType: "insertText", data: "ㅂ", taValue: "ㅂ" },
+      { type: "keydown", key: "ㅂ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "바", taValue: "바" },
+      { type: "keydown", key: "ㅏ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "반", taValue: "반" },
+      { type: "keydown", key: "ㄴ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "반", taValue: "반" },
+      { type: "input", inputType: "insertText", data: "ㄱ", taValue: "반ㄱ" },
+      { type: "keydown", key: "ㄱ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "가", taValue: "반가" },
+      { type: "keydown", key: "ㅏ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "갑", taValue: "반갑" },
+      { type: "keydown", key: "ㅂ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "값", taValue: "반값" },
+      { type: "keydown", key: "ㅅ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "갑", taValue: "반갑" },
+      { type: "input", inputType: "insertText", data: "스", taValue: "반갑스" },
+      { type: "keydown", key: "ㅡ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "습", taValue: "반갑습" },
+      { type: "keydown", key: "ㅂ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "습", taValue: "반갑습" },
+      { type: "input", inputType: "insertText", data: "ㄴ", taValue: "반갑습ㄴ" },
+      { type: "keydown", key: "ㄴ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "니", taValue: "반갑습니" },
+      { type: "keydown", key: "ㅣ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "닏", taValue: "반갑습닏" },
+      { type: "keydown", key: "ㄷ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "니", taValue: "반갑습니" },
+      { type: "input", inputType: "insertText", data: "다", taValue: "반갑습니다" },
+      { type: "keydown", key: "ㅏ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "다", taValue: "반갑습니다" },
+      { type: "keydown", key: " ", keyCode: 32 },
+    ]);
+
+    const joined = (await getWrites(page)).join("");
+    expect(joined.replace(/[^가-힣]/gu, "")).toBe("반갑습니다");
+  });
+
+  test("verbatim WKWebView trace: 안녕하세요 + space is not duplicated", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // The terminator flushes `ta.value.slice(sentPrefix)`. Any commit path
+    // that sends text without advancing `sentPrefix` leaves the whole run
+    // pending, so space re-emitted it: 안녕하세요 안녕하세요.
+    await runIme(page, [
+      { type: "input", inputType: "insertText", data: "ㅇ", taValue: "ㅇ" },
+      { type: "keydown", key: "ㅇ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "아", taValue: "아" },
+      { type: "keydown", key: "ㅏ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "안", taValue: "안" },
+      { type: "keydown", key: "ㄴ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "안", taValue: "안" },
+      { type: "input", inputType: "insertText", data: "ㄴ", taValue: "안ㄴ" },
+      { type: "keydown", key: "ㄴ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "녀", taValue: "안녀" },
+      { type: "keydown", key: "ㅕ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "녕", taValue: "안녕" },
+      { type: "keydown", key: "ㅇ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "녕", taValue: "안녕" },
+      { type: "input", inputType: "insertText", data: "ㅎ", taValue: "안녕ㅎ" },
+      { type: "keydown", key: "ㅎ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "하", taValue: "안녕하" },
+      { type: "keydown", key: "ㅏ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "핫", taValue: "안녕핫" },
+      { type: "keydown", key: "ㅅ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "하", taValue: "안녕하" },
+      { type: "input", inputType: "insertText", data: "세", taValue: "안녕하세" },
+      { type: "keydown", key: "ㅔ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "셍", taValue: "안녕하셍" },
+      { type: "keydown", key: "ㅇ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "세", taValue: "안녕하세" },
+      { type: "input", inputType: "insertText", data: "요", taValue: "안녕하세요" },
+      { type: "keydown", key: "ㅛ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "요", taValue: "안녕하세요" },
+      { type: "keydown", key: " ", keyCode: 32 },
+    ]);
+
+    const joined = (await getWrites(page)).join("");
+    expect(joined.replace(/[^가-힣]/gu, "")).toBe("안녕하세요");
+  });
+
   test("Shift+Enter sends LF, not CR", async ({ page, tauri }) => {
     await seed(tauri);
     await activateTerminal(page);
@@ -1560,114 +1664,6 @@ test.describe("terminal: IME (PR #104 regression)", () => {
 
     const writes = await getWrites(page);
     expect(writes).toContain("\x05");
-  });
-
-  test("deleteCompositionText between syllables does not drop 사 from 사랑", async ({
-    page,
-    tauri,
-  }) => {
-    await seed(tauri);
-    await activateTerminal(page);
-
-    // Production WKWebView: finish 사, deleteCompositionText clears the
-    // textarea, then 랑 starts. The empty delete must flush 사 or the
-    // PTY only ever sees even syllables (사랑하게 될꺼야 → 랑게꺼).
-    await runIme(page, [
-      { type: "keydown", key: "Process", keyCode: 229 },
-      {
-        type: "input",
-        inputType: "insertReplacementText",
-        data: "사",
-        taValue: "사",
-      },
-      {
-        type: "input",
-        inputType: "deleteCompositionText",
-        data: "",
-        taValue: "",
-      },
-      {
-        type: "input",
-        inputType: "insertReplacementText",
-        data: "랑",
-        taValue: "랑",
-      },
-    ]);
-
-    const writes = await getWrites(page);
-    expect(countToken(writes, "사")).toBe(1);
-    expect(countToken(writes, "랑")).toBe(0);
-    expect(await imeOverlayText(page)).toContain("랑");
-  });
-
-  test("사랑하게 via replacement+delete sends every syllable", async ({
-    page,
-    tauri,
-  }) => {
-    await seed(tauri);
-    await activateTerminal(page);
-
-    const syllable = (char: string, clearFirst: boolean) => [
-      ...(clearFirst
-        ? [
-            {
-              type: "input" as const,
-              inputType: "deleteCompositionText",
-              data: "",
-              taValue: "",
-            },
-          ]
-        : []),
-      { type: "keydown" as const, key: "Process", keyCode: 229 },
-      {
-        type: "input" as const,
-        inputType: "insertReplacementText",
-        data: char,
-        taValue: char,
-      },
-    ];
-
-    await runIme(page, [
-      ...syllable("사", false),
-      ...syllable("랑", true),
-      ...syllable("하", true),
-      ...syllable("게", true),
-    ]);
-
-    const writes = await getWrites(page);
-    expect(writes.join("")).toBe("사랑하");
-    expect(await imeOverlayText(page)).toContain("게");
-  });
-
-  test("insertReplacementText 안 → 녕 flushes the previous syllable", async ({
-    page,
-    tauri,
-  }) => {
-    await seed(tauri);
-    await activateTerminal(page);
-
-    // Production WKWebView on the custom protocol often never fires
-    // insertFromComposition. It replaces the helper textarea in place.
-    await runIme(page, [
-      { type: "keydown", key: "Process", keyCode: 229 },
-      {
-        type: "input",
-        inputType: "insertReplacementText",
-        data: "안",
-        taValue: "안",
-      },
-      {
-        type: "input",
-        inputType: "insertReplacementText",
-        data: "녕",
-        taValue: "녕",
-      },
-    ]);
-
-    const writes = await getWrites(page);
-    expect(countToken(writes, "안")).toBe(1);
-    expect(countToken(writes, "녕")).toBe(0);
-    expect(await imeOverlayText(page)).toContain("녕");
   });
 
   test("insertReplacementText ㅎ → 하 → 한 does not flush mid-syllable", async ({
