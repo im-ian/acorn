@@ -1452,6 +1452,73 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(writes).not.toContain("ㅇ");
   });
 
+  // Verbatim event trace captured from a real macOS Korean 2-set IME inside
+  // Acorn's WKWebView (document-capture tracer, 2026-09-15). The production
+  // shape has three properties none of the synthetic cases above model:
+  //   * `input` lands BEFORE its `keydown`
+  //   * no composition events at all — only insertText / insertReplacementText
+  //   * the helper textarea accumulates the whole run ("안녕"), never one syllable
+  // Growing a syllable in place is insertReplacementText; starting a new one is
+  // insertReplacementText(finished syllable) + insertText(new jamo).
+  test("verbatim WKWebView trace: 안녕 + space sends each syllable once", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    await runIme(page, [
+      { type: "input", inputType: "insertText", data: "ㅇ", taValue: "ㅇ" },
+      { type: "keydown", key: "ㅇ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "아", taValue: "아" },
+      { type: "keydown", key: "ㅏ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "안", taValue: "안" },
+      { type: "keydown", key: "ㄴ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "안", taValue: "안" },
+      { type: "input", inputType: "insertText", data: "ㄴ", taValue: "안ㄴ" },
+      { type: "keydown", key: "ㄴ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "녀", taValue: "안녀" },
+      { type: "keydown", key: "ㅕ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "녕", taValue: "안녕" },
+      { type: "keydown", key: "ㅇ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "녕", taValue: "안녕" },
+      { type: "keydown", key: " ", keyCode: 32 },
+    ]);
+
+    const joined = (await getWrites(page)).join("");
+    expect(joined).toContain("안");
+    expect(joined).toContain("녕");
+    // The reported symptom: 안 dropped, leaving "녕", and the run re-emitted.
+    expect(joined.replace(/[^가-힣]/gu, "")).toBe("안녕");
+  });
+
+  test("verbatim WKWebView trace: ㅋㅋㅋ commits every jamo", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Same capture. A repeated jamo never becomes a syllable, so every
+    // keystroke is insertText(ㅋ) + insertReplacementText(ㅋ) against a
+    // growing textarea. Dropping jamo-only commits collapsed this to one ㅋ.
+    await runIme(page, [
+      { type: "input", inputType: "insertText", data: "ㅋ", taValue: "ㅋ" },
+      { type: "keydown", key: "ㅋ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "ㅋ", taValue: "ㅋ" },
+      { type: "input", inputType: "insertText", data: "ㅋ", taValue: "ㅋㅋ" },
+      { type: "keydown", key: "ㅋ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "ㅋ", taValue: "ㅋㅋ" },
+      { type: "input", inputType: "insertText", data: "ㅋ", taValue: "ㅋㅋㅋ" },
+      { type: "keydown", key: "ㅋ", keyCode: 229 },
+      { type: "input", inputType: "insertReplacementText", data: "ㅋ", taValue: "ㅋㅋㅋ" },
+      { type: "keydown", key: " ", keyCode: 32 },
+    ]);
+
+    const joined = (await getWrites(page)).join("");
+    expect(countToken(joined.split(""), "ㅋ")).toBe(3);
+  });
+
   test("Shift+Enter sends LF, not CR", async ({ page, tauri }) => {
     await seed(tauri);
     await activateTerminal(page);
