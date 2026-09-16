@@ -60,6 +60,24 @@ describe("session creation policy", () => {
     ).toBe(false);
   });
 
+  it("keeps an empty unregistered workspace in local scope", () => {
+    expect(
+      resolveProjectScopedForRepoPath(
+        { sessions: [], projects: [project("/repo/app")] },
+        "/Users/me",
+      ),
+    ).toBe(false);
+  });
+
+  it("uses project scope for an empty registered project", () => {
+    expect(
+      resolveProjectScopedForRepoPath(
+        { sessions: [], projects: [project("/repo/app")] },
+        "/repo/app",
+      ),
+    ).toBe(true);
+  });
+
   it("uses project scope when a project-scoped session exists", () => {
     const sessions = [
       session("local", "/repo/app", { project_scoped: false }),
@@ -308,6 +326,28 @@ describe("session creation policy", () => {
       launch: {
         kind: "workspaceCwd",
         cwdPath: "/repo/app/apps/web",
+      },
+    });
+  });
+
+  it("uses local scope for an empty unregistered workspace", () => {
+    expect(
+      resolveActiveSessionScope({
+        sessions: [],
+        projects: [project("/repo/app")],
+        activeWorkspaceRepoPath: "/Users/me",
+        activeWorkspaceCwdPath: "/Users/me",
+        activeProjectFolderId: "local-ws",
+      }),
+    ).toEqual({
+      placement: {
+        repoPath: "/Users/me",
+        projectScoped: false,
+        projectFolderId: "local-ws",
+      },
+      launch: {
+        kind: "workspaceCwd",
+        cwdPath: "/Users/me",
       },
     });
   });
