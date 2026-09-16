@@ -37,7 +37,8 @@
 
 use std::collections::HashSet;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -275,22 +276,28 @@ pub struct SessionPid {
 /// Convert a filesystem cwd into the dash-slug directory name Claude
 /// uses to bucket its JSONL transcripts.
 ///
-/// Examples:
-///   `/Users/me/proj`                          → `-Users-me-proj`
-///   `/Users/me/proj/.claude/worktrees/foo`    → `-Users-me-proj--claude-worktrees-foo`
+/// Claude Code replaces every non-alphanumeric character with `-`. Unix
+/// `/Users/me/proj` becomes `-Users-me-proj`. Windows `X:\foo\bar_baz`
+/// becomes `X--foo-bar-baz`. A `\\?\` verbatim prefix is dropped first so
+/// `\\?\W:\repo` slugs as `W--repo` instead of embedding `:` / `\` into
+/// the directory name (those characters are illegal on Windows).
 pub fn slug_for_cwd(cwd: &Path) -> String {
-    let s = cwd.to_string_lossy();
-    let trimmed = s.trim_start_matches('/');
-    let mut slug = String::with_capacity(s.len() + 1);
-    slug.push('-');
-    for ch in trimmed.chars() {
-        if ch == '/' || ch == '.' {
-            slug.push('-');
-        } else {
-            slug.push(ch);
-        }
+    let raw = cwd.to_string_lossy();
+    let stripped = raw.strip_prefix(r"\\?\").unwrap_or(raw.as_ref());
+    stripped
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
+}
+
+/// True when `slug` is a single path component with no parent-dir escape.
+/// Windows drive-letter slugs (`W--repo`) do not start with `-`.
+pub fn is_safe_claude_project_slug(slug: &str) -> bool {
+    if slug.is_empty() || slug.contains("..") {
+        return false;
     }
-    slug
+    let mut components = Path::new(slug).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 /// Convert a filesystem cwd into Grok's session-directory bucket name.
@@ -1667,10 +1674,20 @@ fn grok_sessions_root() -> Option<PathBuf> {
         .map(|p| p.join("sessions"))
 }
 
+fn is_missing_or_illegal_path(error: &io::Error) -> bool {
+    match error.kind() {
+        io::ErrorKind::NotFound | io::ErrorKind::InvalidInput | io::ErrorKind::InvalidFilename => {
+            true
+        }
+        // Windows ERROR_INVALID_NAME (`:` / `\` in a path component).
+        _ => error.raw_os_error() == Some(123),
+    }
+}
+
 fn safe_is_directory(path: &Path) -> ProviderScanResult<bool> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) => Ok(meta.file_type().is_dir()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) if is_missing_or_illegal_path(&error) => Ok(false),
         Err(error) => Err(provider_access_error(path, error)),
     }
 }
@@ -1678,7 +1695,7 @@ fn safe_is_directory(path: &Path) -> ProviderScanResult<bool> {
 fn safe_read_dir(path: &Path) -> ProviderScanResult<Option<std::fs::ReadDir>> {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if is_missing_or_illegal_path(&error) => return Ok(None),
         Err(error) => return Err(provider_access_error(path, error)),
     };
     if !meta.file_type().is_dir() {
@@ -4263,6 +4280,45 @@ mod tests {
     #[test]
     fn slug_for_simple_cwd() {
         assert_eq!(slug_for_cwd(Path::new("/Users/me/proj")), "-Users-me-proj");
+    }
+
+    #[test]
+    fn slug_for_windows_drive_cwd_is_one_legal_component() {
+        for cwd in [
+            r"W:\winCudeProject\cras_backend",
+            r"\\?\W:\winCudeProject\cras_backend",
+        ] {
+            let slug = slug_for_cwd(Path::new(cwd));
+            assert!(
+                !slug.contains(':') && !slug.contains('\\') && !slug.contains('/'),
+                "slug for {cwd} must be a single path component, got {slug}"
+            );
+            assert!(
+                is_safe_claude_project_slug(&slug),
+                "slug for {cwd} must be a joinable project directory name, got {slug}"
+            );
+            assert_eq!(slug, "W--winCudeProject-cras-backend");
+        }
+        assert_eq!(slug_for_cwd(Path::new(r"X:\foo\bar_baz")), "X--foo-bar-baz");
+    }
+
+    #[test]
+    fn missing_or_illegal_path_treats_windows_invalid_name_as_a_miss() {
+        assert!(is_missing_or_illegal_path(&io::Error::from_raw_os_error(
+            123
+        )));
+        assert!(is_missing_or_illegal_path(&io::Error::new(
+            io::ErrorKind::NotFound,
+            "gone"
+        )));
+        assert!(is_missing_or_illegal_path(&io::Error::new(
+            io::ErrorKind::InvalidFilename,
+            "bad name"
+        )));
+        assert!(!is_missing_or_illegal_path(&io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "nope"
+        )));
     }
 
     #[test]

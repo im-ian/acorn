@@ -170,9 +170,11 @@ pub fn github_owner_repo(repo_path: &Path) -> AppResult<Option<String>> {
 }
 
 pub fn is_git_repository(repo_path: &Path) -> AppResult<bool> {
-    let start = match repo_path.canonicalize() {
+    let start = match acorn_paths::canonicalize(repo_path) {
         Ok(path) => path,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => repo_path.to_path_buf(),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            acorn_paths::simplified(repo_path).to_path_buf()
+        }
         Err(err) => {
             return Err(AppError::Io(io::Error::new(
                 err.kind(),
