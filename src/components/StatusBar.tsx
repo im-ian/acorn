@@ -401,7 +401,10 @@ export function StatusBar() {
             {showSessionCount || (showSessionStatus && active) ? (
               <span className="text-fg-muted/50">|</span>
             ) : null}
-            <span className="whitespace-nowrap rounded bg-accent/15 px-1.5 py-0.5 text-accent">
+            <span
+              data-testid="multi-input-status"
+              className="whitespace-nowrap rounded bg-accent/15 px-1.5 py-0.5 text-accent"
+            >
               {statusBarText(t, "statusBar.multiInputOn")}
             </span>
           </>

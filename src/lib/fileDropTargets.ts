@@ -2,7 +2,7 @@ import { api } from "./api";
 import { resolveSessionAgentProvider } from "./agentProvider";
 import { formatTerminalFileMention } from "./fileMention";
 import type { PaneId } from "./layout";
-import { visibleMultiInputSessionIds } from "./multiInput";
+import { multiInputWriteSessionIds } from "./multiInput";
 import { showTranslatedErrorToast } from "./operationToasts";
 import type { SessionAgentProvider } from "./types";
 import { useAppStore } from "../store";
@@ -108,10 +108,12 @@ function terminalDropTargetForPane(paneId: PaneId): TerminalDropTarget | null {
 
 function ptyWriteTargets(primarySessionId: string): string[] {
   const state = useAppStore.getState();
-  const targets = state.multiInputEnabled
-    ? visibleMultiInputSessionIds(state.panes)
-    : [primarySessionId];
-  return targets.length > 0 ? targets : [primarySessionId];
+  return multiInputWriteSessionIds(
+    state.multiInputEnabled,
+    state.panes,
+    primarySessionId,
+    state.sessions,
+  );
 }
 
 function writePayloadsToTerminal(
