@@ -193,3 +193,16 @@ export function isAbsolutePath(path: string): boolean {
     /^[\\/]{2}[^\\/]/u.test(path)
   );
 }
+
+/**
+ * Collapse `path` to a `~/…` display form when it lives under `home`.
+ * Drive-letter case and `\` vs `/` are ignored so Windows worktree paths
+ * still shorten; the `~` form always uses `/` because it is display-only.
+ */
+export function tildifyHomePath(path: string, home: string | null): string {
+  if (!home) return path;
+  if (pathsEqual(path, home)) return "~";
+  if (!isPathInsideOrEqual(path, home)) return path;
+  const relative = relativePath(home, path).replace(/\\/gu, "/");
+  return relative ? `~/${relative}` : "~";
+}

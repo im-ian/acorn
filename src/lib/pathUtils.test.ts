@@ -10,6 +10,7 @@ import {
   pathsEqual,
   pathsIntersect,
   relativePath,
+  tildifyHomePath,
   trimTrailingPathSeparators,
 } from "./pathUtils";
 
@@ -112,5 +113,25 @@ describe("path utils", () => {
     expect(isAbsolutePath("C:\\repo\\src\\App.tsx")).toBe(true);
     expect(isAbsolutePath("\\\\server\\share\\file.txt")).toBe(true);
     expect(isAbsolutePath("src\\App.tsx")).toBe(false);
+  });
+
+  it("tildifies POSIX and Windows homes without requiring matching separators", () => {
+    expect(tildifyHomePath("/Users/me", "/Users/me")).toBe("~");
+    expect(tildifyHomePath("/Users/me/repo/src", "/Users/me")).toBe(
+      "~/repo/src",
+    );
+    expect(
+      tildifyHomePath(
+        "C:\\Users\\me\\Documents\\repo",
+        "C:\\Users\\me",
+      ),
+    ).toBe("~/Documents/repo");
+    expect(
+      tildifyHomePath("c:/Users/me/Documents/repo", "C:\\Users\\me\\"),
+    ).toBe("~/Documents/repo");
+    expect(tildifyHomePath("C:\\Users\\other\\repo", "C:\\Users\\me")).toBe(
+      "C:\\Users\\other\\repo",
+    );
+    expect(tildifyHomePath("/Users/me/repo", null)).toBe("/Users/me/repo");
   });
 });

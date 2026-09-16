@@ -1021,7 +1021,7 @@ fn owner_rotation_scope(session_id: uuid::Uuid, kind: AgentKind, cwd: &Path) -> 
 }
 
 fn basename_matches(s: &str, target: &str) -> bool {
-    acorn_platform::executable::executable_name_matches(s, target)
+    acorn_platform::executable::agent_cli_matches(s, target)
 }
 
 fn agent_kind_for_basename(value: &str) -> Option<AgentKind> {
@@ -5201,6 +5201,18 @@ mod tests {
                 AgentProcessIdentity {
                     kind: AgentKind::Claude,
                     shape: AgentProcessShape::Runtime,
+                },
+            ),
+            (
+                r"C:\Program Files\nodejs\node.exe",
+                "node.exe",
+                vec![
+                    r"C:\Program Files\nodejs\node.exe",
+                    r"C:\Users\me\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js",
+                ],
+                AgentProcessIdentity {
+                    kind: AgentKind::Claude,
+                    shape: AgentProcessShape::Launcher,
                 },
             ),
             (
