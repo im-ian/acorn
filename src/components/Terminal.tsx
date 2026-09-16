@@ -18,6 +18,7 @@ import { createPortal } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
 import { api, type ClipboardSnapshot } from "../lib/api";
 import { consumeTerminalDetaching } from "../lib/terminalDetach";
+import { isParkedInTerminalLimbo } from "../lib/terminalLimbo";
 import type { BackgroundState } from "../lib/background";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import {
@@ -1203,6 +1204,12 @@ export function Terminal({
       () => useSettings.getState().settings.terminal.scrollSpeed,
     );
     const fitWithCellMeasurements = () => {
+      // Off-screen terminals measure the limbo host, not their pane. Fitting
+      // there resizes the PTY to a size the user never sees and reflows the
+      // xterm buffer twice per tab switch, which shreds a live TUI's frame.
+      // Keep the last on-screen geometry; the `isActive` repaint effect and
+      // the ResizeObserver both re-fit once the terminal lands back in a pane.
+      if (isParkedInTerminalLimbo(container)) return;
       const cjkEnabled =
         useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
       patchTerminalCellMeasurements(term, {
@@ -1233,7 +1240,7 @@ export function Terminal({
           ),
         );
         try {
-          fitAddon.fit();
+          fitWithCellMeasurements();
         } catch {
           // ignore — ResizeObserver will retry
         }
