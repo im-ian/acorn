@@ -176,19 +176,6 @@ const MODIFIER_EVENT_KEYS = new Set([
 let shortcutRecordingActive = false;
 let appHotkeyBlockDepth = 0;
 
-type TauriRuntimeWindow = Window & { __TAURI_INTERNALS__?: unknown };
-
-function isTauriRuntime(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    "__TAURI_INTERNALS__" in (window as TauriRuntimeWindow)
-  );
-}
-
-export function shouldUseTinykeysToggleMultiInputFallback(): boolean {
-  return !isTauriRuntime();
-}
-
 function isMacPlatform(): boolean {
   return (
     typeof navigator !== "undefined" &&

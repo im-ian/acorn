@@ -38,12 +38,11 @@ import {
   forgetCompletedAgentResumeAutoDispatch,
 } from "./lib/agentResume";
 import {
-  DEFAULT_HOTKEYS,
   hotkeyBindingsFor,
-  shouldUseTinykeysToggleMultiInputFallback,
   useHotkeys,
   type HotkeyBindings,
 } from "./lib/hotkeys";
+import { createToggleLatch } from "./lib/multiInput";
 import {
   TERMINAL_CONVERSATION_NAV_EVENT,
   type ConversationNavigationDirection,
@@ -431,7 +430,9 @@ function App() {
   const [stagedRevMismatch, setStagedRevMismatch] =
     useState<StagedRevMismatch | null>(null);
 
+  const acceptMultiInputToggle = useRef(createToggleLatch());
   const toggleMultiInput = useCallback(() => {
+    if (!acceptMultiInputToggle.current()) return;
     const enabled = useAppStore.getState().toggleMultiInput();
     useToasts
       .getState()
@@ -1703,12 +1704,6 @@ function App() {
     };
     const toggleMultiInputHandler = (e: KeyboardEvent) => {
       e.preventDefault();
-      if (
-        shortcuts.toggleMultiInput === DEFAULT_HOTKEYS.toggleMultiInput &&
-        !shouldUseTinykeysToggleMultiInputFallback()
-      ) {
-        return;
-      }
       toggleMultiInput();
     };
     const setActiveTabMinimized = (minimized: boolean) => {
