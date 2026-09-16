@@ -187,7 +187,11 @@ export function resolveProjectScopedForRepoPath(
       session.repo_path === repoPath && session.project_scoped !== false,
   );
   if (hasLocalSessions && !hasProjectSessions) return false;
-  return true;
+  if (hasProjectSessions) return true;
+  // Unregistered roots are local workspaces; project scope would open git there.
+  return context.projects.some((project) =>
+    projectRootPaths(project).includes(repoPath),
+  );
 }
 
 export function buildSessionCreateRequest(
