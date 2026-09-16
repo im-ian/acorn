@@ -1203,19 +1203,25 @@ export function Terminal({
       term,
       () => useSettings.getState().settings.terminal.scrollSpeed,
     );
+    // Set once this terminal has been fitted against a real pane body. Until
+    // then the limbo host's own box is the best size available, which is why
+    // it carries non-zero dimensions.
+    let fittedOnScreen = false;
     const fitWithCellMeasurements = () => {
       // Off-screen terminals measure the limbo host, not their pane. Fitting
       // there resizes the PTY to a size the user never sees and reflows the
       // xterm buffer twice per tab switch, which shreds a live TUI's frame.
       // Keep the last on-screen geometry; the `isActive` repaint effect and
       // the ResizeObserver both re-fit once the terminal lands back in a pane.
-      if (isParkedInTerminalLimbo(container)) return;
+      const parked = isParkedInTerminalLimbo(container);
+      if (parked && fittedOnScreen) return;
       const cjkEnabled =
         useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
       patchTerminalCellMeasurements(term, {
         cjkCellWidthHeuristic: cjkEnabled,
       });
       fitAddon.fit();
+      if (!parked) fittedOnScreen = true;
       patchTerminalCellMeasurements(term, {
         cjkCellWidthHeuristic: cjkEnabled,
       });
