@@ -1,9 +1,9 @@
 use git2::{BranchType, ErrorCode, Repository, WorktreeAddOptions, WorktreePruneOptions};
 use serde::Serialize;
 use std::fs::{File, Metadata, OpenOptions};
-use std::io::{ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -51,7 +51,10 @@ pub fn ensure_repo(path: &Path) -> AppResult<Repository> {
     // any UI poll (`list_commits`, `list_staged`, `diff_*`) racing the
     // sweep still bubbles the raw git error into the right panel.
     let start = walk_to_existing_ancestor(path);
-    Repository::discover(&start).map_err(|e| {
+    // libgit2 does not resolve Windows verbatim prefixes (`\\?\C:\...`) that
+    // `std::fs::canonicalize` produces, so strip them before discover.
+    let start = acorn_paths::simplified(&start);
+    Repository::discover(start).map_err(|e| {
         AppError::Other(format!(
             "could not find git repository from '{}': {}",
             path.display(),
@@ -62,7 +65,8 @@ pub fn ensure_repo(path: &Path) -> AppResult<Repository> {
 
 pub fn project_root_for_path(path: &Path) -> AppResult<PathBuf> {
     let path = path.canonicalize()?;
-    match Repository::discover(&path) {
+    let git_path = acorn_paths::simplified(&path);
+    match Repository::discover(git_path) {
         Ok(repo) => {
             let Some(workdir) = repo.workdir() else {
                 return Ok(path);
@@ -79,7 +83,7 @@ pub fn project_root_for_path(path: &Path) -> AppResult<PathBuf> {
         }
         Err(err)
             if err.code() == git2::ErrorCode::NotFound
-                && !repository_marker_in_ancestry(&path)? =>
+                && !repository_marker_in_ancestry(git_path)? =>
         {
             Ok(path)
         }
@@ -295,13 +299,14 @@ pub fn create_worktree_from_base_branch(
     let branch_ref = repo.find_reference(&branch_ref_name)?;
     let mut opts = WorktreeAddOptions::new();
     opts.checkout_existing(true).reference(Some(&branch_ref));
-    if let Err(err) = repo.worktree(name, &target, Some(&opts)) {
+    let git_target = acorn_paths::simplified(&target);
+    if let Err(err) = repo.worktree(name, git_target, Some(&opts)) {
         if let Ok(mut branch) = repo.find_branch(name, BranchType::Local) {
             let _ = branch.delete();
         }
         return Err(err.into());
     }
-    Ok(target)
+    Ok(git_target.to_path_buf())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -556,6 +561,7 @@ fn add_linked_worktree(
     let branch_ref = repo.find_reference(&branch_ref_name)?;
     let mut opts = WorktreeAddOptions::new();
     opts.checkout_existing(true).reference(Some(&branch_ref));
+    let target = acorn_paths::simplified(target);
     repo.worktree(name, target, Some(&opts))?;
     Ok(target.to_path_buf())
 }
@@ -901,6 +907,41 @@ fn path_entry_exists(path: &Path) -> AppResult<bool> {
     }
 }
 
+const WINDOWS_LOCK_RETRY_ATTEMPTS: u32 = 8;
+
+/// ERROR_ACCESS_DENIED (5) and ERROR_SHARING_VIOLATION (32). Windows returns
+/// these while a just-killed PTY still holds the checkout as cwd.
+pub(crate) fn is_windows_lock_error(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(5) | Some(32))
+}
+
+fn windows_lock_retry_delay(_attempt: u32) -> Duration {
+    if cfg!(test) {
+        Duration::ZERO
+    } else {
+        Duration::from_millis(50)
+    }
+}
+
+pub(crate) fn retry_on_windows_lock<T, F>(mut op: F) -> io::Result<T>
+where
+    F: FnMut() -> io::Result<T>,
+{
+    let mut attempt = 0;
+    loop {
+        match op() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if is_windows_lock_error(&error) && attempt + 1 < WINDOWS_LOCK_RETRY_ATTEMPTS =>
+            {
+                attempt += 1;
+                std::thread::sleep(windows_lock_retry_delay(attempt));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 pub fn stage_remove_worktree_at_path(
     repo_path: &Path,
     worktree_path: &Path,
@@ -928,7 +969,7 @@ pub fn stage_remove_worktree_at_path(
             let token = Uuid::new_v4().to_string();
             let backup_root = ensure_removed_worktree_backup_root(worktree_path)?;
             let backup = backup_root.join(&token);
-            std::fs::rename(worktree_path, &backup)?;
+            retry_on_windows_lock(|| std::fs::rename(worktree_path, &backup))?;
             if let Err(error) = validate_real_directory_entry(&backup, "removed worktree backup") {
                 let _ = std::fs::rename(&backup, worktree_path);
                 return Err(error);
@@ -944,7 +985,7 @@ pub fn stage_remove_worktree_at_path(
 
     if is_acorn_managed_worktree_path(repo_path, worktree_path)? {
         if path_entry_exists(worktree_path)? && is_linked_worktree_root(worktree_path) {
-            std::fs::remove_dir_all(worktree_path)?;
+            retry_on_windows_lock(|| std::fs::remove_dir_all(worktree_path))?;
             return Ok(None);
         }
         if !path_entry_exists(worktree_path)? {
@@ -1256,6 +1297,7 @@ fn is_acorn_managed_worktree_path(repo_path: &Path, worktree_path: &Path) -> App
 /// `worktrees` entry beneath it) as a symlink; blindly creating or deleting
 /// through that path would escape the repository boundary.
 fn checked_worktree_root(repo_path: &Path, create: bool) -> AppResult<PathBuf> {
+    let repo_path = acorn_paths::simplified(repo_path);
     let canonical_repo = repo_path.canonicalize()?;
     if !canonical_repo.is_dir() {
         return Err(AppError::InvalidPath(format!(
@@ -2085,6 +2127,96 @@ mod tests {
         assert_eq!(
             workdir.canonicalize().unwrap(),
             root.canonicalize().unwrap(),
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn retry_on_windows_lock_retries_sharing_violation_then_succeeds() {
+        let mut calls = 0;
+        let result = retry_on_windows_lock(|| {
+            calls += 1;
+            if calls < 3 {
+                Err(io::Error::from_raw_os_error(32))
+            } else {
+                Ok(7)
+            }
+        });
+        assert_eq!(result.expect("sharing violation should retry"), 7);
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn retry_on_windows_lock_retries_access_denied() {
+        let mut calls = 0;
+        let result = retry_on_windows_lock(|| {
+            calls += 1;
+            if calls == 1 {
+                Err(io::Error::from_raw_os_error(5))
+            } else {
+                Ok(())
+            }
+        });
+        result.expect("access denied should retry");
+        assert_eq!(calls, 2);
+        assert!(is_windows_lock_error(&io::Error::from_raw_os_error(5)));
+        assert!(is_windows_lock_error(&io::Error::from_raw_os_error(32)));
+    }
+
+    #[test]
+    fn retry_on_windows_lock_does_not_retry_unrelated_io_error() {
+        let mut calls = 0;
+        let error = retry_on_windows_lock(|| {
+            calls += 1;
+            Err::<(), _>(io::Error::from_raw_os_error(2))
+        })
+        .expect_err("unrelated IO must fail immediately");
+        assert_eq!(error.raw_os_error(), Some(2));
+        assert_eq!(calls, 1);
+        assert!(!is_windows_lock_error(&error));
+    }
+
+    #[test]
+    fn ensure_repo_discovers_from_canonical_path() {
+        let root = unique_temp_dir("canonical");
+        Repository::init(&root).expect("init repo");
+        let canonical = std::fs::canonicalize(&root).expect("canonicalize");
+
+        let opened = ensure_repo(&canonical).expect("discover from canonical path");
+        let workdir = opened.workdir().expect("workdir present");
+        assert_eq!(
+            workdir.canonicalize().unwrap(),
+            root.canonicalize().unwrap(),
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn create_worktree_from_verbatim_windows_path() {
+        let root = unique_temp_dir("verbatim-wt");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let verbatim = std::fs::canonicalize(&root).expect("canonicalize");
+        assert!(
+            verbatim.to_string_lossy().starts_with(r"\\?\"),
+            "expected Windows verbatim prefix, got {}",
+            verbatim.display()
+        );
+
+        let worktree_path =
+            create_worktree(&verbatim, "worker").expect("create worktree from verbatim path");
+        assert!(
+            worktree_path.join(".git").exists(),
+            "linked worktree should exist at {}",
+            worktree_path.display()
+        );
+        assert!(
+            !worktree_path.to_string_lossy().starts_with(r"\\?\"),
+            "worktree path should be simplified for libgit2, got {}",
+            worktree_path.display()
         );
 
         std::fs::remove_dir_all(&root).ok();
