@@ -519,7 +519,7 @@ test.describe("workspace canvas mode", () => {
     await expect(node).toHaveCount(0);
     const beta = page.locator('[data-canvas-session-id="beta"]');
     const removeButton = beta.getByRole("button", { name: "Close beta" });
-    await expect(removeButton.locator("svg")).toHaveClass(/lucide-trash-2/);
+    await expect(removeButton.locator("svg")).toHaveClass(/lucide-trash/);
     await removeButton.click();
     await expect(
       dialog.getByRole("heading", { name: "Remove session" }),
