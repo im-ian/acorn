@@ -110,6 +110,7 @@ import {
   canRenameSession,
 } from "../lib/sessionTitle";
 import {
+  isWslBridgedSession,
   summarizeAllSessionProcesses,
   summarizeSessionProcesses,
 } from "../lib/sessionContext";
@@ -356,7 +357,15 @@ function statusReasonLabel(
 
 function statusDetailLabel(t: Translator, session: Session): string {
   const label = statusLabel(t, session.status);
-  const reason = statusReasonLabel(t, session.status_reason);
+  // A WSL bridge leaves the status stuck on whatever the shell reports, so
+  // say why rather than let it read as a silent failure. A real status reason
+  // still wins: it is proof that resolution worked, which would contradict
+  // the hint — and `wsl.exe` can be an incidental child of a normal session.
+  const reason =
+    statusReasonLabel(t, session.status_reason) ??
+    (isWslBridgedSession(session)
+      ? sidebarText(t, "sidebar.statusReason.wsl_bridged")
+      : null);
   return reason ? `${label} · ${reason}` : label;
 }
 
