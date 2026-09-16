@@ -1054,12 +1054,22 @@ EOF
 const CODEX_PS_INIT_BODY: &str = r#"# Acorn Codex shim (Windows PowerShell sessions).
 # Written by Acorn; edits are overwritten on the next app launch.
 
-# Shadow `codex` only when it currently resolves to the real binary. A profile
-# function or alias — a WSL bridge, a custom launcher — stays in charge, since
-# overriding it would break a setup that works outside Acorn. This runs after
-# the user's profile, so their definition is already visible here.
+# Leave a user-authored wrapper in charge: a profile function or alias — a WSL
+# bridge, a custom launcher — would break inside Acorn if shadowed. This runs
+# after the user's profile, so their definition is already visible here.
+#
+# Anything else is shadowed, and the distinction matters more than it looks.
+# `npm install -g @openai/codex` lays down `codex.ps1`, `codex.cmd` and a
+# bare `codex` side by side, and PowerShell resolves the `.ps1` (an
+# ExternalScript) *ahead* of the `.cmd`. Requiring an Application here would
+# therefore skip the shim on the most common Windows install of Codex, which
+# is the opposite of leaving a user's own setup alone.
 $acornCodexResolved = Get-Command -Name codex -ErrorAction SilentlyContinue
-if ($acornCodexResolved -and $acornCodexResolved.CommandType -eq 'Application') {
+$acornCodexApp = Get-Command -Name codex -CommandType Application -ErrorAction SilentlyContinue |
+  Select-Object -First 1
+if ($acornCodexApp -and $acornCodexResolved -and
+    $acornCodexResolved.CommandType -ne 'Function' -and
+    $acornCodexResolved.CommandType -ne 'Alias') {
 
 function global:codex {
   $app = Get-Command -Name codex -CommandType Application -ErrorAction SilentlyContinue |
@@ -2756,7 +2766,12 @@ done
         // A profile-defined `codex` function or alias (a WSL bridge, a custom
         // launcher) must keep working inside Acorn, so the shim only shadows
         // a name that currently resolves to the real binary.
-        assert!(init.contains("$acornCodexResolved.CommandType -eq 'Application'"));
+        assert!(init.contains("$acornCodexResolved.CommandType -ne 'Function'"));
+        assert!(init.contains("$acornCodexResolved.CommandType -ne 'Alias'"));
+        // `npm install -g @openai/codex` ships codex.ps1 alongside codex.cmd
+        // and PowerShell resolves the .ps1 first, so requiring an Application
+        // here would skip the shim on the most common Windows install.
+        assert!(!init.contains("$acornCodexResolved.CommandType -eq 'Application'"));
         // Minting a lifecycle id here would route the completion into the lane
         // reducer, which drops an untrusted completion with no open turn —
         // and nothing on Windows opens one. See the agent_hooks tests
