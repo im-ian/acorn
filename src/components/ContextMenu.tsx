@@ -53,13 +53,34 @@ interface ContextMenuProps {
   onClose: () => void;
 }
 
+const openMenuClosers = new Set<() => void>();
+
 export function ContextMenu({ open, x, y, items, onClose }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  const closerRef = useRef(() => {
+    onCloseRef.current();
+  });
   const [position, setPosition] = useState({ left: x, top: y });
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
-    function onDown(e: MouseEvent) {
+    const closer = closerRef.current;
+    // Callers stop mousedown/contextmenu bubbling, so a second open would
+    // otherwise leave both portals on screen.
+    for (const other of [...openMenuClosers]) {
+      if (other !== closer) other();
+    }
+    openMenuClosers.add(closer);
+    return () => {
+      openMenuClosers.delete(closer);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointer(e: Event) {
       if (ref.current && !ref.current.contains(e.target as Node)) {
         onClose();
       }
@@ -70,12 +91,14 @@ export function ContextMenu({ open, x, y, items, onClose }: ContextMenuProps) {
     function onScroll() {
       onClose();
     }
-    window.addEventListener("mousedown", onDown);
+    window.addEventListener("mousedown", onPointer, true);
+    window.addEventListener("contextmenu", onPointer, true);
     window.addEventListener("keydown", onKey);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onClose);
     return () => {
-      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mousedown", onPointer, true);
+      window.removeEventListener("contextmenu", onPointer, true);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onClose);
