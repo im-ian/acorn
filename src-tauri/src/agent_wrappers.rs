@@ -1183,9 +1183,31 @@ pub fn ensure_agent_wrapper_dir() -> io::Result<PathBuf> {
 /// Path of the PowerShell shim a Windows session runs at startup. The shim is
 /// what registers Codex's `notify` channel there; without it Codex status on
 /// Windows falls back to transcript polling alone.
-#[cfg(windows)]
+///
+/// Left compiled on every platform on purpose — see
+/// `powershell_codex_shim_args` — so a typo here cannot hide behind a `cfg`
+/// no CI job builds.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn codex_powershell_init_path() -> io::Result<PathBuf> {
     Ok(ensure_agent_wrapper_dir()?.join(CODEX_PS_INIT_NAME))
+}
+
+/// Startup arguments that make a PowerShell session run the Codex shim.
+///
+/// Deliberately platform-independent: no CI job compiles this crate for
+/// Windows, so anything left inside a `cfg(windows)` block is checked by no
+/// compiler anywhere. Keeping the ordering contract here means the POSIX test
+/// suite covers it.
+///
+/// `-NoExit` keeps the session interactive once the shim has run, and `-File`
+/// must stay last because it ends PowerShell's option parsing — every
+/// argument after it belongs to the script.
+pub fn powershell_codex_shim_args(init: &Path) -> Vec<String> {
+    vec![
+        "-NoExit".to_string(),
+        "-File".to_string(),
+        init.display().to_string(),
+    ]
 }
 
 /// Publish the hook server's current URL + token where the notify scripts
@@ -2642,6 +2664,34 @@ done
     /// PowerShell host on the POSIX CI runners, and the Windows CI job does
     /// not build this crate), so the properties that silently disable it are
     /// pinned as content assertions instead.
+    #[test]
+    fn powershell_shim_args_keep_file_last() {
+        let args = powershell_codex_shim_args(Path::new("/wrapper dir/acorn-codex-init.ps1"));
+
+        // `-File` ends PowerShell's option parsing, so anything appended
+        // after the script path would be handed to the script instead of the
+        // host — and `-NoExit` after it would stop keeping the session alive.
+        assert_eq!(
+            args,
+            vec![
+                "-NoExit".to_string(),
+                "-File".to_string(),
+                "/wrapper dir/acorn-codex-init.ps1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wrapper_dir_contains_the_shim_the_init_path_resolves_to() {
+        let base = ScratchDir::new("codex-ps-path");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        // `codex_powershell_init_path` joins this same name onto the wrapper
+        // dir; asserting the file is actually written keeps the two from
+        // drifting apart into a path that resolves to nothing.
+        assert!(dir.join(CODEX_PS_INIT_NAME).is_file());
+    }
+
     #[test]
     fn writes_codex_powershell_shim() {
         let base = ScratchDir::new("codex-ps");

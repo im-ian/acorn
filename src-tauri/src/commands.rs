@@ -9147,16 +9147,13 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
             .or_insert_with(|| wrapper_dir.display().to_string());
         if shell_kind == crate::shell_runtime::ShellKind::PowerShell {
             match crate::agent_wrappers::codex_powershell_init_path() {
-                // `-NoExit` keeps the session interactive after the shim runs,
-                // and `-File` must stay last — it ends option parsing. A shim
-                // that throws still leaves the user a usable shell.
-                Ok(init) => primed_args.extend([
-                    "-NoExit".to_string(),
-                    "-File".to_string(),
-                    init.display().to_string(),
-                ]),
+                // A shim that fails to load still leaves the user a usable
+                // shell: `-NoExit` keeps the session alive either way.
+                Ok(init) => {
+                    primed_args.extend(crate::agent_wrappers::powershell_codex_shim_args(&init))
+                }
                 Err(error) => tracing::warn!(
-                    %id, %error,
+                    %id, error = %error,
                     "codex PowerShell shim unavailable; codex status falls back to transcript polling",
                 ),
             }
