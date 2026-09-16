@@ -1,7 +1,61 @@
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+
+function IndependentMenuRow({
+  id,
+  label,
+}: {
+  id: string;
+  label: string;
+}) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  return (
+    <div
+      data-menu-row={id}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setMenu({ x: event.clientX, y: event.clientY });
+      }}
+    >
+      {label}
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        onClose={() => setMenu(null)}
+        items={[{ label: `${label} action`, onClick: vi.fn() }]}
+      />
+    </div>
+  );
+}
+
+function openRowMenu(row: Element, x: number, y: number, withMouseDown: boolean) {
+  if (withMouseDown) {
+    row.dispatchEvent(
+      new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: x,
+        clientY: y,
+      }),
+    );
+  }
+  row.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+    }),
+  );
+}
 
 describe("ContextMenu", () => {
   let container: HTMLDivElement;
@@ -151,5 +205,66 @@ describe("ContextMenu", () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a single menu when another row right-clicks and stops mousedown", () => {
+    act(() => {
+      root.render(
+        <>
+          <IndependentMenuRow id="a" label="Rename A" />
+          <IndependentMenuRow id="b" label="Rename B" />
+        </>,
+      );
+    });
+
+    const rowA = document.querySelector("[data-menu-row='a']");
+    const rowB = document.querySelector("[data-menu-row='b']");
+    if (!rowA || !rowB) throw new Error("missing rows");
+
+    act(() => {
+      openRowMenu(rowA, 12, 16, false);
+    });
+    expect(document.querySelectorAll("[data-acorn-context-menu]")).toHaveLength(1);
+    expect(document.body.textContent).toContain("Rename A action");
+
+    act(() => {
+      openRowMenu(rowB, 24, 48, true);
+    });
+    expect(document.querySelectorAll("[data-acorn-context-menu]")).toHaveLength(1);
+    expect(document.body.textContent).toContain("Rename B action");
+    expect(document.body.textContent).not.toContain("Rename A action");
+  });
+
+  it("dismisses an open menu on a capturing mousedown even when the row stops bubbling", () => {
+    act(() => {
+      root.render(
+        <>
+          <IndependentMenuRow id="a" label="Rename A" />
+          <IndependentMenuRow id="b" label="Rename B" />
+        </>,
+      );
+    });
+
+    const rowA = document.querySelector("[data-menu-row='a']");
+    const rowB = document.querySelector("[data-menu-row='b']");
+    if (!rowA || !rowB) throw new Error("missing rows");
+
+    act(() => {
+      openRowMenu(rowA, 12, 16, false);
+    });
+    expect(document.querySelectorAll("[data-acorn-context-menu]")).toHaveLength(1);
+
+    act(() => {
+      rowB.dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          clientX: 24,
+          clientY: 48,
+        }),
+      );
+    });
+    expect(document.querySelectorAll("[data-acorn-context-menu]")).toHaveLength(0);
   });
 });
