@@ -101,6 +101,7 @@ import {
   getClipboardImageFile,
   hasClipboardImagePayload,
   isTerminalProtocolReply,
+  shouldDelegateImagePasteToAgent,
   terminalPasteAction,
   type ClipboardImageFile,
 } from "../lib/terminalPaste";
@@ -1535,7 +1536,10 @@ export function Terminal({
     let terminalInputVersion = 0;
     let imagePasteFallbackTimer: number | null = null;
     let imagePasteFallbackSerial = 0;
-    const IMAGE_PASTE_FALLBACK_DELAY_MS = 500;
+    // macOS waits so a native Claude/Codex paste can produce input and
+    // cancel the fallback. Other platforms never get that input, so
+    // materializing the image immediately avoids a visible lag.
+    const IMAGE_PASTE_FALLBACK_DELAY_MS = IS_MAC ? 500 : 0;
     const agentImagePasteFallbackIsActive = async (): Promise<boolean> => {
       if (providerSupportsImagePasteFallback(pasteAgentProviderRef.current)) {
         return true;
@@ -1612,7 +1616,13 @@ export function Terminal({
             imageFile ?? (await readNativeClipboardImageFile());
           fallbackHadAttachment = Boolean(attachmentSource);
           if (!attachmentSource) return;
-          if (await agentImagePasteFallbackIsActive()) {
+          if (
+            shouldDelegateImagePasteToAgent(
+              await agentImagePasteFallbackIsActive(),
+              // Windows agents cannot read CF_DIB; keep Ctrl+V on macOS.
+              IS_MAC,
+            )
+          ) {
             if (
               disposed ||
               serial !== imagePasteFallbackSerial ||
@@ -2547,8 +2557,44 @@ export function Terminal({
       }
     };
 
+    // Windows Ctrl+V otherwise reaches xterm as \x16. Codex treats that as
+    // "read the OS clipboard", then fails on CF_DIB screenshots. Own the
+    // chord and route it through the native snapshot instead.
+    let consumeBrowserPasteFromCtrlV = false;
+    let consumeBrowserPasteFromCtrlVTimer: number | null = null;
+    const ownWindowsCtrlV = () => {
+      consumeBrowserPasteFromCtrlV = true;
+      if (consumeBrowserPasteFromCtrlVTimer !== null) {
+        window.clearTimeout(consumeBrowserPasteFromCtrlVTimer);
+      }
+      consumeBrowserPasteFromCtrlVTimer = window.setTimeout(() => {
+        consumeBrowserPasteFromCtrlV = false;
+        consumeBrowserPasteFromCtrlVTimer = null;
+      }, 0);
+    };
+
     const onKeydown = (e: Event) => {
       const ev = e as KeyboardEvent;
+      if (
+        IS_WINDOWS &&
+        ev.ctrlKey &&
+        !ev.shiftKey &&
+        !ev.metaKey &&
+        !ev.altKey &&
+        ev.key.toLowerCase() === "v"
+      ) {
+        ownWindowsCtrlV();
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        void pasteNativeClipboard().catch((err: unknown) => {
+          console.warn("[Terminal] native paste failed", err);
+          showTranslatedErrorToast(
+            "toasts.terminal.clipboardReadFailed",
+            err,
+          );
+        });
+        return;
+      }
       if (
         IS_WINDOWS &&
         ev.ctrlKey &&
@@ -2811,6 +2857,12 @@ export function Terminal({
     // streaming — must not cancel the fallback.)
     const onPaste = (e: Event) => {
       const ev = e as ClipboardEvent;
+      if (consumeBrowserPasteFromCtrlV) {
+        consumeBrowserPasteFromCtrlV = false;
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        return;
+      }
       const cd = ev.clipboardData;
       if (!cd) return;
       const text = cd?.getData("text/plain") ?? "";
@@ -2822,6 +2874,10 @@ export function Terminal({
       });
       if (action.kind === "deferImageAttachment") {
         scheduleClipboardImageFallback(imageFile, terminalInputVersion);
+        if (!IS_MAC) {
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+        }
         return;
       }
       if (action.kind === "native") {
@@ -4141,6 +4197,9 @@ export function Terminal({
       }
       if (imagePasteFallbackTimer !== null) {
         window.clearTimeout(imagePasteFallbackTimer);
+      }
+      if (consumeBrowserPasteFromCtrlVTimer !== null) {
+        window.clearTimeout(consumeBrowserPasteFromCtrlVTimer);
       }
       imagePasteFallbackSerial += 1;
       for (const off of unlistenFns) {
