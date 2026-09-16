@@ -1054,6 +1054,18 @@ EOF
 const CODEX_PS_INIT_BODY: &str = r#"# Acorn Codex shim (Windows PowerShell sessions).
 # Written by Acorn; edits are overwritten on the next app launch.
 
+# Resolve the Codex binary, skipping npm's extension-less `codex` launcher.
+# npm installs that alongside `codex.cmd`, both report as Application, and it
+# is a `#!/bin/sh` script Windows cannot execute — running it fails the whole
+# command. PowerShell happens to order `.cmd` first today, so this only makes
+# an existing dependency on that ordering explicit rather than fixing a live
+# failure. Anything with an extension is launchable through PATHEXT.
+function Get-AcornCodexBinary {
+  @(Get-Command -Name codex -CommandType Application -ErrorAction SilentlyContinue |
+    Where-Object { [System.IO.Path]::GetExtension($_.Source) -ne '' }) |
+    Select-Object -First 1
+}
+
 # Leave a user-authored wrapper in charge: a profile function or alias — a WSL
 # bridge, a custom launcher — would break inside Acorn if shadowed. This runs
 # after the user's profile, so their definition is already visible here.
@@ -1064,16 +1076,21 @@ const CODEX_PS_INIT_BODY: &str = r#"# Acorn Codex shim (Windows PowerShell sessi
 # ExternalScript) *ahead* of the `.cmd`. Requiring an Application here would
 # therefore skip the shim on the most common Windows install of Codex, which
 # is the opposite of leaving a user's own setup alone.
+#
+# Known limit: a user-authored `codex.ps1` earlier on PATH is shadowed too,
+# because it is indistinguishable from npm's. A `.cmd`/`.exe` wrapper is not
+# affected — that one resolves as the first Application, so the shim calls it
+# and the user's launcher still runs.
 $acornCodexResolved = Get-Command -Name codex -ErrorAction SilentlyContinue
-$acornCodexApp = Get-Command -Name codex -CommandType Application -ErrorAction SilentlyContinue |
-  Select-Object -First 1
+$acornCodexApp = Get-AcornCodexBinary
 if ($acornCodexApp -and $acornCodexResolved -and
     $acornCodexResolved.CommandType -ne 'Function' -and
     $acornCodexResolved.CommandType -ne 'Alias') {
 
 function global:codex {
-  $app = Get-Command -Name codex -CommandType Application -ErrorAction SilentlyContinue |
-    Select-Object -First 1
+  # Re-resolved per call rather than captured at load time, so a PATH change
+  # mid-session is picked up.
+  $app = Get-AcornCodexBinary
   if (-not $app) {
     Write-Host 'Acorn: codex not found in PATH. Install it and ensure it is available in your shell PATH.'
     return
@@ -2764,9 +2781,17 @@ done
         assert!(!init.contains("trusted_hash"));
         assert!(!init.contains("--enable hooks"));
         // A profile-defined `codex` function or alias (a WSL bridge, a custom
-        // launcher) must keep working inside Acorn, so the shim only shadows
-        // a name that currently resolves to the real binary.
+        // launcher) must keep working inside Acorn. Everything else is
+        // shadowed — npm's generated `codex.ps1` resolves ahead of
+        // `codex.cmd`, so requiring an Application would skip the shim on the
+        // most common Windows install.
         assert!(init.contains("$acornCodexResolved.CommandType -ne 'Function'"));
+        // npm also installs an extension-less `codex` (a /bin/sh script)
+        // beside `codex.cmd`; both report as Application and Windows cannot
+        // execute the former, so resolution must skip it rather than lean on
+        // PowerShell's PATHEXT ordering.
+        assert!(init.contains("function Get-AcornCodexBinary"));
+        assert!(init.contains("[System.IO.Path]::GetExtension($_.Source) -ne ''"));
         assert!(init.contains("$acornCodexResolved.CommandType -ne 'Alias'"));
         // `npm install -g @openai/codex` ships codex.ps1 alongside codex.cmd
         // and PowerShell resolves the .ps1 first, so requiring an Application
