@@ -124,8 +124,8 @@ pub struct AppState {
     /// provider child; Graph runs own a bounded set of independently
     /// cancellable node children under the same atomic session claim.
     pub chat_runs: Arc<crate::chat_runs::ChatRunRegistry>,
-    /// macOS idle-sleep assertion owned while Settings keeps Acorn awake.
-    /// Dropping the inner assertion releases the OS power-management hold.
+    /// macOS keep-awake assertions owned while Settings keeps Acorn awake.
+    /// Dropping the inner assertions releases the OS power-management hold.
     pub power_assertion: Arc<Mutex<PowerAssertionState>>,
 }
 

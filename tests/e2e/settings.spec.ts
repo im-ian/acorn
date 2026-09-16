@@ -761,6 +761,7 @@ test.describe("settings modal", () => {
     const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
     await modal.getByRole("button", { name: /^(Sessions|세션)$/ }).click();
 
+    await expect(modal.getByRole("heading", { name: /power|전원/i })).toBeVisible();
     const checkbox = modal.getByRole("checkbox", {
       name: /Keep this Mac awake|이 Mac 잠자기 방지/,
     });
