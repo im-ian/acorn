@@ -377,7 +377,15 @@ struct PlatformProcessTree {
 }
 
 #[cfg(windows)]
-fn configure_tree_root_platform(_command: &mut Command) {}
+fn configure_tree_root_platform(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    // Acorn is a GUI process, so it has no console. Console-subsystem
+    // children such as claude.exe, node.exe, and cmd.exe allocate a visible
+    // window unless this flag is set.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
 
 #[cfg(windows)]
 fn from_std_child_platform(child: &Child) -> io::Result<PlatformProcessTree> {
@@ -484,6 +492,10 @@ mod tests {
 
     const ROLE_ENV: &str = "ACORN_PROCESS_TREE_TEST_ROLE";
     const DIRECTORY_ENV: &str = "ACORN_PROCESS_TREE_TEST_DIRECTORY";
+    #[cfg(windows)]
+    const CONSOLE_PROBE_ENV: &str = "ACORN_PROCESS_TREE_CONSOLE_PROBE";
+    #[cfg(windows)]
+    const CONSOLE_PROBE_OUT_ENV: &str = "ACORN_PROCESS_TREE_CONSOLE_PROBE_OUT";
 
     #[test]
     fn ancestry_accepts_same_process_and_rejects_invalid_ids() {
@@ -662,6 +674,89 @@ mod tests {
             assert!(Instant::now() < deadline, "process tree did not terminate");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[cfg(windows)]
+    fn current_process_has_console_window() -> bool {
+        use windows_sys::Win32::System::Console::GetConsoleWindow;
+        !unsafe { GetConsoleWindow() }.is_null()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_tree_console_probe() {
+        let Ok(role) = std::env::var(CONSOLE_PROBE_ENV) else {
+            return;
+        };
+        assert_eq!(role, "child");
+        let path = std::path::PathBuf::from(
+            std::env::var_os(CONSOLE_PROBE_OUT_ENV).expect("console probe output path"),
+        );
+        let result = if current_process_has_console_window() {
+            "console"
+        } else {
+            "no-console"
+        };
+        std::fs::write(path, result).expect("write console probe result");
+    }
+
+    #[cfg(windows)]
+    fn spawn_console_probe(hide_console: bool) -> String {
+        let directory = tempfile::tempdir().unwrap();
+        let result_path = directory.path().join("result.txt");
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "process::tests::process_tree_console_probe"])
+            .env(CONSOLE_PROBE_ENV, "child")
+            .env(CONSOLE_PROBE_OUT_ENV, &result_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        if hide_console {
+            configure_tree_root(&mut command);
+        }
+        let output = command.output().expect("spawn console probe");
+        assert!(
+            output.status.success(),
+            "console probe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::read_to_string(result_path)
+            .expect("console probe result")
+            .trim()
+            .to_string()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn configure_tree_root_hides_console_window() {
+        assert_eq!(spawn_console_probe(true), "no-console");
+        if current_process_has_console_window() {
+            assert_eq!(spawn_console_probe(false), "console");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn configure_tree_root_preserves_piped_cmd_output() {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/C", "echo acorn-hidden-console"]);
+        configure_tree_root(&mut command);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = command.output().expect("spawn cmd.exe");
+        assert!(
+            output.status.success(),
+            "cmd.exe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("acorn-hidden-console"),
+            "piped stdout was empty: {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 
     #[cfg(unix)]
