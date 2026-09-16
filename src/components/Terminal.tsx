@@ -19,7 +19,7 @@ import "@xterm/xterm/css/xterm.css";
 import { api, type ClipboardSnapshot } from "../lib/api";
 import { consumeTerminalDetaching } from "../lib/terminalDetach";
 import type { BackgroundState } from "../lib/background";
-import { visibleMultiInputSessionIds } from "../lib/multiInput";
+import { multiInputWriteSessionIds } from "../lib/multiInput";
 import {
   extractNativeFileDropPaths,
   hasNativeFileDropData,
@@ -828,6 +828,7 @@ export function Terminal({
   const fitRef = useRef<FitAddon | null>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
   const isActiveRef = useRef(isActive);
+  const isFocusedPaneRef = useRef(isFocusedPane);
   const reduceOutputCadenceRef = useRef(reduceOutputCadence);
   const outputWriterRef = useRef<TerminalOutputWriter | null>(null);
   const pasteAgentProviderRef =
@@ -851,6 +852,7 @@ export function Terminal({
   );
 
   isActiveRef.current = isActive;
+  isFocusedPaneRef.current = isFocusedPane;
   reduceOutputCadenceRef.current = reduceOutputCadence;
   backgroundOutputDelayMsRef.current =
     canvasInactiveTerminalRenderIntervalMs;
@@ -1513,15 +1515,13 @@ export function Terminal({
     const sendUserInputToPty = (data: string) => {
       if (data.length === 0) return;
       const state = useAppStore.getState();
-      const targets = state.multiInputEnabled
-        ? visibleMultiInputSessionIds(state.panes)
-        : [sessionId];
-      const targetIds = targets.length > 0 ? targets : [sessionId];
+      const targetIds = multiInputWriteSessionIds(
+        state.multiInputEnabled,
+        state.panes,
+        sessionId,
+        state.sessions,
+      );
       for (const targetId of targetIds) {
-        const target = state.sessions.find(
-          (candidate) => candidate.id === targetId,
-        );
-        if (target && isArchivedSession(target)) continue;
         writeToPty(targetId, data);
       }
     };
@@ -1606,6 +1606,7 @@ export function Terminal({
         imagePasteFallbackTimer = null;
         if (
           disposed ||
+          !isFocusedPaneRef.current ||
           serial !== imagePasteFallbackSerial ||
           terminalInputVersion !== observedInputVersion
         ) {
@@ -1625,23 +1626,28 @@ export function Terminal({
           ) {
             if (
               disposed ||
+              !isFocusedPaneRef.current ||
               serial !== imagePasteFallbackSerial ||
               terminalInputVersion !== observedInputVersion
             ) {
               return;
             }
-            sendUserInputToPty(AGENT_IMAGE_PASTE_CONTROL);
+            // Local to this paste: sibling sessions never received the
+            // clipboard image, so multi-input must not inject Ctrl+V or a
+            // clipboard-attachment mention into them.
+            sendToPty(AGENT_IMAGE_PASTE_CONTROL);
             return;
           }
           const attachment = await saveClipboardImageAttachment(attachmentSource);
           if (
             disposed ||
+            !isFocusedPaneRef.current ||
             serial !== imagePasteFallbackSerial ||
             terminalInputVersion !== observedInputVersion
           ) {
             return;
           }
-          sendUserInputToPty(
+          sendToPty(
             formatTerminalFileMention(attachment.path, cwd, {
               agentProvider: agentProviderRef.current,
             }),
@@ -3318,8 +3324,10 @@ export function Terminal({
       // continuously), and the retry that finally survived attached the
       // image late — right after an unrelated gesture such as the
       // right-click selection paste.
-      if (!isTerminalProtocolReply(data)) terminalInputVersion += 1;
-      sendUserInputToPty(data);
+      const protocolReply = isTerminalProtocolReply(data);
+      if (!protocolReply) terminalInputVersion += 1;
+      if (protocolReply) sendToPty(data);
+      else sendUserInputToPty(data);
       if (data.includes("\r") || data.includes("\n")) {
         commandSizeSyncScheduler.schedule();
       }
