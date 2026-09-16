@@ -22,6 +22,12 @@ describe("path utils", () => {
     expect(normalizePath("\\\\server\\share\\repo\\")).toBe(
       "//server/share/repo",
     );
+    expect(normalizePath("\\\\?\\C:\\Users\\wincubeDevTeam\\repo\\")).toBe(
+      "C:/Users/wincubeDevTeam/repo",
+    );
+    expect(normalizePath("\\\\?\\UNC\\server\\share\\repo\\")).toBe(
+      "//server/share/repo",
+    );
     expect(normalizePath("src\\components\\App.tsx")).toBe(
       "src/components/App.tsx",
     );
@@ -68,6 +74,9 @@ describe("path utils", () => {
   it("compares Windows drive and UNC paths case-insensitively", () => {
     expect(pathsEqual("C:\\Repo", "c:/repo/")).toBe(true);
     expect(pathsEqual("\\\\Server\\Share", "//server/share")).toBe(true);
+    expect(pathsEqual("\\\\?\\C:\\Users\\me\\repo", "C:/Users/me/repo")).toBe(
+      true,
+    );
     expect(pathsEqual("/Repo", "/repo")).toBe(false);
   });
 
@@ -82,6 +91,18 @@ describe("path utils", () => {
         "\\\\SERVER\\SHARE\\repo",
       ),
     ).toBe(true);
+    expect(
+      isPathInsideOrEqual(
+        "\\\\?\\C:\\Users\\wincubeDevTeam\\repo\\src\\App.tsx",
+        "C:\\Users\\wincubeDevTeam\\repo",
+      ),
+    ).toBe(true);
+    expect(
+      isPathInsideOrEqual(
+        "\\\\?\\C:\\Users\\wincubeDevTeam",
+        "C:\\Users\\wincubeDevTeam\\repo",
+      ),
+    ).toBe(false);
   });
 
   it("preserves native roots and separators while walking and joining", () => {
@@ -111,6 +132,7 @@ describe("path utils", () => {
     expect(isAbsolutePath("/repo/src/App.tsx")).toBe(true);
     expect(isAbsolutePath("C:\\repo\\src\\App.tsx")).toBe(true);
     expect(isAbsolutePath("\\\\server\\share\\file.txt")).toBe(true);
+    expect(isAbsolutePath("\\\\?\\C:\\Users\\wincubeDevTeam")).toBe(true);
     expect(isAbsolutePath("src\\App.tsx")).toBe(false);
   });
 });
