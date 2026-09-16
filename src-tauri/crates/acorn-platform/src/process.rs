@@ -677,9 +677,10 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn current_process_has_console_window() -> bool {
-        use windows_sys::Win32::System::Console::GetConsoleWindow;
-        !unsafe { GetConsoleWindow() }.is_null()
+    fn current_process_has_console() -> bool {
+        use windows_sys::Win32::System::Console::GetConsoleProcessList;
+        let mut dummy = 0u32;
+        unsafe { GetConsoleProcessList(&mut dummy, 1) > 0 }
     }
 
     #[cfg(windows)]
@@ -692,7 +693,7 @@ mod tests {
         let path = std::path::PathBuf::from(
             std::env::var_os(CONSOLE_PROBE_OUT_ENV).expect("console probe output path"),
         );
-        let result = if current_process_has_console_window() {
+        let result = if current_process_has_console() {
             "console"
         } else {
             "no-console"
@@ -731,7 +732,7 @@ mod tests {
     #[test]
     fn configure_tree_root_hides_console_window() {
         assert_eq!(spawn_console_probe(true), "no-console");
-        if current_process_has_console_window() {
+        if current_process_has_console() {
             assert_eq!(spawn_console_probe(false), "console");
         }
     }
