@@ -75,6 +75,41 @@ pub fn user_home_dir() -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "user home directory unavailable"))
 }
 
+/// Strip a Windows verbatim disk prefix (`\\?\C:\foo` → `C:\foo`) when the
+/// remainder is still a usable legacy path.
+///
+/// `std::fs::canonicalize` emits `\\?\` paths on Windows. libgit2's discover
+/// and worktree APIs do not resolve that prefix, so callers pass the result of
+/// this helper (or [`canonicalize`]) into git2. No-op on other platforms.
+pub fn simplified(path: &Path) -> &Path {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut components = path.components();
+        match components.next() {
+            Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_)) => {
+                let stripped = components.as_path();
+                if stripped.as_os_str().is_empty() {
+                    path
+                } else {
+                    stripped
+                }
+            }
+            _ => path,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        path
+    }
+}
+
+/// Canonicalize `path`, then strip a Windows `\\?\` prefix when safe.
+pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
+    let canonical = std::fs::canonicalize(path)?;
+    Ok(simplified(&canonical).to_path_buf())
+}
+
 fn ensure_private_dir(path: &Path) -> io::Result<()> {
     std::fs::create_dir_all(path)?;
     #[cfg(unix)]
@@ -286,6 +321,46 @@ mod tests {
         assert_eq!(
             local_ipc_endpoint("../ipc").unwrap_err().kind(),
             io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn simplified_is_noop_for_ordinary_paths() {
+        assert_eq!(simplified(Path::new("/tmp/repo")), Path::new("/tmp/repo"));
+        assert_eq!(
+            simplified(Path::new(r"W:\winCudeProject")),
+            Path::new(r"W:\winCudeProject")
+        );
+    }
+
+    #[test]
+    fn canonicalize_matches_std_after_windows_prefix_strip() {
+        let path = std::env::temp_dir();
+        let ours = canonicalize(&path).unwrap();
+        let std = std::fs::canonicalize(&path).unwrap();
+        assert_eq!(ours, simplified(&std));
+        #[cfg(windows)]
+        assert!(
+            !ours.to_string_lossy().starts_with(r"\\?\"),
+            "canonical path should not keep a verbatim prefix: {}",
+            ours.display()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn simplified_strips_verbatim_disk_prefix() {
+        assert_eq!(
+            simplified(Path::new(r"\\?\W:\winCudeProject")),
+            Path::new(r"W:\winCudeProject")
+        );
+        assert_eq!(
+            simplified(Path::new(r"\\?\C:\Users\me\repo\.acorn\worktrees\wt")),
+            Path::new(r"C:\Users\me\repo\.acorn\worktrees\wt")
+        );
+        assert_eq!(
+            simplified(Path::new(r"\\?\UNC\server\share\repo")),
+            Path::new(r"\\?\UNC\server\share\repo")
         );
     }
 }

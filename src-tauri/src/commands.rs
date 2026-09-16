@@ -8507,11 +8507,7 @@ fn prepare_claude_fork_in(
     let snapshot_len = source_open_metadata.len();
 
     let dst_slug = acorn_transcript::slug_for_cwd(new_cwd);
-    let slug_path = Path::new(&dst_slug);
-    let mut slug_components = slug_path.components();
-    let is_single_normal_component = matches!(slug_components.next(), Some(Component::Normal(_)))
-        && slug_components.next().is_none();
-    if !dst_slug.starts_with('-') || dst_slug.contains("..") || !is_single_normal_component {
+    if !acorn_transcript::is_safe_claude_project_slug(&dst_slug) {
         return Err(AppError::Other(format!(
             "refusing to stage transcript under unsafe slug: {dst_slug}"
         )));
@@ -18174,6 +18170,31 @@ mod tests {
         let source = project.join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl"));
         std::fs::write(&source, contents).expect("write source transcript");
         source
+    }
+
+    #[test]
+    fn prepare_claude_fork_accepts_windows_drive_cwd_slug() {
+        let root = tempfile::tempdir().expect("temporary Claude projects root");
+        write_claude_fork_source(root.path(), b"parent snapshot\n");
+        let new_cwd = Path::new(r"W:\winCudeProject\cras_backend");
+        let destination_dir = root.path().join(acorn_transcript::slug_for_cwd(new_cwd));
+        let destination = destination_dir.join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl"));
+
+        super::prepare_claude_fork_in(
+            root.path(),
+            CLAUDE_FORK_TEST_UUID,
+            new_cwd,
+            claude_fork_test_limits(8, 1024),
+        )
+        .expect("Windows drive cwd must produce a safe Claude project slug");
+        assert_eq!(
+            destination_dir.file_name().and_then(|name| name.to_str()),
+            Some("W--winCudeProject-cras-backend")
+        );
+        assert_eq!(
+            std::fs::read(&destination).expect("read staged transcript"),
+            b"parent snapshot\n"
+        );
     }
 
     #[test]
