@@ -8998,7 +8998,11 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
         terminate_session_pty(&state, &id);
         return Err(AppError::Other(SESSION_IS_ARCHIVED.to_string()));
     }
-    let cwd = authorize_session_cwd(&state, &session, &PathBuf::from(cwd))?;
+    let cwd = acorn_paths::agent_cwd(&authorize_session_cwd(
+        &state,
+        &session,
+        &PathBuf::from(cwd),
+    )?);
     let output_token = output_token.or_else(|| state.pty_output.current_token(&id));
     // A live in-process PTY means this is a remount, not a new shell.
     // Push remembered mouse/paste CSI into the fresh xterm; the child

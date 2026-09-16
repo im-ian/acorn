@@ -306,7 +306,7 @@ pub fn is_safe_claude_project_slug(slug: &str) -> bool {
 /// characters (`A-Z a-z 0-9 - . _ ~`) intact. `/Users/me/proj` becomes
 /// `%2FUsers%2Fme%2Fproj`.
 fn grok_cwd_bucket(cwd: &Path) -> String {
-    percent_encode_except_unreserved(&cwd.to_string_lossy())
+    percent_encode_except_unreserved(&acorn_paths::agent_cwd(cwd).to_string_lossy())
 }
 
 fn percent_encode_except_unreserved(input: &str) -> String {
@@ -1109,7 +1109,10 @@ fn agent_process_node_from_parts(
             .or_else(|| process_cwd.map(Path::to_path_buf)),
         AgentKind::Claude | AgentKind::Antigravity => process_cwd.map(Path::to_path_buf),
     };
-    Some(AgentProcessNode { identity, cwd })
+    Some(AgentProcessNode {
+        identity,
+        cwd: cwd.map(|path| acorn_paths::agent_cwd(&path)),
+    })
 }
 
 /// Resolve Codex's working directory override from the global CLI option
@@ -1182,7 +1185,7 @@ fn codex_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) ->
         } else {
             cwd
         };
-        effective.canonicalize().unwrap_or(effective)
+        acorn_paths::canonicalize(&effective).unwrap_or_else(|_| acorn_paths::agent_cwd(&effective))
     })
 }
 
@@ -1215,7 +1218,7 @@ fn grok_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) -> 
         } else {
             cwd
         };
-        effective.canonicalize().unwrap_or(effective)
+        acorn_paths::canonicalize(&effective).unwrap_or_else(|_| acorn_paths::agent_cwd(&effective))
     })
 }
 
@@ -2082,8 +2085,13 @@ fn antigravity_owner_cursor_id(
     cursors: &std::collections::HashMap<String, String>,
     cwd: &Path,
 ) -> Option<String> {
-    let cwd = cwd.to_str()?;
-    cursors.get(cwd).filter(|id| is_uuid_v4_shape(id)).cloned()
+    let simplified = acorn_paths::agent_cwd(cwd);
+    for key in [cwd.to_str()?, simplified.to_str()?] {
+        if let Some(id) = cursors.get(key).filter(|id| is_uuid_v4_shape(id)) {
+            return Some(id.clone());
+        }
+    }
+    None
 }
 
 /// Resolve the JSONL transcript a `claude` process is currently writing
@@ -2457,7 +2465,7 @@ fn find_recent_codex_jsonl_budgeted(
             let Some(head) = read_codex_rollout_head_budgeted(&path, budget)? else {
                 continue;
             };
-            if head.cwd != cwd || !head.is_writer_for_scope(scope) {
+            if !acorn_paths::same_cwd(&head.cwd, cwd) || !head.is_writer_for_scope(scope) {
                 continue;
             }
             let birth = meta.created().unwrap_or(mtime);
@@ -2567,7 +2575,7 @@ fn find_completed_codex_jsonl_budgeted(
             let Some(head) = read_codex_rollout_head_budgeted(&path, budget)? else {
                 continue;
             };
-            if head.cwd != cwd || !head.is_writer_for_scope(scope) {
+            if !acorn_paths::same_cwd(&head.cwd, cwd) || !head.is_writer_for_scope(scope) {
                 continue;
             }
             let Some(uuid) = extract_uuid_from_path(&path) else {
@@ -4334,6 +4342,65 @@ mod tests {
         assert_eq!(
             grok_cwd_bucket(Path::new("/Users/me/My Project")),
             "%2FUsers%2Fme%2FMy%20Project"
+        );
+        assert_eq!(
+            grok_cwd_bucket(Path::new(r"\\?\W:\winCudeProject")),
+            grok_cwd_bucket(Path::new(r"W:\winCudeProject"))
+        );
+    }
+
+    #[test]
+    fn agent_process_cwd_strips_windows_verbatim_prefix_for_every_provider() {
+        for (exe, name) in [
+            ("/usr/bin/claude", "claude"),
+            ("/usr/bin/codex", "codex"),
+            ("/usr/bin/grok", "grok"),
+            ("/usr/bin/agy", "agy"),
+        ] {
+            let node = process_node(exe, name, &[name], r"\\?\W:\winCudeProject");
+            assert_eq!(
+                node.cwd.as_deref(),
+                Some(Path::new(r"W:\winCudeProject")),
+                "{name} cwd should drop the verbatim prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn find_recent_codex_jsonl_pairs_verbatim_process_cwd_with_legacy_payload() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-cxcwd-{}", uuid::Uuid::new_v4().simple()));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let path =
+            day.join("rollout-2026-06-10T10-00-00-019e2001-3250-76b0-8410-2e073b38a2c1.jsonl");
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, r#"{{"payload":{{"cwd":"W:\\winCudeProject"}}}}"#).unwrap();
+        let now = fs::metadata(&path).unwrap().modified().unwrap();
+        let found = find_recent_codex_jsonl(
+            Path::new(r"\\?\W:\winCudeProject"),
+            Some(&root.join("sessions")),
+            now - Duration::from_secs(60),
+            now - Duration::from_secs(60),
+            now,
+            false,
+            &HashSet::new(),
+        );
+        assert_eq!(found.map(|(p, _)| p), Some(path));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn antigravity_owner_cursor_matches_verbatim_windows_cwd() {
+        let id = "28a49f9d-4b8f-419c-9d8a-bf0854310e03";
+        let cursors =
+            std::collections::HashMap::from([(r"W:\winCudeProject".to_string(), id.to_string())]);
+        assert_eq!(
+            antigravity_owner_cursor_id(&cursors, Path::new(r"\\?\W:\winCudeProject")).as_deref(),
+            Some(id)
         );
     }
 
