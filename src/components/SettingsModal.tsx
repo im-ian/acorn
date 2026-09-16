@@ -1272,9 +1272,16 @@ function SessionSettings() {
               onChange={(n) => patchTerminal({ maxMountedTerminals: n })}
             />
           </Field>
-          {IS_MAC ? <PowerSettings /> : null}
         </div>
       </SettingsGroup>
+      {IS_MAC ? (
+        <SettingsGroup
+          title={st(t, "settings.power.title")}
+          description={st(t, "settings.power.description")}
+        >
+          <PowerSettings />
+        </SettingsGroup>
+      ) : null}
       <ControlSessionInstallSection />
       <SettingsGroup
         title={st(t, "settings.sessions.background.title")}

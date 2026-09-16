@@ -440,9 +440,10 @@ export interface AcornSettings {
   };
   power: {
     /**
-     * Hold a macOS PreventUserIdleSystemSleep assertion while Acorn is
-     * running. The display may still sleep; this only keeps idle system
-     * sleep from suspending long-running sessions.
+     * Hold macOS PreventUserIdleSystemSleep and PreventSystemSleep
+     * assertions while Acorn is running. Display sleep is still allowed.
+     * PreventSystemSleep is honored on AC power; lid close and the Sleep
+     * menu still win.
      */
     preventSleep: boolean;
   };

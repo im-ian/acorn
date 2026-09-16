@@ -332,10 +332,10 @@
     },
     "power": {
       "title": "电源管理",
-      "description": "控制 Acorn 在运行时如何与 macOS 睡眠交互。",
+      "description": "在 Acorn 打开期间防止 macOS 挂起正在运行的会话。",
       "preventSleep": {
         "label": "让这台 Mac 保持唤醒状态",
-        "description": "Acorn 打开时防止系统因空闲而睡眠。显示器仍可关闭，手动睡眠或合盖操作仍然有效。"
+        "description": "Acorn 打开时阻止空闲睡眠，并在接通电源时阻止显示器关闭后的系统睡眠。显示器仍可关闭。手动睡眠或合盖仍然有效。"
       }
     },
     "github": {
