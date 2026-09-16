@@ -1043,8 +1043,6 @@ EOF
 const CODEX_PS_INIT_BODY: &str = r#"# Acorn Codex shim (Windows PowerShell sessions).
 # Written by Acorn; edits are overwritten on the next app launch.
 
-if (-not $env:ACORN_AGENT_HOOK_SESSION_ID) { return }
-
 function global:codex {
   $app = Get-Command -Name codex -CommandType Application -ErrorAction SilentlyContinue |
     Select-Object -First 1
@@ -1060,6 +1058,9 @@ function global:codex {
   $psHost = $null
   try { $psHost = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName } catch { $psHost = $null }
 
+  # No hook session id means no channel to report on, so run Codex untouched
+  # rather than register a notify callback that can never deliver.
+  #
   # `notify` is a TOML array of literal strings: no escape processing, so a
   # Windows path passes through verbatim and no quote doubling is needed
   # (which also sidesteps Windows PowerShell 5.1's native-argument quoting
@@ -1067,7 +1068,8 @@ function global:codex {
   # string, so fall back to an unhooked run rather than emit broken TOML.
   # ponytail: literal strings only; switch to basic strings with escaping if
   # apostrophe-bearing profile paths ever turn up in the wild.
-  $canHook = $notifyScript -and $psHost -and (Test-Path -LiteralPath $notifyScript) -and
+  $canHook = $env:ACORN_AGENT_HOOK_SESSION_ID -and $notifyScript -and $psHost -and
+    (Test-Path -LiteralPath $notifyScript) -and
     -not $notifyScript.Contains("'") -and -not $psHost.Contains("'")
   if (-not $canHook) {
     & $app.Source @args
@@ -1108,6 +1110,11 @@ const CODEX_PS_NOTIFY_BODY: &str = r#"# Acorn Codex notify receiver (Windows).
 # Written by Acorn; edits are overwritten on the next app launch.
 
 $ProgressPreference = 'SilentlyContinue'
+# Route every failure into the catch: a lost completion is recoverable (the
+# Codex rollout still records `task_complete`, so the status poll converges on
+# the next tick), but a stray error stream is not — Codex spawns this and a
+# noisy failure would surface as agent output.
+$ErrorActionPreference = 'Stop'
 try {
   # Codex's `notify` callback appends the completion payload as the final
   # argument of the configured argv.
@@ -1196,17 +1203,28 @@ pub fn codex_powershell_init_path() -> io::Result<PathBuf> {
 ///
 /// Deliberately platform-independent: no CI job compiles this crate for
 /// Windows, so anything left inside a `cfg(windows)` block is checked by no
-/// compiler anywhere. Keeping the ordering contract here means the POSIX test
-/// suite covers it.
+/// compiler anywhere. Keeping this here means the POSIX test suite covers it.
 ///
-/// `-NoExit` keeps the session interactive once the shim has run, and `-File`
-/// must stay last because it ends PowerShell's option parsing — every
-/// argument after it belongs to the script.
+/// The shim is dot-sourced as *text* rather than passed to `-File`, because
+/// execution policy applies to script files and the Windows client default is
+/// `Restricted` — `-File` would fail on a stock machine and put a red error at
+/// the top of every session. The alternative, launching the session with
+/// `-ExecutionPolicy Bypass`, would lower the policy for everything the user
+/// subsequently runs in that shell; this lowers it for one Acorn-owned file.
+///
+/// `-NoExit` keeps the session interactive afterwards, and a missing shim is
+/// skipped rather than reported, so a wrapper-dir failure costs Codex status
+/// but never the terminal.
 pub fn powershell_codex_shim_args(init: &Path) -> Vec<String> {
+    // Single quotes make a PowerShell literal string, where the only escape is
+    // a doubled quote — so an apostrophe in the profile path stays inert.
+    let quoted = format!("'{}'", init.display().to_string().replace('\'', "''"));
     vec![
         "-NoExit".to_string(),
-        "-File".to_string(),
-        init.display().to_string(),
+        "-Command".to_string(),
+        format!(
+            "if (Test-Path -LiteralPath {quoted}) {{ . ([ScriptBlock]::Create((Get-Content -Raw -LiteralPath {quoted}))) }}"
+        ),
     ]
 }
 
@@ -2665,20 +2683,32 @@ done
     /// not build this crate), so the properties that silently disable it are
     /// pinned as content assertions instead.
     #[test]
-    fn powershell_shim_args_keep_file_last() {
-        let args = powershell_codex_shim_args(Path::new("/wrapper dir/acorn-codex-init.ps1"));
+    fn powershell_shim_is_dot_sourced_as_text_not_as_a_script_file() {
+        let args = powershell_codex_shim_args(Path::new(r"C:\data\acorn-codex-init.ps1"));
 
-        // `-File` ends PowerShell's option parsing, so anything appended
-        // after the script path would be handed to the script instead of the
-        // host — and `-NoExit` after it would stop keeping the session alive.
-        assert_eq!(
-            args,
-            vec![
-                "-NoExit".to_string(),
-                "-File".to_string(),
-                "/wrapper dir/acorn-codex-init.ps1".to_string(),
-            ]
-        );
+        assert_eq!(args[0], "-NoExit");
+        assert_eq!(args[1], "-Command");
+        // `-File` would be rejected under the `Restricted` execution policy
+        // Windows clients ship with, putting an error at the top of every
+        // session. Script *text* is not policy-gated.
+        assert!(!args.contains(&"-File".to_string()));
+        assert!(args[2].contains("[ScriptBlock]::Create"));
+        assert!(args[2].contains("Get-Content -Raw -LiteralPath"));
+        // A wrapper dir that never got written must cost Codex status, not
+        // the terminal.
+        assert!(args[2].starts_with("if (Test-Path -LiteralPath "));
+        assert!(args[2].contains(r"'C:\data\acorn-codex-init.ps1'"));
+    }
+
+    #[test]
+    fn powershell_shim_path_survives_an_apostrophe_in_the_profile_path() {
+        let args = powershell_codex_shim_args(Path::new(r"C:\Users\O'Brien\acorn-codex-init.ps1"));
+
+        // Doubling is the only escape a PowerShell literal string has; a bare
+        // apostrophe would close the string and turn the rest of the path
+        // into code.
+        assert!(args[2].contains(r"'C:\Users\O''Brien\acorn-codex-init.ps1'"));
+        assert!(!args[2].contains(r"'C:\Users\O'Brien"));
     }
 
     #[test]
@@ -2705,7 +2735,8 @@ done
         assert!(init.contains("Get-Command -Name codex -CommandType Application"));
         // No hook session id means no channel to report on: run Codex plain
         // rather than register a notify callback that can never deliver.
-        assert!(init.contains("if (-not $env:ACORN_AGENT_HOOK_SESSION_ID) { return }"));
+        assert!(init.contains("$canHook = $env:ACORN_AGENT_HOOK_SESSION_ID -and"));
+        assert!(init.contains("if (-not $canHook) {"));
         // TOML literal strings keep Windows paths verbatim and keep double
         // quotes out of the native argument, which is what Windows PowerShell
         // 5.1 mis-quotes. A regression to double quotes would break hooks on
