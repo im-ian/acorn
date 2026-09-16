@@ -9028,7 +9028,10 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
     // Inject Acorn session identity and CLI reachability. IPC commands are
     // server-gated to a live source session plus PTY ancestry and capability.
     let mut effective_env = validate_pty_caller_env(env)?;
-    let primed_args = resolved_args;
+    // `mut` is only exercised on Windows, where the PowerShell Codex shim is
+    // appended below.
+    #[allow(unused_mut)]
+    let mut primed_args = resolved_args;
 
     // PTY children get the same SHELL/HOME their dotfiles expect to
     // see. portable-pty inherits these from Acorn's own env in
@@ -9129,6 +9132,40 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
         effective_env
             .entry("ACORN_AGENT_WRAPPER_DIR".to_string())
             .or_insert_with(|| wrapper_dir.display().to_string());
+    } else {
+        tracing::warn!(%id, "agent wrapper dir setup failed; agent hook runtime injection will be inactive");
+    }
+    // Windows resolves commands through PATHEXT, so the POSIX prepend above
+    // cannot work here: the wrapper-dir shims are extension-less `/bin/sh`
+    // scripts and would never be launched. The PowerShell shim shadows
+    // `codex` with a session function instead, so only the wrapper dir itself
+    // needs exposing — it is where the shim reads the live hook endpoint from.
+    #[cfg(windows)]
+    if let Ok(wrapper_dir) = crate::agent_wrappers::ensure_agent_wrapper_dir() {
+        effective_env
+            .entry("ACORN_AGENT_WRAPPER_DIR".to_string())
+            .or_insert_with(|| wrapper_dir.display().to_string());
+        if shell_kind == crate::shell_runtime::ShellKind::PowerShell {
+            match crate::agent_wrappers::codex_powershell_init_path() {
+                // `-NoExit` keeps the session interactive after the shim runs,
+                // and `-File` must stay last — it ends option parsing. A shim
+                // that throws still leaves the user a usable shell.
+                Ok(init) => primed_args.extend([
+                    "-NoExit".to_string(),
+                    "-File".to_string(),
+                    init.display().to_string(),
+                ]),
+                Err(error) => tracing::warn!(
+                    %id, %error,
+                    "codex PowerShell shim unavailable; codex status falls back to transcript polling",
+                ),
+            }
+        } else {
+            tracing::debug!(
+                %id, ?shell_kind,
+                "non-PowerShell Windows shell; codex status falls back to transcript polling",
+            );
+        }
     } else {
         tracing::warn!(%id, "agent wrapper dir setup failed; agent hook runtime injection will be inactive");
     }
