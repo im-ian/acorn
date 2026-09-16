@@ -28,3 +28,13 @@ export function getTerminalLimbo(): HTMLDivElement {
   limboEl = el;
   return el;
 }
+
+/**
+ * True while `el` is parked in the off-screen limbo host. The limbo box is a
+ * fixed 800x600, so fitting a terminal there resizes it (and SIGWINCHes the
+ * PTY) to a geometry the user never sees; a live TUI redraws at that size and
+ * xterm reflows the buffer again on the way back, shredding the frame.
+ */
+export function isParkedInTerminalLimbo(el: Element | null): boolean {
+  return Boolean(el?.closest("[data-acorn-terminal-limbo]"));
+}
