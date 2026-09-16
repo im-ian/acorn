@@ -80,27 +80,29 @@ pub fn user_home_dir() -> io::Result<PathBuf> {
 ///
 /// `std::fs::canonicalize` emits `\\?\` paths on Windows. libgit2's discover
 /// and worktree APIs do not resolve that prefix, so callers pass the result of
-/// this helper (or [`canonicalize`]) into git2. No-op on other platforms.
+/// this helper (or [`canonicalize`]) into git2.
+///
+/// This peels the `\\?\` *string* prefix rather than skipping
+/// `Prefix::VerbatimDisk` and taking `components().as_path()`. The latter
+/// leaves a root-relative `\foo` that drops the drive letter, so a process
+/// whose cwd is on another drive would open the wrong volume.
 pub fn simplified(path: &Path) -> &Path {
-    #[cfg(windows)]
+    strip_verbatim_disk_prefix(path).unwrap_or(path)
+}
+
+fn strip_verbatim_disk_prefix(path: &Path) -> Option<&Path> {
+    let s = path.to_str()?;
+    let rest = s.strip_prefix(r"\\?\")?;
+    let bytes = rest.as_bytes();
+    // `X:\...` or `X:/...` — keep UNC (`\\?\UNC\server\share`) verbatim.
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
     {
-        use std::path::{Component, Prefix};
-        let mut components = path.components();
-        match components.next() {
-            Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_)) => {
-                let stripped = components.as_path();
-                if stripped.as_os_str().is_empty() {
-                    path
-                } else {
-                    stripped
-                }
-            }
-            _ => path,
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        path
+        Some(Path::new(rest))
+    } else {
+        None
     }
 }
 
@@ -347,12 +349,22 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
     #[test]
-    fn simplified_strips_verbatim_disk_prefix() {
+    fn simplified_strips_verbatim_disk_prefix_and_keeps_the_drive() {
+        let stripped = simplified(Path::new(r"\\?\W:\winCudeProject\cras_backend"));
+        let rendered = stripped.to_string_lossy();
         assert_eq!(
-            simplified(Path::new(r"\\?\W:\winCudeProject")),
-            Path::new(r"W:\winCudeProject")
+            stripped,
+            Path::new(r"W:\winCudeProject\cras_backend"),
+            "verbatim disk prefix must become a drive path, got {rendered}"
+        );
+        assert!(
+            rendered.starts_with(r"W:\"),
+            "drive letter must be kept so the path is not root-relative on another volume, got {rendered}"
+        );
+        assert!(
+            !rendered.starts_with(r"\win") && !rendered.starts_with(r"\W"),
+            "must not drop the drive into a current-volume path, got {rendered}"
         );
         assert_eq!(
             simplified(Path::new(r"\\?\C:\Users\me\repo\.acorn\worktrees\wt")),
