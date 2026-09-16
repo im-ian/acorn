@@ -12381,7 +12381,7 @@ fn process_primary_basename_matches(proc: &sysinfo::Process, target: &str) -> bo
 }
 
 fn process_basename_part_matches(s: &str, target: &str) -> bool {
-    acorn_platform::executable::executable_name_matches(s, target)
+    acorn_platform::executable::agent_cli_matches(s, target)
 }
 
 pub(crate) fn sanitize_worktree_name(name: &str) -> String {

@@ -35,6 +35,7 @@ import { writeClipboardText } from "../lib/clipboardText";
 import { cn } from "../lib/cn";
 import { createInFlightCoalescer } from "../lib/inFlightCoalescer";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { tildifyHomePath, trimTrailingPathSeparators } from "../lib/pathUtils";
 import { useSettings } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
 import type {
@@ -154,7 +155,7 @@ function useHomeDir(): string | null {
     let cancelled = false;
     homeDir()
       .then((h) => {
-        if (!cancelled) setHome(h.replace(/\/+$/, ""));
+        if (!cancelled) setHome(trimTrailingPathSeparators(h));
       })
       .catch(() => {
         if (!cancelled) setHome(null);
@@ -164,13 +165,6 @@ function useHomeDir(): string | null {
     };
   }, []);
   return home;
-}
-
-function tildify(path: string, home: string | null): string {
-  if (!home) return path;
-  if (path === home) return "~";
-  if (path.startsWith(`${home}/`)) return `~${path.slice(home.length)}`;
-  return path;
 }
 
 function toAgentTokenProvider(
@@ -327,7 +321,9 @@ export function StatusBar() {
   );
   const home = useHomeDir();
   const [breakdownOpen, setBreakdownOpen] = useState(false);
-  const displayPath = active ? tildify(active.worktree_path, home) : null;
+  const displayPath = active
+    ? tildifyHomePath(active.worktree_path, home)
+    : null;
   // The PR-tab account map is keyed by the same repoPath we hand to the PRs
   // tab — prefer the active session's worktree (matches what was probed),
   // then fall back to the active project root.
@@ -407,70 +403,71 @@ export function StatusBar() {
           </>
         ) : null}
 
-        {/* Right: per-active-session context — gh account, branch, working
-            directory, memory. Grouped together so the eye scans them as
-            "where am I right now?". `min-w-0` lets the truncatable
-            children (branch, path) shrink instead of forcing the row
-            wider than the footer. */}
+        {/* Right: per-active-session context. Truncatable labels (branch,
+            path) live in an overflow-hidden cluster so they yield width;
+            token usage and memory stay `shrink-0` siblings so a long
+            Windows worktree path cannot clip them out of the footer. */}
         <span className="ml-auto flex min-w-0 items-center gap-3">
-          <Select
-            data-testid="workspace-view-status"
-            value={workspaceViewMode}
-            options={workspaceViewOptions}
-            placement="top"
-            aria-label={statusBarFormat(t, "statusBar.workspaceView", {
-              mode: workspaceModeText,
-            })}
-            onValueChange={(value) => {
-              if (isWorkspaceViewMode(value)) setWorkspaceViewMode(value);
-            }}
-            className={cn(
-              "w-[6.25rem] shrink-0",
-              "[&>button]:h-5 [&>button]:rounded [&>button]:border-transparent [&>button]:bg-transparent",
-              "[&>button]:font-mono [&>button]:text-xs [&>button]:text-fg-muted",
-              "[&>button]:hover:bg-bg-elevated [&>button]:hover:text-fg",
-              "[&>button]:focus-visible:ring-1 [&>button]:focus-visible:ring-accent/40",
-              "[&_[data-select-trigger-icon]]:ml-1 [&_[data-select-trigger-label]]:px-1 [&>button>svg]:mr-1 [&>button>svg]:size-3",
-            )}
-          />
-          {loading ? (
-            <span className="whitespace-nowrap">
-              {statusBarText(t, "statusBar.working")}
-            </span>
-          ) : null}
-          {showGithubAccount && prAccount ? (
-            <Tooltip
-              label={statusBarFormat(t, "statusBar.githubAccountTooltip", {
-                account: prAccount,
+          <span className="flex min-w-0 items-center gap-3 overflow-hidden">
+            <Select
+              data-testid="workspace-view-status"
+              value={workspaceViewMode}
+              options={workspaceViewOptions}
+              placement="top"
+              aria-label={statusBarFormat(t, "statusBar.workspaceView", {
+                mode: workspaceModeText,
               })}
-              side="top"
-            >
-              <span className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded bg-fg-muted/15 px-1.5 py-0.5 text-[10px] text-fg-muted">
-                <GitHubMark />
-                {prAccount}
+              onValueChange={(value) => {
+                if (isWorkspaceViewMode(value)) setWorkspaceViewMode(value);
+              }}
+              className={cn(
+                "w-[6.25rem] shrink-0",
+                "[&>button]:h-5 [&>button]:rounded [&>button]:border-transparent [&>button]:bg-transparent",
+                "[&>button]:font-mono [&>button]:text-xs [&>button]:text-fg-muted",
+                "[&>button]:hover:bg-bg-elevated [&>button]:hover:text-fg",
+                "[&>button]:focus-visible:ring-1 [&>button]:focus-visible:ring-accent/40",
+                "[&_[data-select-trigger-icon]]:ml-1 [&_[data-select-trigger-label]]:px-1 [&>button>svg]:mr-1 [&>button>svg]:size-3",
+              )}
+            />
+            {loading ? (
+              <span className="whitespace-nowrap">
+                {statusBarText(t, "statusBar.working")}
               </span>
-            </Tooltip>
-          ) : null}
-          {active ? (
-            <>
-              <span className="text-fg-muted/50">|</span>
-              <span className="min-w-0 truncate whitespace-nowrap">
-                {statusBarFormat(t, "statusBar.branch", {
-                  branch: active.branch,
+            ) : null}
+            {showGithubAccount && prAccount ? (
+              <Tooltip
+                label={statusBarFormat(t, "statusBar.githubAccountTooltip", {
+                  account: prAccount,
                 })}
-              </span>
-            </>
-          ) : null}
-          {showWorkingDirectory && active && displayPath ? (
-            <>
-              <span className="text-fg-muted/50">|</span>
-              <Tooltip label={active.worktree_path} side="top" multiline>
-                <span className="min-w-0 truncate whitespace-nowrap text-right text-fg-muted">
-                  {displayPath}
+                side="top"
+              >
+                <span className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded bg-fg-muted/15 px-1.5 py-0.5 text-[10px] text-fg-muted">
+                  <GitHubMark />
+                  {prAccount}
                 </span>
               </Tooltip>
-            </>
-          ) : null}
+            ) : null}
+            {active ? (
+              <>
+                <span className="text-fg-muted/50">|</span>
+                <span className="min-w-0 truncate whitespace-nowrap">
+                  {statusBarFormat(t, "statusBar.branch", {
+                    branch: active.branch,
+                  })}
+                </span>
+              </>
+            ) : null}
+            {showWorkingDirectory && active && displayPath ? (
+              <>
+                <span className="text-fg-muted/50">|</span>
+                <Tooltip label={active.worktree_path} side="top" multiline>
+                  <span className="min-w-0 truncate whitespace-nowrap text-right text-fg-muted">
+                    {displayPath}
+                  </span>
+                </Tooltip>
+              </>
+            ) : null}
+          </span>
           {showActiveAgentTokenUsage ? (
             <>
               <span className="text-fg-muted/50">|</span>
@@ -491,7 +488,7 @@ export function StatusBar() {
                   type="button"
                   disabled={!memory}
                   onClick={() => setBreakdownOpen(true)}
-                  className="whitespace-nowrap rounded px-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+                  className="shrink-0 whitespace-nowrap rounded px-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
                 >
                   {statusBarFormat(t, "statusBar.memory", {
                     memory: memory ? formatBytes(memory.bytes) : "-",

@@ -7,7 +7,6 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use acorn_transcript::read_tail;
-use directories::UserDirs;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -254,11 +253,10 @@ impl ProviderRateLimits {
 }
 
 fn read_codex_rate_limits_from_latest_sessions() -> ProviderRateLimits {
-    let Some(home) = home_dir() else {
+    let Some(root) = codex_home() else {
         return ProviderRateLimits::default();
     };
-    let sessions = home.join(".codex").join("sessions");
-    read_codex_rate_limits_from_sessions_root(&sessions)
+    read_codex_rate_limits_from_sessions_root(&root.join("sessions"))
 }
 
 fn read_codex_rate_limits_from_sessions_root(sessions: &Path) -> ProviderRateLimits {
@@ -314,10 +312,10 @@ fn read_codex_rate_limits_from_session_file(file: &Path) -> io::Result<Option<Pr
 }
 
 fn read_codex_rate_limits_from_sqlite() -> ProviderRateLimits {
-    let Some(home) = home_dir() else {
+    let Some(root) = codex_home() else {
         return ProviderRateLimits::default();
     };
-    let db = home.join(".codex").join("logs_2.sqlite");
+    let db = root.join("logs_2.sqlite");
     match is_plain_regular_file(&db) {
         Ok(true) => {}
         Ok(false) => return ProviderRateLimits::default(),
@@ -340,7 +338,7 @@ fn read_codex_rate_limits_from_sqlite() -> ProviderRateLimits {
         order by ts desc, ts_nanos desc, id desc
         limit 1;
     "#;
-    let mut command = Command::new("/usr/bin/sqlite3");
+    let mut command = sqlite3_command();
     command.arg(&db).arg(query);
     let stdout = match command_stdout_bounded(
         &mut command,
@@ -454,12 +452,8 @@ fn read_claude_rate_limits_from_paths(
 
 fn claude_rate_limit_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(home) = home_dir() {
-        paths.push(
-            home.join(".claude")
-                .join("token-widget")
-                .join("claude-rate-limits.json"),
-        );
+    if let Some(root) = claude_home() {
+        paths.push(root.join("token-widget").join("claude-rate-limits.json"));
     }
     paths
 }
@@ -472,8 +466,7 @@ fn read_grok_rate_limits() -> ProviderRateLimits {
 }
 
 fn grok_unified_log_path() -> Option<PathBuf> {
-    std::env::var_os("GROK_HOME")
-        .map(PathBuf::from)
+    env_dir("GROK_HOME")
         .or_else(|| home_dir().map(|home| home.join(".grok")))
         .map(|root| root.join("logs").join("unified.jsonl"))
 }
@@ -683,10 +676,7 @@ fn collect_jsonl_files(
                 return;
             }
         };
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
+        if entry_is_directory(&file_type, &entry) {
             if depth >= max_depth {
                 scan.truncated = true;
                 return;
@@ -745,10 +735,52 @@ fn retain_latest_file(
 
 fn is_plain_directory(path: &Path) -> io::Result<bool> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) => Ok(metadata.file_type().is_dir()),
+        Ok(metadata) => Ok(metadata_looks_like_directory(&metadata)),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(err),
     }
+}
+
+fn entry_is_directory(file_type: &fs::FileType, entry: &fs::DirEntry) -> bool {
+    if file_type.is_dir() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return entry
+            .metadata()
+            .map(|metadata| metadata_is_windows_directory(&metadata))
+            .unwrap_or(false);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = entry;
+        false
+    }
+}
+
+fn metadata_looks_like_directory(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_dir() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return metadata_is_windows_directory(metadata);
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[cfg(windows)]
+fn metadata_is_windows_directory(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    // Directory junctions are reparse points, so FileType::is_dir() is
+    // false even when the destination is the user's real config folder.
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0
 }
 
 fn is_plain_regular_file(path: &Path) -> io::Result<bool> {
@@ -857,7 +889,47 @@ fn render_source_path(path: &Path) -> String {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    UserDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
+    acorn_paths::user_home_dir().ok()
+}
+
+fn env_dir(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn codex_home() -> Option<PathBuf> {
+    env_dir("CODEX_HOME").or_else(|| home_dir().map(|home| home.join(".codex")))
+}
+
+fn claude_home() -> Option<PathBuf> {
+    env_dir("CLAUDE_CONFIG_DIR").or_else(|| home_dir().map(|home| home.join(".claude")))
+}
+
+fn sqlite3_program() -> &'static str {
+    if cfg!(windows) {
+        "sqlite3"
+    } else {
+        "/usr/bin/sqlite3"
+    }
+}
+
+fn sqlite3_command() -> Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // Release Acorn is a GUI subsystem process. A console-subsystem
+        // sqlite3.exe inherited from PATH would flash a window every poll.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = Command::new(sqlite3_program());
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new(sqlite3_program())
+    }
 }
 
 fn unix_now() -> f64 {
@@ -877,6 +949,15 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[test]
+    fn sqlite3_program_uses_a_platform_native_lookup() {
+        if cfg!(windows) {
+            assert_eq!(sqlite3_program(), "sqlite3");
+        } else {
+            assert_eq!(sqlite3_program(), "/usr/bin/sqlite3");
+        }
+    }
 
     #[test]
     fn parses_codex_primary_and_secondary_windows() {

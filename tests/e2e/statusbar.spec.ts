@@ -348,6 +348,54 @@ test.describe("status bar", () => {
     await expect(tooltip).not.toContainText("5h");
   });
 
+  test("keeps token usage visible beside a long Windows working directory", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      {
+        ...BASE_SESSION,
+        name: "codex",
+        agent_provider: "codex",
+        branch: "feature/very-long-windows-branch-name-for-status-bar",
+        worktree_path:
+          "C:\\Users\\very.long.username\\Documents\\Projects\\company-monorepo\\packages\\frontend-app",
+      },
+    ]);
+    await tauri.respond("get_agent_token_usage", TOKEN_USAGE);
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          statusBar: {
+            showAgentTokenUsage: true,
+            showWorkingDirectory: true,
+            showMemory: true,
+            showGithubAccount: true,
+          },
+        }),
+      );
+    });
+    await page.setViewportSize({ width: 900, height: 600 });
+    await page.goto("/");
+
+    const footer = page.locator("footer");
+    const tokenBadge = footer.getByTestId("agent-token-usage");
+    await expect(tokenBadge).toBeVisible();
+    await expect(tokenBadge).toContainText("tokens:");
+    await expect(tokenBadge).toContainText("88%");
+    const footerBox = await footer.boundingBox();
+    const badgeBox = await tokenBadge.boundingBox();
+    expect(footerBox).toBeTruthy();
+    expect(badgeBox).toBeTruthy();
+    expect(badgeBox!.width).toBeGreaterThan(0);
+    expect(badgeBox!.x).toBeGreaterThanOrEqual(footerBox!.x - 1);
+    expect(badgeBox!.x + badgeBox!.width).toBeLessThanOrEqual(
+      footerBox!.x + footerBox!.width + 1,
+    );
+  });
+
   test("hides agent token usage for non-agent tabs", async ({ page, tauri }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [{ ...BASE_SESSION, name: "shell" }]);
