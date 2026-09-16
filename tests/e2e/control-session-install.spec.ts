@@ -1,6 +1,6 @@
 import { test, expect, pressHotkey } from "./support";
 
-test.describe("control session: settings install section", () => {
+test.describe("acorn-ipc CLI: settings install section", () => {
   test("renders bundled path + install command when no shim is present", async ({
     page,
     tauri,
@@ -25,7 +25,7 @@ test.describe("control session: settings install section", () => {
     // install card. Matching on the field label keeps us decoupled from
     // the underlying div nesting.
     await expect(
-      modal.getByText(/Control sessions \(acorn-ipc CLI\)/i),
+      modal.getByText("acorn-ipc CLI", { exact: true }),
     ).toBeVisible();
 
     // Bundled binary status badge reflects the mock. Match the badge

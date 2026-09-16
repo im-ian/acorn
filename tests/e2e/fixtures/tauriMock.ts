@@ -89,6 +89,7 @@ export const tauriMockSource = `
     if (cmd === 'plugin:notification|request_permission') return Promise.resolve('granted');
     if (cmd === 'plugin:notification|notify') return Promise.resolve(undefined);
     if (cmd === 'plugin:clipboard-manager|write_text') return Promise.resolve(undefined);
+    if (cmd === 'plugin:resources|close') return Promise.resolve(undefined);
     if (cmd === 'plugin:window|destroy') return Promise.resolve(undefined);
     if (cmd === 'plugin:window|close') return Promise.resolve(undefined);
     if (cmd === 'plugin:window|scale_factor') return Promise.resolve(1);
@@ -666,6 +667,7 @@ export const tauriMockSource = `
       return Promise.resolve({ supported: true, enabled: !!args?.enabled });
     }
     if (cmd === 'pty_write') return Promise.resolve(undefined);
+    if (cmd === 'pty_reset_dec_modes') return Promise.resolve(undefined);
     // File explorer. No real fs in E2E — default to an empty listing so
     // the panel renders without errors. Tests that need real entries
     // override these via window.__ACORN_MOCK_HANDLERS__.

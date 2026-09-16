@@ -429,12 +429,16 @@ impl FsScope {
         {
             return Ok(root);
         }
-        if self.external_files.iter().any(|file| file == path) {
+        if self
+            .external_files
+            .iter()
+            .any(|file| path_is_inside_root(path, file) && path_is_inside_root(file, path))
+        {
             return Ok(path.to_path_buf());
         }
         Err(AppError::InvalidPath(format!(
             "path outside allowed project roots: {}",
-            path.display()
+            strip_verbatim_prefix(path).display()
         )))
     }
 }
@@ -722,25 +726,60 @@ fn fs_trash_scoped(scope: &FsScope, path: String) -> AppResult<()> {
 
 #[tauri::command]
 pub fn fs_reveal(state: State<'_, AppState>, path: String) -> AppResult<()> {
-    let scope = FsScope::from_state(state.inner());
-    fs_reveal_scoped(&scope, path)
+    fs_reveal_in_state(state.inner(), path)
 }
 
-fn fs_reveal_scoped(scope: &FsScope, path: String) -> AppResult<()> {
+fn fs_reveal_in_state(state: &AppState, path: String) -> AppResult<()> {
     let p = PathBuf::from(&path);
-    let scoped = scope.authorize_existing(&p)?;
+    let scope = FsScope::from_state(state);
+    let requested = match scope.authorize_existing(&p) {
+        Ok(scoped) => scoped.requested,
+        Err(err) if is_outside_scope_error(&err) && session_path_is_revealable(state, &p) => p,
+        Err(err) => return Err(err),
+    };
+    reveal_path_in_file_manager(&requested)
+}
+
+fn is_outside_scope_error(err: &AppError) -> bool {
+    matches!(
+        err,
+        AppError::InvalidPath(message) if message.contains("path outside allowed")
+    )
+}
+
+/// Local/unscoped sessions stay out of the file-explorer read/write
+/// allow-list. Revealing in the OS file manager only opens a folder the
+/// sidebar already shows, so those session paths are still eligible.
+fn session_path_is_revealable(state: &AppState, path: &Path) -> bool {
+    let Ok(resolved) = path.canonicalize() else {
+        return false;
+    };
+    state.sessions.list().iter().any(|session| {
+        [&session.worktree_path, &session.repo_path]
+            .into_iter()
+            .any(|candidate| {
+                candidate
+                    .canonicalize()
+                    .map(|root| path_is_inside_root(&resolved, &root))
+                    .unwrap_or(false)
+            })
+    })
+}
+
+fn reveal_path_in_file_manager(path: &Path) -> AppResult<()> {
+    let reveal = strip_verbatim_prefix(path);
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
             .arg("-R")
-            .arg(&scoped.requested)
+            .arg(&reveal)
             .spawn()
             .map_err(|e| AppError::Other(format!("open failed: {e}")))?;
     }
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("xdg-open")
-            .arg(scoped.requested.parent().unwrap_or(&scoped.requested))
+            .arg(reveal.parent().unwrap_or(&reveal))
             .spawn()
             .map_err(|e| AppError::Other(format!("xdg-open failed: {e}")))?;
     }
@@ -748,7 +787,7 @@ fn fs_reveal_scoped(scope: &FsScope, path: String) -> AppResult<()> {
     {
         std::process::Command::new("explorer")
             .arg("/select,")
-            .arg(&scoped.requested)
+            .arg(&reveal)
             .spawn()
             .map_err(|e| AppError::Other(format!("explorer failed: {e}")))?;
     }
@@ -2149,8 +2188,67 @@ fn normalize_absolute_path(path: &Path) -> Option<PathBuf> {
     Some(out)
 }
 
+/// Windows `canonicalize` yields `\\?\C:\...` / `\\?\UNC\...` verbatim
+/// prefixes. Those are a different `Prefix` component than `C:\...`, so
+/// `Path::starts_with` rejects a path that is inside the same directory.
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if let Some(rest) = text
+        .strip_prefix(r"\\?\UNC\")
+        .or_else(|| text.strip_prefix("//?/UNC/"))
+    {
+        let mut unc = String::from(r"\\");
+        unc.push_str(rest);
+        return PathBuf::from(unc);
+    }
+    if let Some(rest) = text
+        .strip_prefix(r"\\?\")
+        .or_else(|| text.strip_prefix("//?/"))
+    {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
 fn path_is_inside_root(path: &Path, root: &Path) -> bool {
-    path == root || path.starts_with(root)
+    let path = strip_verbatim_prefix(path);
+    let root = strip_verbatim_prefix(root);
+    if path == root || path.starts_with(&root) {
+        return true;
+    }
+    windows_logical_path_is_inside(&path, &root)
+}
+
+fn windows_logical_path_is_inside(path: &Path, root: &Path) -> bool {
+    let Some(path_text) = path.to_str() else {
+        return false;
+    };
+    let Some(root_text) = root.to_str() else {
+        return false;
+    };
+    if !looks_like_windows_path(path_text) && !looks_like_windows_path(root_text) {
+        return false;
+    }
+    let path_key = windows_logical_key(path_text);
+    let root_key = windows_logical_key(root_text);
+    path_key == root_key || path_key.starts_with(&format!("{root_key}/"))
+}
+
+fn looks_like_windows_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        || path.starts_with(r"\\")
+        || path.starts_with("//")
+}
+
+fn windows_logical_key(path: &str) -> String {
+    let mut normalized = path.replace('\\', "/");
+    while normalized.len() > 3 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized.to_ascii_lowercase()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2347,6 +2445,82 @@ mod tests {
 
         assert!(roots.contains(&repo_dir.path().canonicalize().unwrap()));
         assert!(roots.contains(&linked_worktree.canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn strip_verbatim_prefix_removes_extended_length_forms() {
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\C:\Users\wincubeDevTeam")),
+            PathBuf::from(r"C:\Users\wincubeDevTeam"),
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\UNC\server\share\repo")),
+            PathBuf::from(r"\\server\share\repo"),
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new("//?/C:/Users/wincubeDevTeam")),
+            PathBuf::from("C:/Users/wincubeDevTeam"),
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new("/Users/me/repo")),
+            PathBuf::from("/Users/me/repo"),
+        );
+    }
+
+    #[test]
+    fn path_is_inside_root_treats_windows_verbatim_prefix_as_same_location() {
+        assert!(path_is_inside_root(
+            Path::new(r"\\?\C:\Users\wincubeDevTeam"),
+            Path::new(r"C:\Users\wincubeDevTeam"),
+        ));
+        assert!(path_is_inside_root(
+            Path::new(r"C:\Users\wincubeDevTeam"),
+            Path::new(r"\\?\C:\Users\wincubeDevTeam"),
+        ));
+        assert!(path_is_inside_root(
+            Path::new(r"\\?\C:\Users\wincubeDevTeam\repo\src"),
+            Path::new(r"C:\Users\wincubeDevTeam\repo"),
+        ));
+        assert!(!path_is_inside_root(
+            Path::new(r"\\?\C:\Users\wincubeDevTeam"),
+            Path::new(r"C:\Users\wincubeDevTeam\repo"),
+        ));
+        assert!(!path_is_inside_root(
+            Path::new(r"C:\Users\wincubeDevTeam\repo-other"),
+            Path::new(r"C:\Users\wincubeDevTeam\repo"),
+        ));
+    }
+
+    #[test]
+    fn session_path_is_revealable_for_local_session_outside_project_scope() {
+        let state = AppState::new();
+        let local = tmpdir();
+        let nested = local.path().join("notes.txt");
+        fs::write(&nested, b"hi").unwrap();
+        state
+            .sessions
+            .insert(test_session(local.path(), local.path(), false));
+
+        let scope = FsScope::from_state(&state);
+        assert!(scope.roots.is_empty());
+        assert!(scope.authorize_existing(local.path()).is_err());
+        assert!(session_path_is_revealable(&state, local.path()));
+        assert!(session_path_is_revealable(&state, &nested));
+
+        let outside = tmpdir();
+        assert!(!session_path_is_revealable(&state, outside.path()));
+    }
+
+    #[test]
+    fn outside_scope_error_matches_project_root_rejection() {
+        let err = AppError::InvalidPath(format!(
+            "path outside allowed project roots: {}",
+            r"\\?\C:\Users\wincubeDevTeam"
+        ));
+        assert!(is_outside_scope_error(&err));
+        assert!(!is_outside_scope_error(&AppError::InvalidPath(
+            "path traversal segment (`..`) is not allowed".into(),
+        )));
     }
 
     fn create_event(paths: Vec<PathBuf>) -> Event {

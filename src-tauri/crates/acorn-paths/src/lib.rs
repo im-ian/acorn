@@ -75,6 +75,56 @@ pub fn user_home_dir() -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "user home directory unavailable"))
 }
 
+/// Strip a Windows verbatim disk prefix (`\\?\C:\foo` → `C:\foo`) when the
+/// remainder is still a usable legacy path.
+///
+/// `std::fs::canonicalize` emits `\\?\` paths on Windows. libgit2's discover
+/// and worktree APIs do not resolve that prefix, so callers pass the result of
+/// this helper (or [`canonicalize`]) into git2.
+///
+/// This peels the `\\?\` *string* prefix rather than skipping
+/// `Prefix::VerbatimDisk` and taking `components().as_path()`. The latter
+/// leaves a root-relative `\foo` that drops the drive letter, so a process
+/// whose cwd is on another drive would open the wrong volume.
+pub fn simplified(path: &Path) -> &Path {
+    strip_verbatim_disk_prefix(path).unwrap_or(path)
+}
+
+fn strip_verbatim_disk_prefix(path: &Path) -> Option<&Path> {
+    let s = path.to_str()?;
+    let rest = s.strip_prefix(r"\\?\")?;
+    let bytes = rest.as_bytes();
+    // `X:\...` or `X:/...` — keep UNC (`\\?\UNC\server\share`) verbatim.
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        Some(Path::new(rest))
+    } else {
+        None
+    }
+}
+
+/// Canonicalize `path`, then strip a Windows `\\?\` prefix when safe.
+pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
+    let canonical = std::fs::canonicalize(path)?;
+    Ok(simplified(&canonical).to_path_buf())
+}
+
+/// Working directory handed to agent CLIs and used when pairing
+/// transcripts. Strips a Windows verbatim disk prefix so every agent
+/// sees `W:\repo` rather than `\\?\W:\repo`.
+pub fn agent_cwd(path: &Path) -> PathBuf {
+    simplified(path).to_path_buf()
+}
+
+/// True when two paths name the same agent working directory after
+/// stripping a Windows verbatim disk prefix.
+pub fn same_cwd(left: &Path, right: &Path) -> bool {
+    simplified(left) == simplified(right)
+}
+
 fn ensure_private_dir(path: &Path) -> io::Result<()> {
     std::fs::create_dir_all(path)?;
     #[cfg(unix)]
@@ -287,5 +337,67 @@ mod tests {
             local_ipc_endpoint("../ipc").unwrap_err().kind(),
             io::ErrorKind::InvalidInput
         );
+    }
+
+    #[test]
+    fn simplified_is_noop_for_ordinary_paths() {
+        assert_eq!(simplified(Path::new("/tmp/repo")), Path::new("/tmp/repo"));
+        assert_eq!(
+            simplified(Path::new(r"W:\winCudeProject")),
+            Path::new(r"W:\winCudeProject")
+        );
+    }
+
+    #[test]
+    fn canonicalize_matches_std_after_windows_prefix_strip() {
+        let path = std::env::temp_dir();
+        let ours = canonicalize(&path).unwrap();
+        let std = std::fs::canonicalize(&path).unwrap();
+        assert_eq!(ours, simplified(&std));
+        #[cfg(windows)]
+        assert!(
+            !ours.to_string_lossy().starts_with(r"\\?\"),
+            "canonical path should not keep a verbatim prefix: {}",
+            ours.display()
+        );
+    }
+
+    #[test]
+    fn simplified_strips_verbatim_disk_prefix_and_keeps_the_drive() {
+        let stripped = simplified(Path::new(r"\\?\W:\winCudeProject\cras_backend"));
+        let rendered = stripped.to_string_lossy();
+        assert_eq!(
+            stripped,
+            Path::new(r"W:\winCudeProject\cras_backend"),
+            "verbatim disk prefix must become a drive path, got {rendered}"
+        );
+        assert!(
+            rendered.starts_with(r"W:\"),
+            "drive letter must be kept so the path is not root-relative on another volume, got {rendered}"
+        );
+        assert!(
+            !rendered.starts_with(r"\win") && !rendered.starts_with(r"\W"),
+            "must not drop the drive into a current-volume path, got {rendered}"
+        );
+        assert_eq!(
+            simplified(Path::new(r"\\?\C:\Users\me\repo\.acorn\worktrees\wt")),
+            Path::new(r"C:\Users\me\repo\.acorn\worktrees\wt")
+        );
+        assert_eq!(
+            simplified(Path::new(r"\\?\UNC\server\share\repo")),
+            Path::new(r"\\?\UNC\server\share\repo")
+        );
+    }
+
+    #[test]
+    fn same_cwd_equates_verbatim_and_legacy_windows_drive_paths() {
+        let verbatim = Path::new(r"\\?\W:\winCudeProject\cras_backend");
+        let legacy = Path::new(r"W:\winCudeProject\cras_backend");
+        assert!(same_cwd(verbatim, legacy));
+        assert_eq!(agent_cwd(verbatim), legacy);
+        assert!(!same_cwd(
+            Path::new(r"W:\winCudeProject\cras_backend"),
+            Path::new(r"W:\winCudeProject\other")
+        ));
     }
 }

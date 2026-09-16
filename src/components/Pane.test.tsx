@@ -408,6 +408,72 @@ describe("Pane empty state", () => {
     );
   });
 
+  it("creates a local session from an empty unregistered workspace pane", async () => {
+    const localFolderId = "local-ws";
+    const created = session("local-session", {
+      name: "new session",
+      repo_path: HOME,
+      worktree_path: HOME,
+      project_scoped: false,
+    });
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.listSessions.mockResolvedValueOnce([created]);
+    mocks.listProjects.mockResolvedValueOnce([project(REPO)]);
+    useAppStore.setState((s) => ({
+      ...s,
+      sessions: [],
+      projects: [project(REPO)],
+      projectFolders: {
+        [HOME]: [
+          {
+            id: localFolderId,
+            repoPath: HOME,
+            name: "New workspace",
+            cwdPath: HOME,
+            position: 1,
+          },
+        ],
+      },
+      workspaces: {
+        [localFolderId]: {
+          layout: { kind: "pane", id: "root" },
+          panes: { root: { id: "root", tabIds: [], activeTabId: null } },
+          focusedPaneId: "root",
+        },
+      },
+      activeProject: HOME,
+      activeProjectFolderId: localFolderId,
+      layout: { kind: "pane", id: "root" },
+      panes: { root: { id: "root", tabIds: [], activeTabId: null } },
+      focusedPaneId: "root",
+      activeTabId: null,
+      activeSessionId: null,
+    }));
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const emptyPane = container.querySelector<HTMLElement>('[role="button"]');
+    expect(emptyPane).not.toBeNull();
+
+    await act(async () => {
+      emptyPane?.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "new session",
+      HOME,
+      false,
+      "regular",
+      null,
+      false,
+    );
+  });
+
   it("opens a project-scoped Goal dialog from the pane context menu", () => {
     act(() => {
       root.render(<Pane paneId="root" />);

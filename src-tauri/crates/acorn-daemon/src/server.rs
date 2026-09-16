@@ -9,7 +9,7 @@
 //! * **Worker threads block on socket I/O** with std `BufReader` /
 //!   `BufWriter`. The daemon is intentionally NOT built on tokio: the
 //!   total connection count is bounded by attached Acorn clients +
-//!   control-session CLI invocations (single-digit normally) and the
+//!   session CLI invocations (single-digit normally) and the
 //!   per-connection work is dominated by PTY syscalls, which are
 //!   blocking anyway via `portable-pty`. Tokio would add a runtime and
 //!   buy nothing here.
@@ -479,6 +479,10 @@ impl Daemon {
                 self.shutdown_flag.store(true, Ordering::SeqCst);
                 ControlResult::Ack
             }
+            ControlPayload::ResetDecModes { target_session_id } => {
+                self.pty.reset_dec_modes(&target_session_id);
+                ControlResult::Ack
+            }
         };
         ControlResponse {
             seq: req.seq,
@@ -566,13 +570,28 @@ impl Daemon {
         // replay, avoiding both the old snapshot->subscribe gap and duplicate
         // bytes.
         let mut replayed_until = 0;
+        // Restore mouse/paste on the fresh xterm even when the ring is not
+        // replayed — a local snapshot restore may have just turned those
+        // modes off. Never written into the ring.
+        let prelude = self.pty.dec_mode_prelude(&attach.session_id);
+        if !prelude.is_empty() {
+            let frame = StreamFrame::Output {
+                data_b64: base64_encode(&prelude),
+            };
+            write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
+        }
         if attach.replay_scrollback {
             if let Some(snap) = self.pty.scrollback_snapshot(&attach.session_id) {
                 replayed_until = snap.end_seq;
-                let frame = StreamFrame::Output {
-                    data_b64: base64_encode(&snap.bytes),
-                };
-                write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
+                // A live overlay TUI's ring is cursor-addressed paints. Dumping
+                // it into a fresh xterm reconstructs mid-frame garbage; the
+                // child still owns the real screen and redraws on SIGWINCH.
+                if !self.pty.mouse_tracking_active(&attach.session_id) {
+                    let frame = StreamFrame::Output {
+                        data_b64: base64_encode(&snap.bytes),
+                    };
+                    write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
+                }
             }
         }
 
@@ -701,8 +720,8 @@ impl Daemon {
                 .registry
                 .get(&source_id)
                 .ok_or_else(|| "source daemon session is not live".to_string())?;
-            if !source.alive || source.kind != super::protocol::SessionKind::Control {
-                return Err("source daemon session is not a live control session".into());
+            if !source.alive {
+                return Err("source daemon session is not live".into());
             }
             let capability = hello
                 .session_capability
@@ -764,7 +783,7 @@ impl Daemon {
                 }
                 if matches!(payload, ControlPayload::Status | ControlPayload::Shutdown) {
                     return Some(unauthorized(
-                        "a control session cannot query or mutate daemon-global state",
+                        "a session CLI cannot query or mutate daemon-global state",
                     ));
                 }
                 let target_id = match payload {
@@ -778,7 +797,8 @@ impl Daemon {
                         target_session_id, ..
                     }
                     | ControlPayload::KillSession { target_session_id }
-                    | ControlPayload::ForgetSession { target_session_id } => {
+                    | ControlPayload::ForgetSession { target_session_id }
+                    | ControlPayload::ResetDecModes { target_session_id } => {
                         Some(*target_session_id)
                     }
                     _ => None,
@@ -789,9 +809,7 @@ impl Daemon {
                     ControlPayload::KillSession { .. } | ControlPayload::ForgetSession { .. }
                 ) && target_id == source_id
                 {
-                    return Some(unauthorized(
-                        "refusing to destroy the source control session",
-                    ));
+                    return Some(unauthorized("refusing to destroy the source session"));
                 }
                 let Some(source) = self.registry.get(&source_id) else {
                     return Some(unauthorized("source daemon session disappeared"));

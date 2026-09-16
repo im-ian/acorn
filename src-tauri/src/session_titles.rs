@@ -1,7 +1,7 @@
 #[cfg(test)]
 use std::path::PathBuf;
 
-use acorn_session::{Session, SessionKind, SessionMode, SessionOwner, SessionTitleSource};
+use acorn_session::{Session, SessionMode, SessionOwner, SessionTitleSource};
 
 use crate::agent_history::{self, AgentHistoryProvider};
 use crate::agent_resume;
@@ -50,7 +50,7 @@ pub fn can_generate_title(session: &Session, transcript_id: Option<&str>) -> boo
 }
 
 pub fn can_force_generate_title(session: &Session) -> bool {
-    session.kind == SessionKind::Regular && matches!(session.owner, SessionOwner::User)
+    matches!(session.owner, SessionOwner::User)
 }
 
 fn auto_title_enabled(session: &Session) -> bool {
@@ -464,7 +464,7 @@ mod tests {
         assert!(!can_generate_title(&session, Some("transcript-1")));
         assert!(can_force_generate_title(&session));
 
-        session.kind = SessionKind::Control;
+        session.owner = SessionOwner::control(session.id);
         assert!(!can_force_generate_title(&session));
     }
 

@@ -37,7 +37,8 @@
 
 use std::collections::HashSet;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -275,22 +276,28 @@ pub struct SessionPid {
 /// Convert a filesystem cwd into the dash-slug directory name Claude
 /// uses to bucket its JSONL transcripts.
 ///
-/// Examples:
-///   `/Users/me/proj`                          → `-Users-me-proj`
-///   `/Users/me/proj/.claude/worktrees/foo`    → `-Users-me-proj--claude-worktrees-foo`
+/// Claude Code replaces every non-alphanumeric character with `-`. Unix
+/// `/Users/me/proj` becomes `-Users-me-proj`. Windows `X:\foo\bar_baz`
+/// becomes `X--foo-bar-baz`. A `\\?\` verbatim prefix is dropped first so
+/// `\\?\W:\repo` slugs as `W--repo` instead of embedding `:` / `\` into
+/// the directory name (those characters are illegal on Windows).
 pub fn slug_for_cwd(cwd: &Path) -> String {
-    let s = cwd.to_string_lossy();
-    let trimmed = s.trim_start_matches('/');
-    let mut slug = String::with_capacity(s.len() + 1);
-    slug.push('-');
-    for ch in trimmed.chars() {
-        if ch == '/' || ch == '.' {
-            slug.push('-');
-        } else {
-            slug.push(ch);
-        }
+    let raw = cwd.to_string_lossy();
+    let stripped = raw.strip_prefix(r"\\?\").unwrap_or(raw.as_ref());
+    stripped
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
+}
+
+/// True when `slug` is a single path component with no parent-dir escape.
+/// Windows drive-letter slugs (`W--repo`) do not start with `-`.
+pub fn is_safe_claude_project_slug(slug: &str) -> bool {
+    if slug.is_empty() || slug.contains("..") {
+        return false;
     }
-    slug
+    let mut components = Path::new(slug).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 /// Convert a filesystem cwd into Grok's session-directory bucket name.
@@ -299,7 +306,7 @@ pub fn slug_for_cwd(cwd: &Path) -> String {
 /// characters (`A-Z a-z 0-9 - . _ ~`) intact. `/Users/me/proj` becomes
 /// `%2FUsers%2Fme%2Fproj`.
 fn grok_cwd_bucket(cwd: &Path) -> String {
-    percent_encode_except_unreserved(&cwd.to_string_lossy())
+    percent_encode_except_unreserved(&acorn_paths::agent_cwd(cwd).to_string_lossy())
 }
 
 fn percent_encode_except_unreserved(input: &str) -> String {
@@ -1102,7 +1109,10 @@ fn agent_process_node_from_parts(
             .or_else(|| process_cwd.map(Path::to_path_buf)),
         AgentKind::Claude | AgentKind::Antigravity => process_cwd.map(Path::to_path_buf),
     };
-    Some(AgentProcessNode { identity, cwd })
+    Some(AgentProcessNode {
+        identity,
+        cwd: cwd.map(|path| acorn_paths::agent_cwd(&path)),
+    })
 }
 
 /// Resolve Codex's working directory override from the global CLI option
@@ -1175,7 +1185,7 @@ fn codex_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) ->
         } else {
             cwd
         };
-        effective.canonicalize().unwrap_or(effective)
+        acorn_paths::canonicalize(&effective).unwrap_or_else(|_| acorn_paths::agent_cwd(&effective))
     })
 }
 
@@ -1208,7 +1218,7 @@ fn grok_effective_cwd_from_args(args: &[String], process_cwd: Option<&Path>) -> 
         } else {
             cwd
         };
-        effective.canonicalize().unwrap_or(effective)
+        acorn_paths::canonicalize(&effective).unwrap_or_else(|_| acorn_paths::agent_cwd(&effective))
     })
 }
 
@@ -1667,10 +1677,20 @@ fn grok_sessions_root() -> Option<PathBuf> {
         .map(|p| p.join("sessions"))
 }
 
+fn is_missing_or_illegal_path(error: &io::Error) -> bool {
+    match error.kind() {
+        io::ErrorKind::NotFound | io::ErrorKind::InvalidInput | io::ErrorKind::InvalidFilename => {
+            true
+        }
+        // Windows ERROR_INVALID_NAME (`:` / `\` in a path component).
+        _ => error.raw_os_error() == Some(123),
+    }
+}
+
 fn safe_is_directory(path: &Path) -> ProviderScanResult<bool> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) => Ok(meta.file_type().is_dir()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) if is_missing_or_illegal_path(&error) => Ok(false),
         Err(error) => Err(provider_access_error(path, error)),
     }
 }
@@ -1678,7 +1698,7 @@ fn safe_is_directory(path: &Path) -> ProviderScanResult<bool> {
 fn safe_read_dir(path: &Path) -> ProviderScanResult<Option<std::fs::ReadDir>> {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if is_missing_or_illegal_path(&error) => return Ok(None),
         Err(error) => return Err(provider_access_error(path, error)),
     };
     if !meta.file_type().is_dir() {
@@ -2065,8 +2085,13 @@ fn antigravity_owner_cursor_id(
     cursors: &std::collections::HashMap<String, String>,
     cwd: &Path,
 ) -> Option<String> {
-    let cwd = cwd.to_str()?;
-    cursors.get(cwd).filter(|id| is_uuid_v4_shape(id)).cloned()
+    let simplified = acorn_paths::agent_cwd(cwd);
+    for key in [cwd.to_str()?, simplified.to_str()?] {
+        if let Some(id) = cursors.get(key).filter(|id| is_uuid_v4_shape(id)) {
+            return Some(id.clone());
+        }
+    }
+    None
 }
 
 /// Resolve the JSONL transcript a `claude` process is currently writing
@@ -2440,7 +2465,7 @@ fn find_recent_codex_jsonl_budgeted(
             let Some(head) = read_codex_rollout_head_budgeted(&path, budget)? else {
                 continue;
             };
-            if head.cwd != cwd || !head.is_writer_for_scope(scope) {
+            if !acorn_paths::same_cwd(&head.cwd, cwd) || !head.is_writer_for_scope(scope) {
                 continue;
             }
             let birth = meta.created().unwrap_or(mtime);
@@ -2550,7 +2575,7 @@ fn find_completed_codex_jsonl_budgeted(
             let Some(head) = read_codex_rollout_head_budgeted(&path, budget)? else {
                 continue;
             };
-            if head.cwd != cwd || !head.is_writer_for_scope(scope) {
+            if !acorn_paths::same_cwd(&head.cwd, cwd) || !head.is_writer_for_scope(scope) {
                 continue;
             }
             let Some(uuid) = extract_uuid_from_path(&path) else {
@@ -4266,6 +4291,45 @@ mod tests {
     }
 
     #[test]
+    fn slug_for_windows_drive_cwd_is_one_legal_component() {
+        for cwd in [
+            r"W:\winCudeProject\cras_backend",
+            r"\\?\W:\winCudeProject\cras_backend",
+        ] {
+            let slug = slug_for_cwd(Path::new(cwd));
+            assert!(
+                !slug.contains(':') && !slug.contains('\\') && !slug.contains('/'),
+                "slug for {cwd} must be a single path component, got {slug}"
+            );
+            assert!(
+                is_safe_claude_project_slug(&slug),
+                "slug for {cwd} must be a joinable project directory name, got {slug}"
+            );
+            assert_eq!(slug, "W--winCudeProject-cras-backend");
+        }
+        assert_eq!(slug_for_cwd(Path::new(r"X:\foo\bar_baz")), "X--foo-bar-baz");
+    }
+
+    #[test]
+    fn missing_or_illegal_path_treats_windows_invalid_name_as_a_miss() {
+        assert!(is_missing_or_illegal_path(&io::Error::from_raw_os_error(
+            123
+        )));
+        assert!(is_missing_or_illegal_path(&io::Error::new(
+            io::ErrorKind::NotFound,
+            "gone"
+        )));
+        assert!(is_missing_or_illegal_path(&io::Error::new(
+            io::ErrorKind::InvalidFilename,
+            "bad name"
+        )));
+        assert!(!is_missing_or_illegal_path(&io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "nope"
+        )));
+    }
+
+    #[test]
     fn grok_cwd_bucket_percent_encodes_separators_and_keeps_unreserved() {
         assert_eq!(
             grok_cwd_bucket(Path::new("/Users/jthefloor")),
@@ -4278,6 +4342,65 @@ mod tests {
         assert_eq!(
             grok_cwd_bucket(Path::new("/Users/me/My Project")),
             "%2FUsers%2Fme%2FMy%20Project"
+        );
+        assert_eq!(
+            grok_cwd_bucket(Path::new(r"\\?\W:\winCudeProject")),
+            grok_cwd_bucket(Path::new(r"W:\winCudeProject"))
+        );
+    }
+
+    #[test]
+    fn agent_process_cwd_strips_windows_verbatim_prefix_for_every_provider() {
+        for (exe, name) in [
+            ("/usr/bin/claude", "claude"),
+            ("/usr/bin/codex", "codex"),
+            ("/usr/bin/grok", "grok"),
+            ("/usr/bin/agy", "agy"),
+        ] {
+            let node = process_node(exe, name, &[name], r"\\?\W:\winCudeProject");
+            assert_eq!(
+                node.cwd.as_deref(),
+                Some(Path::new(r"W:\winCudeProject")),
+                "{name} cwd should drop the verbatim prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn find_recent_codex_jsonl_pairs_verbatim_process_cwd_with_legacy_payload() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-cxcwd-{}", uuid::Uuid::new_v4().simple()));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let path =
+            day.join("rollout-2026-06-10T10-00-00-019e2001-3250-76b0-8410-2e073b38a2c1.jsonl");
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, r#"{{"payload":{{"cwd":"W:\\winCudeProject"}}}}"#).unwrap();
+        let now = fs::metadata(&path).unwrap().modified().unwrap();
+        let found = find_recent_codex_jsonl(
+            Path::new(r"\\?\W:\winCudeProject"),
+            Some(&root.join("sessions")),
+            now - Duration::from_secs(60),
+            now - Duration::from_secs(60),
+            now,
+            false,
+            &HashSet::new(),
+        );
+        assert_eq!(found.map(|(p, _)| p), Some(path));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn antigravity_owner_cursor_matches_verbatim_windows_cwd() {
+        let id = "28a49f9d-4b8f-419c-9d8a-bf0854310e03";
+        let cursors =
+            std::collections::HashMap::from([(r"W:\winCudeProject".to_string(), id.to_string())]);
+        assert_eq!(
+            antigravity_owner_cursor_id(&cursors, Path::new(r"\\?\W:\winCudeProject")).as_deref(),
+            Some(id)
         );
     }
 

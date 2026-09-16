@@ -46,14 +46,13 @@ pub struct Envelope {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Request {
-    /// Mark the source session itself as a control session. This is the only
-    /// request intentionally accepted from a regular source session.
+    /// Compatibility probe: confirm this terminal is authorized for IPC.
     PromoteSelf,
-    /// Return the control-session context primer the agent should load before
+    /// Return the session IPC primer the agent should load before
     /// interpreting natural-language requests like "new session".
     Context,
     /// List sessions visible to the source — i.e. sessions in the same
-    /// project (`repo_path`) as the calling control session.
+    /// project (`repo_path`) as the calling session.
     ListSessions,
     /// List frontend workspaces for the source session's project. Named
     /// workspace state lives in the renderer, so the app bridges this request
@@ -77,11 +76,11 @@ pub enum Request {
         #[serde(default)]
         allow_foreign: bool,
     },
-    /// Create a new (non-control) regular session in the same project as the
-    /// source. Returns the new session's id. The frontend's `pty_spawn`
-    /// flow still has to land in the new session for the PTY to start;
-    /// callers that want output should poll `ListSessions` or wait for the
-    /// app to surface the new tab.
+    /// Create a new regular session in the same project as the source.
+    /// Returns the new session's id. The frontend's `pty_spawn` flow still
+    /// has to land in the new session for the PTY to start; callers that
+    /// want output should poll `ListSessions` or wait for the app to
+    /// surface the new tab.
     NewSession {
         name: String,
         isolated: bool,
@@ -99,7 +98,7 @@ pub enum Request {
         #[serde(default)]
         allow_foreign: bool,
     },
-    /// Tear down the authenticated source control session itself after the
+    /// Tear down the authenticated source session itself after the
     /// response has been delivered. Kept separate from `KillSession` so an
     /// agent must make an explicit self-closing request instead of accidentally
     /// targeting its own UUID through the general destructive command.
@@ -116,7 +115,7 @@ pub enum Request {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum NewSessionOwner {
-    /// Default for `acorn-ipc new-session`: owned by the source control session.
+    /// Default for `acorn-ipc new-session`: owned by the creating session.
     SourceControl,
     /// Explicit opt-out for sessions that should behave like user-created tabs.
     User,
@@ -172,8 +171,8 @@ pub enum ErrorCode {
     OutOfScope,
     /// Request shape was unrecognized or its arguments were invalid.
     Invalid,
-    /// Target exists in the same project but is owned by the user or by another
-    /// control session. Callers must opt in explicitly for these operations.
+    /// Unused: sibling actions in the same project no longer consult ownership.
+    /// Kept so older CLIs can still decode the error tag.
     ForeignSession,
     /// Catch-all for server-side failures (PTY write errors, persistence
     /// errors, etc.). The `message` carries the underlying cause.
@@ -236,7 +235,7 @@ mod tests {
     fn response_error_is_tagged_kind() {
         let r = Response::Error {
             code: ErrorCode::Unauthorized,
-            message: "source is not a control session".to_string(),
+            message: "source session is unauthorized".to_string(),
         };
         let encoded = serde_json::to_string(&r).expect("encode");
         // External tag is `kind` per the serde attribute; `error` payload

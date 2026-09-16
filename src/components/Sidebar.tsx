@@ -4,7 +4,6 @@ import {
   BarChart3,
   Bell,
   BellOff,
-  Bot,
   CheckCheck,
   ChevronRight,
   Copy,
@@ -111,6 +110,7 @@ import {
   canRenameSession,
 } from "../lib/sessionTitle";
 import {
+  isWslBridgedSession,
   summarizeAllSessionProcesses,
   summarizeSessionProcesses,
 } from "../lib/sessionContext";
@@ -357,7 +357,15 @@ function statusReasonLabel(
 
 function statusDetailLabel(t: Translator, session: Session): string {
   const label = statusLabel(t, session.status);
-  const reason = statusReasonLabel(t, session.status_reason);
+  // A WSL bridge leaves the status stuck on whatever the shell reports, so
+  // say why rather than let it read as a silent failure. A real status reason
+  // still wins: it is proof that resolution worked, which would contradict
+  // the hint — and `wsl.exe` can be an incidental child of a normal session.
+  const reason =
+    statusReasonLabel(t, session.status_reason) ??
+    (isWslBridgedSession(session)
+      ? sidebarText(t, "sidebar.statusReason.wsl_bridged")
+      : null);
   return reason ? `${label} · ${reason}` : label;
 }
 
@@ -842,18 +850,6 @@ export function Sidebar() {
         scopedProject,
       );
     };
-    const newControl = () => {
-      const scope = activeScope();
-      const scopedProject =
-        scope && scope.placement.projectScoped !== false
-          ? scopeWithProjectRootLaunch(scope)
-          : undefined;
-      void onNewSessionRef.current(
-        false,
-        "control",
-        scopedProject,
-      );
-    };
     const newChat = () => {
       void onNewSessionRef.current(
         false,
@@ -951,7 +947,6 @@ export function Sidebar() {
     };
     window.addEventListener("acorn:new-session", newSession);
     window.addEventListener("acorn:new-isolated-session", newIsolated);
-    window.addEventListener("acorn:new-control-session", newControl);
     window.addEventListener("acorn:new-chat-session", newChat);
     window.addEventListener(
       NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
@@ -967,7 +962,6 @@ export function Sidebar() {
     return () => {
       window.removeEventListener("acorn:new-session", newSession);
       window.removeEventListener("acorn:new-isolated-session", newIsolated);
-      window.removeEventListener("acorn:new-control-session", newControl);
       window.removeEventListener("acorn:new-chat-session", newChat);
       window.removeEventListener(
         NEW_AUTONOMOUS_GOAL_SESSION_EVENT,
@@ -993,9 +987,7 @@ export function Sidebar() {
       if (!scopeOverride) {
         const title = isolated
           ? sidebarText(t, "sidebar.dialog.selectIsolatedRepository")
-          : kind === "control"
-            ? sidebarText(t, "sidebar.dialog.selectControlDirectory")
-            : sidebarText(t, "sidebar.dialog.selectDirectory");
+          : sidebarText(t, "sidebar.dialog.selectDirectory");
         const name =
           !isolated && kind === "regular"
             ? suggestDefaultSessionName(sessions)
@@ -2223,8 +2215,6 @@ function projectSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
       return <GitBranch size={12} />;
     case "chat":
       return <MessageSquareText size={12} />;
-    case "control":
-      return <Bot size={12} />;
   }
 }
 
@@ -4242,13 +4232,6 @@ function SessionRowLabel({
             aria-label={sidebarText(t, "sidebar.aria.worktree")}
           />
         ) : null}
-        {session.kind === "control" ? (
-          <Bot
-            size={10}
-            className="shrink-0 text-accent"
-            aria-label={sidebarText(t, "sidebar.aria.controlSession")}
-          />
-        ) : null}
         {notificationsSilenced ? (
           <span
             className="inline-flex shrink-0 text-fg-muted"
@@ -5724,14 +5707,6 @@ function buildSessionHoverDetails(
         value={statusDetailLabel(t, session)}
         valueClassName={STATUS_ICON[session.status]}
       />
-      {session.kind === "control" ? (
-        <SessionHoverDetailRow
-          icon={<Bot size={12} />}
-          iconClassName="text-accent"
-          label={sidebarText(t, "sidebar.metadata.kind")}
-          value={sidebarText(t, "sidebar.metadata.controlSession")}
-        />
-      ) : null}
       {session.isolated ? (
         <SessionHoverFlag
           icon={<GitBranch size={12} />}

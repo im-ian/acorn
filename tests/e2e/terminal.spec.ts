@@ -79,6 +79,53 @@ async function seedWritableTerminal(tauri: TauriMock): Promise<void> {
   });
 }
 
+async function stubClipboardImagePersistence(tauri: TauriMock): Promise<void> {
+  await tauri.handle("clipboard_snapshot", () => ({
+    supported: true,
+    changeCount: 1,
+    types: ["public.png"],
+    text: null,
+    hasImage: true,
+    mimeType: "image/png",
+    extension: "png",
+    dataB64: "AQID",
+  }));
+  await tauri.handle("plugin:fs|open", () => {
+    const w = window as unknown as { __clipWriteSize?: number };
+    w.__clipWriteSize = 0;
+    return 701;
+  });
+  await tauri.handle("plugin:fs|write", (args) => {
+    const data = (args as { data?: { length?: number; byteLength?: number } })
+      ?.data;
+    const len = data?.byteLength ?? data?.length ?? 0;
+    const w = window as unknown as { __clipWriteSize?: number };
+    w.__clipWriteSize = (w.__clipWriteSize ?? 0) + len;
+    return len;
+  });
+  await tauri.handle("plugin:fs|fstat", () => {
+    const w = window as unknown as { __clipWriteSize?: number };
+    return {
+      isFile: true,
+      isDirectory: false,
+      isSymlink: false,
+      size: w.__clipWriteSize ?? 0,
+    };
+  });
+  await tauri.handle("plugin:fs|stat", () => {
+    const w = window as unknown as { __clipWriteSize?: number };
+    return {
+      isFile: true,
+      isDirectory: false,
+      isSymlink: false,
+      size: w.__clipWriteSize ?? 0,
+    };
+  });
+  await tauri.handle("plugin:fs|close", () => undefined);
+  await tauri.handle("plugin:resources|close", () => undefined);
+  await tauri.handle("plugin:fs|remove", () => undefined);
+}
+
 async function installNativeDragEventRecorder(
   tauri: TauriMock,
 ): Promise<void> {
@@ -553,6 +600,11 @@ function makePillCursorAssertion(
         activeCursor.evaluate((el) => getComputedStyle(el, "::after").width),
       )
       .toBe("3px");
+    await expect
+      .poll(async () =>
+        activeCursor.evaluate((el) => getComputedStyle(el, "::after").left),
+      )
+      .toBe("-1px");
     await expect
       .poll(async () =>
         activeCursor.evaluate(
@@ -1506,16 +1558,7 @@ test.describe("terminal: spawn", () => {
         grok: null,
       };
     });
-    await tauri.handle("clipboard_snapshot", () => ({
-      supported: true,
-      changeCount: 1,
-      types: ["public.png"],
-      text: null,
-      hasImage: true,
-      mimeType: "image/png",
-      extension: "png",
-      dataB64: "AQID",
-    }));
+    await stubClipboardImagePersistence(tauri);
 
     await page.goto("/");
     await page
@@ -1577,13 +1620,29 @@ test.describe("terminal: spawn", () => {
         ),
       )
       .toBe(1);
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
-        ),
-      )
-      .toEqual(["\x16"]);
+    const isMac = await page.evaluate(() =>
+      /Mac|iP(hone|od|ad)/.test(navigator.platform),
+    );
+    if (isMac) {
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+          ),
+        )
+        .toEqual(["\x16"]);
+    } else {
+      await expect
+        .poll(async () => {
+          const writes = await page.evaluate(
+            () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+          );
+          return writes?.[0] ?? "";
+        })
+        .toMatch(
+          /clipboard-attachments\/clipboard-[0-9a-f]{32}\.png $/,
+        );
+    }
   });
 
   test("does not write selected terminal text on right-click by default", async ({
@@ -4546,6 +4605,147 @@ test.describe("terminal: spawn", () => {
         ),
       )
       .toBe("windows-copy-selection");
+  });
+
+  test("pastes clipboard images as a file mention on Windows instead of Ctrl+V", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "platform", {
+        get: () => "Win32",
+        configurable: true,
+      });
+    });
+    await seedWritableTerminal(tauri);
+    await stubClipboardImagePersistence(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __windowsPasteChannelId?: number };
+      w.__windowsPasteChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("detect_session_agent", () => ({
+      claude: null,
+      codex: "codex-session",
+      antigravity: null,
+      grok: null,
+    }));
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    const textarea = page.locator(".xterm-helper-textarea");
+    await textarea.waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __windowsPasteChannelId?: number })
+              .__windowsPasteChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    const canceled = await textarea.evaluate((element) =>
+      !element.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "v",
+          code: "KeyV",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(canceled).toBe(true);
+
+    await expect
+      .poll(async () => {
+        const writes = await page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+        );
+        return writes?.[0] ?? "";
+      })
+      .toMatch(/clipboard-attachments\/clipboard-[0-9a-f]{32}\.png $/);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+      ),
+    ).not.toContain("\x16");
+  });
+
+  test("pastes clipboard text once on Windows Ctrl+V", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "platform", {
+        get: () => "Win32",
+        configurable: true,
+      });
+    });
+    await seedWritableTerminal(tauri);
+    await tauri.handle("clipboard_snapshot", () => ({
+      supported: true,
+      changeCount: 1,
+      types: ["CF_UNICODETEXT"],
+      text: "hello from clipboard",
+      hasImage: false,
+      mimeType: null,
+      extension: null,
+      dataB64: null,
+    }));
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __windowsTextPasteChannelId?: number };
+      w.__windowsTextPasteChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    const textarea = page.locator(".xterm-helper-textarea");
+    await textarea.waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __windowsTextPasteChannelId?: number })
+              .__windowsTextPasteChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    const canceled = await textarea.evaluate((element) =>
+      !element.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "v",
+          code: "KeyV",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(canceled).toBe(true);
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+        ),
+      )
+      .toEqual(["hello from clipboard"]);
   });
 
   test("reattaching a live daemon session replays daemon scrollback instead of stale disk scrollback", async ({

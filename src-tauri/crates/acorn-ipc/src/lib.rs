@@ -1,5 +1,5 @@
 //! `acorn-ipc`: protocol types, socket-path resolution, bundled-CLI PATH
-//! helpers, and the control-session primer used to brief agents.
+//! helpers, and the session IPC primer used to brief agents.
 //!
 //! Shared by the in-app IPC server (still wired in the main `acorn` crate
 //! because it touches `AppState`, `SessionStore`, persistence, and worktree

@@ -11,10 +11,11 @@
 //!   * The endpoint is owner-only (`0600` on Unix; protected named-pipe
 //!     DACL on Windows).
 //!   * Every request carries a `source_session_id`. The server requires that
-//!     id to resolve to a live `Session` whose `kind == Control`. Any other
-//!     state (missing, wrong kind) returns `Unauthorized`.
+//!     id to resolve to a live `Session`. Missing or unknown ids return
+//!     `Unauthorized`. Peer PID ancestry and a per-PTY capability bind the
+//!     caller to that session's process tree.
 //!   * Target session lookups are scoped to the source's `repo_path`, so a
-//!     control session can only drive siblings inside its own project.
+//!     session can only drive siblings inside its own project.
 //!
 //! The implementation deliberately avoids tokio. We spawn the listener
 //! thread once at app boot and one short-lived worker thread per accepted
@@ -60,10 +61,10 @@ use acorn_session::{Session, SessionKind, SessionOwner, SessionStore};
 const SELECT_SESSION_EVENT: &str = "acorn:ipc-select-session";
 /// Fired whenever an IPC handler mutates the persisted session list
 /// (`new-session`, `close-self`, `kill-session`). The frontend listens and re-fetches
-/// via `list_sessions` so a control-session-driven mutation surfaces in
-/// the sidebar without the user clicking anything. Payload is the
-/// affected session's id as a string, mostly for debugging — the
-/// frontend ignores the value today and just triggers a full refresh.
+/// via `list_sessions` so an IPC-driven mutation surfaces in the sidebar
+/// without the user clicking anything. Payload is the affected session's
+/// id as a string, mostly for debugging — the frontend ignores the value
+/// today and just triggers a full refresh.
 const SESSIONS_CHANGED_EVENT: &str = "acorn:ipc-sessions-changed";
 
 #[derive(Debug, Clone, Serialize)]
@@ -483,10 +484,8 @@ fn write_with_deadline<W: Write>(
     }
 }
 
-/// Top-level request dispatch. Every request resolves the source session and
-/// enforces the "must be Control" gate before invoking command-specific
-/// handlers. Control authority is granted only when Acorn creates the session;
-/// code running inside a regular repository terminal cannot self-promote.
+/// Top-level request dispatch. Every request resolves the source session
+/// (any live session in this app) before invoking command-specific handlers.
 fn dispatch<R: Runtime>(
     envelope: Envelope,
     peer_pid: Option<u32>,
@@ -523,13 +522,13 @@ fn dispatch<R: Runtime>(
         Request::SendKeys {
             target_session_id,
             data_b64,
-            allow_foreign,
-        } => handle_send_keys(&source, &target_session_id, &data_b64, allow_foreign, state),
+            allow_foreign: _,
+        } => handle_send_keys(&source, &target_session_id, &data_b64, state),
         Request::ReadBuffer {
             target_session_id,
             max_bytes,
-            allow_foreign,
-        } => handle_read_buffer(&source, &target_session_id, max_bytes, allow_foreign, state),
+            allow_foreign: _,
+        } => handle_read_buffer(&source, &target_session_id, max_bytes, state),
         Request::NewSession {
             name,
             isolated,
@@ -548,13 +547,13 @@ fn dispatch<R: Runtime>(
         ),
         Request::SelectSession {
             target_session_id,
-            allow_foreign,
-        } => handle_select_session(&source, &target_session_id, allow_foreign, app, state),
+            allow_foreign: _,
+        } => handle_select_session(&source, &target_session_id, app, state),
         Request::CloseSelf => Response::Ack,
         Request::KillSession {
             target_session_id,
-            allow_foreign,
-        } => handle_kill_session(&source, &target_session_id, allow_foreign, app, state),
+            allow_foreign: _,
+        } => handle_kill_session(&source, &target_session_id, app, state),
     }
 }
 
@@ -638,17 +637,10 @@ fn resolve_source(raw_id: &str, sessions: &SessionStore) -> Result<Session, Resp
         code: ErrorCode::Unauthorized,
         message: format!("source session id is not a valid uuid: {raw_id}"),
     })?;
-    let session = sessions.get(&id).map_err(|_| Response::Error {
+    sessions.get(&id).map_err(|_| Response::Error {
         code: ErrorCode::Unauthorized,
         message: "source session not found; is the ACORN_SESSION_ID env still valid?".to_string(),
-    })?;
-    if session.kind != SessionKind::Control {
-        return Err(Response::Error {
-            code: ErrorCode::Unauthorized,
-            message: "source session is not a control session".to_string(),
-        });
-    }
-    Ok(session)
+    })
 }
 
 fn handle_promote_self(session: &Session) -> Response {
@@ -678,7 +670,7 @@ fn resolve_target(
     if target.repo_path != source.repo_path {
         return Err(Response::Error {
             code: ErrorCode::OutOfScope,
-            message: "target session belongs to a different project than the control session"
+            message: "target session belongs to a different project than the source session"
                 .to_string(),
         });
     }
@@ -693,19 +685,8 @@ fn resolve_action_target(
     source: &Session,
     raw_id: &str,
     sessions: &SessionStore,
-    allow_foreign: bool,
 ) -> Result<Session, Response> {
-    let target = resolve_target(source, raw_id, sessions)?;
-    if !allow_foreign && !is_owned_by_source(source, &target) {
-        return Err(Response::Error {
-            code: ErrorCode::ForeignSession,
-            message: format!(
-                "target session is owned by {}; pass --allow-foreign only when the user explicitly asked you to touch it",
-                target.owner.label()
-            ),
-        });
-    }
-    Ok(target)
+    resolve_target(source, raw_id, sessions)
 }
 
 fn handle_context(_source: &Session) -> Response {
@@ -732,10 +713,7 @@ fn handle_list_sessions(source: &Session, sessions: &SessionStore) -> Response {
                 repo_path: s.repo_path.display().to_string(),
                 workspace_path: s.worktree_path.display().to_string(),
                 branch: s.branch,
-                kind: match s.kind {
-                    SessionKind::Regular => "regular".to_string(),
-                    SessionKind::Control => "control".to_string(),
-                },
+                kind: "regular".to_string(),
                 owner: s.owner.label(),
                 status: format!("{:?}", s.status).to_lowercase(),
                 archived: s.archived_at.is_some(),
@@ -814,10 +792,9 @@ fn handle_send_keys(
     source: &Session,
     target_id: &str,
     data_b64: &str,
-    allow_foreign: bool,
     state: &AppState,
 ) -> Response {
-    let target = match resolve_action_target(source, target_id, &state.sessions, allow_foreign) {
+    let target = match resolve_action_target(source, target_id, &state.sessions) {
         Ok(t) => t,
         Err(err) => return err,
     };
@@ -843,10 +820,9 @@ fn handle_read_buffer(
     source: &Session,
     target_id: &str,
     max_bytes: Option<usize>,
-    allow_foreign: bool,
     state: &AppState,
 ) -> Response {
-    let target = match resolve_action_target(source, target_id, &state.sessions, allow_foreign) {
+    let target = match resolve_action_target(source, target_id, &state.sessions) {
         Ok(t) => t,
         Err(err) => return err,
     };
@@ -927,7 +903,7 @@ fn authorize_new_session_workspace(
     Err(Response::Error {
         code: ErrorCode::OutOfScope,
         message: format!(
-            "workspace path is outside the control session project and its worktrees: {}",
+            "workspace path is outside the source session project and its worktrees: {}",
             cwd.display()
         ),
     })
@@ -1026,11 +1002,10 @@ fn handle_new_session<R: Runtime>(
 fn handle_select_session<R: Runtime>(
     source: &Session,
     target_id: &str,
-    allow_foreign: bool,
     app: &AppHandle<R>,
     state: &AppState,
 ) -> Response {
-    let target = match resolve_action_target(source, target_id, &state.sessions, allow_foreign) {
+    let target = match resolve_action_target(source, target_id, &state.sessions) {
         Ok(t) => t,
         Err(err) => return err,
     };
@@ -1046,18 +1021,17 @@ fn handle_select_session<R: Runtime>(
 fn handle_kill_session<R: Runtime>(
     source: &Session,
     target_id: &str,
-    allow_foreign: bool,
     app: &AppHandle<R>,
     state: &AppState,
 ) -> Response {
-    let target = match resolve_action_target(source, target_id, &state.sessions, allow_foreign) {
+    let target = match resolve_action_target(source, target_id, &state.sessions) {
         Ok(t) => t,
         Err(err) => return err,
     };
     if target.id == source.id {
         return Response::Error {
             code: ErrorCode::Invalid,
-            message: "refusing to kill the source control session".to_string(),
+            message: "refusing to kill the source session; use close-self".to_string(),
         };
     }
     let sessions_to_remove = session_removal_cascade(state, &target);
@@ -1211,29 +1185,15 @@ mod tests {
     }
 
     #[test]
-    fn resolve_source_rejects_regular_kind() {
+    fn resolve_source_accepts_regular_kind() {
         let store = SessionStore::new();
         let regular = store.insert(make_session("/tmp/repo", "reg", SessionKind::Regular));
         let result = resolve_source(&regular.id.to_string(), &store);
-        match result {
-            Err(Response::Error {
-                code: ErrorCode::Unauthorized,
-                ..
-            }) => {}
-            other => panic!("expected unauthorized, got {other:?}"),
-        }
+        assert!(result.is_ok(), "any live session should be allowed");
     }
 
     #[test]
-    fn resolve_source_accepts_control_kind() {
-        let store = SessionStore::new();
-        let ctl = store.insert(make_session("/tmp/repo", "ctl", SessionKind::Control));
-        let result = resolve_source(&ctl.id.to_string(), &store);
-        assert!(result.is_ok(), "control session should be allowed");
-    }
-
-    #[test]
-    fn close_self_requires_an_authorized_control_source() {
+    fn close_self_rejects_an_unauthenticated_peer() {
         let app = tauri::test::mock_builder()
             .manage(AppState::new())
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
@@ -1398,38 +1358,23 @@ mod tests {
     }
 
     #[test]
-    fn action_target_rejects_foreign_owner_by_default() {
+    fn action_target_accepts_user_owned_sibling() {
         let store = SessionStore::new();
-        let ctl = store.insert(make_session("/tmp/A", "ctl", SessionKind::Control));
+        let source = store.insert(make_session("/tmp/A", "source", SessionKind::Regular));
         let target = store.insert(make_session("/tmp/A", "user", SessionKind::Regular));
-        let res = resolve_action_target(&ctl, &target.id.to_string(), &store, false);
-        match res {
-            Err(Response::Error {
-                code: ErrorCode::ForeignSession,
-                ..
-            }) => {}
-            other => panic!("expected foreign-session, got {other:?}"),
-        }
+        let res = resolve_action_target(&source, &target.id.to_string(), &store);
+        assert!(res.is_ok(), "same-project siblings should be allowed");
     }
 
     #[test]
     fn action_target_accepts_source_owned_session() {
         let store = SessionStore::new();
-        let ctl = store.insert(make_session("/tmp/A", "ctl", SessionKind::Control));
+        let source = store.insert(make_session("/tmp/A", "source", SessionKind::Regular));
         let mut target = make_session("/tmp/A", "worker", SessionKind::Regular);
-        target.owner = SessionOwner::control(ctl.id);
+        target.owner = SessionOwner::control(source.id);
         let target = store.insert(target);
-        let res = resolve_action_target(&ctl, &target.id.to_string(), &store, false);
+        let res = resolve_action_target(&source, &target.id.to_string(), &store);
         assert!(res.is_ok(), "source-owned worker should be allowed");
-    }
-
-    #[test]
-    fn action_target_allows_foreign_owner_when_explicit() {
-        let store = SessionStore::new();
-        let ctl = store.insert(make_session("/tmp/A", "ctl", SessionKind::Control));
-        let target = store.insert(make_session("/tmp/A", "user", SessionKind::Regular));
-        let res = resolve_action_target(&ctl, &target.id.to_string(), &store, true);
-        assert!(res.is_ok(), "allow_foreign should bypass owner guard");
     }
 
     #[test]
@@ -1437,7 +1382,7 @@ mod tests {
         let state = AppState::new();
         let controller = state
             .sessions
-            .insert(make_session("/tmp/A", "ctl", SessionKind::Control));
+            .insert(make_session("/tmp/A", "ctl", SessionKind::Regular));
         let worker = state.sessions.insert({
             let mut session = make_session("/tmp/A", "worker", SessionKind::Regular);
             session.owner = SessionOwner::control(controller.id);
@@ -1511,7 +1456,7 @@ mod tests {
             let source = state.sessions.insert(make_session(
                 "/tmp/A",
                 &format!("controller-{cycle}"),
-                SessionKind::Control,
+                SessionKind::Regular,
             ));
             let worker = state.sessions.insert({
                 let mut session =
@@ -1693,8 +1638,8 @@ mod tests {
     }
 
     #[test]
-    fn promote_self_is_idempotent_for_an_existing_control_session() {
-        let ctl = make_session("/tmp/A", "ctl", SessionKind::Control);
+    fn promote_self_is_idempotent_for_an_existing_session() {
+        let ctl = make_session("/tmp/A", "ctl", SessionKind::Regular);
         match handle_promote_self(&ctl) {
             Response::SelfPromoted {
                 session_id,

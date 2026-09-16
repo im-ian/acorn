@@ -17,10 +17,6 @@ import { AcornRain } from "./components/AcornRain";
 import { AgentResumeModal } from "./components/AgentResumeModal";
 import { StagedRevMismatchModal } from "./components/StagedRevMismatchModal";
 import { CommandPalette } from "./components/CommandPalette";
-import {
-  ControlSessionGuideModal,
-  CONTROL_GUIDE_DISMISSED_KEY,
-} from "./components/ControlSessionGuideModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
@@ -415,7 +411,6 @@ function App() {
     [sessions],
   );
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [controlGuideOpen, setControlGuideOpen] = useState(false);
   const [permissionWarmupOpen, setPermissionWarmupOpen] = useState(false);
   const [permissionWarmupInitialResults, setPermissionWarmupInitialResults] =
     useState<FolderPermissionWarmupResult[] | null>(null);
@@ -1488,17 +1483,6 @@ function App() {
     return () => window.removeEventListener(EXPAND_PANEL_EVENT, handler);
   }, []);
 
-  // Surface the one-time guide modal after the first control-session
-  // creation. The store dispatches `acorn:show-control-guide` only when the
-  // dismissed-flag is unset, so this handler can stay dumb and just open.
-  useEffect(() => {
-    const handler = () => setControlGuideOpen(true);
-    window.addEventListener("acorn:show-control-guide", handler);
-    return () => {
-      window.removeEventListener("acorn:show-control-guide", handler);
-    };
-  }, []);
-
   // The Tauri app menu fires `acorn:open-settings` when the user picks
   // "Settings..." from the macOS app menu (or hits its Cmd+, accelerator).
   // The same event name is also dispatched as a DOM CustomEvent from
@@ -1546,8 +1530,8 @@ function App() {
     };
   }, []);
 
-  // The IPC server fires `acorn:ipc-sessions-changed` after a control
-  // session creates or kills a sibling. Without this listener those
+  // The IPC server fires `acorn:ipc-sessions-changed` after a session
+  // creates or kills a sibling. Without this listener those
   // mutations would land in the backend and on disk but never surface
   // in the sidebar — the user would only see them after the next app
   // restart. Refresh from the source of truth (`list_sessions`) so we
@@ -1745,10 +1729,6 @@ function App() {
       [shortcuts.newIsolatedSession]: (e: KeyboardEvent) => {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("acorn:new-isolated-session"));
-      },
-      [shortcuts.newControlSession]: (e: KeyboardEvent) => {
-        e.preventDefault();
-        window.dispatchEvent(new CustomEvent("acorn:new-control-session"));
       },
       [shortcuts.addProject]: (e: KeyboardEvent) => {
         e.preventDefault();
@@ -2061,22 +2041,6 @@ function App() {
       ) : null}
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <AcornRain />
-      <ControlSessionGuideModal
-        open={controlGuideOpen}
-        onClose={(dontShowAgain) => {
-          setControlGuideOpen(false);
-          if (dontShowAgain && typeof window !== "undefined") {
-            try {
-              window.localStorage.setItem(CONTROL_GUIDE_DISMISSED_KEY, "1");
-            } catch (error) {
-              console.warn("[App] control guide preference write failed", error);
-              showToast(
-                appText(t, "app.toast.controlGuidePreferenceSaveFailed"),
-              );
-            }
-          }
-        }}
-      />
       <FolderPermissionWarmupModal
         open={permissionWarmupOpen}
         initialResults={permissionWarmupInitialResults}

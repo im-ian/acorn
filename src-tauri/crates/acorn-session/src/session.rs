@@ -203,10 +203,9 @@ pub enum AgentStatusSource {
     ProcessFallback,
 }
 
-/// Distinguishes ordinary terminal sessions from "control" sessions, which
-/// (via the `acorn-ipc` CLI) can drive other sessions in the same project.
-/// Defaults to `Regular` so existing persisted sessions without this field
-/// load cleanly.
+/// Persisted session classification. `Control` remains for disk/wire
+/// compatibility and is treated as `Regular` at load and list time. Any live
+/// session can drive siblings via `acorn-ipc`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionKind {
@@ -396,12 +395,11 @@ pub struct SessionGoal {
     pub revision: u32,
 }
 
-/// Ownership boundary for control-session-created worker sessions.
+/// Ownership metadata for IPC-created worker sessions.
 ///
 /// User-created and legacy sessions default to `User`. Sessions created through
-/// `acorn-ipc new-session` are owned by the source control session so agents can
-/// distinguish their own workers from user terminals or workers created by
-/// another controller.
+/// `acorn-ipc new-session` are owned by the creating session so agents can
+/// distinguish their own workers. Ownership does not gate sibling IPC.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum SessionOwner {

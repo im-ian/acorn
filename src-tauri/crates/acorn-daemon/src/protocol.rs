@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION_MAJOR: u32 = 1;
 /// Minor version of the protocol. Bumped when adding optional fields or
 /// non-breaking new variants. Reported in the handshake purely for telemetry
 /// and feature detection — not used for compatibility gating.
-pub const PROTOCOL_VERSION_MINOR: u32 = 2;
+pub const PROTOCOL_VERSION_MINOR: u32 = 3;
 
 /// First frame on every fresh connection. Both daemon and client send their
 /// own `Hello`; either side may close the connection if the major version
@@ -40,8 +40,8 @@ pub struct Hello {
     pub protocol_version_major: u32,
     pub protocol_version_minor: u32,
     pub role: ClientRole,
-    /// Source session id when this connection originates from inside a
-    /// control session's PTY (set via `ACORN_SESSION_ID`). Absent for app
+    /// Source session id when this connection originates from inside an
+    /// Acorn session PTY (set via `ACORN_SESSION_ID`). Absent for app
     /// connections.
     #[serde(default)]
     pub source_session_id: Option<Uuid>,
@@ -165,6 +165,9 @@ pub enum ControlPayload {
     /// PTY and exits. App-authority only; session CLI callers cannot mutate
     /// daemon-global lifecycle state. Used by Settings → "Quit daemon".
     Shutdown,
+    /// Drop remembered DEC mouse/paste modes for a live PTY. Cmd+K uses
+    /// this so a crashed TUI cannot leave mouse tracking stuck on reattach.
+    ResetDecModes { target_session_id: Uuid },
 }
 
 /// Spec for a new PTY session. Mirrors the shape of the Acorn app's
@@ -203,13 +206,12 @@ pub struct SpawnSpec {
     pub pixel_width: u16,
     #[serde(default)]
     pub pixel_height: u16,
-    /// Session classification (regular / control). Mirrors the
-    /// `SessionKind` enum in `acorn_session`. The daemon preserves it
-    /// in metadata so reattach can re-augment the env on respawn.
+    /// Session classification. Mirrors `SessionKind` in `acorn_session`.
+    /// Preserved for wire compatibility; it is not an authorization gate.
     #[serde(default)]
     pub kind: SessionKind,
     /// Repository path the session belongs to. The daemon uses this to
-    /// scope `acornd` CLI ops (control sessions can only see siblings in
+    /// scope `acornd` CLI ops (a session can only see siblings in
     /// the same project) without pulling in the app's full project model.
     #[serde(default)]
     pub repo_path: Option<std::path::PathBuf>,
@@ -490,6 +492,18 @@ mod tests {
             InteractiveAgentKind::Grok
         );
         assert!(InteractiveAgentKind::try_from(AgentKind::Aider).is_err());
+    }
+
+    #[test]
+    fn reset_dec_modes_roundtrip() {
+        let id = Uuid::new_v4();
+        let payload = ControlPayload::ResetDecModes {
+            target_session_id: id,
+        };
+        let s = serde_json::to_string(&payload).unwrap();
+        assert!(s.contains("reset-dec-modes"));
+        let parsed: ControlPayload = serde_json::from_str(&s).unwrap();
+        assert_eq!(parsed, payload);
     }
 
     #[test]

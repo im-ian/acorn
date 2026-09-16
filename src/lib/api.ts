@@ -790,7 +790,7 @@ export const api = {
    * Inspect the runtime environment for the `acorn-ipc` CLI: bundled binary
    * location and presence, the IPC socket path, and which of the common
    * `$PATH` shim locations already have a copy/symlink installed. Used by
-   * the Sessions → Control sessions settings section.
+   * the Sessions → acorn-ipc CLI settings section.
    */
   getAcornIpcStatus(): Promise<AcornIpcStatus> {
     return invoke<AcornIpcStatus>("get_acorn_ipc_status");
@@ -1214,6 +1214,9 @@ export const api = {
    */
   ptyWrite(sessionId: string, data: string): Promise<void> {
     return enqueuePtyWrite(sessionId, data);
+  },
+  ptyResetDecModes(sessionId: string): Promise<void> {
+    return invoke<void>("pty_reset_dec_modes", { sessionId });
   },
   flushPtyWrite(sessionId?: string): Promise<void> {
     return flushQueuedPtyWrite(sessionId);

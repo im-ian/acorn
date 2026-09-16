@@ -188,13 +188,17 @@
 }
 
 /* Inline-block so the per-character cell boxes Terminal.tsx builds lay out on
-   one line; the caret anchor then starts on the cell boundary the real cursor
-   uses, less the inset applied there. */
+   one line. The caret anchor starts on the cell boundary the real cursor
+   uses; the marker inset lives on ::after. The cloned tail is positioned at
+   the overlay origin, under this text, so TUI chrome does not shift. */
 .acorn-terminal
   .composition-view
   .acorn-ime-composition-text {
   display: inline-block;
+  overflow: visible;
+  position: relative;
   vertical-align: top;
+  z-index: 1;
 }
 
 .acorn-terminal
@@ -205,6 +209,18 @@
   position: relative;
   vertical-align: top;
   width: 0;
+  z-index: 1;
+}
+
+.acorn-terminal
+  .composition-view
+  .acorn-ime-line-tail {
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+  z-index: 0;
 }
 
 .acorn-terminal
@@ -214,7 +230,7 @@
   content: "";
   display: block;
   height: 100%;
-  left: 0;
+  left: var(--acorn-ime-caret-left, -1px);
   pointer-events: none;
   position: absolute;
   top: 0;
@@ -224,6 +240,9 @@
 .acorn-terminal
   .acorn-ime-composition-cursor[data-acorn-ime-cursor-style="block"]::after {
   background: color-mix(in oklab, currentColor 55%, transparent);
+  /* A cell-wide block occupies the next Hangul column and reads as a
+     missing syllable. Keep the marker at the cell edge. */
+  width: 2px;
 }
 
 .acorn-terminal
@@ -237,12 +256,16 @@
   background: currentColor;
   bottom: 0;
   height: 1px;
+  /* Full-cell markers stay at left: 0; the base rule's left offset is for
+     the thin edge markers only. */
+  left: 0;
   top: auto;
 }
 
 .acorn-terminal
   .acorn-ime-composition-cursor[data-acorn-ime-cursor-style="outline"]::after {
   border: 1px solid currentColor;
+  left: 0;
 }
 
 .acorn-terminal
@@ -308,7 +331,7 @@
   content: "";
   display: block;
   height: 100%;
-  left: 0;
+  left: -1px;
   position: absolute;
   top: 0;
   width: 3px;

@@ -216,10 +216,6 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
         labelKey: "settings.shortcuts.items.newIsolatedSession.label",
       },
       {
-        id: "newControlSession",
-        labelKey: "settings.shortcuts.items.newControlSession.label",
-      },
-      {
         id: "addProject",
         labelKey: "settings.shortcuts.items.addProject.label",
       },
@@ -1276,9 +1272,16 @@ function SessionSettings() {
               onChange={(n) => patchTerminal({ maxMountedTerminals: n })}
             />
           </Field>
-          {IS_MAC ? <PowerSettings /> : null}
         </div>
       </SettingsGroup>
+      {IS_MAC ? (
+        <SettingsGroup
+          title={st(t, "settings.power.title")}
+          description={st(t, "settings.power.description")}
+        >
+          <PowerSettings />
+        </SettingsGroup>
+      ) : null}
       <ControlSessionInstallSection />
       <SettingsGroup
         title={st(t, "settings.sessions.background.title")}

@@ -4457,7 +4457,7 @@ fn folder_permission_error(
 /// Inspect the runtime environment for the `acorn-ipc` CLI: where the
 /// app-bundled binary lives, whether it exists yet, and whether the user
 /// has already installed a shim into one of the standard `$PATH` locations.
-/// Used by the Sessions tab's "Control sessions" section to render an
+/// Used by the Sessions tab's "acorn-ipc CLI" section to render an
 /// install hint with a copyable shell command.
 #[tauri::command]
 pub fn get_acorn_ipc_status(state: State<'_, AppState>) -> AcornIpcStatus {
@@ -4581,7 +4581,7 @@ pub fn trash_agent_history_transcript(
 }
 
 /// Stop the running IPC listener (if any) and spawn a fresh one. Used by
-/// the Settings → Control sessions "Restart" button when the socket has
+/// the Settings → Sessions "Restart" button when the socket has
 /// gone stale (e.g. socket file removed under the app's feet). The signal
 /// → poll → exit cycle takes up to `ACCEPT_POLL_INTERVAL_MS`; we wait
 /// twice that before rebinding so the previous listener has dropped its
@@ -4884,6 +4884,9 @@ fn reconcile_stale_worktrees(state: &AppState) {
 /// store. Called on every Session leaving the backend so the frontend
 /// sees fresh values without a second round-trip.
 fn enrich_session(mut s: Session) -> Session {
+    if s.kind == SessionKind::Control {
+        s.kind = SessionKind::Regular;
+    }
     if let Ok(branch) = worktree::current_branch(&s.worktree_path) {
         s.branch = branch;
     }
@@ -5306,11 +5309,7 @@ fn create_session_inner(
     let branch = worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
     let mut session = Session::new(name, repo.clone(), worktree_path, branch, isolated, kind);
     session.project_scoped = project_scoped;
-    session.auto_title_enabled = Some(auto_title_enabled_for_new_session(
-        kind,
-        mode,
-        agent_provider,
-    ));
+    session.auto_title_enabled = Some(auto_title_enabled_for_new_session(mode, agent_provider));
     session.agent_provider = agent_provider;
     session.mode = mode;
     session.goal = goal;
@@ -5611,11 +5610,10 @@ pub async fn get_goal_agent_capabilities(
 }
 
 fn auto_title_enabled_for_new_session(
-    kind: SessionKind,
     mode: SessionMode,
     agent_provider: Option<SessionAgentProvider>,
 ) -> bool {
-    kind == SessionKind::Regular && (mode == SessionMode::Chat || agent_provider.is_some())
+    mode == SessionMode::Chat || agent_provider.is_some()
 }
 
 #[tauri::command]
@@ -7498,11 +7496,9 @@ async fn terminate_session_runtime_blocking(state: AppState, id: Uuid) -> AppRes
 pub(crate) fn session_removal_cascade(state: &AppState, session: &Session) -> Vec<Session> {
     let mut sessions = vec![session.clone()];
     let mut seen = HashSet::from([session.id]);
-    if session.kind == SessionKind::Control {
-        for owned in state.sessions.list_control_owned_descendants(session.id) {
-            if seen.insert(owned.id) {
-                sessions.push(owned);
-            }
+    for owned in state.sessions.list_control_owned_descendants(session.id) {
+        if seen.insert(owned.id) {
+            sessions.push(owned);
         }
     }
     sessions
@@ -8054,7 +8050,7 @@ pub fn rename_session(
     let current = state.sessions.get(&id)?;
     if matches!(current.owner, SessionOwner::Control { .. }) {
         return Err(AppError::Other(
-            "control-session owned tabs cannot be renamed".to_string(),
+            "sessions owned by another session cannot be renamed".to_string(),
         ));
     }
     let native_session = (sync_agent_session_titles
@@ -8511,11 +8507,7 @@ fn prepare_claude_fork_in(
     let snapshot_len = source_open_metadata.len();
 
     let dst_slug = acorn_transcript::slug_for_cwd(new_cwd);
-    let slug_path = Path::new(&dst_slug);
-    let mut slug_components = slug_path.components();
-    let is_single_normal_component = matches!(slug_components.next(), Some(Component::Normal(_)))
-        && slug_components.next().is_none();
-    if !dst_slug.starts_with('-') || dst_slug.contains("..") || !is_single_normal_component {
+    if !acorn_transcript::is_safe_claude_project_slug(&dst_slug) {
         return Err(AppError::Other(format!(
             "refusing to stage transcript under unsafe slug: {dst_slug}"
         )));
@@ -9006,15 +8998,26 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
         terminate_session_pty(&state, &id);
         return Err(AppError::Other(SESSION_IS_ARCHIVED.to_string()));
     }
-    let cwd = authorize_session_cwd(&state, &session, &PathBuf::from(cwd))?;
+    let cwd = acorn_paths::agent_cwd(&authorize_session_cwd(
+        &state,
+        &session,
+        &PathBuf::from(cwd),
+    )?);
     let output_token = output_token.or_else(|| state.pty_output.current_token(&id));
-    // Either an in-process PTY or a daemon-side stream attachment for
-    // this session already exists — caller hit `pty_spawn` twice (e.g.
-    // StrictMode double mount), nothing to do.
-    if state.pty.contains(&id)
-        || state
-            .stream_registry
-            .attachment_matches_output_token(&id, output_token)
+    // A live in-process PTY means this is a remount, not a new shell.
+    // Push remembered mouse/paste CSI into the fresh xterm; the child
+    // will not re-send those modes itself.
+    if state.pty.contains(&id) {
+        let prelude = state.pty.dec_mode_prelude(&id);
+        if !prelude.is_empty() {
+            let event = format!("pty:output:{id}");
+            state.pty_output.send_or_emit(&app, &event, &id, &prelude);
+        }
+        return Ok(());
+    }
+    if state
+        .stream_registry
+        .attachment_matches_output_token(&id, output_token)
     {
         return Ok(());
     }
@@ -9022,10 +9025,12 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
     let resolved_command = shell.program.to_string_lossy().into_owned();
     let shell_kind = shell.kind;
     let resolved_args = shell.args;
-    // Inject Acorn session identity and CLI reachability. Privileged IPC
-    // commands remain server-gated to sessions Acorn created as Control;
-    // repository code inside a regular terminal cannot self-promote.
+    // Inject Acorn session identity and CLI reachability. IPC commands are
+    // server-gated to a live source session plus PTY ancestry and capability.
     let mut effective_env = validate_pty_caller_env(env)?;
+    // `mut` is only exercised on Windows, where the PowerShell Codex shim is
+    // appended below.
+    #[allow(unused_mut)]
     let mut primed_args = resolved_args;
 
     // PTY children get the same SHELL/HOME their dotfiles expect to
@@ -9130,6 +9135,37 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
     } else {
         tracing::warn!(%id, "agent wrapper dir setup failed; agent hook runtime injection will be inactive");
     }
+    // Windows resolves commands through PATHEXT, so the POSIX prepend above
+    // cannot work here: the wrapper-dir shims are extension-less `/bin/sh`
+    // scripts and would never be launched. The PowerShell shim shadows
+    // `codex` with a session function instead, so only the wrapper dir itself
+    // needs exposing — it is where the shim reads the live hook endpoint from.
+    #[cfg(windows)]
+    if let Ok(wrapper_dir) = crate::agent_wrappers::ensure_agent_wrapper_dir() {
+        effective_env
+            .entry("ACORN_AGENT_WRAPPER_DIR".to_string())
+            .or_insert_with(|| wrapper_dir.display().to_string());
+        if shell_kind == crate::shell_runtime::ShellKind::PowerShell {
+            match crate::agent_wrappers::codex_powershell_init_path() {
+                // A shim that fails to load still leaves the user a usable
+                // shell: `-NoExit` keeps the session alive either way.
+                Ok(init) => {
+                    primed_args.extend(crate::agent_wrappers::powershell_codex_shim_args(&init))
+                }
+                Err(error) => tracing::warn!(
+                    %id, error = %error,
+                    "codex PowerShell shim unavailable; codex status falls back to transcript polling",
+                ),
+            }
+        } else {
+            tracing::debug!(
+                %id, ?shell_kind,
+                "non-PowerShell Windows shell; codex status falls back to transcript polling",
+            );
+        }
+    } else {
+        tracing::warn!(%id, "agent wrapper dir setup failed; agent hook runtime injection will be inactive");
+    }
 
     // The other repository roots this session's project spans. The agent
     // wrappers turn them into `--add-dir` flags so a multi-root project is
@@ -9179,32 +9215,20 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
 
     let agent_hooks = state.agent_hooks.lock().clone();
     inject_agent_hook_env(&mut effective_env, &session, agent_hooks.as_deref());
-    if session.kind == SessionKind::Control {
+    effective_env
+        .entry("ACORN_SESSION_ID".to_string())
+        .or_insert_with(|| session.id.to_string());
+    // Daemon socket for the `acornd` CLI. Coexists with
+    // `ACORN_IPC_SOCKET`: scripts that call `acorn-ipc` reach
+    // the in-process server, while `acornd <subcommand>`
+    // reaches the daemon. The two transports manage different
+    // session graphs today (daemon vs in-process); they
+    // converge when `pty_spawn` itself routes through the
+    // daemon.
+    if let Ok(daemon_sock) = acorn_daemon::paths::control_socket_path() {
         effective_env
-            .entry("ACORN_SESSION_ID".to_string())
-            .or_insert_with(|| session.id.to_string());
-        // Daemon socket for the `acornd` CLI. Coexists with
-        // `ACORN_IPC_SOCKET`: scripts that call `acorn-ipc` reach
-        // the in-process server, while `acornd <subcommand>`
-        // reaches the daemon. The two transports manage different
-        // session graphs today (daemon vs in-process); they
-        // converge when `pty_spawn` itself routes through the
-        // daemon.
-        if let Ok(daemon_sock) = acorn_daemon::paths::control_socket_path() {
-            effective_env
-                .entry("ACORN_DAEMON_SOCKET".to_string())
-                .or_insert_with(|| daemon_sock.display().to_string());
-        }
-        // Drop the primer in a worktree-local marker file so whichever
-        // agent the user invokes inside the shell can read the IPC
-        // protocol. `inject_primer_args` is a no-op while `$SHELL` is
-        // an ordinary shell (`AgentFlavor::Unknown`) and only takes
-        // effect on the rare configuration where `$SHELL` itself
-        // resolves to a recognised agent binary.
-        let primer = acorn_ipc::primer::primer();
-        let flavor = acorn_ipc::primer::AgentFlavor::detect(&resolved_command);
-        primed_args = acorn_ipc::primer::inject_primer_args(flavor, primed_args, primer);
-        write_control_marker(&cwd, primer);
+            .entry("ACORN_DAEMON_SOCKET".to_string())
+            .or_insert_with(|| daemon_sock.display().to_string());
     }
 
     // Daemon path — when the killswitch is on, route exclusively through
@@ -9295,9 +9319,8 @@ fn spawn_via_daemon<R: Runtime + 'static>(
     }
 
     // Resolve the session row's persisted daemon metadata. Missing
-    // session is treated as a new spawn — control sessions get their
-    // own env/argv augmentation up-stack, so this branch only handles
-    // the daemon ↔ stream wiring.
+    // session is treated as a new spawn — env/argv augmentation happens
+    // up-stack, so this branch only handles the daemon ↔ stream wiring.
     let session = state.sessions.get(&id).ok();
     let session_kind = session
         .as_ref()
@@ -9339,6 +9362,15 @@ fn spawn_via_daemon<R: Runtime + 'static>(
                 "daemon stream attach failed: {e}; retry the attachment instead of starting a duplicate local PTY"
             )
         })?;
+        // Same-size TIOCSWINSZ is a no-op in the tty driver, so a remount
+        // at the current pane geometry never delivers SIGWINCH. Step the
+        // size down and back so a live TUI redraws onto the new xterm.
+        if cols > 0 && rows > 0 {
+            if let Some((pulse_cols, pulse_rows)) = sigwinch_pulse_size(cols, rows) {
+                let _ = bridge.resize(id, pulse_cols, pulse_rows, 0, 0);
+            }
+            let _ = bridge.resize(id, cols, rows, pixel_width, pixel_height);
+        }
         return Ok(());
     }
 
@@ -9405,6 +9437,16 @@ fn spawn_via_daemon<R: Runtime + 'static>(
     })
 }
 
+fn sigwinch_pulse_size(cols: u16, rows: u16) -> Option<(u16, u16)> {
+    if rows > 1 {
+        Some((cols, rows - 1))
+    } else if cols > 1 {
+        Some((cols - 1, rows))
+    } else {
+        None
+    }
+}
+
 fn daemon_attach_replay_scrollback(freshly_spawned: bool, requested_replay: bool) -> bool {
     if !freshly_spawned {
         return requested_replay;
@@ -9427,44 +9469,6 @@ fn daemon_spawn_name_for_session(session: Option<&Session>, id: Uuid) -> String 
     id.to_string()
 }
 
-/// Drop a `<cwd>/.acorn-control.md` marker every time a control session
-/// PTY spawns. The file is small (<2 KiB) and overwritten on each spawn
-/// so the substituted session-id / socket-path always match the running
-/// PTY. Best-effort: a write failure is logged but does not abort spawn,
-/// since the env vars carry enough state for `acorn-ipc` itself; this
-/// marker exists so whichever agent the user later invokes can read the
-/// protocol from a project-local file.
-fn write_control_marker(cwd: &std::path::Path, primer: &str) {
-    let path = cwd.join(".acorn-control.md");
-    let body = format!(
-        "<!-- generated by Acorn on every control-session PTY spawn. \
-         Safe to commit-ignore. -->\n\n# Control session\n\n{primer}\n",
-    );
-    if let Err(err) = replace_control_marker(cwd, &path, body.as_bytes()) {
-        tracing::warn!(
-            path = %path.display(),
-            error = %err,
-            "failed to write .acorn-control.md marker",
-        );
-    }
-}
-
-fn replace_control_marker(cwd: &Path, path: &Path, body: &[u8]) -> io::Result<()> {
-    // The destination is repository-controlled and may already be a symlink or
-    // hard link. Write to an unpredictable create-new file in the same
-    // directory, then atomically replace the directory entry so the marker
-    // write never follows that link to another file.
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".acorn-control.md.")
-        .suffix(".tmp")
-        .tempfile_in(cwd)?;
-    temporary.write_all(body)?;
-    temporary
-        .persist(path)
-        .map_err(|persist_error| persist_error.error)?;
-    Ok(())
-}
-
 #[tauri::command]
 pub fn pty_subscribe_output(
     state: State<'_, AppState>,
@@ -9484,6 +9488,24 @@ pub fn pty_unsubscribe_output(
     let id = parse_id(&session_id)?;
     state.pty_output.unsubscribe(&id, token);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn pty_reset_dec_modes(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
+    let id = parse_id(&session_id)?;
+    let state = state.inner().clone();
+    run_blocking("pty_reset_dec_modes", move || {
+        if pty_io_uses_daemon(&state, id) {
+            state
+                .daemon_bridge
+                .reset_dec_modes(id)
+                .map_err(|e| AppError::Pty(e.to_string()))?;
+        } else {
+            state.pty.reset_dec_modes(&id);
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -12428,9 +12450,10 @@ mod tests {
         pty_io_uses_daemon, reconcile_stale_worktrees, remove_linked_worktree_at_path,
         remove_worktree_inner, restore_pending_session_removal, resume_session_inner,
         retry_removal_cleanup_inner, seed_initial_commit, should_remove_local_project_mirror,
-        should_route_session_to_daemon, terminate_session_runtime, validate_display_name,
-        validate_editor_command, validate_new_project_name, validate_pty_caller_env,
-        ChatProviderAdapter, ProcessMemorySnapshot, RemovalProgress, MAX_PTY_WORKSPACE_NAME_BYTES,
+        should_route_session_to_daemon, sigwinch_pulse_size, terminate_session_runtime,
+        validate_display_name, validate_editor_command, validate_new_project_name,
+        validate_pty_caller_env, ChatProviderAdapter, ProcessMemorySnapshot, RemovalProgress,
+        MAX_PTY_WORKSPACE_NAME_BYTES,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingRemovalStep, PendingSessionRemoval};
@@ -16973,6 +16996,13 @@ mod tests {
     }
 
     #[test]
+    fn sigwinch_pulse_changes_geometry() {
+        assert_eq!(sigwinch_pulse_size(120, 40), Some((120, 39)));
+        assert_eq!(sigwinch_pulse_size(120, 1), Some((119, 1)));
+        assert_eq!(sigwinch_pulse_size(1, 1), None);
+    }
+
+    #[test]
     fn fresh_daemon_attach_replays_output_emitted_during_spawn() {
         assert!(daemon_attach_replay_scrollback(true, false));
         assert!(daemon_attach_replay_scrollback(true, true));
@@ -17211,25 +17241,14 @@ mod tests {
     #[test]
     fn auto_title_is_enabled_only_for_new_agent_and_chat_sessions() {
         assert!(!auto_title_enabled_for_new_session(
-            SessionKind::Regular,
             SessionMode::Terminal,
             None,
         ));
         assert!(auto_title_enabled_for_new_session(
-            SessionKind::Regular,
             SessionMode::Terminal,
             Some(SessionAgentProvider::Codex),
         ));
-        assert!(auto_title_enabled_for_new_session(
-            SessionKind::Regular,
-            SessionMode::Chat,
-            None,
-        ));
-        assert!(!auto_title_enabled_for_new_session(
-            SessionKind::Control,
-            SessionMode::Chat,
-            Some(SessionAgentProvider::Codex),
-        ));
+        assert!(auto_title_enabled_for_new_session(SessionMode::Chat, None,));
     }
 
     #[test]
@@ -18192,6 +18211,31 @@ mod tests {
     }
 
     #[test]
+    fn prepare_claude_fork_accepts_windows_drive_cwd_slug() {
+        let root = tempfile::tempdir().expect("temporary Claude projects root");
+        write_claude_fork_source(root.path(), b"parent snapshot\n");
+        let new_cwd = Path::new(r"W:\winCudeProject\cras_backend");
+        let destination_dir = root.path().join(acorn_transcript::slug_for_cwd(new_cwd));
+        let destination = destination_dir.join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl"));
+
+        super::prepare_claude_fork_in(
+            root.path(),
+            CLAUDE_FORK_TEST_UUID,
+            new_cwd,
+            claude_fork_test_limits(8, 1024),
+        )
+        .expect("Windows drive cwd must produce a safe Claude project slug");
+        assert_eq!(
+            destination_dir.file_name().and_then(|name| name.to_str()),
+            Some("W--winCudeProject-cras-backend")
+        );
+        assert_eq!(
+            std::fs::read(&destination).expect("read staged transcript"),
+            b"parent snapshot\n"
+        );
+    }
+
+    #[test]
     fn prepare_claude_fork_atomically_copies_snapshot_and_keeps_regular_destination() {
         let root = tempfile::tempdir().expect("temporary Claude projects root");
         let source = write_claude_fork_source(root.path(), b"parent snapshot\n");
@@ -18422,72 +18466,6 @@ mod tests {
             .path()
             .join(format!("{CLAUDE_FORK_TEST_UUID}.jsonl"))
             .exists());
-    }
-
-    #[test]
-    fn control_marker_is_atomically_created_and_replaced() {
-        let directory = tempfile::tempdir().expect("temporary control cwd");
-        let marker = directory.path().join(".acorn-control.md");
-
-        super::write_control_marker(directory.path(), "first primer");
-        assert!(std::fs::read_to_string(&marker)
-            .expect("read first marker")
-            .contains("first primer"));
-
-        super::write_control_marker(directory.path(), "second primer");
-        let body = std::fs::read_to_string(&marker).expect("read replaced marker");
-        assert!(body.contains("second primer"));
-        assert!(!body.contains("first primer"));
-        assert!(std::fs::read_dir(directory.path())
-            .expect("list control cwd")
-            .flatten()
-            .all(|entry| !entry.file_name().to_string_lossy().ends_with(".tmp")));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn control_marker_replacement_does_not_follow_a_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let directory = tempfile::tempdir().expect("temporary control cwd");
-        let outside = tempfile::NamedTempFile::new().expect("outside sentinel");
-        std::fs::write(outside.path(), "outside sentinel").expect("write sentinel");
-        let marker = directory.path().join(".acorn-control.md");
-        symlink(outside.path(), &marker).expect("symlink marker");
-
-        super::write_control_marker(directory.path(), "trusted primer");
-
-        assert_eq!(
-            std::fs::read_to_string(outside.path()).expect("read sentinel"),
-            "outside sentinel"
-        );
-        assert!(std::fs::symlink_metadata(&marker)
-            .expect("marker metadata")
-            .file_type()
-            .is_file());
-        assert!(std::fs::read_to_string(&marker)
-            .expect("read marker")
-            .contains("trusted primer"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn control_marker_replacement_does_not_modify_a_hard_link_peer() {
-        let directory = tempfile::tempdir().expect("temporary control cwd");
-        let outside = tempfile::NamedTempFile::new().expect("outside sentinel");
-        std::fs::write(outside.path(), "outside sentinel").expect("write sentinel");
-        let marker = directory.path().join(".acorn-control.md");
-        std::fs::hard_link(outside.path(), &marker).expect("hard-link marker");
-
-        super::write_control_marker(directory.path(), "trusted primer");
-
-        assert_eq!(
-            std::fs::read_to_string(outside.path()).expect("read sentinel"),
-            "outside sentinel"
-        );
-        assert!(std::fs::read_to_string(&marker)
-            .expect("read marker")
-            .contains("trusted primer"));
     }
 
     #[test]

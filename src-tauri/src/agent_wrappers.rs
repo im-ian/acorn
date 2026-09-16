@@ -8,6 +8,8 @@ use std::os::unix::fs::PermissionsExt;
 const WRAPPER_DIR_NAME: &str = "agent-wrappers";
 const CODEX_WRAPPER_NAME: &str = "codex";
 const CODEX_NOTIFY_NAME: &str = "acorn-codex-notify";
+const CODEX_PS_INIT_NAME: &str = "acorn-codex-init.ps1";
+const CODEX_PS_NOTIFY_NAME: &str = "acorn-codex-notify.ps1";
 const CLAUDE_WRAPPER_NAME: &str = "claude";
 const CLAUDE_NOTIFY_NAME: &str = "acorn-claude-notify";
 const CLAUDE_SETTINGS_NAME: &str = "acorn-claude-settings.json";
@@ -1021,8 +1023,210 @@ X-Acorn-Agent-Hook-Token: $hook_token
 EOF
 "#;
 
+// Windows Codex shim.
+//
+// The POSIX build drops an extension-less `codex` script into the wrapper dir
+// and prepends that dir to PATH. Windows resolves commands through PATHEXT, so
+// such a file is never launched, and the scripts themselves are `/bin/sh`.
+// PowerShell — the shell Acorn spawns on Windows — can shadow the binary with
+// a session-scoped *function* instead: no PATH manipulation, and no extra
+// process sitting between the console and Codex's TUI (which would otherwise
+// intercept Ctrl+C).
+//
+// Only Codex's legacy `notify` channel is registered here. The richer native
+// hook set is deliberately out of scope: Codex requires each command hook to
+// carry a `trusted_hash` fingerprint over its exact command string, that
+// string necessarily differs on Windows, and the fingerprint is derived inside
+// Codex. `notify` carries no such trust record. Approval-waiting therefore
+// stays invisible on Windows — see `docs/COMMON.md`.
+//
+// No lifecycle id is minted, and the notify receiver sends none. That is load
+// bearing, not an omission: with a lifecycle id the event enters the Codex
+// lane reducer, where `finish_turn(_, trusted_native: false)` drops any
+// completion that has no open turn — and nothing on Windows can open one,
+// because the signals that do (`native_prompt`, `jsonl_user`, `jsonl_task`)
+// come from native hooks or the POSIX JSONL watcher. Without one the event
+// takes the unsequenced path, which exists for exactly this case: a wrapper
+// that can report a boundary but cannot sequence it. Sequencing buys nothing
+// here anyway — the shim runs Codex in the foreground, so a session has at
+// most one shim-launched Codex at a time, and a nested Codex never receives
+// the `-c notify` config.
+const CODEX_PS_INIT_BODY: &str = r#"# Acorn Codex shim (Windows PowerShell sessions).
+# Written by Acorn; edits are overwritten on the next app launch.
+
+# Shadow `codex` only when it currently resolves to the real binary. A profile
+# function or alias — a WSL bridge, a custom launcher — stays in charge, since
+# overriding it would break a setup that works outside Acorn. This runs after
+# the user's profile, so their definition is already visible here.
+$acornCodexResolved = Get-Command -Name codex -ErrorAction SilentlyContinue
+if ($acornCodexResolved -and $acornCodexResolved.CommandType -eq 'Application') {
+
+function global:codex {
+  $app = Get-Command -Name codex -CommandType Application -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if (-not $app) {
+    Write-Host 'Acorn: codex not found in PATH. Install it and ensure it is available in your shell PATH.'
+    return
+  }
+
+  $notifyScript = $null
+  if ($env:ACORN_AGENT_WRAPPER_DIR) {
+    $notifyScript = Join-Path $env:ACORN_AGENT_WRAPPER_DIR 'acorn-codex-notify.ps1'
+  }
+  $psHost = $null
+  try { $psHost = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName } catch { $psHost = $null }
+
+  # No hook session id means no channel to report on, so run Codex untouched
+  # rather than register a notify callback that can never deliver.
+  #
+  # `notify` is a TOML array of literal strings: no escape processing, so a
+  # Windows path passes through verbatim and no quote doubling is needed
+  # (which also sidesteps Windows PowerShell 5.1's native-argument quoting
+  # bug). A path containing an apostrophe cannot be expressed as a literal
+  # string, so fall back to an unhooked run rather than emit broken TOML.
+  # ponytail: literal strings only; switch to basic strings with escaping if
+  # apostrophe-bearing profile paths ever turn up in the wild.
+  $canHook = $env:ACORN_AGENT_HOOK_SESSION_ID -and $notifyScript -and $psHost -and
+    (Test-Path -LiteralPath $notifyScript) -and
+    -not $notifyScript.Contains("'") -and -not $psHost.Contains("'")
+  if (-not $canHook) {
+    & $app.Source @args
+    return
+  }
+
+  $notifyArg = $notifyScript.Replace('\', '/')
+  $hostArg = $psHost.Replace('\', '/')
+  $config = "notify=['$hostArg','-NoProfile','-ExecutionPolicy','Bypass','-File','$notifyArg']"
+  & $app.Source -c $config @args
+}
+
+}
+"#;
+
+// Windows twin of `acorn-codex-notify`, reduced to the one channel the
+// PowerShell shim registers. Two POSIX-only behaviours are dropped on
+// purpose: the JSONL watcher (a `mkfifo` + `tail -F` pipeline with no
+// PowerShell equivalent) and the spool. A dropped POST here is recoverable
+// because the Codex rollout still records `task_complete`, so the status poll
+// converges on the next tick.
+const CODEX_PS_NOTIFY_BODY: &str = r#"# Acorn Codex notify receiver (Windows).
+# Written by Acorn; edits are overwritten on the next app launch.
+
+$ProgressPreference = 'SilentlyContinue'
+# Route every failure into the catch: a lost completion is recoverable (the
+# Codex rollout still records `task_complete`, so the status poll converges on
+# the next tick), but a stray error stream is not — Codex spawns this and a
+# noisy failure would surface as agent output.
+$ErrorActionPreference = 'Stop'
+try {
+  # Codex's `notify` callback appends the completion payload as the final
+  # argument of the configured argv.
+  if ($args.Count -lt 1) { exit 0 }
+  $payload = [string]$args[$args.Count - 1]
+  if (-not $payload) { exit 0 }
+
+  $sessionId = $env:ACORN_AGENT_HOOK_SESSION_ID
+  if (-not $sessionId) { exit 0 }
+
+  $parsed = $payload | ConvertFrom-Json
+  $eventType = [string]$parsed.type
+  if (@('agent-turn-complete', 'task_complete', 'turn_complete') -notcontains $eventType) { exit 0 }
+
+  # Nested Codex threads emit the same completion. Only the thread this Acorn
+  # session owns may report it, matching the POSIX notify script's check.
+  $threadId = [string]$parsed.'thread-id'
+  if (-not $threadId) { $threadId = [string]$parsed.thread_id }
+  if ($threadId -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') { exit 0 }
+  if (-not $env:ACORN_AGENT_STATE_DIR) { exit 0 }
+  $markerPath = Join-Path $env:ACORN_AGENT_STATE_DIR 'codex.id'
+  if (-not (Test-Path -LiteralPath $markerPath)) { exit 0 }
+  $owner = [string](Get-Content -LiteralPath $markerPath -TotalCount 1 -ErrorAction SilentlyContinue)
+  if ($owner.Trim() -ne $threadId) { exit 0 }
+
+  # Resolve the endpoint at send time: every app launch republishes its URL
+  # and token, so a session that outlived a restart still reaches the live
+  # server. The spawn-time env pair is only a fallback.
+  $url = ''
+  $token = ''
+  if ($env:ACORN_AGENT_WRAPPER_DIR) {
+    $endpointPath = Join-Path $env:ACORN_AGENT_WRAPPER_DIR 'agent-hook-endpoint'
+    if (Test-Path -LiteralPath $endpointPath) {
+      $lines = @(Get-Content -LiteralPath $endpointPath -TotalCount 2 -ErrorAction SilentlyContinue)
+      if ($lines.Count -ge 2) {
+        $url = ([string]$lines[0]).Trim()
+        $token = ([string]$lines[1]).Trim()
+      }
+    }
+  }
+  if (-not $url -or -not $token) {
+    $url = $env:ACORN_AGENT_HOOK_URL
+    $token = $env:ACORN_AGENT_HOOK_TOKEN
+  }
+  if (-not $url -or -not $token) { exit 0 }
+
+  $headers = @{
+    'X-Acorn-Agent-Hook-Token' = $token
+    'X-Acorn-Agent-Hook-Provider' = 'codex'
+    'X-Acorn-Agent-Hook-Session-Id' = $sessionId
+    'X-Acorn-Agent-Hook-Source' = 'legacy_completion'
+    'X-Acorn-Codex-Native-Hooks-Enabled' = '0'
+  }
+  # Deliberately no X-Acorn-Codex-Lifecycle-Id: a lifecycle id routes the
+  # event into the Codex lane reducer, which drops an untrusted completion
+  # that has no open turn — and the Windows shim has no way to open one. See
+  # CODEX_PS_INIT_BODY.
+
+  Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
+    -ContentType 'application/json; charset=utf-8' -Body $payload -TimeoutSec 2 | Out-Null
+} catch {
+  exit 0
+}
+exit 0
+"#;
+
 pub fn ensure_agent_wrapper_dir() -> io::Result<PathBuf> {
     ensure_agent_wrapper_dir_at(&acorn_daemon::paths::data_dir()?)
+}
+
+/// Path of the PowerShell shim a Windows session runs at startup. The shim is
+/// what registers Codex's `notify` channel there; without it Codex status on
+/// Windows falls back to transcript polling alone.
+///
+/// Left compiled on every platform on purpose — see
+/// `powershell_codex_shim_args` — so a typo here cannot hide behind a `cfg`
+/// no CI job builds.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn codex_powershell_init_path() -> io::Result<PathBuf> {
+    Ok(ensure_agent_wrapper_dir()?.join(CODEX_PS_INIT_NAME))
+}
+
+/// Startup arguments that make a PowerShell session run the Codex shim.
+///
+/// Deliberately platform-independent: no CI job compiles this crate for
+/// Windows, so anything left inside a `cfg(windows)` block is checked by no
+/// compiler anywhere. Keeping this here means the POSIX test suite covers it.
+///
+/// The shim is dot-sourced as *text* rather than passed to `-File`, because
+/// execution policy applies to script files and the Windows client default is
+/// `Restricted` — `-File` would fail on a stock machine and put a red error at
+/// the top of every session. The alternative, launching the session with
+/// `-ExecutionPolicy Bypass`, would lower the policy for everything the user
+/// subsequently runs in that shell; this lowers it for one Acorn-owned file.
+///
+/// `-NoExit` keeps the session interactive afterwards, and a missing shim is
+/// skipped rather than reported, so a wrapper-dir failure costs Codex status
+/// but never the terminal.
+pub fn powershell_codex_shim_args(init: &Path) -> Vec<String> {
+    // Single quotes make a PowerShell literal string, where the only escape is
+    // a doubled quote — so an apostrophe in the profile path stays inert.
+    let quoted = format!("'{}'", init.display().to_string().replace('\'', "''"));
+    vec![
+        "-NoExit".to_string(),
+        "-Command".to_string(),
+        format!(
+            "if (Test-Path -LiteralPath {quoted}) {{ . ([ScriptBlock]::Create((Get-Content -Raw -LiteralPath {quoted}))) }}"
+        ),
+    ]
 }
 
 /// Publish the hook server's current URL + token where the notify scripts
@@ -1068,6 +1272,10 @@ fn ensure_agent_wrapper_dir_at(base: &Path) -> io::Result<PathBuf> {
     ensure_plain_wrapper_directory(&dir)?;
     write_executable(&dir.join(CODEX_WRAPPER_NAME), CODEX_WRAPPER_BODY)?;
     write_executable(&dir.join(CODEX_NOTIFY_NAME), CODEX_NOTIFY_BODY)?;
+    // Written on every platform so the POSIX test suite can assert the
+    // Windows shim's contract; only a Windows PTY ever sources it.
+    write_executable(&dir.join(CODEX_PS_INIT_NAME), CODEX_PS_INIT_BODY)?;
+    write_executable(&dir.join(CODEX_PS_NOTIFY_NAME), CODEX_PS_NOTIFY_BODY)?;
     write_executable(&dir.join(CLAUDE_WRAPPER_NAME), CLAUDE_WRAPPER_BODY)?;
     write_executable(&dir.join(CLAUDE_NOTIFY_NAME), CLAUDE_NOTIFY_BODY)?;
     write_executable(
@@ -2469,6 +2677,116 @@ done
             fs::read_dir(&shared_tmp).unwrap().next().is_none(),
             "watcher initialization failure leaked its private runtime directory"
         );
+    }
+
+    /// The Windows shim cannot be executed from this test suite (no
+    /// PowerShell host on the POSIX CI runners, and the Windows CI job does
+    /// not build this crate), so the properties that silently disable it are
+    /// pinned as content assertions instead.
+    #[test]
+    fn powershell_shim_is_dot_sourced_as_text_not_as_a_script_file() {
+        let args = powershell_codex_shim_args(Path::new(r"C:\data\acorn-codex-init.ps1"));
+
+        assert_eq!(args[0], "-NoExit");
+        assert_eq!(args[1], "-Command");
+        // `-File` would be rejected under the `Restricted` execution policy
+        // Windows clients ship with, putting an error at the top of every
+        // session. Script *text* is not policy-gated.
+        assert!(!args.contains(&"-File".to_string()));
+        assert!(args[2].contains("[ScriptBlock]::Create"));
+        assert!(args[2].contains("Get-Content -Raw -LiteralPath"));
+        // A wrapper dir that never got written must cost Codex status, not
+        // the terminal.
+        assert!(args[2].starts_with("if (Test-Path -LiteralPath "));
+        assert!(args[2].contains(r"'C:\data\acorn-codex-init.ps1'"));
+    }
+
+    #[test]
+    fn powershell_shim_path_survives_an_apostrophe_in_the_profile_path() {
+        let args = powershell_codex_shim_args(Path::new(r"C:\Users\O'Brien\acorn-codex-init.ps1"));
+
+        // Doubling is the only escape a PowerShell literal string has; a bare
+        // apostrophe would close the string and turn the rest of the path
+        // into code.
+        assert!(args[2].contains(r"'C:\Users\O''Brien\acorn-codex-init.ps1'"));
+        assert!(!args[2].contains(r"'C:\Users\O'Brien"));
+    }
+
+    #[test]
+    fn wrapper_dir_contains_the_shim_the_init_path_resolves_to() {
+        let base = ScratchDir::new("codex-ps-path");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        // `codex_powershell_init_path` joins this same name onto the wrapper
+        // dir; asserting the file is actually written keeps the two from
+        // drifting apart into a path that resolves to nothing.
+        assert!(dir.join(CODEX_PS_INIT_NAME).is_file());
+    }
+
+    #[test]
+    fn writes_codex_powershell_shim() {
+        let base = ScratchDir::new("codex-ps");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        let init = fs::read_to_string(dir.join("acorn-codex-init.ps1")).unwrap();
+        // A function shadows the binary; PATHEXT never resolves an
+        // extension-less shim, so the POSIX PATH-prepend approach cannot be
+        // reused here.
+        assert!(init.contains("function global:codex"));
+        assert!(init.contains("Get-Command -Name codex -CommandType Application"));
+        // No hook session id means no channel to report on: run Codex plain
+        // rather than register a notify callback that can never deliver.
+        assert!(init.contains("$canHook = $env:ACORN_AGENT_HOOK_SESSION_ID -and"));
+        assert!(init.contains("if (-not $canHook) {"));
+        // TOML literal strings keep Windows paths verbatim and keep double
+        // quotes out of the native argument, which is what Windows PowerShell
+        // 5.1 mis-quotes. A regression to double quotes would break hooks on
+        // 5.1 only — invisible on pwsh 7.
+        assert!(init.contains(
+            "$config = \"notify=['$hostArg','-NoProfile','-ExecutionPolicy','Bypass','-File','$notifyArg']\""
+        ));
+        assert!(!init.contains("notify=[\\\""));
+        // An apostrophe cannot appear inside a TOML literal string.
+        assert!(init.contains("-not $notifyScript.Contains(\"'\")"));
+        assert!(init.contains("& $app.Source @args"));
+        // Native hooks need a Codex-derived `trusted_hash` over the command
+        // string, which cannot be precomputed for a Windows command line.
+        assert!(!init.contains("trusted_hash"));
+        assert!(!init.contains("--enable hooks"));
+        // A profile-defined `codex` function or alias (a WSL bridge, a custom
+        // launcher) must keep working inside Acorn, so the shim only shadows
+        // a name that currently resolves to the real binary.
+        assert!(init.contains("$acornCodexResolved.CommandType -eq 'Application'"));
+        // Minting a lifecycle id here would route the completion into the lane
+        // reducer, which drops an untrusted completion with no open turn —
+        // and nothing on Windows opens one. See the agent_hooks tests
+        // `windows_codex_notify_completion_ends_the_turn` and
+        // `windows_codex_notify_must_not_send_a_lifecycle_id`.
+        assert!(!init.contains("$env:ACORN_CODEX_LIFECYCLE_ID ="));
+        // `codex --version` on every invocation costs a full process start,
+        // and the header it fed is diagnostics-only.
+        assert!(!init.contains("--version"));
+
+        let notify = fs::read_to_string(dir.join("acorn-codex-notify.ps1")).unwrap();
+        // Must match the source the Rust parser accepts for Codex's legacy
+        // notify payload, or every POST is rejected as an unsupported source.
+        assert!(notify.contains("'X-Acorn-Agent-Hook-Source' = 'legacy_completion'"));
+        assert!(notify.contains("'X-Acorn-Agent-Hook-Provider' = 'codex'"));
+        assert!(notify.contains("'X-Acorn-Agent-Hook-Token' = $token"));
+        assert!(notify.contains("agent-turn-complete"));
+        // Nested Codex threads emit the same completion; only the owning
+        // thread may report, mirroring the POSIX notify script.
+        assert!(notify.contains("Join-Path $env:ACORN_AGENT_STATE_DIR 'codex.id'"));
+        // The endpoint file is republished per app launch; preferring it over
+        // the spawn-time env is what keeps restart-surviving PTYs attached.
+        assert!(notify.contains("Join-Path $env:ACORN_AGENT_WRAPPER_DIR 'agent-hook-endpoint'"));
+        // See `windows_codex_notify_must_not_send_a_lifecycle_id`: this
+        // header would make the whole shim a no-op.
+        assert!(!notify.contains("$headers['X-Acorn-Codex-Lifecycle-Id']"));
+        assert!(notify.contains("$url = $env:ACORN_AGENT_HOOK_URL"));
+        // 5.1 sends a string body as ISO-8859-1 unless the charset says
+        // otherwise, which would corrupt any non-ASCII payload.
+        assert!(notify.contains("charset=utf-8"));
     }
 
     #[test]
