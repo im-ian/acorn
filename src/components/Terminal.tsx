@@ -1246,7 +1246,7 @@ export function Terminal({
           ),
         );
         try {
-          fitWithCellMeasurements();
+          fitAddon.fit();
         } catch {
           // ignore — ResizeObserver will retry
         }
