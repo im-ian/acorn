@@ -1033,15 +1033,33 @@ EOF
 // process sitting between the console and Codex's TUI (which would otherwise
 // intercept Ctrl+C).
 //
-// Only Codex's legacy `notify` channel is registered here, which reports turn
-// completion. The richer native hook set is deliberately out of scope: Codex
-// requires each command hook to carry a `trusted_hash` fingerprint over its
-// exact command string, that string necessarily differs on Windows, and the
-// fingerprint is derived inside Codex. `notify` carries no such trust record.
-// Approval-waiting therefore stays invisible on Windows — see
-// `docs/COMMON.md`.
+// Only Codex's legacy `notify` channel is registered here. The richer native
+// hook set is deliberately out of scope: Codex requires each command hook to
+// carry a `trusted_hash` fingerprint over its exact command string, that
+// string necessarily differs on Windows, and the fingerprint is derived inside
+// Codex. `notify` carries no such trust record. Approval-waiting therefore
+// stays invisible on Windows — see `docs/COMMON.md`.
+//
+// No lifecycle id is minted, and the notify receiver sends none. That is load
+// bearing, not an omission: with a lifecycle id the event enters the Codex
+// lane reducer, where `finish_turn(_, trusted_native: false)` drops any
+// completion that has no open turn — and nothing on Windows can open one,
+// because the signals that do (`native_prompt`, `jsonl_user`, `jsonl_task`)
+// come from native hooks or the POSIX JSONL watcher. Without one the event
+// takes the unsequenced path, which exists for exactly this case: a wrapper
+// that can report a boundary but cannot sequence it. Sequencing buys nothing
+// here anyway — the shim runs Codex in the foreground, so a session has at
+// most one shim-launched Codex at a time, and a nested Codex never receives
+// the `-c notify` config.
 const CODEX_PS_INIT_BODY: &str = r#"# Acorn Codex shim (Windows PowerShell sessions).
 # Written by Acorn; edits are overwritten on the next app launch.
+
+# Shadow `codex` only when it currently resolves to the real binary. A profile
+# function or alias — a WSL bridge, a custom launcher — stays in charge, since
+# overriding it would break a setup that works outside Acorn. This runs after
+# the user's profile, so their definition is already visible here.
+$acornCodexResolved = Get-Command -Name codex -ErrorAction SilentlyContinue
+if ($acornCodexResolved -and $acornCodexResolved.CommandType -eq 'Application') {
 
 function global:codex {
   $app = Get-Command -Name codex -CommandType Application -ErrorAction SilentlyContinue |
@@ -1076,27 +1094,12 @@ function global:codex {
     return
   }
 
-  $version = 'unknown'
-  try {
-    $reported = & $app.Source --version 2>$null | Select-Object -First 1
-    if ($reported -match '(\d+\.\d+\.\d+)') { $version = $Matches[1] }
-  } catch { $version = 'unknown' }
+  $notifyArg = $notifyScript.Replace('\', '/')
+  $hostArg = $psHost.Replace('\', '/')
+  $config = "notify=['$hostArg','-NoProfile','-ExecutionPolicy','Bypass','-File','$notifyArg']"
+  & $app.Source -c $config @args
+}
 
-  # Restored in `finally` so a later command in this shell does not inherit a
-  # stale lifecycle id, and so Ctrl+C out of the TUI still unwinds cleanly.
-  $previousLifecycleId = $env:ACORN_CODEX_LIFECYCLE_ID
-  $previousVersion = $env:ACORN_CODEX_VERSION
-  try {
-    $env:ACORN_CODEX_LIFECYCLE_ID = "$($PID)_$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
-    $env:ACORN_CODEX_VERSION = $version
-    $notifyArg = $notifyScript.Replace('\', '/')
-    $hostArg = $psHost.Replace('\', '/')
-    $config = "notify=['$hostArg','-NoProfile','-ExecutionPolicy','Bypass','-File','$notifyArg']"
-    & $app.Source -c $config @args
-  } finally {
-    $env:ACORN_CODEX_LIFECYCLE_ID = $previousLifecycleId
-    $env:ACORN_CODEX_VERSION = $previousVersion
-  }
 }
 "#;
 
@@ -1168,12 +1171,10 @@ try {
     'X-Acorn-Agent-Hook-Source' = 'legacy_completion'
     'X-Acorn-Codex-Native-Hooks-Enabled' = '0'
   }
-  if ($env:ACORN_CODEX_LIFECYCLE_ID) {
-    $headers['X-Acorn-Codex-Lifecycle-Id'] = $env:ACORN_CODEX_LIFECYCLE_ID
-  }
-  if ($env:ACORN_CODEX_VERSION) {
-    $headers['X-Acorn-Codex-Version'] = $env:ACORN_CODEX_VERSION
-  }
+  # Deliberately no X-Acorn-Codex-Lifecycle-Id: a lifecycle id routes the
+  # event into the Codex lane reducer, which drops an untrusted completion
+  # that has no open turn — and the Windows shim has no way to open one. See
+  # CODEX_PS_INIT_BODY.
 
   Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
     -ContentType 'application/json; charset=utf-8' -Body $payload -TimeoutSec 2 | Out-Null
@@ -2752,6 +2753,19 @@ done
         // string, which cannot be precomputed for a Windows command line.
         assert!(!init.contains("trusted_hash"));
         assert!(!init.contains("--enable hooks"));
+        // A profile-defined `codex` function or alias (a WSL bridge, a custom
+        // launcher) must keep working inside Acorn, so the shim only shadows
+        // a name that currently resolves to the real binary.
+        assert!(init.contains("$acornCodexResolved.CommandType -eq 'Application'"));
+        // Minting a lifecycle id here would route the completion into the lane
+        // reducer, which drops an untrusted completion with no open turn —
+        // and nothing on Windows opens one. See the agent_hooks tests
+        // `windows_codex_notify_completion_ends_the_turn` and
+        // `windows_codex_notify_must_not_send_a_lifecycle_id`.
+        assert!(!init.contains("$env:ACORN_CODEX_LIFECYCLE_ID ="));
+        // `codex --version` on every invocation costs a full process start,
+        // and the header it fed is diagnostics-only.
+        assert!(!init.contains("--version"));
 
         let notify = fs::read_to_string(dir.join("acorn-codex-notify.ps1")).unwrap();
         // Must match the source the Rust parser accepts for Codex's legacy
@@ -2766,6 +2780,9 @@ done
         // The endpoint file is republished per app launch; preferring it over
         // the spawn-time env is what keeps restart-surviving PTYs attached.
         assert!(notify.contains("Join-Path $env:ACORN_AGENT_WRAPPER_DIR 'agent-hook-endpoint'"));
+        // See `windows_codex_notify_must_not_send_a_lifecycle_id`: this
+        // header would make the whole shim a no-op.
+        assert!(!notify.contains("$headers['X-Acorn-Codex-Lifecycle-Id']"));
         assert!(notify.contains("$url = $env:ACORN_AGENT_HOOK_URL"));
         // 5.1 sends a string body as ISO-8859-1 unless the charset says
         // otherwise, which would corrupt any non-ASCII payload.
