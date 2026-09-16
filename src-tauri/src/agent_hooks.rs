@@ -2477,9 +2477,10 @@ fn write_response(stream: &mut TcpStream, code: u16, reason: &str) -> io::Result
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_agent_hook_event, dispatch_connection, handle_connection, AgentHookApplyOutcome,
-        AgentHookEvent, AgentHookEventKind, AgentHookHandlerOutcome, AgentHookOwnership,
-        AgentHookReducer, AgentHookServer, ConnectionPermit, HookEventHandler, MAX_HEADER_BYTES,
+        apply_agent_hook_event, dispatch_connection, handle_connection, parse_agent_hook_request,
+        AgentHookApplyOutcome, AgentHookEvent, AgentHookEventKind, AgentHookHandlerOutcome,
+        AgentHookOwnership, AgentHookReducer, AgentHookServer, ConnectionPermit, HookEventHandler,
+        MAX_HEADER_BYTES,
     };
     use acorn_session::{
         AgentStatusSource, Session, SessionAgentProvider, SessionKind, SessionStatus,
@@ -2930,6 +2931,106 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("Stop delivered");
         assert_eq!(event.event, AgentHookEventKind::NeedsInput);
+    }
+
+    /// Build the exact request the Windows PowerShell notify receiver sends.
+    /// Mirrors `CODEX_PS_NOTIFY_BODY` header for header — the shim cannot be
+    /// executed on a POSIX runner, so this is what proves its wire format
+    /// still lands.
+    fn windows_codex_notify_request(
+        session_id: Uuid,
+        thread_id: &str,
+        lifecycle_id: Option<&str>,
+    ) -> (String, String) {
+        let mut head = format!(
+            "POST /agent-hook HTTP/1.1\r\n\
+             x-acorn-agent-hook-provider: codex\r\n\
+             x-acorn-agent-hook-session-id: {session_id}\r\n\
+             x-acorn-agent-hook-source: legacy_completion\r\n\
+             x-acorn-codex-native-hooks-enabled: 0"
+        );
+        if let Some(lifecycle_id) = lifecycle_id {
+            head.push_str(&format!("\r\nx-acorn-codex-lifecycle-id: {lifecycle_id}"));
+        }
+        let body = format!(
+            r#"{{"type":"agent-turn-complete","thread-id":"{thread_id}","turn-id":"turn-1"}}"#
+        );
+        (head, body)
+    }
+
+    fn codex_session_awaiting_hooks(sessions: &acorn_session::SessionStore) -> Uuid {
+        let mut session = Session::new(
+            "Agent".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.status = SessionStatus::Working;
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.hook_provider = Some(SessionAgentProvider::Codex);
+        session.hook_active = true;
+        let id = session.id;
+        sessions.insert(session);
+        id
+    }
+
+    #[test]
+    fn windows_codex_notify_completion_ends_the_turn() {
+        let sessions = acorn_session::SessionStore::new();
+        let session_id = codex_session_awaiting_hooks(&sessions);
+        let (head, body) =
+            windows_codex_notify_request(session_id, "019f6322-41e5-7882-a99a-d186dff6739c", None);
+
+        let event = parse_agent_hook_request(&head, body.as_bytes())
+            .expect("Windows notify request parses")
+            .expect("request carries an event");
+        let outcome = AgentHookReducer::new(sessions.clone())
+            .apply(event)
+            .expect("Windows notify completion applies");
+
+        // The Windows shim's only channel. If this regresses to `Ignored`,
+        // Codex status on Windows silently falls back to transcript polling
+        // with nothing to show for the shim.
+        assert_eq!(
+            outcome,
+            AgentHookApplyOutcome::Applied(SessionStatus::WaitingForInput)
+        );
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::WaitingForInput
+        );
+    }
+
+    #[test]
+    fn windows_codex_notify_must_not_send_a_lifecycle_id() {
+        let sessions = acorn_session::SessionStore::new();
+        let session_id = codex_session_awaiting_hooks(&sessions);
+        let (head, body) = windows_codex_notify_request(
+            session_id,
+            "019f6322-41e5-7882-a99a-d186dff6739c",
+            Some("1234_1700000000"),
+        );
+
+        let event = parse_agent_hook_request(&head, body.as_bytes())
+            .expect("request parses")
+            .expect("request carries an event");
+        let outcome = AgentHookReducer::new(sessions.clone())
+            .apply(event)
+            .expect("apply returns");
+
+        // A lifecycle id routes the event into the lane reducer, where an
+        // untrusted completion with no open turn is dropped — and the Windows
+        // shim has no signal that opens one. This is why the receiver sends no
+        // lifecycle header; adding one back would make the shim a no-op.
+        assert_eq!(
+            outcome,
+            AgentHookApplyOutcome::Ignored {
+                status: SessionStatus::Working,
+                reason: "completion without an active turn",
+            }
+        );
     }
 
     #[test]

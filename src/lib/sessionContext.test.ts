@@ -3,6 +3,7 @@ import {
   currentPullRequestSearchQuery,
   findCurrentPullRequestForBranch,
   findSessionsForPullRequest,
+  isWslBridgedSession,
   summarizeAllSessionProcesses,
   summarizeSessionProcesses,
 } from "./sessionContext";
@@ -159,5 +160,55 @@ describe("session context helpers", () => {
         { pid: 13, name: "cargo", depth: 3 },
       ]),
     ).toBe("codex, rg, node, cargo");
+  });
+
+  it("flags a session whose only live process is the WSL bridge", () => {
+    expect(
+      isWslBridgedSession(
+        session("a", {
+          active_processes: [{ pid: 10, name: "wsl.exe", depth: 1 }],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("matches the WSL bridge regardless of reported name casing", () => {
+    expect(
+      isWslBridgedSession(
+        session("a", {
+          active_processes: [{ pid: 10, name: "WSL.EXE", depth: 1 }],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not flag a session that resolved an agent transcript", () => {
+    // `wsl.exe` can also be an incidental child of a normal Windows session.
+    // A bound transcript proves status resolution worked, so the hint would
+    // be actively wrong.
+    expect(
+      isWslBridgedSession(
+        session("a", {
+          agent_transcript_provider: "codex",
+          active_processes: [{ pid: 10, name: "wsl.exe", depth: 2 }],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag an ordinary session with no WSL bridge", () => {
+    expect(
+      isWslBridgedSession(
+        session("a", {
+          active_processes: [{ pid: 10, name: "codex", depth: 1 }],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag an idle session with no live processes", () => {
+    expect(isWslBridgedSession(session("a", { active_processes: [] }))).toBe(
+      false,
+    );
   });
 });
