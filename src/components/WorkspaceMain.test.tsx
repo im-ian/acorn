@@ -442,6 +442,43 @@ describe("WorkspaceMain", () => {
     expect(useAppStore.getState().workspaces[REPO].canvas?.nodes).toEqual({});
   });
 
+  it("expands a canvas session across the workspace pane", () => {
+    installCanvasSessions(["alpha"]);
+    render("canvas");
+
+    const expand = document.querySelector<HTMLButtonElement>(
+      "[data-testid='workspace-canvas-node-expand']",
+    );
+    expect(expand).not.toBeNull();
+    act(() => expand!.click());
+
+    const popover = document.querySelector<HTMLElement>(
+      "[data-testid='kanban-terminal-popover']",
+    );
+    expect(popover).not.toBeNull();
+    expect(popover!.dataset.terminalPopoverLayout).toBe("pane");
+    expect(popover!.closest("[data-workspace-main]")).not.toBeNull();
+    expect(
+      document.querySelector("[data-testid='kanban-terminal-popover-expand']"),
+    ).toBeNull();
+    expect(
+      document.querySelector("[data-testid='kanban-terminal-popover-resize']"),
+    ).toBeNull();
+    expect(
+      document.querySelector(
+        "[data-testid='kanban-terminal-popover-reset-position']",
+      ),
+    ).toBeNull();
+
+    act(() =>
+      popover!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!
+        .click(),
+    );
+    expect(
+      document.querySelector("[data-testid='kanban-terminal-popover']"),
+    ).toBeNull();
+  });
+
   it("activates a canvas terminal when focus enters its portaled body", () => {
     installCanvasSessions(["alpha", "beta"]);
     render("canvas");
