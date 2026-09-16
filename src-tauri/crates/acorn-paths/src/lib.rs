@@ -112,6 +112,19 @@ pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
     Ok(simplified(&canonical).to_path_buf())
 }
 
+/// Working directory handed to agent CLIs and used when pairing
+/// transcripts. Strips a Windows verbatim disk prefix so every agent
+/// sees `W:\repo` rather than `\\?\W:\repo`.
+pub fn agent_cwd(path: &Path) -> PathBuf {
+    simplified(path).to_path_buf()
+}
+
+/// True when two paths name the same agent working directory after
+/// stripping a Windows verbatim disk prefix.
+pub fn same_cwd(left: &Path, right: &Path) -> bool {
+    simplified(left) == simplified(right)
+}
+
 fn ensure_private_dir(path: &Path) -> io::Result<()> {
     std::fs::create_dir_all(path)?;
     #[cfg(unix)]
@@ -374,5 +387,17 @@ mod tests {
             simplified(Path::new(r"\\?\UNC\server\share\repo")),
             Path::new(r"\\?\UNC\server\share\repo")
         );
+    }
+
+    #[test]
+    fn same_cwd_equates_verbatim_and_legacy_windows_drive_paths() {
+        let verbatim = Path::new(r"\\?\W:\winCudeProject\cras_backend");
+        let legacy = Path::new(r"W:\winCudeProject\cras_backend");
+        assert!(same_cwd(verbatim, legacy));
+        assert_eq!(agent_cwd(verbatim), legacy);
+        assert!(!same_cwd(
+            Path::new(r"W:\winCudeProject\cras_backend"),
+            Path::new(r"W:\winCudeProject\other")
+        ));
     }
 }

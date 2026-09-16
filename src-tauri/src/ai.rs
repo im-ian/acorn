@@ -387,7 +387,7 @@ fn run_oneshot_in_dir_cancellable_with_transport_and_environment(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(cwd) = cwd {
-        command_builder.current_dir(cwd);
+        command_builder.current_dir(acorn_paths::agent_cwd(cwd));
     }
     let mut child = command_builder.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -469,7 +469,7 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(cwd) = cwd {
-        command_builder.current_dir(cwd);
+        command_builder.current_dir(acorn_paths::agent_cwd(cwd));
     }
     let mut child = command_builder.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {

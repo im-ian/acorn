@@ -198,7 +198,7 @@ impl PtyManager {
         for arg in &effective_args {
             cmd.arg(arg);
         }
-        cmd.cwd(&spec.cwd);
+        cmd.cwd(acorn_paths::agent_cwd(&spec.cwd));
         // Apply the same TERM/COLORTERM/LANG/shell-env layering the
         // in-process `pty::PtyManager` uses, then a backstop that refuses
         // an empty `TERM` / `COLORTERM`. Without this the daemon path

@@ -9,6 +9,7 @@ name = "acorn_transcript"
 
 [dependencies]
 acorn-agent = { path = "../acorn-agent" }
+acorn-paths = { path = "../acorn-paths" }
 acorn-platform = { path = "../acorn-platform" }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }
