@@ -357,6 +357,7 @@ function CanvasTerminalPopoverOverlay({
       session={session}
       anchor={anchor}
       onClose={close}
+      fillPane
     />
   ) : null;
 }
@@ -1866,10 +1867,12 @@ function KanbanTerminalPopover({
   session,
   anchor,
   onClose,
+  fillPane = false,
 }: {
   session: Session;
   anchor: HTMLElement;
   onClose: () => void;
+  fillPane?: boolean;
 }) {
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
@@ -1903,7 +1906,7 @@ function KanbanTerminalPopover({
     readKanbanTerminalPopoverSize(),
   );
   const [isExpanded, setIsExpanded] = useState(
-    () => popoverDefaultSize === "fullscreen",
+    () => fillPane || popoverDefaultSize === "fullscreen",
   );
   const [headerMenu, setHeaderMenu] = useState<{
     x: number;
@@ -2185,7 +2188,7 @@ function KanbanTerminalPopover({
   }, [anchor, onClose]);
 
   function startDrag(event: ReactPointerEvent<HTMLElement>) {
-    if (isExpanded || event.button !== 0) return;
+    if (fillPane || isExpanded || event.button !== 0) return;
     const target = event.target;
     if (
       target instanceof Element &&
@@ -2343,23 +2346,29 @@ function KanbanTerminalPopover({
     onClose();
   }
 
-  const popoverStyle: CSSProperties = isExpanded
+  const popoverStyle: CSSProperties = fillPane
     ? {
-        position: "fixed",
-        width: `calc(100vw - ${KANBAN_TERMINAL_POPOVER_MARGIN_PX * 2}px)`,
-        height: `calc(100vh - ${KANBAN_TERMINAL_POPOVER_MARGIN_PX * 2}px)`,
-        left: KANBAN_TERMINAL_POPOVER_MARGIN_PX,
-        top: KANBAN_TERMINAL_POPOVER_MARGIN_PX,
+        position: "absolute",
+        inset: 0,
         visibility: "visible",
       }
-    : {
-        position: "fixed",
-        width: size.width,
-        height: size.height,
-        left: position?.left ?? -9999,
-        top: position?.top ?? -9999,
-        visibility: position ? "visible" : "hidden",
-      };
+    : isExpanded
+      ? {
+          position: "fixed",
+          width: `calc(100vw - ${KANBAN_TERMINAL_POPOVER_MARGIN_PX * 2}px)`,
+          height: `calc(100vh - ${KANBAN_TERMINAL_POPOVER_MARGIN_PX * 2}px)`,
+          left: KANBAN_TERMINAL_POPOVER_MARGIN_PX,
+          top: KANBAN_TERMINAL_POPOVER_MARGIN_PX,
+          visibility: "visible",
+        }
+      : {
+          position: "fixed",
+          width: size.width,
+          height: size.height,
+          left: position?.left ?? -9999,
+          top: position?.top ?? -9999,
+          visibility: position ? "visible" : "hidden",
+        };
 
   const popover = (
     <div
@@ -2367,8 +2376,14 @@ function KanbanTerminalPopover({
       role="dialog"
       aria-label={t("workspace.kanban.terminalPopover.ariaLabel")}
       data-testid="kanban-terminal-popover"
+      data-terminal-popover-layout={fillPane ? "pane" : "float"}
       onKeyDown={handlePopoverKeyDown}
-      className="relative z-50 flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-bg-elevated shadow-2xl shadow-black/35"
+      className={cn(
+        "z-50 flex min-h-0 flex-col overflow-hidden border border-border bg-bg-elevated",
+        fillPane
+          ? "rounded-[var(--acorn-pane-radius)]"
+          : "relative rounded-lg shadow-2xl shadow-black/35",
+      )}
       style={popoverStyle}
     >
       <header
@@ -2377,7 +2392,7 @@ function KanbanTerminalPopover({
         onContextMenu={handleHeaderContextMenu}
         className={cn(
           "shrink-0 border-b border-border px-3 py-2.5",
-          !isExpanded && "cursor-move select-none",
+          !fillPane && !isExpanded && "cursor-move select-none",
         )}
       >
         <div className="flex min-w-0 items-start gap-2">
@@ -2476,56 +2491,62 @@ function KanbanTerminalPopover({
               </WorkspaceSessionTerminalPopoverMetaItem>
             </div>
           </div>
-          <Tooltip
-            label={t("workspace.kanban.terminalPopover.resetPosition")}
-            side="bottom"
-          >
-            <IconButton
-              aria-label={t("workspace.kanban.terminalPopover.resetPosition")}
-              data-testid="kanban-terminal-popover-reset-position"
-              onClick={resetPopoverPosition}
-              size="sm"
-              surface="panel"
-            >
-              <LocateFixed size={14} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip
-            label={t("workspace.kanban.terminalPopover.resetSize")}
-            side="bottom"
-          >
-            <IconButton
-              aria-label={t("workspace.kanban.terminalPopover.resetSize")}
-              data-testid="kanban-terminal-popover-reset-size"
-              onClick={resetPopoverSize}
-              size="sm"
-              surface="panel"
-            >
-              <RotateCcw size={14} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip
-            label={t(
-              isExpanded
-                ? "workspace.kanban.terminalPopover.restore"
-                : "workspace.kanban.terminalPopover.expand",
-            )}
-            side="bottom"
-          >
-            <IconButton
-              aria-label={t(
-                isExpanded
-                  ? "workspace.kanban.terminalPopover.restore"
-                  : "workspace.kanban.terminalPopover.expand",
-              )}
-              data-testid="kanban-terminal-popover-expand"
-              onClick={() => setIsExpanded((current) => !current)}
-              size="sm"
-              surface="panel"
-            >
-              {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            </IconButton>
-          </Tooltip>
+          {fillPane ? null : (
+            <>
+              <Tooltip
+                label={t("workspace.kanban.terminalPopover.resetPosition")}
+                side="bottom"
+              >
+                <IconButton
+                  aria-label={t(
+                    "workspace.kanban.terminalPopover.resetPosition",
+                  )}
+                  data-testid="kanban-terminal-popover-reset-position"
+                  onClick={resetPopoverPosition}
+                  size="sm"
+                  surface="panel"
+                >
+                  <LocateFixed size={14} />
+                </IconButton>
+              </Tooltip>
+              <Tooltip
+                label={t("workspace.kanban.terminalPopover.resetSize")}
+                side="bottom"
+              >
+                <IconButton
+                  aria-label={t("workspace.kanban.terminalPopover.resetSize")}
+                  data-testid="kanban-terminal-popover-reset-size"
+                  onClick={resetPopoverSize}
+                  size="sm"
+                  surface="panel"
+                >
+                  <RotateCcw size={14} />
+                </IconButton>
+              </Tooltip>
+              <Tooltip
+                label={t(
+                  isExpanded
+                    ? "workspace.kanban.terminalPopover.restore"
+                    : "workspace.kanban.terminalPopover.expand",
+                )}
+                side="bottom"
+              >
+                <IconButton
+                  aria-label={t(
+                    isExpanded
+                      ? "workspace.kanban.terminalPopover.restore"
+                      : "workspace.kanban.terminalPopover.expand",
+                  )}
+                  data-testid="kanban-terminal-popover-expand"
+                  onClick={() => setIsExpanded((current) => !current)}
+                  size="sm"
+                  surface="panel"
+                >
+                  {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                </IconButton>
+              </Tooltip>
+            </>
+          )}
           <Tooltip
             label={t("dialogs.common.close")}
             shortcut={closeShortcut}
@@ -2570,7 +2591,7 @@ function KanbanTerminalPopover({
           />
         )}
       </div>
-      {isExpanded ? null : (
+      {fillPane || isExpanded ? null : (
         <button
           type="button"
           aria-label={t("workspace.kanban.terminalPopover.resize")}
@@ -2587,7 +2608,7 @@ function KanbanTerminalPopover({
     </div>
   );
 
-  return createPortal(popover, document.body);
+  return fillPane ? popover : createPortal(popover, document.body);
 }
 
 function KanbanTerminalPopoverTitleInput({

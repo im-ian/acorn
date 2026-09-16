@@ -191,12 +191,43 @@ test.describe("workspace canvas mode", () => {
     await node.getByRole("button", { name: "Expand canvas-created" }).click();
     const popover = page.getByTestId("kanban-terminal-popover");
     await expect(popover).toBeVisible();
+    await expect(popover).toHaveAttribute(
+      "data-terminal-popover-layout",
+      "pane",
+    );
+    await expect(page.getByTestId("kanban-terminal-popover-expand")).toHaveCount(
+      0,
+    );
     await expect(page.getByTestId("workspace-view-status")).toContainText(
       "Canvas",
     );
     await expect(
       popover.locator('[data-acorn-terminal-slot="canvas-created"]'),
     ).toBeAttached();
+    const coverage = await page.evaluate(() => {
+      const dialog = document.querySelector(
+        "[data-testid='kanban-terminal-popover']",
+      );
+      const pane = document.querySelector("[data-workspace-main]");
+      if (!(dialog instanceof HTMLElement) || !(pane instanceof HTMLElement)) {
+        return null;
+      }
+      const dialogRect = dialog.getBoundingClientRect();
+      const paneRect = pane.getBoundingClientRect();
+      return {
+        insidePane: pane.contains(dialog),
+        dx: Math.abs(dialogRect.left - paneRect.left),
+        dy: Math.abs(dialogRect.top - paneRect.top),
+        dw: Math.abs(dialogRect.width - paneRect.width),
+        dh: Math.abs(dialogRect.height - paneRect.height),
+      };
+    });
+    expect(coverage).not.toBeNull();
+    expect(coverage?.insidePane).toBe(true);
+    expect(coverage?.dx).toBeLessThan(2);
+    expect(coverage?.dy).toBeLessThan(2);
+    expect(coverage?.dw).toBeLessThan(2);
+    expect(coverage?.dh).toBeLessThan(2);
 
     await popover.getByRole("button", { name: "Close" }).click();
     await expect(popover).toHaveCount(0);
