@@ -377,7 +377,15 @@ struct PlatformProcessTree {
 }
 
 #[cfg(windows)]
-fn configure_tree_root_platform(_command: &mut Command) {}
+fn configure_tree_root_platform(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    // Acorn is a GUI process, so it has no console. Console-subsystem
+    // children such as claude.exe, node.exe, and cmd.exe allocate a visible
+    // window unless this flag is set.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
 
 #[cfg(windows)]
 fn from_std_child_platform(child: &Child) -> io::Result<PlatformProcessTree> {
@@ -662,6 +670,29 @@ mod tests {
             assert!(Instant::now() < deadline, "process tree did not terminate");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn configure_tree_root_preserves_piped_cmd_output() {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/C", "echo acorn-hidden-console"]);
+        configure_tree_root(&mut command);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = command.output().expect("spawn cmd.exe");
+        assert!(
+            output.status.success(),
+            "cmd.exe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("acorn-hidden-console"),
+            "piped stdout was empty: {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 
     #[cfg(unix)]
