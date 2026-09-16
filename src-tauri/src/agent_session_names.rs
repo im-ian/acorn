@@ -177,6 +177,7 @@ fn spawn_codex_app_server() -> Result<Child, String> {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         crate::shell_env::apply_to_command(&mut command);
+        acorn_platform::process::configure_tree_root(&mut command);
 
         match command.spawn() {
             Ok(child) => return Ok(child),

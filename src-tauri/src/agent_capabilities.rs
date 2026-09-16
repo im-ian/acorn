@@ -4,6 +4,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
+use acorn_platform::process::configure_tree_root;
 use acorn_session::SessionAgentProvider;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -286,13 +287,14 @@ fn cli_output(name: &str, args: &[&str]) -> Result<String, String> {
 fn spawn_codex_app_server() -> Result<Child, String> {
     for attempt in 0..2 {
         let path = cli_resolver::resolve("codex").map_err(|error| error.to_string())?;
-        match Command::new(path)
+        let mut command = Command::new(path);
+        command
             .args(["app-server", "--stdio"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+            .stderr(Stdio::null());
+        configure_tree_root(&mut command);
+        match command.spawn() {
             Ok(child) => return Ok(child),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound && attempt == 0 => {
                 cli_resolver::invalidate("codex");
