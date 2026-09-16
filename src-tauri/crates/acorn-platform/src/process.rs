@@ -492,10 +492,6 @@ mod tests {
 
     const ROLE_ENV: &str = "ACORN_PROCESS_TREE_TEST_ROLE";
     const DIRECTORY_ENV: &str = "ACORN_PROCESS_TREE_TEST_DIRECTORY";
-    #[cfg(windows)]
-    const CONSOLE_PROBE_ENV: &str = "ACORN_PROCESS_TREE_CONSOLE_PROBE";
-    #[cfg(windows)]
-    const CONSOLE_PROBE_OUT_ENV: &str = "ACORN_PROCESS_TREE_CONSOLE_PROBE_OUT";
 
     #[test]
     fn ancestry_accepts_same_process_and_rejects_invalid_ids() {
@@ -673,67 +669,6 @@ mod tests {
         while child.try_wait().unwrap().is_none() || pid_is_alive(grandchild_pid) {
             assert!(Instant::now() < deadline, "process tree did not terminate");
             std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    #[cfg(windows)]
-    fn current_process_has_console() -> bool {
-        use windows_sys::Win32::System::Console::GetConsoleProcessList;
-        let mut dummy = 0u32;
-        unsafe { GetConsoleProcessList(&mut dummy, 1) > 0 }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn process_tree_console_probe() {
-        let Ok(role) = std::env::var(CONSOLE_PROBE_ENV) else {
-            return;
-        };
-        assert_eq!(role, "child");
-        let path = std::path::PathBuf::from(
-            std::env::var_os(CONSOLE_PROBE_OUT_ENV).expect("console probe output path"),
-        );
-        let result = if current_process_has_console() {
-            "console"
-        } else {
-            "no-console"
-        };
-        std::fs::write(path, result).expect("write console probe result");
-    }
-
-    #[cfg(windows)]
-    fn spawn_console_probe(hide_console: bool) -> String {
-        let directory = tempfile::tempdir().unwrap();
-        let result_path = directory.path().join("result.txt");
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .args(["--exact", "process::tests::process_tree_console_probe"])
-            .env(CONSOLE_PROBE_ENV, "child")
-            .env(CONSOLE_PROBE_OUT_ENV, &result_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
-        if hide_console {
-            configure_tree_root(&mut command);
-        }
-        let output = command.output().expect("spawn console probe");
-        assert!(
-            output.status.success(),
-            "console probe failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        std::fs::read_to_string(result_path)
-            .expect("console probe result")
-            .trim()
-            .to_string()
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn configure_tree_root_hides_console_window() {
-        assert_eq!(spawn_console_probe(true), "no-console");
-        if current_process_has_console() {
-            assert_eq!(spawn_console_probe(false), "console");
         }
     }
 

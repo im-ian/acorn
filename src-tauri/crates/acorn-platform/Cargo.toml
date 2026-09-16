@@ -19,7 +19,6 @@ nix = { version = "0.31", default-features = false, features = ["process", "sign
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
-    "Win32_System_Console",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
