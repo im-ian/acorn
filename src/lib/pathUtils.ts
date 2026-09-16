@@ -1,14 +1,25 @@
 export type PathFlavor = "posix" | "windows";
 
+function stripWindowsVerbatimPrefix(path: string): string {
+  if (/^[\\/]{2}[?][\\/]UNC[\\/]/u.test(path)) {
+    return `\\\\${path.slice(8)}`;
+  }
+  if (/^[\\/]{2}[?][\\/]/u.test(path)) {
+    return path.slice(4);
+  }
+  return path;
+}
+
 function explicitPathFlavor(path: string): PathFlavor | null {
+  const stripped = stripWindowsVerbatimPrefix(path);
   if (
-    /^[a-zA-Z]:/u.test(path) ||
-    path.startsWith("\\\\") ||
-    path.startsWith("//")
+    /^[a-zA-Z]:/u.test(stripped) ||
+    stripped.startsWith("\\\\") ||
+    stripped.startsWith("//")
   ) {
     return "windows";
   }
-  if (path.startsWith("/")) return "posix";
+  if (stripped.startsWith("/")) return "posix";
   return null;
 }
 
@@ -68,6 +79,7 @@ export function normalizePath(
     return normalized.replace(/\/+$/u, "");
   }
 
+  path = stripWindowsVerbatimPrefix(path);
   const unc = /^[\\/]{2}[^\\/]/u.test(path);
   let normalized = path.replace(/[\\/]+/gu, "/");
   if (unc && !normalized.startsWith("//")) normalized = `/${normalized}`;
@@ -187,9 +199,10 @@ export function pathsIntersect(a: string, b: string): boolean {
 }
 
 export function isAbsolutePath(path: string): boolean {
+  const stripped = stripWindowsVerbatimPrefix(path);
   return (
-    path.startsWith("/") ||
-    /^[a-zA-Z]:[\\/]/u.test(path) ||
-    /^[\\/]{2}[^\\/]/u.test(path)
+    stripped.startsWith("/") ||
+    /^[a-zA-Z]:[\\/]/u.test(stripped) ||
+    /^[\\/]{2}[^\\/]/u.test(stripped)
   );
 }
