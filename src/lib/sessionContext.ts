@@ -110,3 +110,26 @@ export function summarizeAllSessionProcesses(
   const names = sessionProcessNames(processes);
   return names.length > 0 ? names.join(", ") : null;
 }
+
+const WSL_BRIDGE_PROCESS_NAMES = new Set(["wsl", "wsl.exe", "wslhost.exe"]);
+
+/**
+ * True when this session's live processes are a WSL bridge rather than an
+ * agent Acorn can follow.
+ *
+ * Agent status has two sources and WSL defeats both: the process scan only
+ * sees `wsl.exe` on the Windows side (the real `codex` runs inside the VM),
+ * and the transcript scan looks under the Windows profile while the rollout
+ * lands in the distro's Linux home. The result is a session that reports a
+ * plain shell forever, which reads as Acorn silently failing. Surfacing the
+ * cause is the honest alternative — supporting it is a separate piece of work.
+ *
+ * A bound transcript means something did resolve, so the session is not
+ * treated as bridged no matter what else is running.
+ */
+export function isWslBridgedSession(session: Session): boolean {
+  if (session.agent_transcript_provider) return false;
+  return sessionProcessNames(session.active_processes).some((name) =>
+    WSL_BRIDGE_PROCESS_NAMES.has(name.toLowerCase()),
+  );
+}

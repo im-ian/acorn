@@ -1278,7 +1278,8 @@
     "statusReason": {
       "turn_complete": "Agent turn complete",
       "turn_interrupted": "Agent turn interrupted",
-      "shell_prompt": "Shell prompt detected"
+      "shell_prompt": "Shell prompt detected",
+      "wsl_bridged": "Agent status unavailable (running through WSL)"
     },
     "dialog": {
       "selectExistingProject": "Select an existing project",

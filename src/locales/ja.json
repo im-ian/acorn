@@ -1278,7 +1278,8 @@
     "statusReason": {
       "turn_complete": "エージェントのターンが完了しました",
       "turn_interrupted": "エージェントのターンが中断されました",
-      "shell_prompt": "シェルプロンプトが検出されました"
+      "shell_prompt": "シェルプロンプトが検出されました",
+      "wsl_bridged": "エージェント状態を追跡できません (WSL 経由で実行中)"
     },
     "dialog": {
       "selectExistingProject": "既存のプロジェクトを選択します",

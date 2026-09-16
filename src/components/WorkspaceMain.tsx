@@ -80,6 +80,7 @@ import type {
   SessionStatusReason,
 } from "../lib/types";
 import {
+  isWslBridgedSession,
   summarizeAllSessionProcesses,
   summarizeSessionProcesses,
 } from "../lib/sessionContext";
@@ -3040,7 +3041,11 @@ function statusReasonLabel(
 
 function statusDetailLabel(t: Translator, session: Session): string {
   const label = statusLabel(t, session.status);
-  const reason = statusReasonLabel(t, session.status_reason);
+  // A WSL bridge leaves the status stuck on whatever the shell reports, so
+  // say why rather than let it read as a silent failure.
+  const reason = isWslBridgedSession(session)
+    ? t("sidebar.statusReason.wsl_bridged")
+    : statusReasonLabel(t, session.status_reason);
   return reason ? `${label} · ${reason}` : label;
 }
 
