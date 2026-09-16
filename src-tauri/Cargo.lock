@@ -25,6 +25,7 @@ dependencies = [
  "git2",
  "globset",
  "ignore",
+ "image",
  "nix 0.31.3",
  "notify",
  "notify-rust",
@@ -55,6 +56,7 @@ dependencies = [
  "trash",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
