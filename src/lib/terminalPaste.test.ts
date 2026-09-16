@@ -4,12 +4,28 @@ import {
   getClipboardImageFile,
   hasClipboardImagePayload,
   isTerminalProtocolReply,
+  shouldDelegateImagePasteToAgent,
   terminalPasteAction,
   type ClipboardImageFile,
 } from "./terminalPaste";
 
 it("keeps agent image paste fallback wired to Ctrl+V", () => {
   expect(AGENT_IMAGE_PASTE_CONTROL).toBe("\x16");
+});
+
+describe("shouldDelegateImagePasteToAgent", () => {
+  it("hands Ctrl+V to Claude/Codex only when the agent can read the OS clipboard", () => {
+    expect(shouldDelegateImagePasteToAgent(true, true)).toBe(true);
+  });
+
+  it("keeps image bytes on the file-mention path when the agent cannot read the OS clipboard", () => {
+    expect(shouldDelegateImagePasteToAgent(true, false)).toBe(false);
+  });
+
+  it("does not delegate when no image-paste agent is active", () => {
+    expect(shouldDelegateImagePasteToAgent(false, true)).toBe(false);
+    expect(shouldDelegateImagePasteToAgent(false, false)).toBe(false);
+  });
 });
 
 describe("terminalPasteAction", () => {

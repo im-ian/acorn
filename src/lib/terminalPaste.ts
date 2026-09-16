@@ -148,6 +148,13 @@ export function isTerminalProtocolReply(data: string): boolean {
   return data.length > 0 && TERMINAL_PROTOCOL_REPLY_RE.test(data);
 }
 
+export function shouldDelegateImagePasteToAgent(
+  agentFallbackActive: boolean,
+  osClipboardReadableByAgent: boolean,
+): boolean {
+  return agentFallbackActive && osClipboardReadableByAgent;
+}
+
 export function terminalPasteAction({
   text,
   hasImagePayload,
