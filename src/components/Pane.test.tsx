@@ -100,6 +100,19 @@ const REPO = "/Users/me/repo";
 const HOME = "/Users/me";
 const WORKTREE = `${REPO}/.acorn/worktrees/feature`;
 
+/**
+ * Empty-area "double-click to create a session" affordances count two `click`
+ * events themselves rather than listening for `dblclick`, so the gesture keeps
+ * working under Chromium's 2px Windows double-click rectangle.
+ */
+function doubleClick(el: Element | null | undefined): void {
+  for (let i = 0; i < 2; i++) {
+    el?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+  }
+}
+
 function project(repoPath: string): Project {
   return {
     repo_path: repoPath,
@@ -458,9 +471,7 @@ describe("Pane empty state", () => {
     expect(emptyPane).not.toBeNull();
 
     await act(async () => {
-      emptyPane?.dispatchEvent(
-        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-      );
+      doubleClick(emptyPane);
     });
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
@@ -577,9 +588,7 @@ describe("Pane empty state", () => {
     expect(emptyPane).not.toBeNull();
 
     await act(async () => {
-      emptyPane?.dispatchEvent(
-        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-      );
+      doubleClick(emptyPane);
     });
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
@@ -620,9 +629,7 @@ describe("Pane empty state", () => {
     expect(filler).not.toBeNull();
 
     await act(async () => {
-      filler?.dispatchEvent(
-        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-      );
+      doubleClick(filler);
     });
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
@@ -699,9 +706,7 @@ describe("Pane empty state", () => {
     expect(filler).not.toBeNull();
 
     await act(async () => {
-      filler?.dispatchEvent(
-        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-      );
+      doubleClick(filler);
     });
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
@@ -786,9 +791,7 @@ describe("Pane empty state", () => {
     expect(filler).not.toBeNull();
 
     await act(async () => {
-      filler?.dispatchEvent(
-        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-      );
+      doubleClick(filler);
     });
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
@@ -857,9 +860,7 @@ describe("Pane empty state", () => {
     expect(filler).not.toBeNull();
 
     await act(async () => {
-      filler?.dispatchEvent(
-        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-      );
+      doubleClick(filler);
     });
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
@@ -922,9 +923,7 @@ describe("Pane empty state", () => {
     expect(filler).not.toBeNull();
 
     await act(async () => {
-      filler?.dispatchEvent(
-        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-      );
+      doubleClick(filler);
     });
 
     expect(mocks.createSession).toHaveBeenCalledWith(
