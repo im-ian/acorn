@@ -2254,3 +2254,139 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(writes).not.toContain("있Abc한");
   });
 });
+
+// Windows/Linux (WebView2, WebKitGTK) deliver CJK input through the W3C
+// composition events, which xterm's own CompositionHelper already commits.
+// The InputEvent state machine above is a WKWebView workaround and cannot
+// stand in for it: Blink never fires `insertFromComposition`, and the
+// terminator keydown that finalizes a syllable reports `key` as "Process",
+// so no commit point is ever reached — Korean vanished from the terminal
+// and Enter submitted a bare CR.
+//
+// These drive a REAL Chromium composition through CDP
+// (Input.imeSetComposition / Input.insertText) rather than synthetic
+// InputEvents, so the shape under test is the engine's own — the same one
+// WebView2 produces.
+test.describe("terminal: IME on the WebView2 event shape", () => {
+  async function fakeWindows(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "platform", {
+        get: () => "Win32",
+        configurable: true,
+      });
+    });
+  }
+
+  /** The IME writes into xterm's helper textarea — compose only once it
+   *  actually holds focus, or the CDP composition lands nowhere. */
+  async function focusHelperTextarea(page: Page): Promise<void> {
+    await expect
+      .poll(async () => {
+        await page.evaluate(() => {
+          document
+            .querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")
+            ?.focus();
+        });
+        return page.evaluate(() => document.activeElement?.className ?? "");
+      })
+      .toContain("xterm-helper-textarea");
+  }
+
+  type Cdp = Awaited<ReturnType<ReturnType<Page["context"]>["newCDPSession"]>>;
+
+  /** One composing keystroke: the IME-consumed keydown, then the preview. */
+  async function composeKey(cdp: Cdp, text: string): Promise<void> {
+    await cdp.send("Input.dispatchKeyEvent", {
+      type: "rawKeyDown",
+      windowsVirtualKeyCode: 229,
+      nativeVirtualKeyCode: 229,
+      key: "Process",
+      code: "KeyR",
+    });
+    await cdp.send("Input.imeSetComposition", {
+      text,
+      selectionStart: text.length,
+      selectionEnd: text.length,
+    });
+    await cdp.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      windowsVirtualKeyCode: 229,
+      nativeVirtualKeyCode: 229,
+      key: "Process",
+      code: "KeyR",
+    });
+  }
+
+  /** The IME handing the finished syllable over (compositionend + input). */
+  async function commitSyllable(cdp: Cdp, text: string): Promise<void> {
+    await cdp.send("Input.dispatchKeyEvent", {
+      type: "rawKeyDown",
+      windowsVirtualKeyCode: 229,
+      nativeVirtualKeyCode: 229,
+      key: "Process",
+      code: "KeyR",
+    });
+    await cdp.send("Input.insertText", { text });
+  }
+
+  /** xterm commits a finished syllable from a deferred task. Injected input
+   *  can outrun that task under parallel load in a way a typist never does;
+   *  wait for the PTY write instead of racing it. */
+  async function ptyCatchesUp(page: Page, text: string): Promise<void> {
+    await expect
+      .poll(async () => (await getWrites(page)).join(""))
+      .toContain(text);
+  }
+
+  async function openTerminal(page: Page, tauri: TauriMock): Promise<Cdp> {
+    await fakeWindows(page);
+    await seed(tauri);
+    await activateTerminal(page);
+    await focusHelperTextarea(page);
+    return page.context().newCDPSession(page);
+  }
+
+  test("commits Hangul once and keeps it ahead of Enter", async ({
+    page,
+    tauri,
+  }) => {
+    const cdp = await openTerminal(page, tauri);
+
+    await composeKey(cdp, "ㅎ");
+    await composeKey(cdp, "하");
+    await composeKey(cdp, "한");
+    // The IME commits 한 as the next syllable opens.
+    await commitSyllable(cdp, "한");
+    await ptyCatchesUp(page, "한");
+    await composeKey(cdp, "ㄱ");
+    await composeKey(cdp, "그");
+    await composeKey(cdp, "글");
+    await commitSyllable(cdp, "글");
+    await ptyCatchesUp(page, "글");
+    await page.keyboard.press("Enter");
+
+    // Each syllable exactly once, and the CR last — an Enter that overtakes
+    // the commit submits an empty line and strands the text.
+    await expect
+      .poll(async () => (await getWrites(page)).join(""))
+      .toBe("한글\r");
+  });
+
+  test("commits the syllable a space terminator finalizes", async ({
+    page,
+    tauri,
+  }) => {
+    const cdp = await openTerminal(page, tauri);
+
+    await composeKey(cdp, "ㅎ");
+    await composeKey(cdp, "하");
+    await composeKey(cdp, "한");
+    await commitSyllable(cdp, "한");
+    await ptyCatchesUp(page, "한");
+    await page.keyboard.press("Space");
+
+    await expect
+      .poll(async () => (await getWrites(page)).join(""))
+      .toBe("한 ");
+  });
+});

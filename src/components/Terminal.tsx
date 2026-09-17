@@ -270,6 +270,15 @@ const IS_MAC =
 const IS_WINDOWS =
   typeof navigator !== "undefined" &&
   /^(Win32|Win64|Windows)/u.test(navigator.platform);
+// WKWebView fires no usable W3C composition events for CJK IMEs — every
+// preview and commit arrives as an InputEvent instead, which is what the
+// IME state machine in the terminal effect reconstructs. Every other engine
+// (WebView2 on Windows, WebKitGTK) fires compositionstart/update/end, and
+// xterm's own CompositionHelper already commits from `compositionend`
+// there. Our path cannot stand in for it: Blink never fires the WebKit-only
+// `insertFromComposition`, and its terminator keydowns report `key` as
+// "Process", so no commit point is ever reached and every syllable is lost.
+const NATIVE_IME_COMPOSITION = !IS_MAC;
 const MODIFIER_LINK_LABEL = IS_MAC ? "Command-click" : "Ctrl-click";
 
 interface TerminalRenderInternals {
@@ -2329,6 +2338,9 @@ export function Terminal({
       const ta = container.querySelector<HTMLTextAreaElement>(
         ".xterm-helper-textarea",
       );
+      // Composition belongs to xterm on engines that fire the W3C events;
+      // only the `insertText` whitespace normalisation below still applies.
+      if (NATIVE_IME_COMPOSITION && ev.inputType !== "insertText") return;
       switch (ev.inputType) {
         case "insertCompositionText": {
           const preview = ev.data ?? "";
@@ -2444,7 +2456,8 @@ export function Terminal({
           // first jamo of a session when WKWebView fires `input`
           // before the corresponding keydown.
           const isIme =
-            lastKeyCode229 || (!!ev.data && CJK_DATA_RE.test(ev.data));
+            !NATIVE_IME_COMPOSITION &&
+            (lastKeyCode229 || (!!ev.data && CJK_DATA_RE.test(ev.data)));
           if (isIme && imeDeleting) {
             if (
               ev.data &&
@@ -2652,7 +2665,7 @@ export function Terminal({
       // path because the Korean 2-set IME reports them with
       // `ev.key` set to underlying ASCII (e.g. shift+ㅅ → key="T"),
       // and treating those as terminators flushes mid-syllable.
-      if (ev.keyCode === 229) {
+      if (ev.keyCode === 229 && !NATIVE_IME_COMPOSITION) {
         const ta229 = container.querySelector<HTMLTextAreaElement>(
           ".xterm-helper-textarea",
         );
@@ -3238,7 +3251,9 @@ export function Terminal({
     // per-syllable PTY writes our `onInput` path already issued,
     // duplicating the composed phrase. Our `onInput` covers preview,
     // partial commits, and final commit through `commitComposition()`,
-    // so xterm's path is pure duplication.
+    // so xterm's path is pure duplication — on WKWebView. Everywhere else
+    // xterm's path is the ONLY one that commits (see
+    // `NATIVE_IME_COMPOSITION`), so the listeners stay off there.
     const swallowComposition = (e: Event) => {
       // `deleteCompositionText` deliberately leaves `composing` set, because
       // the commit still follows it. A composition that ends *without* one —
@@ -3251,9 +3266,11 @@ export function Terminal({
       }
       e.stopImmediatePropagation();
     };
-    container.addEventListener("compositionstart", swallowComposition, true);
-    container.addEventListener("compositionupdate", swallowComposition, true);
-    container.addEventListener("compositionend", swallowComposition, true);
+    if (!NATIVE_IME_COMPOSITION) {
+      container.addEventListener("compositionstart", swallowComposition, true);
+      container.addEventListener("compositionupdate", swallowComposition, true);
+      container.addEventListener("compositionend", swallowComposition, true);
+    }
 
     let ptyReady = false;
     let lastPtyResize:
