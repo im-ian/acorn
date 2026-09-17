@@ -526,7 +526,10 @@ fn canonical_existing_path(path: &Path) -> AppResult<PathBuf> {
     if !path.is_absolute() {
         return Err(AppError::InvalidPath("absolute path required".into()));
     }
-    path.canonicalize().map_err(AppError::from)
+    // Strip Windows verbatim prefixes (`\\?\C:\...`) so stored session /
+    // project paths stay on the legacy-drive form every other subsystem
+    // already expects (git2, agent cwd, frontend path equality).
+    acorn_paths::canonicalize(path).map_err(AppError::from)
 }
 
 /// Normalize a renderer/IPC supplied label before it reaches persistent state
@@ -560,7 +563,41 @@ fn is_unsafe_display_name_char(value: char) -> bool {
 }
 
 fn path_is_inside(path: &Path, root: &Path) -> bool {
-    path == root || path.starts_with(root)
+    // Match fs_explorer: Windows canonicalize emits `\\?\` prefixes that
+    // `Path::starts_with` treats as a different root. Compare after peeling
+    // the prefix so mixed stored/live forms still authorize correctly.
+    let path = acorn_paths::simplified(path);
+    let root = acorn_paths::simplified(root);
+    if path == root || path.starts_with(root) {
+        return true;
+    }
+    windows_logical_path_is_inside(path, root)
+}
+
+fn windows_logical_path_is_inside(path: &Path, root: &Path) -> bool {
+    let Some(path_text) = path.to_str() else {
+        return false;
+    };
+    let Some(root_text) = root.to_str() else {
+        return false;
+    };
+    if !looks_like_windows_path_text(path_text) && !looks_like_windows_path_text(root_text) {
+        return false;
+    }
+    let path_key = windows_logical_path_key(path_text);
+    let root_key = windows_logical_path_key(root_text);
+    path_key == root_key || path_key.starts_with(&format!("{root_key}/"))
+}
+
+fn looks_like_windows_path_text(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        || path.starts_with(r"\\")
+        || path.starts_with("//")
+}
+
+fn windows_logical_path_key(path: &str) -> String {
+    path.replace('\\', "/").to_ascii_lowercase()
 }
 
 fn registered_project_roots(state: &AppState) -> Vec<PathBuf> {
@@ -569,7 +606,7 @@ fn registered_project_roots(state: &AppState) -> Vec<PathBuf> {
         .list()
         .into_iter()
         .flat_map(|project| project.roots())
-        .filter_map(|root| root.canonicalize().ok())
+        .filter_map(|root| acorn_paths::canonicalize(&root).ok())
         .collect();
     roots.sort();
     roots.dedup();
@@ -584,7 +621,7 @@ fn registered_repository_roots(state: &AppState) -> Vec<PathBuf> {
             Ok(worktrees) => roots.extend(
                 worktrees
                     .into_iter()
-                    .filter_map(|path| path.canonicalize().ok()),
+                    .filter_map(|path| acorn_paths::canonicalize(&path).ok()),
             ),
             Err(error) => tracing::debug!(
                 path = %project_root.display(),
@@ -7775,9 +7812,28 @@ pub async fn remove_session(
     id: String,
     remove_worktree: Option<bool>,
 ) -> AppResult<RemovalOutcome<Option<SessionRemoval>>> {
-    let app_state = state.inner().clone();
+    remove_session_inner(state.inner().clone(), id, remove_worktree).await
+}
+
+async fn remove_session_inner(
+    app_state: AppState,
+    id: String,
+    remove_worktree: Option<bool>,
+) -> AppResult<RemovalOutcome<Option<SessionRemoval>>> {
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
-    let session = app_state.sessions.get(&id)?;
+    // Idempotent: a second remove (React effect re-entry, duplicate UI action)
+    // must not toast "session not found" after the first call already deleted.
+    let session = match app_state.sessions.get(&id) {
+        Ok(session) => session,
+        Err(acorn_session::SessionError::NotFound(_)) => {
+            return Ok(RemovalProgress::default().into_outcome(
+                &app_state,
+                None,
+                vec![id.to_string()],
+                None,
+            ));
+        }
+    };
     let sessions_to_remove = session_removal_cascade(&app_state, &session);
     let mut progress = RemovalProgress::default();
     let removed_session_ids = sessions_to_remove
@@ -12448,10 +12504,10 @@ mod tests {
         linked_worktree_root_for_registered_path, memory_root_pids, normalize_session_goal,
         normalize_session_graph, poll_defers_to_hook, project_creation_git_error,
         pty_io_uses_daemon, reconcile_stale_worktrees, remove_linked_worktree_at_path,
-        remove_worktree_inner, restore_pending_session_removal, resume_session_inner,
+        remove_session_inner, remove_worktree_inner, restore_pending_session_removal, resume_session_inner,
         retry_removal_cleanup_inner, seed_initial_commit, should_remove_local_project_mirror,
         should_route_session_to_daemon, sigwinch_pulse_size, terminate_session_runtime,
-        validate_display_name, validate_editor_command, validate_new_project_name,
+        path_is_inside, validate_display_name, validate_editor_command, validate_new_project_name,
         validate_pty_caller_env, ChatProviderAdapter, ProcessMemorySnapshot, RemovalProgress,
         MAX_PTY_WORKSPACE_NAME_BYTES,
     };
@@ -12501,6 +12557,39 @@ mod tests {
     }
 
     #[test]
+    fn path_is_inside_treats_windows_verbatim_prefix_as_same_location() {
+        assert!(path_is_inside(
+            Path::new(r"\\?\D:\winCudeProject\cras_backend\src"),
+            Path::new(r"D:\winCudeProject\cras_backend"),
+        ));
+        assert!(path_is_inside(
+            Path::new(r"D:\winCudeProject\cras_backend"),
+            Path::new(r"\\?\D:\winCudeProject\cras_backend"),
+        ));
+        assert!(!path_is_inside(
+            Path::new(r"\\?\D:\other\cras_backend"),
+            Path::new(r"D:\winCudeProject\cras_backend"),
+        ));
+    }
+
+
+    #[test]
+    fn remove_session_is_idempotent_when_session_already_gone() {
+        let state = AppState::new();
+        let missing = Uuid::new_v4().to_string();
+        let outcome = tauri::async_runtime::block_on(remove_session_inner(
+            state,
+            missing.clone(),
+            Some(false),
+        ))
+        .expect("missing session remove should succeed idempotently");
+        assert_eq!(outcome.removed_session_ids, vec![missing]);
+        assert!(outcome.result.is_none());
+        assert!(outcome.issues.is_empty());
+    }
+
+
+    #[test]
     fn repository_authorization_accepts_registered_roots_and_descendants_only() {
         let state = AppState::new();
         let root = tempfile::tempdir().expect("registered project root");
@@ -12513,11 +12602,11 @@ mod tests {
 
         assert_eq!(
             authorize_registered_repository(&state, root.path()).unwrap(),
-            root.path().canonicalize().unwrap()
+            acorn_paths::canonicalize(root.path()).unwrap()
         );
         assert_eq!(
             authorize_registered_repository(&state, &nested).unwrap(),
-            nested.canonicalize().unwrap()
+            acorn_paths::canonicalize(&nested).unwrap()
         );
         assert!(authorize_registered_repository(&state, outside.path()).is_err());
     }
@@ -12550,11 +12639,11 @@ mod tests {
 
         assert_eq!(
             authorize_registered_repository(&state, &worktree_path).unwrap(),
-            worktree_path.canonicalize().unwrap()
+            acorn_paths::canonicalize(&worktree_path).unwrap()
         );
         assert_eq!(
             authorize_registered_repository(&state, &nested).unwrap(),
-            nested.canonicalize().unwrap()
+            acorn_paths::canonicalize(&nested).unwrap()
         );
         assert_eq!(
             authorize_registered_worktree(&state, root.path(), &worktree_path).unwrap(),

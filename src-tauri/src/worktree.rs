@@ -64,14 +64,15 @@ pub fn ensure_repo(path: &Path) -> AppResult<Repository> {
 }
 
 pub fn project_root_for_path(path: &Path) -> AppResult<PathBuf> {
-    let path = path.canonicalize()?;
+    // Prefer the shared canonicalize so Windows never stores `\\?\` roots.
+    let path = acorn_paths::canonicalize(path)?;
     let git_path = acorn_paths::simplified(&path);
     match Repository::discover(git_path) {
         Ok(repo) => {
             let Some(workdir) = repo.workdir() else {
                 return Ok(path);
             };
-            workdir.canonicalize().map_err(|err| {
+            acorn_paths::canonicalize(workdir).map_err(|err| {
                 AppError::Io(std::io::Error::new(
                     err.kind(),
                     format!(

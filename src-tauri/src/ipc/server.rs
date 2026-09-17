@@ -851,6 +851,8 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 }
 
 fn path_is_inside(path: &Path, root: &Path) -> bool {
+    let path = acorn_paths::simplified(path);
+    let root = acorn_paths::simplified(root);
     path == root || path.starts_with(root)
 }
 
@@ -861,7 +863,7 @@ fn canonical_existing_path(path: &Path, label: &str) -> Result<PathBuf, Response
             message: format!("{label} must be an absolute path: {}", path.display()),
         });
     }
-    path.canonicalize().map_err(|err| Response::Error {
+    acorn_paths::canonicalize(path).map_err(|err| Response::Error {
         code: ErrorCode::Invalid,
         message: format!("{label} is not accessible: {} ({err})", path.display()),
     })

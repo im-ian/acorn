@@ -68,6 +68,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useAppStore, type WorkspaceViewMode } from "../store";
 import { openExternalUrlWithFeedback } from "../lib/externalOpener";
+import { pathsEqual } from "../lib/pathUtils";
 import {
   AgentProviderIcon,
   buildAgentForkCommand,
@@ -1971,15 +1972,8 @@ function projectFolderGroupById(
   return null;
 }
 
-function normalizeWorkspacePath(path: string): string {
-  return path.replace(/[\\/]+$/, "");
-}
-
 function isWorktreeWorkspace(folder: ProjectFolder): boolean {
-  return (
-    normalizeWorkspacePath(folder.cwdPath) !==
-    normalizeWorkspacePath(folder.repoPath)
-  );
+  return !pathsEqual(folder.cwdPath, folder.repoPath);
 }
 
 function WorkspaceIcon({
@@ -2013,8 +2007,7 @@ function canAssignSessionToWorkspace(
   }
   if (
     isWorktreeWorkspace(targetFolder) &&
-    normalizeWorkspacePath(session.worktree_path) !==
-      normalizeWorkspacePath(targetFolder.cwdPath)
+    !pathsEqual(session.worktree_path, targetFolder.cwdPath)
   ) {
     return false;
   }
@@ -2028,8 +2021,7 @@ function canCreateWorkspaceFromSessionWorktree(
 ): boolean {
   if (!hasRecordedWorktree(session)) return false;
   if (
-    normalizeWorkspacePath(session.worktree_path) ===
-    normalizeWorkspacePath(session.repo_path)
+    pathsEqual(session.worktree_path, session.repo_path)
   ) {
     return false;
   }
@@ -2113,15 +2105,13 @@ function isSessionDragCrossingLockedWorkspace(
   return Boolean(
     targetFolder &&
       isWorktreeWorkspace(targetFolder) &&
-      normalizeWorkspacePath(session.worktree_path) !==
-        normalizeWorkspacePath(targetFolder.cwdPath),
+      !pathsEqual(session.worktree_path, targetFolder.cwdPath),
   );
 }
 
 function workspacePathLabel(folder: ProjectFolder): string | null {
   if (
-    normalizeWorkspacePath(folder.cwdPath) ===
-    normalizeWorkspacePath(folder.repoPath)
+    pathsEqual(folder.cwdPath, folder.repoPath)
   ) {
     return null;
   }
@@ -3520,8 +3510,7 @@ function SessionRow({
     currentProjectFolder !== undefined &&
     currentWorkspaceCwd !== null &&
     isWorktreeWorkspace(currentProjectFolder) &&
-    normalizeWorkspacePath(session.worktree_path) ===
-      normalizeWorkspacePath(currentWorkspaceCwd);
+    pathsEqual(session.worktree_path, currentWorkspaceCwd);
   const currentPullRequest = useCurrentPullRequest(session);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
   const transcriptPath = session.agent_transcript_path?.trim() || null;
