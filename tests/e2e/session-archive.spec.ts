@@ -124,6 +124,11 @@ test.describe("session archive", () => {
     const preview = page.getByRole("dialog", {
       name: /archived session preview/i,
     });
+    // Archiving parks the session; it must not pop the restore modal.
+    await expect(preview).toHaveCount(0);
+
+    await sidebar.getByRole("button", { name: /Archived/ }).click();
+    await sidebar.getByRole("button", { name: /alpha.*Ready/ }).click();
     await expect(preview).toBeVisible();
     await expect(
       preview.getByRole("button", { name: "Restore", exact: true }),
