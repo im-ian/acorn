@@ -3530,9 +3530,13 @@ export const useAppStore = create<AppStateModel>()(
         s.activeProjectFolderId,
         true,
       );
-      const previewId = cascadeIds.has(s.activeSessionId ?? "")
-        ? id
-        : retainedArchivedPreviewSessionId(sessions, s.archivedPreviewSessionId);
+      // Archiving is a park, not a request to look at the parked session:
+      // only an already-open preview survives. Forcing the preview open here
+      // made every archive pop a "restore?" modal over the workspace.
+      const previewId = retainedArchivedPreviewSessionId(
+        sessions,
+        s.archivedPreviewSessionId,
+      );
       return {
         sessions,
         error: null,

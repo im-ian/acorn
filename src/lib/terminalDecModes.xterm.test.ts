@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Terminal } from "@xterm/xterm";
+import { MOUSE_PASTE_RESET_CSI } from "./terminalRestorePlan";
 
 function writeAll(term: Terminal, data: string): Promise<void> {
   return new Promise((resolve) => {
@@ -25,6 +26,16 @@ describe("xterm.js mouse mode transitions", () => {
     const term = makeTerm();
     await writeAll(term, "\x1b[?1000;1006h");
     expect(term.modes.mouseTrackingMode).toBe("vt200");
+    term.dispose();
+  });
+
+  it("the respawn reset clears any-motion tracking left by a killed TUI", async () => {
+    const term = makeTerm();
+    await writeAll(term, "\x1b[?1003;1006h");
+    expect(term.modes.mouseTrackingMode).toBe("any");
+    await writeAll(term, MOUSE_PASTE_RESET_CSI);
+    expect(term.modes.mouseTrackingMode).toBe("none");
+    expect(term.modes.bracketedPasteMode).toBe(false);
     term.dispose();
   });
 

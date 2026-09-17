@@ -1746,14 +1746,38 @@ describe("archiveSession", () => {
     ]);
     expect(useAppStore.getState().sessions[0]?.archived_at).toBeTruthy();
     expect(useAppStore.getState().panes.root.tabIds).toEqual(["a2"]);
-    expect(useAppStore.getState().archivedPreviewSessionId).toBe("a1");
-    expect(useAppStore.getState().activeSessionId).toBe("a1");
+    expect(useAppStore.getState().archivedPreviewSessionId).toBeNull();
+    expect(useAppStore.getState().activeSessionId).toBe("a2");
 
     pending.resolve(archived);
     await archive;
     expect(useAppStore.getState().panes.root.tabIds).toEqual(["a2"]);
-    expect(useAppStore.getState().archivedPreviewSessionId).toBe("a1");
+    expect(useAppStore.getState().archivedPreviewSessionId).toBeNull();
     expect(useAppStore.getState().sessions).toHaveLength(2);
+  });
+
+  it("falls back to the pane's last-selected session, not the last tab", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    const a3 = session("a3", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2, a3]);
+    useAppStore.getState().selectSession("a3");
+    useAppStore.getState().selectSession("a2");
+    useAppStore.getState().selectSession("a1");
+
+    const archived = { ...a1, archived_at: "2026-04-01T00:00:00Z" };
+    mockApi.archiveSession.mockResolvedValueOnce(archived);
+    mockApi.listSessions.mockResolvedValue([archived, a2, a3]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    await useAppStore.getState().archiveSession("a1");
+
+    const s = useAppStore.getState();
+    // Tab order is [a2, a3]; positional fallback would land on a3.
+    expect(s.panes.root.tabIds).toEqual(["a2", "a3"]);
+    expect(s.panes.root.activeTabId).toBe("a2");
+    expect(s.activeSessionId).toBe("a2");
+    expect(s.archivedPreviewSessionId).toBeNull();
   });
 
   it("parks control-owned descendants with the controller", async () => {
