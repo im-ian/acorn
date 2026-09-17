@@ -91,6 +91,7 @@ import {
   type NewGraphSessionEventDetail,
 } from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
+import { useSyntheticDoubleClick } from "../lib/doubleClick";
 import {
   revealInFileManagerText,
   revealPathWithFeedback,
@@ -2376,6 +2377,10 @@ function ProjectGroupView({
       isGroupDefaultFolder(project, folderGroup.folder),
     ) ?? project.folders[0] ?? null;
   const projectSessionCreationFolder = defaultFolderGroup?.folder ?? null;
+  const onEmptyGroupClick = useSyntheticDoubleClick(() => {
+    if (!defaultFolderGroup) return;
+    onAddSession(defaultFolderGroup.folder, false, "regular");
+  });
 
   const hoverDetails = sessionDisplay.showDetailsOnHover
     ? buildProjectHoverDetails(t, project, sourcePaths ?? [])
@@ -2802,10 +2807,10 @@ function ProjectGroupView({
               <li
                 role="button"
                 tabIndex={0}
-                onClick={onActivate}
-                onDoubleClick={() =>
-                  onAddSession(defaultFolderGroup.folder, false, "regular")
-                }
+                onClick={(e) => {
+                  onActivate();
+                  onEmptyGroupClick(e);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
@@ -4431,6 +4436,7 @@ function LocalTerminalArea({
   onMoveSessionToFolder,
 }: LocalTerminalAreaProps) {
   const t = useTranslation();
+  const onEmptyStripClick = useSyntheticDoubleClick(onCreate);
   const newSessionShortcut = useSettings((s) =>
     formatHotkey(s.settings.shortcuts.newSession),
   );
@@ -4651,7 +4657,7 @@ function LocalTerminalArea({
             ? sidebarText(t, "sidebar.localTerminals.newSession")
             : undefined
         }
-        onDoubleClick={onCreate}
+        onClick={onEmptyStripClick}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();

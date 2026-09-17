@@ -58,6 +58,7 @@ import {
 import { requestNewAutonomousGoalSession } from "../lib/autonomousGoal";
 import { requestNewGraphSession } from "../lib/graphSessionEvents";
 import { cn } from "../lib/cn";
+import { useSyntheticDoubleClick } from "../lib/doubleClick";
 import {
   revealInFileManagerText,
   revealPathWithFeedback,
@@ -669,9 +670,9 @@ export function Pane({ paneId }: PaneProps) {
         {active ? null : (
           <EmptyPane
             hasProjects={hasProjects}
-            onDoubleClick={
+            onCreate={
               hasProjects
-                ? handleNewTabFromEmpty
+                ? () => void handleNewTabFromEmpty()
                 : () =>
                     window.dispatchEvent(new CustomEvent("acorn:new-project"))
             }
@@ -719,19 +720,27 @@ export function Pane({ paneId }: PaneProps) {
 
 function EmptyPane({
   hasProjects,
-  onDoubleClick,
+  onCreate,
   onContextMenu,
 }: {
   hasProjects: boolean;
-  onDoubleClick: () => void;
+  onCreate: () => void;
   onContextMenu: (x: number, y: number) => void;
 }) {
   const t = useTranslation();
+  const onClick = useSyntheticDoubleClick(onCreate);
 
   return (
     <div
       className="flex h-full flex-col items-center justify-center gap-2 text-fg-muted hover:text-fg/80 transition cursor-pointer select-none"
-      onDoubleClick={onDoubleClick}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        // Space is the pane-wide double-tap gesture (see the window listener
+        // above), so only Enter activates the role="button" directly.
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        onCreate();
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -925,6 +934,7 @@ function TabStrip({
   minimizedTabIds,
 }: TabStripProps) {
   const [insertIndex, setInsertIndex] = useState<number | null>(null);
+  const onFillerClick = useSyntheticDoubleClick(onNewTab);
   const stripRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const tabDrag = useWorkspaceTabDragSession();
@@ -1054,9 +1064,9 @@ function TabStrip({
       <div
         data-pane-tab-filler={paneId}
         className="min-w-[2.5rem] flex-1 self-stretch"
-        onDoubleClick={(e) => {
+        onClick={(e) => {
           if (e.target !== e.currentTarget) return;
-          onNewTab();
+          onFillerClick(e);
         }}
       />
     </div>
