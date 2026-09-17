@@ -271,14 +271,16 @@ const IS_WINDOWS =
   typeof navigator !== "undefined" &&
   /^(Win32|Win64|Windows)/u.test(navigator.platform);
 // WKWebView fires no usable W3C composition events for CJK IMEs — every
-// preview and commit arrives as an InputEvent instead, which is what the
-// IME state machine in the terminal effect reconstructs. Every other engine
-// (WebView2 on Windows, WebKitGTK) fires compositionstart/update/end, and
-// xterm's own CompositionHelper already commits from `compositionend`
-// there. Our path cannot stand in for it: Blink never fires the WebKit-only
-// `insertFromComposition`, and its terminator keydowns report `key` as
-// "Process", so no commit point is ever reached and every syllable is lost.
-const NATIVE_IME_COMPOSITION = !IS_MAC;
+// preview and commit arrives as an InputEvent instead, which is what the IME
+// state machine in the terminal effect reconstructs. WebView2 fires
+// compositionstart/update/end, and xterm's own CompositionHelper already
+// commits from `compositionend` there. Our path cannot stand in for it:
+// Blink never fires the WebKit-only `insertFromComposition`, and its
+// terminator keydowns report `key` as "Process", so no commit point is ever
+// reached and every syllable is lost. Linux (WebKitGTK) is deliberately left
+// on the WKWebView path — it is not a shipped target and its composition
+// behaviour is unverified, so the conservative default is the status quo.
+const NATIVE_IME_COMPOSITION = IS_WINDOWS;
 const MODIFIER_LINK_LABEL = IS_MAC ? "Command-click" : "Ctrl-click";
 
 interface TerminalRenderInternals {

@@ -86,7 +86,22 @@ async function seed(tauri: TauriMock): Promise<void> {
   });
 }
 
-async function activateTerminal(page: Page): Promise<void> {
+/**
+ * `platform` decides which engine the terminal's IME layer emulates, so it has
+ * to be pinned rather than inherited from whatever OS runs the suite: the
+ * WKWebView InputEvent path is macOS-only, and a Linux CI runner would
+ * otherwise exercise a different path than a macOS laptop for the same test.
+ */
+async function activateTerminal(
+  page: Page,
+  platform = "MacIntel",
+): Promise<void> {
+  await page.addInitScript((value) => {
+    Object.defineProperty(navigator, "platform", {
+      get: () => value,
+      configurable: true,
+    });
+  }, platform);
   await page.goto("/");
   await page
     .getByRole("button", { name: /^shell main · Ready$/ })
@@ -2268,15 +2283,6 @@ test.describe("terminal: IME (PR #104 regression)", () => {
 // InputEvents, so the shape under test is the engine's own — the same one
 // WebView2 produces.
 test.describe("terminal: IME on the WebView2 event shape", () => {
-  async function fakeWindows(page: Page): Promise<void> {
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, "platform", {
-        get: () => "Win32",
-        configurable: true,
-      });
-    });
-  }
-
   /** The IME writes into xterm's helper textarea — compose only once it
    *  actually holds focus, or the CDP composition lands nowhere. */
   async function focusHelperTextarea(page: Page): Promise<void> {
@@ -2339,9 +2345,8 @@ test.describe("terminal: IME on the WebView2 event shape", () => {
   }
 
   async function openTerminal(page: Page, tauri: TauriMock): Promise<Cdp> {
-    await fakeWindows(page);
     await seed(tauri);
-    await activateTerminal(page);
+    await activateTerminal(page, "Win32");
     await focusHelperTextarea(page);
     return page.context().newCDPSession(page);
   }
