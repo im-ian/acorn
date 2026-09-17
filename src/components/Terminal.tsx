@@ -3595,6 +3595,13 @@ export function Terminal({
         .getState()
         .sessions.find((candidate) => candidate.id === sessionId);
       if (session && isArchivedSession(session)) return;
+      // A child killed from the outside (archive, crash, `pty_kill`) never
+      // emits the DECRST for the modes it turned on, and this xterm outlives
+      // the respawn — so the fresh shell would inherit the dead TUI's mouse
+      // tracker and receive `\e[<35;…M` motion reports as keyboard input.
+      // Reattach to a still-live PTY re-sends the real modes as a prelude
+      // right after `pty_spawn`, so clearing here is safe in both cases.
+      term.write(MOUSE_PASTE_RESET_CSI);
       spawnInFlight = true;
       try {
         ptyReady = false;
