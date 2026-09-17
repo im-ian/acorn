@@ -183,13 +183,18 @@ async function imeOverlayText(page: Page): Promise<string> {
 }
 
 /** Inline geometry of the cloned line-tail inside the composition overlay. */
-async function imeTailBox(
-  page: Page,
-): Promise<{ text: string; left: string; clipLeft: string }> {
+async function imeTailBox(page: Page): Promise<{
+  text: string;
+  left: string;
+  clipLeft: string;
+  background: string;
+  viewBackground: string;
+}> {
   return page.evaluate(() => {
-    const tail = document.querySelector<HTMLElement>(
-      ".composition-view.active .acorn-ime-line-tail",
+    const view = document.querySelector<HTMLElement>(
+      ".composition-view.active",
     );
+    const tail = view?.querySelector<HTMLElement>(".acorn-ime-line-tail");
     const clipPath = tail?.style.clipPath ?? "";
     // `inset(0 0 0 0px)` is normalised to `inset(0px)`, so read the last
     // length rather than matching the string the code wrote.
@@ -198,6 +203,8 @@ async function imeTailBox(
       text: tail?.textContent ?? "",
       left: tail?.style.left ?? "",
       clipLeft: clipPath ? (parts[parts.length - 1] ?? "") : "",
+      background: tail ? getComputedStyle(tail).backgroundColor : "",
+      viewBackground: view ? getComputedStyle(view).backgroundColor : "",
     };
   });
 }
@@ -1716,6 +1723,11 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(parseFloat(tail.clipLeft)).toBe(0);
     // ...and it moves right by the composed width, the way the real line will.
     expect(parseFloat(tail.left)).toBeGreaterThan(0);
+    // The shifted clone sits on top of the row it copies, so it has to be
+    // opaque. A transparent tail paints both, one syllable apart, and the
+    // line reads as doubled glyphs.
+    expect(tail.background).toBe(tail.viewBackground);
+    expect(tail.background).not.toBe("rgba(0, 0, 0, 0)");
   });
 
   test("composing over blank tail columns still pins a TUI border", async ({

@@ -215,6 +215,10 @@
 .acorn-terminal
   .composition-view
   .acorn-ime-line-tail {
+  /* The clone is painted shifted over the live row it copies. Without the
+     overlay's own background behind it both draw, one syllable apart, and
+     the line reads as doubled glyphs. */
+  background-color: inherit;
   left: 0;
   pointer-events: none;
   position: absolute;
