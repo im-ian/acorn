@@ -151,6 +151,7 @@ name = "acorn-session"
 version = "0.1.0"
 dependencies = [
  "acorn-agent",
+ "acorn-paths",
  "acorn-platform",
  "acorn-pty",
  "acorn-transcript",

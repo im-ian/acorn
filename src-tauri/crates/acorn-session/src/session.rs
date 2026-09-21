@@ -62,7 +62,14 @@ impl Project {
     }
 
     pub fn owns_root(&self, path: &std::path::Path) -> bool {
-        self.repo_path == path || self.source_paths.iter().any(|root| root == path)
+        // Windows may persist either `D:\repo` or `\\?\D:\repo` across
+        // releases; treat those as the same root so create/remove do not mint
+        // a duplicate project or miss the registered one.
+        acorn_paths::same_cwd(&self.repo_path, path)
+            || self
+                .source_paths
+                .iter()
+                .any(|root| acorn_paths::same_cwd(root, path))
     }
 }
 
@@ -77,8 +84,8 @@ impl ProjectStore {
     }
 
     pub fn ensure(&self, repo_path: PathBuf, name: String) -> Project {
-        if let Some(existing) = self.inner.get(&repo_path) {
-            return existing.value().clone();
+        if let Some(existing) = self.owner_of_root(&repo_path) {
+            return existing;
         }
         let next_position = self
             .inner
@@ -109,7 +116,13 @@ impl ProjectStore {
     }
 
     pub fn remove(&self, repo_path: &std::path::Path) -> Option<Project> {
-        self.inner.remove(repo_path).map(|(_, v)| v)
+        let key = self
+            .inner
+            .iter()
+            .find(|entry| entry.value().owns_root(repo_path))?
+            .key()
+            .clone();
+        self.inner.remove(&key).map(|(_, v)| v)
     }
 
     /// The project that claims `path` as one of its roots, primary or extra.
@@ -122,7 +135,13 @@ impl ProjectStore {
 
     /// Rename a project. Returns `None` when the project is not registered.
     pub fn rename(&self, repo_path: &std::path::Path, name: String) -> Option<Project> {
-        let mut entry = self.inner.get_mut(repo_path)?;
+        let key = self
+            .inner
+            .iter()
+            .find(|entry| entry.value().owns_root(repo_path))?
+            .key()
+            .clone();
+        let mut entry = self.inner.get_mut(&key)?;
         entry.name = name;
         Some(entry.clone())
     }
@@ -134,7 +153,13 @@ impl ProjectStore {
         repo_path: &std::path::Path,
         source_paths: Vec<PathBuf>,
     ) -> Option<Project> {
-        let mut entry = self.inner.get_mut(repo_path)?;
+        let key = self
+            .inner
+            .iter()
+            .find(|entry| entry.value().owns_root(repo_path))?
+            .key()
+            .clone();
+        let mut entry = self.inner.get_mut(&key)?;
         entry.source_paths = source_paths;
         Some(entry.clone())
     }
@@ -1658,6 +1683,7 @@ impl SessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn fake_session(repo: &str, worktree: &str, isolated: bool) -> Session {
         Session::new(
@@ -2851,5 +2877,28 @@ mod tests {
             SessionAgentProvider::Antigravity.hook_provider_env_value(),
             "antigravity"
         );
+    }
+    #[test]
+    fn owns_root_equates_windows_verbatim_prefix() {
+        let project = Project::new(
+            PathBuf::from(r"D:\winCudeProject\cras_backend"),
+            "cras".to_string(),
+            0,
+        );
+        assert!(project.owns_root(Path::new(r"\\?\D:\winCudeProject\cras_backend")));
+        assert!(project.owns_root(Path::new(r"D:\winCudeProject\cras_backend")));
+        assert!(!project.owns_root(Path::new(r"D:\other")));
+
+        let store = ProjectStore::new();
+        store.ensure(
+            PathBuf::from(r"D:\winCudeProject\cras_backend"),
+            "cras".to_string(),
+        );
+        let again = store.ensure(
+            PathBuf::from(r"\\?\D:\winCudeProject\cras_backend"),
+            "dup".to_string(),
+        );
+        assert_eq!(again.name, "cras");
+        assert_eq!(store.list().len(), 1);
     }
 }
