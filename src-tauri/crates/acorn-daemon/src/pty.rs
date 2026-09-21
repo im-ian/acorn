@@ -83,9 +83,15 @@ struct PtyHandle {
     /// half-closed PTY.
     stop: Arc<AtomicBool>,
     /// Broadcast channel: every byte chunk read from the PTY goes here
-    /// for live consumers. Stored as a `Sender` — drop is the only
-    /// teardown signal, no explicit close needed.
-    output_tx: broadcast::Sender<OutputChunk>,
+    /// for live consumers. Dropping the sender is the only teardown
+    /// signal attached stream pumps get, so it lives in an `Option` the
+    /// wait thread clears on child exit rather than relying on the last
+    /// `Arc<PtyHandle>` going away. The reader thread holds one of those
+    /// `Arc`s and, on Windows, can stay parked in `read()` forever after
+    /// the child is reaped — ConPTY keeps its pipe open — which would
+    /// otherwise strand every subscriber waiting for output that will
+    /// never come.
+    output_tx: Mutex<Option<broadcast::Sender<OutputChunk>>>,
     /// Scrollback ring. Same `Arc` as the one in
     /// `DaemonSession::scrollback`; both pointers are clones of the
     /// instance created during `spawn`.
@@ -240,7 +246,7 @@ impl PtyManager {
             killer: Mutex::new(killer),
             process_tree,
             stop: stop.clone(),
-            output_tx: output_tx.clone(),
+            output_tx: Mutex::new(Some(output_tx)),
             scrollback: scrollback.clone(),
             exit_code,
             dec_modes: Mutex::new(DecModeTracker::default()),
@@ -386,8 +392,16 @@ impl PtyManager {
     pub fn subscribe(&self, id: &Uuid) -> Option<PtySubscription> {
         self.handles.get(id).map(|r| {
             let handle = r.value();
+            let rx = match handle.output_tx.lock().as_ref() {
+                Some(tx) => tx.subscribe(),
+                // The wait thread already cleared the sender. Hand back a
+                // receiver that is closed from the start so the caller's
+                // pump emits its exit frame immediately instead of parking
+                // on a channel nothing will ever publish to.
+                None => broadcast::channel::<OutputChunk>(1).1,
+            };
             PtySubscription {
-                rx: handle.output_tx.subscribe(),
+                rx,
                 exit_code: Arc::clone(&handle.exit_code),
             }
         })
@@ -517,9 +531,9 @@ fn read_loop(mut reader: Box<dyn Read + Send>, handle: Arc<PtyHandle>) {
                 // them. The scrollback ring is the safety net on
                 // reattach.
                 if let Some(span) = span {
-                    let _ = handle
-                        .output_tx
-                        .send(OutputChunk::new(chunk.to_vec(), span));
+                    if let Some(tx) = handle.output_tx.lock().as_ref() {
+                        let _ = tx.send(OutputChunk::new(chunk.to_vec(), span));
+                    }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -543,6 +557,12 @@ fn wait_loop(
         Err(_) => None,
     };
     *expected_handle.exit_code.lock() = code;
+    // Close the broadcast *after* the exit code is visible: a pump woken by
+    // `Closed` reads that code to build its exit frame. Dropping the sender
+    // here rather than leaning on the handle's refcount is what makes exit
+    // observable on Windows, where the reader thread keeps its `Arc` while
+    // parked in a `read()` that ConPTY never ends.
+    *expected_handle.output_tx.lock() = None;
     stop.store(true, Ordering::SeqCst);
     handles.remove_if(&session_id, |_, current| {
         Arc::ptr_eq(current, &expected_handle)
@@ -579,6 +599,106 @@ mod tests {
             agent_resume_token: None,
             agent_kind: None,
         }
+    }
+
+    /// A child that lives long enough to attach to, then exits on its own.
+    /// Natural exit — not a kill — is the path that regressed on Windows.
+    #[cfg(any(unix, windows))]
+    fn self_exiting_test_spec(id: Uuid) -> SpawnSpec {
+        #[cfg(unix)]
+        let (command, args) = (
+            "/bin/sh".to_string(),
+            vec!["-c".to_string(), "sleep 1".to_string()],
+        );
+        // `cmd.exe /C ...` does not run under ConPTY here — it produces a few
+        // bytes and never exits. `powershell.exe` is the spawn shape the
+        // ConPTY test above already proves works on this harness.
+        #[cfg(windows)]
+        let (command, args) = (
+            "powershell.exe".to_string(),
+            vec![
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-Command".to_string(),
+                "Start-Sleep -Milliseconds 800".to_string(),
+            ],
+        );
+
+        SpawnSpec {
+            command,
+            args,
+            ..long_running_test_spec(id)
+        }
+    }
+
+    /// The daemon's only "this PTY is finished" signal to an already-attached
+    /// stream pump is the broadcast channel closing. The reader thread holds an
+    /// `Arc<PtyHandle>` and, on Windows, stays parked in `read()` after the
+    /// child is reaped because ConPTY never closes its pipe — so the close has
+    /// to come from the wait thread clearing the sender. Without that, an
+    /// attached client waits forever and the app never learns the shell exited.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn subscriber_sees_broadcast_close_when_child_exits() {
+        let manager = PtyManager::new(Arc::new(|_, _| {}));
+        let registry = SessionRegistry::new();
+        let id = Uuid::new_v4();
+
+        manager
+            .spawn(self_exiting_test_spec(id), registry.clone())
+            .unwrap();
+        // Hold a handle `Arc` for the rest of the test. That is precisely the
+        // Windows condition reproduced on every platform: a live
+        // `Arc<PtyHandle>` — there, the reader thread parked in `read()` —
+        // outliving the child. Before the fix this kept the sender alive and
+        // the close below never arrived on any OS.
+        let handle = manager
+            .handles
+            .get(&id)
+            .map(|entry| Arc::clone(entry.value()))
+            .expect("spawned session has a live handle");
+        let mut subscription = manager.subscribe(&id).expect("live session subscribes");
+
+        // PowerShell asks the terminal for its cursor position before it will
+        // proceed, and blocks until something answers. xterm.js answers this in
+        // the app; a headless test has to as well, or the child never reaches
+        // its body and never exits — which looks exactly like a missed exit.
+        let mut answered_cursor_queries = 0usize;
+        // Poll rather than block, so a regression fails the assert instead of
+        // parking the test thread until the CI job times out.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut closed = false;
+        while Instant::now() < deadline {
+            if let Some(snapshot) = manager.scrollback_snapshot(&id) {
+                let seen = String::from_utf8_lossy(&snapshot.bytes)
+                    .matches("\u{1b}[6n")
+                    .count();
+                while answered_cursor_queries < seen {
+                    let _ = manager.write(&id, b"\x1b[1;1R");
+                    answered_cursor_queries += 1;
+                }
+            }
+            match subscription.rx.try_recv() {
+                Err(broadcast::error::TryRecvError::Closed) => {
+                    closed = true;
+                    break;
+                }
+                // Back off only when the queue is drained. A broadcast reports
+                // `Closed` after its buffered chunks are consumed.
+                Err(_) => std::thread::sleep(Duration::from_millis(25)),
+                Ok(_) => {}
+            }
+        }
+
+        assert!(
+            closed,
+            "broadcast stayed open after the PTY child exited; attached clients would never see an exit frame"
+        );
+        assert!(
+            handle.output_tx.lock().is_none(),
+            "the wait thread must clear the sender on child exit, not leave it to the handle refcount"
+        );
     }
 
     #[cfg(any(unix, windows))]
