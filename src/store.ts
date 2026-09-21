@@ -92,6 +92,7 @@ import {
   type SessionFolderAssignments,
 } from "./lib/projectFolders";
 import { isArchivedSession } from "./lib/sessionArchive";
+import { pathsEqual } from "./lib/pathUtils";
 import { canRegenerateSessionTitle } from "./lib/sessionTitle";
 import {
   summarizeTokenUsage,
@@ -1389,12 +1390,8 @@ function latestNeedsInputSessionId(
   return null;
 }
 
-function normalizeWorkspacePath(path: string): string {
-  return path.replace(/[\\/]+$/, "");
-}
-
 function sameWorkspacePath(a: string, b: string): boolean {
-  return normalizeWorkspacePath(a) === normalizeWorkspacePath(b);
+  return pathsEqual(a, b);
 }
 
 function isWorktreeProjectFolder(folder: ProjectFolder): boolean {

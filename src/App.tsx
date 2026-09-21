@@ -1361,9 +1361,19 @@ function App() {
   // shared worktree workspace sessions keep the worktree, plain sessions can
   // skip confirmation, and standalone isolated sessions can delete their
   // worktree automatically when the cleanup prompt is disabled.
+  //
+  // Guard with removeInFlightIdRef the same way archive does: this effect
+  // depends on `sessions`, so an optimistic remove re-fires it. Without the
+  // guard the second invoke hits the backend after the first deleted the row
+  // and toasts "session not found" while the UI still shows the session.
+  const removeInFlightIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!pendingRemove) return;
+    if (!pendingRemove) {
+      removeInFlightIdRef.current = null;
+      return;
+    }
     if (pendingRemoveNeedsRunningWarning) return;
+    if (removeInFlightIdRef.current === pendingRemove.id) return;
     const recordedWorktree = hasRecordedWorktree(pendingRemove);
     const canDeleteWorktree = canDeleteSessionWorktree(
       pendingRemove,
@@ -1375,6 +1385,7 @@ function App() {
       !canDeleteWorktree &&
       !isArchivedSession(pendingRemove)
     ) {
+      removeInFlightIdRef.current = pendingRemove.id;
       clearPendingRemove();
       void removeSession(pendingRemove.id, false).then((outcome) => {
         showStoreOperationToast(null, "toasts.session.removeFailed");
@@ -1392,6 +1403,7 @@ function App() {
       deleteIsolatedWorktreesWithoutPrompt &&
       !pendingRemoveHasOwnedSessions
     ) {
+      removeInFlightIdRef.current = pendingRemove.id;
       clearPendingRemove();
       void removeSession(pendingRemove.id, true).then((outcome) =>
         showStoreSessionRemovalToast(
@@ -1408,6 +1420,7 @@ function App() {
     if (confirmRemoveSession || recordedWorktree || pendingRemoveHasOwnedSessions) {
       return;
     }
+    removeInFlightIdRef.current = pendingRemove.id;
     clearPendingRemove();
     void removeSession(pendingRemove.id, false).then((outcome) => {
       showStoreOperationToast(null, "toasts.session.removeFailed");

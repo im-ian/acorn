@@ -1,17 +1,14 @@
 import type { ProjectFoldersByRepo } from "./projectFolders";
 import { isArchivedSession } from "./sessionArchive";
 import type { Session } from "./types";
+import { pathsEqual } from "./pathUtils";
 
 export function hasRecordedWorktree(session: Session): boolean {
   return session.isolated || session.in_worktree;
 }
 
-function normalizeWorkspacePath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/g, "");
-}
-
 function sameWorkspacePath(a: string, b: string): boolean {
-  return normalizeWorkspacePath(a) === normalizeWorkspacePath(b);
+  return pathsEqual(a, b);
 }
 
 export function sessionsUsingProjectWorktree(

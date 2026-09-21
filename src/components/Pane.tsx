@@ -75,7 +75,7 @@ import {
 } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { clampTabInsertIndex } from "../lib/paneTabs";
-import { basename } from "../lib/pathUtils";
+import { basename, normalizePath, pathsEqual } from "../lib/pathUtils";
 import {
   useSettings,
   resolveAiExecutionRequest,
@@ -781,11 +781,11 @@ function isNonTerminalTextEditingTarget(target: EventTarget | null): boolean {
 }
 
 function normalizeWorkspacePath(path: string): string {
-  return path.replace(/[\\/]+$/, "");
+  return normalizePath(path);
 }
 
 function sameWorkspacePath(a: string, b: string): boolean {
-  return normalizeWorkspacePath(a) === normalizeWorkspacePath(b);
+  return pathsEqual(a, b);
 }
 
 function projectRootScopeForSession(

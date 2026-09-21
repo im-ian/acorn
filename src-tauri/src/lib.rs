@@ -101,27 +101,49 @@ fn path_basename(path: &Path) -> String {
 }
 
 fn normalize_loaded_project_path(path: &Path) -> PathBuf {
-    worktree::project_root_for_path(path).unwrap_or_else(|_| path.to_path_buf())
+    let resolved = worktree::project_root_for_path(path).unwrap_or_else(|_| path.to_path_buf());
+    // Always peel Windows verbatim prefixes, even when discover fails and we
+    // fall back to the stored path — otherwise boot re-persists `\\?\` roots
+    // that break create/remove authorization and frontend path equality.
+    acorn_paths::simplified(&resolved).to_path_buf()
 }
 
 fn normalize_loaded_project(mut project: acorn_session::Project) -> (acorn_session::Project, bool) {
     let repo_path = normalize_loaded_project_path(&project.repo_path);
-    let changed = repo_path != project.repo_path;
+    let mut source_paths: Vec<PathBuf> = project
+        .source_paths
+        .iter()
+        .map(|path| normalize_loaded_project_path(path))
+        .collect();
+    source_paths.sort();
+    source_paths.dedup();
+    let changed = repo_path != project.repo_path || source_paths != project.source_paths;
     if changed {
         project.name = path_basename(&repo_path);
         project.repo_path = repo_path;
+        project.source_paths = source_paths;
     }
     (project, changed)
 }
 
 fn normalize_loaded_session(mut session: acorn_session::Session) -> (acorn_session::Session, bool) {
+    let worktree_path = acorn_paths::simplified(&session.worktree_path).to_path_buf();
+    let mut changed = worktree_path != session.worktree_path;
+    if changed {
+        session.worktree_path = worktree_path;
+    }
     if !session.project_scoped {
-        return (session, false);
+        let repo_path = acorn_paths::simplified(&session.repo_path).to_path_buf();
+        if repo_path != session.repo_path {
+            session.repo_path = repo_path;
+            changed = true;
+        }
+        return (session, changed);
     }
     let repo_path = normalize_loaded_project_path(&session.repo_path);
-    let changed = repo_path != session.repo_path;
-    if changed {
+    if repo_path != session.repo_path {
         session.repo_path = repo_path;
+        changed = true;
     }
     (session, changed)
 }
