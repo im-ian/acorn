@@ -152,6 +152,98 @@ test.describe("pane / sidebar shortcuts", () => {
     ).toBeVisible();
   });
 
+  test("double-clicking an empty pane after focusing instant sessions creates a local session", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __createdLocalSession?: boolean };
+      return w.__createdLocalSession
+        ? [
+            {
+              id: "local-1",
+              name: "new session",
+              repo_path: "/Users/tester",
+              worktree_path: "/Users/tester",
+              branch: "HEAD",
+              isolated: false,
+              project_scoped: false,
+              status: "ready",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+              last_message: null,
+              kind: "regular",
+              owner: { kind: "user" },
+              position: null,
+              in_worktree: false,
+            },
+          ]
+        : [];
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __createdLocalSession?: boolean;
+        __createSessionCalls?: unknown[];
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      w.__createdLocalSession = true;
+      return {
+        id: "local-1",
+        name: "new session",
+        repo_path: "/Users/tester",
+        worktree_path: "/Users/tester",
+        branch: "HEAD",
+        isolated: false,
+        project_scoped: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      };
+    });
+
+    await page.goto("/");
+    const instantArea = page.getByRole("region", {
+      name: "Local terminal sessions",
+    });
+    await instantArea
+      .getByText("Double-click to start an instant session.")
+      .click();
+
+    const emptyPane = page.getByText(/Drop a tab here or double-click/i);
+    await expect(emptyPane).toBeVisible();
+    await emptyPane.dblclick();
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __createSessionCalls?: unknown[] })
+          .__createSessionCalls,
+    )) as Array<{
+      name: string;
+      repoPath: string;
+      isolated: boolean;
+      projectScoped: boolean;
+    }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      name: "new session",
+      repoPath: "/Users/tester",
+      isolated: false,
+      projectScoped: false,
+    });
+    await expect(
+      page
+        .getByRole("region", { name: "Local terminal sessions" })
+        .getByRole("button", { name: /^new session\b/ }),
+    ).toBeVisible();
+  });
+
   test("double-clicking a tab strip beside a worktree session creates a project-root session", async ({
     page,
     tauri,
