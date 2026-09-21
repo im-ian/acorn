@@ -735,7 +735,11 @@ fn authorize_local_session_root(path: &Path) -> AppResult<PathBuf> {
     let home = acorn_paths::user_home_dir()
         .map_err(|_| AppError::InvalidPath("user home directory is not available".into()))?
         .canonicalize()?;
-    if path == home {
+    // `canonical_existing_path` peels Windows verbatim prefixes; `Path::canonicalize`
+    // keeps them. Raw equality therefore compares `C:\Users\me` against
+    // `\\?\C:\Users\me` and rejects HOME itself, which breaks every local
+    // session create on Windows.
+    if acorn_paths::same_cwd(&path, &home) {
         Ok(path)
     } else {
         Err(AppError::InvalidPath(format!(
