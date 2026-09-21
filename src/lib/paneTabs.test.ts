@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyTabMinimized,
+  applyTabsMinimized,
   clampTabInsertIndex,
   collectMinimizedTabIds,
   isTabMinimizedInWorkspaces,
@@ -59,6 +60,24 @@ describe("applyTabMinimized", () => {
   it("ignores unknown tab ids", () => {
     expect(applyTabMinimized(["a"], [], "missing", true)).toEqual({
       tabIds: ["a"],
+      minimizedTabIds: [],
+    });
+  });
+});
+
+describe("applyTabsMinimized", () => {
+  it("minimizes several expanded tabs into the left group", () => {
+    expect(applyTabsMinimized(["a", "b", "c"], [], ["c", "a"], true)).toEqual({
+      tabIds: ["c", "a", "b"],
+      minimizedTabIds: ["c", "a"],
+    });
+  });
+
+  it("clears minimized state for several tabs", () => {
+    expect(
+      applyTabsMinimized(["a", "c", "b"], ["a", "c"], ["a", "c"], false),
+    ).toEqual({
+      tabIds: ["c", "a", "b"],
       minimizedTabIds: [],
     });
   });

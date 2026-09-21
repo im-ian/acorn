@@ -73,6 +73,22 @@ export function applyTabMinimized(
   };
 }
 
+export function applyTabsMinimized(
+  tabIds: readonly string[],
+  minimizedTabIds: readonly string[],
+  targets: readonly string[],
+  minimized: boolean,
+): { tabIds: string[]; minimizedTabIds: string[] } {
+  let nextTabIds = [...tabIds];
+  let nextMinimized = normalizeMinimizedTabIds(minimizedTabIds, tabIds);
+  for (const tabId of targets) {
+    const next = applyTabMinimized(nextTabIds, nextMinimized, tabId, minimized);
+    nextTabIds = next.tabIds;
+    nextMinimized = next.minimizedTabIds;
+  }
+  return { tabIds: nextTabIds, minimizedTabIds: nextMinimized };
+}
+
 // Insert positions are relative to a left-prefix of minimized ids.
 export function clampTabInsertIndex(
   tabIds: readonly string[],
