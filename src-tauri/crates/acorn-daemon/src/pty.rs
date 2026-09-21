@@ -660,20 +660,34 @@ mod tests {
         // Poll rather than block: a regression should fail the assert, not
         // park the test thread until the CI job times out.
         let deadline = Instant::now() + Duration::from_secs(15);
+        let started = Instant::now();
         let mut closed = false;
+        let mut cleared_after: Option<u128> = None;
+        let mut last_recv = String::from("never polled");
         while Instant::now() < deadline {
+            if cleared_after.is_none() && handle.output_tx.lock().is_none() {
+                cleared_after = Some(started.elapsed().as_millis());
+            }
             match subscription.rx.try_recv() {
                 Err(broadcast::error::TryRecvError::Closed) => {
                     closed = true;
                     break;
                 }
-                _ => std::thread::sleep(Duration::from_millis(25)),
+                Err(other) => {
+                    last_recv = format!("{other:?}");
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Ok(chunk) => {
+                    last_recv = format!("Ok({} bytes)", chunk.bytes.len());
+                }
             }
         }
 
         assert!(
             closed,
-            "broadcast stayed open after the PTY child exited; attached clients would never see an exit frame"
+            "broadcast stayed open after the PTY child exited; sender_cleared_after={cleared_after:?} exit_code={:?} handle_arcs={} last_recv={last_recv}",
+            *handle.exit_code.lock(),
+            Arc::strong_count(&handle),
         );
         assert!(
             handle.output_tx.lock().is_none(),
