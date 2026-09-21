@@ -423,10 +423,7 @@ impl JiraClient {
         let (Some(email), Some(site)) = (meta.email, meta.site) else {
             return Ok(None);
         };
-        let base = match meta.cloud_id.filter(|id| is_safe_cloud_id(id)) {
-            Some(cloud_id) => format!("https://api.atlassian.com/ex/jira/{cloud_id}"),
-            None => format!("https://{site}"),
-        };
+        let base = api_base(&site, meta.cloud_id.as_deref());
         Ok(Some(Self {
             email,
             token,
@@ -488,6 +485,13 @@ fn is_safe_cloud_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
 }
 
+fn api_base(site: &str, cloud_id: Option<&str>) -> String {
+    match cloud_id.filter(|id| is_safe_cloud_id(id)) {
+        Some(cloud_id) => format!("https://api.atlassian.com/ex/jira/{cloud_id}"),
+        None => format!("https://{site}"),
+    }
+}
+
 fn listing_from_error(error: AppError) -> TrackerListing {
     let message = error.to_string();
     if message.contains("HTTP 401") || message.contains("HTTP 403") {
@@ -532,7 +536,9 @@ fn resolve_base(email: &str, token: &str, host: &str) -> AppResult<(String, Opti
         .ok()
         .is_some_and(|response| (200..300).contains(&response.status))
     {
-        return Ok((format!("https://{host}"), cloud_id));
+        // Classic unscoped tokens authenticate on the site host. Persisting a
+        // cloudId would send later calls to the scoped-token gateway instead.
+        return Ok((format!("https://{host}"), None));
     }
     if let Some(cloud_id) = cloud_id {
         let gateway = format!("https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/myself");
@@ -654,15 +660,7 @@ pub fn list_issues(
     });
     let value = match client.send_json(Method::POST, "/rest/api/3/search/jql", &payload) {
         Ok(value) => value,
-        Err(_) => {
-            let encoded = url::form_urlencoded::byte_serialize(jql.as_bytes()).collect::<String>();
-            match client.get_json::<Value>(&format!(
-                "/rest/api/3/search?jql={encoded}&maxResults={limit}&fields=summary,status,assignee,reporter,created,updated,labels"
-            )) {
-                Ok(value) => value,
-                Err(error) => return Ok(listing_from_error(error)),
-            }
-        }
+        Err(error) => return Ok(listing_from_error(error)),
     };
     let items = value
         .get("issues")
@@ -854,6 +852,41 @@ mod tests {
         assert!(validate_transition_id("21").is_ok());
         assert!(validate_transition_id("").is_err());
         assert!(validate_transition_id("21;drop").is_err());
+    }
+
+    #[test]
+    fn api_base_uses_site_host_until_a_verified_cloud_id_is_stored() {
+        assert_eq!(
+            api_base("acme.atlassian.net", None),
+            "https://acme.atlassian.net"
+        );
+        assert_eq!(
+            api_base(
+                "acme.atlassian.net",
+                Some("01234567-89ab-cdef-0123-456789abcdef")
+            ),
+            "https://api.atlassian.com/ex/jira/01234567-89ab-cdef-0123-456789abcdef"
+        );
+        assert_eq!(
+            api_base("acme.atlassian.net", Some("not a cloud id")),
+            "https://acme.atlassian.net"
+        );
+    }
+
+    #[test]
+    fn listing_from_error_keeps_auth_failures_as_needs_auth() {
+        assert!(matches!(
+            listing_from_error(AppError::Other("Authentication required (HTTP 401)".into())),
+            TrackerListing::NeedsAuth
+        ));
+        match listing_from_error(AppError::Other(
+            "The requested API has been removed (HTTP 410)".into(),
+        )) {
+            TrackerListing::NoAccess { message } => {
+                assert!(message.contains("removed"));
+            }
+            other => panic!("expected NoAccess, got {other:?}"),
+        }
     }
 
     #[test]
