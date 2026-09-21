@@ -28,7 +28,6 @@ const CODEX_SCAN_MAX_DIR_DEPTH: usize = 3;
 const CODEX_MAX_ANCESTOR_DEPTH: usize = 16;
 const CLAUDE_SCAN_MAX_DIR_DEPTH: usize = 1;
 const ANTIGRAVITY_SCAN_MAX_DIR_DEPTH: usize = 3;
-const GROK_SCAN_MAX_DIR_DEPTH: usize = 2;
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
 const READ_HEAD_INITIAL_BYTES: u64 = 256 * 1024;
@@ -62,6 +61,21 @@ fn path_access_error(operation: &str, path: &Path, error: std::io::Error) -> App
         "failed to {operation} agent transcript path {}: {error}",
         path.display()
     ))
+}
+
+fn discovery_entry_limit_error(root: &Path) -> AppError {
+    AppError::Other(format!(
+        "agent transcript discovery entry limit exceeded below {}",
+        root.display()
+    ))
+}
+
+fn charge_discovery_entry(root: &Path, remaining_entries: &mut usize) -> AppResult<()> {
+    if *remaining_entries == 0 {
+        return Err(discovery_entry_limit_error(root));
+    }
+    *remaining_entries -= 1;
+    Ok(())
 }
 
 struct TranscriptSnapshot {
@@ -618,9 +632,7 @@ fn scan_grok(scope: HistoryScope<'_>, limit: usize) -> AppResult<Vec<AgentHistor
     let Some(root) = grok_sessions_root() else {
         return Ok(Vec::new());
     };
-    let files = collect_files_checked(&root, GROK_SCAN_MAX_DIR_DEPTH, |path| {
-        is_grok_transcript_path(path, &root)
-    })?;
+    let files = collect_grok_transcripts_checked(&root)?;
     parse_recent_files_checked(files, limit, |path| parse_grok_file_checked(path, scope))
 }
 
@@ -884,6 +896,86 @@ fn collect_files_across_roots_with_entry_limit_checked(
     Ok(dated.into_iter().map(|(path, _)| path).collect())
 }
 
+fn collect_grok_transcripts_checked(root: &Path) -> AppResult<Vec<PathBuf>> {
+    collect_grok_transcripts_with_entry_limit_checked(root, MAX_DISCOVERY_ENTRIES_PER_PROVIDER)
+}
+
+fn collect_grok_transcripts_with_entry_limit_checked(
+    root: &Path,
+    max_entries: usize,
+) -> AppResult<Vec<PathBuf>> {
+    match fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => {
+            return Err(AppError::InvalidPath(format!(
+                "provider transcript root is not a regular directory: {}",
+                root.display()
+            )));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(path_access_error("inspect", root, err)),
+    }
+
+    let mut out = Vec::new();
+    let mut remaining_entries = max_entries;
+    let cwd_buckets = fs::read_dir(root).map_err(|error| path_access_error("read", root, error))?;
+    for bucket_entry in cwd_buckets {
+        charge_discovery_entry(root, &mut remaining_entries)?;
+        let bucket_entry = bucket_entry.map_err(|error| path_access_error("read", root, error))?;
+        let bucket_path = bucket_entry.path();
+        let bucket_type = bucket_entry
+            .file_type()
+            .map_err(|error| path_access_error("inspect", &bucket_path, error))?;
+        if !bucket_type.is_dir() {
+            continue;
+        }
+
+        let sessions = fs::read_dir(&bucket_path)
+            .map_err(|error| path_access_error("read", &bucket_path, error))?;
+        for session_entry in sessions {
+            charge_discovery_entry(root, &mut remaining_entries)?;
+            let session_entry =
+                session_entry.map_err(|error| path_access_error("read", &bucket_path, error))?;
+            let session_path = session_entry.path();
+            let session_type = session_entry
+                .file_type()
+                .map_err(|error| path_access_error("inspect", &session_path, error))?;
+            if !session_type.is_dir() {
+                continue;
+            }
+            let session_name = session_entry.file_name();
+            let Some(session_id) = session_name.to_str() else {
+                continue;
+            };
+            if Uuid::parse_str(session_id).is_err() {
+                continue;
+            }
+
+            // Session dirs also hold locks, events, terminal, and mcp files.
+            // Probe updates.jsonl by name so those dirents never consume the
+            // discovery budget.
+            charge_discovery_entry(root, &mut remaining_entries)?;
+            let updates = session_path.join("updates.jsonl");
+            match fs::symlink_metadata(&updates) {
+                Ok(metadata) if metadata.file_type().is_file() => out.push(updates),
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(path_access_error("inspect", &updates, error)),
+            }
+        }
+    }
+
+    let mut dated = Vec::with_capacity(out.len());
+    for path in out {
+        if let Some(updated_at) = file_updated_at_checked(&path)? {
+            dated.push((path, updated_at));
+        }
+    }
+    dated.sort_by(|a, b| b.1.cmp(&a.1));
+    dated.truncate(MAX_DISCOVERED_FILES_PER_PROVIDER);
+    Ok(dated.into_iter().map(|(path, _)| path).collect())
+}
+
 fn collect_files_from_root_checked(
     root: &Path,
     max_dir_depth: usize,
@@ -907,13 +999,7 @@ fn collect_files_from_root_checked(
     while let Some((dir, depth)) = stack.pop() {
         let entries = fs::read_dir(&dir).map_err(|error| path_access_error("read", &dir, error))?;
         for entry in entries {
-            if *remaining_entries == 0 {
-                return Err(AppError::Other(format!(
-                    "agent transcript discovery entry limit exceeded below {}",
-                    root.display()
-                )));
-            }
-            *remaining_entries -= 1;
+            charge_discovery_entry(root, remaining_entries)?;
             let entry = entry.map_err(|error| path_access_error("read", &dir, error))?;
             let path = entry.path();
             let file_type = entry
@@ -3027,6 +3113,123 @@ mod tests {
 
         let hidden_id = "0198c151-f3ee-7991-9768-741923bb6b51";
         write_grok_history_transcript(&grok_home, hidden_id, &repo, true);
+        let history = scan_grok(HistoryScope::Project(&repo), 10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, id);
+    }
+
+    #[test]
+    fn grok_discovery_probes_updates_without_listing_session_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let session = root
+            .join("encoded-cwd")
+            .join("0198c151-f3ee-7991-9768-741923bb6b50");
+        fs::create_dir_all(&session).unwrap();
+        let transcript = session.join("updates.jsonl");
+        fs::write(&transcript, "{}\n").unwrap();
+        for name in [
+            "summary.json",
+            "summary.json.lock",
+            "events.jsonl",
+            "chat_history.jsonl",
+            "updates.jsonl.lock",
+            "prompt_context.json",
+            "system_prompt.txt",
+        ] {
+            fs::write(session.join(name), "x").unwrap();
+        }
+        fs::create_dir(session.join("terminal")).unwrap();
+        fs::create_dir(session.join("mcp")).unwrap();
+
+        let naive = collect_files_with_entry_limit_checked(
+            root,
+            2,
+            |path| is_grok_transcript_path(path, root),
+            3,
+        );
+        assert!(
+            naive.is_err(),
+            "listing the session dir must exhaust cwd + session + transcript budget"
+        );
+
+        let files = collect_grok_transcripts_with_entry_limit_checked(root, 3).unwrap();
+        assert_eq!(files, vec![transcript]);
+    }
+
+    #[test]
+    fn grok_discovery_discards_traversal_that_exceeds_session_dir_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let bucket = root.join("encoded-cwd");
+        fs::create_dir(&bucket).unwrap();
+        for id in [
+            "0198c151-f3ee-7991-9768-741923bb6b50",
+            "0198c151-f3ee-7991-9768-741923bb6b51",
+        ] {
+            let session = bucket.join(id);
+            fs::create_dir(&session).unwrap();
+            fs::write(session.join("updates.jsonl"), "{}\n").unwrap();
+        }
+
+        assert!(
+            collect_grok_transcripts_with_entry_limit_checked(root, 4).is_err(),
+            "1 cwd bucket + 2 session dirs + 2 probes exceeds a budget of 4"
+        );
+        let mut files = collect_grok_transcripts_with_entry_limit_checked(root, 5).unwrap();
+        files.sort();
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn grok_discovery_skips_non_uuid_dirs_and_nested_transcripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let nested = root
+            .join("encoded-cwd")
+            .join("0198c151-f3ee-7991-9768-741923bb6b50")
+            .join("subagents")
+            .join("0198c151-f3ee-7991-9768-741923bb6b51");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("updates.jsonl"), "{}\n").unwrap();
+        let stray = root.join("encoded-cwd").join("not-a-uuid");
+        fs::create_dir_all(&stray).unwrap();
+        fs::write(stray.join("updates.jsonl"), "{}\n").unwrap();
+
+        let files = collect_grok_transcripts_with_entry_limit_checked(root, 10).unwrap();
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn grok_discovery_treats_missing_root_as_empty() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-missing-grok-history-root-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+
+        assert!(collect_grok_transcripts_with_entry_limit_checked(&root, 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn scan_grok_ignores_sidecar_files_in_the_session_directory() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let grok_home = dir.path().join("grok-home");
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let repo = normalize_path(&repo);
+        let _grok_home = EnvVarGuard::set("GROK_HOME", &grok_home);
+        let id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let transcript = write_grok_history_transcript(&grok_home, id, &repo, false);
+        let session = transcript.parent().unwrap();
+        for i in 0..40 {
+            fs::write(session.join(format!("noise-{i}.json")), "x").unwrap();
+        }
+        fs::create_dir(session.join("terminal")).unwrap();
+        fs::create_dir(session.join("mcp")).unwrap();
+
         let history = scan_grok(HistoryScope::Project(&repo), 10).unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].id, id);
