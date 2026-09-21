@@ -17,6 +17,7 @@ mod error;
 mod external_url;
 mod fs_explorer;
 mod git_ops;
+mod github_api;
 mod graph_runs;
 mod ipc;
 mod notifications;
