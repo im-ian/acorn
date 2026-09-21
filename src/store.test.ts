@@ -2685,7 +2685,7 @@ describe("setTabsMinimized", () => {
       [session("a1", REPO_A), session("a2", REPO_A), session("a3", REPO_A)],
     );
 
-    useAppStore.getState().setTabsMinimized(["a1", "a3"], true);
+    useAppStore.getState().setTabsMinimized(["a3", "a1"], true);
 
     const pane = useAppStore.getState().panes[useAppStore.getState().focusedPaneId];
     expect(pane.tabIds).toEqual(["a1", "a3", "a2"]);

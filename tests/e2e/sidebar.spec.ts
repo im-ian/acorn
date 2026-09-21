@@ -4994,6 +4994,8 @@ test.describe("sidebar: project lifecycle", () => {
         : "Reveal in File Manager",
     );
     const expectedProjectActions = [
+      "Minimize All Tabs",
+      "Expand All Tabs",
       "Add source folder",
       "Project Settings",
       revealLabel,

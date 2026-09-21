@@ -3367,6 +3367,7 @@ function ProjectFolderView({
             icon: <Pencil size={12} />,
             onClick: () => setEditing(true),
           },
+          contextMenuGroupTitle(t, "open"),
           {
             label: revealInFileManagerText(t),
             icon: <FolderOpen size={12} />,
@@ -3374,6 +3375,7 @@ function ProjectFolderView({
               void revealPathWithFeedback(folder.cwdPath);
             },
           },
+          contextMenuGroupTitle(t, "copy"),
           {
             label: sidebarText(t, "sidebar.actions.copyPath"),
             icon: <Copy size={12} />,
@@ -5076,6 +5078,7 @@ function LocalWorkspaceView({
       icon: <Pencil size={12} />,
       onClick: () => setEditing(true),
     },
+    contextMenuGroupTitle(t, "open"),
     {
       label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
@@ -5083,6 +5086,7 @@ function LocalWorkspaceView({
         void revealPathWithFeedback(folder.cwdPath);
       },
     },
+    contextMenuGroupTitle(t, "copy"),
     {
       label: sidebarText(t, "sidebar.actions.copyPath"),
       icon: <Copy size={12} />,

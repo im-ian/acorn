@@ -66,18 +66,18 @@ describe("applyTabMinimized", () => {
 });
 
 describe("applyTabsMinimized", () => {
-  it("minimizes several expanded tabs into the left group", () => {
+  it("minimizes several expanded tabs while keeping pane order", () => {
     expect(applyTabsMinimized(["a", "b", "c"], [], ["c", "a"], true)).toEqual({
-      tabIds: ["c", "a", "b"],
-      minimizedTabIds: ["c", "a"],
+      tabIds: ["a", "c", "b"],
+      minimizedTabIds: ["a", "c"],
     });
   });
 
-  it("clears minimized state for several tabs", () => {
+  it("clears minimized state without reshuffling expanded tabs", () => {
     expect(
       applyTabsMinimized(["a", "c", "b"], ["a", "c"], ["a", "c"], false),
     ).toEqual({
-      tabIds: ["c", "a", "b"],
+      tabIds: ["a", "c", "b"],
       minimizedTabIds: [],
     });
   });

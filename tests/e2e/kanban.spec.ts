@@ -1061,7 +1061,11 @@ test.describe("workspace kanban mode", () => {
       "Copy",
       "Remove Session",
     ]);
-    await expect(cardMenu.getByRole("separator")).toHaveCount(3);
+    await expect(cardMenu).toContainText("Session");
+    await expect(cardMenu).toContainText("Open");
+    await expect(cardMenu).toContainText("Copy");
+    await expect(cardMenu).toContainText("Danger");
+    await expect(cardMenu.getByRole("separator")).toHaveCount(0);
     await expect(
       cardMenu.getByRole("menuitem", { name: "Open shell", exact: true }),
     ).toHaveCount(0);
