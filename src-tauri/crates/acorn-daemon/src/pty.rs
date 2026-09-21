@@ -687,7 +687,21 @@ mod tests {
         let mut closed = false;
         let mut cleared_after: Option<u128> = None;
         let mut last_recv = String::from("never polled");
+        // PowerShell asks the terminal for its cursor position before it will
+        // proceed, and blocks until something answers. xterm.js answers this in
+        // the app; a headless test must too, or the child never reaches its
+        // body and never exits — which looks exactly like a missed exit signal.
+        let mut answered_cursor_queries = 0usize;
         while Instant::now() < deadline {
+            if let Some(snapshot) = manager.scrollback_snapshot(&id) {
+                let seen = String::from_utf8_lossy(&snapshot.bytes)
+                    .matches("\u{1b}[6n")
+                    .count();
+                while answered_cursor_queries < seen {
+                    let _ = manager.write(&id, b"\x1b[1;1R");
+                    answered_cursor_queries += 1;
+                }
+            }
             if cleared_after.is_none() && handle.output_tx.lock().is_none() {
                 cleared_after = Some(started.elapsed().as_millis());
             }
