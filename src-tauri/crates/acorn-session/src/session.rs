@@ -2901,5 +2901,4 @@ mod tests {
         assert_eq!(again.name, "cras");
         assert_eq!(store.list().len(), 1);
     }
-
 }

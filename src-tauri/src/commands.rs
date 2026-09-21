@@ -12502,14 +12502,14 @@ mod tests {
         ensure_new_project_destination_available, font_name_from_path,
         infer_acornd_root_from_session_pids, inject_agent_hook_env,
         linked_worktree_root_for_registered_path, memory_root_pids, normalize_session_goal,
-        normalize_session_graph, poll_defers_to_hook, project_creation_git_error,
+        normalize_session_graph, path_is_inside, poll_defers_to_hook, project_creation_git_error,
         pty_io_uses_daemon, reconcile_stale_worktrees, remove_linked_worktree_at_path,
-        remove_session_inner, remove_worktree_inner, restore_pending_session_removal, resume_session_inner,
-        retry_removal_cleanup_inner, seed_initial_commit, should_remove_local_project_mirror,
-        should_route_session_to_daemon, sigwinch_pulse_size, terminate_session_runtime,
-        path_is_inside, validate_display_name, validate_editor_command, validate_new_project_name,
-        validate_pty_caller_env, ChatProviderAdapter, ProcessMemorySnapshot, RemovalProgress,
-        MAX_PTY_WORKSPACE_NAME_BYTES,
+        remove_session_inner, remove_worktree_inner, restore_pending_session_removal,
+        resume_session_inner, retry_removal_cleanup_inner, seed_initial_commit,
+        should_remove_local_project_mirror, should_route_session_to_daemon, sigwinch_pulse_size,
+        terminate_session_runtime, validate_display_name, validate_editor_command,
+        validate_new_project_name, validate_pty_caller_env, ChatProviderAdapter,
+        ProcessMemorySnapshot, RemovalProgress, MAX_PTY_WORKSPACE_NAME_BYTES,
     };
     use crate::error::{AppError, AppResult};
     use crate::state::{AppState, PendingRemovalStep, PendingSessionRemoval};
@@ -12572,7 +12572,6 @@ mod tests {
         ));
     }
 
-
     #[test]
     fn remove_session_is_idempotent_when_session_already_gone() {
         let state = AppState::new();
@@ -12587,7 +12586,6 @@ mod tests {
         assert!(outcome.result.is_none());
         assert!(outcome.issues.is_empty());
     }
-
 
     #[test]
     fn repository_authorization_accepts_registered_roots_and_descendants_only() {
