@@ -22,6 +22,11 @@ use crate::pull_requests::{
 };
 use crate::state::{AppState, PendingRemovalStep, PendingSessionRemoval};
 use crate::todos::{self, TodoItem};
+use crate::tracker::{
+    JiraAccount, JiraProjectInfo, LinearAccount, LinearTeam, TrackerAccounts, TrackerDetailListing,
+    TrackerListing,
+};
+use crate::tracker_secrets;
 use crate::work_graph::{self, GraphPromptPlan};
 use crate::worktree;
 use acorn_agent::AgentKind;
@@ -12059,6 +12064,178 @@ pub async fn delete_github_comment(
     let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
     run_blocking("delete_github_comment", move || {
         pull_requests::delete_github_comment(&repo_path, &account_login, comment_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_tracker_accounts() -> AppResult<TrackerAccounts> {
+    run_blocking("get_tracker_accounts", tracker_secrets::accounts).await
+}
+
+#[tauri::command]
+pub async fn set_linear_api_key(key: String) -> AppResult<LinearAccount> {
+    run_blocking("set_linear_api_key", move || crate::linear::connect(&key)).await
+}
+
+#[tauri::command]
+pub async fn clear_linear_api_key() -> AppResult<TrackerAccounts> {
+    run_blocking("clear_linear_api_key", || {
+        crate::linear::disconnect()?;
+        tracker_secrets::accounts()
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_linear_teams() -> AppResult<Vec<LinearTeam>> {
+    run_blocking("list_linear_teams", crate::linear::list_teams).await
+}
+
+#[tauri::command]
+pub async fn list_linear_issues(
+    app_state: State<'_, AppState>,
+    repo_path: String,
+    state: Option<IssueStateFilter>,
+    limit: Option<u32>,
+    query: Option<String>,
+) -> AppResult<TrackerListing> {
+    let repo_path = authorize_registered_repository(app_state.inner(), Path::new(&repo_path))?;
+    run_blocking("list_linear_issues", move || {
+        crate::linear::list_issues(
+            &repo_path,
+            state.unwrap_or(IssueStateFilter::Open),
+            limit.unwrap_or(50),
+            query.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_linear_issue(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+) -> AppResult<TrackerDetailListing> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    run_blocking("get_linear_issue", move || {
+        crate::linear::get_issue(&repo_path, &id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn add_linear_comment(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+    body: String,
+) -> AppResult<()> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    run_blocking("add_linear_comment", move || {
+        crate::linear::add_comment(&repo_path, &id, &body)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_linear_issue_state(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+    state_id: String,
+) -> AppResult<()> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    run_blocking("set_linear_issue_state", move || {
+        crate::linear::set_state(&repo_path, &id, &state_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_jira_credentials(
+    email: String,
+    site: String,
+    token: String,
+) -> AppResult<JiraAccount> {
+    run_blocking("set_jira_credentials", move || {
+        crate::jira::connect(&email, &site, &token)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn clear_jira_credentials() -> AppResult<TrackerAccounts> {
+    run_blocking("clear_jira_credentials", || {
+        crate::jira::disconnect()?;
+        tracker_secrets::accounts()
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_jira_projects() -> AppResult<Vec<JiraProjectInfo>> {
+    run_blocking("list_jira_projects", crate::jira::list_projects).await
+}
+
+#[tauri::command]
+pub async fn list_jira_issues(
+    app_state: State<'_, AppState>,
+    repo_path: String,
+    state: Option<IssueStateFilter>,
+    limit: Option<u32>,
+    query: Option<String>,
+) -> AppResult<TrackerListing> {
+    let repo_path = authorize_registered_repository(app_state.inner(), Path::new(&repo_path))?;
+    run_blocking("list_jira_issues", move || {
+        crate::jira::list_issues(
+            &repo_path,
+            state.unwrap_or(IssueStateFilter::Open),
+            limit.unwrap_or(50),
+            query.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_jira_issue(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+) -> AppResult<TrackerDetailListing> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    run_blocking("get_jira_issue", move || {
+        crate::jira::get_issue(&repo_path, &id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn add_jira_comment(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+    body: String,
+) -> AppResult<()> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    run_blocking("add_jira_comment", move || {
+        crate::jira::add_comment(&repo_path, &id, &body)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_jira_issue_state(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+    state_id: String,
+) -> AppResult<()> {
+    let repo_path = authorize_registered_repository(state.inner(), Path::new(&repo_path))?;
+    run_blocking("set_jira_issue_state", move || {
+        crate::jira::set_state(&repo_path, &id, &state_id)
     })
     .await
 }

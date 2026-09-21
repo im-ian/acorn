@@ -211,6 +211,8 @@ describe("ProjectSettingsModal", () => {
       },
       worktrees: { base_branch: null },
       start_work: { agent_prompt: null },
+      linear: { team_id: null, team_key: null, team_name: null },
+      jira: { project_key: null, project_name: null },
     });
     expect(onClose).toHaveBeenCalled();
   });
@@ -265,6 +267,8 @@ describe("ProjectSettingsModal", () => {
       pull_requests: { generation_prompt: null },
       worktrees: { base_branch: null },
       start_work: { agent_prompt: "Implement {title} from {url}." },
+      linear: { team_id: null, team_key: null, team_name: null },
+      jira: { project_key: null, project_name: null },
     });
   });
 

@@ -104,6 +104,7 @@
       "agents": "에이전트",
       "sessions": "세션",
       "github": "GitHub",
+      "integrations": "연동",
       "editor": "편집기",
       "notifications": "알림",
       "shortcuts": "단축키",
@@ -363,6 +364,25 @@
       "showChecks": {
         "label": "CI 상태 표시",
         "description": "각 PR 행에 CI/check 완료 요약을 표시합니다."
+      }
+    },
+    "integrations": {
+      "connectedAs": "{name}(으)로 연결됨",
+      "notConnected": "연결되지 않았습니다.",
+      "save": "저장",
+      "saving": "저장 중…",
+      "disconnect": "연결 해제",
+      "linear": {
+        "title": "Linear API 키",
+        "hint": "Linear → Settings → Security & access에서 개인 API 키를 붙여 넣습니다. 목록은 Read, 상태 변경은 Write가 필요합니다. OS 키체인에 저장되며 Acorn 설정 파일에는 넣지 않습니다."
+      },
+      "jira": {
+        "title": "Jira Cloud",
+        "hint": "read:jira-work 범위의 Atlassian API 토큰을 사용하고, 상태 변경에는 write:jira-work가 필요합니다. 토큰은 OS 키체인에, 이메일과 사이트는 로컬에 저장됩니다.",
+        "email": "Atlassian 이메일",
+        "site": "사이트",
+        "token": "API 토큰",
+        "tokenPlaceholder": "Atlassian API 토큰"
       }
     },
     "appearance": {
@@ -1785,6 +1805,8 @@
     "groups": {
       "code": "코드",
       "github": "GitHub",
+      "linear": "Linear",
+      "jira": "Jira",
       "agents": "에이전트"
     },
     "tabs": {
@@ -1794,6 +1816,8 @@
       "staged": "스테이징",
       "prs": "PR",
       "issues": "이슈",
+      "linearIssues": "이슈",
+      "jiraIssues": "이슈",
       "activity": "활동",
       "history": "기록",
       "actions": "작업"
@@ -1959,6 +1983,17 @@
       "jobsCount": "작업 ({count})",
       "noJobs": "보고된 작업이 없습니다.",
       "openJobOnGitHub": "GitHub에서 작업 열기"
+    },
+    "trackers": {
+      "needsAuth": "이슈를 불러오려면 설정에서 Linear 또는 Jira를 연결하세요.",
+      "openSettings": "설정 열기",
+      "needsLinearTeam": "이 프로젝트의 Linear 팀을 고르세요.",
+      "needsJiraProject": "이 프로젝트의 Jira 프로젝트를 고르세요.",
+      "chooseTeam": "Linear 팀 선택",
+      "chooseProject": "Jira 프로젝트 선택",
+      "noTeams": "이 키로 Linear 팀을 가져오지 못했습니다.",
+      "noProjects": "이 계정으로 Jira 프로젝트를 가져오지 못했습니다.",
+      "loading": "이슈를 불러오는 중…"
     },
     "checks": {
       "allPassed": "체크 {count}개 모두 통과",
@@ -2261,6 +2296,7 @@
         "sources": "소스 폴더",
         "pullRequests": "Pull request",
         "startWork": "작업 시작",
+        "issues": "이슈",
         "worktrees": "워크트리"
       },
       "general": "일반",
@@ -2306,6 +2342,14 @@
       "startWorkPrompt": "에이전트 프롬프트",
       "startWorkPromptHint": "플레이스홀더: {kind}, {number}, {title}, {url}, {branch}, {body}. 비우면 첫 메시지 없이 에이전트만 시작합니다.",
       "startWorkPromptPlaceholder": "GitHub {kind} #{number}: {title} 작업을 진행하세요.",
+      "issues": "이슈 트래커",
+      "issuesHint": "이 Acorn 프로젝트를 Linear 팀 및/또는 Jira 프로젝트에 연결합니다. 계정을 연결한 뒤 우측 패널에서 팀이나 프로젝트를 고릅니다.",
+      "linearTeam": "Linear 팀",
+      "linearTeamHint": "우측 패널 Linear 이슈 목록에 사용합니다.",
+      "jiraProject": "Jira 프로젝트",
+      "jiraProjectHint": "우측 패널 Jira 이슈 목록에 사용합니다.",
+      "notMapped": "연결되지 않음",
+      "clearMapping": "연결 해제",
       "promptCount": "{count} / {max}",
       "rememberAfterClose": "프로젝트를 닫은 뒤에도 설정 유지",
       "rememberAfterCloseHint": "끄면 이 프로젝트를 닫을 때 저장된 프로젝트 설정을 삭제합니다.",
@@ -2613,6 +2657,31 @@
       "stateNotPlanned": "계획 없음",
       "assignees": "담당자:",
       "milestone": "마일스톤:"
+    },
+    "trackerIssueDetail": {
+      "loading": "이슈를 불러오는 중…",
+      "needsAuth": "이 트래커가 연결되어 있지 않습니다.",
+      "needsMapping": "이 프로젝트가 Linear 팀 또는 Jira 프로젝트에 연결되지 않았습니다.",
+      "openInLinear": "Linear에서 열기",
+      "openInJira": "Jira에서 열기",
+      "close": "닫기",
+      "created": "생성",
+      "updated": "업데이트",
+      "assignees": "담당자:",
+      "comments": "댓글",
+      "noComments": "아직 댓글이 없습니다.",
+      "noBody": "이슈 본문이 없습니다.",
+      "commentAriaLabel": "이슈 댓글",
+      "commentPlaceholder": "댓글 추가…",
+      "commentWrite": "작성",
+      "commentPreview": "미리보기",
+      "commentPreviewEmpty": "미리볼 내용이 없습니다.",
+      "commentSubmit": "댓글",
+      "commentSubmitting": "게시 중...",
+      "commentFailed": "댓글 게시 실패:",
+      "changeState": "이슈 상태 변경",
+      "writePermissionLinear": "상태를 바꾸려면 Linear API 키에 Write 권한이 필요합니다.",
+      "writePermissionJira": "상태를 바꾸려면 Jira API 토큰에 write:jira-work 권한이 필요합니다."
     }
   },
   "commandPalette": {

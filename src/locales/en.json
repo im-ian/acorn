@@ -104,6 +104,7 @@
       "agents": "Agents",
       "sessions": "Sessions",
       "github": "GitHub",
+      "integrations": "Integrations",
       "editor": "Editor",
       "notifications": "Notifications",
       "shortcuts": "Shortcuts",
@@ -363,6 +364,25 @@
       "showChecks": {
         "label": "Show CI status",
         "description": "Render the CI/check completion summary in each PR row."
+      }
+    },
+    "integrations": {
+      "connectedAs": "Connected as {name}",
+      "notConnected": "Not connected.",
+      "save": "Save",
+      "saving": "Saving…",
+      "disconnect": "Disconnect",
+      "linear": {
+        "title": "Linear API key",
+        "hint": "Paste a personal API key from Linear → Settings → Security & access. Read lists issues; Write is required to change status. The key is stored in the OS keychain, not in Acorn settings."
+      },
+      "jira": {
+        "title": "Jira Cloud",
+        "hint": "Use a scoped Atlassian API token with read:jira-work, plus write:jira-work to change status. The token is stored in the OS keychain. Email and site are saved locally.",
+        "email": "Atlassian email",
+        "site": "Site",
+        "token": "API token",
+        "tokenPlaceholder": "Atlassian API token"
       }
     },
     "appearance": {
@@ -1785,6 +1805,8 @@
     "groups": {
       "code": "Code",
       "github": "GitHub",
+      "linear": "Linear",
+      "jira": "Jira",
       "agents": "Agents"
     },
     "tabs": {
@@ -1794,6 +1816,8 @@
       "staged": "Staged",
       "prs": "PRs",
       "issues": "Issues",
+      "linearIssues": "Issues",
+      "jiraIssues": "Issues",
       "activity": "Activity",
       "history": "History",
       "actions": "Actions"
@@ -1959,6 +1983,17 @@
       "jobsCount": "Jobs ({count})",
       "noJobs": "No jobs reported.",
       "openJobOnGitHub": "Open job on GitHub"
+    },
+    "trackers": {
+      "needsAuth": "Connect Linear or Jira in Settings to load issues.",
+      "openSettings": "Open Settings",
+      "needsLinearTeam": "Choose the Linear team for this project.",
+      "needsJiraProject": "Choose the Jira project for this project.",
+      "chooseTeam": "Select a Linear team",
+      "chooseProject": "Select a Jira project",
+      "noTeams": "No Linear teams were returned for this key.",
+      "noProjects": "No Jira projects were returned for this account.",
+      "loading": "Loading issues…"
     },
     "checks": {
       "allPassed": "All {count} checks passed",
@@ -2261,6 +2296,7 @@
         "sources": "Source folders",
         "pullRequests": "Pull requests",
         "startWork": "Start work",
+        "issues": "Issues",
         "worktrees": "Worktrees"
       },
       "general": "General",
@@ -2306,6 +2342,14 @@
       "startWorkPrompt": "Agent prompt",
       "startWorkPromptHint": "Placeholders: {kind}, {number}, {title}, {url}, {branch}, and {body}. Leave empty to start the agent without a first message.",
       "startWorkPromptPlaceholder": "Work on GitHub {kind} #{number}: {title}",
+      "issues": "Issue trackers",
+      "issuesHint": "Map this Acorn project to a Linear team and/or Jira project. Choose the team or project from the right panel after connecting an account.",
+      "linearTeam": "Linear team",
+      "linearTeamHint": "Used to list Linear issues in the right panel.",
+      "jiraProject": "Jira project",
+      "jiraProjectHint": "Used to list Jira issues in the right panel.",
+      "notMapped": "Not mapped",
+      "clearMapping": "Clear mapping",
       "promptCount": "{count} / {max}",
       "rememberAfterClose": "Keep project settings after closing this project",
       "rememberAfterCloseHint": "When disabled, Acorn deletes this project's saved settings when you close the project.",
@@ -2613,6 +2657,31 @@
       "stateNotPlanned": "Not planned",
       "assignees": "Assignees:",
       "milestone": "Milestone:"
+    },
+    "trackerIssueDetail": {
+      "loading": "Loading issue…",
+      "needsAuth": "This tracker is not connected.",
+      "needsMapping": "This project is not mapped to a Linear team or Jira project.",
+      "openInLinear": "Open in Linear",
+      "openInJira": "Open in Jira",
+      "close": "Close",
+      "created": "Created",
+      "updated": "Updated",
+      "assignees": "Assignees:",
+      "comments": "Comments",
+      "noComments": "No comments yet.",
+      "noBody": "No issue description.",
+      "commentAriaLabel": "Issue comment",
+      "commentPlaceholder": "Add a comment…",
+      "commentWrite": "Write",
+      "commentPreview": "Preview",
+      "commentPreviewEmpty": "Nothing to preview yet.",
+      "commentSubmit": "Comment",
+      "commentSubmitting": "Posting...",
+      "commentFailed": "Failed to post comment:",
+      "changeState": "Change issue status",
+      "writePermissionLinear": "A Linear API key with Write permission is required to change status.",
+      "writePermissionJira": "A Jira API token with write:jira-work is required to change status."
     }
   },
   "commandPalette": {
