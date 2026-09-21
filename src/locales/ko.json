@@ -2483,7 +2483,7 @@
       "checksPending": "head 커밋의 체크 {count}개가 아직 진행 중입니다.",
       "checksBlocking": "브랜치 보호 정책에 따라 체크가 완료/통과될 때까지 머지가 차단됩니다.",
       "adminMerge": "관리자 머지 (브랜치 보호 무시)",
-      "adminMergeHint": "gh에 --admin 옵션을 전달해 강제로 머지합니다. 저장소 정책상 허용되며 필수 체크를 무시해도 되는 경우에만 사용하세요."
+      "adminMergeHint": "저장소 정책이 허용하면 필수 체크를 무시하고 머지합니다. 브랜치 보호를 우회해도 될 때만 사용하세요."
     },
     "stagedRevMismatch": {
       "title": "셸 환경 업데이트됨",
