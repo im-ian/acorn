@@ -26,6 +26,7 @@ import {
   Waypoints,
   X,
 } from "lucide-react";
+import { homeDir } from "@tauri-apps/api/path";
 import {
   Fragment,
   Suspense,
@@ -463,8 +464,6 @@ export function Pane({ paneId }: PaneProps) {
   }
 
   function creationScopeForPane(): SessionCreateScope | null {
-    // Prefer the pane's project if any tabs exist (shouldn't here), else use
-    // the globally active project. With no project at all, do nothing.
     const anchor = active ?? tabs[0] ?? null;
     if (anchor) return rootScopeForTab(anchor);
 
@@ -505,12 +504,18 @@ export function Pane({ paneId }: PaneProps) {
 
   async function handleNewTabFromEmpty() {
     const scope = creationScopeForPane();
-    if (!scope) return;
-    await spawnSession(
-      scope.placement.repoPath,
-      "regular",
-      scope,
-    );
+    if (scope) {
+      await spawnSession(scope.placement.repoPath, "regular", scope);
+      return;
+    }
+    // Instant Sessions focus leaves no workspace selected. Local sessions
+    // may only start in HOME.
+    const home = await homeDir();
+    if (!home) return;
+    await spawnSession(home, "regular", {
+      placement: { repoPath: home, projectScoped: false },
+      launch: { kind: "projectRoot" },
+    });
   }
 
   const hasProjects = projects.length > 0;
@@ -697,7 +702,6 @@ export function Pane({ paneId }: PaneProps) {
           onNewTab: () => void handleNewTabFromEmpty(),
           onSplit: splitFocusedPane,
           onClose: () => closePane(paneId),
-          activeProjectFallback: useAppStore.getState().activeProject,
           onNewGoal:
             autonomousGoalScope?.placement.projectScoped === true
               ? () => requestNewAutonomousGoalSession(autonomousGoalScope)
@@ -1981,7 +1985,6 @@ function buildPaneMenuItems({
   onNewTab,
   onSplit,
   onClose,
-  activeProjectFallback,
   onNewGoal,
   onNewGraph,
   shortcuts,
@@ -1996,7 +1999,6 @@ function buildPaneMenuItems({
   onNewTab: () => void;
   onSplit: (direction: Direction) => void;
   onClose: () => void;
-  activeProjectFallback: string | null;
   onNewGoal?: () => void;
   onNewGraph?: () => void;
   shortcuts: Record<HotkeyId, string>;
@@ -2071,7 +2073,6 @@ function buildPaneMenuItems({
       icon: <TerminalIcon size={12} />,
       shortcut: shortcutLabel(shortcuts, "newSession"),
       onClick: onNewTab,
-      disabled: !activeSession && activeProjectFallback === null,
     },
     ...(onNewGoal
       ? [

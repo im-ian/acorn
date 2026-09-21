@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   ptyWrite: vi.fn(async () => undefined),
   fsGrantExternalFile: vi.fn(async () => undefined),
   showTranslatedErrorToast: vi.fn(),
+  homeDir: vi.fn(async () => "/Users/me"),
 }));
 
 vi.mock("../lib/api", () => ({
@@ -68,6 +69,10 @@ vi.mock("../lib/api", () => ({
 
 vi.mock("../lib/operationToasts", () => ({
   showTranslatedErrorToast: mocks.showTranslatedErrorToast,
+}));
+
+vi.mock("@tauri-apps/api/path", () => ({
+  homeDir: mocks.homeDir,
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -472,6 +477,90 @@ describe("Pane empty state", () => {
 
     await act(async () => {
       doubleClick(emptyPane);
+    });
+
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "new session",
+      HOME,
+      false,
+      "regular",
+      null,
+      false,
+    );
+  });
+
+  it("creates a local session from an empty pane after focusing instant sessions", async () => {
+    const created = session("local-session", {
+      name: "new session",
+      repo_path: HOME,
+      worktree_path: HOME,
+      project_scoped: false,
+    });
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.listSessions.mockResolvedValueOnce([created]);
+    mocks.listProjects.mockResolvedValueOnce([project(REPO)]);
+    useAppStore.getState().focusLocalSessions();
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const emptyPane = container.querySelector<HTMLElement>('[role="button"]');
+    expect(emptyPane).not.toBeNull();
+
+    await act(async () => {
+      doubleClick(emptyPane);
+    });
+
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "new session",
+      HOME,
+      false,
+      "regular",
+      null,
+      false,
+    );
+  });
+
+  it("creates a local session from the empty pane menu after focusing instant sessions", async () => {
+    const created = session("local-session", {
+      name: "new session",
+      repo_path: HOME,
+      worktree_path: HOME,
+      project_scoped: false,
+    });
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.listSessions.mockResolvedValueOnce([created]);
+    mocks.listProjects.mockResolvedValueOnce([project(REPO)]);
+    useAppStore.getState().focusLocalSessions();
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const emptyPane = container.querySelector<HTMLElement>('[role="button"]');
+    expect(emptyPane).not.toBeNull();
+    act(() => {
+      emptyPane?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 40,
+          clientY: 50,
+        }),
+      );
+    });
+
+    const newSessionItem = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent?.includes("New Session in This Pane"));
+    expect(newSessionItem).not.toBeUndefined();
+    expect(newSessionItem?.disabled).toBe(false);
+
+    await act(async () => {
+      newSessionItem?.click();
     });
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
