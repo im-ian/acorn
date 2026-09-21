@@ -552,9 +552,17 @@ fn wait_loop(
     registry: Arc<SessionRegistry>,
     stop: Arc<AtomicBool>,
 ) {
-    let code = match child.wait() {
-        Ok(status) => Some(status.exit_code() as i32),
-        Err(_) => None,
+    // `Child::wait` never returns for a reaped ConPTY child on Windows, and
+    // every exit signal the daemon publishes hangs off this one call: the exit
+    // code, the registry detach, and the broadcast close below. Poll for the
+    // status instead so exit is observed on every platform. The cost is one
+    // cheap status check per live session per interval.
+    let code = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status.exit_code() as i32),
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            Err(_) => break None,
+        }
     };
     *expected_handle.exit_code.lock() = code;
     // Close the broadcast *after* the exit code is visible: a pump woken by
