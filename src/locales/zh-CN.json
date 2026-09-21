@@ -2483,7 +2483,7 @@
       "checksPending": "头部分支仍有 {count} 项检查在运行。",
       "checksBlocking": "合并被分支保护阻止，直到检查完成或通过。",
       "adminMerge": "管理合并（覆盖分支保护）",
-      "adminMergeHint": "通过将 --admin 传递给 gh 来强制合并。仅当仓库策略允许并且您接受覆盖所需的检查时才使用。"
+      "adminMergeHint": "在仓库策略允许时强制合并并覆盖必需检查。仅在接受绕过分支保护时使用。"
     },
     "stagedRevMismatch": {
       "title": "shell 环境已更新",
