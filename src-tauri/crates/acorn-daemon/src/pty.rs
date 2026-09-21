@@ -665,6 +665,26 @@ mod tests {
             .expect("spawned session has a live handle");
         let mut subscription = manager.subscribe(&id).expect("live session subscribes");
 
+        // Control: the same command outside a PTY. If this reports an exit and
+        // the PTY child does not, the gap is ConPTY-specific rather than the
+        // child simply still running.
+        let control_wait = {
+            #[cfg(windows)]
+            let mut c = std::process::Command::new("cmd.exe");
+            #[cfg(windows)]
+            c.args(["/C", "ping", "-n", "2", "127.0.0.1"]);
+            #[cfg(unix)]
+            let mut c = std::process::Command::new("/bin/sh");
+            #[cfg(unix)]
+            c.args(["-c", "sleep 1"]);
+            c.stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .and_then(|mut ch| ch.wait())
+                .map(|st| st.code())
+                .map_err(|e| e.to_string())
+        };
+
         // Poll rather than block: a regression should fail the assert, not
         // park the test thread until the CI job times out.
         let deadline = Instant::now() + Duration::from_secs(15);
@@ -693,9 +713,14 @@ mod tests {
 
         assert!(
             closed,
-            "broadcast stayed open after the PTY child exited; sender_cleared_after={cleared_after:?} exit_code={:?} handle_arcs={} last_recv={last_recv}",
+            "broadcast stayed open after the PTY child exited; sender_cleared_after={cleared_after:?} exit_code={:?} handle_arcs={} last_recv={last_recv} scrollback_bytes={} control_wait={:?}",
             *handle.exit_code.lock(),
             Arc::strong_count(&handle),
+            manager
+                .scrollback_snapshot(&id)
+                .map(|snap| snap.bytes.len())
+                .unwrap_or(usize::MAX),
+            control_wait,
         );
         assert!(
             handle.output_tx.lock().is_none(),
