@@ -552,17 +552,9 @@ fn wait_loop(
     registry: Arc<SessionRegistry>,
     stop: Arc<AtomicBool>,
 ) {
-    // `Child::wait` never returns for a reaped ConPTY child on Windows, and
-    // every exit signal the daemon publishes hangs off this one call: the exit
-    // code, the registry detach, and the broadcast close below. Poll for the
-    // status instead so exit is observed on every platform. The cost is one
-    // cheap status check per live session per interval.
-    let code = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status.exit_code() as i32),
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
-            Err(_) => break None,
-        }
+    let code = match child.wait() {
+        Ok(status) => Some(status.exit_code() as i32),
+        Err(_) => None,
     };
     *expected_handle.exit_code.lock() = code;
     // Close the broadcast *after* the exit code is visible: a pump woken by
@@ -618,15 +610,18 @@ mod tests {
             "/bin/sh".to_string(),
             vec!["-c".to_string(), "sleep 1".to_string()],
         );
+        // `cmd.exe /C ...` does not run under ConPTY here — it produces a few
+        // bytes and never exits. `powershell.exe` is the spawn shape the
+        // ConPTY test above already proves works on this harness.
         #[cfg(windows)]
         let (command, args) = (
-            "cmd.exe".to_string(),
+            "powershell.exe".to_string(),
             vec![
-                "/C".to_string(),
-                "ping".to_string(),
-                "-n".to_string(),
-                "2".to_string(),
-                "127.0.0.1".to_string(),
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-Command".to_string(),
+                "Start-Sleep -Milliseconds 800".to_string(),
             ],
         );
 
