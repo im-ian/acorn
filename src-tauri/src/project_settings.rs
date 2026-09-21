@@ -40,6 +40,10 @@ pub struct ProjectSettings {
     pub worktrees: ProjectWorktreeSettings,
     #[serde(default)]
     pub start_work: ProjectStartWorkSettings,
+    #[serde(default)]
+    pub linear: ProjectLinearSettings,
+    #[serde(default)]
+    pub jira: ProjectJiraSettings,
 }
 
 impl Default for ProjectSettings {
@@ -49,6 +53,8 @@ impl Default for ProjectSettings {
             pull_requests: ProjectPullRequestSettings::default(),
             worktrees: ProjectWorktreeSettings::default(),
             start_work: ProjectStartWorkSettings::default(),
+            linear: ProjectLinearSettings::default(),
+            jira: ProjectJiraSettings::default(),
         }
     }
 }
@@ -89,6 +95,24 @@ impl Default for ProjectStartWorkSettings {
 
 fn default_start_work_prompt() -> Option<String> {
     Some(STANDARD_START_WORK_PROMPT.to_string())
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectLinearSettings {
+    #[serde(default)]
+    pub team_id: Option<String>,
+    #[serde(default)]
+    pub team_key: Option<String>,
+    #[serde(default)]
+    pub team_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectJiraSettings {
+    #[serde(default)]
+    pub project_key: Option<String>,
+    #[serde(default)]
+    pub project_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -228,7 +252,43 @@ fn normalize_settings(mut settings: ProjectSettings) -> ProjectSettings {
             )
         }
     });
+    settings.linear.team_id = normalize_optional_id(settings.linear.team_id, 128);
+    settings.linear.team_key = normalize_tracker_key(settings.linear.team_key);
+    settings.linear.team_name = normalize_optional_id(settings.linear.team_name, 128);
+    settings.jira.project_key = normalize_tracker_key(settings.jira.project_key);
+    settings.jira.project_name = normalize_optional_id(settings.jira.project_name, 128);
     settings
+}
+
+fn normalize_optional_id(value: Option<String>, max_chars: usize) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.chars().take(max_chars).collect())
+        }
+    })
+}
+
+fn normalize_tracker_key(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim().to_ascii_uppercase();
+        if trimmed.len() < 2 || trimmed.len() > 16 {
+            return None;
+        }
+        let mut chars = trimmed.chars();
+        let Some(first) = chars.next() else {
+            return None;
+        };
+        if first.is_ascii_uppercase()
+            && chars.all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+        {
+            Some(trimmed)
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]
@@ -256,6 +316,15 @@ mod tests {
                 start_work: ProjectStartWorkSettings {
                     agent_prompt: Some("Fix GitHub {kind} #{number}.".to_string()),
                 },
+                linear: ProjectLinearSettings {
+                    team_id: Some("team-1".into()),
+                    team_key: Some("jtf".into()),
+                    team_name: Some("Frontend".into()),
+                },
+                jira: ProjectJiraSettings {
+                    project_key: Some("acorn".into()),
+                    project_name: Some("Acorn".into()),
+                },
             };
 
             let saved = update(&repo, settings).unwrap();
@@ -275,6 +344,8 @@ mod tests {
                 loaded.settings.start_work.agent_prompt.as_deref(),
                 Some("Fix GitHub {kind} #{number}.")
             );
+            assert_eq!(loaded.settings.linear.team_key.as_deref(), Some("JTF"));
+            assert_eq!(loaded.settings.jira.project_key.as_deref(), Some("ACORN"));
         });
     }
 
@@ -354,6 +425,7 @@ mod tests {
                     start_work: ProjectStartWorkSettings {
                         agent_prompt: Some(PREVIOUS_STANDARD_START_WORK_PROMPT.to_string()),
                     },
+                    ..ProjectSettings::default()
                 },
             )
             .unwrap();
@@ -388,6 +460,7 @@ mod tests {
                     start_work: ProjectStartWorkSettings {
                         agent_prompt: Some("   ".to_string()),
                     },
+                    ..ProjectSettings::default()
                 },
             )
             .unwrap();
@@ -412,9 +485,7 @@ mod tests {
                 &repo,
                 ProjectSettings {
                     remember_after_close: false,
-                    pull_requests: ProjectPullRequestSettings::default(),
-                    worktrees: ProjectWorktreeSettings::default(),
-                    start_work: ProjectStartWorkSettings::default(),
+                    ..ProjectSettings::default()
                 },
             )
             .unwrap();

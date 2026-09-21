@@ -39,7 +39,9 @@ import {
   MinusCircle,
   Play,
   Search,
+  SquareKanban,
   SquareTerminal,
+  Ticket,
   Trash2,
   X,
 } from "lucide-react";
@@ -89,6 +91,7 @@ import {
   useIsGitRepository,
   useIsGitHubRepo,
 } from "../lib/useIsGitHubRepo";
+import { useTrackerAccounts } from "../lib/useTrackerAccounts";
 import {
   RIGHT_GROUPS,
   groupOfTab,
@@ -128,6 +131,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
 import { FileExplorer } from "./FileExplorer";
+import { TrackerIssuesTab } from "./TrackerIssuesTab";
 import { GitHubLabelChip } from "./GitHubLabelChip";
 import { IssueDetailModal } from "./IssueDetailModal";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
@@ -202,6 +206,8 @@ const BACKGROUND_LOADED_TABS = new Set<RightTab>([
   "prs",
   "issues",
   "actions",
+  "linearIssues",
+  "jiraIssues",
   "history",
 ]);
 const PROJECT_PREFETCH_START_DELAY_MS = 1_000;
@@ -366,6 +372,9 @@ export function RightPanel() {
     gitRepoProbeVersion,
   );
   const githubVisible = isGitHubRepo === true;
+  const trackerAccounts = useTrackerAccounts();
+  const linearVisible = trackerAccounts.linear.connected;
+  const jiraVisible = trackerAccounts.jira.connected;
   const gitBackedTabsVisible =
     codePanelRepoPath !== null && isCodeGitRepo !== false;
 
@@ -380,11 +389,20 @@ export function RightPanel() {
             ? tabsForGroup("code")
             : tabsForGroup("code").filter((tab) => tab === "files"),
       github: githubVisible ? tabsForGroup("github") : [],
+      linear: linearVisible ? tabsForGroup("linear") : [],
+      jira: jiraVisible ? tabsForGroup("jira") : [],
       agents: showTodos
         ? tabsForGroup("agents")
         : tabsForGroup("agents").filter((tab) => tab !== "todos"),
     }),
-    [codePanelRepoPath, gitBackedTabsVisible, githubVisible, showTodos],
+    [
+      codePanelRepoPath,
+      gitBackedTabsVisible,
+      githubVisible,
+      linearVisible,
+      jiraVisible,
+      showTodos,
+    ],
   );
   const visibleGroups = useMemo(
     () => RIGHT_GROUPS.filter((g) => visibleTabsByGroup[g].length > 0),
@@ -622,6 +640,24 @@ export function RightPanel() {
             </BackgroundLoadedTab>
           </>
         ) : null}
+        {projectRootRepoPath && linearVisible ? (
+          <BackgroundLoadedTab active={rightTab === "linearIssues"}>
+            <TrackerIssuesTab
+              key={`linear:${projectRootRepoPath}`}
+              provider="linear"
+              repoPath={projectRootRepoPath}
+            />
+          </BackgroundLoadedTab>
+        ) : null}
+        {projectRootRepoPath && jiraVisible ? (
+          <BackgroundLoadedTab active={rightTab === "jiraIssues"}>
+            <TrackerIssuesTab
+              key={`jira:${projectRootRepoPath}`}
+              provider="jira"
+              repoPath={projectRootRepoPath}
+            />
+          </BackgroundLoadedTab>
+        ) : null}
         {agentHistoryScope === "unscoped" || agentHistoryPath ? (
           <BackgroundLoadedTab active={rightTab === "history"}>
             <AgentHistoryTab
@@ -797,6 +833,10 @@ function groupIcon(group: RightGroup): ReactNode {
       return <Code2 size={14} />;
     case "github":
       return <Globe size={14} />;
+    case "linear":
+      return <Ticket size={14} />;
+    case "jira":
+      return <SquareKanban size={14} />;
     case "agents":
       return <Bot size={14} />;
   }
@@ -808,6 +848,10 @@ function groupLabelKey(group: RightGroup): RightPanelTranslationKey {
       return "rightPanel.groups.code";
     case "github":
       return "rightPanel.groups.github";
+    case "linear":
+      return "rightPanel.groups.linear";
+    case "jira":
+      return "rightPanel.groups.jira";
     case "agents":
       return "rightPanel.groups.agents";
   }
@@ -827,6 +871,9 @@ function tabIcon(tab: RightTab): ReactNode {
       return <CircleDot size={12} />;
     case "actions":
       return <Activity size={12} />;
+    case "linearIssues":
+    case "jiraIssues":
+      return <CircleDot size={12} />;
     case "todos":
       return <ListTodo size={12} />;
     case "history":

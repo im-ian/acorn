@@ -283,6 +283,8 @@ export const tauriMockSource = `
           pull_requests: { generation_prompt: standardPrGenerationPrompt },
           worktrees: { base_branch: null },
           start_work: { agent_prompt: null },
+          linear: { team_id: null, team_key: null, team_name: null },
+          jira: { project_key: null, project_name: null },
         },
       });
     }
@@ -294,6 +296,8 @@ export const tauriMockSource = `
           pull_requests: { generation_prompt: standardPrGenerationPrompt },
           worktrees: { base_branch: null },
           start_work: { agent_prompt: null },
+          linear: { team_id: null, team_key: null, team_name: null },
+          jira: { project_key: null, project_name: null },
         },
       });
     }
@@ -530,6 +534,23 @@ export const tauriMockSource = `
     // override this via window.__ACORN_MOCK_HANDLERS__.
     if (cmd === 'github_origin_slug') {
       return Promise.resolve('acorn/test');
+    }
+    if (cmd === 'get_tracker_accounts') {
+      return Promise.resolve({
+        linear: { connected: false, viewer: null, workspace: null },
+        jira: { connected: false, email: null, site: null, display_name: null },
+      });
+    }
+    if (cmd === 'list_linear_teams') return Promise.resolve([]);
+    if (cmd === 'list_jira_projects') return Promise.resolve([]);
+    if (cmd === 'list_linear_issues' || cmd === 'list_jira_issues') {
+      return Promise.resolve({ kind: 'needs_auth' });
+    }
+    if (cmd === 'get_linear_issue' || cmd === 'get_jira_issue') {
+      return Promise.resolve({ kind: 'needs_auth' });
+    }
+    if (cmd === 'set_linear_issue_state' || cmd === 'set_jira_issue_state') {
+      return Promise.resolve(undefined);
     }
     if (cmd === 'is_git_repository') {
       return Promise.resolve(true);

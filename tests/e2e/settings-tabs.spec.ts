@@ -62,6 +62,14 @@ const TAB_MARKERS: Array<{
     },
   },
   {
+    tab: /^(Integrations|연동)$/,
+    label: "Integrations",
+    marker: {
+      kind: "text",
+      pattern: /Linear API key|Linear API 키/i,
+    },
+  },
+  {
     tab: /^(Editor|편집기)$/,
     label: "Editor",
     marker: {

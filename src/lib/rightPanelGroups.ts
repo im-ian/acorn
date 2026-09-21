@@ -1,4 +1,4 @@
-export type RightGroup = "code" | "github" | "agents";
+export type RightGroup = "code" | "github" | "linear" | "jira" | "agents";
 
 export type RightTab =
   | "files"
@@ -7,14 +7,24 @@ export type RightTab =
   | "prs"
   | "issues"
   | "actions"
+  | "linearIssues"
+  | "jiraIssues"
   | "todos"
   | "history";
 
-export const RIGHT_GROUPS: ReadonlyArray<RightGroup> = ["code", "github", "agents"];
+export const RIGHT_GROUPS: ReadonlyArray<RightGroup> = [
+  "code",
+  "github",
+  "linear",
+  "jira",
+  "agents",
+];
 
 const TABS_BY_GROUP: Record<RightGroup, ReadonlyArray<RightTab>> = {
   code: ["files", "staged", "commits"],
   github: ["prs", "issues", "actions"],
+  linear: ["linearIssues"],
+  jira: ["jiraIssues"],
   agents: ["history", "todos"],
 };
 
@@ -37,6 +47,8 @@ export function defaultTabByGroup(): Record<RightGroup, RightTab> {
   return {
     code: defaultTabForGroup("code"),
     github: defaultTabForGroup("github"),
+    linear: defaultTabForGroup("linear"),
+    jira: defaultTabForGroup("jira"),
     agents: defaultTabForGroup("agents"),
   };
 }

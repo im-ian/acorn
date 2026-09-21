@@ -598,11 +598,24 @@ export interface ProjectStartWorkSettings {
   agent_prompt: string | null;
 }
 
+export interface ProjectLinearSettings {
+  team_id: string | null;
+  team_key: string | null;
+  team_name: string | null;
+}
+
+export interface ProjectJiraSettings {
+  project_key: string | null;
+  project_name: string | null;
+}
+
 export interface ProjectSettings {
   remember_after_close: boolean;
   pull_requests: ProjectPullRequestSettings;
   worktrees: ProjectWorktreeSettings;
   start_work: ProjectStartWorkSettings;
+  linear?: ProjectLinearSettings;
+  jira?: ProjectJiraSettings;
 }
 
 export interface ProjectSettingsRecord {
@@ -866,6 +879,98 @@ export type IssueDetailListing =
   | { kind: "ok"; account: string; detail: IssueDetail }
   | { kind: "not_github" }
   | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
+
+export interface LinearAccount {
+  connected: boolean;
+  viewer: string | null;
+  workspace: string | null;
+}
+
+export interface JiraAccount {
+  connected: boolean;
+  email: string | null;
+  site: string | null;
+  display_name: string | null;
+}
+
+export interface TrackerAccounts {
+  linear: LinearAccount;
+  jira: JiraAccount;
+}
+
+export interface LinearTeam {
+  id: string;
+  key: string;
+  name: string;
+}
+
+export interface JiraProjectInfo {
+  id: string;
+  key: string;
+  name: string;
+}
+
+export type TrackerProvider = "linear" | "jira";
+
+export interface TrackerIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  state: string;
+  state_type: string;
+  author: string;
+  url: string;
+  created_at: string;
+  updated_at: string;
+  comments: number;
+  labels: PullRequestLabel[];
+  assignee: string | null;
+}
+
+export type TrackerListing =
+  | { kind: "ok"; items: TrackerIssue[]; account: string }
+  | { kind: "needs_auth" }
+  | { kind: "needs_mapping" }
+  | { kind: "no_access"; message: string };
+
+export interface TrackerComment {
+  id: string;
+  author: string;
+  body: string;
+  created_at: string;
+  url: string | null;
+}
+
+export interface TrackerWorkflowState {
+  id: string;
+  name: string;
+  state_type: string;
+}
+
+export interface TrackerIssueDetail {
+  id: string;
+  identifier: string;
+  title: string;
+  body: string;
+  state: string;
+  state_type: string;
+  state_id?: string;
+  author: string;
+  url: string;
+  created_at: string;
+  updated_at: string;
+  labels: PullRequestLabel[];
+  comments: TrackerComment[];
+  assignees: string[];
+  available_states?: TrackerWorkflowState[];
+  can_change_state?: boolean;
+}
+
+export type TrackerDetailListing =
+  | { kind: "ok"; account: string; detail: TrackerIssueDetail }
+  | { kind: "needs_auth" }
+  | { kind: "needs_mapping" }
+  | { kind: "no_access"; message: string };
 
 export interface PullRequestComment {
   id: number | null;

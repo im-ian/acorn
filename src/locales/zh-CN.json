@@ -104,6 +104,7 @@
       "agents": "智能体",
       "sessions": "会话",
       "github": "GitHub",
+      "integrations": "集成",
       "editor": "编辑器",
       "notifications": "通知",
       "shortcuts": "快捷键",
@@ -363,6 +364,25 @@
       "showChecks": {
         "label": "显示 CI 状态",
         "description": "在每个 PR 行中呈现 CI/检查完成摘要。"
+      }
+    },
+    "integrations": {
+      "connectedAs": "已连接为 {name}",
+      "notConnected": "未连接。",
+      "save": "保存",
+      "saving": "保存中…",
+      "disconnect": "断开",
+      "linear": {
+        "title": "Linear API 密钥",
+        "hint": "从 Linear → Settings → Security & access 粘贴个人 API 密钥。列表需要 Read，更改状态需要 Write。密钥保存在操作系统钥匙串中，不会写入 Acorn 设置文件。"
+      },
+      "jira": {
+        "title": "Jira Cloud",
+        "hint": "使用带 read:jira-work 范围的 Atlassian API 令牌，更改状态还需要 write:jira-work。令牌保存在操作系统钥匙串中，邮箱和站点保存在本地。",
+        "email": "Atlassian 邮箱",
+        "site": "站点",
+        "token": "API 令牌",
+        "tokenPlaceholder": "Atlassian API 令牌"
       }
     },
     "appearance": {
@@ -1785,6 +1805,8 @@
     "groups": {
       "code": "代码",
       "github": "GitHub",
+      "linear": "Linear",
+      "jira": "Jira",
       "agents": "智能体"
     },
     "tabs": {
@@ -1794,6 +1816,8 @@
       "staged": "已暂存",
       "prs": "PRs",
       "issues": "议题",
+      "linearIssues": "议题",
+      "jiraIssues": "议题",
       "activity": "活动",
       "history": "历史记录",
       "actions": "操作"
@@ -1959,6 +1983,17 @@
       "jobsCount": "作业 ({count})",
       "noJobs": "未报告作业。",
       "openJobOnGitHub": "在 GitHub 上打开作业"
+    },
+    "trackers": {
+      "needsAuth": "请在设置中连接 Linear 或 Jira 后再加载议题。",
+      "openSettings": "打开设置",
+      "needsLinearTeam": "请选择此项目对应的 Linear 团队。",
+      "needsJiraProject": "请选择此项目对应的 Jira 项目。",
+      "chooseTeam": "选择 Linear 团队",
+      "chooseProject": "选择 Jira 项目",
+      "noTeams": "此密钥未返回任何 Linear 团队。",
+      "noProjects": "此账号未返回任何 Jira 项目。",
+      "loading": "正在加载议题…"
     },
     "checks": {
       "allPassed": "所有 {count} 检查均已通过",
@@ -2261,6 +2296,7 @@
         "sources": "源文件夹",
         "pullRequests": "拉取请求",
         "startWork": "开始工作",
+        "issues": "议题",
         "worktrees": "工作树"
       },
       "general": "常规",
@@ -2306,6 +2342,14 @@
       "startWorkPrompt": "代理提示词",
       "startWorkPromptHint": "占位符：{kind}、{number}、{title}、{url}、{branch}、{body}。留空则仅启动代理，不发送第一条消息。",
       "startWorkPromptPlaceholder": "处理 GitHub {kind} #{number}：{title}",
+      "issues": "议题跟踪器",
+      "issuesHint": "将此 Acorn 项目映射到 Linear 团队和/或 Jira 项目。连接账号后可在右侧面板中选择。",
+      "linearTeam": "Linear 团队",
+      "linearTeamHint": "用于右侧面板的 Linear 议题列表。",
+      "jiraProject": "Jira 项目",
+      "jiraProjectHint": "用于右侧面板的 Jira 议题列表。",
+      "notMapped": "未映射",
+      "clearMapping": "清除映射",
       "promptCount": "{count} / {max}",
       "rememberAfterClose": "关闭此项目后保留项目设置",
       "rememberAfterCloseHint": "禁用后，当您关闭项目时，Acorn 会删除此项目保存的设置。",
@@ -2613,6 +2657,31 @@
       "stateNotPlanned": "未计划",
       "assignees": "受让人：",
       "milestone": "里程碑："
+    },
+    "trackerIssueDetail": {
+      "loading": "正在加载议题…",
+      "needsAuth": "尚未连接此跟踪器。",
+      "needsMapping": "此项目尚未映射到 Linear 团队或 Jira 项目。",
+      "openInLinear": "在 Linear 中打开",
+      "openInJira": "在 Jira 中打开",
+      "close": "关闭",
+      "created": "创建",
+      "updated": "更新",
+      "assignees": "经办人：",
+      "comments": "评论",
+      "noComments": "还没有评论。",
+      "noBody": "没有议题描述。",
+      "commentAriaLabel": "议题评论",
+      "commentPlaceholder": "添加评论…",
+      "commentWrite": "编写",
+      "commentPreview": "预览",
+      "commentPreviewEmpty": "还没有可预览的内容。",
+      "commentSubmit": "评论",
+      "commentSubmitting": "正在发布...",
+      "commentFailed": "发布评论失败：",
+      "changeState": "更改议题状态",
+      "writePermissionLinear": "更改状态需要具有 Write 权限的 Linear API 密钥。",
+      "writePermissionJira": "更改状态需要具有 write:jira-work 权限的 Jira API 令牌。"
     }
   },
   "commandPalette": {

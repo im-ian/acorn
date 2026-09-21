@@ -65,6 +65,7 @@ export type ProjectSettingsTab =
   | "sources"
   | "pullRequests"
   | "startWork"
+  | "issues"
   | "worktrees";
 
 const PROJECT_SETTINGS_TABS: Array<{
@@ -78,6 +79,7 @@ const PROJECT_SETTINGS_TABS: Array<{
     labelKey: "dialogs.projectSettings.tabs.pullRequests",
   },
   { id: "startWork", labelKey: "dialogs.projectSettings.tabs.startWork" },
+  { id: "issues", labelKey: "dialogs.projectSettings.tabs.issues" },
   { id: "worktrees", labelKey: "dialogs.projectSettings.tabs.worktrees" },
 ];
 
@@ -129,6 +131,15 @@ function defaultProjectSettings(): ProjectSettings {
     start_work: {
       agent_prompt: STANDARD_START_WORK_PROMPT,
     },
+    linear: {
+      team_id: null,
+      team_key: null,
+      team_name: null,
+    },
+    jira: {
+      project_key: null,
+      project_name: null,
+    },
   };
 }
 
@@ -149,6 +160,15 @@ function hydrateProjectSettings(settings: ProjectSettings): ProjectSettings {
       agent_prompt: resolveStartWorkAgentPrompt(
         settings.start_work?.agent_prompt,
       ),
+    },
+    linear: {
+      team_id: settings.linear?.team_id ?? null,
+      team_key: settings.linear?.team_key ?? null,
+      team_name: settings.linear?.team_name ?? null,
+    },
+    jira: {
+      project_key: settings.jira?.project_key ?? null,
+      project_name: settings.jira?.project_name ?? null,
     },
   };
 }
@@ -895,6 +915,77 @@ export function ProjectSettingsModal({
                         Array.from(prompt).length,
                       )}
                     </p>
+                  </Field>
+                </ProjectSettingsGroup>
+              ) : tab === "issues" ? (
+                <ProjectSettingsGroup
+                  title={dt(t, "dialogs.projectSettings.issues")}
+                  description={dt(t, "dialogs.projectSettings.issuesHint")}
+                >
+                  <Field
+                    label={dt(t, "dialogs.projectSettings.linearTeam")}
+                    hint={dt(t, "dialogs.projectSettings.linearTeamHint")}
+                  >
+                    <p className="text-xs text-fg">
+                      {settings.linear?.team_key
+                        ? `${settings.linear.team_key}${
+                            settings.linear.team_name
+                              ? ` · ${settings.linear.team_name}`
+                              : ""
+                          }`
+                        : dt(t, "dialogs.projectSettings.notMapped")}
+                    </p>
+                    {settings.linear?.team_key ? (
+                      <button
+                        type="button"
+                        className="text-[11px] text-fg-muted underline-offset-2 hover:text-fg hover:underline"
+                        disabled={loading || saving}
+                        onClick={() =>
+                          setSettings((current) => ({
+                            ...current,
+                            linear: {
+                              team_id: null,
+                              team_key: null,
+                              team_name: null,
+                            },
+                          }))
+                        }
+                      >
+                        {dt(t, "dialogs.projectSettings.clearMapping")}
+                      </button>
+                    ) : null}
+                  </Field>
+                  <Field
+                    label={dt(t, "dialogs.projectSettings.jiraProject")}
+                    hint={dt(t, "dialogs.projectSettings.jiraProjectHint")}
+                  >
+                    <p className="text-xs text-fg">
+                      {settings.jira?.project_key
+                        ? `${settings.jira.project_key}${
+                            settings.jira.project_name
+                              ? ` · ${settings.jira.project_name}`
+                              : ""
+                          }`
+                        : dt(t, "dialogs.projectSettings.notMapped")}
+                    </p>
+                    {settings.jira?.project_key ? (
+                      <button
+                        type="button"
+                        className="text-[11px] text-fg-muted underline-offset-2 hover:text-fg hover:underline"
+                        disabled={loading || saving}
+                        onClick={() =>
+                          setSettings((current) => ({
+                            ...current,
+                            jira: {
+                              project_key: null,
+                              project_name: null,
+                            },
+                          }))
+                        }
+                      >
+                        {dt(t, "dialogs.projectSettings.clearMapping")}
+                      </button>
+                    ) : null}
                   </Field>
                 </ProjectSettingsGroup>
               ) : tab === "startWork" ? (

@@ -104,6 +104,7 @@
       "agents": "エージェント",
       "sessions": "セッション",
       "github": "GitHub",
+      "integrations": "連携",
       "editor": "エディタ",
       "notifications": "通知",
       "shortcuts": "ショートカット",
@@ -363,6 +364,25 @@
       "showChecks": {
         "label": "CIステータスの表示",
         "description": "各 PR 行に CI/チェック完了の概要を表示します。"
+      }
+    },
+    "integrations": {
+      "connectedAs": "{name} として接続済み",
+      "notConnected": "未接続です。",
+      "save": "保存",
+      "saving": "保存中…",
+      "disconnect": "切断",
+      "linear": {
+        "title": "Linear API キー",
+        "hint": "Linear の Settings → Security & access から個人 API キーを貼り付けます。一覧は Read、状態変更は Write が必要です。OS のキーチェーンに保存され、Acorn の設定ファイルには入りません。"
+      },
+      "jira": {
+        "title": "Jira Cloud",
+        "hint": "read:jira-work スコープの Atlassian API トークンを使い、状態変更には write:jira-work が必要です。トークンは OS のキーチェーン、メールとサイトはローカルに保存されます。",
+        "email": "Atlassian メール",
+        "site": "サイト",
+        "token": "API トークン",
+        "tokenPlaceholder": "Atlassian API トークン"
       }
     },
     "appearance": {
@@ -1785,6 +1805,8 @@
     "groups": {
       "code": "コード",
       "github": "GitHub",
+      "linear": "Linear",
+      "jira": "Jira",
       "agents": "エージェント"
     },
     "tabs": {
@@ -1794,6 +1816,8 @@
       "staged": "段階的",
       "prs": "PR",
       "issues": "問題点",
+      "linearIssues": "Issues",
+      "jiraIssues": "Issues",
       "activity": "アクティビティ",
       "history": "歴史",
       "actions": "アクション"
@@ -1959,6 +1983,17 @@
       "jobsCount": "ジョブ ({count})",
       "noJobs": "報告された仕事はありません。",
       "openJobOnGitHub": "GitHub で求人を開く"
+    },
+    "trackers": {
+      "needsAuth": "Issues を読み込むには Settings で Linear または Jira を接続してください。",
+      "openSettings": "設定を開く",
+      "needsLinearTeam": "このプロジェクトの Linear チームを選んでください。",
+      "needsJiraProject": "このプロジェクトの Jira プロジェクトを選んでください。",
+      "chooseTeam": "Linear チームを選択",
+      "chooseProject": "Jira プロジェクトを選択",
+      "noTeams": "このキーでは Linear チームを取得できませんでした。",
+      "noProjects": "このアカウントでは Jira プロジェクトを取得できませんでした。",
+      "loading": "Issues を読み込み中…"
     },
     "checks": {
       "allPassed": "すべての {count} チェックに合格しました",
@@ -2261,6 +2296,7 @@
         "sources": "ソースフォルダー",
         "pullRequests": "プルリクエスト",
         "startWork": "作業を開始",
+        "issues": "Issues",
         "worktrees": "ワークツリー"
       },
       "general": "一般",
@@ -2306,6 +2342,14 @@
       "startWorkPrompt": "エージェントプロンプト",
       "startWorkPromptHint": "プレースホルダー: {kind}、{number}、{title}、{url}、{branch}、{body}。空にすると最初のメッセージなしでエージェントを起動します。",
       "startWorkPromptPlaceholder": "GitHub の {kind} #{number}: {title} に取り組んでください。",
+      "issues": "Issue トラッカー",
+      "issuesHint": "この Acorn プロジェクトを Linear チームや Jira プロジェクトに対応付けます。アカウント接続後、右パネルから選択します。",
+      "linearTeam": "Linear チーム",
+      "linearTeamHint": "右パネルの Linear Issues 一覧に使います。",
+      "jiraProject": "Jira プロジェクト",
+      "jiraProjectHint": "右パネルの Jira Issues 一覧に使います。",
+      "notMapped": "未設定",
+      "clearMapping": "対応付けを解除",
       "promptCount": "{count} / {max}",
       "rememberAfterClose": "このプロジェクトを閉じた後もプロジェクト設定を保持します",
       "rememberAfterCloseHint": "無効にすると、プロジェクトを閉じるときに、Acorn はこのプロジェクトの保存された設定を削除します。",
@@ -2613,6 +2657,31 @@
       "stateNotPlanned": "予定なし",
       "assignees": "譲受人:",
       "milestone": "マイルストーン:"
+    },
+    "trackerIssueDetail": {
+      "loading": "Issue を読み込み中…",
+      "needsAuth": "このトラッカーは接続されていません。",
+      "needsMapping": "このプロジェクトは Linear チームまたは Jira プロジェクトに対応付けられていません。",
+      "openInLinear": "Linear で開く",
+      "openInJira": "Jira で開く",
+      "close": "閉じる",
+      "created": "作成",
+      "updated": "更新",
+      "assignees": "担当者:",
+      "comments": "コメント",
+      "noComments": "まだコメントはありません。",
+      "noBody": "説明がありません。",
+      "commentAriaLabel": "Issue コメント",
+      "commentPlaceholder": "コメントを追加…",
+      "commentWrite": "作成",
+      "commentPreview": "プレビュー",
+      "commentPreviewEmpty": "プレビューする内容がありません。",
+      "commentSubmit": "コメント",
+      "commentSubmitting": "投稿中...",
+      "commentFailed": "コメントの投稿に失敗しました:",
+      "changeState": "課題の状態を変更",
+      "writePermissionLinear": "状態を変更するには Linear API キーに Write 権限が必要です。",
+      "writePermissionJira": "状態を変更するには Jira API トークンに write:jira-work 権限が必要です。"
     }
   },
   "commandPalette": {
