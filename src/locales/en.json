@@ -2483,7 +2483,7 @@
       "checksPending": "{count} check(s) still running on the head ref.",
       "checksBlocking": "Merge is blocked by branch protection until checks finish or pass.",
       "adminMerge": "Admin merge (override branch protection)",
-      "adminMergeHint": "Forces the merge by passing --admin to gh. Use only when repo policy permits and you accept overriding required checks."
+      "adminMergeHint": "Forces the merge, overriding required checks when repository policy allows it. Use only when you accept bypassing branch protection."
     },
     "stagedRevMismatch": {
       "title": "Shell environment updated",

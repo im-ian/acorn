@@ -935,6 +935,26 @@ query($owner:String!, $name:String!, $number:Int!) {
       assignees(first: 20) { nodes { login } }
       milestone { title }
       comments(first: 100) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          databaseId
+          body
+          createdAt
+          url
+          author { login avatarUrl }
+        }
+      }
+    }
+  }
+}
+"#;
+
+const ISSUE_COMMENTS_PAGE_QUERY: &str = r#"
+query($owner:String!, $name:String!, $number:Int!, $first:Int!, $after:String) {
+  repository(owner:$owner, name:$name) {
+    issue(number:$number) {
+      comments(first:$first, after:$after) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           databaseId
           body
@@ -965,7 +985,17 @@ fn run_issue_view(slug: &str, number: u64, token: &str) -> AppResult<GhIssueView
             "GitHub issue {number} was not found in {slug}"
         )));
     }
-    Ok(issue_view_from_gql(issue))
+    let mut issue = issue.clone();
+    paginate_named_connection(
+        token,
+        owner,
+        name,
+        number,
+        ISSUE_COMMENTS_PAGE_QUERY,
+        "comments",
+        &mut issue,
+    )?;
+    Ok(issue_view_from_gql(&issue))
 }
 
 /// Aggregate `statusCheckRollup` entries into pass/fail/pending counts.
@@ -1663,6 +1693,7 @@ query($owner:String!, $name:String!, $number:Int!) {
       baseRefName
       labels(first: 50) { nodes { name color } }
       comments(first: 100) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           databaseId
           body
@@ -1672,6 +1703,7 @@ query($owner:String!, $name:String!, $number:Int!) {
         }
       }
       reviews(first: 100) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           body
           state
@@ -1680,6 +1712,7 @@ query($owner:String!, $name:String!, $number:Int!) {
         }
       }
       commits(first: 100) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           commit {
             oid
@@ -1745,8 +1778,100 @@ fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestV
             "GitHub pull request {number} was not found in {slug}"
         )));
     }
-    Ok(pr_view_from_gql(pr))
+    let mut pr = pr.clone();
+    paginate_named_connection(
+        token,
+        owner,
+        name,
+        number,
+        PR_COMMENTS_PAGE_QUERY,
+        "comments",
+        &mut pr,
+    )?;
+    paginate_named_connection(
+        token,
+        owner,
+        name,
+        number,
+        PR_REVIEWS_PAGE_QUERY,
+        "reviews",
+        &mut pr,
+    )?;
+    paginate_named_connection(
+        token,
+        owner,
+        name,
+        number,
+        PR_COMMITS_PAGE_QUERY,
+        "commits",
+        &mut pr,
+    )?;
+    Ok(pr_view_from_gql(&pr))
 }
+
+const PR_COMMENTS_PAGE_QUERY: &str = r#"
+query($owner:String!, $name:String!, $number:Int!, $first:Int!, $after:String) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      comments(first:$first, after:$after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          databaseId
+          body
+          createdAt
+          url
+          author { login avatarUrl }
+        }
+      }
+    }
+  }
+}
+"#;
+
+const PR_REVIEWS_PAGE_QUERY: &str = r#"
+query($owner:String!, $name:String!, $number:Int!, $first:Int!, $after:String) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      reviews(first:$first, after:$after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          body
+          state
+          submittedAt
+          author { login avatarUrl }
+        }
+      }
+    }
+  }
+}
+"#;
+
+const PR_COMMITS_PAGE_QUERY: &str = r#"
+query($owner:String!, $name:String!, $number:Int!, $first:Int!, $after:String) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      commits(first:$first, after:$after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          commit {
+            oid
+            messageHeadline
+            messageBody
+            committedDate
+            authors(first: 10) {
+              nodes {
+                name
+                email
+                user { login }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"#;
 
 fn run_pr_refs(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestRefs> {
     #[derive(Deserialize)]
@@ -2038,6 +2163,83 @@ fn percent_encode_github_api_value(value: &str, preserve_slashes: bool) -> Strin
     encoded
 }
 
+const DETAIL_PAGE_SIZE: i64 = 100;
+const DETAIL_ITEM_CAP: usize = 1000;
+
+fn paginate_named_connection(
+    token: &str,
+    owner: &str,
+    name: &str,
+    number: u64,
+    query: &str,
+    field: &str,
+    node: &mut Value,
+) -> AppResult<()> {
+    loop {
+        let count = node
+            .pointer(&format!("/{field}/nodes"))
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        let has_next = node
+            .pointer(&format!("/{field}/pageInfo/hasNextPage"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !has_next || count >= DETAIL_ITEM_CAP {
+            return Ok(());
+        }
+        let Some(after) = node
+            .pointer(&format!("/{field}/pageInfo/endCursor"))
+            .and_then(Value::as_str)
+            .filter(|cursor| !cursor.is_empty())
+            .map(ToString::to_string)
+        else {
+            return Ok(());
+        };
+        let first = ((DETAIL_ITEM_CAP - count) as i64).min(DETAIL_PAGE_SIZE);
+        let page = github_api::graphql(
+            token,
+            query,
+            json!({
+                "owner": owner,
+                "name": name,
+                "number": number as i64,
+                "first": first,
+                "after": after,
+            }),
+        )?;
+        let next = page
+            .pointer(&format!("/data/repository/pullRequest/{field}"))
+            .or_else(|| page.pointer(&format!("/data/repository/issue/{field}")));
+        let Some(next) = next else {
+            return Ok(());
+        };
+        let extra = next
+            .get("nodes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let extra_len = extra.len();
+        if extra_len == 0 {
+            return Ok(());
+        }
+        if let Some(nodes) = node
+            .pointer_mut(&format!("/{field}/nodes"))
+            .and_then(Value::as_array_mut)
+        {
+            nodes.extend(extra);
+        }
+        if let Some(page_info) = next.get("pageInfo").cloned() {
+            if let Some(connection) = node.get_mut(field).and_then(Value::as_object_mut) {
+                connection.insert("pageInfo".into(), page_info);
+            }
+        }
+        if extra_len < first as usize {
+            return Ok(());
+        }
+    }
+}
+
 fn graphql_repo_connection(
     token: &str,
     owner: &str,
@@ -2212,12 +2414,12 @@ fn gql_labels(value: &Value) -> Vec<PullRequestLabel> {
 }
 
 fn gql_author(value: &Value) -> GhAuthor {
-    GhAuthor {
-        login: value
-            .pointer("/author/login")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-    }
+    let login = value
+        .pointer("/author/login")
+        .or_else(|| value.get("login"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    GhAuthor { login }
 }
 
 fn collect_actor_avatar(map: &mut HashMap<String, String>, node: &Value) {
@@ -2686,6 +2888,14 @@ impl MergeMethod {
         }
     }
 
+    fn as_graphql_enum(self) -> &'static str {
+        match self {
+            MergeMethod::Squash => "SQUASH",
+            MergeMethod::Merge => "MERGE",
+            MergeMethod::Rebase => "REBASE",
+        }
+    }
+
     /// Squash and merge commits accept a title/body override. Rebase merges
     /// replay individual commits, so message overrides are not applicable.
     fn accepts_message_override(self) -> bool {
@@ -2778,6 +2988,68 @@ pub fn update_pull_request_body(repo_path: &Path, number: u64, body: &str) -> Ap
     }
 }
 
+const PR_NODE_ID_QUERY: &str = r#"
+query($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) { id }
+  }
+}
+"#;
+
+const MARK_READY_MUTATION: &str = r#"
+mutation($id:ID!) {
+  markPullRequestReadyForReview(input:{pullRequestId:$id}) {
+    pullRequest { number }
+  }
+}
+"#;
+
+const CONVERT_DRAFT_MUTATION: &str = r#"
+mutation($id:ID!) {
+  convertPullRequestToDraft(input:{pullRequestId:$id}) {
+    pullRequest { number }
+  }
+}
+"#;
+
+const MERGE_PULL_REQUEST_MUTATION: &str = r#"
+mutation($id:ID!, $method:PullRequestMergeMethod!, $headline:String, $body:String) {
+  mergePullRequest(input:{
+    pullRequestId:$id,
+    mergeMethod:$method,
+    commitHeadline:$headline,
+    commitBody:$body
+  }) {
+    pullRequest { number }
+  }
+}
+"#;
+
+fn pull_request_node_id(slug: &str, number: u64, token: &str) -> AppResult<String> {
+    let (owner, name) = validate_github_slug(slug)?;
+    let value = github_api::graphql(
+        token,
+        PR_NODE_ID_QUERY,
+        json!({ "owner": owner, "name": name, "number": number as i64 }),
+    )?;
+    value
+        .pointer("/data/repository/pullRequest/id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| {
+            AppError::Other(format!(
+                "GitHub pull request {number} was not found in {slug}"
+            ))
+        })
+}
+
+fn run_pr_id_mutation(slug: &str, number: u64, token: &str, mutation: &str) -> AppResult<()> {
+    let id = pull_request_node_id(slug, number, token)?;
+    github_api::graphql(token, mutation, json!({ "id": id }))?;
+    Ok(())
+}
+
 fn run_pr_merge(
     slug: &str,
     number: u64,
@@ -2785,8 +3057,11 @@ fn run_pr_merge(
     method: MergeMethod,
     commit_title: Option<&str>,
     commit_body: Option<&str>,
-    _admin: bool,
+    admin: bool,
 ) -> AppResult<()> {
+    if admin {
+        return run_pr_merge_graphql(slug, number, token, method, commit_title, commit_body);
+    }
     let mut payload = json!({ "merge_method": method.as_api_value() });
     if method.accepts_message_override() {
         if let Some(title) = commit_title.filter(|title| !title.trim().is_empty()) {
@@ -2804,6 +3079,33 @@ fn run_pr_merge(
     )
 }
 
+fn run_pr_merge_graphql(
+    slug: &str,
+    number: u64,
+    token: &str,
+    method: MergeMethod,
+    commit_title: Option<&str>,
+    commit_body: Option<&str>,
+) -> AppResult<()> {
+    let id = pull_request_node_id(slug, number, token)?;
+    let mut variables = json!({
+        "id": id,
+        "method": method.as_graphql_enum(),
+        "headline": Value::Null,
+        "body": Value::Null,
+    });
+    if method.accepts_message_override() {
+        if let Some(title) = commit_title.filter(|title| !title.trim().is_empty()) {
+            variables["headline"] = json!(title);
+        }
+        if let Some(body) = commit_body {
+            variables["body"] = json!(body);
+        }
+    }
+    github_api::graphql(token, MERGE_PULL_REQUEST_MUTATION, variables)?;
+    Ok(())
+}
+
 fn run_pr_close(slug: &str, number: u64, token: &str) -> AppResult<()> {
     github_api::send_json(
         token,
@@ -2813,40 +3115,25 @@ fn run_pr_close(slug: &str, number: u64, token: &str) -> AppResult<()> {
     )
 }
 
-fn pr_state_change_endpoint(
-    slug: &str,
-    number: u64,
-    change: PullRequestStateChange,
-) -> (Method, String, Option<Value>) {
-    match change {
-        PullRequestStateChange::Ready => (
-            Method::POST,
-            format!("repos/{slug}/pulls/{number}/ready_for_review"),
-            None,
-        ),
-        PullRequestStateChange::Draft => (
-            Method::POST,
-            format!("repos/{slug}/pulls/{number}/convert_to_draft"),
-            None,
-        ),
-        PullRequestStateChange::Reopen => (
-            Method::PATCH,
-            format!("repos/{slug}/pulls/{number}"),
-            Some(json!({ "state": "open" })),
-        ),
-    }
-}
-
 fn run_pr_state_change(
     slug: &str,
     number: u64,
     token: &str,
     change: PullRequestStateChange,
 ) -> AppResult<()> {
-    let (method, path, body) = pr_state_change_endpoint(slug, number, change);
-    match body {
-        Some(payload) => github_api::send_json(token, method, &path, &payload),
-        None => github_api::send(token, method, &path, None),
+    match change {
+        PullRequestStateChange::Ready => {
+            run_pr_id_mutation(slug, number, token, MARK_READY_MUTATION)
+        }
+        PullRequestStateChange::Draft => {
+            run_pr_id_mutation(slug, number, token, CONVERT_DRAFT_MUTATION)
+        }
+        PullRequestStateChange::Reopen => github_api::send_json(
+            token,
+            Method::PATCH,
+            &format!("repos/{slug}/pulls/{number}"),
+            &json!({ "state": "open" }),
+        ),
     }
 }
 
@@ -3249,6 +3536,23 @@ pub fn get_workflow_run_detail(
     }
 }
 
+fn list_workflow_jobs(slug: &str, token: &str, run_id: u64) -> AppResult<RestWorkflowJobs> {
+    let mut jobs = Vec::new();
+    let mut page = 1u32;
+    loop {
+        let path = format!("repos/{slug}/actions/runs/{run_id}/jobs?per_page=100&page={page}");
+        let payload: RestWorkflowJobs = github_api::json(token, Method::GET, &path, None)?;
+        let batch_len = payload.jobs.len();
+        jobs.extend(payload.jobs);
+        if jobs.len() >= DETAIL_ITEM_CAP || batch_len < 100 {
+            break;
+        }
+        page += 1;
+    }
+    jobs.truncate(DETAIL_ITEM_CAP);
+    Ok(RestWorkflowJobs { jobs })
+}
+
 fn run_workflow_view(slug: &str, token: &str, run_id: u64) -> AppResult<WorkflowRunDetail> {
     let run: RestWorkflowRun = github_api::json(
         token,
@@ -3256,12 +3560,7 @@ fn run_workflow_view(slug: &str, token: &str, run_id: u64) -> AppResult<Workflow
         &format!("repos/{slug}/actions/runs/{run_id}"),
         None,
     )?;
-    let jobs_payload: RestWorkflowJobs = github_api::json(
-        token,
-        Method::GET,
-        &format!("repos/{slug}/actions/runs/{run_id}/jobs?per_page=100"),
-        None,
-    )?;
+    let jobs_payload = list_workflow_jobs(slug, token, run_id)?;
     let summary = workflow_run_from_rest(run);
     Ok(WorkflowRunDetail {
         id: summary.id,
@@ -3450,20 +3749,13 @@ mod tests {
     }
 
     #[test]
-    fn pr_state_changes_map_to_rest_endpoints() {
-        let ready = pr_state_change_endpoint("acme/widgets", 42, PullRequestStateChange::Ready);
-        assert_eq!(ready.0, Method::POST);
-        assert_eq!(ready.1, "repos/acme/widgets/pulls/42/ready_for_review");
-        assert!(ready.2.is_none());
-
-        let draft = pr_state_change_endpoint("acme/widgets", 42, PullRequestStateChange::Draft);
-        assert_eq!(draft.0, Method::POST);
-        assert_eq!(draft.1, "repos/acme/widgets/pulls/42/convert_to_draft");
-
-        let reopen = pr_state_change_endpoint("acme/widgets", 42, PullRequestStateChange::Reopen);
-        assert_eq!(reopen.0, Method::PATCH);
-        assert_eq!(reopen.1, "repos/acme/widgets/pulls/42");
-        assert_eq!(reopen.2, Some(json!({ "state": "open" })));
+    fn draft_ready_mutations_use_pull_request_id() {
+        assert!(MARK_READY_MUTATION.contains("markPullRequestReadyForReview"));
+        assert!(CONVERT_DRAFT_MUTATION.contains("convertPullRequestToDraft"));
+        assert!(MERGE_PULL_REQUEST_MUTATION.contains("mergePullRequest"));
+        assert_eq!(MergeMethod::Squash.as_graphql_enum(), "SQUASH");
+        assert_eq!(MergeMethod::Merge.as_graphql_enum(), "MERGE");
+        assert_eq!(MergeMethod::Rebase.as_graphql_enum(), "REBASE");
     }
 
     #[test]
@@ -3869,6 +4161,50 @@ mod tests {
         assert_eq!(detail.comments[0].id, Some(1));
         assert_eq!(detail.comments[0].body, "Looks good");
         assert_eq!(detail.assignees, vec!["carol".to_string()]);
+        assert_eq!(detail.milestone.as_deref(), Some("v1"));
+    }
+
+    #[test]
+    fn gql_author_reads_nested_and_flat_login() {
+        assert_eq!(
+            gql_author(&json!({ "author": { "login": "alice" } }))
+                .login
+                .as_deref(),
+            Some("alice")
+        );
+        assert_eq!(
+            gql_author(&json!({ "login": "carol" })).login.as_deref(),
+            Some("carol")
+        );
+    }
+
+    #[test]
+    fn issue_view_from_gql_keeps_flat_assignee_logins() {
+        let node = json!({
+            "title": "Render issue detail",
+            "body": "Issue body",
+            "state": "CLOSED",
+            "url": "https://github.com/acme/widgets/issues/7",
+            "createdAt": "2026-06-01T00:00:00Z",
+            "updatedAt": "2026-06-02T00:00:00Z",
+            "stateReason": "COMPLETED",
+            "author": { "login": "alice", "avatarUrl": "https://example/alice.png" },
+            "labels": { "nodes": [{ "name": "enhancement", "color": "a2eeef" }] },
+            "comments": {
+                "nodes": [{
+                    "databaseId": 1,
+                    "author": { "login": "bob" },
+                    "body": "Looks good",
+                    "createdAt": "2026-06-02T01:00:00Z",
+                    "url": "https://github.com/acme/widgets/issues/7#issuecomment-1"
+                }]
+            },
+            "assignees": { "nodes": [{ "login": "carol" }] },
+            "milestone": { "title": "v1" }
+        });
+        let detail = build_issue_detail(7, issue_view_from_gql(&node));
+        assert_eq!(detail.assignees, vec!["carol".to_string()]);
+        assert_eq!(detail.comments[0].author, "bob");
         assert_eq!(detail.milestone.as_deref(), Some("v1"));
     }
 }
