@@ -54,6 +54,22 @@ vi.mock("../lib/api", () => ({
       vi.fn<(limit: number) => Promise<AgentHistoryItem[]>>(),
     readSessionTodos: vi.fn<() => Promise<[]>>(),
     ptyRepoRoot: vi.fn<() => Promise<string | null>>(),
+    getTrackerAccounts: vi.fn<() => Promise<{
+      linear: {
+        connected: boolean;
+        viewer: string | null;
+        workspace: string | null;
+      };
+      jira: {
+        connected: boolean;
+        email: string | null;
+        site: string | null;
+        display_name: string | null;
+      };
+    }>>(),
+    getProjectSettings: vi.fn(),
+    listLinearIssues: vi.fn(),
+    listJiraIssues: vi.fn(),
   },
 }));
 
@@ -257,6 +273,10 @@ describe("RightPanel background tab loading", () => {
     mockApi.listAgentHistory.mockResolvedValue([]);
     mockApi.listUnscopedAgentHistory.mockResolvedValue([]);
     mockApi.readSessionTodos.mockResolvedValue([]);
+    mockApi.getTrackerAccounts.mockResolvedValue({
+      linear: { connected: false, viewer: null, workspace: null },
+      jira: { connected: false, email: null, site: null, display_name: null },
+    });
     mockApi.ptyRepoRoot.mockResolvedValue(null);
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
     useAppStore.setState({

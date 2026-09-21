@@ -26,6 +26,13 @@ import type {
   IssueDetailListing,
   IssueListing,
   IssueStateFilter,
+  JiraAccount,
+  JiraProjectInfo,
+  LinearAccount,
+  LinearTeam,
+  TrackerAccounts,
+  TrackerDetailListing,
+  TrackerListing,
   MemoryUsage,
   MergeMethod,
   Project,
@@ -652,6 +659,87 @@ export const api = {
       accountLogin,
       commentId,
     });
+  },
+  getTrackerAccounts(): Promise<TrackerAccounts> {
+    return invoke<TrackerAccounts>("get_tracker_accounts");
+  },
+  setLinearApiKey(key: string): Promise<LinearAccount> {
+    return invoke<LinearAccount>("set_linear_api_key", { key });
+  },
+  clearLinearApiKey(): Promise<TrackerAccounts> {
+    return invoke<TrackerAccounts>("clear_linear_api_key");
+  },
+  listLinearTeams(): Promise<LinearTeam[]> {
+    return invoke<LinearTeam[]>("list_linear_teams");
+  },
+  listLinearIssues(
+    repoPath: string,
+    state: IssueStateFilter = "open",
+    limit = 50,
+    query: string | null = null,
+  ): Promise<TrackerListing> {
+    return invoke<TrackerListing>("list_linear_issues", {
+      repoPath,
+      state,
+      limit,
+      query,
+    });
+  },
+  getLinearIssue(repoPath: string, id: string): Promise<TrackerDetailListing> {
+    return invoke<TrackerDetailListing>("get_linear_issue", { repoPath, id });
+  },
+  addLinearComment(
+    repoPath: string,
+    id: string,
+    body: string,
+  ): Promise<void> {
+    return invoke<void>("add_linear_comment", { repoPath, id, body });
+  },
+  setLinearIssueState(
+    repoPath: string,
+    id: string,
+    stateId: string,
+  ): Promise<void> {
+    return invoke<void>("set_linear_issue_state", { repoPath, id, stateId });
+  },
+  setJiraCredentials(
+    email: string,
+    site: string,
+    token: string,
+  ): Promise<JiraAccount> {
+    return invoke<JiraAccount>("set_jira_credentials", { email, site, token });
+  },
+  clearJiraCredentials(): Promise<TrackerAccounts> {
+    return invoke<TrackerAccounts>("clear_jira_credentials");
+  },
+  listJiraProjects(): Promise<JiraProjectInfo[]> {
+    return invoke<JiraProjectInfo[]>("list_jira_projects");
+  },
+  listJiraIssues(
+    repoPath: string,
+    state: IssueStateFilter = "open",
+    limit = 50,
+    query: string | null = null,
+  ): Promise<TrackerListing> {
+    return invoke<TrackerListing>("list_jira_issues", {
+      repoPath,
+      state,
+      limit,
+      query,
+    });
+  },
+  getJiraIssue(repoPath: string, id: string): Promise<TrackerDetailListing> {
+    return invoke<TrackerDetailListing>("get_jira_issue", { repoPath, id });
+  },
+  addJiraComment(repoPath: string, id: string, body: string): Promise<void> {
+    return invoke<void>("add_jira_comment", { repoPath, id, body });
+  },
+  setJiraIssueState(
+    repoPath: string,
+    id: string,
+    stateId: string,
+  ): Promise<void> {
+    return invoke<void>("set_jira_issue_state", { repoPath, id, stateId });
   },
   getPullRequestDetail(
     repoPath: string,

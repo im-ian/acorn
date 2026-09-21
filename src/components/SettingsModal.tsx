@@ -113,6 +113,7 @@ import {
   type AcornTheme,
   type ThemeCatalogEntry,
 } from "../lib/themes";
+import { emitTrackerAccountsChanged } from "../lib/trackerEvents";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
@@ -144,6 +145,7 @@ type Tab =
   | "sessions"
   | "agents"
   | "github"
+  | "integrations"
   | "editor"
   | "notifications"
   | "shortcuts"
@@ -160,6 +162,7 @@ const TABS: Array<{ id: Tab; labelKey: TranslationKey }> = [
   { id: "sessions", labelKey: "settings.tabs.sessions" },
   { id: "agents", labelKey: "settings.tabs.agents" },
   { id: "github", labelKey: "settings.tabs.github" },
+  { id: "integrations", labelKey: "settings.tabs.integrations" },
   { id: "editor", labelKey: "settings.tabs.editor" },
   { id: "notifications", labelKey: "settings.tabs.notifications" },
   { id: "shortcuts", labelKey: "settings.tabs.shortcuts" },
@@ -555,6 +558,8 @@ export function SettingsModal() {
             />
           ) : tab === "github" ? (
             <GithubSettings />
+          ) : tab === "integrations" ? (
+            <IntegrationsSettings />
           ) : tab === "editor" ? (
             <EditorSettings />
           ) : tab === "notifications" ? (
@@ -1518,6 +1523,209 @@ function GithubSettings() {
           checked={settings.github.showChecks}
           onChange={(v) => patchGithub({ showChecks: v })}
         />
+      </Field>
+    </section>
+  );
+}
+
+function IntegrationsSettings() {
+  const t = useTranslation();
+  const [accounts, setAccounts] = useState<
+    Awaited<ReturnType<typeof api.getTrackerAccounts>> | null
+  >(null);
+  const [linearKey, setLinearKey] = useState("");
+  const [jiraEmail, setJiraEmail] = useState("");
+  const [jiraSite, setJiraSite] = useState("");
+  const [jiraToken, setJiraToken] = useState("");
+  const [saving, setSaving] = useState<"linear" | "jira" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadAccounts = useCallback(async () => {
+    const next = await api.getTrackerAccounts();
+    setAccounts(next);
+    if (next.jira.email) setJiraEmail(next.jira.email);
+    if (next.jira.site) setJiraSite(next.jira.site);
+  }, []);
+
+  useEffect(() => {
+    void loadAccounts().catch((e) => setError(String(e)));
+  }, [loadAccounts]);
+
+  async function saveLinear() {
+    setSaving("linear");
+    setError(null);
+    try {
+      await api.setLinearApiKey(linearKey);
+      setLinearKey("");
+      emitTrackerAccountsChanged();
+      await loadAccounts();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function disconnectLinear() {
+    setSaving("linear");
+    setError(null);
+    try {
+      await api.clearLinearApiKey();
+      emitTrackerAccountsChanged();
+      await loadAccounts();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function saveJira() {
+    setSaving("jira");
+    setError(null);
+    try {
+      await api.setJiraCredentials(jiraEmail, jiraSite, jiraToken);
+      setJiraToken("");
+      emitTrackerAccountsChanged();
+      await loadAccounts();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function disconnectJira() {
+    setSaving("jira");
+    setError(null);
+    try {
+      await api.clearJiraCredentials();
+      setJiraToken("");
+      emitTrackerAccountsChanged();
+      await loadAccounts();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  return (
+    <section className="space-y-6">
+      {error ? <p className="text-xs text-danger">{error}</p> : null}
+      <Field
+        label={st(t, "settings.integrations.linear.title")}
+        hint={st(t, "settings.integrations.linear.hint")}
+      >
+        {accounts?.linear.connected ? (
+          <p className="text-xs text-fg">
+            {stf(t, "settings.integrations.connectedAs", {
+              name:
+                accounts.linear.viewer ??
+                accounts.linear.workspace ??
+                "Linear",
+            })}
+          </p>
+        ) : (
+          <p className="text-xs text-fg-muted">
+            {st(t, "settings.integrations.notConnected")}
+          </p>
+        )}
+        <TextInput
+          type="password"
+          autoComplete="off"
+          value={linearKey}
+          onChange={(e) => setLinearKey(e.target.value)}
+          placeholder="lin_api_…"
+          aria-label={st(t, "settings.integrations.linear.title")}
+        />
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            disabled={!linearKey.trim() || saving !== null}
+            onClick={() => void saveLinear()}
+          >
+            {saving === "linear"
+              ? st(t, "settings.integrations.saving")
+              : st(t, "settings.integrations.save")}
+          </Button>
+          {accounts?.linear.connected ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={saving !== null}
+              onClick={() => void disconnectLinear()}
+            >
+              {st(t, "settings.integrations.disconnect")}
+            </Button>
+          ) : null}
+        </div>
+      </Field>
+      <Field
+        label={st(t, "settings.integrations.jira.title")}
+        hint={st(t, "settings.integrations.jira.hint")}
+      >
+        {accounts?.jira.connected ? (
+          <p className="text-xs text-fg">
+            {stf(t, "settings.integrations.connectedAs", {
+              name:
+                accounts.jira.display_name ??
+                accounts.jira.email ??
+                accounts.jira.site ??
+                "Jira",
+            })}
+          </p>
+        ) : (
+          <p className="text-xs text-fg-muted">
+            {st(t, "settings.integrations.notConnected")}
+          </p>
+        )}
+        <TextInput
+          value={jiraEmail}
+          onChange={(e) => setJiraEmail(e.target.value)}
+          placeholder="you@company.com"
+          aria-label={st(t, "settings.integrations.jira.email")}
+        />
+        <TextInput
+          value={jiraSite}
+          onChange={(e) => setJiraSite(e.target.value)}
+          placeholder="acme.atlassian.net"
+          aria-label={st(t, "settings.integrations.jira.site")}
+        />
+        <TextInput
+          type="password"
+          autoComplete="off"
+          value={jiraToken}
+          onChange={(e) => setJiraToken(e.target.value)}
+          placeholder={st(t, "settings.integrations.jira.tokenPlaceholder")}
+          aria-label={st(t, "settings.integrations.jira.token")}
+        />
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            disabled={
+              !jiraEmail.trim() ||
+              !jiraSite.trim() ||
+              !jiraToken.trim() ||
+              saving !== null
+            }
+            onClick={() => void saveJira()}
+          >
+            {saving === "jira"
+              ? st(t, "settings.integrations.saving")
+              : st(t, "settings.integrations.save")}
+          </Button>
+          {accounts?.jira.connected ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={saving !== null}
+              onClick={() => void disconnectJira()}
+            >
+              {st(t, "settings.integrations.disconnect")}
+            </Button>
+          ) : null}
+        </div>
       </Field>
     </section>
   );

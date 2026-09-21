@@ -19,7 +19,10 @@ mod fs_explorer;
 mod git_ops;
 mod github_api;
 mod graph_runs;
+mod https_client;
 mod ipc;
+mod jira;
+mod linear;
 mod notifications;
 mod persistence;
 mod power_assertion;
@@ -37,6 +40,8 @@ mod staged_rev_reconcile;
 mod state;
 mod todos;
 mod token_usage;
+mod tracker;
+mod tracker_secrets;
 mod unified_diff;
 mod work_graph;
 mod worktree;
@@ -864,6 +869,21 @@ pub fn run() {
             commands::add_issue_comment,
             commands::update_github_comment,
             commands::delete_github_comment,
+            commands::get_tracker_accounts,
+            commands::set_linear_api_key,
+            commands::clear_linear_api_key,
+            commands::list_linear_teams,
+            commands::list_linear_issues,
+            commands::get_linear_issue,
+            commands::add_linear_comment,
+            commands::set_linear_issue_state,
+            commands::set_jira_credentials,
+            commands::clear_jira_credentials,
+            commands::list_jira_projects,
+            commands::list_jira_issues,
+            commands::get_jira_issue,
+            commands::add_jira_comment,
+            commands::set_jira_issue_state,
             commands::get_pull_request_detail,
             commands::get_pull_request_diff,
             commands::add_pull_request_comment,

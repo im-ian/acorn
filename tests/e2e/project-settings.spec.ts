@@ -465,6 +465,8 @@ test.describe("project settings", () => {
           pull_requests: { generation_prompt: null },
           worktrees: { base_branch: "refs/heads/develop" },
           start_work: { agent_prompt: null },
+          linear: { team_id: null, team_key: null, team_name: null },
+          jira: { project_key: null, project_name: null },
         },
       },
     ]);
@@ -570,6 +572,8 @@ test.describe("project settings", () => {
           pull_requests: { generation_prompt: "Backoffice prompt" },
           worktrees: { base_branch: "refs/heads/main" },
           start_work: { agent_prompt: null },
+          linear: { team_id: null, team_key: null, team_name: null },
+          jira: { project_key: null, project_name: null },
         },
       },
       {
@@ -579,6 +583,8 @@ test.describe("project settings", () => {
           pull_requests: { generation_prompt: "Acorn prompt" },
           worktrees: { base_branch: "refs/heads/develop" },
           start_work: { agent_prompt: null },
+          linear: { team_id: null, team_key: null, team_name: null },
+          jira: { project_key: null, project_name: null },
         },
       },
     ]);
@@ -655,6 +661,8 @@ test.describe("project settings", () => {
         pull_requests: { generation_prompt: null },
         worktrees: { base_branch: "team/integration" },
         start_work: { agent_prompt: null },
+        linear: { team_id: null, team_key: null, team_name: null },
+        jira: { project_key: null, project_name: null },
       },
     });
   });
