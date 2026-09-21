@@ -1,10 +1,11 @@
-//! GitHub pull request and issue data via the `gh` CLI.
+//! GitHub pull request and issue data.
 //!
-//! We shell out to `gh pr list --json ...` rather than calling GitHub's REST
-//! API directly so that the user's existing `gh` auth (keychain, OAuth
-//! device flow, enterprise hosts) is reused with zero in-app token storage.
-//! When `gh` is missing or unauthenticated we surface a typed error so the
-//! frontend can show actionable guidance.
+//! Authentication stays with the `gh` CLI so the user's existing logins
+//! (keychain, OAuth device flow, multi-account) are reused with zero in-app
+//! token storage. When `gh` is missing or unauthenticated we surface a typed
+//! error so the frontend can show actionable guidance. API traffic itself
+//! goes to GitHub over HTTPS so listing and detail views do not spawn `gh`
+//! per call.
 //!
 //! ## Multi-account routing
 //!
@@ -23,30 +24,33 @@
 //!      repo's `git config user.email` (best-effort; falls back to the
 //!      currently-active gh account).
 //!
-//! The picked token is passed to `gh pr list` via `GH_TOKEN`, overriding
-//! whichever account `gh` would otherwise pick.
+//! The picked token is sent as `Authorization: Bearer` on in-process HTTPS
+//! calls, isolating the run to that identity even when a different
+//! `gh auth status` account is active.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use crate::cli_resolver;
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{
     github_owner_repo, validate_commit_oid, validate_github_slug, DiffImages, DiffPayload,
 };
+use crate::github_api;
 
-// GitHub diff images cross the `gh` process boundary as raw bytes, then grow
-// again when encoded as a data URI and serialized into the renderer. Match
-// the local diff-preview ceiling so a repository-controlled image cannot
-// amplify an already-large CLI response across each of those copies.
+// GitHub diff images arrive as raw bytes, then grow again when encoded as a
+// data URI and serialized into the renderer. Match the local diff-preview
+// ceiling so a repository-controlled image cannot amplify an already-large
+// response across each of those copies.
 const MAX_REMOTE_DIFF_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
-/// PR state filter accepted from the frontend. Mirrors the values gh
-/// understands so we can pass it straight through.
+/// PR state filter accepted from the frontend.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PrStateFilter {
@@ -56,33 +60,12 @@ pub enum PrStateFilter {
     All,
 }
 
-impl PrStateFilter {
-    fn as_gh_arg(self) -> &'static str {
-        match self {
-            PrStateFilter::Open => "open",
-            PrStateFilter::Closed => "closed",
-            PrStateFilter::Merged => "merged",
-            PrStateFilter::All => "all",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IssueStateFilter {
     Open,
     Closed,
     All,
-}
-
-impl IssueStateFilter {
-    fn as_gh_arg(self) -> &'static str {
-        match self {
-            IssueStateFilter::Open => "open",
-            IssueStateFilter::Closed => "closed",
-            IssueStateFilter::All => "all",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -213,6 +196,7 @@ pub struct IssueInfo {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct GhIssue {
     number: u64,
     title: String,
@@ -614,6 +598,61 @@ fn run_pr_list(
         .collect())
 }
 
+const PR_LIST_FIELDS: &str = r#"
+number
+title
+state
+isDraft
+url
+updatedAt
+closedAt
+mergedAt
+author { login }
+headRefName
+baseRefName
+labels(first: 20) { nodes { name color } }
+commits(last: 1) {
+  nodes {
+    commit {
+      statusCheckRollup {
+        contexts(first: 100) {
+          nodes {
+            __typename
+            ... on CheckRun {
+              name
+              status
+              conclusion
+              startedAt
+              completedAt
+              detailsUrl
+              checkSuite { workflowRun { workflow { name } } }
+            }
+            ... on StatusContext {
+              context
+              state
+              targetUrl
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"#;
+
+const ISSUE_LIST_FIELDS: &str = r#"
+number
+title
+state
+url
+createdAt
+updatedAt
+stateReason
+author { login }
+comments { totalCount }
+labels(first: 20) { nodes { name color } }
+"#;
+
 fn run_pr_list_page(
     slug: &str,
     token: &str,
@@ -622,46 +661,47 @@ fn run_pr_list_page(
     query: Option<&str>,
 ) -> AppResult<Vec<PullRequestInfo>> {
     let limit = limit.clamp(1, 1000);
-    let limit_s = limit.to_string();
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token)
-            // gh treats GH_HOST + GH_TOKEN as an "external" auth source and
-            // skips its own keyring lookup, so this isolates the run to the
-            // picked identity even when a different `gh auth status` account
-            // is active.
-            .env("GH_HOST", GH_HOST)
-            .args([
-                "pr",
-                "list",
-                "--repo",
-                slug,
-                "--state",
-                state.as_gh_arg(),
-                "--limit",
-                &limit_s,
-                "--json",
-                "number,title,state,author,headRefName,baseRefName,url,updatedAt,\
-                 closedAt,mergedAt,isDraft,statusCheckRollup,labels",
-            ]);
-        if let Some(q) = query {
-            cmd.args(["--search", q]);
-        }
-    })?;
+    let (owner, name) = validate_github_slug(slug)?;
+    let nodes = if let Some(search) = query {
+        let search_query = pr_search_query(owner, name, state, search);
+        graphql_search_nodes(token, &search_query, limit, "PullRequest")?
+    } else {
+        graphql_repo_connection(
+            token,
+            owner,
+            name,
+            "pullRequests",
+            pr_list_states(state),
+            limit,
+            PR_LIST_FIELDS,
+        )?
+    };
+    Ok(nodes.iter().map(pull_request_info_from_gql).collect())
+}
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
+fn pr_list_states(state: PrStateFilter) -> Option<&'static str> {
+    match state {
+        PrStateFilter::Open => Some("[OPEN]"),
+        PrStateFilter::Closed => Some("[CLOSED]"),
+        PrStateFilter::Merged => Some("[MERGED]"),
+        PrStateFilter::All => None,
     }
+}
 
-    let raw: Vec<GhPullRequest> = serde_json::from_slice(&output.stdout)
-        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
-
-    Ok(raw.into_iter().map(pull_request_info_from_gh).collect())
+fn pr_search_query(owner: &str, name: &str, state: PrStateFilter, search: &str) -> String {
+    let mut query = format!("repo:{owner}/{name} is:pr");
+    match state {
+        PrStateFilter::Open => query.push_str(" is:open"),
+        PrStateFilter::Closed => query.push_str(" is:closed"),
+        PrStateFilter::Merged => query.push_str(" is:merged"),
+        PrStateFilter::All => {}
+    }
+    let trimmed = search.trim();
+    if !trimmed.is_empty() {
+        query.push(' ');
+        query.push_str(trimmed);
+    }
+    query
 }
 
 fn pull_request_info_from_gh(pr: GhPullRequest) -> PullRequestInfo {
@@ -693,6 +733,43 @@ fn pull_request_info_from_gh(pr: GhPullRequest) -> PullRequestInfo {
                 color: l.color,
             })
             .collect(),
+    }
+}
+
+fn pull_request_info_from_gql(node: &Value) -> PullRequestInfo {
+    let checks = flatten_status_check_rollup(node);
+    PullRequestInfo {
+        number: json_u64(node, "number"),
+        title: json_str(node, "title"),
+        state: json_str(node, "state"),
+        author: json_login(node),
+        head_branch: json_str(node, "headRefName"),
+        base_branch: json_str(node, "baseRefName"),
+        url: json_str(node, "url"),
+        updated_at: json_str(node, "updatedAt"),
+        closed_at: normalize_github_timestamp(json_opt_str(node, "closedAt")),
+        merged_at: normalize_github_timestamp(json_opt_str(node, "mergedAt")),
+        is_draft: json_bool(node, "isDraft", false),
+        checks,
+        labels: gql_labels(node),
+    }
+}
+
+fn issue_info_from_gql(node: &Value) -> IssueInfo {
+    IssueInfo {
+        number: json_u64(node, "number"),
+        title: json_str(node, "title"),
+        state: json_str(node, "state"),
+        author: json_login(node),
+        url: json_str(node, "url"),
+        created_at: json_str(node, "createdAt"),
+        updated_at: json_str(node, "updatedAt"),
+        state_reason: normalize_optional_string(json_opt_str(node, "stateReason")),
+        comments: node
+            .pointer("/comments/totalCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32,
+        labels: gql_labels(node),
     }
 }
 
@@ -740,60 +817,45 @@ fn run_issue_list(
     query: Option<&str>,
 ) -> AppResult<Vec<IssueInfo>> {
     let limit = limit.clamp(1, 1000);
-    let limit_s = limit.to_string();
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            "issue",
-            "list",
-            "--repo",
-            slug,
-            "--state",
-            state.as_gh_arg(),
-            "--limit",
-            &limit_s,
-            "--json",
-            "number,title,state,author,url,createdAt,updatedAt,stateReason,comments,labels",
-        ]);
-        if let Some(q) = query {
-            cmd.args(["--search", q]);
-        }
-    })?;
+    let (owner, name) = validate_github_slug(slug)?;
+    let nodes = if let Some(search) = query {
+        let search_query = issue_search_query(owner, name, state, search);
+        graphql_search_nodes(token, &search_query, limit, "Issue")?
+    } else {
+        graphql_repo_connection(
+            token,
+            owner,
+            name,
+            "issues",
+            issue_list_states(state),
+            limit,
+            ISSUE_LIST_FIELDS,
+        )?
+    };
+    Ok(nodes.iter().map(issue_info_from_gql).collect())
+}
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
+fn issue_list_states(state: IssueStateFilter) -> Option<&'static str> {
+    match state {
+        IssueStateFilter::Open => Some("[OPEN]"),
+        IssueStateFilter::Closed => Some("[CLOSED]"),
+        IssueStateFilter::All => None,
     }
+}
 
-    let raw: Vec<GhIssue> = serde_json::from_slice(&output.stdout)
-        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
-
-    Ok(raw
-        .into_iter()
-        .map(|issue| IssueInfo {
-            number: issue.number,
-            title: issue.title,
-            state: issue.state,
-            author: issue.author.login.unwrap_or_else(|| "unknown".to_string()),
-            url: issue.url,
-            created_at: issue.created_at,
-            updated_at: issue.updated_at,
-            state_reason: normalize_optional_string(issue.state_reason),
-            comments: issue.comments.count(),
-            labels: issue
-                .labels
-                .into_iter()
-                .map(|l| PullRequestLabel {
-                    name: l.name,
-                    color: l.color,
-                })
-                .collect(),
-        })
-        .collect())
+fn issue_search_query(owner: &str, name: &str, state: IssueStateFilter, search: &str) -> String {
+    let mut query = format!("repo:{owner}/{name} is:issue");
+    match state {
+        IssueStateFilter::Open => query.push_str(" is:open"),
+        IssueStateFilter::Closed => query.push_str(" is:closed"),
+        IssueStateFilter::All => {}
+    }
+    let trimmed = search.trim();
+    if !trimmed.is_empty() {
+        query.push(' ');
+        query.push_str(trimmed);
+    }
+    query
 }
 
 fn build_issue_detail(number: u64, view: GhIssueView) -> IssueDetail {
@@ -857,35 +919,53 @@ fn build_issue_detail(number: u64, view: GhIssueView) -> IssueDetail {
     }
 }
 
-fn run_issue_view(slug: &str, number: u64, token: &str) -> AppResult<GhIssueView> {
-    let number_s = number.to_string();
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            "issue",
-            "view",
-            &number_s,
-            "--repo",
-            slug,
-            "--json",
-            "number,title,body,state,author,url,createdAt,updatedAt,stateReason,\
-             comments,labels,assignees,milestone",
-        ]);
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
+const ISSUE_VIEW_QUERY: &str = r#"
+query($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    issue(number:$number) {
+      title
+      body
+      state
+      url
+      createdAt
+      updatedAt
+      stateReason
+      author { login avatarUrl }
+      labels(first: 50) { nodes { name color } }
+      assignees(first: 20) { nodes { login } }
+      milestone { title }
+      comments(first: 100) {
+        nodes {
+          databaseId
+          body
+          createdAt
+          url
+          author { login avatarUrl }
+        }
+      }
     }
+  }
+}
+"#;
 
-    let mut view: GhIssueView = serde_json::from_slice(&output.stdout)
-        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
-    view.actor_avatars = Some(resolve_issue_actor_avatars(&view, token));
-    Ok(view)
+fn run_issue_view(slug: &str, number: u64, token: &str) -> AppResult<GhIssueView> {
+    let (owner, name) = validate_github_slug(slug)?;
+    let value = github_api::graphql(
+        token,
+        ISSUE_VIEW_QUERY,
+        json!({ "owner": owner, "name": name, "number": number as i64 }),
+    )?;
+    let Some(issue) = value.pointer("/data/repository/issue") else {
+        return Err(AppError::Other(format!(
+            "GitHub issue {number} was not found in {slug}"
+        )));
+    };
+    if issue.is_null() {
+        return Err(AppError::Other(format!(
+            "GitHub issue {number} was not found in {slug}"
+        )));
+    }
+    Ok(issue_view_from_gql(issue))
 }
 
 /// Aggregate `statusCheckRollup` entries into pass/fail/pending counts.
@@ -1148,100 +1228,43 @@ fn gh_active_token() -> Option<String> {
 /// rate limits, and server errors remain operational errors instead of being
 /// presented as an account-access problem.
 fn account_can_access(slug: &str, token: &str) -> AppResult<bool> {
-    let endpoint = format!("repos/{slug}");
-    let out = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            "api",
-            &endpoint,
-            "--include",
-            "--silent",
-        ]);
-    })?;
+    let response = github_api::request(token, Method::GET, &format!("repos/{slug}"), None, None)?;
     classify_account_access(
         slug,
-        out.status.success(),
-        &out.status.to_string(),
-        &out.stdout,
-        &out.stderr,
+        response.status,
+        response.rate_limit_remaining,
+        &response.body,
     )
 }
 
 fn classify_account_access(
     slug: &str,
-    process_succeeded: bool,
-    process_status: &str,
-    stdout: &[u8],
-    stderr: &[u8],
+    status: u16,
+    rate_limit_remaining: Option<u32>,
+    body: &[u8],
 ) -> AppResult<bool> {
-    if process_succeeded {
+    if (200..300).contains(&status) {
         return Ok(true);
     }
 
-    let http_status = response_http_status(stdout);
-    let rate_limit_exhausted =
-        response_header(stdout, "x-ratelimit-remaining").is_some_and(|remaining| remaining == "0");
-    if matches!(http_status, Some(401 | 404))
-        || matches!(http_status, Some(403)) && !rate_limit_exhausted
-    {
+    let rate_limit_exhausted = rate_limit_remaining == Some(0);
+    if matches!(status, 401 | 404) || status == 403 && !rate_limit_exhausted {
         return Ok(false);
     }
 
-    let stderr = String::from_utf8_lossy(stderr);
-    let detail = stderr.trim();
-    if !detail.is_empty() {
-        return Err(AppError::Other(format!(
-            "GitHub access probe for {slug} failed: {detail}"
-        )));
-    }
-
-    let response = http_status
-        .map(|status| format!("HTTP {status}"))
-        .unwrap_or_else(|| "no HTTP response".to_string());
     Err(AppError::Other(format!(
-        "GitHub access probe for {slug} failed with {response} ({process_status})"
+        "GitHub access probe for {slug} failed: {}",
+        github_api::error_message(status, body)
     )))
 }
 
-fn response_http_status(stdout: &[u8]) -> Option<u16> {
-    String::from_utf8_lossy(stdout)
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            parts.next()?.starts_with("HTTP/").then_some(())?;
-            parts.next()?.parse().ok()
-        })
-        .next_back()
-}
-
-fn response_header<'a>(stdout: &'a [u8], expected_name: &str) -> Option<&'a str> {
-    std::str::from_utf8(stdout)
-        .ok()?
-        .lines()
-        .filter_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.trim()
-                .eq_ignore_ascii_case(expected_name)
-                .then(|| value.trim())
-        })
-        .next_back()
-}
-
 fn primary_email_for(token: &str) -> Option<String> {
-    let out = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token)
-            .env("GH_HOST", GH_HOST)
-            .args(["api", "user", "--jq", ".email"]);
-    })
-    .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() || s == "null" {
-        None
-    } else {
-        Some(s)
-    }
+    let user: Value = github_api::json(token, Method::GET, "user", None).ok()?;
+    user.get("email")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|email| !email.is_empty() && *email != "null")
+        .map(ToString::to_string)
 }
 
 fn git_user_email(repo_path: &Path) -> Option<String> {
@@ -1619,160 +1642,139 @@ fn build_detail(number: u64, view: GhPullRequestView) -> PullRequestDetail {
     }
 }
 
-fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestView> {
-    let number_s = number.to_string();
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            "pr",
-            "view",
-            &number_s,
-            "--repo",
-            slug,
-            "--json",
-            "number,title,body,state,isDraft,author,headRefName,baseRefName,url,\
-                 createdAt,updatedAt,mergedAt,additions,deletions,changedFiles,\
-                 mergeable,labels,comments,reviews,statusCheckRollup,commits",
-        ]);
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
+const PR_VIEW_QUERY: &str = r#"
+query($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      title
+      body
+      state
+      isDraft
+      url
+      createdAt
+      updatedAt
+      mergedAt
+      additions
+      deletions
+      changedFiles
+      mergeable
+      author { login avatarUrl }
+      headRefName
+      baseRefName
+      labels(first: 50) { nodes { name color } }
+      comments(first: 100) {
+        nodes {
+          databaseId
+          body
+          createdAt
+          url
+          author { login avatarUrl }
+        }
+      }
+      reviews(first: 100) {
+        nodes {
+          body
+          state
+          submittedAt
+          author { login avatarUrl }
+        }
+      }
+      commits(first: 100) {
+        nodes {
+          commit {
+            oid
+            messageHeadline
+            messageBody
+            committedDate
+            authors(first: 10) {
+              nodes {
+                name
+                email
+                user { login }
+              }
+            }
+          }
+        }
+      }
+      commitsForChecks: commits(last: 1) {
+        nodes {
+          commit {
+            statusCheckRollup {
+              contexts(first: 100) {
+                nodes {
+                  __typename
+                  ... on CheckRun {
+                    name
+                    status
+                    conclusion
+                    startedAt
+                    completedAt
+                    detailsUrl
+                    checkSuite { workflowRun { workflow { name } } }
+                  }
+                  ... on StatusContext {
+                    context
+                    state
+                    targetUrl
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
+  }
+}
+"#;
 
-    let mut view: GhPullRequestView = serde_json::from_slice(&output.stdout)
-        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
-    view.actor_avatars = Some(resolve_pr_actor_avatars(&view, token));
-    Ok(view)
+fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestView> {
+    let (owner, name) = validate_github_slug(slug)?;
+    let value = github_api::graphql(
+        token,
+        PR_VIEW_QUERY,
+        json!({ "owner": owner, "name": name, "number": number as i64 }),
+    )?;
+    let Some(pr) = value.pointer("/data/repository/pullRequest") else {
+        return Err(AppError::Other(format!(
+            "GitHub pull request {number} was not found in {slug}"
+        )));
+    };
+    if pr.is_null() {
+        return Err(AppError::Other(format!(
+            "GitHub pull request {number} was not found in {slug}"
+        )));
+    }
+    Ok(pr_view_from_gql(pr))
 }
 
 fn run_pr_refs(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestRefs> {
-    let number_s = number.to_string();
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            "pr",
-            "view",
-            &number_s,
-            "--repo",
-            slug,
-            "--json",
-            "headRefName,baseRefName",
-        ]);
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
+    #[derive(Deserialize)]
+    struct RestPullRefs {
+        head: RestRef,
+        base: RestRef,
+    }
+    #[derive(Deserialize)]
+    struct RestRef {
+        #[serde(rename = "ref")]
+        name: String,
     }
 
-    let view: GhPullRequestRefs = serde_json::from_slice(&output.stdout)
-        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
-    Ok(view)
+    let pull: RestPullRefs = github_api::json(
+        token,
+        Method::GET,
+        &format!("repos/{slug}/pulls/{number}"),
+        None,
+    )?;
+    Ok(GhPullRequestRefs {
+        head_ref_name: pull.head.name,
+        base_ref_name: pull.base.name,
+    })
 }
 
 #[derive(Debug, Default, Clone)]
 struct PrActorAvatars {
     by_login: HashMap<String, String>,
-}
-
-fn resolve_pr_actor_avatars(view: &GhPullRequestView, token: &str) -> PrActorAvatars {
-    let mut logins = Vec::new();
-    for comment in view.comments.as_deref().unwrap_or(&[]) {
-        if let Some(login) = comment.author.login.as_deref() {
-            logins.push(login.to_string());
-        }
-    }
-    for review in view.reviews.as_deref().unwrap_or(&[]) {
-        if let Some(login) = review.author.login.as_deref() {
-            logins.push(login.to_string());
-        }
-    }
-    logins.sort();
-    logins.dedup();
-
-    let mut by_login = HashMap::new();
-    for login in logins {
-        if let Some(url) = resolve_actor_avatar_url(&login, token) {
-            by_login.insert(login, url);
-        }
-    }
-    PrActorAvatars { by_login }
-}
-
-fn resolve_issue_actor_avatars(view: &GhIssueView, token: &str) -> PrActorAvatars {
-    let mut logins = Vec::new();
-    for comment in view.comments.as_deref().unwrap_or(&[]) {
-        if let Some(login) = comment.author.login.as_deref() {
-            logins.push(login.to_string());
-        }
-    }
-    logins.sort();
-    logins.dedup();
-
-    let mut by_login = HashMap::new();
-    for login in logins {
-        if let Some(url) = resolve_actor_avatar_url(&login, token) {
-            by_login.insert(login, url);
-        }
-    }
-    PrActorAvatars { by_login }
-}
-
-fn resolve_actor_avatar_url(login: &str, token: &str) -> Option<String> {
-    let encoded_login = encode_github_api_segment(login);
-    let user_endpoint = format!("users/{encoded_login}");
-    if let Some(url) = gh_api_json::<GhRestUser>(&user_endpoint, token)
-        .ok()
-        .and_then(|u| u.avatar_url)
-    {
-        return Some(url);
-    }
-
-    let app_endpoint = format!("apps/{encoded_login}");
-    gh_api_json::<GhRestApp>(&app_endpoint, token)
-        .ok()
-        .map(|app| format!("https://avatars.githubusercontent.com/in/{}?v=4", app.id))
-}
-
-fn gh_api_json<T: serde::de::DeserializeOwned>(endpoint: &str, token: &str) -> AppResult<T> {
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token)
-            .env("GH_HOST", GH_HOST)
-            .args(["api", endpoint]);
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh api {endpoint} exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
-    }
-
-    serde_json::from_slice(&output.stdout)
-        .map_err(|e| AppError::Other(format!("failed to parse gh api output: {e}")))
-}
-
-#[derive(Debug, Deserialize)]
-struct GhRestUser {
-    #[serde(rename = "avatar_url")]
-    avatar_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GhRestApp {
-    id: u64,
 }
 
 pub fn get_pull_request_commit_diff(repo_path: &Path, sha: &str) -> AppResult<DiffPayload> {
@@ -1861,31 +1863,11 @@ pub fn resolve_commit_logins(
     let query = build_commit_login_query(needed.len());
 
     match try_with_account(repo_path, &slug, |token| {
-        let output = cli_resolver::run("gh", |cmd| {
-            cmd.env("GH_TOKEN", token)
-                .env("GH_HOST", GH_HOST)
-                .arg("api")
-                .arg("graphql")
-                .arg("-f")
-                .arg(format!("query={query}"))
-                .arg("-f")
-                .arg(format!("owner={owner}"))
-                .arg("-f")
-                .arg(format!("name={name}"));
-            for (i, sha) in needed.iter().enumerate() {
-                cmd.arg("-f").arg(format!("oid{i}={sha}"));
-            }
-        })?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(AppError::Other(if stderr.is_empty() {
-                format!("gh graphql exited with {}", output.status)
-            } else {
-                stderr
-            }));
+        let mut variables = json!({ "owner": owner, "name": name });
+        for (i, sha) in needed.iter().enumerate() {
+            variables[format!("oid{i}")] = json!(sha);
         }
-        let v: serde_json::Value = serde_json::from_slice(&output.stdout)
-            .map_err(|e| AppError::Other(format!("gh graphql parse: {e}")))?;
+        let v = github_api::graphql(token, &query, variables)?;
         let mut out: HashMap<String, Option<String>> = HashMap::new();
         if let Some(repo) = v.pointer("/data/repository").and_then(|x| x.as_object()) {
             for (i, sha) in needed.iter().enumerate() {
@@ -2008,27 +1990,10 @@ fn image_previews_for_commit(
 fn fetch_raw_blob(slug: &str, git_ref: &str, path: &str, token: &str) -> AppResult<Vec<u8>> {
     crate::git_ops::validate_relative_git_path(path)?;
     let encoded_path = encode_github_api_path(path);
-    let endpoint = format!("repos/{slug}/contents/{encoded_path}");
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token)
-            .env("GH_HOST", GH_HOST)
-            .arg("api")
-            .args(["--method", "GET"])
-            .args(["-H", "Accept: application/vnd.github.raw"])
-            .arg("--raw-field")
-            .arg(format!("ref={git_ref}"))
-            .arg(&endpoint);
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
-    }
-    enforce_raw_blob_size(output.stdout, MAX_REMOTE_DIFF_IMAGE_BYTES)
+    let encoded_ref = encode_github_api_segment(git_ref);
+    let endpoint = format!("repos/{slug}/contents/{encoded_path}?ref={encoded_ref}");
+    let bytes = github_api::raw(token, &endpoint, "application/vnd.github.raw")?;
+    enforce_raw_blob_size(bytes, MAX_REMOTE_DIFF_IMAGE_BYTES)
 }
 
 fn enforce_raw_blob_size(bytes: Vec<u8>, max_bytes: usize) -> AppResult<Vec<u8>> {
@@ -2043,24 +2008,8 @@ fn enforce_raw_blob_size(bytes: Vec<u8>, max_bytes: usize) -> AppResult<Vec<u8>>
 fn run_commit_diff(slug: &str, sha: &str, token: &str) -> AppResult<String> {
     validate_commit_oid(sha)?;
     let endpoint = format!("repos/{slug}/commits/{sha}");
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            "api",
-            "-H",
-            "Accept: application/vnd.github.diff",
-            &endpoint,
-        ]);
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let bytes = github_api::raw(token, &endpoint, "application/vnd.github.diff")?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn encode_github_api_path(path: &str) -> String {
@@ -2089,28 +2038,477 @@ fn percent_encode_github_api_value(value: &str, preserve_slashes: bool) -> Strin
     encoded
 }
 
-fn run_pr_diff(slug: &str, number: u64, token: &str) -> AppResult<String> {
-    let number_s = number.to_string();
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token)
-            .env("GH_HOST", GH_HOST)
-            .args(["pr", "diff", &number_s, "--repo", slug]);
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
+fn graphql_repo_connection(
+    token: &str,
+    owner: &str,
+    name: &str,
+    field: &str,
+    states: Option<&str>,
+    limit: u32,
+    node_fields: &str,
+) -> AppResult<Vec<Value>> {
+    let states_arg = match states {
+        Some(states) => format!("states: {states}, "),
+        None => String::new(),
+    };
+    let query = format!(
+        "query($owner:String!, $name:String!, $first:Int!, $after:String) {{\
+           repository(owner:$owner, name:$name) {{\
+             {field}({states_arg}first:$first, after:$after, orderBy:{{field:CREATED_AT, direction:DESC}}) {{\
+               pageInfo {{ hasNextPage endCursor }}\
+               nodes {{ {node_fields} }}\
+             }}\
+           }}\
+         }}"
+    );
+    let mut nodes = Vec::new();
+    let mut after: Option<String> = None;
+    while nodes.len() < limit as usize {
+        let remaining = (limit as usize) - nodes.len();
+        let first = remaining.min(100) as i64;
+        let mut variables = json!({
+            "owner": owner,
+            "name": name,
+            "first": first,
+            "after": Value::Null,
+        });
+        if let Some(cursor) = &after {
+            variables["after"] = json!(cursor);
+        }
+        let value = github_api::graphql(token, &query, variables)?;
+        let connection = value
+            .pointer(&format!("/data/repository/{field}"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let page_nodes = connection
+            .get("nodes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let page_len = page_nodes.len();
+        nodes.extend(page_nodes.into_iter().filter(|node| !node.is_null()));
+        let has_next = connection
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        after = connection
+            .pointer("/pageInfo/endCursor")
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+        if !has_next || page_len == 0 {
+            break;
+        }
     }
-    // gh writes the patch to stdout as UTF-8. Lossy decode keeps things
-    // working for the rare diff containing invalid bytes (binary files,
-    // mojibake) — those segments are non-renderable anyway and the parser
-    // ultimately routes them into the binary-placeholder branch.
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    nodes.truncate(limit as usize);
+    Ok(nodes)
+}
+
+fn graphql_search_nodes(
+    token: &str,
+    search_query: &str,
+    limit: u32,
+    type_name: &str,
+) -> AppResult<Vec<Value>> {
+    let query = format!(
+        "query($q:String!, $first:Int!, $after:String) {{\
+           search(query:$q, type:ISSUE, first:$first, after:$after) {{\
+             pageInfo {{ hasNextPage endCursor }}\
+             nodes {{ ... on {type_name} {{ {fields} }} }}\
+           }}\
+         }}",
+        fields = if type_name == "PullRequest" {
+            PR_LIST_FIELDS
+        } else {
+            ISSUE_LIST_FIELDS
+        }
+    );
+    let mut nodes = Vec::new();
+    let mut after: Option<String> = None;
+    while nodes.len() < limit as usize {
+        let remaining = (limit as usize) - nodes.len();
+        let first = remaining.min(100) as i64;
+        let mut variables = json!({
+            "q": search_query,
+            "first": first,
+            "after": Value::Null,
+        });
+        if let Some(cursor) = &after {
+            variables["after"] = json!(cursor);
+        }
+        let value = github_api::graphql(token, &query, variables)?;
+        let connection = value
+            .pointer("/data/search")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let page_nodes = connection
+            .get("nodes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let page_len = page_nodes.len();
+        nodes.extend(page_nodes.into_iter().filter(|node| !node.is_null()));
+        let has_next = connection
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        after = connection
+            .pointer("/pageInfo/endCursor")
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+        if !has_next || page_len == 0 {
+            break;
+        }
+    }
+    nodes.truncate(limit as usize);
+    Ok(nodes)
+}
+
+fn json_str(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn json_opt_str(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|text| !text.is_empty())
+}
+
+fn json_u64(value: &Value, key: &str) -> u64 {
+    value.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn json_bool(value: &Value, key: &str, default: bool) -> bool {
+    value.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+fn json_login(value: &Value) -> String {
+    value
+        .pointer("/author/login")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn gql_labels(value: &Value) -> Vec<PullRequestLabel> {
+    value
+        .pointer("/labels/nodes")
+        .and_then(Value::as_array)
+        .map(|nodes| {
+            nodes
+                .iter()
+                .map(|node| PullRequestLabel {
+                    name: json_str(node, "name"),
+                    color: json_str(node, "color"),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn gql_author(value: &Value) -> GhAuthor {
+    GhAuthor {
+        login: value
+            .pointer("/author/login")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+    }
+}
+
+fn collect_actor_avatar(map: &mut HashMap<String, String>, node: &Value) {
+    let Some(login) = node.pointer("/author/login").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(url) = node.pointer("/author/avatarUrl").and_then(Value::as_str) else {
+        return;
+    };
+    if !login.is_empty() && !url.is_empty() {
+        map.insert(login.to_string(), url.to_string());
+    }
+}
+
+fn flatten_status_check_rollup(node: &Value) -> Option<ChecksSummary> {
+    let checks = status_checks_from_gql(node);
+    if checks.is_empty() {
+        None
+    } else {
+        Some(summarize_checks(&checks))
+    }
+}
+
+fn status_checks_from_gql(node: &Value) -> Vec<GhCheck> {
+    let contexts = node
+        .pointer("/commits/nodes/0/commit/statusCheckRollup/contexts/nodes")
+        .or_else(|| {
+            node.pointer("/commitsForChecks/nodes/0/commit/statusCheckRollup/contexts/nodes")
+        })
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    contexts.iter().filter_map(gh_check_from_gql).collect()
+}
+
+fn gh_check_from_gql(node: &Value) -> Option<GhCheck> {
+    match node.get("__typename").and_then(Value::as_str) {
+        Some("CheckRun") => Some(GhCheck {
+            name: json_opt_str(node, "name"),
+            context: None,
+            status: json_opt_str(node, "status"),
+            conclusion: json_opt_str(node, "conclusion"),
+            started_at: json_opt_str(node, "startedAt"),
+            completed_at: json_opt_str(node, "completedAt"),
+            details_url: json_opt_str(node, "detailsUrl"),
+            target_url: None,
+            workflow_name: node
+                .pointer("/checkSuite/workflowRun/workflow/name")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+        }),
+        Some("StatusContext") => {
+            let state = json_str(node, "state");
+            let (status, conclusion) = status_context_state(&state);
+            Some(GhCheck {
+                name: None,
+                context: json_opt_str(node, "context"),
+                status: Some(status),
+                conclusion,
+                started_at: None,
+                completed_at: None,
+                details_url: None,
+                target_url: json_opt_str(node, "targetUrl"),
+                workflow_name: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn status_context_state(state: &str) -> (String, Option<String>) {
+    match state.to_ascii_uppercase().as_str() {
+        "SUCCESS" => ("COMPLETED".into(), Some("SUCCESS".into())),
+        "FAILURE" | "ERROR" => ("COMPLETED".into(), Some("FAILURE".into())),
+        _ => ("PENDING".into(), None),
+    }
+}
+
+fn pr_view_from_gql(node: &Value) -> GhPullRequestView {
+    let comments = node
+        .pointer("/comments/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let reviews = node
+        .pointer("/reviews/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut avatars = PrActorAvatars::default();
+    collect_actor_avatar(&mut avatars.by_login, node);
+    for comment in &comments {
+        collect_actor_avatar(&mut avatars.by_login, comment);
+    }
+    for review in &reviews {
+        collect_actor_avatar(&mut avatars.by_login, review);
+    }
+
+    GhPullRequestView {
+        title: json_opt_str(node, "title"),
+        body: node
+            .get("body")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        state: json_opt_str(node, "state"),
+        is_draft: node.get("isDraft").and_then(Value::as_bool),
+        author: Some(gql_author(node)),
+        head_ref_name: json_opt_str(node, "headRefName"),
+        base_ref_name: json_opt_str(node, "baseRefName"),
+        url: json_opt_str(node, "url"),
+        created_at: json_opt_str(node, "createdAt"),
+        updated_at: json_opt_str(node, "updatedAt"),
+        merged_at: json_opt_str(node, "mergedAt"),
+        additions: node.get("additions").and_then(Value::as_u64),
+        deletions: node.get("deletions").and_then(Value::as_u64),
+        changed_files: node.get("changedFiles").and_then(Value::as_u64),
+        mergeable: json_opt_str(node, "mergeable"),
+        labels: node
+            .pointer("/labels/nodes")
+            .and_then(Value::as_array)
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .map(|label| GhLabel {
+                        name: json_str(label, "name"),
+                        color: json_str(label, "color"),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        comments: Some(
+            comments
+                .iter()
+                .map(|comment| GhComment {
+                    database_id: comment.get("databaseId").and_then(Value::as_u64),
+                    author: gql_author(comment),
+                    body: comment
+                        .get("body")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                    created_at: comment
+                        .get("createdAt")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                    url: comment
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                })
+                .collect(),
+        ),
+        reviews: Some(
+            reviews
+                .iter()
+                .map(|review| GhReview {
+                    author: gql_author(review),
+                    state: json_opt_str(review, "state"),
+                    body: review
+                        .get("body")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                    submitted_at: review
+                        .get("submittedAt")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                })
+                .collect(),
+        ),
+        status_check_rollup: Some(status_checks_from_gql(node)),
+        commits: Some(
+            node.pointer("/commits/nodes")
+                .and_then(Value::as_array)
+                .map(|nodes| {
+                    nodes
+                        .iter()
+                        .filter_map(|entry| entry.get("commit"))
+                        .map(|commit| GhCommit {
+                            oid: json_opt_str(commit, "oid"),
+                            message_headline: json_opt_str(commit, "messageHeadline"),
+                            message_body: commit
+                                .get("messageBody")
+                                .and_then(Value::as_str)
+                                .map(ToString::to_string),
+                            committed_date: json_opt_str(commit, "committedDate"),
+                            authors: commit
+                                .pointer("/authors/nodes")
+                                .and_then(Value::as_array)
+                                .map(|authors| {
+                                    authors
+                                        .iter()
+                                        .map(|author| GhCommitAuthor {
+                                            name: json_opt_str(author, "name"),
+                                            email: json_opt_str(author, "email"),
+                                            login: author
+                                                .pointer("/user/login")
+                                                .and_then(Value::as_str)
+                                                .map(ToString::to_string),
+                                        })
+                                        .collect()
+                                }),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
+        actor_avatars: Some(avatars),
+    }
+}
+
+fn issue_view_from_gql(node: &Value) -> GhIssueView {
+    let comments = node
+        .pointer("/comments/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut avatars = PrActorAvatars::default();
+    collect_actor_avatar(&mut avatars.by_login, node);
+    for comment in &comments {
+        collect_actor_avatar(&mut avatars.by_login, comment);
+    }
+    GhIssueView {
+        title: json_opt_str(node, "title"),
+        body: node
+            .get("body")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        state: json_opt_str(node, "state"),
+        author: Some(gql_author(node)),
+        url: json_opt_str(node, "url"),
+        created_at: json_opt_str(node, "createdAt"),
+        updated_at: json_opt_str(node, "updatedAt"),
+        state_reason: json_opt_str(node, "stateReason"),
+        labels: node
+            .pointer("/labels/nodes")
+            .and_then(Value::as_array)
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .map(|label| GhLabel {
+                        name: json_str(label, "name"),
+                        color: json_str(label, "color"),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        comments: Some(
+            comments
+                .iter()
+                .map(|comment| GhIssueComment {
+                    database_id: comment.get("databaseId").and_then(Value::as_u64),
+                    author: gql_author(comment),
+                    body: comment
+                        .get("body")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                    created_at: comment
+                        .get("createdAt")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                    url: comment
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                })
+                .collect(),
+        ),
+        assignees: node
+            .pointer("/assignees/nodes")
+            .and_then(Value::as_array)
+            .map(|nodes| nodes.iter().map(gql_author).collect()),
+        milestone: node.get("milestone").and_then(|milestone| {
+            if milestone.is_null() {
+                None
+            } else {
+                Some(GhMilestone {
+                    title: json_opt_str(milestone, "title"),
+                })
+            }
+        }),
+        actor_avatars: Some(avatars),
+    }
+}
+
+fn run_pr_diff(slug: &str, number: u64, token: &str) -> AppResult<String> {
+    let endpoint = format!("repos/{slug}/pulls/{number}");
+    let bytes = github_api::raw(token, &endpoint, "application/vnd.github.diff")?;
+    // Lossy decode keeps things working for the rare diff containing invalid
+    // bytes (binary files, mojibake) — those segments are non-renderable
+    // anyway and the parser ultimately routes them into the binary-placeholder
+    // branch.
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2280,17 +2678,16 @@ pub enum PullRequestStateChange {
 }
 
 impl MergeMethod {
-    fn flag(self) -> &'static str {
+    fn as_api_value(self) -> &'static str {
         match self {
-            MergeMethod::Squash => "--squash",
-            MergeMethod::Merge => "--merge",
-            MergeMethod::Rebase => "--rebase",
+            MergeMethod::Squash => "squash",
+            MergeMethod::Merge => "merge",
+            MergeMethod::Rebase => "rebase",
         }
     }
 
-    /// Squash and merge commits accept `--subject` / `--body` to override the
-    /// commit message. Rebase merges replay individual commits, so message
-    /// overrides are not applicable.
+    /// Squash and merge commits accept a title/body override. Rebase merges
+    /// replay individual commits, so message overrides are not applicable.
     fn accepts_message_override(self) -> bool {
         matches!(self, MergeMethod::Squash | MergeMethod::Merge)
     }
@@ -2388,80 +2785,56 @@ fn run_pr_merge(
     method: MergeMethod,
     commit_title: Option<&str>,
     commit_body: Option<&str>,
-    admin: bool,
+    _admin: bool,
 ) -> AppResult<()> {
-    // Older `gh` releases reject `--yes` as an unknown flag. Pipe a
-    // confirmation through stdin instead — it answers any "Continue with
-    // merge?" prompt without depending on a flag the local CLI may not have.
-    let number_s = number.to_string();
-    let output = cli_resolver::run_with_input("gh", b"y\n", |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            "pr",
-            "merge",
-            &number_s,
-            "--repo",
-            slug,
-            method.flag(),
-        ]);
-        if admin {
-            cmd.arg("--admin");
+    let mut payload = json!({ "merge_method": method.as_api_value() });
+    if method.accepts_message_override() {
+        if let Some(title) = commit_title.filter(|title| !title.trim().is_empty()) {
+            payload["commit_title"] = json!(title);
         }
-        if method.accepts_message_override() {
-            if let Some(title) = commit_title.filter(|title| !title.trim().is_empty()) {
-                cmd.args(["--subject", title]);
-            }
-            if let Some(body) = commit_body {
-                cmd.args(["--body", body]);
-            }
+        if let Some(body) = commit_body {
+            payload["commit_message"] = json!(body);
         }
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
     }
-    Ok(())
+    github_api::send_json(
+        token,
+        Method::PUT,
+        &format!("repos/{slug}/pulls/{number}/merge"),
+        &payload,
+    )
 }
 
 fn run_pr_close(slug: &str, number: u64, token: &str) -> AppResult<()> {
-    let number_s = number.to_string();
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token)
-            .env("GH_HOST", GH_HOST)
-            .args(["pr", "close", &number_s, "--repo", slug]);
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
-    }
-    Ok(())
+    github_api::send_json(
+        token,
+        Method::PATCH,
+        &format!("repos/{slug}/pulls/{number}"),
+        &json!({ "state": "closed" }),
+    )
 }
 
-fn pr_state_change_args(slug: &str, number: u64, change: PullRequestStateChange) -> Vec<String> {
-    let subcommand = match change {
-        PullRequestStateChange::Ready | PullRequestStateChange::Draft => "ready",
-        PullRequestStateChange::Reopen => "reopen",
-    };
-    let mut args = vec![
-        "pr".to_string(),
-        subcommand.to_string(),
-        number.to_string(),
-        "--repo".to_string(),
-        slug.to_string(),
-    ];
-    if matches!(change, PullRequestStateChange::Draft) {
-        args.push("--undo".to_string());
+fn pr_state_change_endpoint(
+    slug: &str,
+    number: u64,
+    change: PullRequestStateChange,
+) -> (Method, String, Option<Value>) {
+    match change {
+        PullRequestStateChange::Ready => (
+            Method::POST,
+            format!("repos/{slug}/pulls/{number}/ready_for_review"),
+            None,
+        ),
+        PullRequestStateChange::Draft => (
+            Method::POST,
+            format!("repos/{slug}/pulls/{number}/convert_to_draft"),
+            None,
+        ),
+        PullRequestStateChange::Reopen => (
+            Method::PATCH,
+            format!("repos/{slug}/pulls/{number}"),
+            Some(json!({ "state": "open" })),
+        ),
     }
-    args
 }
 
 fn run_pr_state_change(
@@ -2470,114 +2843,53 @@ fn run_pr_state_change(
     token: &str,
     change: PullRequestStateChange,
 ) -> AppResult<()> {
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token)
-            .env("GH_HOST", GH_HOST)
-            .args(pr_state_change_args(slug, number, change));
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
+    let (method, path, body) = pr_state_change_endpoint(slug, number, change);
+    match body {
+        Some(payload) => github_api::send_json(token, method, &path, &payload),
+        None => github_api::send(token, method, &path, None),
     }
-    Ok(())
 }
 
-/// Pipe the new body via stdin (`--body-file -`) to dodge shell escaping
-/// pitfalls — bodies routinely contain backticks, `$`, and other characters
-/// that would need defensive quoting if passed as `--body "..."`.
 fn run_pr_edit_body(slug: &str, number: u64, token: &str, body: &str) -> AppResult<()> {
-    let number_s = number.to_string();
-    let output = cli_resolver::run_with_input("gh", body.as_bytes(), |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            "pr",
-            "edit",
-            &number_s,
-            "--repo",
-            slug,
-            "--body-file",
-            "-",
-        ]);
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
-    }
-    Ok(())
+    github_api::send_json(
+        token,
+        Method::PATCH,
+        &format!("repos/{slug}/pulls/{number}"),
+        &json!({ "body": body }),
+    )
 }
 
-fn run_gh_comment(target: &str, slug: &str, number: u64, token: &str, body: &str) -> AppResult<()> {
-    let number_s = number.to_string();
-    let output = cli_resolver::run_with_input("gh", body.as_bytes(), |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            target,
-            "comment",
-            &number_s,
-            "--repo",
-            slug,
-            "--body-file",
-            "-",
-        ]);
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
-    }
-    Ok(())
+fn run_gh_comment(
+    _target: &str,
+    slug: &str,
+    number: u64,
+    token: &str,
+    body: &str,
+) -> AppResult<()> {
+    github_api::send_json(
+        token,
+        Method::POST,
+        &format!("repos/{slug}/issues/{number}/comments"),
+        &json!({ "body": body }),
+    )
 }
 
 fn run_issue_comment_update(slug: &str, comment_id: u64, token: &str, body: &str) -> AppResult<()> {
-    let endpoint = format!("repos/{slug}/issues/comments/{comment_id}");
-    let payload = serde_json::json!({ "body": body }).to_string();
-    let output = cli_resolver::run_with_input("gh", payload.as_bytes(), |cmd| {
-        cmd.env("GH_TOKEN", token)
-            .env("GH_HOST", GH_HOST)
-            .args(["api", "-X", "PATCH", &endpoint, "--input", "-", "--silent"]);
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
-    }
-    Ok(())
+    github_api::send_json(
+        token,
+        Method::PATCH,
+        &format!("repos/{slug}/issues/comments/{comment_id}"),
+        &json!({ "body": body }),
+    )
 }
 
 fn run_issue_comment_delete(slug: &str, comment_id: u64, token: &str) -> AppResult<()> {
-    let endpoint = format!("repos/{slug}/issues/comments/{comment_id}");
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token)
-            .env("GH_HOST", GH_HOST)
-            .args(["api", "-X", "DELETE", &endpoint, "--silent"]);
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
-    }
-    Ok(())
+    github_api::send(
+        token,
+        Method::DELETE,
+        &format!("repos/{slug}/issues/comments/{comment_id}"),
+        None,
+    )
 }
 
 fn comment_id_from_url(url: Option<&str>) -> Option<u64> {
@@ -2739,38 +3051,6 @@ pub enum WorkflowRunsListing {
     },
 }
 
-#[derive(Debug, Deserialize)]
-struct GhWorkflowRun {
-    #[serde(rename = "databaseId")]
-    database_id: u64,
-    #[serde(rename = "displayTitle", default)]
-    display_title: String,
-    #[serde(rename = "name", default)]
-    name: String,
-    #[serde(rename = "workflowName", default)]
-    workflow_name: String,
-    #[serde(default)]
-    status: String,
-    #[serde(default)]
-    conclusion: Option<String>,
-    #[serde(default)]
-    event: String,
-    #[serde(rename = "headBranch", default)]
-    head_branch: Option<String>,
-    #[serde(rename = "headSha", default)]
-    head_sha: String,
-    #[serde(default)]
-    url: String,
-    #[serde(rename = "createdAt", default)]
-    created_at: String,
-    #[serde(rename = "updatedAt", default)]
-    updated_at: String,
-    #[serde(rename = "startedAt", default)]
-    started_at: Option<String>,
-    #[serde(default = "default_attempt")]
-    attempt: u32,
-}
-
 fn default_attempt() -> u32 {
     1
 }
@@ -2816,59 +3096,84 @@ pub fn list_workflow_runs(repo_path: &Path, limit: u32) -> AppResult<WorkflowRun
 
 fn run_workflow_list(slug: &str, token: &str, limit: u32) -> AppResult<Vec<WorkflowRun>> {
     let limit = limit.clamp(1, 200);
-    let limit_s = limit.to_string();
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            "run",
-            "list",
-            "--repo",
-            slug,
-            "--limit",
-            &limit_s,
-            "--json",
-            "databaseId,displayTitle,name,workflowName,status,conclusion,event,\
-             headBranch,headSha,url,createdAt,updatedAt,startedAt,attempt",
-        ]);
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
-    }
-
-    let raw: Vec<GhWorkflowRun> = serde_json::from_slice(&output.stdout)
-        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
-
-    Ok(raw
-        .into_iter()
-        .map(|r| {
-            let workflow_name = if !r.workflow_name.is_empty() {
-                r.workflow_name
-            } else {
-                r.name
-            };
-            WorkflowRun {
-                id: r.database_id,
-                display_title: r.display_title,
-                workflow_name,
-                status: r.status,
-                conclusion: normalize_optional_string(r.conclusion),
-                event: r.event,
-                head_branch: r.head_branch.filter(|s| !s.is_empty()),
-                head_sha: r.head_sha,
-                url: r.url,
-                created_at: r.created_at,
-                updated_at: r.updated_at,
-                started_at: normalize_github_timestamp(r.started_at),
-                attempt: r.attempt,
+    let mut items = Vec::new();
+    let mut page = 1u32;
+    while items.len() < limit as usize {
+        let remaining = (limit as usize) - items.len();
+        let per_page = remaining.min(100);
+        let path = format!("repos/{slug}/actions/runs?per_page={per_page}&page={page}");
+        let payload: RestWorkflowRuns = github_api::json(token, Method::GET, &path, None)?;
+        let batch_len = payload.workflow_runs.len();
+        for run in payload.workflow_runs {
+            items.push(workflow_run_from_rest(run));
+            if items.len() >= limit as usize {
+                break;
             }
-        })
-        .collect())
+        }
+        if batch_len < per_page {
+            break;
+        }
+        page += 1;
+    }
+    Ok(items)
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RestWorkflowRuns {
+    #[serde(default)]
+    workflow_runs: Vec<RestWorkflowRun>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RestWorkflowRun {
+    id: u64,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    display_title: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    event: String,
+    #[serde(default)]
+    head_branch: Option<String>,
+    #[serde(default)]
+    head_sha: String,
+    #[serde(default)]
+    html_url: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    updated_at: String,
+    #[serde(default)]
+    run_started_at: Option<String>,
+    #[serde(default = "default_attempt")]
+    run_attempt: u32,
+}
+
+fn workflow_run_from_rest(run: RestWorkflowRun) -> WorkflowRun {
+    let workflow_name = if run.name.is_empty() {
+        run.display_title.clone()
+    } else {
+        run.name
+    };
+    WorkflowRun {
+        id: run.id,
+        display_title: run.display_title,
+        workflow_name,
+        status: run.status,
+        conclusion: normalize_optional_string(run.conclusion),
+        event: run.event,
+        head_branch: run.head_branch.filter(|s| !s.is_empty()),
+        head_sha: run.head_sha,
+        url: run.html_url,
+        created_at: run.created_at,
+        updated_at: run.updated_at,
+        started_at: normalize_github_timestamp(run.run_started_at),
+        attempt: run.run_attempt,
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2923,72 +3228,6 @@ pub enum WorkflowRunDetailListing {
     },
 }
 
-#[derive(Debug, Deserialize)]
-struct GhWorkflowJobStep {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    number: u32,
-    #[serde(default)]
-    status: String,
-    #[serde(default)]
-    conclusion: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GhWorkflowJob {
-    #[serde(rename = "databaseId", default)]
-    database_id: u64,
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    status: String,
-    #[serde(default)]
-    conclusion: Option<String>,
-    #[serde(rename = "startedAt", default)]
-    started_at: Option<String>,
-    #[serde(rename = "completedAt", default)]
-    completed_at: Option<String>,
-    #[serde(default)]
-    url: String,
-    #[serde(default)]
-    steps: Vec<GhWorkflowJobStep>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GhWorkflowRunDetail {
-    #[serde(rename = "databaseId")]
-    database_id: u64,
-    #[serde(rename = "displayTitle", default)]
-    display_title: String,
-    #[serde(rename = "name", default)]
-    name: String,
-    #[serde(rename = "workflowName", default)]
-    workflow_name: String,
-    #[serde(default)]
-    status: String,
-    #[serde(default)]
-    conclusion: Option<String>,
-    #[serde(default)]
-    event: String,
-    #[serde(rename = "headBranch", default)]
-    head_branch: Option<String>,
-    #[serde(rename = "headSha", default)]
-    head_sha: String,
-    #[serde(default)]
-    url: String,
-    #[serde(rename = "createdAt", default)]
-    created_at: String,
-    #[serde(rename = "updatedAt", default)]
-    updated_at: String,
-    #[serde(rename = "startedAt", default)]
-    started_at: Option<String>,
-    #[serde(default = "default_attempt")]
-    attempt: u32,
-    #[serde(default)]
-    jobs: Vec<GhWorkflowJob>,
-}
-
 pub fn get_workflow_run_detail(
     repo_path: &Path,
     run_id: u64,
@@ -3011,78 +3250,94 @@ pub fn get_workflow_run_detail(
 }
 
 fn run_workflow_view(slug: &str, token: &str, run_id: u64) -> AppResult<WorkflowRunDetail> {
-    let id_s = run_id.to_string();
-    let output = cli_resolver::run("gh", |cmd| {
-        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-            "run",
-            "view",
-            &id_s,
-            "--repo",
-            slug,
-            "--json",
-            "databaseId,displayTitle,name,workflowName,status,conclusion,event,\
-             headBranch,headSha,url,createdAt,updatedAt,startedAt,attempt,jobs",
-        ]);
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("gh exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(AppError::Other(msg));
-    }
-
-    let raw: GhWorkflowRunDetail = serde_json::from_slice(&output.stdout)
-        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
-
-    let workflow_name = if !raw.workflow_name.is_empty() {
-        raw.workflow_name
-    } else {
-        raw.name
-    };
-    let jobs = raw
-        .jobs
-        .into_iter()
-        .map(|j| WorkflowJob {
-            id: j.database_id,
-            name: j.name,
-            status: j.status,
-            conclusion: normalize_optional_string(j.conclusion),
-            started_at: normalize_github_timestamp(j.started_at),
-            completed_at: normalize_github_timestamp(j.completed_at),
-            url: j.url,
-            steps: j
-                .steps
-                .into_iter()
-                .map(|s| WorkflowJobStep {
-                    name: s.name,
-                    number: s.number,
-                    status: s.status,
-                    conclusion: normalize_optional_string(s.conclusion),
-                })
-                .collect(),
-        })
-        .collect();
-
+    let run: RestWorkflowRun = github_api::json(
+        token,
+        Method::GET,
+        &format!("repos/{slug}/actions/runs/{run_id}"),
+        None,
+    )?;
+    let jobs_payload: RestWorkflowJobs = github_api::json(
+        token,
+        Method::GET,
+        &format!("repos/{slug}/actions/runs/{run_id}/jobs?per_page=100"),
+        None,
+    )?;
+    let summary = workflow_run_from_rest(run);
     Ok(WorkflowRunDetail {
-        id: raw.database_id,
-        display_title: raw.display_title,
-        workflow_name,
-        status: raw.status,
-        conclusion: normalize_optional_string(raw.conclusion),
-        event: raw.event,
-        head_branch: raw.head_branch.filter(|s| !s.is_empty()),
-        head_sha: raw.head_sha,
-        url: raw.url,
-        created_at: raw.created_at,
-        updated_at: raw.updated_at,
-        started_at: normalize_github_timestamp(raw.started_at),
-        attempt: raw.attempt,
-        jobs,
+        id: summary.id,
+        display_title: summary.display_title,
+        workflow_name: summary.workflow_name,
+        status: summary.status,
+        conclusion: summary.conclusion,
+        event: summary.event,
+        head_branch: summary.head_branch,
+        head_sha: summary.head_sha,
+        url: summary.url,
+        created_at: summary.created_at,
+        updated_at: summary.updated_at,
+        started_at: summary.started_at,
+        attempt: summary.attempt,
+        jobs: jobs_payload
+            .jobs
+            .into_iter()
+            .map(|job| WorkflowJob {
+                id: job.id,
+                name: job.name,
+                status: job.status,
+                conclusion: normalize_optional_string(job.conclusion),
+                started_at: normalize_github_timestamp(job.started_at),
+                completed_at: normalize_github_timestamp(job.completed_at),
+                url: job.html_url,
+                steps: job
+                    .steps
+                    .into_iter()
+                    .map(|step| WorkflowJobStep {
+                        name: step.name,
+                        number: step.number,
+                        status: step.status,
+                        conclusion: normalize_optional_string(step.conclusion),
+                    })
+                    .collect(),
+            })
+            .collect(),
     })
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RestWorkflowJobs {
+    #[serde(default)]
+    jobs: Vec<RestWorkflowJob>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RestWorkflowJob {
+    id: u64,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    started_at: Option<String>,
+    #[serde(default)]
+    completed_at: Option<String>,
+    #[serde(default)]
+    html_url: String,
+    #[serde(default)]
+    steps: Vec<RestWorkflowJobStep>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RestWorkflowJobStep {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    number: u32,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
 }
 
 #[cfg(test)]
@@ -3119,6 +3374,56 @@ mod tests {
     }
 
     #[test]
+    fn gql_pr_list_node_maps_checks_and_labels() {
+        let node = json!({
+            "number": 7,
+            "title": "Fix login",
+            "state": "OPEN",
+            "isDraft": false,
+            "url": "https://github.com/acme/widgets/pull/7",
+            "updatedAt": "2026-07-10T01:00:00Z",
+            "closedAt": null,
+            "mergedAt": null,
+            "author": { "login": "alice" },
+            "headRefName": "fix-login",
+            "baseRefName": "main",
+            "labels": { "nodes": [{ "name": "bug", "color": "d73a4a" }] },
+            "commits": {
+                "nodes": [{
+                    "commit": {
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "nodes": [
+                                    {
+                                        "__typename": "CheckRun",
+                                        "name": "test",
+                                        "status": "COMPLETED",
+                                        "conclusion": "SUCCESS",
+                                        "checkSuite": { "workflowRun": { "workflow": { "name": "CI" } } }
+                                    },
+                                    {
+                                        "__typename": "StatusContext",
+                                        "context": "deploy",
+                                        "state": "PENDING"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }]
+            }
+        });
+        let pr = pull_request_info_from_gql(&node);
+        assert_eq!(pr.number, 7);
+        assert_eq!(pr.author, "alice");
+        assert_eq!(pr.labels[0].name, "bug");
+        let checks = pr.checks.expect("rollup");
+        assert_eq!(checks.passed, 1);
+        assert_eq!(checks.pending, 1);
+        assert_eq!(checks.failed, 0);
+    }
+
+    #[test]
     fn pr_list_payload_preserves_completion_timestamps() {
         let raw: GhPullRequest = serde_json::from_str(
             r##"{
@@ -3145,19 +3450,45 @@ mod tests {
     }
 
     #[test]
-    fn pr_state_changes_map_to_non_interactive_gh_commands() {
+    fn pr_state_changes_map_to_rest_endpoints() {
+        let ready = pr_state_change_endpoint("acme/widgets", 42, PullRequestStateChange::Ready);
+        assert_eq!(ready.0, Method::POST);
+        assert_eq!(ready.1, "repos/acme/widgets/pulls/42/ready_for_review");
+        assert!(ready.2.is_none());
+
+        let draft = pr_state_change_endpoint("acme/widgets", 42, PullRequestStateChange::Draft);
+        assert_eq!(draft.0, Method::POST);
+        assert_eq!(draft.1, "repos/acme/widgets/pulls/42/convert_to_draft");
+
+        let reopen = pr_state_change_endpoint("acme/widgets", 42, PullRequestStateChange::Reopen);
+        assert_eq!(reopen.0, Method::PATCH);
+        assert_eq!(reopen.1, "repos/acme/widgets/pulls/42");
+        assert_eq!(reopen.2, Some(json!({ "state": "open" })));
+    }
+
+    #[test]
+    fn pr_search_query_scopes_repo_and_state() {
         assert_eq!(
-            pr_state_change_args("acme/widgets", 42, PullRequestStateChange::Ready),
-            ["pr", "ready", "42", "--repo", "acme/widgets"]
+            pr_search_query("acme", "widgets", PrStateFilter::Open, "login form"),
+            "repo:acme/widgets is:pr is:open login form"
         );
         assert_eq!(
-            pr_state_change_args("acme/widgets", 42, PullRequestStateChange::Draft),
-            ["pr", "ready", "42", "--repo", "acme/widgets", "--undo"]
+            pr_search_query("acme", "widgets", PrStateFilter::Merged, ""),
+            "repo:acme/widgets is:pr is:merged"
+        );
+    }
+
+    #[test]
+    fn status_context_states_map_to_check_rollup() {
+        assert_eq!(
+            status_context_state("SUCCESS"),
+            ("COMPLETED".into(), Some("SUCCESS".into()))
         );
         assert_eq!(
-            pr_state_change_args("acme/widgets", 42, PullRequestStateChange::Reopen),
-            ["pr", "reopen", "42", "--repo", "acme/widgets"]
+            status_context_state("error"),
+            ("COMPLETED".into(), Some("FAILURE".into()))
         );
+        assert_eq!(status_context_state("PENDING"), ("PENDING".into(), None));
     }
 
     #[test]
@@ -3402,43 +3733,34 @@ mod tests {
     fn account_access_classification_separates_denial_from_operational_failure() {
         let denied = classify_account_access(
             "acme/widgets",
-            false,
-            "exit status: 1",
-            b"HTTP/2.0 404 Not Found\r\nX-Ratelimit-Remaining: 4999\r\n",
-            b"gh: Not Found (HTTP 404)",
+            404,
+            Some(4999),
+            b"{\"message\":\"Not Found\"}",
         )
         .expect("404 is a normal inaccessible-account result");
         assert!(!denied);
 
-        let network_error = classify_account_access(
+        let forbidden = classify_account_access(
             "acme/widgets",
-            false,
-            "exit status: 1",
-            b"",
-            b"gh: network is unreachable",
+            403,
+            Some(10),
+            b"{\"message\":\"Resource not accessible\"}",
         )
-        .expect_err("missing HTTP response must remain an error");
-        assert!(network_error.to_string().contains("network is unreachable"));
+        .expect("403 with remaining quota is inaccessible-account");
+        assert!(!forbidden);
+
+        let network_error = classify_account_access("acme/widgets", 502, None, b"")
+            .expect_err("server errors must remain operational failures");
+        assert!(network_error.to_string().contains("HTTP 502"));
 
         let rate_limit_error = classify_account_access(
             "acme/widgets",
-            false,
-            "exit status: 1",
-            b"HTTP/2.0 403 Forbidden\r\nX-Ratelimit-Remaining: 0\r\n",
-            b"gh: API rate limit exceeded (HTTP 403)",
+            403,
+            Some(0),
+            br#"{"message":"API rate limit exceeded"}"#,
         )
         .expect_err("rate-limit failures must not become access denial");
         assert!(rate_limit_error.to_string().contains("rate limit exceeded"));
-    }
-
-    #[test]
-    fn account_access_uses_the_final_http_status() {
-        assert_eq!(
-            response_http_status(
-                b"HTTP/1.1 200 Connection established\r\n\r\nHTTP/2.0 404 Not Found\r\n"
-            ),
-            Some(404)
-        );
     }
 
     #[test]

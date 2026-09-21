@@ -155,6 +155,7 @@ trash = { workspace = true }
 # markers; tests also use it for scratch directories.
 tempfile = { workspace = true }
 url = { workspace = true }
+reqwest = { version = "0.13", features = ["blocking", "json"] }
 
 [dev-dependencies]
 tauri = { workspace = true, features = ["test"] }

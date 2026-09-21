@@ -11,9 +11,9 @@
 //!
 //! PTY sessions handle this by wrapping every spawn in
 //! `$SHELL -l -i -c 'exec <cmd>'`, which is fine for one-shot agent sessions
-//! but would add 50–200ms of shell startup *per* gh invocation. The
-//! multi-account picker in `pull_requests.rs` makes 5–10 gh calls per refresh
-//! — enough to feel sluggish.
+//! but would add 50–200ms of shell startup *per* CLI invocation. GitHub
+//! listing uses HTTPS after a local `gh auth token` lookup; other CLIs still
+//! spawn through this resolver.
 //!
 //! Instead we resolve `<name>` to an absolute path (`/opt/homebrew/bin/gh`,
 //! `~/.local/bin/gh`, etc.) once via the user shell, cache it, and then spawn
@@ -107,27 +107,17 @@ pub fn run<F>(name: &str, mut configure: F) -> AppResult<Output>
 where
     F: FnMut(&mut Command),
 {
-    run_inner(name, None, &mut configure)
+    run_inner(name, &mut configure)
 }
 
-/// Bounded variant for CLIs whose JSON request body is supplied through
-/// stdin. This keeps the same path-cache retry and process-tree lifecycle as
-/// [`run`] instead of open-coding `spawn` + unbounded `wait_with_output`.
-pub fn run_with_input<F>(name: &str, input: &[u8], mut configure: F) -> AppResult<Output>
-where
-    F: FnMut(&mut Command),
-{
-    run_inner(name, Some(input), &mut configure)
-}
-
-fn run_inner<F>(name: &str, input: Option<&[u8]>, configure: &mut F) -> AppResult<Output>
+fn run_inner<F>(name: &str, configure: &mut F) -> AppResult<Output>
 where
     F: FnMut(&mut Command),
 {
     let path = resolve(name)?;
     let mut cmd = Command::new(&path);
     configure(&mut cmd);
-    match acorn_platform::process::run_bounded(&mut cmd, input, CLI_OUTPUT_LIMITS) {
+    match acorn_platform::process::run_bounded(&mut cmd, None, CLI_OUTPUT_LIMITS) {
         Ok(out) => Ok(out),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Cache is stale — binary moved/uninstalled since last resolve.
@@ -136,7 +126,7 @@ where
             let path = resolve(name)?;
             let mut cmd = Command::new(&path);
             configure(&mut cmd);
-            acorn_platform::process::run_bounded(&mut cmd, input, CLI_OUTPUT_LIMITS)
+            acorn_platform::process::run_bounded(&mut cmd, None, CLI_OUTPUT_LIMITS)
                 .map_err(|e| spawn_error(name, e))
         }
         Err(e) => Err(spawn_error(name, e)),
