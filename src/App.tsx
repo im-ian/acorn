@@ -142,6 +142,10 @@ const RIGHT_PANEL_MIN_SIZE = "16%";
 type AppTranslationKey = Extract<TranslationKey, `app.${string}`>;
 
 let lastPreventSleepSync: boolean | null = null;
+// `select-session` can arrive before `sessions-changed` finishes placing the
+// new row. Keep the id until that placement has run so the terminal mounts
+// in the workspace the create event asked for.
+let pendingIpcSelectSessionId: string | null = null;
 
 interface IpcSessionsChangedPayload {
   action?: string;
@@ -162,6 +166,18 @@ function ipcSessionsChangedPayload(value: unknown): IpcSessionsChangedPayload | 
     workspace_path:
       typeof raw.workspace_path === "string" ? raw.workspace_path : null,
   };
+}
+
+function ipcSelectSessionId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const sessionId = value.trim();
+  return sessionId.length > 0 ? sessionId : null;
+}
+
+function focusIpcSelectedSession(sessionId: string): boolean {
+  const state = useAppStore.getState();
+  if (!state.sessions.some((session) => session.id === sessionId)) return false;
+  return state.openSessionSurface(sessionId);
 }
 
 function appText(t: Translator, key: AppTranslationKey): string {
@@ -1555,16 +1571,32 @@ function App() {
     let cancelled = false;
     listen<unknown>("acorn:ipc-sessions-changed", (event) => {
       const payload = ipcSessionsChangedPayload(event.payload);
-      void useAppStore
-        .getState()
-        .refreshSessions()
-        .then(() => {
-          if (payload?.action !== "created" || !payload.session_id) return;
+      void (async () => {
+        await useAppStore.getState().refreshSessions();
+        if (
+          payload?.action === "created" &&
+          payload.session_id &&
+          !useAppStore
+            .getState()
+            .sessions.some((session) => session.id === payload.session_id)
+        ) {
+          // A select-session refresh can supersede this one before the new
+          // row is applied. Refresh again so workspace placement still sees it.
+          await useAppStore.getState().refreshSessions();
+        }
+        if (payload?.action === "created" && payload.session_id) {
           useAppStore.getState().placeSessionInWorkspace(payload.session_id, {
             workspaceId: payload.workspace_id,
             workspacePath: payload.workspace_path,
           });
-        });
+        }
+        if (
+          payload?.session_id &&
+          pendingIpcSelectSessionId === payload.session_id
+        ) {
+          focusIpcSelectedSession(payload.session_id);
+        }
+      })();
     })
       .then((fn) => {
         if (cancelled) {
@@ -1575,6 +1607,40 @@ function App() {
       })
       .catch((err) => {
         console.error("[App] failed to attach ipc-sessions-changed listener", err);
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Opening the surface is what mounts `<Terminal>` and starts the PTY.
+  // The backend event only names the session.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen<unknown>("acorn:ipc-select-session", (event) => {
+      const sessionId = ipcSelectSessionId(event.payload);
+      if (!sessionId) return;
+      pendingIpcSelectSessionId = sessionId;
+      if (focusIpcSelectedSession(sessionId)) return;
+      void useAppStore
+        .getState()
+        .refreshSessions()
+        .then(() => {
+          if (pendingIpcSelectSessionId !== sessionId) return;
+          focusIpcSelectedSession(sessionId);
+        });
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error("[App] failed to attach ipc-select-session listener", err);
       });
     return () => {
       cancelled = true;
