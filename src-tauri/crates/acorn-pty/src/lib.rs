@@ -222,9 +222,7 @@ impl PtyManager {
         cmd.cwd(&cwd);
         env_applier(&mut cmd);
 
-        let mut child = pair
-            .slave
-            .spawn_command(cmd)
+        let mut child = acorn_platform::pty_spawn::spawn_command(&*pair.master, &*pair.slave, cmd)
             .map_err(|e| PtyError::Other(format!("spawn_command failed: {e}")))?;
         let process_tree = ProcessTree::from_portable_child(child.as_ref()).map_err(|err| {
             let _ = child.kill();

@@ -214,9 +214,7 @@ impl PtyManager {
         // color regressions whenever the daemon killswitch was on.
         (self.env_applier)(&mut cmd, spec.env.clone());
 
-        let mut child = pair
-            .slave
-            .spawn_command(cmd)
+        let mut child = acorn_platform::pty_spawn::spawn_command(&*pair.master, &*pair.slave, cmd)
             .map_err(|e| std::io::Error::other(format!("spawn_command failed: {e}")))?;
         let process_tree = ProcessTree::from_portable_child(child.as_ref()).map_err(|err| {
             let _ = child.kill();

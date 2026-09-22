@@ -12,5 +12,9 @@
   <string>Acorn checks iCloud Drive access so terminal sessions can continue working with projects stored there after updates.</string>
   <key>NSAppDataUsageDescription</key>
   <string>Acorn reads agent and developer-tool data files only when needed to show session history, resume candidates, or project context inside your terminal workspace.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Acorn runs terminal sessions that may launch screenshot, browser-automation, and other developer tools which capture the screen.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Acorn runs terminal sessions that may launch tools which capture system audio together with the screen.</string>
 </dict>
 </plist>

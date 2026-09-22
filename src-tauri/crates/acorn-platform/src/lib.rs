@@ -4,4 +4,5 @@ pub mod dec_modes;
 pub mod executable;
 pub mod fs;
 pub mod process;
+pub mod pty_spawn;
 pub mod xtversion;
