@@ -1040,6 +1040,62 @@ test.describe("pane / sidebar shortcuts", () => {
     ).not.toHaveAttribute("data-tab-minimized", "true");
   });
 
+  test("project menu can minimize and expand every tab in the project", async ({
+    page,
+    tauri,
+  }) => {
+    const beta = {
+      ...SESSION,
+      id: "s-2",
+      name: "beta",
+      created_at: "2026-01-01T00:00:01Z",
+      updated_at: "2026-01-01T00:00:06Z",
+    };
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION, beta]);
+
+    await page.goto("/");
+
+    await page
+      .locator('[data-testid="sidebar"]')
+      .getByRole("button", { name: /^alpha main · Ready/ })
+      .first()
+      .click();
+
+    const projectRow = page.getByRole("button", { name: "Project demo" });
+    await projectRow.click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", { name: "Minimize All Tabs" }),
+    ).toBeEnabled();
+    await expect(
+      page.getByRole("menuitem", { name: "Expand All Tabs" }),
+    ).toBeDisabled();
+    await page.getByRole("menuitem", { name: "Minimize All Tabs" }).click();
+
+    const alphaTab = page.locator('[data-pane-tab-strip] [data-pane-tab="s-1"]');
+    const betaTab = page.locator('[data-pane-tab-strip] [data-pane-tab="s-2"]');
+    await expect(alphaTab).toHaveAttribute("data-tab-minimized", "true");
+    await expect(betaTab).toHaveAttribute("data-tab-minimized", "true");
+    await expect(
+      page.locator(
+        '[data-testid="sidebar"] [data-sidebar-minimized-strip] [data-sidebar-session="s-1"]',
+      ),
+    ).toBeVisible();
+    await expect(
+      page.locator(
+        '[data-testid="sidebar"] [data-sidebar-minimized-strip] [data-sidebar-session="s-2"]',
+      ),
+    ).toBeVisible();
+
+    await projectRow.click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", { name: "Minimize All Tabs" }),
+    ).toBeDisabled();
+    await page.getByRole("menuitem", { name: "Expand All Tabs" }).click();
+    await expect(alphaTab).not.toHaveAttribute("data-tab-minimized", "true");
+    await expect(betaTab).not.toHaveAttribute("data-tab-minimized", "true");
+  });
+
   test("minimize and restore shortcuts collapse and expand the focused tab", async ({
     page,
     tauri,

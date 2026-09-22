@@ -1429,8 +1429,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
         icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
         onClick: () => setSessionSilenced(session.id, !sessionSilenced),
       },
-      { type: "separator" },
-      workspaceContextMenuGroupTitle(t, "open"),
       {
         label: sidebarText(t, "sidebar.actions.openWorkSummary"),
         icon: <BarChart3 size={12} />,
@@ -1439,6 +1437,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
           void openWorkSummaryTab({ sessionId: session.id });
         },
       },
+      workspaceContextMenuGroupTitle(t, "open"),
       {
         label: sidebarText(t, "sidebar.actions.openWorktreeInEditor"),
         icon: <PencilLine size={12} />,
@@ -1454,7 +1453,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
           void revealPathWithFeedback(session.worktree_path);
         },
       },
-      { type: "separator" },
       workspaceContextMenuGroupTitle(t, "copy"),
       {
         type: "submenu",
@@ -1493,7 +1491,6 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
           },
         ],
       },
-      { type: "separator" },
       workspaceContextMenuGroupTitle(t, "danger"),
       {
         label: sidebarText(t, "sidebar.actions.removeSessionMenu"),

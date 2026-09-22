@@ -39,6 +39,7 @@ import {
 } from "./lib/layout";
 import {
   applyTabMinimized,
+  applyTabsMinimized,
   clampTabInsertIndex,
   mergeMinimizedTabIds,
   normalizeMinimizedTabIds,
@@ -539,6 +540,7 @@ interface AppStateModel {
   closePane: (paneId: PaneId) => void;
   moveTab: (args: MoveTabArgs) => void;
   setTabMinimized: (tabId: string, minimized: boolean) => void;
+  setTabsMinimized: (tabIds: readonly string[], minimized: boolean) => void;
   createSession: (
     name: string,
     repoPath: string,
@@ -3182,6 +3184,98 @@ export const useAppStore = create<AppStateModel>()(
         workspaces,
         ...mirrorActive(workspaces, owner.projectFolderId, s),
       };
+    });
+  },
+
+  setTabsMinimized(tabIds, minimized) {
+    set((s) => {
+      const unique: string[] = [];
+      const seen = new Set<string>();
+      for (const id of tabIds) {
+        if (typeof id !== "string" || id.length === 0 || seen.has(id)) continue;
+        seen.add(id);
+        unique.push(id);
+      }
+      if (unique.length === 0) return s;
+
+      const groups = new Map<
+        string,
+        {
+          projectFolderId: string;
+          paneId: PaneId;
+          ids: string[];
+        }
+      >();
+      for (const id of unique) {
+        const owner = findTabOwner(s, id);
+        if (!owner) continue;
+        const key = `${owner.projectFolderId}\0${owner.paneId}`;
+        const group = groups.get(key);
+        if (group) {
+          group.ids.push(id);
+        } else {
+          groups.set(key, {
+            projectFolderId: owner.projectFolderId,
+            paneId: owner.paneId,
+            ids: [id],
+          });
+        }
+      }
+      if (groups.size === 0) return s;
+
+      let workspaces = s.workspaces;
+      let changed = false;
+      for (const group of groups.values()) {
+        const ws = workspaces[group.projectFolderId];
+        if (!ws) continue;
+        const pane = ws.panes[group.paneId];
+        if (!pane) continue;
+        const currentMinimized = pane.minimizedTabIds ?? [];
+        const next = applyTabsMinimized(
+          pane.tabIds,
+          currentMinimized,
+          group.ids,
+          minimized,
+        );
+        if (
+          next.tabIds.length === pane.tabIds.length &&
+          next.tabIds.every((id, index) => id === pane.tabIds[index]) &&
+          next.minimizedTabIds.length === currentMinimized.length &&
+          next.minimizedTabIds.every(
+            (id, index) => id === currentMinimized[index],
+          )
+        ) {
+          continue;
+        }
+        changed = true;
+        workspaces = {
+          ...workspaces,
+          [group.projectFolderId]: {
+            ...ws,
+            panes: {
+              ...ws.panes,
+              [group.paneId]: withMinimizedTabIds(
+                pane,
+                next.tabIds,
+                next.minimizedTabIds,
+              ),
+            },
+          },
+        };
+      }
+      if (!changed) return s;
+
+      const activeId = activeWorkspaceId(s);
+      if (
+        activeId &&
+        [...groups.values()].some((group) => group.projectFolderId === activeId)
+      ) {
+        return {
+          workspaces,
+          ...mirrorActive(workspaces, activeId, s),
+        };
+      }
+      return { workspaces };
     });
   },
 

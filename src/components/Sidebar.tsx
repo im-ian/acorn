@@ -281,6 +281,7 @@ type SidebarContextMenuGroup =
   | "session"
   | "fork"
   | "workspace"
+  | "layout"
   | "project"
   | "open"
   | "copy"
@@ -335,6 +336,32 @@ function contextMenuGroupTitle(
     type: "group-title",
     label: sidebarText(t, `sidebar.contextMenu.${group}`),
   };
+}
+
+function tabSizeAllMenuItems(
+  t: Translator,
+  sessionIds: readonly string[],
+  minimizedIds: ReadonlySet<string>,
+  onSet: (ids: readonly string[], minimized: boolean) => void,
+): ContextMenuItem[] {
+  const ids = sessionIds.filter((id) => id.length > 0);
+  const hasExpanded = ids.some((id) => !minimizedIds.has(id));
+  const hasMinimized = ids.some((id) => minimizedIds.has(id));
+  return [
+    contextMenuGroupTitle(t, "layout"),
+    {
+      label: sidebarText(t, "sidebar.actions.minimizeAllTabs"),
+      icon: <Minimize2 size={12} />,
+      disabled: ids.length === 0 || !hasExpanded,
+      onClick: () => onSet(ids, true),
+    },
+    {
+      label: sidebarText(t, "sidebar.actions.expandAllTabs"),
+      icon: <Maximize2 size={12} />,
+      disabled: ids.length === 0 || !hasMinimized,
+      onClick: () => onSet(ids, false),
+    },
+  ];
 }
 
 function statusLabel(t: Translator, status: SessionStatus): string {
@@ -2323,6 +2350,8 @@ function ProjectGroupView({
   const convertProjectToSourceFolder = useAppStore(
     (s) => s.convertProjectToSourceFolder,
   );
+  const setTabsMinimized = useAppStore((s) => s.setTabsMinimized);
+  const minimizedIds = useMinimizedTabIdSet();
   // Any other project can host this one: a session records the root it started
   // in, and that root stays registered, so only the grouping moves.
   const sourceFolderHosts = useMemo(
@@ -2418,52 +2447,44 @@ function ProjectGroupView({
     },
     [runCreateAction, shortcuts, t],
   );
-  const overflowCreateMenuItems = useMemo<ContextMenuItem[]>(
-    () => {
-      const sessionItems: ContextMenuItem[] =
-        PROJECT_SESSION_OVERFLOW_CREATE_ACTIONS.map((action) => {
-          return {
-            label: sidebarText(t, action.labelKey),
-            icon: projectSessionCreateIcon(action.id),
-            shortcut: action.hotkeyId
-              ? formatHotkey(shortcuts[action.hotkeyId])
-              : undefined,
-            onClick: () => runCreateAction(action),
-          };
-        });
-      return [
-        contextMenuGroupTitle(t, "workspace"),
-        {
-          label: sidebarText(t, "sidebar.actions.newProjectFolder"),
-          icon: <FolderPlus size={12} />,
-          onClick: onAddFolder,
-        },
-        {
-          label: sidebarText(
-            t,
-            "sidebar.actions.newProjectFolderWithWorktree",
-          ),
-          icon: <GitBranch size={12} />,
-          onClick: onAddWorktreeFolder,
-        },
-        {
-          label: sidebarText(t, "sidebar.actions.addProjectSourceFolder"),
-          icon: <FolderGit2 size={12} />,
-          onClick: onAddSourceFolder,
-        },
-        contextMenuGroupTitle(t, "session"),
-        ...sessionItems,
-      ];
+  const workspaceCreateMenuItems: ContextMenuItem[] = [
+    {
+      label: sidebarText(t, "sidebar.actions.newProjectFolder"),
+      icon: <FolderPlus size={12} />,
+      onClick: onAddFolder,
     },
-    [
-      onAddFolder,
-      onAddSourceFolder,
-      onAddWorktreeFolder,
-      runCreateAction,
-      shortcuts,
+    {
+      label: sidebarText(t, "sidebar.actions.newProjectFolderWithWorktree"),
+      icon: <GitBranch size={12} />,
+      onClick: onAddWorktreeFolder,
+    },
+  ];
+  const addSourceFolderMenuItem: ContextMenuItem = {
+    label: sidebarText(t, "sidebar.actions.addProjectSourceFolder"),
+    icon: <FolderGit2 size={12} />,
+    onClick: onAddSourceFolder,
+  };
+  const overflowCreateMenuItems: ContextMenuItem[] = [
+    contextMenuGroupTitle(t, "session"),
+    ...PROJECT_SESSION_OVERFLOW_CREATE_ACTIONS.map<ContextMenuItem>((action) => ({
+      label: sidebarText(t, action.labelKey),
+      icon: projectSessionCreateIcon(action.id),
+      shortcut: action.hotkeyId
+        ? formatHotkey(shortcuts[action.hotkeyId])
+        : undefined,
+      onClick: () => runCreateAction(action),
+    })),
+    contextMenuGroupTitle(t, "workspace"),
+    ...workspaceCreateMenuItems,
+    ...tabSizeAllMenuItems(
       t,
-    ],
-  );
+      project.sessions.map((session) => session.id),
+      minimizedIds,
+      setTabsMinimized,
+    ),
+    contextMenuGroupTitle(t, "project"),
+    addSourceFolderMenuItem,
+  ];
 
   async function convertToSourceFolder(targetRepoPath: string) {
     const converted = await convertProjectToSourceFolder(
@@ -2531,12 +2552,14 @@ function ProjectGroupView({
     onClick: onRemoveProject,
   };
   const projectManagementMenuItems: ContextMenuItem[] = [
+    ...tabSizeAllMenuItems(
+      t,
+      project.sessions.map((session) => session.id),
+      minimizedIds,
+      setTabsMinimized,
+    ),
     contextMenuGroupTitle(t, "project"),
-    {
-      label: sidebarText(t, "sidebar.actions.addProjectSourceFolder"),
-      icon: <FolderGit2 size={12} />,
-      onClick: onAddSourceFolder,
-    },
+    addSourceFolderMenuItem,
     ...projectActionMenuItems,
     contextMenuGroupTitle(t, "danger"),
     closeProjectMenuItem,
@@ -2557,7 +2580,6 @@ function ProjectGroupView({
       ),
     [prioritizeNeedsInputTabs, project, topLevelOrder],
   );
-  const minimizedIds = useMinimizedTabIdSet();
   const { minimizedSessions, rest: restTopLevelItems } = useMemo(
     () => partitionProjectTopLevelItems(topLevelItems, minimizedIds),
     [minimizedIds, topLevelItems],
@@ -2750,28 +2772,15 @@ function ProjectGroupView({
                 contextMenuGroupTitle(t, "session"),
                 ...createMenuItems,
                 contextMenuGroupTitle(t, "workspace"),
-                {
-                  label: sidebarText(t, "sidebar.actions.newProjectFolder"),
-                  icon: <FolderPlus size={12} />,
-                  onClick: onAddFolder,
-                },
-                {
-                  label: sidebarText(
-                    t,
-                    "sidebar.actions.newProjectFolderWithWorktree",
-                  ),
-                  icon: <GitBranch size={12} />,
-                  onClick: onAddWorktreeFolder,
-                },
-                {
-                  label: sidebarText(
-                    t,
-                    "sidebar.actions.addProjectSourceFolder",
-                  ),
-                  icon: <FolderGit2 size={12} />,
-                  onClick: onAddSourceFolder,
-                },
+                ...workspaceCreateMenuItems,
+                ...tabSizeAllMenuItems(
+                  t,
+                  project.sessions.map((session) => session.id),
+                  minimizedIds,
+                  setTabsMinimized,
+                ),
                 contextMenuGroupTitle(t, "project"),
+                addSourceFolderMenuItem,
                 ...projectActionMenuItems,
                 contextMenuGroupTitle(t, "danger"),
                 closeProjectMenuItem,
@@ -2986,6 +2995,7 @@ function ProjectFolderView({
 }: ProjectFolderViewProps) {
   const t = useTranslation();
   const shortcuts = useSettings((s) => s.settings.shortcuts);
+  const setTabsMinimized = useAppStore((s) => s.setTabsMinimized);
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [createMenu, setCreateMenu] = useState<{
@@ -3357,6 +3367,7 @@ function ProjectFolderView({
             icon: <Pencil size={12} />,
             onClick: () => setEditing(true),
           },
+          contextMenuGroupTitle(t, "open"),
           {
             label: revealInFileManagerText(t),
             icon: <FolderOpen size={12} />,
@@ -3364,6 +3375,7 @@ function ProjectFolderView({
               void revealPathWithFeedback(folder.cwdPath);
             },
           },
+          contextMenuGroupTitle(t, "copy"),
           {
             label: sidebarText(t, "sidebar.actions.copyPath"),
             icon: <Copy size={12} />,
@@ -3371,6 +3383,12 @@ function ProjectFolderView({
               void copyTextWithFeedback(folder.cwdPath);
             },
           },
+          ...tabSizeAllMenuItems(
+            t,
+            folderGroup.sessions.map((session) => session.id),
+            minimizedIds,
+            setTabsMinimized,
+          ),
           contextMenuGroupTitle(t, "danger"),
           {
             label: removeLabel,
@@ -3760,15 +3778,16 @@ function SessionRow({
       icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
       onClick: () => setSessionSilenced(session.id, !sessionSilenced),
     },
+    ...(forkItems.length > 0
+      ? [contextMenuGroupTitle(t, "fork"), ...forkItems]
+      : []),
+    contextMenuGroupTitle(t, "layout"),
     minimizeSessionMenuItem(
       t,
       minimized,
       () => setTabMinimized(session.id, !minimized),
       formatHotkey(shortcuts[minimized ? "expandTab" : "minimizeTab"]),
     ),
-    ...(forkItems.length > 0
-      ? [contextMenuGroupTitle(t, "fork"), ...forkItems]
-      : []),
     ...(workspaceMenuItems.length > 0
       ? [contextMenuGroupTitle(t, "workspace"), ...workspaceMenuItems]
       : []),
@@ -3827,12 +3846,12 @@ function SessionRow({
         },
       ],
     },
+    contextMenuGroupTitle(t, "danger"),
     {
       label: sidebarText(t, "sidebar.actions.archiveSessionMenu"),
       icon: <Archive size={12} />,
       onClick: () => requestArchiveSession(session.id),
     },
-    contextMenuGroupTitle(t, "danger"),
     {
       label: sidebarText(t, "sidebar.actions.removeSessionMenu"),
       icon: <Trash2 size={12} />,
@@ -4074,6 +4093,7 @@ function ArchivedSessionRow({
   const agentProvider = resolveSessionAgentProvider(session);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const menuItems: ContextMenuItem[] = [
+    contextMenuGroupTitle(t, "session"),
     {
       label: sidebarText(t, "sidebar.actions.resumeSessionMenu"),
       icon: <Undo2 size={12} />,
@@ -5018,6 +5038,7 @@ function LocalWorkspaceView({
   onMoveSessionToFolder,
 }: LocalWorkspaceViewProps) {
   const t = useTranslation();
+  const setTabsMinimized = useAppStore((s) => s.setTabsMinimized);
   const newSessionShortcut = useSettings((s) =>
     formatHotkey(s.settings.shortcuts.newSession),
   );
@@ -5057,6 +5078,7 @@ function LocalWorkspaceView({
       icon: <Pencil size={12} />,
       onClick: () => setEditing(true),
     },
+    contextMenuGroupTitle(t, "open"),
     {
       label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
@@ -5064,6 +5086,7 @@ function LocalWorkspaceView({
         void revealPathWithFeedback(folder.cwdPath);
       },
     },
+    contextMenuGroupTitle(t, "copy"),
     {
       label: sidebarText(t, "sidebar.actions.copyPath"),
       icon: <Copy size={12} />,
@@ -5071,6 +5094,12 @@ function LocalWorkspaceView({
         void copyTextWithFeedback(folder.cwdPath);
       },
     },
+    ...tabSizeAllMenuItems(
+      t,
+      folderGroup.sessions.map((session) => session.id),
+      minimizedIds,
+      setTabsMinimized,
+    ),
     contextMenuGroupTitle(t, "danger"),
     {
       label: sidebarText(t, "sidebar.actions.removeProjectFolder"),
@@ -5387,6 +5416,7 @@ function LocalSessionRow({
 
   const transcriptPath = session.agent_transcript_path?.trim() || null;
   const menuItems: ContextMenuItem[] = [
+    contextMenuGroupTitle(t, "session"),
     {
       label: sidebarText(t, "sidebar.actions.rename"),
       icon: <Pencil size={12} />,
@@ -5409,6 +5439,7 @@ function LocalSessionRow({
       icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
       onClick: () => setSessionSilenced(session.id, !sessionSilenced),
     },
+    contextMenuGroupTitle(t, "layout"),
     minimizeSessionMenuItem(
       t,
       minimized,
@@ -5417,7 +5448,7 @@ function LocalSessionRow({
     ),
     ...(canCreateWorktreeWorkspace
       ? [
-          { type: "separator" as const },
+          contextMenuGroupTitle(t, "workspace"),
           {
             label: sidebarText(t, "sidebar.actions.createWorkspaceFromWorktree"),
             icon: <GitBranch size={12} />,
@@ -5425,7 +5456,7 @@ function LocalSessionRow({
           } satisfies ContextMenuItem,
         ]
       : []),
-    { type: "separator" },
+    contextMenuGroupTitle(t, "open"),
     {
       label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
@@ -5433,21 +5464,29 @@ function LocalSessionRow({
         void revealPathWithFeedback(session.worktree_path);
       },
     },
+    contextMenuGroupTitle(t, "copy"),
     {
-      label: sidebarText(t, "sidebar.actions.copyWorktreePath"),
+      type: "submenu",
+      label: sidebarText(t, "sidebar.actions.copy"),
       icon: <Copy size={12} />,
-      onClick: () => void copyTextWithFeedback(session.worktree_path),
+      children: [
+        {
+          label: sidebarText(t, "sidebar.actions.worktreePath"),
+          icon: <Copy size={12} />,
+          onClick: () => void copyTextWithFeedback(session.worktree_path),
+        },
+        ...(transcriptPath
+          ? [
+              {
+                label: sidebarText(t, "sidebar.actions.transcriptPath"),
+                icon: <Copy size={12} />,
+                onClick: () => void copyTextWithFeedback(transcriptPath),
+              } satisfies ContextMenuItem,
+            ]
+          : []),
+      ],
     },
-    ...(transcriptPath
-      ? [
-          {
-            label: sidebarText(t, "sidebar.actions.copyTranscriptPath"),
-            icon: <Copy size={12} />,
-            onClick: () => void copyTextWithFeedback(transcriptPath),
-          } satisfies ContextMenuItem,
-        ]
-      : []),
-    { type: "separator" },
+    contextMenuGroupTitle(t, "danger"),
     {
       label: sidebarText(t, "sidebar.actions.archiveSessionMenu"),
       icon: <Archive size={12} />,
