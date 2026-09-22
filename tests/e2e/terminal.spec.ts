@@ -735,6 +735,158 @@ test.describe("terminal: spawn", () => {
     expect(first.parentLimbo).toBeNull();
   });
 
+  test("ipc select-session mounts the terminal and spawns its pty", async ({
+    page,
+    tauri,
+  }) => {
+    await seedAlphaBetaTerminals(tauri);
+    await tauri.handle("pty_spawn", (args) => {
+      const w = window as unknown as { __ptySpawnCalls?: unknown[] };
+      w.__ptySpawnCalls = w.__ptySpawnCalls ?? [];
+      w.__ptySpawnCalls.push(args);
+      return null;
+    });
+
+    await page.goto("/");
+    await expect(
+      page.getByRole("button", { name: /^beta main · Ready$/ }),
+    ).toBeVisible({ timeout: 8_000 });
+
+    const spawnedBefore = (await page.evaluate(() => {
+      return (
+        (window as unknown as { __ptySpawnCalls?: Array<{ sessionId: string }> })
+          .__ptySpawnCalls ?? []
+      ).map((call) => call.sessionId);
+    })) as string[];
+    expect(spawnedBefore).not.toContain("s-beta");
+
+    await page.evaluate(() => {
+      (
+        window as unknown as {
+          __ACORN_EMIT_TAURI_EVENT__?: (event: string, payload: unknown) => void;
+        }
+      ).__ACORN_EMIT_TAURI_EVENT__?.("acorn:ipc-select-session", "s-beta");
+    });
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            return (
+              (
+                window as unknown as {
+                  __ptySpawnCalls?: Array<{ sessionId: string }>;
+                }
+              ).__ptySpawnCalls ?? []
+            ).map((call) => call.sessionId);
+          }),
+        { timeout: 8_000 },
+      )
+      .toContain("s-beta");
+  });
+
+  test("ipc select-session waits for a session created in the same turn", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __ipcSessions?: unknown[] };
+      return w.__ipcSessions ?? [];
+    });
+    await tauri.handle("pty_spawn", (args) => {
+      const w = window as unknown as { __ptySpawnCalls?: unknown[] };
+      w.__ptySpawnCalls = w.__ptySpawnCalls ?? [];
+      w.__ptySpawnCalls.push(args);
+      return null;
+    });
+    await page.addInitScript(() => {
+      const w = window as unknown as { __ipcSessions?: unknown[] };
+      w.__ipcSessions = [
+        {
+          id: "s-alpha",
+          name: "alpha",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: 0,
+          in_worktree: false,
+        },
+      ];
+    });
+
+    await page.goto("/");
+    await expect(
+      page.getByRole("button", { name: /^alpha main · Ready$/ }),
+    ).toBeVisible({ timeout: 8_000 });
+
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __ipcSessions?: unknown[];
+        __ACORN_EMIT_TAURI_EVENT__?: (event: string, payload: unknown) => void;
+      };
+      w.__ipcSessions = [
+        ...(w.__ipcSessions ?? []),
+        {
+          id: "s-beta",
+          name: "beta",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "ready",
+          created_at: "2026-01-01T00:00:01Z",
+          updated_at: "2026-01-01T00:00:01Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: 1,
+          in_worktree: false,
+        },
+      ];
+      w.__ACORN_EMIT_TAURI_EVENT__?.("acorn:ipc-select-session", "s-beta");
+      w.__ACORN_EMIT_TAURI_EVENT__?.("acorn:ipc-sessions-changed", {
+        action: "created",
+        session_id: "s-beta",
+        workspace_path: "/tmp/demo",
+      });
+    });
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            return (
+              (
+                window as unknown as {
+                  __ptySpawnCalls?: Array<{ sessionId: string }>;
+                }
+              ).__ptySpawnCalls ?? []
+            ).map((call) => call.sessionId);
+          }),
+        { timeout: 8_000 },
+      )
+      .toContain("s-beta");
+  });
+
   test("applies cursor changes live and keeps them across terminal switches", async ({
     page,
     tauri,

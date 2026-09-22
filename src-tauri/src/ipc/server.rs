@@ -56,8 +56,9 @@ use crate::worktree;
 use acorn_session::{Session, SessionKind, SessionOwner, SessionStore};
 
 /// Tauri event the frontend listens for to focus a session requested via
-/// the IPC `select-session` command. Kept in lockstep with the listener
-/// wired up in `src/components/Sidebar.tsx`'s sibling for `acorn:*` events.
+/// the IPC `select-session` command. `App.tsx` opens that session's surface
+/// so its terminal mounts and `pty_spawn` runs. The payload is the session
+/// id string.
 const SELECT_SESSION_EVENT: &str = "acorn:ipc-select-session";
 /// Fired whenever an IPC handler mutates the persisted session list
 /// (`new-session`, `close-self`, `kill-session`). The frontend listens and re-fetches
@@ -807,7 +808,7 @@ fn handle_send_keys(
             };
         }
     };
-    if let Err(err) = state.pty.write(&target.id, &bytes) {
+    if let Err(err) = crate::commands::write_session_pty(state, target.id, &bytes) {
         return Response::Error {
             code: ErrorCode::Internal,
             message: format!("pty write failed: {err}"),
@@ -827,14 +828,18 @@ fn handle_read_buffer(
         Err(err) => return err,
     };
     let cap = max_bytes.unwrap_or(64 * 1024).min(4 * 1024 * 1024);
-    match state.pty.tail_bytes(&target.id, cap) {
-        Some((bytes, truncated)) => Response::Buffer {
+    match crate::commands::read_session_pty_tail(state, target.id, cap) {
+        Ok(Some((bytes, truncated))) => Response::Buffer {
             data_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             truncated,
         },
-        None => Response::Error {
+        Ok(None) => Response::Error {
             code: ErrorCode::NotFound,
             message: format!("session {} has no live pty", target.id),
+        },
+        Err(err) => Response::Error {
+            code: ErrorCode::Internal,
+            message: format!("pty read failed: {err}"),
         },
     }
 }
@@ -1109,6 +1114,53 @@ mod tests {
         );
         s.status = SessionStatus::Ready;
         s
+    }
+
+    #[test]
+    fn send_keys_without_a_pty_reports_the_missing_pty() {
+        let state = AppState::new();
+        state.daemon_bridge.set_enabled(false);
+        let session =
+            state
+                .sessions
+                .insert(make_session("/tmp/demo", "shell", SessionKind::Regular));
+        let data = base64::engine::general_purpose::STANDARD.encode(b"ls");
+        let response = handle_send_keys(&session, &session.id.to_string(), &data, &state);
+        match response {
+            Response::Error { code, message } => {
+                assert_eq!(code, ErrorCode::Internal);
+                assert!(
+                    message.contains("no pty for session"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected missing pty, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_keys_for_a_daemon_bound_session_skips_the_in_process_pty() {
+        let state = AppState::new();
+        state.daemon_bridge.set_enabled(false);
+        let session =
+            state
+                .sessions
+                .insert(make_session("/tmp/demo", "shell", SessionKind::Regular));
+        state
+            .sessions
+            .set_daemon_session_id(&session.id, Some(session.id))
+            .expect("bind session to daemon");
+        let data = base64::engine::general_purpose::STANDARD.encode(b"ls");
+        let response = handle_send_keys(&session, &session.id.to_string(), &data, &state);
+        match response {
+            Response::Error { message, .. } => {
+                assert!(
+                    !message.contains("no pty for session"),
+                    "daemon-bound input fell through to the in-process map: {message}"
+                );
+            }
+            other => panic!("expected a daemon transport error, got {other:?}"),
+        }
     }
 
     fn unique_temp_dir(label: &str) -> PathBuf {

@@ -9596,18 +9596,7 @@ pub async fn pty_write(
     let lock = state.pty_write_lock(id);
     let _write_order = lock.lock().await;
     run_blocking("pty_write", move || {
-        if pty_io_uses_daemon(&state, id) {
-            state
-                .daemon_bridge
-                .send_input(id, &bytes)
-                .map_err(|e| AppError::Pty(e.to_string()))?;
-        } else {
-            state
-                .pty
-                .write(&id, &bytes)
-                .map_err(|e| AppError::Pty(e.to_string()))?;
-        }
-        Ok(())
+        write_session_pty(&state, id, &bytes).map_err(AppError::Pty)
     })
     .await
 }
@@ -9710,6 +9699,42 @@ pub fn pty_detach(
 
 fn daemon_session_alive_or_attached(state: &AppState, id: Uuid) -> bool {
     state.stream_registry.contains(&id) || state.daemon_bridge.is_alive(id)
+}
+
+pub(crate) fn write_session_pty(state: &AppState, id: Uuid, bytes: &[u8]) -> Result<(), String> {
+    if pty_io_uses_daemon(state, id) {
+        state
+            .daemon_bridge
+            .send_input(id, bytes)
+            .map_err(|err| err.to_string())
+    } else {
+        state.pty.write(&id, bytes).map_err(|err| err.to_string())
+    }
+}
+
+pub(crate) fn read_session_pty_tail(
+    state: &AppState,
+    id: Uuid,
+    max_bytes: usize,
+) -> Result<Option<(Vec<u8>, bool)>, String> {
+    if !pty_io_uses_daemon(state, id) {
+        return Ok(state.pty.tail_bytes(&id, max_bytes));
+    }
+    match state.daemon_bridge.read_buffer(id, max_bytes) {
+        Ok(tail) => Ok(Some(tail)),
+        Err(err) if is_missing_daemon_session(&err) => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn is_missing_daemon_session(err: &crate::daemon_bridge::BridgeError) -> bool {
+    matches!(
+        err,
+        crate::daemon_bridge::BridgeError::Daemon {
+            code: acorn_daemon::protocol::ErrorCode::NotFound,
+            ..
+        }
+    )
 }
 
 fn pty_io_uses_daemon(state: &AppState, id: Uuid) -> bool {

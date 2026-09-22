@@ -37,6 +37,7 @@ use acorn_daemon::protocol::{
     StatusSnapshot,
 };
 use acorn_daemon::{client, paths};
+use base64::Engine;
 
 /// How long the bridge waits for `acornd` to become reachable after
 /// spawning it. Conservative because the first launch on a cold disk
@@ -589,6 +590,29 @@ impl DaemonBridge {
             data_b64,
         })?)? {
             ControlResult::Ack => Ok(()),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// Read the freshest daemon scrollback without subscribing to the live
+    /// stream. IPC `read-buffer` uses this when the PTY is daemon-owned;
+    /// the in-process tail ring does not contain those bytes.
+    pub fn read_buffer(&self, target: Uuid, max_bytes: usize) -> BridgeResult<(Vec<u8>, bool)> {
+        match Self::unpack_error(self.call(ControlPayload::ReadBuffer {
+            target_session_id: target,
+            max_bytes: Some(max_bytes),
+        })?)? {
+            ControlResult::Buffer {
+                data_b64,
+                truncated,
+            } => {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data_b64)
+                    .map_err(|err| {
+                        BridgeError::Io(io::Error::new(io::ErrorKind::InvalidData, err.to_string()))
+                    })?;
+                Ok((bytes, truncated))
+            }
             other => Err(unexpected(other)),
         }
     }
