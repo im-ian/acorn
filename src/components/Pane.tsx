@@ -2007,9 +2007,8 @@ function buildPaneMenuItems({
   onOpenWorkSummary?: () => void;
 }): ContextMenuItem[] {
   const editorReady = hasConfiguredEditor();
-  const worktreeItems: ContextMenuItem[] = activeSession
+  const activeSessionItems: ContextMenuItem[] = activeSession
     ? [
-        { type: "separator" },
         ...(onOpenWorkSummary
           ? [
               {
@@ -2034,6 +2033,11 @@ function buildPaneMenuItems({
           onClick: () =>
             setSessionSilenced(activeSession.id, !activeSessionSilenced),
         },
+      ]
+    : [];
+  const openItems: ContextMenuItem[] = activeSession
+    ? [
+        paneContextMenuGroupTitle(t, "open"),
         {
           label: paneT(t, "pane.menu.openWorktreeInEditor"),
           icon: <PencilLine size={12} />,
@@ -2051,7 +2055,7 @@ function buildPaneMenuItems({
             void revealPathWithFeedback(activeSession.worktree_path);
           },
         },
-        { type: "separator" },
+        paneContextMenuGroupTitle(t, "copy"),
         {
           label: paneT(t, "pane.menu.copyWorktreePath"),
           icon: <Copy size={12} />,
@@ -2068,6 +2072,7 @@ function buildPaneMenuItems({
     : [];
 
   return [
+    paneContextMenuGroupTitle(t, "session"),
     {
       label: paneT(t, "pane.menu.newSessionInThisPane"),
       icon: <TerminalIcon size={12} />,
@@ -2092,7 +2097,8 @@ function buildPaneMenuItems({
           },
         ]
       : []),
-    { type: "separator" },
+    ...activeSessionItems,
+    paneContextMenuGroupTitle(t, "layout"),
     {
       label: paneT(t, "pane.menu.splitRight"),
       icon: <SplitSquareHorizontal size={12} />,
@@ -2114,8 +2120,8 @@ function buildPaneMenuItems({
       },
       disabled: totalPanes <= 1,
     },
-    ...worktreeItems,
-    { type: "separator" },
+    ...openItems,
+    paneContextMenuGroupTitle(t, "close"),
     {
       label: paneT(t, "pane.menu.closePane"),
       icon: <X size={12} />,

@@ -2678,6 +2678,41 @@ describe("setTabMinimized", () => {
   });
 });
 
+describe("setTabsMinimized", () => {
+  it("minimizes every listed tab in the active workspace", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A), session("a3", REPO_A)],
+    );
+
+    useAppStore.getState().setTabsMinimized(["a3", "a1"], true);
+
+    const pane = useAppStore.getState().panes[useAppStore.getState().focusedPaneId];
+    expect(pane.tabIds).toEqual(["a1", "a3", "a2"]);
+    expect(pane.minimizedTabIds).toEqual(["a1", "a3"]);
+  });
+
+  it("expands every listed tab without switching projects", async () => {
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [session("a1", REPO_A), session("b1", REPO_B), session("b2", REPO_B)],
+    );
+    useAppStore.getState().selectSession("a1");
+    useAppStore.getState().setTabsMinimized(["b1", "b2"], true);
+    expect(useAppStore.getState().activeProject).toBe(REPO_A);
+
+    useAppStore.getState().setTabsMinimized(["b1", "b2"], false);
+
+    expect(useAppStore.getState().activeProject).toBe(REPO_A);
+    const pane = Object.values(
+      useAppStore.getState().workspaces[REPO_B]?.panes ?? {},
+    ).find((candidate) => candidate.tabIds.includes("b1"));
+    expect(pane?.minimizedTabIds).toBeUndefined();
+    expect(pane?.tabIds).toEqual(expect.arrayContaining(["b1", "b2"]));
+    expect(pane?.tabIds).toHaveLength(2);
+  });
+});
+
 describe("closePane", () => {
   it("merges the closed pane's sessions into the surviving pane", async () => {
     await seed(

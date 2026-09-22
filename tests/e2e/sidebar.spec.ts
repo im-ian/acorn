@@ -288,6 +288,7 @@ test.describe("sidebar: project lifecycle", () => {
     });
     const menu = page.getByRole("menu");
     await expect(menu).toContainText("Session");
+    await expect(menu).toContainText("Layout");
     await expect(menu).toContainText("Open");
     await expect(menu).toContainText("Copy");
     await expect(menu).toContainText("Danger");
@@ -3032,18 +3033,22 @@ test.describe("sidebar: project lifecycle", () => {
     await page
       .getByRole("button", { name: "Create session in this project" })
       .click();
-    await expect(page.getByRole("menu")).toContainText("Workspace");
     await expect(page.getByRole("menu")).toContainText("Session");
+    await expect(page.getByRole("menu")).toContainText("Workspace");
+    await expect(page.getByRole("menu")).toContainText("Layout");
+    await expect(page.getByRole("menu")).toContainText("Project");
     const menuLabels = await page.getByRole("menuitem").evaluateAll((items) =>
       items.map((item) => item.textContent?.replace(/\s+/g, " ").trim()),
     );
-    expect(menuLabels.slice(0, 6)).toEqual([
-      "New workspace",
-      "New worktree workspace",
-      "Add source folder",
+    expect(menuLabels.slice(0, 8)).toEqual([
       "New Loop session",
       "New Graph session",
       "New chat session",
+      "New workspace",
+      "New worktree workspace",
+      "Minimize All Tabs",
+      "Expand All Tabs",
+      "Add source folder",
     ]);
     await expect(
       page.getByRole("menuitem", { name: "New session" }),
@@ -4989,6 +4994,8 @@ test.describe("sidebar: project lifecycle", () => {
         : "Reveal in File Manager",
     );
     const expectedProjectActions = [
+      "Minimize All Tabs",
+      "Expand All Tabs",
       "Add source folder",
       "Project Settings",
       revealLabel,
