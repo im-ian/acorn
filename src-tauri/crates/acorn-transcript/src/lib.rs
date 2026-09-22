@@ -1889,6 +1889,163 @@ fn find_claude_jsonl_for_uuid_budgeted(
     Ok(None)
 }
 
+/// True when an explicit resume may attach a transcript that records
+/// `transcript_cwd`.
+///
+/// The shell cwd and the recorded cwd match for a normal resume. They
+/// diverge when History starts the shell at the main checkout because the
+/// conversation's worktree directory was missing: the provider keeps the
+/// worktree path. That path is accepted only when this repository still
+/// registers it as a linked worktree. Recency pairing does not use this
+/// helper, so a guess cannot cross into another checkout.
+fn explicit_resume_cwd_matches(process_cwd: &Path, transcript_cwd: &Path) -> bool {
+    process_cwd == transcript_cwd || same_repository_linked_worktree(process_cwd, transcript_cwd)
+}
+
+/// True when `transcript_cwd` is a linked worktree registered on the
+/// repository that contains `process_cwd`.
+///
+/// The registration is read from the process repository's common dir.
+/// A transcript path is only compared against those recorded roots, so a
+/// cwd from another project cannot satisfy the check by claiming this repo.
+fn same_repository_linked_worktree(process_cwd: &Path, transcript_cwd: &Path) -> bool {
+    if transcript_cwd.as_os_str().is_empty() {
+        return false;
+    }
+    let Some(common) = git_common_dir(process_cwd) else {
+        return false;
+    };
+    let Ok(meta) = std::fs::symlink_metadata(&common) else {
+        return false;
+    };
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(common.join("worktrees")) else {
+        return false;
+    };
+    // Pairing runs on the live scan. Stop after a bounded number of
+    // registrations so a huge worktrees directory cannot stall it.
+    for (index, entry) in entries.enumerate() {
+        if index >= MAX_LINKED_WORKTREE_REGISTRATIONS {
+            break;
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Some(recorded) = read_worktree_gitdir(&entry.path().join("gitdir")) else {
+            continue;
+        };
+        let Some(root) = recorded.parent() else {
+            continue;
+        };
+        if resume_paths_match(root, transcript_cwd) {
+            return true;
+        }
+    }
+    false
+}
+
+const MAX_LINKED_WORKTREE_REGISTRATIONS: usize = 256;
+const GIT_METADATA_MAX_BYTES: u64 = 4_096;
+
+fn read_worktree_gitdir(path: &Path) -> Option<PathBuf> {
+    let text = read_bounded_metadata_text(path)?;
+    let recorded = PathBuf::from(text.trim());
+    if recorded.as_os_str().is_empty() {
+        return None;
+    }
+    let recorded = if recorded.is_absolute() {
+        recorded
+    } else {
+        path.parent()?.join(recorded)
+    };
+    Some(lexical_normalize(&recorded))
+}
+
+fn git_common_dir(start: &Path) -> Option<PathBuf> {
+    let mut current = start.to_path_buf();
+    for _ in 0..64 {
+        let marker = current.join(".git");
+        match std::fs::symlink_metadata(&marker) {
+            Ok(meta) if meta.file_type().is_symlink() => {}
+            Ok(meta) if meta.is_dir() => return Some(marker),
+            Ok(meta) if meta.is_file() => return worktree_common_dir(&current, &marker),
+            _ => {}
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    None
+}
+
+fn worktree_common_dir(checkout: &Path, git_file: &Path) -> Option<PathBuf> {
+    let text = read_bounded_metadata_text(git_file)?;
+    let gitdir = text.trim().strip_prefix("gitdir:")?.trim();
+    if gitdir.is_empty() {
+        return None;
+    }
+    let gitdir = PathBuf::from(gitdir);
+    let gitdir = if gitdir.is_absolute() {
+        gitdir
+    } else {
+        checkout.join(gitdir)
+    };
+    let gitdir = lexical_normalize(&gitdir);
+    let common = match read_bounded_metadata_text(&gitdir.join("commondir")) {
+        Some(text) => {
+            let relative = PathBuf::from(text.trim());
+            if relative.as_os_str().is_empty() {
+                return None;
+            }
+            if relative.is_absolute() {
+                relative
+            } else {
+                gitdir.join(relative)
+            }
+        }
+        None => gitdir.parent()?.parent()?.to_path_buf(),
+    };
+    Some(lexical_normalize(&common))
+}
+
+fn read_bounded_metadata_text(path: &Path) -> Option<String> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.file_type().is_file() || meta.len() > GIT_METADATA_MAX_BYTES {
+        return None;
+    }
+    let text = std::fs::read_to_string(path).ok()?;
+    if text.len() as u64 > GIT_METADATA_MAX_BYTES {
+        return None;
+    }
+    Some(text)
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+fn resume_paths_match(left: &Path, right: &Path) -> bool {
+    if left == right || acorn_paths::same_cwd(left, right) {
+        return true;
+    }
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
 fn claude_uuid_path_matches_cwd_budgeted(
     path: &Path,
     cwd: &Path,
@@ -1903,7 +2060,7 @@ fn claude_uuid_path_matches_cwd_budgeted(
         return Ok(false);
     }
     Ok(read_agent_transcript_cwd_budgeted(path, budget)?
-        .map(|transcript_cwd| transcript_cwd == cwd)
+        .map(|transcript_cwd| explicit_resume_cwd_matches(cwd, &transcript_cwd))
         .unwrap_or(true))
 }
 
@@ -3229,7 +3386,9 @@ fn grok_visible_transcript(
 ) -> ProviderScanResult<Option<PathBuf>> {
     match read_grok_session_summary_budgeted(session_dir, budget)? {
         Some(summary) => {
-            let cwd_ok = cwd.map_or(true, |cwd| summary.cwd == cwd);
+            let cwd_ok = cwd.map_or(true, |process_cwd| {
+                explicit_resume_cwd_matches(process_cwd, &summary.cwd)
+            });
             if summary.id == uuid && cwd_ok && !summary.hidden && !summary.is_subagent {
                 Ok(Some(updates))
             } else {
@@ -3238,7 +3397,8 @@ fn grok_visible_transcript(
         }
         // The preferred cwd bucket already encodes this process cwd, so a
         // mid-write summary is not proof the UUID is hidden. Other buckets
-        // still need a parsed cwd match so --resume cannot claim a sibling.
+        // still need a readable summary so --resume cannot claim a sibling
+        // whose cwd was never parsed.
         None if allow_unreadable_summary => Ok(Some(updates)),
         None => Ok(None),
     }
@@ -3272,9 +3432,9 @@ fn locate_grok_transcript_matching_cwd(
 
 /// Pair a live grok process to its transcript.
 ///
-/// An explicit `--resume` / `--session-id` UUID always wins, scoped to this
-/// process cwd so another tab's conversation cannot be claimed. Recency is
-/// only safe when this cwd has a single grok.
+/// An explicit `--resume` / `--session-id` UUID wins for this process cwd,
+/// and for a linked worktree of the same repository. Recency stays inside
+/// one cwd and is only safe when that cwd has a single grok.
 #[allow(clippy::too_many_arguments)]
 fn pair_live_grok_transcript(
     cwd: &Path,
@@ -5875,6 +6035,53 @@ mod tests {
     }
 
     #[test]
+    fn explicit_codex_resume_pairs_when_rollout_cwd_differs() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-cx-cwd-{}", uuid::Uuid::new_v4().simple()));
+        let sessions = root.join("sessions");
+        let process_cwd = root.join("main");
+        let recorded_cwd = root.join("worktree");
+        let id = "019e2001-3250-76b0-8410-2e073b38a2c1";
+        let day = codex_day_dirs_for_uuid(&sessions, id)
+            .into_iter()
+            .next()
+            .unwrap();
+        fs::create_dir_all(&day).unwrap();
+        fs::create_dir_all(&process_cwd).unwrap();
+
+        let transcript = day.join(format!("rollout-2026-05-13T15-23-29-{id}.jsonl"));
+        let mut file = File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{{\"payload\":{{\"cwd\":\"{}\"}}}}",
+            recorded_cwd.display()
+        )
+        .unwrap();
+
+        let explicit = find_codex_jsonl_for_uuid(Some(&sessions), id, &HashSet::new());
+        assert_eq!(explicit.map(|(_, found_id)| found_id).as_deref(), Some(id));
+
+        let recent = find_recent_codex_jsonl(
+            &process_cwd,
+            Some(&sessions),
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::now(),
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            recent, None,
+            "recency pairing keeps a rollout whose cwd is another checkout"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn extracts_uuid_from_antigravity_transcript_path() {
         let path = Path::new(
             "/Users/me/.gemini/antigravity/brain/17f38e8c-3a7e-408b-8c79-aef7432c0fd2/.system_generated/logs/transcript.jsonl",
@@ -6145,6 +6352,216 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_resume_accepts_a_registered_worktree_cwd() {
+        let (_guard, root) = canonical_temp("resume-worktree");
+        let (main, worktree) = repo_with_linked_worktree(&root);
+        let id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        let sessions = root.join("sessions");
+        let grok_path = write_grok_session(&sessions, &worktree, id, false, false);
+
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let paired = find_grok_jsonl_for_uuid_budgeted(
+            Some(&sessions),
+            id,
+            Some(&main),
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(
+            paired
+                .as_ref()
+                .map(|(path, found_id)| (path.as_path(), found_id.as_str())),
+            Some((grok_path.as_path(), id))
+        );
+
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let recent = find_recent_grok_jsonl_budgeted(
+            &main,
+            Some(&sessions),
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::now(),
+            true,
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(recent, None, "recency pairing stays inside the process cwd");
+
+        let projects = root.join("projects");
+        let claude_dir = projects.join("worktree-slug");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let claude_path = claude_dir.join(format!("{id}.jsonl"));
+        std::fs::write(
+            &claude_path,
+            format!("{{\"cwd\":\"{}\"}}\n", worktree.display()),
+        )
+        .unwrap();
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let claude = find_claude_jsonl_for_uuid_budgeted(
+            &main,
+            Some(&projects),
+            id,
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(
+            claude
+                .as_ref()
+                .map(|(path, found_id)| (path.as_path(), found_id.as_str())),
+            Some((claude_path.as_path(), id))
+        );
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        let claude_recent = find_recent_claude_jsonl_budgeted(
+            &main,
+            Some(&projects),
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::now(),
+            true,
+            &HashSet::new(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(claude_recent, None);
+        assert!(same_repository_linked_worktree(&worktree, &worktree));
+        assert!(!same_repository_linked_worktree(&worktree, &main));
+
+        std::fs::remove_dir_all(&worktree).unwrap();
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        assert!(
+            find_grok_jsonl_for_uuid_budgeted(
+                Some(&sessions),
+                id,
+                Some(&main),
+                &HashSet::new(),
+                &mut budget,
+            )
+            .unwrap()
+            .is_some(),
+            "a deleted worktree checkout still pairs while git lists it"
+        );
+
+        write_grok_session(&sessions, &worktree, id, true, false);
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        assert_eq!(
+            find_grok_jsonl_for_uuid_budgeted(
+                Some(&sessions),
+                id,
+                Some(&main),
+                &HashSet::new(),
+                &mut budget,
+            )
+            .unwrap(),
+            None,
+            "a hidden grok session stays unpaired"
+        );
+    }
+
+    #[test]
+    fn explicit_resume_rejects_a_worktree_from_another_repository() {
+        let (_guard, root) = canonical_temp("resume-other-repo");
+        let (main, _) = repo_with_linked_worktree(&root.join("ours"));
+        let (_, foreign) = repo_with_linked_worktree(&root.join("theirs"));
+        let sessions = root.join("sessions");
+        let id = "0198c151-f3ee-7991-9768-741923bb6b50";
+        write_grok_session(&sessions, &foreign, id, false, false);
+
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        assert_eq!(
+            find_grok_jsonl_for_uuid_budgeted(
+                Some(&sessions),
+                id,
+                Some(&main),
+                &HashSet::new(),
+                &mut budget,
+            )
+            .unwrap(),
+            None
+        );
+
+        let projects = root.join("projects");
+        let dir = projects.join("foreign");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{id}.jsonl")),
+            format!("{{\"cwd\":\"{}\"}}\n", foreign.display()),
+        )
+        .unwrap();
+        let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+        assert_eq!(
+            find_claude_jsonl_for_uuid_budgeted(
+                &main,
+                Some(&projects),
+                id,
+                &HashSet::new(),
+                &mut budget,
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    struct RemoveOnDrop(PathBuf);
+
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn canonical_temp(label: &str) -> (RemoveOnDrop, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("acorn-{label}-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let canonical = root.canonicalize().expect("canonicalize temp dir");
+        (RemoveOnDrop(canonical.clone()), canonical)
+    }
+
+    fn repo_with_linked_worktree(root: &Path) -> (PathBuf, PathBuf) {
+        let main = root.join("repo");
+        let worktree = main.join(".acorn").join("worktrees").join("feature");
+        std::fs::create_dir_all(&main).unwrap();
+        git_command(&main, &["init"]);
+        std::fs::write(main.join("README"), "hi").unwrap();
+        git_command(&main, &["add", "README"]);
+        git_command(&main, &["commit", "-m", "init"]);
+        git_command(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                worktree.to_str().expect("utf-8 worktree path"),
+            ],
+        );
+        (main, worktree)
+    }
+
+    fn git_command(cwd: &Path, args: &[&str]) {
+        let empty_config = cwd.join(".empty-gitconfig");
+        if !empty_config.exists() {
+            std::fs::write(&empty_config, "").unwrap();
+        }
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", &empty_config)
+            .env("GIT_CONFIG_SYSTEM", &empty_config)
+            .env("GIT_AUTHOR_NAME", "acorn")
+            .env("GIT_AUTHOR_EMAIL", "acorn@example.com")
+            .env("GIT_COMMITTER_NAME", "acorn")
+            .env("GIT_COMMITTER_EMAIL", "acorn@example.com")
+            .status()
+            .unwrap_or_else(|error| panic!("spawn git {args:?}: {error}"));
+        assert!(status.success(), "git {args:?} failed in {}", cwd.display());
     }
 
     #[test]
