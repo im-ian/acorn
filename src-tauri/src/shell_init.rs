@@ -165,6 +165,10 @@ mod tests {
         assert!(body.contains("_acorn_user_zd_real"));
         assert!(body.contains("ACORN_CLI_DIR"));
         assert!(body.contains("ACORN_AGENT_WRAPPER_DIR"));
+        assert!(body.contains("Acorn session: ${ACORN_SESSION_ID}"));
+        assert!(body.contains("https://github.com/im-ian/acorn/blob/main/docs/SESSION_IPC.md"));
+        assert!(!body.contains("Acorn control session ready."));
+        assert!(!body.contains("Agents can run"));
         // Restore ZDOTDIR before .zlogin runs (otherwise the staged
         // .zlogin would resolve to the user's dir on its own).
         assert!(body.contains("_acorn_zd_save"));
