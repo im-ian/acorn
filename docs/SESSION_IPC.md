@@ -183,6 +183,13 @@ acorn-ipc kill-session  -t <uuid> [--allow-foreign]
 `--allow-foreign` is accepted for compatibility and has no effect. Sibling
 actions in the same project succeed without it.
 
+`send-keys` and `read-buffer` do not require the target to be focused.
+They reach a live PTY, including one whose terminal view was detached to
+stay under the mounted-terminal cap. `select-session` moves the user's
+focus. Use it only when the target has no live PTY yet and you need that
+shell's output: `new-session` persists a row and does not start a shell,
+and focusing the session is what mounts the terminal and calls `pty_spawn`.
+
 Add `--json` to any command to get machine-readable output. Each command
 exits non-zero with a stable code on error:
 
@@ -254,12 +261,13 @@ for id in $(acorn-ipc list-sessions --json | jq -r '.sessions[] | select(.is_sou
 done
 ```
 
-Spin up a fresh isolated worktree and focus it:
+Spin up a fresh isolated worktree. `select-session` is only here so the
+new row gets a shell; skip it when the target already has a live PTY.
 
 ```sh
 acorn-ipc promote-self   # no-op; confirms this terminal is authorized
 new_id=$(acorn-ipc new-session "patch-bot" --isolated)
-acorn-ipc select-session -t "$new_id"
+acorn-ipc select-session -t "$new_id"   # moves focus; starts the PTY
 ```
 
 Close the current session only after its work and final report are complete:

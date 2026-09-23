@@ -70,6 +70,14 @@ pub fn primer() -> &'static str {
          - Use `close-self` only as the final action after the requested work, \
          verification, delivery, and completion report are all finished. It \
          closes this session and every session it owns.\n\
+         - Do not run `select-session` to send input or read output. \
+         `send-keys` and `read-buffer` reach a live PTY without moving the \
+         user's focus, including a session whose terminal view was detached \
+         to stay under the mounted-terminal cap.\n\
+         - `new-session` does not start a shell. Run `select-session` only \
+         when `send-keys` or `read-buffer` reports that the target has no \
+         live PTY and you need that shell's output. That command moves focus \
+         so the app can mount the terminal and start the PTY.\n\
          \n\
          Available commands (project-scoped — other projects are not reachable):\n\
          \n\
@@ -80,7 +88,7 @@ pub fn primer() -> &'static str {
            acorn-ipc new-session   <name> [--workspace current|PATH] [--workspace-id ID] [--isolated] [--owner me|user]\n\
            acorn-ipc send-keys     -t <uuid> --data '…' --enter\n\
            acorn-ipc read-buffer   -t <uuid> [--max-bytes N]\n\
-           acorn-ipc select-session -t <uuid>\n\
+           acorn-ipc select-session -t <uuid>            # only when the target has no live PTY; moves focus\n\
            acorn-ipc close-self                         # final action; closes this session and its owned workers\n\
            acorn-ipc kill-session  -t <uuid>\n\
          \n\
@@ -154,6 +162,8 @@ mod tests {
         assert!(p.contains("$ACORN_IPC_SOCKET"));
         assert!(p.contains("$ACORN_DAEMON_SOCKET"));
         assert!(p.contains("acorn-ipc list-sessions"));
+        assert!(p.contains("Do not run `select-session` to send input or read output"));
+        assert!(p.contains("no live PTY"));
     }
 
     #[test]
