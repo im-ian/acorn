@@ -2190,6 +2190,160 @@ test.describe("terminal: spawn", () => {
     ).toEqual([linkText]);
   });
 
+  test("a second jittered click on the same terminal link opens it once more", async ({
+    page,
+    tauri,
+  }) => {
+    // The first jitter replays one click and leaves xterm remembering that
+    // press. The next passthrough mouseup must not open the link again.
+    await enableTerminalRightClickPasteSelection(page, { fontSize: 24 });
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __linkClickAgainChannelId?: number };
+      w.__linkClickAgainChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("open_external_url", (args) => {
+      const { url } = args as { url: string };
+      const w = window as unknown as { __openedUrls?: string[] };
+      w.__openedUrls = [...(w.__openedUrls ?? []), url];
+      return true;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __linkClickAgainChannelId?: number })
+              .__linkClickAgainChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "https://example.com/acorn";
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkClickAgainChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkClickAgainChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    const linkRect = await terminalTextRect(page, linkText);
+    expect(linkRect).not.toBeNull();
+    const x = linkRect!.left + 10;
+    const y = (linkRect!.top + linkRect!.bottom) / 2;
+    const jitterClick = async () => {
+      await page.mouse.move(x, y + 30);
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + 1, y + 10);
+      await page.mouse.up();
+    };
+    await jitterClick();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            ((window as unknown as { __openedUrls?: string[] }).__openedUrls ??
+              []).length,
+        ),
+      )
+      .toBe(1);
+    await jitterClick();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            ((window as unknown as { __openedUrls?: string[] }).__openedUrls ??
+              []).length,
+        ),
+      )
+      .toBe(2);
+    await page.waitForTimeout(300);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __openedUrls?: string[] }).__openedUrls,
+      ),
+    ).toEqual([linkText, linkText]);
+  });
+
+  test("a double-click on a terminal link opens it once", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { fontSize: 24 } }),
+      );
+    });
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __linkDoubleClickChannelId?: number };
+      w.__linkDoubleClickChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("open_external_url", (args) => {
+      const { url } = args as { url: string };
+      const w = window as unknown as { __openedUrls?: string[] };
+      w.__openedUrls = [...(w.__openedUrls ?? []), url];
+      return true;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __linkDoubleClickChannelId?: number })
+              .__linkDoubleClickChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "https://example.com/acorn";
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkDoubleClickChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+
+    const linkRect = await terminalTextRect(page, linkText);
+    expect(linkRect).not.toBeNull();
+    const x = linkRect!.left + 10;
+    const y = (linkRect!.top + linkRect!.bottom) / 2;
+    await page.mouse.move(x, y + 30);
+    await page.mouse.dblclick(x, y);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            ((window as unknown as { __openedUrls?: string[] }).__openedUrls ??
+              []).length,
+        ),
+      )
+      .toBe(1);
+    await page.waitForTimeout(300);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __openedUrls?: string[] }).__openedUrls,
+      ),
+    ).toEqual([linkText]);
+  });
+
   test("drag-selecting a terminal link inside a TUI does not open it", async ({
     page,
     tauri,

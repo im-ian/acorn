@@ -23,3 +23,11 @@ export function terminalMouseTrackingReleaseAction(args: {
   if (args.selectedTextLength > 0) return "keep-selection";
   return "click";
 }
+
+/**
+ * The first press of a multi-click already opens the link. Later presses
+ * report detail >= 2 and would open another tab for the same gesture.
+ */
+export function terminalLinkPressShouldOpen(detail: number): boolean {
+  return detail < 2;
+}
