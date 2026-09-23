@@ -13,14 +13,6 @@ export type TerminalMouseTrackingReleaseAction = "click" | "keep-selection";
  * text — including a one-character drag — is kept for paste. Double/triple
  * click is always a word/line select.
  */
-/**
- * The first press of a multi-click already opens the link. Later presses
- * report detail >= 2 and would open another tab for the same gesture.
- */
-export function terminalLinkPressShouldOpen(detail: number): boolean {
-  return detail < 2;
-}
-
 export function terminalMouseTrackingReleaseAction(args: {
   selecting: boolean;
   selectedTextLength: number;
@@ -30,4 +22,12 @@ export function terminalMouseTrackingReleaseAction(args: {
   if (args.clickCount >= 2) return "keep-selection";
   if (args.selectedTextLength > 0) return "keep-selection";
   return "click";
+}
+
+/**
+ * The first press of a multi-click already opens the link. Later presses
+ * report detail >= 2 and would open another tab for the same gesture.
+ */
+export function terminalLinkPressShouldOpen(detail: number): boolean {
+  return detail < 2;
 }
