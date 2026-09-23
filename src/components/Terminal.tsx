@@ -66,6 +66,7 @@ import {
 import { patchTerminalMouseCoordinateScale } from "../lib/terminalMouseScale";
 import {
   TERMINAL_MOUSE_SELECT_THRESHOLD_PX,
+  terminalLinkPressShouldOpen,
   terminalMouseTrackingReleaseAction,
 } from "../lib/terminalMouseTracking";
 import {
@@ -294,6 +295,9 @@ interface TerminalRenderInternals {
           };
         };
       };
+      // xterm remembers the link under the last mousedown and opens it when
+      // a later mouseup lands on the same link.
+      _mouseDownLink?: unknown;
     };
     _renderService?: {
       dimensions?: {
@@ -495,6 +499,12 @@ function renderTerminalLineTail(
     column += width;
   }
   tailView.replaceChildren(fragment);
+}
+
+function forgetTerminalLinkPress(term: XTerm): void {
+  const linkifier = (term as unknown as TerminalRenderInternals)._core
+    ?.linkifier;
+  if (linkifier) linkifier._mouseDownLink = undefined;
 }
 
 function suppressCurrentXtermLinkUnderline(term: XTerm): void {
@@ -993,6 +1003,7 @@ export function Terminal({
       if (linkActivation === "modifier-click" && !modifierHeld(event)) {
         return;
       }
+      if (!terminalLinkPressShouldOpen(event.detail)) return;
       const filePath = fileUrlToPath(uri);
       if (filePath) {
         void api
@@ -1179,6 +1190,7 @@ export function Terminal({
           if (linkActivation === "modifier-click" && !modifierHeld(event)) {
             return;
           }
+          if (!terminalLinkPressShouldOpen(event.detail)) return;
           openTerminalFileReference(reference);
         },
         hover: (_event, _reference, link) => {
@@ -3177,6 +3189,10 @@ export function Terminal({
         // linkifier while the same mouseup is still bubbling toward it — the
         // link would then activate twice for one press.
         leftDragSelecting = false;
+        // This mouseup finalizes the selection, and it still matches the
+        // link xterm remembered from the previous press. Drop that press so
+        // the passthrough does not open the link before the click replay.
+        forgetTerminalLinkPress(term);
         window.setTimeout(() => {
           if (disposed) return;
           const action = terminalMouseTrackingReleaseAction({

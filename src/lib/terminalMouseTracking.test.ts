@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { terminalMouseTrackingReleaseAction } from "./terminalMouseTracking";
+import {
+  terminalLinkPressShouldOpen,
+  terminalMouseTrackingReleaseAction,
+} from "./terminalMouseTracking";
+
+describe("terminalLinkPressShouldOpen", () => {
+  it("opens the first press and skips the rest of a multi-click", () => {
+    expect(terminalLinkPressShouldOpen(1)).toBe(true);
+    expect(terminalLinkPressShouldOpen(0)).toBe(true);
+    expect(terminalLinkPressShouldOpen(2)).toBe(false);
+    expect(terminalLinkPressShouldOpen(3)).toBe(false);
+  });
+});
 
 describe("terminalMouseTrackingReleaseAction", () => {
   it("replays a press that never started a selection as a click", () => {
