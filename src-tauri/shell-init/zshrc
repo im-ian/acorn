@@ -63,9 +63,8 @@ export PATH
 if [ -n "${ACORN_SESSION_ID-}" ] && [ -z "${ACORN_CONTROL_BANNER_SHOWN-}" ]; then
     export ACORN_CONTROL_BANNER_SHOWN=1
     printf '%s\n' \
-        'Acorn control session ready.' \
-        'Agents can run: acorn-ipc context' \
-        '"new session" means an Acorn sibling terminal session.'
+        "Acorn session: ${ACORN_SESSION_ID}" \
+        'acorn-ipc guide: https://github.com/im-ian/acorn/blob/main/docs/SESSION_IPC.md'
 fi
 
 _acorn_osc7() {

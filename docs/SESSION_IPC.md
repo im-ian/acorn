@@ -45,10 +45,18 @@ priming through PTY environment on every spawn:
 - `ACORN_DAEMON_SOCKET` — the background daemon control endpoint, so
   scripts can also reach `acornd`.
 
-Agents reload the protocol text at any time with `acorn-ipc context`. The
-primer lists the session id, IPC endpoints, natural-language mapping for
-phrases like "new session", and every `acorn-ipc` subcommand with
-copy-pasteable examples.
+When the PTY starts, the shell prints only the session id and a pointer
+to this guide:
+
+```text
+Acorn session: <ACORN_SESSION_ID>
+acorn-ipc guide: https://github.com/im-ian/acorn/blob/main/docs/SESSION_IPC.md
+```
+
+Agents reload the same protocol at any time with `acorn-ipc context`. The
+primer lists the session id, IPC endpoints, and every `acorn-ipc`
+subcommand. In a request to an agent, "new session" means a sibling Acorn
+terminal in this project unless the user clearly means a new chat.
 
 ## The `acorn-ipc` CLI
 

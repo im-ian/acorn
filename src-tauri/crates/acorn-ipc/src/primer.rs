@@ -97,6 +97,7 @@ pub fn primer() -> &'static str {
          `acornd send-keys -t …`, etc. — same shape, different transport.\n\
          \n\
          Tips:\n\
+         - Protocol guide: https://github.com/im-ian/acorn/blob/main/docs/SESSION_IPC.md\n\
          - Pass `--json` to `acorn-ipc` for machine-parseable output.\n\
          - Prefer delegating CPU-bound or long-running work to sibling sessions \
          instead of running it serially here.\n\
@@ -164,6 +165,7 @@ mod tests {
         assert!(p.contains("acorn-ipc list-sessions"));
         assert!(p.contains("Do not run `select-session` to send input or read output"));
         assert!(p.contains("no live PTY"));
+        assert!(p.contains("https://github.com/im-ian/acorn/blob/main/docs/SESSION_IPC.md"));
     }
 
     #[test]
