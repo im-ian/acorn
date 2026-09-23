@@ -74,10 +74,10 @@ pub fn primer() -> &'static str {
          `send-keys` and `read-buffer` reach a live PTY without moving the \
          user's focus, including a session whose terminal view was detached \
          to stay under the mounted-terminal cap.\n\
-         - `new-session` does not start a shell. Run `select-session` only \
-         when `send-keys` or `read-buffer` reports that the target has no \
-         live PTY and you need that shell's output. That command moves focus \
-         so the app can mount the terminal and start the PTY.\n\
+         - `new-session` does not start a shell by itself. The shell starts \
+         when that row is mounted. Run `select-session` only when \
+         `send-keys` or `read-buffer` reports that the target has no live \
+         PTY and you need that shell's output. That command moves focus.\n\
          \n\
          Available commands (project-scoped — other projects are not reachable):\n\
          \n\

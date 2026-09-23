@@ -45,13 +45,16 @@ priming through PTY environment on every spawn:
 - `ACORN_DAEMON_SOCKET` — the background daemon control endpoint, so
   scripts can also reach `acornd`.
 
-When the PTY starts, the shell prints only the session id and a pointer
-to this guide:
+On zsh, Acorn's staged `.zshrc` prints the session id and a pointer to
+this guide when the PTY starts:
 
 ```text
 Acorn session: <ACORN_SESSION_ID>
 acorn-ipc guide: https://github.com/im-ian/acorn/blob/main/docs/SESSION_IPC.md
 ```
+
+Other shells do not print that banner. They still receive the same env
+vars, and `acorn-ipc context` prints the protocol.
 
 Agents reload the same protocol at any time with `acorn-ipc context`. The
 primer lists the session id, IPC endpoints, and every `acorn-ipc`
@@ -193,10 +196,12 @@ actions in the same project succeed without it.
 
 `send-keys` and `read-buffer` do not require the target to be focused.
 They reach a live PTY, including one whose terminal view was detached to
-stay under the mounted-terminal cap. `select-session` moves the user's
-focus. Use it only when the target has no live PTY yet and you need that
-shell's output: `new-session` persists a row and does not start a shell,
-and focusing the session is what mounts the terminal and calls `pty_spawn`.
+stay under the mounted-terminal cap. `new-session` only persists a row.
+The shell starts when that row is mounted: in the panes view that is
+usually `select-session`, and in canvas a visible tab can mount on its
+own. `select-session` moves the user's focus. Use it only when
+`send-keys` or `read-buffer` reports that the target has no live PTY and
+you need that shell's output.
 
 Add `--json` to any command to get machine-readable output. Each command
 exits non-zero with a stable code on error:
@@ -269,13 +274,14 @@ for id in $(acorn-ipc list-sessions --json | jq -r '.sessions[] | select(.is_sou
 done
 ```
 
-Spin up a fresh isolated worktree. `select-session` is only here so the
-new row gets a shell; skip it when the target already has a live PTY.
+Spin up a fresh isolated worktree. Focus it only if it has no PTY yet.
 
 ```sh
 acorn-ipc promote-self   # no-op; confirms this terminal is authorized
 new_id=$(acorn-ipc new-session "patch-bot" --isolated)
-acorn-ipc select-session -t "$new_id"   # moves focus; starts the PTY
+if ! acorn-ipc read-buffer -t "$new_id" --max-bytes 1 >/dev/null 2>&1; then
+  acorn-ipc select-session -t "$new_id"   # no PTY yet; this moves focus
+fi
 ```
 
 Close the current session only after its work and final report are complete:
