@@ -13,13 +13,22 @@ use portable_pty::{Child, CommandBuilder, MasterPty, SlavePty};
 /// ScreenCaptureKit still checks the child, so the dialog repeats. `posix_spawn`
 /// with `responsibility_spawnattrs_setdisclaim` starts a new responsibility
 /// chain at the shell; later tools prompt and persist as themselves.
+///
+/// Accessibility (`kTCCServiceAccessibility`) has the opposite semantics: the
+/// check targets the responsible process itself, so a disclaimed session can
+/// never use an Accessibility grant given to Acorn — `osascript`/`cliclick`
+/// fail with -25211 and macOS never prompts for the bare shell. The disclaim
+/// bit is one decision per process chain; no spawn shape satisfies both
+/// services. `ACORN_NO_TCC_DISCLAIM=1` in the session env opts that session
+/// back into Acorn's responsibility chain (restoring Accessibility
+/// inheritance) at the cost of re-entering the Screen Recording prompt loop.
 pub fn spawn_command(
     master: &dyn MasterPty,
     slave: &dyn SlavePty,
     cmd: CommandBuilder,
 ) -> io::Result<Box<dyn Child + Send + Sync>> {
     #[cfg(target_os = "macos")]
-    {
+    if should_disclaim(&cmd) {
         if let Some(tty) = master.tty_name() {
             return macos::spawn_disclaimed(&tty, &cmd);
         }
@@ -28,6 +37,13 @@ pub fn spawn_command(
     slave
         .spawn_command(cmd)
         .map_err(|err| io::Error::other(err.to_string()))
+}
+
+/// `ACORN_NO_TCC_DISCLAIM=1` (exactly "1") skips the disclaim; anything else
+/// keeps it, so an unset or `=0` session stays on the safe capture default.
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn should_disclaim(cmd: &CommandBuilder) -> bool {
+    cmd.get_env("ACORN_NO_TCC_DISCLAIM") != Some(std::ffi::OsStr::new("1"))
 }
 
 #[cfg(target_os = "macos")]
@@ -388,8 +404,7 @@ mod tests {
             .expect("PTY child produced output")
     }
 
-    #[test]
-    fn spawned_pty_child_stdio_is_a_tty() {
+    fn assert_child_stdio_is_a_tty(env: &[(&str, &str)]) {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -401,6 +416,9 @@ mod tests {
         let mut cmd = CommandBuilder::new("/bin/sh");
         cmd.arg("-c");
         cmd.arg("if [ -t 0 ]; then printf IS_TTY; else printf NOT_A_TTY; fi");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
         let mut child = spawn_command(&*pair.master, &*pair.slave, cmd).expect("spawn pty child");
         drop(pair.slave);
         let reader = pair.master.try_clone_reader().expect("clone reader");
@@ -411,6 +429,28 @@ mod tests {
             "child stdin should be a tty, got {output:?}"
         );
         assert!(status.success(), "child should exit 0, got {status:?}");
+    }
+
+    #[test]
+    fn spawned_pty_child_stdio_is_a_tty() {
+        assert_child_stdio_is_a_tty(&[]);
+    }
+
+    #[test]
+    fn opted_out_pty_child_stdio_is_still_a_tty() {
+        assert_child_stdio_is_a_tty(&[("ACORN_NO_TCC_DISCLAIM", "1")]);
+    }
+
+    #[test]
+    fn no_tcc_disclaim_env_must_be_exactly_one() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        assert!(should_disclaim(&cmd), "unset env keeps the disclaim");
+        cmd.env("ACORN_NO_TCC_DISCLAIM", "0");
+        assert!(should_disclaim(&cmd), "=0 keeps the disclaim");
+        cmd.env("ACORN_NO_TCC_DISCLAIM", "true");
+        assert!(should_disclaim(&cmd), "non-\"1\" keeps the disclaim");
+        cmd.env("ACORN_NO_TCC_DISCLAIM", "1");
+        assert!(!should_disclaim(&cmd), "=1 skips the disclaim");
     }
 
     #[cfg(target_os = "macos")]
