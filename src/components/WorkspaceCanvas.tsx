@@ -45,6 +45,7 @@ import {
 } from "../lib/projectSessionCreateActions";
 import { useSettings } from "../lib/settings";
 import type { Session, SessionStatus } from "../lib/types";
+import { queueTerminalFocus } from "../lib/terminalFocus";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
@@ -735,13 +736,7 @@ export function WorkspaceCanvas({
     (sessionId: string) => {
       activateNode(sessionId);
       useAppStore.getState().openTerminalPopup(sessionId);
-      requestAnimationFrame(() => {
-        window.dispatchEvent(
-          new CustomEvent("acorn:focus-session", {
-            detail: { sessionId },
-          }),
-        );
-      });
+      queueTerminalFocus(sessionId);
     },
     [activateNode],
   );

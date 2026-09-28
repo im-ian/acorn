@@ -23,6 +23,7 @@ import type {
   SessionProcessSummary,
   SessionStatus,
 } from "./lib/types";
+import { queueTerminalFocus } from "./lib/terminalFocus";
 import { commandRequestsWorktreeAdoption } from "./lib/worktreeAdoption";
 import {
   type Direction,
@@ -2404,25 +2405,9 @@ export const useAppStore = create<AppStateModel>()(
     // an existing session tab leaves focus on the previous terminal, so a
     // session parked on an input prompt (e.g. Claude's AskUserQuestion) takes
     // no keyboard until the user clicks into it. rAF defers past TerminalHost's
-    // portal reattach, same as the session-create focus path above.
-    if (id !== null && typeof window !== "undefined") {
-      requestAnimationFrame(() => {
-        const active = document.activeElement;
-        if (
-          active instanceof HTMLInputElement ||
-          active instanceof HTMLTextAreaElement ||
-          active instanceof HTMLSelectElement ||
-          active?.getAttribute("contenteditable") === "true"
-        ) {
-          return;
-        }
-        window.dispatchEvent(
-          new CustomEvent("acorn:focus-session", {
-            detail: { sessionId: id },
-          }),
-        );
-      });
-    }
+    // portal reattach. The pending id covers a terminal that was unmounted by
+    // the resident limit and is not listening yet.
+    if (id !== null) queueTerminalFocus(id);
   },
 
   openSessionSurface(id, options) {
@@ -2443,14 +2428,8 @@ export const useAppStore = create<AppStateModel>()(
     } else {
       state.closeTerminalPopup();
     }
-    if (options?.centerInCanvas && typeof window !== "undefined") {
-      requestAnimationFrame(() => {
-        window.dispatchEvent(
-          new CustomEvent<FocusSessionEventDetail>("acorn:focus-session", {
-            detail: { sessionId: id, canvasTarget: "center" },
-          }),
-        );
-      });
+    if (options?.centerInCanvas) {
+      queueTerminalFocus(id, { canvasTarget: "center" });
     }
     return true;
   },

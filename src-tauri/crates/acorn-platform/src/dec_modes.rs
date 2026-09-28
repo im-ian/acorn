@@ -1,11 +1,12 @@
 //! Track DEC private modes from a PTY stdout stream.
 //!
-//! Overlay TUIs enable mouse tracking once at start. Reattach replays a
-//! ring that may have already dropped those CSI sequences, so the live
-//! process still believes the mouse is on while a fresh xterm does not.
-//! This tracker is the lossless projection of the subset we restore:
-//! mouse protocol, SGR encoding, and bracketed paste. Alt-screen is
-//! ignored — replaying `?1049h` blanks xterm.js's alt buffer.
+//! Overlay TUIs enter the alternate screen and turn on mouse tracking once
+//! at start, then never repeat those sequences. A fresh xterm that stays on
+//! the normal buffer hides the SIGWINCH redraw, so keystrokes land in the
+//! child and nothing paints. The prelude is the subset we restore: alt
+//! screen, mouse protocol, SGR encoding, and bracketed paste. `?1049h` is
+//! sent only as that prelude — dumping it out of the ring clears xterm.js's
+//! alt buffer under the bytes that follow.
 
 /// Mouse protocol last written by DECSET 9/1000/1002/1003.
 /// DECRST of any of those four collapses to `None`, matching xterm.js.
@@ -21,6 +22,7 @@ pub enum MouseProtocol {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DecPrivateModes {
+    pub alt_screen: bool,
     pub mouse: MouseProtocol,
     pub sgr_mouse: bool,
     pub bracketed_paste: bool,
@@ -30,6 +32,11 @@ impl DecPrivateModes {
     /// CSI to replay into a fresh xterm parser. Empty when all defaults.
     pub fn prelude(self) -> Vec<u8> {
         let mut out = Vec::new();
+        if self.alt_screen {
+            // 1049 clears on entry. The child will not send it again, and the
+            // following SIGWINCH redraw has to land on the buffer it paints.
+            out.extend_from_slice(b"\x1b[?1049h");
+        }
         match self.mouse {
             MouseProtocol::None => {}
             MouseProtocol::X10 => out.extend_from_slice(b"\x1b[?9h"),
@@ -208,6 +215,7 @@ impl DecModeTracker {
 
     fn apply_dec(&mut self, param: u16, enable: bool) {
         match param {
+            47 | 1047 | 1049 => self.modes.alt_screen = enable,
             9 | 1000 | 1002 | 1003 => {
                 if enable {
                     self.modes.mouse = match param {
@@ -245,12 +253,13 @@ mod tests {
         assert_eq!(
             modes,
             DecPrivateModes {
+                alt_screen: true,
                 mouse: MouseProtocol::Vt200,
                 sgr_mouse: true,
                 bracketed_paste: false,
             }
         );
-        assert_eq!(modes.prelude(), b"\x1b[?1000h\x1b[?1006h");
+        assert_eq!(modes.prelude(), b"\x1b[?1049h\x1b[?1000h\x1b[?1006h");
     }
 
     #[test]
@@ -326,8 +335,17 @@ mod tests {
     }
 
     #[test]
-    fn alt_screen_is_not_in_prelude() {
+    fn alt_screen_is_restored_and_any_exit_clears_it() {
         let modes = track(&[b"\x1b[?1049h\x1b[?1000h"]);
+        assert!(modes.alt_screen);
+        assert_eq!(modes.prelude(), b"\x1b[?1049h\x1b[?1000h");
+
+        let modes = track(&[b"\x1b[?47h\x1b[?1049l"]);
+        assert!(!modes.alt_screen);
+        assert_eq!(modes.prelude(), b"");
+
+        let modes = track(&[b"\x1b[?1047h\x1b[?1047l\x1b[?1000h"]);
+        assert!(!modes.alt_screen);
         assert_eq!(modes.prelude(), b"\x1b[?1000h");
     }
 

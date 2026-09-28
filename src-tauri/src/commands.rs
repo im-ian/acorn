@@ -9070,13 +9070,30 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
     )?);
     let output_token = output_token.or_else(|| state.pty_output.current_token(&id));
     // A live in-process PTY means this is a remount, not a new shell.
-    // Push remembered mouse/paste CSI into the fresh xterm; the child
-    // will not re-send those modes itself.
+    // Push remembered alt-screen/mouse/paste CSI into the fresh xterm; the
+    // child will not re-send those modes itself.
     if state.pty.contains(&id) {
         let prelude = state.pty.dec_mode_prelude(&id);
         if !prelude.is_empty() {
             let event = format!("pty:output:{id}");
             state.pty_output.send_or_emit(&app, &event, &id, &prelude);
+        }
+        // The prelude can switch a fresh xterm onto an empty alt buffer.
+        // Same-size TIOCSWINSZ does not notify the child, so step the size
+        // after the prelude is queued and let the TUI redraw there.
+        let cols = cols.unwrap_or(0);
+        let rows = rows.unwrap_or(0);
+        if cols > 0 && rows > 0 {
+            if let Some((pulse_cols, pulse_rows)) = sigwinch_pulse_size(cols, rows) {
+                let _ = state.pty.resize(&id, pulse_cols, pulse_rows, 0, 0);
+            }
+            let _ = state.pty.resize(
+                &id,
+                cols,
+                rows,
+                pixel_width.unwrap_or(0),
+                pixel_height.unwrap_or(0),
+            );
         }
         return Ok(());
     }

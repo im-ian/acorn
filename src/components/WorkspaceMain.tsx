@@ -94,6 +94,7 @@ import {
   resolveSessionTitlePrompt,
   useSettings,
 } from "../lib/settings";
+import { queueTerminalFocus } from "../lib/terminalFocus";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import { isWorkspaceTabId } from "../lib/workspaceTabs";
@@ -696,15 +697,7 @@ function KanbanBoard({
       selectSession(id);
       openTerminalPopup(id);
       setTerminalPopover({ sessionId: id, anchor });
-      if (typeof window !== "undefined") {
-        requestAnimationFrame(() => {
-          window.dispatchEvent(
-            new CustomEvent("acorn:focus-session", {
-              detail: { sessionId: id },
-            }),
-          );
-        });
-      }
+      queueTerminalFocus(id);
     },
     [selectSession, openTerminalPopup],
   );
