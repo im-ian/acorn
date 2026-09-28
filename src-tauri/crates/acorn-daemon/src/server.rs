@@ -570,16 +570,13 @@ impl Daemon {
         // replay, avoiding both the old snapshot->subscribe gap and duplicate
         // bytes.
         let mut replayed_until = 0;
-        // Restore mouse/paste on the fresh xterm even when the ring is not
-        // replayed — a local snapshot restore may have just turned those
-        // modes off. Never written into the ring.
+        // `?1049h` moves xterm.js onto an empty alt buffer. It has to follow
+        // the ring replay: writing it first drops shell history into that
+        // buffer, and exiting alt later shows a normal buffer the replay
+        // never filled. Mouse-tracking TUIs skip the ring; their prelude
+        // still opens the alt buffer before the SIGWINCH redraw.
         let prelude = self.pty.dec_mode_prelude(&attach.session_id);
-        if !prelude.is_empty() {
-            let frame = StreamFrame::Output {
-                data_b64: base64_encode(&prelude),
-            };
-            write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
-        }
+        let mut replay_bytes: Option<Vec<u8>> = None;
         if attach.replay_scrollback {
             if let Some(snap) = self.pty.scrollback_snapshot(&attach.session_id) {
                 replayed_until = snap.end_seq;
@@ -587,12 +584,15 @@ impl Daemon {
                 // it into a fresh xterm reconstructs mid-frame garbage; the
                 // child still owns the real screen and redraws on SIGWINCH.
                 if !self.pty.mouse_tracking_active(&attach.session_id) {
-                    let frame = StreamFrame::Output {
-                        data_b64: base64_encode(&snap.bytes),
-                    };
-                    write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
+                    replay_bytes = Some(snap.bytes);
                 }
             }
+        }
+        for frame_bytes in ordered_attach_outputs(replay_bytes.as_deref(), &prelude) {
+            let frame = StreamFrame::Output {
+                data_b64: base64_encode(&frame_bytes),
+            };
+            write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
         }
 
         // Reader side (client → daemon) runs on a separate thread so
@@ -1089,6 +1089,18 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Ring replay, then the mode prelude. An empty side is omitted.
+fn ordered_attach_outputs(snapshot: Option<&[u8]>, prelude: &[u8]) -> Vec<Vec<u8>> {
+    let mut frames = Vec::new();
+    if let Some(snapshot) = snapshot {
+        frames.push(snapshot.to_vec());
+    }
+    if !prelude.is_empty() {
+        frames.push(prelude.to_vec());
+    }
+    frames
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::protocol::SessionKind;
@@ -1099,6 +1111,24 @@ mod tests {
     /// protocol dispatch and don't actually spawn PTYs.
     fn noop_env_applier() -> crate::pty::EnvApplier {
         Arc::new(|_cmd, _env| {})
+    }
+
+    #[test]
+    fn scrollback_replay_precedes_alt_screen_prelude() {
+        let frames = ordered_attach_outputs(Some(b"shell-history"), b"\x1b[?1049h\x1b[?1000h");
+        assert_eq!(
+            frames,
+            vec![
+                b"shell-history".to_vec(),
+                b"\x1b[?1049h\x1b[?1000h".to_vec()
+            ]
+        );
+    }
+
+    #[test]
+    fn mouse_tracking_attach_sends_prelude_without_a_snapshot() {
+        let frames = ordered_attach_outputs(None, b"\x1b[?1049h\x1b[?1000h");
+        assert_eq!(frames, vec![b"\x1b[?1049h\x1b[?1000h".to_vec()]);
     }
 
     #[test]

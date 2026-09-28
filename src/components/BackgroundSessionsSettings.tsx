@@ -23,6 +23,7 @@ import {
 } from "react";
 
 import { api, type DaemonSessionSummary, type DaemonStatus } from "../lib/api";
+import { queueTerminalFocus } from "../lib/terminalFocus";
 import { cn } from "../lib/cn";
 import type { Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
@@ -437,15 +438,7 @@ function SessionsList({
         }
         await refreshAll();
         selectSession(daemonSession.id);
-        if (typeof window !== "undefined") {
-          requestAnimationFrame(() => {
-            window.dispatchEvent(
-              new CustomEvent("acorn:focus-session", {
-                detail: { sessionId: daemonSession.id },
-              }),
-            );
-          });
-        }
+        queueTerminalFocus(daemonSession.id);
         await onRefresh();
         showToast(
           t(
