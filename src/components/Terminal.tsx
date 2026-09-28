@@ -89,7 +89,12 @@ import {
   rememberTerminalScrollback,
 } from "../lib/terminalScrollbackHandoff";
 import {
-  cancelPendingTerminalPtyDisposal,
+  takeTerminalFocus,
+  clearTerminalFocus,
+  terminalFocusBlockedByTextEntry,
+} from "../lib/terminalFocus";
+import {
+  beginTerminalMount,
   scheduleTerminalPtyDisposal,
 } from "../lib/terminalPtyDisposal";
 import {
@@ -1216,7 +1221,7 @@ export function Terminal({
     // terminal column.
     termRef.current = term;
     fitRef.current = fitAddon;
-    cancelPendingTerminalPtyDisposal(sessionId);
+    const mountEpoch = beginTerminalMount(sessionId);
 
     // The DOM renderer (default) anchors xterm's hidden textarea at the
     // cursor cell, so IME composition popups (CJK input) render at the
@@ -1224,6 +1229,17 @@ export function Terminal({
     // PTY mid-composition. The canvas/webgl addons are faster but mis-handle
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
+    // `acorn:focus-session` is dispatched on the frame of the tab switch, which
+    // is before this effect registers its listener when the view was unmounted
+    // by the resident-terminal limit. Claim that pending focus now.
+    if (
+      takeTerminalFocus(sessionId) &&
+      isActiveRef.current &&
+      isFocusedPaneRef.current &&
+      !terminalFocusBlockedByTextEntry(document.activeElement)
+    ) {
+      term.focus();
+    }
     const unpatchMouseCoordinateScale = patchTerminalMouseCoordinateScale(term);
     const unpatchWheelScroll = patchTerminalWheelScroll(
       term,
@@ -3568,6 +3584,7 @@ export function Terminal({
 
     let exited = false;
     let spawnInFlight = false;
+    let spawnInFlightPromise: Promise<void> = Promise.resolve();
     // Snapshot of linked worktrees taken right before each PTY spawn. On exit
     // we re-fetch and compare when this spawn cycle carried an explicit
     // adoption intent, or when this session's own live cwd was observed inside
@@ -3625,6 +3642,13 @@ export function Terminal({
     }
 
     async function spawnPty() {
+      if (disposed || spawnInFlight) return;
+      const run = performSpawnPty();
+      spawnInFlightPromise = run;
+      await run;
+    }
+
+    async function performSpawnPty() {
       if (disposed || spawnInFlight) return;
       const session = useAppStore
         .getState()
@@ -3685,11 +3709,9 @@ export function Terminal({
           outputToken: outputSubscriptionToken,
         });
         if (disposed) {
-          // Cleanup ran mid-spawn — the pty just got created has no UI.
-          // Issue a kill so we do not leak a child process.
-          invoke("pty_kill", { sessionId }).catch(() => {
-            // best effort
-          });
+          // The scheduler reaps this promise if the mount epoch is still
+          // current. Killing here would race a remount that already advanced
+          // the epoch and is attaching to this same PTY.
           return;
         }
         ptyReady = true;
@@ -4268,7 +4290,7 @@ export function Terminal({
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
       }
-      scheduleTerminalPtyDisposal(sessionId, () => {
+      scheduleTerminalPtyDisposal(sessionId, mountEpoch, () => {
         if (detachingForReuse) {
           // Evicted for memory, not deleted: detach so the daemon keeps the
           // shell + scrollback ring alive and a later remount re-attaches and
@@ -4290,7 +4312,7 @@ export function Terminal({
             // Backend may not implement pty_kill yet — safe to ignore.
           });
         }
-      });
+      }, spawnInFlightPromise);
       if (drainAndPersistBeforeDispose) {
         // A resident-limit eviction can unmount the terminal less than one
         // debounce window after the latest output. Keep xterm and the
@@ -4332,6 +4354,7 @@ export function Terminal({
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ sessionId: string }>).detail;
       if (!detail || detail.sessionId !== sessionId) return;
+      clearTerminalFocus(sessionId);
       termRef.current?.focus();
     };
     window.addEventListener("acorn:focus-session", handler);
