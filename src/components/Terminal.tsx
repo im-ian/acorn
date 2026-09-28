@@ -104,6 +104,14 @@ import {
   planTerminalRestore,
 } from "../lib/terminalRestorePlan";
 import {
+  TERMINAL_REFRESH_EVENT,
+  terminalRefreshRedraw,
+  terminalRefreshRestoreSequence,
+  type TerminalRefreshDetail,
+  type TerminalRefreshModes,
+  type TerminalRefreshMouseEncoding,
+} from "../lib/terminalRefresh";
+import {
   AGENT_IMAGE_PASTE_CONTROL,
   getClipboardImageFile,
   hasClipboardImagePayload,
@@ -803,6 +811,33 @@ function encodeStringToBase64(input: string): string {
 
 function usesExplicitRelativePath(path: string): boolean {
   return path.startsWith("./") || path.startsWith("../");
+}
+
+function readMouseEncoding(term: XTerm): TerminalRefreshMouseEncoding | null {
+  const encoding = (
+    term as unknown as {
+      _core?: { coreMouseService?: { activeEncoding?: string } };
+    }
+  )._core?.coreMouseService?.activeEncoding;
+  if (
+    encoding === "DEFAULT" ||
+    encoding === "SGR" ||
+    encoding === "SGR_PIXELS"
+  ) {
+    return encoding;
+  }
+  return null;
+}
+
+function snapshotTerminalRefreshModes(term: XTerm): TerminalRefreshModes {
+  return {
+    alternateScreen: term.buffer.active.type === "alternate",
+    applicationCursorKeysMode: term.modes.applicationCursorKeysMode,
+    applicationKeypadMode: term.modes.applicationKeypadMode,
+    bracketedPasteMode: term.modes.bracketedPasteMode,
+    mouseTrackingMode: term.modes.mouseTrackingMode,
+    mouseEncoding: readMouseEncoding(term),
+  };
 }
 
 function selectedTextForTerminalContextPaste(
@@ -3774,6 +3809,69 @@ export function Terminal({
       backgroundDelayMs: () => backgroundOutputDelayMsRef.current,
     });
     outputWriterRef.current = outputWriter;
+    // Reset the emulator in place and ask the foreground process to redraw.
+    // A PTY exit with the restart prompt disabled removes a worktree-backed
+    // session, so this path never kills or respawns the shell. The DEC
+    // tracker stays intact: clearing it makes the next attach replay an
+    // overlay ring instead of waiting for SIGWINCH.
+    let refreshInFlight = false;
+    const refreshMountedTerminal = async () => {
+      const redraw = terminalRefreshRedraw(term);
+      const modes = snapshotTerminalRefreshModes(term);
+      outputWriter.discardPending();
+      await outputWriter.whenIdle();
+      if (disposed) return;
+      hideLinkTooltip(true);
+      term.reset();
+      // `reset()` does not pass ESC c through the parser, so the cursor
+      // override attribute would otherwise stay on.
+      setCursorApplicationOverride(false);
+      const restore = terminalRefreshRestoreSequence(modes);
+      if (restore) {
+        await new Promise<void>((resolve) => {
+          term.write(restore, resolve);
+        });
+      }
+      if (disposed) return;
+      clearRememberedTerminalScrollback(sessionId);
+      scheduleContextDispatch();
+      scheduleScrollbackSave();
+      if (!ptyReady) return;
+      if (redraw === "form-feed") {
+        sendToPty("\x0c");
+        return;
+      }
+      const size = currentPtySize();
+      const pulse = sigwinchPulseSize(size);
+      if (!pulse) return;
+      try {
+        await invoke("pty_resize", {
+          sessionId,
+          cols: pulse.cols,
+          rows: pulse.rows,
+          pixelWidth: pulse.pixelWidth,
+          pixelHeight: pulse.pixelHeight,
+        });
+      } catch (err) {
+        console.error("[Terminal] pty_resize failed", err);
+        return;
+      }
+      if (disposed) return;
+      const restored = currentPtySize();
+      if (restored.cols !== size.cols || restored.rows !== size.rows) return;
+      sendPtyResize(true, restored);
+    };
+    const onRefreshRequested = (event: Event) => {
+      const detail = (event as CustomEvent<TerminalRefreshDetail>).detail;
+      if (!detail || detail.sessionId !== sessionId) return;
+      event.preventDefault();
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      void refreshMountedTerminal().finally(() => {
+        refreshInFlight = false;
+      });
+    };
+    window.addEventListener(TERMINAL_REFRESH_EVENT, onRefreshRequested);
     const waitForOutputWriterIdleBeforeSave = async () => {
       await outputWriter.whenIdle();
     };
@@ -4263,6 +4361,7 @@ export function Terminal({
       container.removeEventListener("compositionupdate", swallowComposition, true);
       container.removeEventListener("compositionend", swallowComposition, true);
       window.removeEventListener("acorn:terminal-clear", onClearRequested);
+      window.removeEventListener(TERMINAL_REFRESH_EVENT, onRefreshRequested);
       inputDisposable.dispose();
       renderDisposable.dispose();
       scrollDisposable.dispose();
