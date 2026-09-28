@@ -3,6 +3,7 @@ export interface TerminalOutputWriter {
   flushSoon(): void;
   whenIdle(): Promise<void>;
   drainAndDispose(): Promise<void>;
+  discardPending(): void;
   dispose(): void;
   pendingBytes(): number;
 }
@@ -247,6 +248,20 @@ export function createTerminalOutputWriter({
       cancelScheduledFlush();
       while (idleResolvers.length > 0) {
         idleResolvers.shift()?.();
+      }
+    },
+    discardPending() {
+      // Bytes already inside `write` still finish. A terminal reset waits
+      // for `whenIdle()` so that chunk is wiped instead of landing after
+      // the reset. Everything not yet parsed is dropped.
+      cancelScheduledFlush();
+      immediateFlushPending = false;
+      queue.length = 0;
+      queuedBytes = 0;
+      if (!writing) {
+        while (idleResolvers.length > 0) {
+          idleResolvers.shift()?.();
+        }
       }
     },
     dispose() {

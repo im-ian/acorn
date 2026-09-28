@@ -50,6 +50,7 @@ import {
   buildAgentContextMenuItems,
   createEmptySessionAgentDetection,
 } from "../lib/agentContextMenu";
+import { terminalRefreshMenuItem } from "../lib/terminalRefresh";
 import {
   AgentProviderIcon,
   buildAgentForkCommand,
@@ -1472,6 +1473,10 @@ function TabItem({
             onClick: () =>
               setSessionSilenced(session.id, !sessionSilenced),
           },
+          terminalRefreshMenuItem(
+            paneT(t, "pane.menu.refreshTerminal"),
+            session.id,
+          ),
         ] satisfies ContextMenuItem[])
       : []),
     ...(forkItems.length > 0

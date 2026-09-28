@@ -79,6 +79,7 @@ import {
   buildAgentContextMenuItems,
   createEmptySessionAgentDetection,
 } from "../lib/agentContextMenu";
+import { terminalRefreshMenuItem } from "../lib/terminalRefresh";
 import { api, type SessionRemoval } from "../lib/api";
 import { copyTextWithFeedback } from "../lib/clipboardActions";
 import {
@@ -3778,6 +3779,10 @@ function SessionRow({
       icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
       onClick: () => setSessionSilenced(session.id, !sessionSilenced),
     },
+    terminalRefreshMenuItem(
+      sidebarText(t, "sidebar.actions.refreshTerminal"),
+      session.id,
+    ),
     ...(forkItems.length > 0
       ? [contextMenuGroupTitle(t, "fork"), ...forkItems]
       : []),
@@ -5439,6 +5444,10 @@ function LocalSessionRow({
       icon: sessionSilenced ? <Bell size={12} /> : <BellOff size={12} />,
       onClick: () => setSessionSilenced(session.id, !sessionSilenced),
     },
+    terminalRefreshMenuItem(
+      sidebarText(t, "sidebar.actions.refreshTerminal"),
+      session.id,
+    ),
     contextMenuGroupTitle(t, "layout"),
     minimizeSessionMenuItem(
       t,

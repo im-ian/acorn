@@ -418,6 +418,128 @@ test.describe("sidebar: project lifecycle", () => {
     expect(calls[0]).toMatchObject({ id: "session-1", force: true });
   });
 
+  test("refresh resets a session terminal without removing it", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "demo-session",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "waiting_for_input",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "local-1",
+        name: "local-quiet",
+        repo_path: "/Users/tester",
+        worktree_path: "/Users/tester",
+        branch: "HEAD",
+        isolated: false,
+        project_scoped: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.handle("remove_session", (args) => {
+      const w = window as unknown as { __refreshRemove?: unknown[] };
+      w.__refreshRemove = w.__refreshRemove ?? [];
+      w.__refreshRemove.push(args);
+      return {
+        result: null,
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      };
+    });
+    await tauri.handle("remove_worktree", (args) => {
+      const w = window as unknown as { __refreshWorktree?: unknown[] };
+      w.__refreshWorktree = w.__refreshWorktree ?? [];
+      w.__refreshWorktree.push(args);
+      return {
+        result: null,
+        removedSessionIds: [],
+        issues: [],
+        retryToken: null,
+      };
+    });
+    await tauri.handle("pty_reset_dec_modes", (args) => {
+      const w = window as unknown as { __refreshReset?: unknown[] };
+      w.__refreshReset = w.__refreshReset ?? [];
+      w.__refreshReset.push(args);
+      return undefined;
+    });
+
+    await page.goto("/");
+
+    const sidebarSession = page
+      .locator("aside")
+      .getByRole("button", { name: /demo-session/ });
+    await sidebarSession.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Refresh Terminal" }).click();
+
+    const projectTab = page.locator('[data-tab-drag-handle="session-1"]');
+    await projectTab.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Refresh Terminal" }).click();
+    await expect(projectTab).toBeVisible();
+
+    const localSession = page
+      .getByRole("region", { name: "Local terminal sessions" })
+      .getByRole("button", { name: /local-quiet/ });
+    await localSession.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Refresh Terminal" }).click();
+
+    await expect(
+      page.getByRole("heading", { name: "Remove session" }),
+    ).toHaveCount(0);
+    await expect(sidebarSession).toBeVisible();
+    await expect(localSession).toBeVisible();
+    await expect(page.locator('[data-tab-drag-handle="local-1"]')).toBeVisible();
+
+    const probe = await page.evaluate(() => {
+      const w = window as unknown as {
+        __refreshRemove?: unknown[];
+        __refreshWorktree?: unknown[];
+        __refreshReset?: unknown[];
+      };
+      return {
+        remove: w.__refreshRemove ?? [],
+        worktree: w.__refreshWorktree ?? [],
+        reset: w.__refreshReset ?? [],
+      };
+    });
+    expect(probe.remove).toEqual([]);
+    expect(probe.worktree).toEqual([]);
+    expect(probe.reset).toEqual([]);
+  });
+
   test("session notification silence is shared by every session menu", async ({
     page,
     tauri,

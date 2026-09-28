@@ -262,4 +262,49 @@ describe("createTerminalOutputWriter", () => {
     await Promise.resolve();
     expect(written).toEqual(["tail"]);
   });
+
+  it("drops output that has not been parsed yet", () => {
+    const frames = createFrameScheduler();
+    const write = vi.fn();
+    const writer = createTerminalOutputWriter({
+      write,
+      afterWrite: vi.fn(),
+      isActive: () => true,
+      requestFrame: frames.requestFrame,
+      cancelFrame: frames.cancelFrame,
+    });
+
+    writer.enqueue(bytes("stale"));
+    writer.discardPending();
+    frames.runFrame();
+
+    expect(write).not.toHaveBeenCalled();
+    expect(writer.pendingBytes()).toBe(0);
+  });
+
+  it("keeps an in-flight write and drops bytes queued behind it", () => {
+    const frames = createFrameScheduler();
+    const parseCallbacks: Array<() => void> = [];
+    const written: string[] = [];
+    const writer = createTerminalOutputWriter({
+      write: (chunk, onParsed) => {
+        written.push(text(chunk));
+        parseCallbacks.push(onParsed);
+      },
+      afterWrite: vi.fn(),
+      isActive: () => true,
+      requestFrame: frames.requestFrame,
+      cancelFrame: frames.cancelFrame,
+    });
+
+    writer.enqueue(bytes("inflight"));
+    frames.runFrame();
+    writer.enqueue(bytes("later"));
+    writer.discardPending();
+    parseCallbacks[0]?.();
+    frames.runFrame();
+
+    expect(written).toEqual(["inflight"]);
+    expect(writer.pendingBytes()).toBe(0);
+  });
 });
