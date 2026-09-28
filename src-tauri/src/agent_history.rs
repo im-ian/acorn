@@ -1654,6 +1654,21 @@ fn scan_transcript_json_lines(
         .map(|_| ())
 }
 
+fn discard_through_newline<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(());
+        }
+        if let Some(index) = available.iter().position(|byte| *byte == b'\n') {
+            reader.consume(index + 1);
+            return Ok(());
+        }
+        let consumed = available.len();
+        reader.consume(consumed);
+    }
+}
+
 fn scan_transcript_json_lines_checked(
     snapshot: TranscriptSnapshot,
     limits: TranscriptScanLimits,
@@ -1676,10 +1691,19 @@ fn scan_transcript_json_lines_checked(
         if read == 0 {
             return Ok(true);
         }
-        if line.len() > limits.max_line_bytes || line_count >= limits.max_lines {
+        if line_count >= limits.max_lines {
             return Ok(false);
         }
         line_count += 1;
+        // A single image or tool payload can exceed the line cap. Skipping
+        // that record keeps the rest of the transcript usable for titles.
+        if line.len() > limits.max_line_bytes {
+            if !line.ends_with(b"\n") {
+                discard_through_newline(&mut reader)
+                    .map_err(|error| path_access_error("read", &path, error))?;
+            }
+            continue;
+        }
         let Ok(text) = std::str::from_utf8(&line) else {
             return Ok(false);
         };
@@ -4774,7 +4798,12 @@ mod tests {
             ..exact
         };
         let snapshot = open_transcript_snapshot(&transcript, line_too_large).unwrap();
-        assert!(scan_transcript_json_lines(snapshot, line_too_large, |_| {}).is_none());
+        let mut skipped = 0;
+        assert_eq!(
+            scan_transcript_json_lines(snapshot, line_too_large, |_| skipped += 1),
+            Some(())
+        );
+        assert_eq!(skipped, 0);
 
         fs::write(&transcript, [line.as_slice(), line.as_slice()].concat()).unwrap();
         let too_many_lines = TranscriptScanLimits {
@@ -4784,6 +4813,38 @@ mod tests {
         };
         let snapshot = open_transcript_snapshot(&transcript, too_many_lines).unwrap();
         assert!(scan_transcript_json_lines(snapshot, too_many_lines, |_| {}).is_none());
+    }
+
+    #[test]
+    fn transcript_scan_skips_an_oversized_line_and_keeps_its_neighbors() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("transcript.jsonl");
+        let first = b"{\"ok\":1}\n";
+        let mut oversized = b"{\"blob\":\"".to_vec();
+        oversized.extend(std::iter::repeat(b'x').take(80));
+        oversized.extend(b"\"}\n");
+        let last = b"{\"ok\":2}\n";
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(first);
+        bytes.extend_from_slice(&oversized);
+        bytes.extend_from_slice(last);
+        fs::write(&transcript, bytes).unwrap();
+
+        let limits = TranscriptScanLimits {
+            max_bytes: 1024,
+            max_lines: 10,
+            max_line_bytes: 48,
+        };
+        let snapshot = open_transcript_snapshot(&transcript, limits).unwrap();
+        let mut visited = Vec::new();
+        assert_eq!(
+            scan_transcript_json_lines(snapshot, limits, |line| visited.push(line.to_string())),
+            Some(())
+        );
+        assert_eq!(
+            visited,
+            vec!["{\"ok\":1}".to_string(), "{\"ok\":2}".to_string()]
+        );
     }
 
     #[cfg(unix)]
