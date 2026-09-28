@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   agentTranscriptSummary: vi.fn(),
   agentTranscriptSummaryAtPath: vi.fn(),
   ptyWrite: vi.fn(async () => undefined),
+  ptyResetDecModes: vi.fn(async () => undefined),
   fsGrantExternalFile: vi.fn(async () => undefined),
   showTranslatedErrorToast: vi.fn(),
   homeDir: vi.fn(async () => "/Users/me"),
@@ -63,6 +64,7 @@ vi.mock("../lib/api", () => ({
     agentTranscriptSummary: mocks.agentTranscriptSummary,
     agentTranscriptSummaryAtPath: mocks.agentTranscriptSummaryAtPath,
     ptyWrite: mocks.ptyWrite,
+    ptyResetDecModes: mocks.ptyResetDecModes,
     fsGrantExternalFile: mocks.fsGrantExternalFile,
   },
 }));
@@ -1665,6 +1667,57 @@ describe("Pane empty state", () => {
     // trap focus — a focused xterm would eat the keys aimed at the menu.
     expect(useAppStore.getState().activeTabId).toBe(second.id);
     expect(focused).toEqual([]);
+  });
+
+  it("refreshes the terminal from the session tab menu without removing the session", async () => {
+    const active = session("refresh-session");
+    seedActivePaneWithTab(active);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const tab = container
+      .querySelector(`[data-tab-drag-handle="${active.id}"]`)
+      ?.closest('[role="button"]');
+    expect(tab).toBeInstanceOf(HTMLElement);
+
+    await act(async () => {
+      tab?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 20,
+          clientY: 20,
+        }),
+      );
+    });
+
+    const item = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((entry) => entry.textContent === "Refresh Terminal");
+    expect(item).toBeDefined();
+
+    const refreshed: string[] = [];
+    const onRefresh = (event: Event) => {
+      refreshed.push(
+        (event as CustomEvent<{ sessionId: string }>).detail.sessionId,
+      );
+    };
+    window.addEventListener("acorn:terminal-refresh", onRefresh);
+    try {
+      await act(async () => {
+        item?.click();
+      });
+    } finally {
+      window.removeEventListener("acorn:terminal-refresh", onRefresh);
+    }
+
+    expect(refreshed).toEqual([active.id]);
+    expect(useAppStore.getState().sessions.map((entry) => entry.id)).toContain(
+      active.id,
+    );
+    expect(mocks.ptyResetDecModes).not.toHaveBeenCalled();
   });
 
   it("starts tab drag from the title text area without native draggable", () => {
