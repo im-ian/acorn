@@ -329,6 +329,27 @@ async fn stage_remove_linked_worktree_blocking(
     .await
 }
 
+async fn delete_linked_worktree_blocking(
+    repo_path: PathBuf,
+    worktree_path: PathBuf,
+) -> AppResult<()> {
+    run_blocking("delete linked worktree", move || {
+        worktree::delete_worktree_at_path(&repo_path, &worktree_path)
+    })
+    .await
+}
+
+async fn delete_linked_worktree_and_sessions_blocking(
+    state: AppState,
+    repo_path: PathBuf,
+    worktree_path: PathBuf,
+) -> AppResult<RemovalOutcome<Option<worktree::RemovedWorktree>>> {
+    run_blocking("delete linked worktree with sessions", move || {
+        delete_linked_worktree_at_path_and_sessions(&state, &repo_path, &worktree_path)
+    })
+    .await
+}
+
 async fn stage_remove_linked_worktree_and_sessions_blocking(
     state: AppState,
     repo_path: PathBuf,
@@ -8830,6 +8851,7 @@ pub async fn remove_worktree(
     repo_path: String,
     worktree_path: String,
     remove_sessions: Option<bool>,
+    permanent: Option<bool>,
 ) -> AppResult<RemovalOutcome<Option<worktree::RemovedWorktree>>> {
     let app_state = state.inner().clone();
     let (repo_path, worktree_path) = authorize_registered_worktree(
@@ -8838,7 +8860,15 @@ pub async fn remove_worktree(
         Path::new(&worktree_path),
     )?;
     let remove_sessions = remove_sessions.unwrap_or(false);
-    remove_worktree_inner(app_state, repo_path, worktree_path, remove_sessions).await
+    let permanent = permanent.unwrap_or(false);
+    remove_worktree_inner(
+        app_state,
+        repo_path,
+        worktree_path,
+        remove_sessions,
+        permanent,
+    )
+    .await
 }
 
 async fn remove_worktree_inner(
@@ -8846,6 +8876,7 @@ async fn remove_worktree_inner(
     repo_path: PathBuf,
     worktree_path: PathBuf,
     remove_sessions: bool,
+    permanent: bool,
 ) -> AppResult<RemovalOutcome<Option<worktree::RemovedWorktree>>> {
     ensure_worktree_not_held_by_archived_session(&app_state, &worktree_path)?;
     if remove_sessions {
@@ -8859,6 +8890,14 @@ async fn remove_worktree_inner(
                 WORKTREE_IN_USE_BY_OTHER_SESSIONS.to_string(),
             ));
         }
+        if permanent {
+            return delete_linked_worktree_and_sessions_blocking(
+                app_state,
+                repo_path,
+                worktree_path,
+            )
+            .await;
+        }
         return stage_remove_linked_worktree_and_sessions_blocking(
             app_state,
             repo_path,
@@ -8867,6 +8906,10 @@ async fn remove_worktree_inner(
         .await;
     }
     ensure_no_sessions_using_worktree_path_except(&app_state, &worktree_path, None)?;
+    if permanent {
+        delete_linked_worktree_blocking(repo_path, worktree_path).await?;
+        return Ok(RemovalOutcome::complete(None, Vec::new()));
+    }
     let removed = stage_remove_linked_worktree_blocking(repo_path, worktree_path).await?;
     Ok(RemovalOutcome::complete(removed, Vec::new()))
 }
@@ -12531,6 +12574,31 @@ pub(crate) fn stage_remove_linked_worktree_at_path(
     worktree::stage_remove_worktree_at_path(repo_path, worktree_path)
 }
 
+fn delete_linked_worktree_at_path_and_sessions(
+    state: &AppState,
+    repo_path: &Path,
+    worktree_path: &Path,
+) -> AppResult<RemovalOutcome<Option<worktree::RemovedWorktree>>> {
+    let sessions = sessions_using_linked_worktree(state, repo_path, worktree_path);
+
+    for session in &sessions {
+        terminate_session_runtime(state, &session.id)?;
+    }
+
+    worktree::delete_worktree_at_path(repo_path, worktree_path)?;
+    let removed_session_ids = sessions
+        .iter()
+        .map(|session| session.id.to_string())
+        .collect::<Vec<_>>();
+    let mut progress = RemovalProgress::default();
+    cleanup_removed_scrollbacks(&removed_session_ids, &mut progress);
+    for session in sessions {
+        state.sessions.remove(&session.id).ok();
+    }
+    persist_removal_state(state, &mut progress);
+    Ok(progress.into_outcome(state, None, removed_session_ids, None))
+}
+
 /// Surface the previous-agent-conversation candidate for a session. `None`
 /// means there is nothing the user needs to decide about, or the same
 /// provider is currently active in this session's PTY tree and the modal
@@ -13141,6 +13209,7 @@ mod tests {
             repo_dir.clone(),
             worktree_path.clone(),
             false,
+            false,
         ))
         .expect_err("archived occupant must block worktree deletion");
         assert_eq!(err.to_string(), super::WORKTREE_HELD_BY_ARCHIVED_SESSION);
@@ -13157,11 +13226,45 @@ mod tests {
             repo_dir.clone(),
             worktree_path.clone(),
             true,
+            false,
         ))
         .expect_err("remove_sessions must not delete an archived occupant");
         assert_eq!(err.to_string(), super::WORKTREE_HELD_BY_ARCHIVED_SESSION);
         assert!(worktree_path.exists());
         assert!(state.sessions.get(&created.id).is_ok());
+
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn permanent_worktree_removal_deletes_the_checkout_in_place() {
+        let repo_dir = unique_repo_dir("permanent-worktree-delete");
+        let repo = init_repo_with_commit(&repo_dir);
+        drop(repo);
+        let worktree_path =
+            crate::worktree::create_worktree(&repo_dir, "gone").expect("create linked worktree");
+        std::fs::write(worktree_path.join("marker.txt"), "gone").expect("marker");
+        let state = AppState::new();
+
+        let outcome = tauri::async_runtime::block_on(remove_worktree_inner(
+            state,
+            repo_dir.clone(),
+            worktree_path.clone(),
+            false,
+            true,
+        ))
+        .expect("permanent delete");
+
+        assert!(outcome.result.is_none());
+        assert!(!worktree_path.exists());
+        assert!(
+            !worktree_path
+                .parent()
+                .expect("worktree parent")
+                .join(".acorn-deleted-worktrees")
+                .exists(),
+            "project-settings deletion must not stage a backup"
+        );
 
         std::fs::remove_dir_all(&repo_dir).ok();
     }

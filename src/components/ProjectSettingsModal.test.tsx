@@ -26,6 +26,7 @@ vi.mock("../lib/api", () => ({
         repoPath: string,
         worktreePath: string,
         removeSessions?: boolean,
+        permanent?: boolean,
       ) => Promise<WorktreeRemovalOutcome>
     >(),
     discardRemovedWorktree: vi.fn<
@@ -292,12 +293,6 @@ describe("ProjectSettingsModal", () => {
   });
 
   it("lists project worktrees and removes one after confirmation", async () => {
-    const removal: WorktreeRemoval = {
-      token: "remove-feature-alpha",
-      repoPath: "/repo/acorn",
-      worktreePath: "/repo/acorn/.acorn/worktrees/feature-alpha",
-      gitCommonDir: "/repo/acorn/.git",
-    };
     mockApi.getProjectSettings.mockResolvedValue({
       key: "github:im-ian/acorn",
       settings: {
@@ -321,9 +316,6 @@ describe("ProjectSettingsModal", () => {
         modified_ms: null,
       },
     ]);
-    mockApi.removeWorktree.mockResolvedValueOnce(
-      worktreeRemovalOutcome(removal),
-    );
     const onClose = vi.fn();
 
     await act(async () => {
@@ -377,8 +369,9 @@ describe("ProjectSettingsModal", () => {
       "/repo/acorn",
       "/repo/acorn/.acorn/worktrees/feature-alpha",
       false,
+      true,
     );
-    expect(mockApi.discardRemovedWorktree).toHaveBeenCalledWith(removal);
+    expect(mockApi.discardRemovedWorktree).not.toHaveBeenCalled();
     expect(mockApi.listProjectWorktrees).toHaveBeenCalledTimes(1);
     expect(document.body.textContent).not.toContain("feature-alpha");
     expect(document.body.textContent).toContain("feature-beta");
@@ -487,12 +480,14 @@ describe("ProjectSettingsModal", () => {
       "/repo/acorn",
       "/repo/acorn/.acorn/worktrees/feature-alpha",
       false,
+      true,
     );
     expect(mockApi.removeWorktree).toHaveBeenNthCalledWith(
       2,
       "/repo/backoffice",
       "/repo/backoffice/.acorn/worktrees/backoffice-cleanup",
       false,
+      true,
     );
     expect(document.body.textContent).not.toContain("feature-alpha");
     expect(document.body.textContent).not.toContain("backoffice-cleanup");
@@ -696,6 +691,7 @@ describe("ProjectSettingsModal", () => {
     expect(mockApi.removeWorktree).toHaveBeenCalledWith(
       "/repo/acorn",
       "/repo/acorn/.acorn/worktrees/feature-alpha",
+      true,
       true,
     );
     expect(useAppStore.getState().sessions).toEqual([]);

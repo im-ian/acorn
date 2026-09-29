@@ -10,13 +10,10 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { api, type WorktreeRemoval } from "../lib/api";
+import { api } from "../lib/api";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
-import {
-  discardRemovedWorktreesWithRetry,
-  showRemovalOutcomeIssues,
-} from "../lib/operationToasts";
+import { showRemovalOutcomeIssues } from "../lib/operationToasts";
 import {
   STANDARD_PR_GENERATION_PROMPT,
   STANDARD_START_WORK_PROMPT,
@@ -715,7 +712,6 @@ export function ProjectSettingsModal({
         ),
       );
       showRemovalOutcomeIssues(outcome);
-      await discardRemovedWorktreesWithRetry(outcome.result);
     } catch (e) {
       setWorktreeError({ kind: "remove", message: String(e) });
     } finally {
@@ -757,7 +753,6 @@ export function ProjectSettingsModal({
     setRemovingUnused(true);
     setWorktreeError(null);
     const removedKeys = new Set<string>();
-    const removals: WorktreeRemoval[] = [];
     const failures: string[] = [];
     try {
       for (const target of targets) {
@@ -771,9 +766,6 @@ export function ProjectSettingsModal({
             target.path,
             false,
           );
-          if (outcome.result) {
-            removals.push(outcome.result);
-          }
           showRemovalOutcomeIssues(outcome);
           removedKeys.add(`${target.rootPath}\u0000${target.path}`);
         } catch (e) {
@@ -788,7 +780,6 @@ export function ProjectSettingsModal({
         ),
       );
       setConfirmRemoveUnused(false);
-      await discardRemovedWorktreesWithRetry(removals);
       if (failures.length > 0) {
         setWorktreeError({
           kind: "removeUnused",
