@@ -45,6 +45,7 @@ ignore = "0.4"
 globset = "0.4"
 trash = "5"
 tempfile = "3"
+rusqlite = { version = "0.32", default-features = false, features = ["bundled"] }
 windows-sys = "0.61"
 minisign-verify = "0.2.5"
 url = "2"

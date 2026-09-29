@@ -53,6 +53,7 @@ const WORKTREE_HELD_BY_ARCHIVED_SESSION: &str =
 const SESSION_IS_ARCHIVED: &str =
     "Cannot start a terminal or adopt a worktree for an archived session.";
 const CODEX_TOOL_PROCESS_START_TOLERANCE: std::time::Duration = std::time::Duration::from_secs(1);
+const DASHBOARD_ROSTER_LIMIT: usize = 32;
 const MAX_CODEX_REPAIR_TAIL_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_CLAUDE_FORK_PROJECT_ENTRIES: usize = 10_000;
 const MAX_CLAUDE_FORK_TRANSCRIPT_BYTES: u64 = 64 * 1024 * 1024;
@@ -10879,7 +10880,7 @@ fn detect_session_statuses_blocking(
             // may have written during this poll's process-table / transcript
             // I/O, and reusing the `previous` captured before that I/O would
             // clobber the newer hook status back to an old value.
-            let (status, agent_status_source, status_reason) = if defer_to_hook {
+            let (mut status, mut agent_status_source, mut status_reason) = if defer_to_hook {
                 let (stored, stored_source, hook_revision, lifecycle_revision) = parsed_id
                     .and_then(|uuid| state.sessions.lifecycle_snapshot(&uuid).ok())
                     .unwrap_or((
@@ -11087,6 +11088,27 @@ fn detect_session_statuses_blocking(
                         session,
                         transcript,
                     );
+                }
+            }
+            // The store keeps the single resume pin and any hook status.
+            // The badge the UI reads is this return value, so a dashboard
+            // host can fold its roster without a second store write.
+            if !transcript_lookup_failed {
+                let roster_status = dashboard_roster_status(
+                    &sys,
+                    live_agent,
+                    session.as_ref().map(|s| s.worktree_path.as_path()),
+                    live.as_ref().map(|transcript| transcript.id.as_str()),
+                    status,
+                );
+                if roster_status != status {
+                    // The root reason describes one transcript. A folded
+                    // badge must not keep "turn complete" on a sibling
+                    // that is still working, or a hook wait that the
+                    // workers have already finished.
+                    status = roster_status;
+                    status_reason = None;
+                    agent_status_source = Some(AgentStatusSource::ProcessFallback);
                 }
             }
             SessionStatusEntry {
@@ -11432,6 +11454,273 @@ fn live_codex_has_tool_descendant(
             })
         },
     )
+}
+
+/// Badge for a dashboard host that is running more than one conversation.
+///
+/// The poll still owns one terminal. Grok's manifest, Claude's supervisor
+/// roster, and Codex's open spawn edges are extra transcripts inside that
+/// host, not extra PTY descendants. A `claude agents` screen replaces a
+/// frozen hook status: its workers report hooks for a different session.
+/// One Grok row, a Codex process with no open children, and any other
+/// agent keep the status this poll already computed. Codex's permission
+/// upgrade is already applied to `root_status` before the fold.
+fn dashboard_roster_status(
+    sys: &System,
+    live_agent: Option<(AgentKind, Pid)>,
+    session_worktree: Option<&Path>,
+    pinned_transcript_id: Option<&str>,
+    root_status: SessionStatus,
+) -> SessionStatus {
+    let Some((kind, pid)) = live_agent else {
+        return root_status;
+    };
+    let Some(proc) = sys.process(pid) else {
+        return root_status;
+    };
+    match kind {
+        AgentKind::Grok => grok_dashboard_status(pid, proc, root_status),
+        AgentKind::Claude => {
+            claude_agents_dashboard_status(sys, proc, session_worktree, root_status)
+        }
+        AgentKind::Codex => codex_dashboard_status(pinned_transcript_id, root_status),
+        AgentKind::Antigravity => root_status,
+    }
+}
+
+fn grok_dashboard_status(
+    pid: Pid,
+    proc: &sysinfo::Process,
+    root_status: SessionStatus,
+) -> SessionStatus {
+    let Some(cwd) = proc.cwd() else {
+        return root_status;
+    };
+    let process_start = SystemTime::UNIX_EPOCH + Duration::from_secs(proc.start_time());
+    let ids = acorn_transcript::grok_live_manifest_session_ids(pid.as_u32(), cwd, process_start);
+    // One manifest row is the conversation this poll already classified.
+    if ids.len() < 2 {
+        return root_status;
+    }
+    let mut slots = Vec::new();
+    for id in ids.into_iter().take(DASHBOARD_ROSTER_LIMIT) {
+        let Some(path) = acorn_transcript::locate_grok_transcript_for_cwd_checked(&id, cwd)
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        slots.push((
+            AgentKind::Grok,
+            classify_running_transcript(&path, AgentKind::Grok),
+        ));
+    }
+    session_status::fold_dashboard_statuses(&slots).unwrap_or(root_status)
+}
+
+fn claude_agents_dashboard_status(
+    sys: &System,
+    proc: &sysinfo::Process,
+    session_worktree: Option<&Path>,
+    root_status: SessionStatus,
+) -> SessionStatus {
+    let args = proc
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    if !claude_agents_dashboard_args(&args) {
+        return root_status;
+    }
+    let anchors = dashboard_scope_anchors(session_worktree, proc.cwd());
+    // Without a repository anchor the supervisor roster is global and
+    // would light this pane from another checkout.
+    if anchors.is_empty() {
+        return root_status;
+    }
+    let mut slots = Vec::new();
+    for worker in acorn_transcript::claude_daemon_roster_workers() {
+        if slots.len() >= DASHBOARD_ROSTER_LIMIT {
+            break;
+        }
+        if sys.process(Pid::from_u32(worker.pid)).is_none() {
+            continue;
+        }
+        if !path_in_dashboard_scope(&worker.cwd, &anchors) {
+            continue;
+        }
+        let Some(path) =
+            acorn_transcript::locate_claude_session_transcript(&worker.cwd, &worker.session_id)
+        else {
+            continue;
+        };
+        slots.push((
+            AgentKind::Claude,
+            classify_running_transcript(&path, AgentKind::Claude),
+        ));
+    }
+    // An agents screen with no classifiable job in this repository is
+    // idle. Keeping the hook status would freeze WaitingForInput after
+    // the workers finish, because those hooks are not attributed to
+    // this Acorn session.
+    session_status::fold_dashboard_statuses(&slots).unwrap_or(SessionStatus::Ready)
+}
+
+fn codex_dashboard_status(
+    pinned_transcript_id: Option<&str>,
+    root_status: SessionStatus,
+) -> SessionStatus {
+    let Some(parent) = pinned_transcript_id.filter(|id| !id.is_empty()) else {
+        return root_status;
+    };
+    let children = acorn_transcript::codex_live_open_child_thread_ids(parent);
+    if children.is_empty() {
+        return root_status;
+    }
+    let mut slots = vec![(AgentKind::Codex, root_status)];
+    let now = SystemTime::now();
+    for child in children.into_iter().take(DASHBOARD_ROSTER_LIMIT) {
+        let Some(path) = acorn_transcript::locate_codex_transcript(&child) else {
+            continue;
+        };
+        // An open spawn edge outlives the child. A rollout that has stopped
+        // being written is not a live turn: an aborted or killed child would
+        // otherwise pin Waiting or Working until the parent process exits.
+        if !codex_child_rollout_is_live(&path, now) {
+            continue;
+        }
+        slots.push((
+            AgentKind::Codex,
+            classify_running_transcript(&path, AgentKind::Codex),
+        ));
+    }
+    session_status::fold_dashboard_statuses(&slots).unwrap_or(root_status)
+}
+
+fn codex_child_rollout_is_live(path: &Path, now: SystemTime) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    rollout_write_is_live(modified, now)
+}
+
+fn rollout_write_is_live(modified: SystemTime, now: SystemTime) -> bool {
+    match now.duration_since(modified) {
+        Ok(age) => age <= Duration::from_secs(acorn_transcript::DORMANT_TRANSCRIPT_SECS),
+        // A timestamp ahead of the poll is still a writer, not a stale file.
+        Err(_) => true,
+    }
+}
+
+/// Roster transcripts are classified as their own sessions. `previous`
+/// stays Ready so a meta-only tail cannot inherit this terminal's hook wait.
+fn classify_running_transcript(path: &Path, kind: AgentKind) -> SessionStatus {
+    session_status::detect_with_reason(
+        Some((path.to_path_buf(), kind)),
+        SessionStatus::Ready,
+        Some(acorn_pty::ShellHint::Running),
+    )
+    .status
+}
+
+fn dashboard_scope_anchors(
+    session_worktree: Option<&Path>,
+    process_cwd: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut anchors = Vec::new();
+    for path in [session_worktree, process_cwd].into_iter().flatten() {
+        if path.as_os_str().is_empty() {
+            continue;
+        }
+        if anchors.iter().any(|existing| existing == path) {
+            continue;
+        }
+        anchors.push(path.to_path_buf());
+    }
+    anchors
+}
+
+fn path_in_dashboard_scope(path: &Path, anchors: &[PathBuf]) -> bool {
+    anchors
+        .iter()
+        .any(|anchor| acorn_transcript::shares_git_common_dir(path, anchor))
+}
+
+const CLAUDE_AGENTS_VALUE_FLAGS: &[&str] = &[
+    "--settings",
+    "--add-dir",
+    "--resume",
+    "-r",
+    "--session-id",
+    "--model",
+    "--permission-mode",
+    "--agent",
+    "--allowedTools",
+    "--disallowedTools",
+    "--mcp-config",
+    "--plugin-dir",
+    "--system-prompt",
+    "--append-system-prompt",
+    "--fallback-model",
+    "--effort",
+    "--output-format",
+    "--input-format",
+    "--betas",
+    "--tools",
+    "--setting-sources",
+    "--debug-file",
+    "--debug",
+];
+
+/// True when this Claude argv is the interactive agents screen.
+///
+/// Parsing starts after the claude executable so a `node …/cli.js` shim is
+/// not treated as the subcommand. The first positional token has to be
+/// `agents`. Value-taking flags are skipped so `--settings <path>` is not
+/// that token. `-p` / `--print` is a one-shot invocation and never a
+/// dashboard, even when later args say `agents`.
+fn claude_agents_dashboard_args(args: &[String]) -> bool {
+    let Some(claude_index) = args
+        .iter()
+        .position(|arg| acorn_platform::executable::agent_cli_matches(arg, "claude"))
+    else {
+        return false;
+    };
+    let mut index = claude_index + 1;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if let Some((name, _)) = arg.split_once('=') {
+            if name == "-p" || name == "--print" {
+                return false;
+            }
+            if name.starts_with("--") {
+                index += 1;
+                continue;
+            }
+        }
+        if arg == "-p" || arg == "--print" {
+            return false;
+        }
+        if arg == "--" {
+            return args.get(index + 1).is_some_and(|next| next == "agents");
+        }
+        if arg == "agents" {
+            return true;
+        }
+        if CLAUDE_AGENTS_VALUE_FLAGS.contains(&arg) {
+            index = index.saturating_add(2);
+            continue;
+        }
+        if arg.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        return false;
+    }
+    false
 }
 
 fn hook_status_with_live_tool_activity(
@@ -19078,5 +19367,74 @@ mod tests {
         ));
         assert!(marker.exists(), "failed cleanup must not report success");
         assert!(state.folder_grants.lock().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod dashboard_roster_tests {
+    use super::{claude_agents_dashboard_args, rollout_write_is_live};
+    use std::time::{Duration, SystemTime};
+
+    fn args(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|part| (*part).to_string()).collect()
+    }
+
+    #[test]
+    fn claude_agents_dashboard_accepts_the_interactive_screen() {
+        assert!(claude_agents_dashboard_args(&args(&[
+            "/usr/local/bin/claude",
+            "--settings",
+            "/tmp/acorn-claude-settings.json",
+            "--dangerously-skip-permissions",
+            "agents",
+        ])));
+        assert!(claude_agents_dashboard_args(&args(&[
+            "claude",
+            "--settings=/tmp/acorn-claude-settings.json",
+            "agents",
+        ])));
+        assert!(claude_agents_dashboard_args(&args(&[
+            "claude", "--", "agents",
+        ])));
+        assert!(claude_agents_dashboard_args(&args(&["claude", "agents"])));
+        assert!(claude_agents_dashboard_args(&args(&[
+            "node",
+            "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+            "--settings",
+            "/tmp/acorn-claude-settings.json",
+            "agents",
+        ])));
+    }
+
+    #[test]
+    fn claude_agents_dashboard_rejects_one_shot_and_other_positionals() {
+        assert!(!claude_agents_dashboard_args(&args(&["claude", "-p"])));
+        assert!(!claude_agents_dashboard_args(&args(&[
+            "claude", "--print", "agents",
+        ])));
+        assert!(!claude_agents_dashboard_args(&args(&[
+            "claude", "--", "chat",
+        ])));
+        assert!(!claude_agents_dashboard_args(&args(&[
+            "claude", "chat", "agents",
+        ])));
+        assert!(!claude_agents_dashboard_args(&args(&[])));
+        assert!(!claude_agents_dashboard_args(&args(&[
+            "claude",
+            "--resume",
+            "c9258f49-835e-4db5-b7ef-800199ad469a",
+        ])));
+    }
+
+    #[test]
+    fn quiet_codex_child_rollout_is_not_a_live_turn() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        let dormant = Duration::from_secs(acorn_transcript::DORMANT_TRANSCRIPT_SECS);
+        assert!(rollout_write_is_live(now - dormant, now));
+        assert!(!rollout_write_is_live(
+            now - dormant - Duration::from_secs(1),
+            now
+        ));
+        assert!(rollout_write_is_live(now + Duration::from_secs(5), now));
     }
 }
