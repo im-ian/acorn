@@ -1121,13 +1121,14 @@ export const api = {
     repoPath: string,
     worktreePath: string,
     removeSessions = false,
+    permanent = false,
   ): Promise<WorktreeRemovalOutcome> {
-    return invoke<WorktreeRemovalOutcome>(
-      "remove_worktree",
-      removeSessions
-        ? { repoPath, worktreePath, removeSessions }
-        : { repoPath, worktreePath },
-    );
+    return invoke<WorktreeRemovalOutcome>("remove_worktree", {
+      repoPath,
+      worktreePath,
+      ...(removeSessions ? { removeSessions: true } : {}),
+      ...(permanent ? { permanent: true } : {}),
+    });
   },
   retryRemovalCleanup(
     retryToken: string,

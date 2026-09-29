@@ -3847,6 +3847,7 @@ describe("removeProjectWorktree", () => {
       REPO_B,
       worktreePath,
       true,
+      true,
     );
     expect(state.sessions).toEqual([]);
     expect(
