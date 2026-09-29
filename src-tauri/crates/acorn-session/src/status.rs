@@ -253,6 +253,44 @@ fn completed_turn_status(kind: AgentKind) -> SessionStatus {
     }
 }
 
+/// One terminal badge for every session a dashboard host is running.
+///
+/// Grok's completed turn is [`SessionStatus::WaitingForInput`] because that
+/// provider has no hook for an idle prompt. That resting state must not hide
+/// a sibling that is still working. Claude and Codex use the same variant
+/// for an aborted turn or a permission wait, which the user has to answer,
+/// so that outranks [`SessionStatus::Working`].
+pub fn fold_dashboard_statuses(slots: &[(AgentKind, SessionStatus)]) -> Option<SessionStatus> {
+    if slots.is_empty() {
+        return None;
+    }
+    let user_must_answer = slots.iter().any(|(kind, status)| {
+        *status == SessionStatus::WaitingForInput && *kind != AgentKind::Grok
+    });
+    if user_must_answer {
+        return Some(SessionStatus::WaitingForInput);
+    }
+    if slots
+        .iter()
+        .any(|(_, status)| *status == SessionStatus::Working)
+    {
+        return Some(SessionStatus::Working);
+    }
+    if slots
+        .iter()
+        .any(|(_, status)| *status == SessionStatus::Errored)
+    {
+        return Some(SessionStatus::Errored);
+    }
+    if slots
+        .iter()
+        .any(|(kind, status)| *kind == AgentKind::Grok && *status == SessionStatus::WaitingForInput)
+    {
+        return Some(SessionStatus::WaitingForInput);
+    }
+    Some(SessionStatus::Ready)
+}
+
 fn grok_followup_overrides_resting_status(
     kind: AgentKind,
     path: &Path,
@@ -1114,6 +1152,59 @@ mod tests {
                 .expect("write grok background manifest");
         }
         path
+    }
+
+    #[test]
+    fn fold_dashboard_statuses_lets_a_real_wait_outrank_working() {
+        assert_eq!(
+            fold_dashboard_statuses(&[
+                (AgentKind::Grok, SessionStatus::Working),
+                (AgentKind::Claude, SessionStatus::WaitingForInput),
+                (AgentKind::Codex, SessionStatus::Ready),
+            ]),
+            Some(SessionStatus::WaitingForInput)
+        );
+    }
+
+    #[test]
+    fn fold_dashboard_statuses_does_not_let_grok_rest_hide_work() {
+        assert_eq!(
+            fold_dashboard_statuses(&[
+                (AgentKind::Grok, SessionStatus::WaitingForInput),
+                (AgentKind::Claude, SessionStatus::Working),
+            ]),
+            Some(SessionStatus::Working)
+        );
+    }
+
+    #[test]
+    fn fold_dashboard_statuses_ranks_error_above_rest_and_below_work() {
+        assert_eq!(
+            fold_dashboard_statuses(&[
+                (AgentKind::Claude, SessionStatus::Errored),
+                (AgentKind::Codex, SessionStatus::Working),
+            ]),
+            Some(SessionStatus::Working)
+        );
+        assert_eq!(
+            fold_dashboard_statuses(&[
+                (AgentKind::Codex, SessionStatus::Errored),
+                (AgentKind::Grok, SessionStatus::WaitingForInput),
+            ]),
+            Some(SessionStatus::Errored)
+        );
+        assert_eq!(
+            fold_dashboard_statuses(&[(AgentKind::Grok, SessionStatus::WaitingForInput)]),
+            Some(SessionStatus::WaitingForInput)
+        );
+        assert_eq!(
+            fold_dashboard_statuses(&[
+                (AgentKind::Claude, SessionStatus::Ready),
+                (AgentKind::Codex, SessionStatus::Ready),
+            ]),
+            Some(SessionStatus::Ready)
+        );
+        assert_eq!(fold_dashboard_statuses(&[]), None);
     }
 
     fn write_grok_subagent_meta(transcript: &Path, meta: &str) {

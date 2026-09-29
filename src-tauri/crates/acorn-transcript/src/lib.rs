@@ -1395,6 +1395,10 @@ fn grok_transcript_id_from_args(args: &[String]) -> Option<String> {
 const GROK_ACTIVE_SESSIONS_FILE: &str = "active_sessions.json";
 const GROK_ACTIVE_SESSIONS_MAX_BYTES: u64 = 1024 * 1024;
 
+/// How many sibling conversations one dashboard host contributes to a badge.
+/// A corrupt manifest must not turn one poll into an unbounded transcript walk.
+const DASHBOARD_SESSION_LIMIT: usize = 32;
+
 /// The session id grok's `active_sessions.json` manifest declares for a live
 /// grok process. This pins the conversation even when several groks share one
 /// cwd and no `--resume` / `--session-id` argument names it — the case where
@@ -1413,30 +1417,90 @@ fn grok_manifest_transcript_id(
     cwd: &Path,
     process_start: SystemTime,
 ) -> Option<String> {
-    let manifest = sessions_root?.parent()?.join(GROK_ACTIVE_SESSIONS_FILE);
-    let meta = std::fs::symlink_metadata(&manifest).ok()?;
+    grok_manifest_session_ids(sessions_root, pid, cwd, process_start)
+        .into_iter()
+        .next()
+}
+
+/// Every manifest row this live grok process owns, newest append first.
+///
+/// One pager can host several top-level conversations. The resume pin stays
+/// the newest row; a dashboard badge has to classify the others too. The
+/// same pid, cwd, and `opened_at` filters apply, so a recycled pid still
+/// cannot inherit a dead session.
+fn grok_manifest_session_ids(
+    sessions_root: Option<&Path>,
+    pid: u32,
+    cwd: &Path,
+    process_start: SystemTime,
+) -> Vec<String> {
+    let Some(sessions_root) = sessions_root else {
+        return Vec::new();
+    };
+    let Some(manifest_dir) = sessions_root.parent() else {
+        return Vec::new();
+    };
+    let manifest = manifest_dir.join(GROK_ACTIVE_SESSIONS_FILE);
+    let Ok(meta) = std::fs::symlink_metadata(&manifest) else {
+        return Vec::new();
+    };
     if !meta.is_file() || meta.len() > GROK_ACTIVE_SESSIONS_MAX_BYTES {
-        return None;
+        return Vec::new();
     }
-    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest).ok()?).ok()?;
+    let Ok(bytes) = std::fs::read(&manifest) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Vec::new();
+    };
+    let Some(entries) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    let mut seen = HashSet::new();
     // Later rows are newer appends; walk backwards so the freshest claim on a
-    // pid wins.
-    value.as_array()?.iter().rev().find_map(|entry| {
-        if entry.get("pid")?.as_u64()? != u64::from(pid) {
-            return None;
+    // pid stays the resume pin.
+    for entry in entries.iter().rev() {
+        if ids.len() >= DASHBOARD_SESSION_LIMIT {
+            break;
         }
-        if Path::new(entry.get("cwd")?.as_str()?) != cwd {
-            return None;
+        if entry.get("pid").and_then(serde_json::Value::as_u64) != Some(u64::from(pid)) {
+            continue;
         }
-        if !grok_row_opened_after(entry.get("opened_at")?.as_str()?, process_start) {
-            return None;
+        let Some(row_cwd) = entry.get("cwd").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if Path::new(row_cwd) != cwd {
+            continue;
         }
-        entry
-            .get("session_id")?
-            .as_str()
+        let Some(opened_at) = entry.get("opened_at").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !grok_row_opened_after(opened_at, process_start) {
+            continue;
+        }
+        let Some(session_id) = entry
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
             .filter(|id| is_uuid_v4_shape(id))
-            .map(str::to_string)
-    })
+        else {
+            continue;
+        };
+        let session_id = session_id.to_string();
+        if seen.insert(session_id.clone()) {
+            ids.push(session_id);
+        }
+    }
+    ids
+}
+
+/// Manifest rows for the grok process at `pid`, from the user grok home.
+pub fn grok_live_manifest_session_ids(
+    pid: u32,
+    cwd: &Path,
+    process_start: SystemTime,
+) -> Vec<String> {
+    grok_manifest_session_ids(grok_sessions_root().as_deref(), pid, cwd, process_start)
 }
 
 /// True when RFC 3339 `opened_at` is at or after `process_start`. Process
@@ -1653,6 +1717,87 @@ fn claude_projects_root() -> Option<PathBuf> {
         .map(|h| h.join(".claude").join("projects"))
 }
 
+/// One background job hosted by the Claude supervisor, not by the
+/// `claude agents` PTY. The roster object key is an 8-character prefix;
+/// `sessionId` is the conversation uuid the transcript is named after.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaudeRosterWorker {
+    pub session_id: String,
+    pub pid: u32,
+    pub cwd: PathBuf,
+}
+
+const CLAUDE_ROSTER_MAX_BYTES: u64 = 1024 * 1024;
+
+pub fn parse_claude_roster_workers(bytes: &[u8]) -> Vec<ClaudeRosterWorker> {
+    if bytes.len() as u64 > CLAUDE_ROSTER_MAX_BYTES {
+        return Vec::new();
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return Vec::new();
+    };
+    let Some(workers) = value.get("workers").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for worker in workers.values() {
+        let Some(session_id) = worker
+            .get("sessionId")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| is_uuid_v4_shape(id))
+        else {
+            continue;
+        };
+        let Some(pid) = worker.get("pid").and_then(serde_json::Value::as_u64) else {
+            continue;
+        };
+        let Ok(pid) = u32::try_from(pid) else {
+            continue;
+        };
+        if pid == 0 {
+            continue;
+        }
+        let Some(cwd) = worker
+            .get("cwd")
+            .and_then(serde_json::Value::as_str)
+            .filter(|cwd| !cwd.is_empty())
+        else {
+            continue;
+        };
+        out.push(ClaudeRosterWorker {
+            session_id: session_id.to_string(),
+            pid,
+            cwd: PathBuf::from(cwd),
+        });
+    }
+    out
+}
+
+/// Workers currently listed in `~/.claude/daemon/roster.json`.
+///
+/// A missing or unreadable roster is empty. Callers that are looking at a
+/// `claude agents` screen treat that as no background jobs.
+pub fn claude_daemon_roster_workers() -> Vec<ClaudeRosterWorker> {
+    let Some(home) = directories::UserDirs::new() else {
+        return Vec::new();
+    };
+    let path = home
+        .home_dir()
+        .join(".claude")
+        .join("daemon")
+        .join("roster.json");
+    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        return Vec::new();
+    };
+    if !meta.is_file() || meta.len() > CLAUDE_ROSTER_MAX_BYTES {
+        return Vec::new();
+    }
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Vec::new();
+    };
+    parse_claude_roster_workers(&bytes)
+}
+
 fn codex_sessions_root() -> Option<PathBuf> {
     codex_sessions_root_from(
         std::env::var_os("CODEX_HOME"),
@@ -1764,6 +1909,66 @@ pub fn locate_codex_transcript_checked(uuid: &str) -> ProviderScanResult<Option<
         return Ok(None);
     };
     locate_codex_transcript_in_checked(&root, uuid)
+}
+
+/// Open child threads of `parent` recorded in Codex's state database.
+///
+/// Spawn edges stay `open` after the child process exits, so this is only
+/// meaningful while that parent Codex process is still alive. A missing,
+/// locked, or unfamiliar database returns no children and the parent
+/// status stands on its own.
+pub fn codex_open_child_thread_ids(database: &Path, parent: &str) -> Vec<String> {
+    if !is_uuid_v4_shape(parent) {
+        return Vec::new();
+    }
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let Ok(conn) = rusqlite::Connection::open_with_flags(database, flags) else {
+        return Vec::new();
+    };
+    // A writer inside the live Codex process owns this file. Don't stall
+    // the status poll waiting for it.
+    let _ = conn.busy_timeout(Duration::from_millis(50));
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT child_thread_id FROM thread_spawn_edges \
+         WHERE parent_thread_id = ?1 AND status = 'open' LIMIT 32",
+    ) else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map(rusqlite::params![parent], |row| row.get::<_, String>(0)) else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for row in rows {
+        if ids.len() >= DASHBOARD_SESSION_LIMIT {
+            break;
+        }
+        let Ok(id) = row else {
+            continue;
+        };
+        if is_uuid_v4_shape(&id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// Open child threads of `parent` in the user Codex state database.
+pub fn codex_live_open_child_thread_ids(parent: &str) -> Vec<String> {
+    let Some(sessions) = codex_sessions_root() else {
+        return Vec::new();
+    };
+    let Some(codex_home) = sessions.parent() else {
+        return Vec::new();
+    };
+    let database = codex_home.join("state_5.sqlite");
+    let Ok(meta) = std::fs::symlink_metadata(&database) else {
+        return Vec::new();
+    };
+    if !meta.is_file() {
+        return Vec::new();
+    }
+    codex_open_child_thread_ids(&database, parent)
 }
 
 #[cfg(test)]
@@ -1889,6 +2094,18 @@ fn find_claude_jsonl_for_uuid_budgeted(
     Ok(None)
 }
 
+/// Claude JSONL whose session id is `uuid` and whose cwd metadata matches
+/// `cwd`. The slug directory is tried first, then the other project dirs,
+/// same as resume lookup.
+pub fn locate_claude_session_transcript(cwd: &Path, uuid: &str) -> Option<PathBuf> {
+    let root = claude_projects_root()?;
+    let mut budget = ProviderScanBudget::new(PROVIDER_SCAN_LIMITS);
+    find_claude_jsonl_for_uuid_budgeted(cwd, Some(&root), uuid, &HashSet::new(), &mut budget)
+        .ok()
+        .flatten()
+        .map(|(path, _)| path)
+}
+
 /// True when an explicit resume may attach a transcript that records
 /// `transcript_cwd`.
 ///
@@ -1961,6 +2178,23 @@ fn read_worktree_gitdir(path: &Path) -> Option<PathBuf> {
         path.parent()?.join(recorded)
     };
     Some(lexical_normalize(&recorded))
+}
+
+/// True when `left` and `right` are the same directory, or checkouts that
+/// share one git common dir. A linked worktree and its main checkout are
+/// one repository for dashboard scope; two unrelated repos are not, even
+/// when a supervisor hosts jobs from both.
+pub fn shares_git_common_dir(left: &Path, right: &Path) -> bool {
+    if left.as_os_str().is_empty() || right.as_os_str().is_empty() {
+        return false;
+    }
+    if left == right {
+        return true;
+    }
+    match (git_common_dir(left), git_common_dir(right)) {
+        (Some(left_common), Some(right_common)) => left_common == right_common,
+        _ => false,
+    }
 }
 
 fn git_common_dir(start: &Path) -> Option<PathBuf> {
@@ -6742,6 +6976,180 @@ mod tests {
             None
         );
         assert_eq!(grok_manifest_transcript_id(None, 42, cwd, started), None);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn grok_manifest_lists_same_process_sessions_newest_first() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-grok-manifest-rows-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let cwd = Path::new("/repo");
+        let started = SystemTime::UNIX_EPOCH + Duration::from_secs(1_760_000_000);
+        let older = "0198c151-f3ee-7991-9768-741923bb6b51";
+        let newer = "0198c151-f3ee-7991-9768-741923bb6b52";
+        std::fs::write(
+            root.join(GROK_ACTIVE_SESSIONS_FILE),
+            serde_json::to_vec(&serde_json::json!([
+                {"session_id": older, "pid": 42, "cwd": "/repo", "opened_at": "2025-10-09T08:53:20Z"},
+                {"session_id": "0198c151-f3ee-7991-9768-741923bb6b53", "pid": 99,
+                 "cwd": "/repo", "opened_at": "2025-10-09T08:53:21Z"},
+                {"session_id": newer, "pid": 42, "cwd": "/repo", "opened_at": "2025-10-09T08:53:30Z"},
+                {"session_id": newer, "pid": 42, "cwd": "/repo", "opened_at": "2025-10-09T08:53:30Z"},
+                {"session_id": "not-a-uuid", "pid": 42, "cwd": "/repo", "opened_at": "2025-10-09T08:53:31Z"},
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            grok_manifest_session_ids(Some(&sessions), 42, cwd, started),
+            vec![newer.to_string(), older.to_string()]
+        );
+        assert_eq!(
+            grok_manifest_transcript_id(Some(&sessions), 42, cwd, started).as_deref(),
+            Some(newer)
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parse_claude_roster_workers_skips_rows_that_cannot_be_classified() {
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "proto": 1,
+            "workers": {
+                "c9258f49": {
+                    "sessionId": "c9258f49-835e-4db5-b7ef-800199ad469a",
+                    "pid": 13196,
+                    "cwd": "/repo/acorn"
+                },
+                "badid": {
+                    "sessionId": "not-a-uuid",
+                    "pid": 1,
+                    "cwd": "/repo"
+                },
+                "nopid": {
+                    "sessionId": "1d25b655-c80d-4d20-93b0-cea2ed0bbe6c",
+                    "cwd": "/repo"
+                },
+                "emptycwd": {
+                    "sessionId": "66442718-0ceb-4318-8e05-3eabff29bec5",
+                    "pid": 4,
+                    "cwd": ""
+                }
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            parse_claude_roster_workers(&bytes),
+            vec![ClaudeRosterWorker {
+                session_id: "c9258f49-835e-4db5-b7ef-800199ad469a".to_string(),
+                pid: 13196,
+                cwd: PathBuf::from("/repo/acorn"),
+            }]
+        );
+        assert!(parse_claude_roster_workers(b"not-json").is_empty());
+        assert!(parse_claude_roster_workers(b"{}").is_empty());
+    }
+
+    #[test]
+    fn shares_git_common_dir_matches_a_linked_worktree() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-git-common-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let repo = root.join("repo");
+        let git = repo.join(".git");
+        let gitdir = git.join("worktrees").join("feature");
+        let worktree = root.join("worktree");
+        std::fs::create_dir_all(&gitdir).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            "gitdir: ../repo/.git/worktrees/feature\n",
+        )
+        .unwrap();
+        std::fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+        let other = root.join("other");
+        std::fs::create_dir_all(other.join(".git")).unwrap();
+        let plain = root.join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+
+        assert!(shares_git_common_dir(&repo, &worktree));
+        assert!(shares_git_common_dir(&repo.join("src"), &worktree));
+        assert!(!shares_git_common_dir(&repo, &other));
+        assert!(shares_git_common_dir(&plain, &plain));
+        assert!(!shares_git_common_dir(&plain, &repo));
+        assert!(!shares_git_common_dir(Path::new(""), &repo));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn codex_open_child_thread_ids_returns_open_edges_for_the_parent() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-codex-edges-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = root.join("state_5.sqlite");
+        let parent = "11111111-1111-4111-8111-111111111111";
+        let open_child = "22222222-2222-4222-8222-222222222222";
+        let closed_child = "33333333-3333-4333-8333-333333333333";
+        let other_child = "44444444-4444-4444-8444-444444444444";
+        let conn = rusqlite::Connection::open(&database).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE thread_spawn_edges (
+                parent_thread_id TEXT NOT NULL,
+                child_thread_id TEXT NOT NULL PRIMARY KEY,
+                status TEXT NOT NULL
+            );
+            INSERT INTO thread_spawn_edges VALUES
+                ('{parent}', '{open_child}', 'open'),
+                ('{parent}', '{closed_child}', 'closed'),
+                ('{parent}', 'not-a-uuid', 'open'),
+                ('99999999-9999-4999-8999-999999999999', '{other_child}', 'open');"
+        ))
+        .unwrap();
+        drop(conn);
+
+        assert_eq!(
+            codex_open_child_thread_ids(&database, parent),
+            vec![open_child.to_string()]
+        );
+        assert!(codex_open_child_thread_ids(&database, "not-a-uuid").is_empty());
+        assert!(codex_open_child_thread_ids(&root.join("missing.sqlite"), parent).is_empty());
+
+        let capped = root.join("capped.sqlite");
+        let conn = rusqlite::Connection::open(&capped).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE thread_spawn_edges (
+                parent_thread_id TEXT NOT NULL,
+                child_thread_id TEXT NOT NULL PRIMARY KEY,
+                status TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        for index in 0..40 {
+            let child = format!("00000000-0000-4000-8000-{index:012}");
+            conn.execute(
+                "INSERT INTO thread_spawn_edges VALUES (?1, ?2, 'open')",
+                rusqlite::params![parent, child],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        assert_eq!(codex_open_child_thread_ids(&capped, parent).len(), 32);
+
+        let empty = root.join("empty.sqlite");
+        rusqlite::Connection::open(&empty).unwrap();
+        assert!(codex_open_child_thread_ids(&empty, parent).is_empty());
 
         std::fs::remove_dir_all(root).unwrap();
     }
