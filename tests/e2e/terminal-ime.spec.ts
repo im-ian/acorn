@@ -1966,6 +1966,30 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(writes).toContain("\x05");
   });
 
+  test("Alt+ArrowLeft sends meta-b, not CSI 1;3D", async ({ page, tauri }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    await runIme(page, [
+      { type: "keydown", key: "ArrowLeft", keyCode: 37, alt: true },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(writes.join("")).toBe("\x1bb");
+  });
+
+  test("Alt+ArrowRight sends meta-f", async ({ page, tauri }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    await runIme(page, [
+      { type: "keydown", key: "ArrowRight", keyCode: 39, alt: true },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(writes.join("")).toBe("\x1bf");
+  });
+
   test("insertReplacementText ㅎ → 하 → 한 does not flush mid-syllable", async ({
     page,
     tauri,
