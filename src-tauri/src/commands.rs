@@ -11578,16 +11578,41 @@ fn codex_dashboard_status(
         return root_status;
     }
     let mut slots = vec![(AgentKind::Codex, root_status)];
+    let now = SystemTime::now();
     for child in children.into_iter().take(DASHBOARD_ROSTER_LIMIT) {
         let Some(path) = acorn_transcript::locate_codex_transcript(&child) else {
             continue;
         };
+        // An open spawn edge outlives the child. A rollout that has stopped
+        // being written is not a live turn: an aborted or killed child would
+        // otherwise pin Waiting or Working until the parent process exits.
+        if !codex_child_rollout_is_live(&path, now) {
+            continue;
+        }
         slots.push((
             AgentKind::Codex,
             classify_running_transcript(&path, AgentKind::Codex),
         ));
     }
     session_status::fold_dashboard_statuses(&slots).unwrap_or(root_status)
+}
+
+fn codex_child_rollout_is_live(path: &Path, now: SystemTime) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    rollout_write_is_live(modified, now)
+}
+
+fn rollout_write_is_live(modified: SystemTime, now: SystemTime) -> bool {
+    match now.duration_since(modified) {
+        Ok(age) => age <= Duration::from_secs(acorn_transcript::DORMANT_TRANSCRIPT_SECS),
+        // A timestamp ahead of the poll is still a writer, not a stale file.
+        Err(_) => true,
+    }
 }
 
 /// Roster transcripts are classified as their own sessions. `previous`
@@ -19347,7 +19372,8 @@ mod tests {
 
 #[cfg(test)]
 mod dashboard_roster_tests {
-    use super::claude_agents_dashboard_args;
+    use super::{claude_agents_dashboard_args, rollout_write_is_live};
+    use std::time::{Duration, SystemTime};
 
     fn args(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| (*part).to_string()).collect()
@@ -19398,5 +19424,17 @@ mod dashboard_roster_tests {
             "--resume",
             "c9258f49-835e-4db5-b7ef-800199ad469a",
         ])));
+    }
+
+    #[test]
+    fn quiet_codex_child_rollout_is_not_a_live_turn() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        let dormant = Duration::from_secs(acorn_transcript::DORMANT_TRANSCRIPT_SECS);
+        assert!(rollout_write_is_live(now - dormant, now));
+        assert!(!rollout_write_is_live(
+            now - dormant - Duration::from_secs(1),
+            now
+        ));
+        assert!(rollout_write_is_live(now + Duration::from_secs(5), now));
     }
 }
