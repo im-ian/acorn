@@ -19,3 +19,4 @@ uuid = { workspace = true }
 directories = { workspace = true }
 parking_lot = { workspace = true }
 chrono = { workspace = true }
+rusqlite = { workspace = true }
