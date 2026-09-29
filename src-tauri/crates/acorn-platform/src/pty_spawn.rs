@@ -455,9 +455,14 @@ mod tests {
         cmd.env("ACORN_TCC_DISCLAIM", "0");
         assert!(!should_disclaim(&cmd), "only exactly \"1\" disclaims");
         cmd.env("ACORN_TCC_DISCLAIM", "true");
-        assert!(!should_disclaim(&cmd));
+        assert!(!should_disclaim(&cmd), "only exactly \"1\" disclaims");
         cmd.env("ACORN_TCC_DISCLAIM", "1");
         assert!(should_disclaim(&cmd), "=1 disclaims");
+        cmd.env("ACORN_NO_TCC_DISCLAIM", "0");
+        assert!(
+            should_disclaim(&cmd),
+            "opt-out must be exactly \"1\" to win"
+        );
 
         cmd.env("ACORN_NO_TCC_DISCLAIM", "1");
         assert!(
@@ -472,6 +477,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn spawned_shell_can_list_its_working_directory() {
+        // A protected working directory stays listable only while this process
+        // remains responsible. An unprotected checkout can list it either way.
         let cwd = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         if std::fs::read_dir(&cwd).is_err() {
             return;
