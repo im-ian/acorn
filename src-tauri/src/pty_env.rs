@@ -26,7 +26,13 @@ pub const RENDER_CAPABILITY: &[(&str, &str)] =
 /// `iTerm.app` and emit sequences those emulators handle; Acorn is not
 /// them. A stable non-empty value keeps the child from inheriting the
 /// host emulator's name (and vscode shell-integration hooks in user rc).
-pub const TERMINAL_IDENTITY: &[(&str, &str)] = &[("TERM_PROGRAM", "Acorn")];
+///
+/// `VTE_VERSION=7600` selects Claude Code's synchronized-output path.
+/// That check reads `VTE_VERSION` once at startup (`>= 6800`) and then
+/// freezes. The name detector returns `TERM_PROGRAM` first, so the
+/// terminal stays "Acorn". xterm.js implements DEC 2026.
+pub const TERMINAL_IDENTITY: &[(&str, &str)] =
+    &[("TERM_PROGRAM", "Acorn"), ("VTE_VERSION", "7600")];
 
 const HOST_TERMINAL_ENV: &[&str] = &[
     "TERM_PROGRAM",
@@ -158,7 +164,7 @@ pub fn apply_render_capability_backstop(cmd: &mut CommandBuilder) {
     }
 }
 
-/// Stamp `TERM_PROGRAM=Acorn` when no caller override remains. Inherited
+/// Stamp [`TERMINAL_IDENTITY`] when no caller override remains. Inherited
 /// host values are already stripped; without a replacement the child has
 /// no terminal identity of its own.
 pub fn apply_terminal_identity_backstop(cmd: &mut CommandBuilder) {
@@ -250,6 +256,40 @@ mod tests {
             cmd.get_env("TERM_PROGRAM").and_then(|s| s.to_str()),
             Some("Acorn"),
         );
+        assert_eq!(
+            cmd.get_env("VTE_VERSION").and_then(|s| s.to_str()),
+            Some("7600"),
+        );
+    }
+
+    #[test]
+    fn layered_env_replaces_inherited_vte_version() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env_clear();
+        cmd.env("VTE_VERSION", "9999");
+        cmd.env("TERM_PROGRAM", "iTerm.app");
+        apply_layered_env(&mut cmd, HashMap::new());
+        assert_eq!(
+            cmd.get_env("VTE_VERSION").and_then(|s| s.to_str()),
+            Some("7600"),
+        );
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM").and_then(|s| s.to_str()),
+            Some("Acorn"),
+        );
+    }
+
+    #[test]
+    fn layered_env_preserves_explicit_vte_version_override() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env_clear();
+        let mut env = HashMap::new();
+        env.insert("VTE_VERSION".to_string(), "1".to_string());
+        apply_layered_env(&mut cmd, env);
+        assert_eq!(
+            cmd.get_env("VTE_VERSION").and_then(|s| s.to_str()),
+            Some("1")
+        );
     }
 
     #[test]
@@ -270,10 +310,15 @@ mod tests {
         let mut cmd = CommandBuilder::new("/bin/sh");
         cmd.env_clear();
         cmd.env("TERM_PROGRAM", "");
+        cmd.env("VTE_VERSION", "");
         apply_terminal_identity_backstop(&mut cmd);
         assert_eq!(
             cmd.get_env("TERM_PROGRAM").and_then(|s| s.to_str()),
             Some("Acorn"),
+        );
+        assert_eq!(
+            cmd.get_env("VTE_VERSION").and_then(|s| s.to_str()),
+            Some("7600"),
         );
     }
 
