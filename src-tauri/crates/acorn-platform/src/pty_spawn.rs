@@ -6,22 +6,22 @@ use portable_pty::{Child, CommandBuilder, MasterPty, SlavePty};
 
 /// Spawn `cmd` on `slave`, using `master` only for the slave TTY path on macOS.
 ///
-/// macOS TCC attributes Screen Recording and similar prompts to the responsible
-/// process of the capturing binary. portable-pty uses `fork`/`exec` with
-/// `pre_exec`, so a session child keeps Acorn (or `acornd`) as that responsible
-/// process. Granting the prompt then stores a decision for Acorn while
-/// ScreenCaptureKit still checks the child, so the dialog repeats. `posix_spawn`
-/// with `responsibility_spawnattrs_setdisclaim` starts a new responsibility
-/// chain at the shell; later tools prompt and persist as themselves.
+/// macOS TCC attributes private-data checks to the responsible process.
+/// portable-pty uses `fork`/`exec`, so a session child keeps Acorn (or
+/// `acornd`) responsible and can use grants the user already gave that app:
+/// protected folders, Accessibility, and other apps' data.
 ///
-/// Accessibility (`kTCCServiceAccessibility`) has the opposite semantics: the
-/// check targets the responsible process itself, so a disclaimed session can
-/// never use an Accessibility grant given to Acorn — `osascript`/`cliclick`
-/// fail with -25211 and macOS never prompts for the bare shell. The disclaim
-/// bit is one decision per process chain; no spawn shape satisfies both
-/// services. `ACORN_NO_TCC_DISCLAIM=1` in the session env opts that session
-/// back into Acorn's responsibility chain (restoring Accessibility
-/// inheritance) at the cost of re-entering the Screen Recording prompt loop.
+/// `responsibility_spawnattrs_setdisclaim` starts a new chain at the shell.
+/// Screen Recording can then persist on the capturing tool, but every other
+/// service stops seeing Acorn. Desktop, Documents, and Downloads return
+/// EPERM (`getcwd: cannot access parent directories`), Accessibility fails
+/// with -25211, and helper binaries show up as their own Files & Folders
+/// client. A versioned agent executable is blocked from other apps' data
+/// under its own filename, and the next build is a new client.
+///
+/// Sessions keep Acorn's chain. `ACORN_TCC_DISCLAIM=1` opts into the
+/// disclaim. `ACORN_NO_TCC_DISCLAIM=1` forces Acorn's chain and wins when
+/// both are set. Either flag has to be present in the spawn-time env.
 pub fn spawn_command(
     master: &dyn MasterPty,
     slave: &dyn SlavePty,
@@ -39,11 +39,15 @@ pub fn spawn_command(
         .map_err(|err| io::Error::other(err.to_string()))
 }
 
-/// `ACORN_NO_TCC_DISCLAIM=1` (exactly "1") skips the disclaim; anything else
-/// keeps it, so an unset or `=0` session stays on the safe capture default.
+/// `ACORN_TCC_DISCLAIM=1` (exactly "1") starts a new TCC chain for that session.
+/// `ACORN_NO_TCC_DISCLAIM=1` keeps Acorn responsible and wins when both are set.
+/// Any other value keeps Acorn's chain.
 #[cfg(any(target_os = "macos", all(test, unix)))]
 fn should_disclaim(cmd: &CommandBuilder) -> bool {
-    cmd.get_env("ACORN_NO_TCC_DISCLAIM") != Some(std::ffi::OsStr::new("1"))
+    if cmd.get_env("ACORN_NO_TCC_DISCLAIM") == Some(std::ffi::OsStr::new("1")) {
+        return false;
+    }
+    cmd.get_env("ACORN_TCC_DISCLAIM") == Some(std::ffi::OsStr::new("1"))
 }
 
 #[cfg(target_os = "macos")]
@@ -442,15 +446,66 @@ mod tests {
     }
 
     #[test]
-    fn no_tcc_disclaim_env_must_be_exactly_one() {
+    fn tcc_disclaim_flags_are_exact() {
         let mut cmd = CommandBuilder::new("/bin/sh");
-        assert!(should_disclaim(&cmd), "unset env keeps the disclaim");
+        assert!(
+            !should_disclaim(&cmd),
+            "sessions keep Acorn responsible unless asked"
+        );
+        cmd.env("ACORN_TCC_DISCLAIM", "0");
+        assert!(!should_disclaim(&cmd), "only exactly \"1\" disclaims");
+        cmd.env("ACORN_TCC_DISCLAIM", "true");
+        assert!(!should_disclaim(&cmd), "only exactly \"1\" disclaims");
+        cmd.env("ACORN_TCC_DISCLAIM", "1");
+        assert!(should_disclaim(&cmd), "=1 disclaims");
         cmd.env("ACORN_NO_TCC_DISCLAIM", "0");
-        assert!(should_disclaim(&cmd), "=0 keeps the disclaim");
-        cmd.env("ACORN_NO_TCC_DISCLAIM", "true");
-        assert!(should_disclaim(&cmd), "non-\"1\" keeps the disclaim");
+        assert!(
+            should_disclaim(&cmd),
+            "opt-out must be exactly \"1\" to win"
+        );
+
         cmd.env("ACORN_NO_TCC_DISCLAIM", "1");
-        assert!(!should_disclaim(&cmd), "=1 skips the disclaim");
+        assert!(
+            !should_disclaim(&cmd),
+            "opt-out wins when both flags are set"
+        );
+        cmd.env_remove("ACORN_TCC_DISCLAIM");
+        cmd.env("ACORN_NO_TCC_DISCLAIM", "0");
+        assert!(!should_disclaim(&cmd));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn spawned_shell_can_list_its_working_directory() {
+        // A protected working directory stays listable only while this process
+        // remains responsible. An unprotected checkout can list it either way.
+        let cwd = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if std::fs::read_dir(&cwd).is_err() {
+            return;
+        }
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("/bin/bash");
+        cmd.arg("--noprofile");
+        cmd.arg("--norc");
+        cmd.arg("-c");
+        cmd.arg("if /bin/ls -A -f . >/dev/null 2>&1; then printf LIST_OK; else printf LIST_NO; fi");
+        cmd.cwd(&cwd);
+        let mut child = spawn_command(&*pair.master, &*pair.slave, cmd).expect("spawn pty child");
+        drop(pair.slave);
+        let reader = pair.master.try_clone_reader().expect("clone reader");
+        let output = collect_output(reader, "LIST_");
+        let _ = child.wait();
+        assert!(
+            output.contains("LIST_OK") && !output.contains("Operation not permitted"),
+            "session cwd should stay listable, got {output:?}"
+        );
     }
 
     #[cfg(target_os = "macos")]
