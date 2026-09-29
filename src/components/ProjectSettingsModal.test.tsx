@@ -692,6 +692,7 @@ describe("ProjectSettingsModal", () => {
       "/repo/acorn",
       "/repo/acorn/.acorn/worktrees/feature-alpha",
       true,
+      true,
     );
     expect(useAppStore.getState().sessions).toEqual([]);
     expect(document.body.textContent).not.toContain("feature-alpha");

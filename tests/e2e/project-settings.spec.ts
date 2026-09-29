@@ -754,12 +754,14 @@ test.describe("project settings", () => {
       repoPath: string;
       worktreePath: string;
       removeSessions: boolean;
+      permanent?: boolean;
     }>;
     expect(calls).toEqual([
       {
         repoPath: "/tmp/acorn",
         worktreePath: "/tmp/acorn/.acorn/worktrees/feature-alpha",
         removeSessions: true,
+        permanent: true,
       },
     ]);
   });
