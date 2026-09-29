@@ -4051,6 +4051,7 @@ export const useAppStore = create<AppStateModel>()(
         repoPath,
         worktreePath,
         removeSessions,
+        true,
       );
       set((s) => {
         const removedSessionIds = new Set<string>();

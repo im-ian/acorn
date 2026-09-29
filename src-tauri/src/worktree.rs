@@ -1004,6 +1004,145 @@ pub fn stage_remove_worktree_at_path(
     )))
 }
 
+/// Delete a linked worktree where it stands. Unlike
+/// [`stage_remove_worktree_at_path`], this does not park the checkout under
+/// `.acorn-deleted-worktrees`. A checkout already parked for undo is removed
+/// only when its gitdir is this registration, so a sibling backup can still
+/// be restored.
+pub fn delete_worktree_at_path(repo_path: &Path, worktree_path: &Path) -> AppResult<()> {
+    let repo = ensure_repo(repo_path)?;
+    let names = repo.worktrees()?;
+    for name in names.iter().filter_map(|name| name.ok().flatten()) {
+        let wt = repo.find_worktree(name)?;
+        // The checkout is often already gone, so string equality misses the
+        // macOS `/var` vs `/private/var` alias. Resolve the parent that still
+        // exists and compare the worktree name.
+        if !same_path_with_resolved_parent(wt.path(), worktree_path) {
+            continue;
+        }
+        // A partial `remove_dir_all` can leave the directory after its `.git`
+        // file is gone. The registration is still this checkout, so finish
+        // deleting it instead of treating the retry as an unrelated path.
+        let checkout_exists = path_entry_exists(worktree_path)?;
+        if checkout_exists {
+            validate_real_directory_entry(worktree_path, "linked worktree path")?;
+        }
+        let backups = staged_backups_for_registered_worktree(&repo, worktree_path, name)?;
+        if checkout_exists {
+            retry_on_windows_lock(|| std::fs::remove_dir_all(worktree_path))?;
+        }
+        for backup in &backups {
+            retry_on_windows_lock(|| std::fs::remove_dir_all(backup))?;
+        }
+        if !backups.is_empty() {
+            remove_empty_backup_root(worktree_path);
+        }
+        prune_missing_registered_worktree(&wt, worktree_path)?;
+        return Ok(());
+    }
+
+    if path_entry_exists(worktree_path)? && !is_linked_worktree_root(worktree_path) {
+        return Err(AppError::InvalidPath(format!(
+            "not a linked git worktree: {}",
+            worktree_path.display()
+        )));
+    }
+
+    if is_acorn_managed_worktree_path(repo_path, worktree_path)? {
+        if path_entry_exists(worktree_path)? && is_linked_worktree_root(worktree_path) {
+            retry_on_windows_lock(|| std::fs::remove_dir_all(worktree_path))?;
+        }
+        return Ok(());
+    }
+
+    if !path_entry_exists(worktree_path)? {
+        return Ok(());
+    }
+
+    Err(AppError::InvalidPath(format!(
+        "linked git worktree is not registered: {}",
+        worktree_path.display()
+    )))
+}
+
+fn staged_backups_for_registered_worktree(
+    repo: &Repository,
+    worktree_path: &Path,
+    worktree_name: &str,
+) -> AppResult<Vec<PathBuf>> {
+    let Some(root) = existing_removed_worktree_backup_root(worktree_path)? else {
+        return Ok(Vec::new());
+    };
+    let expected_git_dir = repo.commondir().join("worktrees").join(worktree_name);
+    let mut matched = Vec::new();
+    for entry in root.read_dir()? {
+        let backup = entry?.path();
+        if staged_backup_matches_worktree(&backup, &expected_git_dir)? {
+            validate_real_directory_entry(&backup, "removed worktree backup")?;
+            matched.push(backup);
+        }
+    }
+    Ok(matched)
+}
+
+fn staged_backup_matches_worktree(backup: &Path, expected_git_dir: &Path) -> AppResult<bool> {
+    let metadata = match std::fs::symlink_metadata(backup) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let text_matches = linked_git_dir_matches(backup, expected_git_dir);
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        if text_matches {
+            return Err(AppError::InvalidPath(format!(
+                "removed worktree backup must be a real directory: {}",
+                backup.display()
+            )));
+        }
+        return Ok(false);
+    }
+
+    match Repository::open(backup) {
+        Ok(backup_repo) => match backup_repo.path().canonicalize() {
+            Ok(backup_git_dir)
+                if same_path_with_resolved_parent(&backup_git_dir, expected_git_dir) =>
+            {
+                Ok(true)
+            }
+            _ if text_matches => Err(AppError::InvalidPath(format!(
+                "removed worktree backup does not match its registered path: {}",
+                backup.display()
+            ))),
+            _ => Ok(false),
+        },
+        Err(_) if text_matches => Err(AppError::InvalidPath(format!(
+            "removed worktree backup is not a valid repository: {}",
+            backup.display()
+        ))),
+        Err(_) => Ok(false),
+    }
+}
+
+fn linked_git_dir_matches(checkout: &Path, expected_git_dir: &Path) -> bool {
+    linked_worktree_git_dir(checkout)
+        .is_some_and(|git_dir| same_path_with_resolved_parent(&git_dir, expected_git_dir))
+}
+
+fn linked_worktree_git_dir(checkout: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(checkout.join(".git")).ok()?;
+    let line = text.lines().next()?.trim();
+    let rest = line.strip_prefix("gitdir:")?.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(rest);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        Some(checkout.join(path))
+    }
+}
+
 #[cfg(test)]
 pub fn remove_worktree_at_path(repo_path: &Path, worktree_path: &Path) -> AppResult<()> {
     if let Some(removed) = stage_remove_worktree_at_path(repo_path, worktree_path)? {
@@ -2409,6 +2548,228 @@ mod tests {
             .expect("remote branch");
         assert!(infos[..first_remote].iter().all(|branch| !branch.is_remote));
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_worktree_at_path_removes_checkout_without_a_backup() {
+        let root = unique_temp_dir("delete-in-place");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "delete-me").expect("create worktree");
+        std::fs::write(worktree_path.join("marker.txt"), "keep-until-delete").expect("marker");
+
+        delete_worktree_at_path(&root, &worktree_path).expect("delete worktree");
+
+        assert!(!worktree_path.exists());
+        assert!(
+            !worktree_path
+                .parent()
+                .expect("worktree parent")
+                .join(DELETED_WORKTREES_DIR)
+                .exists(),
+            "in-place delete must not stage a backup"
+        );
+        assert!(
+            !list_worktree_paths(&root)
+                .expect("list worktrees")
+                .iter()
+                .any(|path| same_path(path, &worktree_path)),
+            "delete should prune the linked worktree registration"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_worktree_at_path_prunes_a_locked_registration() {
+        let root = unique_temp_dir("delete-locked");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "delete-locked").expect("create worktree");
+        {
+            let repo = Repository::open(&root).expect("open repo");
+            let wt = repo.find_worktree("delete-locked").expect("find worktree");
+            wt.lock(Some("claude agent delete-locked (pid 999999)"))
+                .expect("lock worktree");
+        }
+
+        delete_worktree_at_path(&root, &worktree_path).expect("delete locked worktree");
+
+        assert!(!worktree_path.exists());
+        assert!(!worktree_path
+            .parent()
+            .expect("worktree parent")
+            .join(DELETED_WORKTREES_DIR)
+            .exists());
+        assert!(
+            !list_worktree_paths(&root)
+                .expect("list worktrees")
+                .iter()
+                .any(|path| same_path(path, &worktree_path)),
+            "delete should prune a locked linked worktree registration"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_worktree_at_path_removes_only_the_matching_staged_backup() {
+        let root = unique_temp_dir("delete-staged-sibling");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let first_path = create_worktree(&root, "delete-staged").expect("create first worktree");
+        let second_path = create_worktree(&root, "keep-staged").expect("create second worktree");
+        let first = stage_remove_worktree_at_path(&root, &first_path)
+            .expect("stage first")
+            .expect("first token");
+        let second = stage_remove_worktree_at_path(&root, &second_path)
+            .expect("stage second")
+            .expect("second token");
+        let backup_root = removed_worktree_backup_root_path(&first_path).expect("backup root");
+        let first_backup = backup_root.join(&first.token);
+        let second_backup = backup_root.join(&second.token);
+
+        delete_worktree_at_path(&root, &first_path).expect("delete staged worktree");
+
+        assert!(
+            !first_backup.exists(),
+            "matching undo backup should be deleted"
+        );
+        assert!(
+            second_backup.exists(),
+            "a sibling undo backup should stay in place"
+        );
+        let listed = list_worktree_paths(&root).expect("list worktrees");
+        assert!(
+            !listed
+                .iter()
+                .any(|path| path.file_name() == first_path.file_name()),
+            "the deleted registration should be pruned"
+        );
+        assert!(
+            listed
+                .iter()
+                .any(|path| path.file_name() == second_path.file_name()),
+            "the sibling registration should stay restorable"
+        );
+        discard_removed_worktree(
+            Path::new(&first.repo_path),
+            Path::new(&first.worktree_path),
+            &first.token,
+            Path::new(&first.git_common_dir),
+        )
+        .expect("discard of an already deleted backup should succeed");
+        restore_removed_worktree(
+            Path::new(&second.repo_path),
+            Path::new(&second.worktree_path),
+            &second.token,
+            Path::new(&second.git_common_dir),
+        )
+        .expect("restore sibling");
+        assert!(second_path.exists());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_worktree_at_path_prunes_a_missing_checkout_beside_another_backup() {
+        let root = unique_temp_dir("delete-missing-beside-backup");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let missing_path = create_worktree(&root, "already-gone").expect("create missing worktree");
+        let staged_path = create_worktree(&root, "still-staged").expect("create staged worktree");
+        std::fs::remove_dir_all(&missing_path).expect("remove checkout without staging");
+        let staged = stage_remove_worktree_at_path(&root, &staged_path)
+            .expect("stage sibling")
+            .expect("sibling token");
+        let staged_backup = removed_worktree_backup_root_path(&staged_path)
+            .expect("backup root")
+            .join(&staged.token);
+
+        delete_worktree_at_path(&root, &missing_path).expect("prune missing registration");
+
+        assert!(staged_backup.exists(), "sibling backup should stay");
+        let listed = list_worktree_paths(&root).expect("list worktrees");
+        assert!(!listed
+            .iter()
+            .any(|path| path.file_name() == missing_path.file_name()));
+        assert!(listed
+            .iter()
+            .any(|path| path.file_name() == staged_path.file_name()));
+        restore_removed_worktree(
+            Path::new(&staged.repo_path),
+            Path::new(&staged.worktree_path),
+            &staged.token,
+            Path::new(&staged.git_common_dir),
+        )
+        .expect("restore sibling");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_worktree_at_path_finishes_a_checkout_whose_git_file_is_gone() {
+        let root = unique_temp_dir("delete-partial");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "partial").expect("create worktree");
+        std::fs::remove_file(worktree_path.join(".git")).expect("remove git file");
+        std::fs::write(worktree_path.join("marker.txt"), "left behind").expect("marker");
+        assert!(!is_linked_worktree_root(&worktree_path));
+
+        delete_worktree_at_path(&root, &worktree_path).expect("finish partial delete");
+
+        assert!(!worktree_path.exists());
+        assert!(!list_worktree_paths(&root)
+            .expect("list worktrees")
+            .iter()
+            .any(|path| path.file_name() == worktree_path.file_name()));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_worktree_at_path_keeps_registration_when_staged_backup_is_not_a_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("delete-symlink-backup");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "symlink-backup").expect("create worktree");
+        let removed = stage_remove_worktree_at_path(&root, &worktree_path)
+            .expect("stage remove")
+            .expect("removal token");
+        let backup = removed_worktree_backup_root_path(&worktree_path)
+            .expect("backup root")
+            .join(&removed.token);
+        let relocated = backup.with_extension("relocated");
+        std::fs::rename(&backup, &relocated).expect("relocate backup");
+        symlink(&relocated, &backup).expect("symlink backup entry");
+
+        let error = delete_worktree_at_path(&root, &worktree_path)
+            .expect_err("symlinked backup must not be pruned");
+
+        assert!(matches!(error, AppError::InvalidPath(_)));
+        assert!(relocated.exists(), "backup contents should stay");
+        assert!(
+            list_worktree_paths(&root)
+                .expect("list worktrees")
+                .iter()
+                .any(|path| path.file_name() == worktree_path.file_name()),
+            "registration must stay while its undo backup cannot be deleted"
+        );
+
+        std::fs::remove_file(&backup).expect("remove backup symlink");
+        std::fs::rename(&relocated, &backup).expect("restore real backup entry");
+        restore_removed_worktree(
+            Path::new(&removed.repo_path),
+            Path::new(&removed.worktree_path),
+            &removed.token,
+            Path::new(&removed.git_common_dir),
+        )
+        .expect("restore worktree for cleanup");
         std::fs::remove_dir_all(&root).ok();
     }
 

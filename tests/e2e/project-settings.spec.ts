@@ -125,10 +125,7 @@ test.describe("project settings", () => {
     ]);
   });
 
-  test("manages project worktrees and retries failed permanent cleanup", async ({
-    page,
-    tauri,
-  }) => {
+  test("deletes a project worktree in place", async ({ page, tauri }) => {
     await tauri.respond("list_projects", [
       {
         repo_path: "/tmp/acorn",
@@ -162,37 +159,20 @@ test.describe("project settings", () => {
     await tauri.handle("remove_worktree", (args) => {
       const w = window as unknown as {
         __removeWorktreeCalls?: unknown[];
+        __worktrees?: Array<{ path: string }>;
       };
       w.__removeWorktreeCalls = w.__removeWorktreeCalls ?? [];
       w.__removeWorktreeCalls.push(args);
       const worktreePath = (args as { worktreePath?: string }).worktreePath;
+      w.__worktrees = (w.__worktrees ?? []).filter(
+        (worktree) => worktree.path !== worktreePath,
+      );
       return {
-        result: {
-          token: "remove-feature-alpha",
-          repoPath: "/tmp/acorn",
-          worktreePath,
-          gitCommonDir: "/tmp/acorn/.git",
-        },
+        result: null,
         removedSessionIds: [],
         issues: [],
         retryToken: null,
       };
-    });
-    await tauri.handle("discard_removed_worktree", (args) => {
-      const w = window as unknown as {
-        __discardWorktreeCalls?: unknown[];
-        __worktrees?: Array<{ path: string }>;
-      };
-      w.__discardWorktreeCalls = w.__discardWorktreeCalls ?? [];
-      w.__discardWorktreeCalls.push(args);
-      const worktreePath = (args as { worktreePath?: string }).worktreePath;
-      w.__worktrees = (w.__worktrees ?? []).filter(
-        (worktree) => worktree.path !== worktreePath,
-      );
-      if (w.__discardWorktreeCalls.length === 1) {
-        throw new Error("Permission denied");
-      }
-      return undefined;
     });
 
     await page.goto("/");
@@ -233,43 +213,18 @@ test.describe("project settings", () => {
       () =>
         (window as unknown as { __removeWorktreeCalls?: unknown[] })
           .__removeWorktreeCalls,
-    )) as Array<{ repoPath: string; worktreePath: string }>;
+    )) as Array<{
+      repoPath: string;
+      worktreePath: string;
+      permanent?: boolean;
+    }>;
     expect(calls).toEqual([
       {
         repoPath: "/tmp/acorn",
         worktreePath: "/tmp/acorn/.acorn/worktrees/feature-alpha",
+        permanent: true,
       },
     ]);
-
-    const retryToast = page.getByText(
-      "Failed to finish deleting removed worktree data: Permission denied. Retry",
-    );
-    await expect(retryToast).toBeVisible({ timeout: 7_000 });
-    await retryToast.click();
-
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () =>
-            (window as unknown as { __discardWorktreeCalls?: unknown[] })
-              .__discardWorktreeCalls?.length ?? 0,
-        ),
-      )
-      .toBe(2);
-    expect(
-      await page.evaluate(
-        () =>
-          (window as unknown as { __discardWorktreeCalls?: unknown[] })
-            .__discardWorktreeCalls,
-      ),
-    ).toEqual(
-      Array.from({ length: 2 }, () => ({
-        token: "remove-feature-alpha",
-        repoPath: "/tmp/acorn",
-        worktreePath: "/tmp/acorn/.acorn/worktrees/feature-alpha",
-        gitCommonDir: "/tmp/acorn/.git",
-      })),
-    );
   });
 
   test("deletes all worktrees not used by a session", async ({
@@ -386,15 +341,21 @@ test.describe("project settings", () => {
       () =>
         (window as unknown as { __removeWorktreeCalls?: unknown[] })
           .__removeWorktreeCalls,
-    )) as Array<{ repoPath: string; worktreePath: string }>;
+    )) as Array<{
+      repoPath: string;
+      worktreePath: string;
+      permanent?: boolean;
+    }>;
     expect(calls).toEqual([
       {
         repoPath: "/tmp/acorn",
         worktreePath: "/tmp/acorn/.acorn/worktrees/feature-alpha",
+        permanent: true,
       },
       {
         repoPath: "/tmp/acorn",
         worktreePath: "/tmp/acorn/.acorn/worktrees/feature-gamma",
+        permanent: true,
       },
     ]);
   });
