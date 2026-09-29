@@ -132,6 +132,7 @@ import {
   type TerminalFileReference,
 } from "../lib/terminalFileLinks";
 import { createTerminalWebLinkProvider } from "../lib/terminalWebLinks";
+import { lineEditorAltArrowSequence } from "../lib/terminalAltArrow";
 import {
   cursorStyleFromDecscusr,
   nextCursorApplicationOverride,
@@ -2896,6 +2897,24 @@ export function Terminal({
           ev.stopImmediatePropagation();
           return;
         }
+      }
+      // xterm's Alt+arrow is CSI 1;3D, which shell line editors insert as
+      // the literal tail ";3D". Send the sequences they already bind.
+      // Alternate-screen and mouse-tracking apps keep xterm's CSI form.
+      const altArrow = lineEditorAltArrowSequence(ev, {
+        alternateScreen: term.buffer.active.type === "alternate",
+        mouseTracking: term.modes.mouseTrackingMode !== "none",
+        applicationCursor: term.modes.applicationCursorKeysMode,
+      });
+      if (altArrow) {
+        // term.input scrolls to the prompt and fires onData, which bumps
+        // terminalInputVersion so a pending image paste is cancelled.
+        // sendUserInputToPty alone skips both, and would also double-write
+        // if called together with input.
+        term.input(altArrow);
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        return;
       }
     };
 
