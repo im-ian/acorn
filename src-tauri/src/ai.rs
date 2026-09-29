@@ -1,5 +1,5 @@
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::str;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
@@ -50,6 +50,8 @@ pub enum AiProvider {
 pub enum PromptTransport {
     Stdin,
     Argument,
+    /// Prompt bytes stay in a 0600 file. Grok headless mode does not read stdin.
+    File,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,12 +61,34 @@ pub struct ResolvedAiCommand {
     pub prompt_transport: PromptTransport,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum CommandEnvironment {
     #[cfg(test)]
     Interactive,
     Passive,
+    /// Grok has no non-persistent flag. Sessions, hooks, and MCP config stay
+    /// inside `home`, which is deleted with the private working directory.
+    /// `profile` is the process home: Grok resolves `~/.agents` and
+    /// `~/.claude` from there, not from `GROK_HOME`. Auth stays at
+    /// `auth_path` so a refresh cannot rotate the user's token into that
+    /// temporary home.
+    PassiveGrok {
+        home: PathBuf,
+        profile: PathBuf,
+        auth_path: Option<PathBuf>,
+    },
 }
+
+const GROK_PASSIVE_REQUIREMENTS: &str = "\
+allow_managed_mcp_servers_only = true
+enable_all_project_mcp_servers = false
+allow_managed_hooks_only = true
+";
+
+/// Built-in that is named only so it can be removed again. An empty
+/// `--tools` value is ignored and leaves the default catalog in place.
+const GROK_PASSIVE_TOOL_ALLOW: &str = "read_file";
+const GROK_PASSIVE_TOOL_DENY: &str = "read_file,search_tool,use_tool,Agent";
 
 pub enum AiProcessStreamEvent<'a> {
     Stdout(&'a str),
@@ -140,10 +164,13 @@ impl AiExecutionRequest {
 
     /// Resolve a provider for passive text generation such as session titles
     /// and suggested commit messages. Passive jobs are not user-authorized
-    /// agent turns: they must accept the prompt over stdin, expose no tools or
-    /// project customizations, and avoid provider-side session persistence.
+    /// agent turns: the prompt stays off argv, the process gets no tools or
+    /// project customizations, and the provider must not keep a session.
     pub fn resolve_passive_text(&self) -> AppResult<ResolvedAiCommand> {
-        let mut resolved = self.resolve()?;
+        let mut resolved = match self.provider {
+            AiProvider::Grok => self.resolve_passive_grok()?,
+            _ => self.resolve()?,
+        };
         match self.provider {
             AiProvider::Claude => {
                 resolved.args.extend([
@@ -169,21 +196,48 @@ impl AiExecutionRequest {
                     .args
                     .extend(["--no-log".to_string(), "--no-stream".to_string()]);
             }
-            AiProvider::Codex | AiProvider::Antigravity | AiProvider::Grok => {
+            AiProvider::Grok => {}
+            AiProvider::Codex | AiProvider::Antigravity => {
                 return Err(AppError::Other(format!(
-                    "{} cannot be used for passive text generation because its CLI does not expose a verified tool-free, non-persistent mode; choose Claude, Ollama, or LLM",
+                    "{} cannot be used for passive text generation because its CLI does not expose a verified tool-free, non-persistent mode; choose Claude, Grok, Ollama, or LLM",
                     provider_label(self.provider)
                 )));
             }
             AiProvider::Custom => unreachable!("custom providers fail in resolve"),
         }
-        if resolved.prompt_transport != PromptTransport::Stdin {
+        if resolved.prompt_transport == PromptTransport::Argument {
             return Err(AppError::Other(format!(
                 "{} cannot be used for passive text generation because it would expose the prompt in process arguments",
                 provider_label(self.provider)
             )));
         }
         Ok(resolved)
+    }
+
+    fn resolve_passive_grok(&self) -> AppResult<ResolvedAiCommand> {
+        let mut args = vec![
+            "--no-auto-update".into(),
+            "--output-format".into(),
+            "plain".into(),
+            "--no-memory".into(),
+            "--max-turns".into(),
+            "1".into(),
+            "--no-subagents".into(),
+            "--disable-web-search".into(),
+            "--verbatim".into(),
+            "--permission-mode".into(),
+            "dontAsk".into(),
+            "--tools".into(),
+            GROK_PASSIVE_TOOL_ALLOW.into(),
+            "--disallowed-tools".into(),
+            GROK_PASSIVE_TOOL_DENY.into(),
+        ];
+        append_native_model_and_effort_args(self, &mut args)?;
+        Ok(ResolvedAiCommand {
+            command: "grok",
+            args,
+            prompt_transport: PromptTransport::File,
+        })
     }
 }
 
@@ -299,6 +353,19 @@ pub fn run_passive_text(
                 "failed to create a private passive AI working directory: {error}"
             ))
         })?;
+    let environment = if request.provider == AiProvider::Grok {
+        let home = working_directory.path().join("grok-home");
+        let profile = working_directory.path().join("profile");
+        let auth_path = install_grok_passive_home(&home)?;
+        restrict_private_directory(&profile, "home directory for passive text")?;
+        CommandEnvironment::PassiveGrok {
+            home,
+            profile,
+            auth_path,
+        }
+    } else {
+        CommandEnvironment::Passive
+    };
     run_oneshot_in_dir_cancellable_with_transport_and_environment(
         resolved.command,
         &resolved.args,
@@ -307,8 +374,52 @@ pub fn run_passive_text(
         Some(working_directory.path()),
         None,
         resolved.prompt_transport,
-        CommandEnvironment::Passive,
+        environment,
     )
+}
+
+fn restrict_private_directory(path: &Path, purpose: &str) -> AppResult<()> {
+    std::fs::create_dir_all(path).map_err(|error| {
+        AppError::Other(format!("failed to create a private {purpose}: {error}"))
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(
+            |error| AppError::Other(format!("failed to restrict a private {purpose}: {error}")),
+        )?;
+    }
+    Ok(())
+}
+
+fn install_grok_passive_home(home: &Path) -> AppResult<Option<PathBuf>> {
+    restrict_private_directory(home, "Grok home for passive text")?;
+    acorn_platform::fs::write_atomic_private(
+        &home.join("requirements.toml"),
+        GROK_PASSIVE_REQUIREMENTS.as_bytes(),
+    )
+    .map_err(|error| {
+        AppError::Other(format!(
+            "failed to write the passive Grok MCP lockdown: {error}"
+        ))
+    })?;
+    Ok(existing_grok_auth_path())
+}
+
+fn existing_grok_auth_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("GROK_AUTH_PATH") {
+        let path = PathBuf::from(path);
+        return regular_grok_auth_file(&path).then_some(path);
+    }
+    let home = std::env::var_os("GROK_HOME")
+        .map(PathBuf::from)
+        .or_else(|| directories::UserDirs::new().map(|dirs| dirs.home_dir().join(".grok")))?;
+    let path = home.join("auth.json");
+    regular_grok_auth_file(&path).then_some(path)
+}
+
+fn regular_grok_auth_file(path: &Path) -> bool {
+    acorn_platform::fs::open_regular_nofollow(path).is_ok()
 }
 
 pub fn run_resolved_streaming_in_dir_cancellable<F>(
@@ -369,21 +480,14 @@ fn run_oneshot_in_dir_cancellable_with_transport_and_environment(
 ) -> AppResult<String> {
     let resolved = resolve_ai_cli(command, settings_label)?;
     let mut command_args = args.to_vec();
-    if prompt_transport == PromptTransport::Argument {
-        command_args.push(prompt.to_string());
-    }
+    apply_prompt_transport(&mut command_args, prompt, cwd, prompt_transport)?;
     let mut command_builder = Command::new(&resolved);
     crate::shell_env::apply_to_command(&mut command_builder);
-    if environment == CommandEnvironment::Passive {
-        strip_acorn_authority_environment(&mut command_builder);
-    }
+    apply_command_environment(&mut command_builder, &environment);
     configure_tree_root(&mut command_builder);
     command_builder
         .args(&command_args)
-        .stdin(match prompt_transport {
-            PromptTransport::Stdin => Stdio::piped(),
-            PromptTransport::Argument => Stdio::null(),
-        })
+        .stdin(prompt_stdio(prompt_transport))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(cwd) = cwd {
@@ -426,6 +530,95 @@ fn run_oneshot_in_dir_cancellable_with_transport_and_environment(
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+fn apply_prompt_transport(
+    command_args: &mut Vec<String>,
+    prompt: &str,
+    cwd: Option<&Path>,
+    prompt_transport: PromptTransport,
+) -> AppResult<()> {
+    match prompt_transport {
+        PromptTransport::Stdin => Ok(()),
+        PromptTransport::Argument => {
+            command_args.push(prompt.to_string());
+            Ok(())
+        }
+        PromptTransport::File => {
+            let dir = cwd.ok_or_else(|| {
+                AppError::Other("a prompt file requires a private working directory".to_string())
+            })?;
+            let path = dir.join("prompt.txt");
+            acorn_platform::fs::write_atomic_private(&path, prompt.as_bytes()).map_err(
+                |error| {
+                    AppError::Other(format!("failed to write the passive prompt file: {error}"))
+                },
+            )?;
+            command_args.push("--prompt-file".into());
+            command_args.push(path.display().to_string());
+            Ok(())
+        }
+    }
+}
+
+fn prompt_stdio(prompt_transport: PromptTransport) -> Stdio {
+    match prompt_transport {
+        PromptTransport::Stdin => Stdio::piped(),
+        PromptTransport::Argument | PromptTransport::File => Stdio::null(),
+    }
+}
+
+fn apply_command_environment(command: &mut Command, environment: &CommandEnvironment) {
+    match environment {
+        #[cfg(test)]
+        CommandEnvironment::Interactive => {}
+        CommandEnvironment::Passive => {
+            strip_acorn_authority_environment(command);
+        }
+        CommandEnvironment::PassiveGrok {
+            home,
+            profile,
+            auth_path,
+        } => {
+            strip_acorn_authority_environment(command);
+            command.env("GROK_HOME", home);
+            // `~/.agents` and `~/.claude` follow the process home, not GROK_HOME.
+            command.env("HOME", profile);
+            command.env("USERPROFILE", profile);
+            command.env("GROK_MEMORY", "0");
+            // `0` disables the folder-trust gate, so an inherited value would
+            // load a repository that contains the temp directory.
+            command.env_remove("GROK_FOLDER_TRUST");
+            // An absolute CLAUDE_CONFIG_DIR would bypass the empty process home.
+            command.env_remove("CLAUDE_CONFIG_DIR");
+            for key in [
+                "GROK_CLAUDE_HOOKS_ENABLED",
+                "GROK_CLAUDE_MCPS_ENABLED",
+                "GROK_CLAUDE_AGENTS_ENABLED",
+                "GROK_CLAUDE_RULES_ENABLED",
+                "GROK_CLAUDE_SKILLS_ENABLED",
+                "GROK_CURSOR_HOOKS_ENABLED",
+                "GROK_CURSOR_MCPS_ENABLED",
+                "GROK_CURSOR_AGENTS_ENABLED",
+                "GROK_CURSOR_RULES_ENABLED",
+                "GROK_CURSOR_SKILLS_ENABLED",
+                "GROK_CODEX_HOOKS_ENABLED",
+                "GROK_CODEX_MCPS_ENABLED",
+                "GROK_CODEX_SKILLS_ENABLED",
+                "GROK_MANAGED_MCPS_ENABLED",
+            ] {
+                command.env(key, "false");
+            }
+            match auth_path {
+                Some(path) => {
+                    command.env("GROK_AUTH_PATH", path);
+                }
+                None => {
+                    command.env_remove("GROK_AUTH_PATH");
+                }
+            }
+        }
+    }
+}
+
 fn strip_acorn_authority_environment(command: &mut Command) {
     let mut keys = std::env::vars_os()
         .map(|(key, _)| key)
@@ -454,18 +647,13 @@ where
 {
     let resolved = resolve_ai_cli(command, settings_label)?;
     let mut command_args = args.to_vec();
-    if prompt_transport == PromptTransport::Argument {
-        command_args.push(prompt.to_string());
-    }
+    apply_prompt_transport(&mut command_args, prompt, cwd, prompt_transport)?;
     let mut command_builder = Command::new(&resolved);
     crate::shell_env::apply_to_command(&mut command_builder);
     configure_tree_root(&mut command_builder);
     command_builder
         .args(&command_args)
-        .stdin(match prompt_transport {
-            PromptTransport::Stdin => Stdio::piped(),
-            PromptTransport::Argument => Stdio::null(),
-        })
+        .stdin(prompt_stdio(prompt_transport))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(cwd) = cwd {
@@ -1363,7 +1551,7 @@ mod tests {
 
     #[test]
     fn passive_generation_rejects_agent_clis_without_tool_free_mode() {
-        for provider in [AiProvider::Codex, AiProvider::Antigravity, AiProvider::Grok] {
+        for provider in [AiProvider::Codex, AiProvider::Antigravity] {
             let request = AiExecutionRequest {
                 provider,
                 model: None,
@@ -1376,6 +1564,170 @@ mod tests {
                 .expect_err("agent provider must fail closed");
             assert!(error.to_string().contains("tool-free, non-persistent"));
         }
+    }
+
+    #[test]
+    fn passive_grok_is_tool_free_and_keeps_the_prompt_out_of_argv() {
+        let request = AiExecutionRequest {
+            provider: AiProvider::Grok,
+            model: Some("grok-4.5".to_string()),
+            effort: Some("low".to_string()),
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        let resolved = request.resolve_passive_text().unwrap();
+        assert_eq!(resolved.command, "grok");
+        assert_eq!(resolved.prompt_transport, PromptTransport::File);
+        assert_eq!(
+            resolved.args,
+            vec![
+                "--no-auto-update",
+                "--output-format",
+                "plain",
+                "--no-memory",
+                "--max-turns",
+                "1",
+                "--no-subagents",
+                "--disable-web-search",
+                "--verbatim",
+                "--permission-mode",
+                "dontAsk",
+                "--tools",
+                "read_file",
+                "--disallowed-tools",
+                "read_file,search_tool,use_tool,Agent",
+                "-m",
+                "grok-4.5",
+                "--effort",
+                "low",
+            ]
+        );
+        assert!(!resolved.args.iter().any(|arg| arg == "-p"));
+    }
+
+    #[test]
+    fn passive_grok_home_locks_down_mcp_without_copying_auth() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("grok-home");
+        let auth = install_grok_passive_home(&home).unwrap();
+
+        let requirements = std::fs::read_to_string(home.join("requirements.toml")).unwrap();
+        assert!(requirements.contains("allow_managed_mcp_servers_only = true"));
+        assert!(requirements.contains("enable_all_project_mcp_servers = false"));
+        assert!(requirements.contains("allow_managed_hooks_only = true"));
+        assert!(!home.join("auth.json").exists());
+        assert!(!home.join("config.toml").exists());
+        if let Some(auth) = auth {
+            assert!(auth.is_absolute());
+            assert!(regular_grok_auth_file(&auth));
+            assert!(!auth.starts_with(&home));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn regular_grok_auth_file_rejects_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("auth.json");
+        std::fs::write(&real, b"{}").unwrap();
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(regular_grok_auth_file(&real));
+        assert!(!regular_grok_auth_file(&link));
+    }
+
+    #[test]
+    fn passive_grok_environment_uses_the_private_home() {
+        let mut command = Command::new("ignored");
+        command
+            .env("ACORN_TEST_AUTHORITY", "secret")
+            .env("GROK_HOME", "/Users/someone/.grok")
+            .env("GROK_FOLDER_TRUST", "0")
+            .env("CLAUDE_CONFIG_DIR", "/Users/someone/.claude");
+        apply_command_environment(
+            &mut command,
+            &CommandEnvironment::PassiveGrok {
+                home: PathBuf::from("/tmp/acorn-passive-grok-home"),
+                profile: PathBuf::from("/tmp/acorn-passive-profile"),
+                auth_path: Some(PathBuf::from("/Users/someone/.grok/auth.json")),
+            },
+        );
+
+        let env = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(env.get("ACORN_TEST_AUTHORITY"), Some(&None));
+        assert_eq!(
+            env.get("GROK_HOME").and_then(|value| value.as_deref()),
+            Some("/tmp/acorn-passive-grok-home")
+        );
+        assert_eq!(
+            env.get("HOME").and_then(|value| value.as_deref()),
+            Some("/tmp/acorn-passive-profile")
+        );
+        assert_eq!(
+            env.get("USERPROFILE").and_then(|value| value.as_deref()),
+            Some("/tmp/acorn-passive-profile")
+        );
+        assert_eq!(env.get("GROK_FOLDER_TRUST"), Some(&None));
+        assert_eq!(env.get("CLAUDE_CONFIG_DIR"), Some(&None));
+        assert_eq!(
+            env.get("GROK_AUTH_PATH").and_then(|value| value.as_deref()),
+            Some("/Users/someone/.grok/auth.json")
+        );
+        assert_eq!(
+            env.get("GROK_CLAUDE_HOOKS_ENABLED")
+                .and_then(|value| value.as_deref()),
+            Some("false")
+        );
+        assert_eq!(
+            env.get("GROK_CURSOR_MCPS_ENABLED")
+                .and_then(|value| value.as_deref()),
+            Some("false")
+        );
+        assert_eq!(
+            env.get("GROK_MEMORY").and_then(|value| value.as_deref()),
+            Some("0")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runs_prompt_from_a_private_file_when_requested() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let args = vec![
+            "-c".to_string(),
+            "test \"$1\" = --prompt-file && cat \"$2\"".to_string(),
+            "sh".to_string(),
+        ];
+        let output = run_oneshot_in_dir_cancellable_with_transport(
+            "/bin/sh",
+            &args,
+            "hello-file",
+            "test settings",
+            Some(dir.path()),
+            None,
+            PromptTransport::File,
+        )
+        .unwrap();
+        let prompt_path = dir.path().join("prompt.txt");
+
+        assert_eq!(output, "hello-file");
+        assert_eq!(std::fs::read_to_string(&prompt_path).unwrap(), "hello-file");
+        assert_eq!(
+            std::fs::metadata(prompt_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]

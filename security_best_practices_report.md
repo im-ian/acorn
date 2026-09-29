@@ -83,10 +83,16 @@ PTY·AI CLI 연동, 파일·트랜스크립트 처리, GitHub 연동, 설치·�
 - 조치:
   - 수동 보조 작업 전용 `resolve_passive_text`/`run_passive_text` 경계를 만들었다
     (`src-tauri/src/ai.rs:145-205`, `src-tauri/src/ai.rs:288-310`).
-  - Claude는 tool-free/safe/non-persistent 모드, LLM은 no-log/no-stream만 허용하고,
-    안전한 비에이전트 모드를 확인할 수 없는 Codex·Antigravity·Grok은 거부한다.
-  - prompt는 argv가 아닌 stdin으로만 전달하고 빈 private cwd에서 실행하며 모든
-    `ACORN_*` 환경을 제거한다 (`src-tauri/src/ai.rs:358-439`).
+  - Claude는 tool-free/safe/non-persistent 모드, LLM은 no-log/no-stream만 허용한다.
+    Grok은 빈 tool catalog, MCP lockdown, hook 비활성, private `GROK_HOME`에서
+    prompt file로만 실행하고 그 home은 호출이 끝나면 삭제한다. 프로세스 `HOME`은
+    같은 임시 디렉터리의 빈 profile이라 `~/.agents`와 `~/.claude`가 사용자
+    설정을 읽지 않고, `GROK_FOLDER_TRUST`는 끄지 않는다. 로그인 파일은
+    `GROK_AUTH_PATH`로 기존 경로를 가리킨다. Codex·Antigravity는 같은 모드가
+    확인되지 않아 거부한다.
+  - prompt는 argv에 넣지 않는다. Claude·Ollama·LLM은 stdin, Grok은 private
+    prompt file이다. 실행 cwd는 빈 private 디렉터리이고 모든 `ACORN_*` 환경을
+    제거한다 (`src-tauri/src/ai.rs`).
   - 출력·시간·프로세스 트리는 제한된 one-shot 경로에서 종료한다.
 
 ### SBP-004 — 파일 TOCTOU, symlink 추적, 무제한 파일/미디어 읽기

@@ -176,7 +176,9 @@ flowchart LR
 
 4. **Passive title/commit generation → 저장소 지침을 통한 tool execution**
 
-   tool-free/non-persistent provider만 빈 cwd·stdin·권한 환경 제거 상태로 실행한다.
+   tool-free/non-persistent provider만 빈 cwd에서 실행한다. prompt는 argv에
+   들어가지 않고, `ACORN_*` 권한 환경은 제거한다. Grok은 private home, 빈
+   프로세스 home, MCP lockdown으로 같은 경계를 맞춘 뒤 그 home을 삭제한다.
 
 5. **큰 stdout/file/transcript/frame → 메모리 또는 thread 고갈**
 
@@ -205,7 +207,7 @@ flowchart LR
 | TM-003 | 가짜/중복 daemon | socket/state | 중간 | Critical | kernel lock, auth token, peer executable, legacy app path pin, deadlines | writable unsigned binary 대체 |
 | TM-004 | symlink/TOCTOU 파일 탈출 | 로컬 파일 | 높음 | High | canonical scope + no-follow descriptor + snapshot | 동일 UID 직접 파일 권한 |
 | TM-005 | 과대 파일/출력/frame DoS | 가용성 | 높음 | High | byte/line/entry/time/connection/process-tree caps | 예산 내 반복 요청 |
-| TM-006 | passive AI tool execution | shell/repo/secrets | 중간 | High | tool-free provider allowlist, empty cwd, stdin, strip env | provider CLI 자체 취약점 |
+| TM-006 | passive AI tool execution | shell/repo/secrets | 중간 | High | tool-free provider allowlist, empty cwd, prompt off argv, strip env, Grok private home, empty process home | provider CLI 자체 취약점 |
 | TM-007 | GitHub slug/OID/argv 주입 | GitHub token/repo | 중간 | High | strict validators, variables, encoding, `--`, no prompt | `gh`/GitHub upstream 취약점 |
 | TM-008 | Markdown/URL/CSS 네트워크·스킴 실행 | OS opener/privacy | 높음 | High | safe URL broker, no raw HTML, remote-image consent, CSS scan | 사용자가 승인한 HTTPS origin |
 | TM-009 | transcript/hook 상태 위조 | session lifecycle | 높음 | High | token, owner/turn correlation, revision fence, bounded parser | 합법 owner process가 악성인 경우 |
