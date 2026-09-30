@@ -10,6 +10,7 @@ use crate::daemon_bridge::DaemonBridge;
 use crate::daemon_stream::StreamRegistry;
 use crate::fs_explorer::{AssetSnapshotStore, WatcherState};
 use crate::ipc::server::IpcServerHandle;
+use crate::ipc::session_close::PendingSessionCloseRequests;
 use crate::ipc::workspaces::PendingWorkspaceRequests;
 use crate::power_assertion::PowerAssertionState;
 use crate::pty_output::PtyOutputRouter;
@@ -79,6 +80,9 @@ pub struct AppState {
     /// in-process socket server owns the request and the renderer answers via
     /// a Tauri command after reading frontend workspace state.
     pub ipc_workspace_requests: Arc<Mutex<PendingWorkspaceRequests>>,
+    /// One-shot answers for IPC close requests. The renderer says whether the
+    /// target's isolated worktree should be deleted with the session.
+    pub ipc_session_close_requests: Arc<Mutex<PendingSessionCloseRequests>>,
     /// Per-PTY random capabilities for the in-process IPC protocol. A missing
     /// entry can be rebound only by a kernel-verified descendant of the live
     /// PTY root, which preserves daemon sessions across app restarts.
@@ -150,6 +154,7 @@ impl AppState {
             pending_removal_retries: Arc::new(Mutex::new(HashMap::new())),
             ipc_handle: Arc::new(Mutex::new(None)),
             ipc_workspace_requests: Arc::new(Mutex::new(Default::default())),
+            ipc_session_close_requests: Arc::new(Mutex::new(HashMap::new())),
             ipc_session_capabilities: Arc::new(Mutex::new(HashMap::new())),
             daemon_bridge: DaemonBridge::new(),
             stream_registry: StreamRegistry::new(),

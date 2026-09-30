@@ -47,8 +47,9 @@ use uuid::Uuid;
 
 use crate::commands::{
     create_unique_project_worktree, sanitize_worktree_name, session_removal_cascade,
-    terminate_session_runtime,
+    terminate_session_runtime, RemovalOutcome, SessionRemoval,
 };
+use crate::ipc::session_close::{SessionCloseRequestPayload, SESSION_CLOSE_REQUEST_EVENT};
 use crate::ipc::workspaces::{ListWorkspacesRequestPayload, LIST_WORKSPACES_REQUEST_EVENT};
 use crate::persistence;
 use crate::state::AppState;
@@ -67,6 +68,26 @@ const SELECT_SESSION_EVENT: &str = "acorn:ipc-select-session";
 /// id as a string, mostly for debugging — the frontend ignores the value
 /// today and just triggers a full refresh.
 const SESSIONS_CHANGED_EVENT: &str = "acorn:ipc-sessions-changed";
+/// How long an IPC close waits for the renderer to apply the isolated-worktree
+/// setting. A missing listener keeps the worktree and still removes the session.
+const SESSION_CLOSE_DECISION_TIMEOUT_MS: u64 = 1_000;
+
+#[derive(Debug, Clone, Serialize)]
+struct IpcSessionRemovalNotice {
+    token: String,
+    repo_path: String,
+    worktree_path: String,
+    git_common_dir: String,
+    session_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct IpcRemovalIssueNotice {
+    kind: String,
+    target: String,
+    message: String,
+    retryable: bool,
+}
 
 #[derive(Debug, Clone, Serialize)]
 struct SessionsChangedPayload {
@@ -77,6 +98,13 @@ struct SessionsChangedPayload {
     workspace_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace_id: Option<String>,
+    /// Present on the root session when its linked worktree was staged for undo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    removal: Option<IpcSessionRemovalNotice>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    issues: Vec<IpcRemovalIssueNotice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_token: Option<String>,
 }
 
 /// Shutdown signal for an active IPC listener. The listener thread polls
@@ -349,8 +377,7 @@ fn execute_post_response<R: Runtime>(
                     return;
                 }
             };
-            let sessions_to_remove = session_removal_cascade(state, &source);
-            remove_ipc_sessions(&sessions_to_remove, app, state)
+            close_ipc_session(&source, app, state)
         }
     };
     if let Err(err) = result {
@@ -993,6 +1020,9 @@ fn handle_new_session<R: Runtime>(
             repo_path: inserted.repo_path.display().to_string(),
             workspace_path: Some(inserted.worktree_path.display().to_string()),
             workspace_id,
+            removal: None,
+            issues: Vec::new(),
+            retry_token: None,
         },
     ) {
         tracing::warn!(
@@ -1041,14 +1071,127 @@ fn handle_kill_session<R: Runtime>(
             message: "refusing to kill the source session; use close-self".to_string(),
         };
     }
-    let sessions_to_remove = session_removal_cascade(state, &target);
-    if let Err(message) = remove_ipc_sessions(&sessions_to_remove, app, state) {
+    if let Err(message) = close_ipc_session(&target, app, state) {
         return Response::Error {
             code: ErrorCode::Internal,
             message,
         };
     }
     Response::Ack
+}
+
+fn close_ipc_session<R: Runtime>(
+    root: &Session,
+    app: &AppHandle<R>,
+    state: &AppState,
+) -> Result<(), String> {
+    if frontend_requests_worktree_removal(app, state, root.id) {
+        let snapshot = session_removal_cascade(state, root);
+        match tauri::async_runtime::block_on(crate::commands::remove_session_inner(
+            state.clone(),
+            root.id.to_string(),
+            Some(true),
+        )) {
+            Ok(outcome) => {
+                emit_worktree_removal(app, root.id, &snapshot, &outcome);
+                return Ok(());
+            }
+            Err(err) => {
+                tracing::warn!(
+                    session_id = %root.id,
+                    error = %err,
+                    "ipc: worktree removal failed; removing the session without its worktree"
+                );
+            }
+        }
+    }
+    let sessions_to_remove = session_removal_cascade(state, root);
+    remove_ipc_sessions(&sessions_to_remove, app, state)
+}
+
+fn frontend_requests_worktree_removal<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    session_id: Uuid,
+) -> bool {
+    let request_id = Uuid::new_v4().to_string();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    state
+        .ipc_session_close_requests
+        .lock()
+        .insert(request_id.clone(), sender);
+    if let Err(err) = app.emit(
+        SESSION_CLOSE_REQUEST_EVENT,
+        SessionCloseRequestPayload {
+            request_id: request_id.clone(),
+            session_id: session_id.to_string(),
+        },
+    ) {
+        tracing::warn!(error = %err, "ipc: session close decision emit failed");
+        state.ipc_session_close_requests.lock().remove(&request_id);
+        return false;
+    }
+    match receiver.recv_timeout(Duration::from_millis(SESSION_CLOSE_DECISION_TIMEOUT_MS)) {
+        Ok(remove_worktree) => remove_worktree,
+        Err(_) => {
+            state.ipc_session_close_requests.lock().remove(&request_id);
+            false
+        }
+    }
+}
+
+fn emit_worktree_removal<R: Runtime>(
+    app: &AppHandle<R>,
+    root_id: Uuid,
+    sessions: &[Session],
+    outcome: &RemovalOutcome<Option<SessionRemoval>>,
+) {
+    let removal = outcome
+        .result
+        .as_ref()
+        .map(|removal| IpcSessionRemovalNotice {
+            token: removal.token.clone(),
+            repo_path: removal.repo_path.clone(),
+            worktree_path: removal.worktree_path.clone(),
+            git_common_dir: removal.git_common_dir.clone(),
+            session_ids: removal.session_ids.clone(),
+        });
+    let issues = outcome
+        .issues
+        .iter()
+        .map(|issue| IpcRemovalIssueNotice {
+            kind: issue.kind.clone(),
+            target: issue.target.clone(),
+            message: issue.message.clone(),
+            retryable: issue.retryable,
+        })
+        .collect::<Vec<_>>();
+    for session in sessions {
+        let is_root = session.id == root_id;
+        if let Err(err) = app.emit(
+            SESSIONS_CHANGED_EVENT,
+            SessionsChangedPayload {
+                action: "removed",
+                session_id: session.id.to_string(),
+                repo_path: session.repo_path.display().to_string(),
+                workspace_path: Some(session.worktree_path.display().to_string()),
+                workspace_id: None,
+                removal: if is_root { removal.clone() } else { None },
+                issues: if is_root { issues.clone() } else { Vec::new() },
+                retry_token: if is_root {
+                    outcome.retry_token.clone()
+                } else {
+                    None
+                },
+            },
+        ) {
+            tracing::warn!(
+                error = %err,
+                event = SESSIONS_CHANGED_EVENT,
+                "ipc: sessions-changed emit failed",
+            );
+        }
+    }
 }
 
 fn remove_ipc_sessions<R: Runtime>(
@@ -1078,6 +1221,9 @@ fn remove_ipc_sessions<R: Runtime>(
                 repo_path: session.repo_path.display().to_string(),
                 workspace_path: Some(session.worktree_path.display().to_string()),
                 workspace_id: None,
+                removal: None,
+                issues: Vec::new(),
+                retry_token: None,
             },
         ) {
             tracing::warn!(
@@ -1668,6 +1814,142 @@ mod tests {
         assert!(
             status.success(),
             "close-self runtime helper failed: {status}"
+        );
+    }
+
+    fn answer_pending_close(state: AppState, remove_worktree: bool) {
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let request_id = state
+                    .ipc_session_close_requests
+                    .lock()
+                    .keys()
+                    .next()
+                    .cloned();
+                if let Some(request_id) = request_id {
+                    crate::ipc::session_close::deliver_session_close_response(
+                        &mut state.ipc_session_close_requests.lock(),
+                        crate::ipc::session_close::SessionCloseResponsePayload {
+                            request_id,
+                            remove_worktree,
+                        },
+                    )
+                    .expect("deliver close decision");
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    panic!("IPC close request was not registered");
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+    }
+
+    fn mock_ipc_app() -> (tauri::App<tauri::test::MockRuntime>, AppState) {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::new())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("build mock app");
+        let state = app.state::<AppState>().inner().clone();
+        state.daemon_bridge.set_enabled(false);
+        (app, state)
+    }
+
+    #[test]
+    fn ipc_close_removes_the_session_when_the_frontend_does_not_answer() {
+        let (app, state) = mock_ipc_app();
+        let session =
+            state
+                .sessions
+                .insert(make_session("/tmp/demo", "shell", SessionKind::Regular));
+        let started = Instant::now();
+        close_ipc_session(&session, app.handle(), &state).expect("close without a frontend");
+        assert!(started.elapsed() >= Duration::from_millis(SESSION_CLOSE_DECISION_TIMEOUT_MS));
+        assert!(state.sessions.get(&session.id).is_err());
+        assert!(state.pending_session_removals.lock().is_empty());
+    }
+
+    #[test]
+    fn ipc_close_keeps_a_worktree_when_the_frontend_declines() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let root = scratch.path().join("repo");
+        std::fs::create_dir_all(&root).expect("repo dir");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        std::fs::write(root.join("tracked.txt"), "initial").expect("tracked file");
+        let signature = git2::Signature::now("acorn-test", "test@acorn").expect("signature");
+        let tree_id = {
+            let mut index = repo.index().expect("index");
+            index
+                .add_path(std::path::Path::new("tracked.txt"))
+                .expect("add tracked file");
+            index.write_tree().expect("write tree")
+        };
+        let tree = repo.find_tree(tree_id).expect("tree");
+        repo.commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
+            .expect("commit");
+        drop(tree);
+        drop(repo);
+        let worktree_path =
+            crate::worktree::create_worktree(&root, "solo").expect("create worktree");
+        let (app, state) = mock_ipc_app();
+        let session = state.sessions.insert(Session::new(
+            "solo".to_string(),
+            root,
+            worktree_path.clone(),
+            "solo".to_string(),
+            true,
+            SessionKind::Regular,
+        ));
+        answer_pending_close(state.clone(), false);
+        close_ipc_session(&session, app.handle(), &state).expect("close keeping worktree");
+        assert!(state.sessions.get(&session.id).is_err());
+        assert!(worktree_path.is_dir());
+        assert!(state.pending_session_removals.lock().is_empty());
+    }
+
+    #[test]
+    fn ipc_close_stages_an_isolated_worktree_when_the_frontend_asks() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let root = scratch.path().join("repo");
+        std::fs::create_dir_all(&root).expect("repo dir");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        std::fs::write(root.join("tracked.txt"), "initial").expect("tracked file");
+        let signature = git2::Signature::now("acorn-test", "test@acorn").expect("signature");
+        let tree_id = {
+            let mut index = repo.index().expect("index");
+            index
+                .add_path(std::path::Path::new("tracked.txt"))
+                .expect("add tracked file");
+            index.write_tree().expect("write tree")
+        };
+        let tree = repo.find_tree(tree_id).expect("tree");
+        repo.commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
+            .expect("commit");
+        drop(tree);
+        drop(repo);
+        let worktree_path =
+            crate::worktree::create_worktree(&root, "solo").expect("create worktree");
+        let (app, state) = mock_ipc_app();
+        let session = state.sessions.insert(Session::new(
+            "solo".to_string(),
+            root.clone(),
+            worktree_path.clone(),
+            "solo".to_string(),
+            true,
+            SessionKind::Regular,
+        ));
+        answer_pending_close(state.clone(), true);
+        close_ipc_session(&session, app.handle(), &state).expect("close deleting worktree");
+        assert!(state.sessions.get(&session.id).is_err());
+        assert!(!worktree_path.exists());
+        let pending = state.pending_session_removals.lock();
+        assert_eq!(pending.len(), 1);
+        let removal = pending.values().next().expect("staged removal");
+        assert_eq!(removal.sessions[0].id, session.id);
+        assert_eq!(
+            std::path::Path::new(&removal.worktree.worktree_path),
+            worktree_path.as_path()
         );
     }
 

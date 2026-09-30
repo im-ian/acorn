@@ -10,4 +10,5 @@
 //! `commands` — none of which are available to a leaf crate.
 
 pub mod server;
+pub mod session_close;
 pub mod workspaces;

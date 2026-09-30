@@ -254,9 +254,18 @@ error instead of guessing from backend session paths.
 
 `close-self` is the explicit self-closing path. The server first acknowledges
 the request, waits for the CLI to read the response and close its socket, then
-terminates the source session's complete runtime and removes its session
-record. Every session owned by that source is closed too; unrelated and
-user-owned sessions are left running.
+asks the open window whether this session's worktree should be deleted.
+`kill-session` asks the same question before it acknowledges. The window
+applies the isolated-worktree cleanup setting: a standalone isolated worktree
+is staged for deletion only when that confirmation is off and the session owns
+no other sessions. The window then shows the same undo toast as a sidebar
+removal. The undo restores the worktree and the session row; it does not
+resurrect the process that was just closed. Shared worktrees, linked
+worktrees, workspace folders, and sessions that own other sessions keep their
+directories. If the window is reloading and does not answer, the server still
+removes the session records and leaves every worktree on disk. Every session
+owned by the closed session is closed too; unrelated and user-owned sessions
+are left running.
 
 `promote-self` is an idempotent compatibility probe. It does not change
 session kind.

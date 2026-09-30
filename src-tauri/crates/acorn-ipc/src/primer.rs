@@ -69,7 +69,9 @@ pub fn primer() -> &'static str {
          `new-session --workspace <path> --workspace-id <id>`.\n\
          - Use `close-self` only as the final action after the requested work, \
          verification, delivery, and completion report are all finished. It \
-         closes this session and every session it owns.\n\
+         closes this session and every session it owns. A standalone isolated \
+         worktree is also removed when Settings deletes those without asking; \
+         the window shows an undo toast. Shared worktrees stay.\n\
          - Do not run `select-session` to send input or read output. \
          `send-keys` and `read-buffer` reach a live PTY without moving the \
          user's focus, including a session whose terminal view was detached \

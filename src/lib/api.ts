@@ -67,6 +67,7 @@ import type {
   MacosPermissionResetResult,
 } from "./permissionWarmup";
 import type { IpcListWorkspacesResponsePayload } from "./ipcWorkspaces";
+import type { IpcSessionCloseResponsePayload } from "./ipcSessionClose";
 import type { GraphPromptPlan } from "./workGraph";
 
 export type {
@@ -912,6 +913,11 @@ export const api = {
     response: IpcListWorkspacesResponsePayload,
   ): Promise<void> {
     return invoke<void>("ipc_list_workspaces_response", { response });
+  },
+  ipcSessionCloseResponse(
+    response: IpcSessionCloseResponsePayload,
+  ): Promise<void> {
+    return invoke<void>("ipc_session_close_response", { response });
   },
   listSystemFonts(): Promise<string[]> {
     return invoke<string[]>("list_system_fonts");
