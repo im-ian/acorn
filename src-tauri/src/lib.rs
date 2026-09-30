@@ -941,6 +941,7 @@ pub fn run() {
             commands::reset_macos_developer_permissions,
             commands::ipc_restart,
             commands::ipc_list_workspaces_response,
+            commands::ipc_session_close_response,
             commands::list_system_fonts,
             commands::list_agent_history,
             commands::agent_transcript_summary,
