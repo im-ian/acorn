@@ -44,6 +44,7 @@ import {
   normalizeHangulCommit,
 } from "../lib/terminalIme";
 import {
+  createStreamingViewportRepaint,
   createTerminalRepaintScheduler,
   createTerminalVisibilityRepaintObserver,
   repaintTerminalViewport,
@@ -51,6 +52,7 @@ import {
 import {
   ptyPixelSize,
   shouldForceCommandPtyResize,
+  SIGWINCH_PULSE_GAP_MS,
   sigwinchPulseSize,
 } from "../lib/terminalPtySize";
 import {
@@ -102,6 +104,7 @@ import {
   isDaemonEnabledFromStorage,
   MOUSE_PASTE_RESET_CSI,
   planTerminalRestore,
+  withoutAltScreenEnterPrefix,
 } from "../lib/terminalRestorePlan";
 import {
   TERMINAL_REFRESH_EVENT,
@@ -1338,6 +1341,8 @@ export function Terminal({
     let liveCwdProbeTimer: number | null = null;
     let daemonSessionAliveAtMount = false;
     let replayScrollbackOnSpawn = true;
+    let preserveOverlayOnSpawn = false;
+    let overlaySnapshotToPaint: string | null = null;
 
     const rememberLinkedWorktreeCwd = (path: string, source: string) => {
       void api
@@ -1557,22 +1562,13 @@ export function Terminal({
       }, SCROLLBACK_SAVE_DEBOUNCE_MS);
     };
 
-    // Force viewport repaints around PTY output bursts.
-    //
-    // xterm's DOM renderer reuses per-row DOM elements and incrementally
-    // patches glyphs as the buffer changes. When a streaming TUI (Claude
-    // CLI, `htop`, `claude --print`) is mid-redraw — or interrupted by
-    // Esc/Ctrl+C — the parser can settle with stale cursor/cell DOM left
-    // from an earlier frame. The xterm buffer is correct
-    // (copy-to-clipboard yields clean text); only the DOM rendition is
-    // stale. Forcing `refresh(0, rows-1)` rebuilds every visible row from
-    // the buffer, which clears leftover characters and cursor blocks.
-    //
-    // An idle refresh after the burst goes quiet catches interrupted
-    // final frames. A full rebuild on every write queues pointer motion.
-    const VIEWPORT_REPAINT_IDLE_MS = 120;
-    let viewportRepaintTimer: number | null = null;
-    const repaintViewport = () => {
+    // xterm's DOM renderer reuses per-row elements and can leave the previous
+    // frame's glyphs up after a streaming TUI settles. The buffer is already
+    // current (copy is clean); `refresh` rebuilds the visible rows from it.
+    // Waiting until output goes quiet never runs while a TUI keeps writing,
+    // and a full rebuild on every write queues pointer motion, so a continuous
+    // stream repaints on a short interval instead.
+    const streamingViewportRepaint = createStreamingViewportRepaint(() => {
       if (disposed) return;
       try {
         term.refresh(0, term.rows - 1);
@@ -1580,17 +1576,7 @@ export function Terminal({
         // ignore — terminal may have been disposed between scheduling
         // and reaching the call.
       }
-    };
-    const scheduleViewportIdleRepaint = () => {
-      if (disposed) return;
-      if (viewportRepaintTimer !== null) {
-        window.clearTimeout(viewportRepaintTimer);
-      }
-      viewportRepaintTimer = window.setTimeout(() => {
-        viewportRepaintTimer = null;
-        repaintViewport();
-      }, VIEWPORT_REPAINT_IDLE_MS);
-    };
+    });
 
     const writeToPty = (targetSessionId: string, data: string) => {
       void api.ptyWrite(targetSessionId, data).catch((err: unknown) => {
@@ -3361,6 +3347,9 @@ export function Terminal({
     }
 
     let ptyReady = false;
+    // A one-cell pulse only reaches the child when nothing else writes the
+    // original size during the gap. Same-size TIOCSWINSZ is one SIGWINCH.
+    let ptyResizeSuspended = false;
     let lastPtyResize:
       | {
           cols: number;
@@ -3389,6 +3378,7 @@ export function Terminal({
         pixelHeight: number;
       } = currentPtySize(),
     ) => {
+      if (ptyResizeSuspended) return;
       if (!ptyReady || size.cols <= 0 || size.rows <= 0) return;
       if (
         !force &&
@@ -3417,6 +3407,46 @@ export function Terminal({
         }
         console.error("[Terminal] pty_resize failed", err);
       });
+    };
+    // Shrink by one cell, wait until the child can observe that size, then
+    // restore. A pair of resizes with no gap is one SIGWINCH at the original
+    // geometry, so an overlay TUI never redraws onto the new xterm. Other
+    // resizes wait out that gap: a same-size write in the middle is the
+    // original geometry again.
+    const pulseRemountedPty = async () => {
+      const size = currentPtySize();
+      const pulse = sigwinchPulseSize(size);
+      if (!pulse) {
+        sendPtyResize(true, currentPtySize());
+        return;
+      }
+      ptyResizeSuspended = true;
+      let interrupted = false;
+      try {
+        try {
+          await invoke("pty_resize", {
+            sessionId,
+            cols: pulse.cols,
+            rows: pulse.rows,
+            pixelWidth: pulse.pixelWidth,
+            pixelHeight: pulse.pixelHeight,
+          });
+        } catch (err: unknown) {
+          console.error("[Terminal] pty_resize failed", err);
+        }
+        if (disposed) {
+          interrupted = true;
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, SIGWINCH_PULSE_GAP_MS);
+        });
+        if (disposed) interrupted = true;
+      } finally {
+        ptyResizeSuspended = false;
+      }
+      if (interrupted || disposed) return;
+      sendPtyResize(true, currentPtySize());
     };
     const syncViewportAndPtySize = () => {
       const fit = fitTerminalRef.current;
@@ -3760,6 +3790,7 @@ export function Terminal({
           // truth. Local snapshots are only restored for dead daemon sessions,
           // where there is no live ring to replay.
           replayScrollback: replayScrollbackOnSpawn,
+          preserveScreen: preserveOverlayOnSpawn,
           outputToken: outputSubscriptionToken,
         });
         if (disposed) {
@@ -3813,9 +3844,9 @@ export function Terminal({
         if (isActiveRef.current) {
           // Hidden portal targets keep their xterm buffer current but do not
           // need DOM repaint work until TerminalHost moves them on-screen.
-          // Extra full refresh is idle-only. Per-write rebuilds queue
-          // TUI pointer motion on WKWebView.
-          scheduleViewportIdleRepaint();
+          // Full refresh stays on a short interval. Rebuilding every write
+          // queues TUI pointer motion on WKWebView.
+          streamingViewportRepaint.schedule();
         }
         // The sticky prompt is buffer-derived; keep it in sync with parsed
         // output even when the terminal was hidden during the write.
@@ -3860,25 +3891,7 @@ export function Terminal({
         sendToPty("\x0c");
         return;
       }
-      const size = currentPtySize();
-      const pulse = sigwinchPulseSize(size);
-      if (!pulse) return;
-      try {
-        await invoke("pty_resize", {
-          sessionId,
-          cols: pulse.cols,
-          rows: pulse.rows,
-          pixelWidth: pulse.pixelWidth,
-          pixelHeight: pulse.pixelHeight,
-        });
-      } catch (err) {
-        console.error("[Terminal] pty_resize failed", err);
-        return;
-      }
-      if (disposed) return;
-      const restored = currentPtySize();
-      if (restored.cols !== size.cols || restored.rows !== size.rows) return;
-      sendPtyResize(true, restored);
+      await pulseRemountedPty();
     };
     const onRefreshRequested = (event: Event) => {
       const detail = (event as CustomEvent<TerminalRefreshDetail>).detail;
@@ -3906,11 +3919,20 @@ export function Terminal({
     // await resumption point so a disposed mount short-circuits cleanly.
     const folderPermissionOutputDetector =
       createFolderPermissionOutputDetector();
+    // `?1049h` clears the alt buffer and homes the cursor. While a restored
+    // overlay frame is being painted, a leading alt-screen enter in this
+    // burst is dropped so it cannot wipe that frame. The rest of the chunk
+    // (mouse and paste modes, or a redraw) still applies.
+    let stripAltScreenEnter = false;
     const handlePtyOutput = (bytes: Uint8Array) => {
-      outputWriter.enqueue(bytes);
+      const output = stripAltScreenEnter
+        ? withoutAltScreenEnterPrefix(bytes)
+        : bytes;
+      if (output.byteLength === 0) return;
+      outputWriter.enqueue(output);
       if (
         !applicationOwnsWheel(term) &&
-        folderPermissionOutputDetector.push(bytes)
+        folderPermissionOutputDetector.push(output)
       ) {
         window.dispatchEvent(new Event(FOLDER_PERMISSION_RECHECK_EVENT));
       }
@@ -4100,13 +4122,11 @@ export function Terminal({
       });
       unlistenFns.push(() => restartDisposable.dispose());
 
-      // If the daemon already owns a live PTY for this session, its ring
-      // buffer is the freshest representation of the screen. Disk scrollback
-      // is only the last saved frontend snapshot and can be stale after the
-      // app has been closed while an agent kept running. Replaying that
-      // stale snapshot first leaves xterm's buffer/cursor out of sync with
-      // the next daemon redraw, so live daemon reattach skips disk restore
-      // and asks `pty_spawn` to replay the daemon ring instead.
+      // A live shell replays the daemon ring. A live overlay does not: that
+      // ring is cursor-addressed, and the attach prelude's alt-screen enter
+      // clears the new xterm and homes the cursor. The serialized snapshot
+      // is painted after attach instead, which puts the input cursor back
+      // on the TUI's prompt.
       try {
         const daemonSessions = await api.daemonListSessions();
         if (disposed) return;
@@ -4125,11 +4145,9 @@ export function Terminal({
         });
       }
 
-      // Restore the xterm-rendered disk snapshot before spawning so the user
-      // sees the previous terminal screen immediately on app restart. Dead or
-      // newly spawned sessions can safely use that snapshot; already-live
-      // daemon sessions must use the daemon ring instead so cursor state
-      // matches the running PTY.
+      // Dead sessions restore the snapshot before spawn, then leave the alt
+      // screen so the new shell prompt is visible. A live overlay keeps the
+      // snapshot until after attach: `?1049h` in the prelude would wipe it.
       try {
         const saved = await invoke<string | null>("scrollback_load", {
           sessionId,
@@ -4142,14 +4160,24 @@ export function Terminal({
           disk: saved,
         });
         replayScrollbackOnSpawn = restorePlan.replayScrollback;
+        preserveOverlayOnSpawn = false;
+        overlaySnapshotToPaint = null;
         const restored = restorePlan.snapshot
           ? stripRestoreMarkers(restorePlan.snapshot)
           : "";
-        if (
+        const canRestore =
           restorePlan.source !== null &&
-          restored &&
-          shouldRestoreScrollback(restored)
-        ) {
+          Boolean(restored) &&
+          shouldRestoreScrollback(restored);
+        if (canRestore && restorePlan.preserveOverlay) {
+          overlaySnapshotToPaint = restored;
+          preserveOverlayOnSpawn = true;
+        } else if (restorePlan.preserveOverlay) {
+          // Nothing paintable. Replay the ring and let the prelude open
+          // the alt screen so a SIGWINCH redraw has somewhere to land.
+          replayScrollbackOnSpawn = true;
+        }
+        if (canRestore && !restorePlan.preserveOverlay) {
           // Each step is awaited individually so the restored snapshot,
           // terminal-mode resets, and the new shell's first prompt cannot
           // interleave inside xterm's parser queue. Strict serial drain
@@ -4207,29 +4235,35 @@ export function Terminal({
       }
 
       if (disposed) return;
-      await spawnPty();
-      if (disposed) return;
-      // Same-size TIOCSWINSZ is a no-op in the tty driver. Step the live
-      // PTY down and back so a remounted overlay TUI redraws onto this xterm.
-      if (daemonSessionAliveAtMount) {
-        const size = currentPtySize();
-        const pulse = sigwinchPulseSize(size);
-        if (pulse) {
-          lastPtyResize = pulse;
-          try {
-            await invoke("pty_resize", {
-              sessionId,
-              cols: pulse.cols,
-              rows: pulse.rows,
-              pixelWidth: pulse.pixelWidth,
-              pixelHeight: pulse.pixelHeight,
+      // The attach prelude can arrive before `pty_spawn` resolves. Keep
+      // dropping a leading alt-screen enter until the saved frame is on
+      // screen and the redraw pulse has finished.
+      stripAltScreenEnter = preserveOverlayOnSpawn;
+      try {
+        await spawnPty();
+        // A failed spawn already wrote the error on this xterm. Painting the
+        // overlay afterwards would cover that banner, and a resize pulse
+        // has no PTY to reach.
+        if (!disposed && ptyReady && overlaySnapshotToPaint) {
+          // Drain the prelude before the snapshot. Unparsed cursor moves
+          // still queued after it would land on the restored frame.
+          await outputWriter.whenIdle();
+          if (!disposed) {
+            outputWriter.discardPending();
+            await new Promise<void>((resolve) => {
+              term.write(overlaySnapshotToPaint ?? "", resolve);
             });
-          } catch (err) {
-            console.error("[Terminal] pty_resize failed", err);
           }
-          if (disposed) return;
         }
-        sendPtyResize(true, size);
+        if (
+          !disposed &&
+          ptyReady &&
+          (daemonSessionAliveAtMount || overlaySnapshotToPaint)
+        ) {
+          await pulseRemountedPty();
+        }
+      } finally {
+        stripAltScreenEnter = false;
       }
 
       const unsubArchiveResume = useAppStore.subscribe((state, prev) => {
@@ -4342,10 +4376,7 @@ export function Terminal({
       if (!drainAndPersistBeforeDispose) {
         outputWriter.dispose();
       }
-      if (viewportRepaintTimer !== null) {
-        window.clearTimeout(viewportRepaintTimer);
-        viewportRepaintTimer = null;
-      }
+      streamingViewportRepaint.dispose();
       cancelLinkTooltipHide();
       if (resizeTimer !== null) {
         window.clearTimeout(resizeTimer);

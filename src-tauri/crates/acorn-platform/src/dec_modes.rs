@@ -54,6 +54,20 @@ impl DecPrivateModes {
     }
 }
 
+/// Drop a leading alt-screen enter from `prelude()`.
+///
+/// `?1049h` clears xterm.js's alt buffer and homes the cursor. A remount
+/// that already painted a serialized frame must not send it again.
+pub fn without_alt_screen_enter(prelude: &[u8]) -> Vec<u8> {
+    const ENTERS: [&[u8]; 3] = [b"\x1b[?1049h", b"\x1b[?1047h", b"\x1b[?47h"];
+    for prefix in ENTERS {
+        if let Some(rest) = prelude.strip_prefix(prefix) {
+            return rest.to_vec();
+        }
+    }
+    prelude.to_vec()
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum State {
     #[default]
@@ -260,6 +274,20 @@ mod tests {
             }
         );
         assert_eq!(modes.prelude(), b"\x1b[?1049h\x1b[?1000h\x1b[?1006h");
+        assert_eq!(
+            without_alt_screen_enter(&modes.prelude()),
+            b"\x1b[?1000h\x1b[?1006h"
+        );
+    }
+
+    #[test]
+    fn without_alt_screen_enter_keeps_a_prelude_that_never_entered() {
+        let modes = track(&[b"\x1b[?1000h\x1b[?2004h"]);
+        assert_eq!(
+            without_alt_screen_enter(&modes.prelude()),
+            b"\x1b[?1000h\x1b[?2004h"
+        );
+        assert_eq!(without_alt_screen_enter(b""), b"");
     }
 
     #[test]

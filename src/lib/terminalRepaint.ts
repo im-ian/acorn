@@ -73,6 +73,55 @@ export function createTerminalRepaintScheduler(
 }
 
 /**
+ * Gap between corrective full-viewport refreshes while PTY output continues.
+ * A streaming TUI often never goes quiet, and xterm's DOM renderer can leave
+ * the previous frame's cells up until `refresh`. Waiting for silence freezes
+ * the pane even though the buffer is already current. A full rebuild on every
+ * write queues pointer motion, so paints stay at least this far apart.
+ */
+export const STREAMING_VIEWPORT_REPAINT_INTERVAL_MS = 48;
+
+export function createStreamingViewportRepaint(
+  repaint: () => void,
+  intervalMs = STREAMING_VIEWPORT_REPAINT_INTERVAL_MS,
+  now: () => number = () => performance.now(),
+  scheduleTimer: (callback: () => void, delayMs: number) => number = (
+    callback,
+    delayMs,
+  ) => window.setTimeout(callback, delayMs),
+  cancelTimer: (id: number) => void = (id) => window.clearTimeout(id),
+): { schedule: () => void; dispose: () => void } {
+  let timer: number | null = null;
+  let lastPaintAt = Number.NEGATIVE_INFINITY;
+  let dirty = false;
+
+  const dispose = () => {
+    if (timer !== null) {
+      cancelTimer(timer);
+      timer = null;
+    }
+    dirty = false;
+  };
+
+  const paint = () => {
+    timer = null;
+    if (!dirty) return;
+    dirty = false;
+    lastPaintAt = now();
+    repaint();
+  };
+
+  const schedule = () => {
+    dirty = true;
+    if (timer !== null) return;
+    const wait = Math.max(0, intervalMs - (now() - lastPaintAt));
+    timer = scheduleTimer(paint, wait);
+  };
+
+  return { schedule, dispose };
+}
+
+/**
  * Whether a repaint is needed for a visibility transition. xterm's DOM renderer
  * skips row paints while its element has no layout box (background tab, hidden
  * kanban view, split/merge remount), so it must be forced to rebuild only when

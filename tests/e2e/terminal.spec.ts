@@ -5128,6 +5128,71 @@ test.describe("terminal: spawn", () => {
     );
   });
 
+  test("reattaching a live overlay restores the serialized frame and cursor", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "working",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("daemon_list_sessions", () => [
+      {
+        id: "s-term",
+        name: "shell",
+        kind: "regular",
+        alive: true,
+        cwd: "/tmp/demo",
+        repo_path: "/tmp/demo",
+        branch: "main",
+        agent_kind: null,
+      },
+    ]);
+    await tauri.handle(
+      "scrollback_load",
+      () => "\u001b[?1049h\u001b[Hoverlay cursor stays",
+    );
+    await tauri.handle("pty_spawn", (args) => {
+      const w = window as unknown as { __ptySpawnCalls?: unknown[] };
+      w.__ptySpawnCalls = w.__ptySpawnCalls ?? [];
+      w.__ptySpawnCalls.push(args);
+      return null;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Working$/ })
+      .click();
+
+    await expect(page.locator(".xterm")).toContainText("overlay cursor stays", {
+      timeout: 5_000,
+    });
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __ptySpawnCalls?: unknown[] }).__ptySpawnCalls,
+    )) as Array<{ replayScrollback: boolean; preserveScreen: boolean }>;
+    expect(calls.some((call) => call.preserveScreen === true)).toBe(true);
+    expect(calls.some((call) => call.replayScrollback === false)).toBe(true);
+  });
+
   test("scrollback load failure keeps later terminal saves disabled", async ({
     page,
     tauri,

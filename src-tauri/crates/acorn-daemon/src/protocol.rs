@@ -411,6 +411,12 @@ pub struct StreamAttach {
     /// reattach; CLI watchers may not.
     #[serde(default)]
     pub replay_scrollback: bool,
+    /// The client paints a serialized overlay after this attach. Skip the
+    /// alt-screen enter (`?1049h` clears and homes the cursor) and skip the
+    /// cursor-addressed ring. Mouse and paste modes are still restored.
+    /// Older clients omit the field.
+    #[serde(default)]
+    pub preserve_screen: bool,
 }
 
 /// Bidirectional stream frame. The daemon sends `Output` / `Exit` /

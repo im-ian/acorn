@@ -160,6 +160,7 @@ pub fn attach<R: Runtime + 'static>(
     pid: Option<u32>,
     output_token: Option<u64>,
     replay_scrollback: bool,
+    preserve_screen: bool,
 ) -> std::io::Result<()> {
     let mut conn = socket::connect_stream()?;
 
@@ -186,6 +187,7 @@ pub fn attach<R: Runtime + 'static>(
     let attach = StreamAttach {
         session_id,
         replay_scrollback,
+        preserve_screen,
     };
     {
         let writer = reader.get_mut();

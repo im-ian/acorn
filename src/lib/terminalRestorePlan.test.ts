@@ -3,7 +3,52 @@ import {
   assumeDaemonAliveForRestore,
   isDaemonEnabledFromStorage,
   planTerminalRestore,
+  snapshotKeepsAlternateScreen,
+  withoutAltScreenEnterPrefix,
 } from "./terminalRestorePlan";
+
+const ALT = "\u001b[?1049h";
+
+describe("snapshotKeepsAlternateScreen", () => {
+  it("tracks the last alt-screen private mode", () => {
+    expect(snapshotKeepsAlternateScreen("plain")).toBe(false);
+    expect(snapshotKeepsAlternateScreen(`${ALT}frame`)).toBe(true);
+    expect(snapshotKeepsAlternateScreen(`history${ALT}\u001b[Hframe`)).toBe(
+      true,
+    );
+    expect(snapshotKeepsAlternateScreen(`${ALT}frame\u001b[?1049l`)).toBe(
+      false,
+    );
+    expect(snapshotKeepsAlternateScreen("\u001b[?47h")).toBe(true);
+    expect(snapshotKeepsAlternateScreen("\u001b[?1049;1000h")).toBe(true);
+  });
+});
+
+describe("withoutAltScreenEnterPrefix", () => {
+  it("strips only a leading alt-screen enter", () => {
+    const enter = (text: string) =>
+      Uint8Array.from(text, (char) => char.charCodeAt(0));
+    const prefix = enter("\u001b[?1049h");
+    const rest = enter("\u001b[?1003hframe");
+    const combined = new Uint8Array(prefix.length + rest.length);
+    combined.set(prefix);
+    combined.set(rest, prefix.length);
+
+    expect(Array.from(withoutAltScreenEnterPrefix(combined))).toEqual(
+      Array.from(rest),
+    );
+    expect(Array.from(withoutAltScreenEnterPrefix(enter("\u001b[?1047h")))).toEqual(
+      [],
+    );
+    expect(Array.from(withoutAltScreenEnterPrefix(enter("\u001b[?47hX")))).toEqual(
+      Array.from(enter("X")),
+    );
+    const mouse = enter("\u001b[?1003h");
+    expect(withoutAltScreenEnterPrefix(mouse)).toBe(mouse);
+    const wrapped = enter("ready\u001b[?1049h");
+    expect(withoutAltScreenEnterPrefix(wrapped)).toBe(wrapped);
+  });
+});
 
 describe("terminal restore plan", () => {
   it("uses daemon replay when the daemon session is alive", () => {
@@ -17,6 +62,49 @@ describe("terminal restore plan", () => {
       snapshot: null,
       source: null,
       replayScrollback: true,
+      preserveOverlay: false,
+    });
+  });
+
+  it("paints a live overlay snapshot instead of replaying the ring", () => {
+    expect(
+      planTerminalRestore({
+        daemonAlive: true,
+        handoff: `${ALT}cursor in the prompt`,
+        disk: "older disk",
+      }),
+    ).toEqual({
+      snapshot: `${ALT}cursor in the prompt`,
+      source: "handoff",
+      replayScrollback: false,
+      preserveOverlay: true,
+    });
+    expect(
+      planTerminalRestore({
+        daemonAlive: true,
+        handoff: null,
+        disk: `scrollback${ALT}still in the tui`,
+      }),
+    ).toEqual({
+      snapshot: `scrollback${ALT}still in the tui`,
+      source: "disk",
+      replayScrollback: false,
+      preserveOverlay: true,
+    });
+  });
+
+  it("prefers a newer normal-buffer handoff over an alt-screen disk snapshot", () => {
+    expect(
+      planTerminalRestore({
+        daemonAlive: true,
+        handoff: "back at the shell",
+        disk: `${ALT}old tui`,
+      }),
+    ).toEqual({
+      snapshot: null,
+      source: null,
+      replayScrollback: true,
+      preserveOverlay: false,
     });
   });
 
@@ -31,6 +119,7 @@ describe("terminal restore plan", () => {
       snapshot: null,
       source: null,
       replayScrollback: true,
+      preserveOverlay: false,
     });
   });
 
@@ -45,6 +134,7 @@ describe("terminal restore plan", () => {
       snapshot: "latest handoff",
       source: "handoff",
       replayScrollback: false,
+      preserveOverlay: false,
     });
   });
 
@@ -59,6 +149,7 @@ describe("terminal restore plan", () => {
       snapshot: "saved disk",
       source: "disk",
       replayScrollback: false,
+      preserveOverlay: false,
     });
   });
 
@@ -103,6 +194,7 @@ describe("terminal restore plan", () => {
       snapshot: null,
       source: null,
       replayScrollback: true,
+      preserveOverlay: false,
     });
   });
 });
