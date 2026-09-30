@@ -102,6 +102,12 @@ import {
   parseIpcListWorkspacesRequestPayload,
 } from "./lib/ipcWorkspaces";
 import {
+  IPC_SESSION_CLOSE_REQUEST_EVENT,
+  ipcCloseRemovesWorktree,
+  parseIpcSessionCloseRemovalNotice,
+  parseIpcSessionCloseRequest,
+} from "./lib/ipcSessionClose";
+import {
   TERMINAL_PASTE_EVENT,
   type TerminalPasteEventDetail,
 } from "./lib/pasteEvents";
@@ -1564,8 +1570,9 @@ function App() {
   // creates or kills a sibling. Without this listener those
   // mutations would land in the backend and on disk but never surface
   // in the sidebar — the user would only see them after the next app
-  // restart. Refresh from the source of truth (`list_sessions`) so we
-  // do not have to trust event payload shape across versions.
+  // restart. Refresh the session list from `list_sessions`. A staged
+  // worktree removal is not in that list; the event carries the undo
+  // token for the same toast the sidebar shows.
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     let cancelled = false;
@@ -1595,6 +1602,31 @@ function App() {
           pendingIpcSelectSessionId === payload.session_id
         ) {
           focusIpcSelectedSession(payload.session_id);
+        }
+        if (payload?.action === "removed") {
+          const notice = parseIpcSessionCloseRemovalNotice(event.payload);
+          if (notice.removal) {
+            showStoreSessionRemovalToast(
+              {
+                result: notice.removal,
+                removedSessionIds: notice.removal.sessionIds,
+                issues: notice.issues,
+                retryToken: notice.retryToken,
+              },
+              "toasts.session.sessionWorktreeRemoved",
+              "toasts.session.sessionWorktreeRemovedUndo",
+              "toasts.session.sessionWorktreeRemoveFailed",
+              "toasts.session.sessionWorktreeRestored",
+              "toasts.session.sessionWorktreeRestoreFailed",
+            );
+          } else if (notice.issues.length > 0) {
+            showRemovalOutcomeIssues({
+              result: null,
+              removedSessionIds: [],
+              issues: notice.issues,
+              retryToken: notice.retryToken,
+            });
+          }
         }
       })();
     })
@@ -1641,6 +1673,56 @@ function App() {
       })
       .catch((err) => {
         console.error("[App] failed to attach ipc-select-session listener", err);
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen<unknown>(IPC_SESSION_CLOSE_REQUEST_EVENT, (event) => {
+      const request = parseIpcSessionCloseRequest(event.payload);
+      if (!request) {
+        console.error(
+          "[App] received malformed ipc session close request",
+          event.payload,
+        );
+        return;
+      }
+      const state = useAppStore.getState();
+      const session =
+        state.sessions.find((candidate) => candidate.id === request.session_id) ??
+        null;
+      const removeWorktree = ipcCloseRemovesWorktree(
+        session,
+        state.projectFolders,
+        state.sessions,
+        useSettings.getState().settings.sessions.confirmDeleteIsolatedWorktrees,
+      );
+      void api
+        .ipcSessionCloseResponse({
+          request_id: request.request_id,
+          remove_worktree: removeWorktree,
+        })
+        .catch((err) => {
+          console.error("[App] failed to answer ipc session close request", err);
+        });
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error(
+          "[App] failed to attach ipc session close listener",
+          err,
+        );
       });
     return () => {
       cancelled = true;

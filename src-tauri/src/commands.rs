@@ -4694,6 +4694,15 @@ pub fn ipc_list_workspaces_response(
         .map_err(|_| "IPC workspace request receiver dropped".to_string())
 }
 
+#[tauri::command]
+pub fn ipc_session_close_response(
+    state: State<'_, AppState>,
+    response: crate::ipc::session_close::SessionCloseResponsePayload,
+) -> Result<(), String> {
+    let mut requests = state.ipc_session_close_requests.lock();
+    crate::ipc::session_close::deliver_session_close_response(&mut requests, response)
+}
+
 /// Locations a Unix user might symlink the CLI into, in priority order. The
 /// bundled CLI is already placed on PATH inside every Acorn PTY. Windows has
 /// no symlink-based install suggestion because it would either require
@@ -7845,7 +7854,7 @@ pub async fn remove_session(
     remove_session_inner(state.inner().clone(), id, remove_worktree).await
 }
 
-async fn remove_session_inner(
+pub(crate) async fn remove_session_inner(
     app_state: AppState,
     id: String,
     remove_worktree: Option<bool>,
