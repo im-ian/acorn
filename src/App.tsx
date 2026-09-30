@@ -128,6 +128,7 @@ import type { Session } from "./lib/types";
 import { useTranslation } from "./lib/useTranslation";
 import {
   showRemovalOutcomeIssues,
+  showSessionRemovalToast,
   showStoreSessionRemovalToast,
   showStoreWorktreeRemovalToast,
 } from "./lib/operationToasts";
@@ -1606,19 +1607,21 @@ function App() {
         if (payload?.action === "removed") {
           const notice = parseIpcSessionCloseRemovalNotice(event.payload);
           if (notice.removal) {
-            showStoreSessionRemovalToast(
-              {
-                result: notice.removal,
-                removedSessionIds: notice.removal.sessionIds,
-                issues: notice.issues,
-                retryToken: notice.retryToken,
-              },
+            // Rust already staged the worktree. A leftover store error from
+            // refreshSessions must not consume the undo token.
+            showSessionRemovalToast(
+              notice.removal,
               "toasts.session.sessionWorktreeRemoved",
               "toasts.session.sessionWorktreeRemovedUndo",
-              "toasts.session.sessionWorktreeRemoveFailed",
               "toasts.session.sessionWorktreeRestored",
               "toasts.session.sessionWorktreeRestoreFailed",
             );
+            showRemovalOutcomeIssues({
+              result: notice.removal,
+              removedSessionIds: notice.removal.sessionIds,
+              issues: notice.issues,
+              retryToken: notice.retryToken,
+            });
           } else if (notice.issues.length > 0) {
             showRemovalOutcomeIssues({
               result: null,
