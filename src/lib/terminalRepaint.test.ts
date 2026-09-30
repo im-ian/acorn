@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createStreamingViewportRepaint,
   createTerminalRepaintScheduler,
   createTerminalVisibilityRepaintObserver,
   repaintTerminalViewport,
@@ -110,6 +111,76 @@ describe("createTerminalRepaintScheduler", () => {
     vi.advanceTimersByTime(50);
 
     expect(repaint).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createStreamingViewportRepaint", () => {
+  it("repaints a continuous stream on the interval instead of after silence", () => {
+    let now = 0;
+    const timers = new Map<number, { at: number; cb: () => void }>();
+    let nextId = 1;
+    const repaint = vi.fn();
+    const scheduler = createStreamingViewportRepaint(
+      repaint,
+      48,
+      () => now,
+      (cb, delay) => {
+        const id = nextId++;
+        timers.set(id, { at: now + delay, cb });
+        return id;
+      },
+      (id) => {
+        timers.delete(id);
+      },
+    );
+    const fireDue = () => {
+      for (const [id, timer] of [...timers.entries()]) {
+        if (timer.at > now) continue;
+        timers.delete(id);
+        timer.cb();
+      }
+    };
+
+    scheduler.schedule();
+    fireDue();
+    expect(repaint).toHaveBeenCalledTimes(1);
+
+    scheduler.schedule();
+    scheduler.schedule();
+    now = 20;
+    fireDue();
+    expect(repaint).toHaveBeenCalledTimes(1);
+    expect(timers.size).toBe(1);
+
+    now = 48;
+    fireDue();
+    expect(repaint).toHaveBeenCalledTimes(2);
+    scheduler.dispose();
+  });
+
+  it("drops a queued refresh when disposed", () => {
+    const timers = new Map<number, () => void>();
+    let nextId = 1;
+    const repaint = vi.fn();
+    const scheduler = createStreamingViewportRepaint(
+      repaint,
+      48,
+      () => 0,
+      (cb) => {
+        const id = nextId++;
+        timers.set(id, cb);
+        return id;
+      },
+      (id) => {
+        timers.delete(id);
+      },
+    );
+
+    scheduler.schedule();
+    scheduler.dispose();
+    for (const cb of timers.values()) cb();
+
+    expect(repaint).not.toHaveBeenCalled();
   });
 });
 

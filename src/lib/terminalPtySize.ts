@@ -21,6 +21,14 @@ export type PtyGridSize = {
   pixelHeight: number;
 };
 
+/**
+ * Pause between the two resizes of a SIGWINCH pulse. Back-to-back
+ * `TIOCSWINSZ` calls collapse to one signal, and the child then reads the
+ * original size and skips the redraw. The fresh xterm stays on the blank
+ * alt screen with the cursor at home.
+ */
+export const SIGWINCH_PULSE_GAP_MS = 100;
+
 /** One-cell shrink used to force a tty SIGWINCH when geometry is unchanged. */
 export function sigwinchPulseSize(size: PtyGridSize): PtyGridSize | null {
   if (size.rows > 1) {

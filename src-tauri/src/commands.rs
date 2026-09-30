@@ -9072,6 +9072,7 @@ pub async fn pty_spawn<R: Runtime + 'static>(
     pixel_width: Option<u16>,
     pixel_height: Option<u16>,
     replay_scrollback: Option<bool>,
+    preserve_screen: Option<bool>,
     output_token: Option<u64>,
 ) -> AppResult<()> {
     let state = state.inner().clone();
@@ -9090,6 +9091,7 @@ pub async fn pty_spawn<R: Runtime + 'static>(
             pixel_width,
             pixel_height,
             replay_scrollback,
+            preserve_screen,
             output_token,
         )
     })
@@ -9108,6 +9110,7 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
     pixel_width: Option<u16>,
     pixel_height: Option<u16>,
     replay_scrollback: Option<bool>,
+    preserve_screen: Option<bool>,
     output_token: Option<u64>,
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
@@ -9122,31 +9125,39 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
         &PathBuf::from(cwd),
     )?);
     let output_token = output_token.or_else(|| state.pty_output.current_token(&id));
+    let preserve_screen = preserve_screen.unwrap_or(false);
     // A live in-process PTY means this is a remount, not a new shell.
     // Push remembered alt-screen/mouse/paste CSI into the fresh xterm; the
-    // child will not re-send those modes itself.
+    // child will not re-send those modes itself. The client paints a
+    // serialized overlay after spawn returns, so the alt-screen enter
+    // would clear that frame.
     if state.pty.contains(&id) {
-        let prelude = state.pty.dec_mode_prelude(&id);
+        let mut prelude = state.pty.dec_mode_prelude(&id);
+        if preserve_screen {
+            prelude = acorn_platform::dec_modes::without_alt_screen_enter(&prelude);
+        }
         if !prelude.is_empty() {
             let event = format!("pty:output:{id}");
             state.pty_output.send_or_emit(&app, &event, &id, &prelude);
         }
-        // The prelude can switch a fresh xterm onto an empty alt buffer.
-        // Same-size TIOCSWINSZ does not notify the child, so step the size
-        // after the prelude is queued and let the TUI redraw there.
-        let cols = cols.unwrap_or(0);
-        let rows = rows.unwrap_or(0);
-        if cols > 0 && rows > 0 {
-            if let Some((pulse_cols, pulse_rows)) = sigwinch_pulse_size(cols, rows) {
-                let _ = state.pty.resize(&id, pulse_cols, pulse_rows, 0, 0);
+        // The frontend paces this pulse when it preserved the overlay frame.
+        // Back-to-back resizes here never reach the child as a size change.
+        if !preserve_screen {
+            let cols = cols.unwrap_or(0);
+            let rows = rows.unwrap_or(0);
+            if cols > 0 && rows > 0 {
+                if let Some((pulse_cols, pulse_rows)) = sigwinch_pulse_size(cols, rows) {
+                    let _ = state.pty.resize(&id, pulse_cols, pulse_rows, 0, 0);
+                    std::thread::sleep(SIGWINCH_PULSE_GAP);
+                }
+                let _ = state.pty.resize(
+                    &id,
+                    cols,
+                    rows,
+                    pixel_width.unwrap_or(0),
+                    pixel_height.unwrap_or(0),
+                );
             }
-            let _ = state.pty.resize(
-                &id,
-                cols,
-                rows,
-                pixel_width.unwrap_or(0),
-                pixel_height.unwrap_or(0),
-            );
         }
         return Ok(());
     }
@@ -9387,6 +9398,7 @@ fn pty_spawn_blocking<R: Runtime + 'static>(
             pixel_height.unwrap_or(0),
             output_token,
             replay_scrollback.unwrap_or(true),
+            preserve_screen,
         )
         .map_err(AppError::Pty)?;
         return Ok(());
@@ -9445,6 +9457,7 @@ fn spawn_via_daemon<R: Runtime + 'static>(
     pixel_height: u16,
     output_token: Option<u64>,
     replay_scrollback: bool,
+    preserve_screen: bool,
 ) -> Result<(), String> {
     let bridge = &state.daemon_bridge;
     let registry = state.stream_registry.clone();
@@ -9491,21 +9504,16 @@ fn spawn_via_daemon<R: Runtime + 'static>(
             pid,
             output_token,
             daemon_attach_replay_scrollback(false, replay_scrollback),
+            preserve_screen,
         )
         .map_err(|e| {
             format!(
                 "daemon stream attach failed: {e}; retry the attachment instead of starting a duplicate local PTY"
             )
         })?;
-        // Same-size TIOCSWINSZ is a no-op in the tty driver, so a remount
-        // at the current pane geometry never delivers SIGWINCH. Step the
-        // size down and back so a live TUI redraws onto the new xterm.
-        if cols > 0 && rows > 0 {
-            if let Some((pulse_cols, pulse_rows)) = sigwinch_pulse_size(cols, rows) {
-                let _ = bridge.resize(id, pulse_cols, pulse_rows, 0, 0);
-            }
-            let _ = bridge.resize(id, cols, rows, pixel_width, pixel_height);
-        }
+        // The frontend waits between the two resizes. Doing it here as well
+        // collapses into one SIGWINCH at the original size, before the
+        // serialized overlay frame is painted.
         return Ok(());
     }
 
@@ -9564,6 +9572,7 @@ fn spawn_via_daemon<R: Runtime + 'static>(
         outcome.pid,
         output_token,
         daemon_attach_replay_scrollback(true, replay_scrollback),
+        false,
     )
     .map_err(|e| {
         format!(
@@ -9571,6 +9580,9 @@ fn spawn_via_daemon<R: Runtime + 'static>(
         )
     })
 }
+
+/// Long enough for a TUI to read the pulsed winsize before it is restored.
+const SIGWINCH_PULSE_GAP: std::time::Duration = std::time::Duration::from_millis(100);
 
 fn sigwinch_pulse_size(cols: u16, rows: u16) -> Option<(u16, u16)> {
     if rows > 1 {

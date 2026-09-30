@@ -575,9 +575,14 @@ impl Daemon {
         // buffer, and exiting alt later shows a normal buffer the replay
         // never filled. Mouse-tracking TUIs skip the ring; their prelude
         // still opens the alt buffer before the SIGWINCH redraw.
-        let prelude = self.pty.dec_mode_prelude(&attach.session_id);
+        let mut prelude = self.pty.dec_mode_prelude(&attach.session_id);
+        if attach.preserve_screen {
+            prelude = acorn_platform::dec_modes::without_alt_screen_enter(&prelude);
+        }
         let mut replay_bytes: Option<Vec<u8>> = None;
-        if attach.replay_scrollback {
+        // The client paints a serialized overlay after this prelude. The ring
+        // is cursor-addressed and would move that cursor off the prompt.
+        if attach.replay_scrollback && !attach.preserve_screen {
             if let Some(snap) = self.pty.scrollback_snapshot(&attach.session_id) {
                 replayed_until = snap.end_seq;
                 // A live overlay TUI's ring is cursor-addressed paints. Dumping
