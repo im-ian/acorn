@@ -3300,6 +3300,140 @@ test.describe("sidebar: project lifecycle", () => {
     });
   });
 
+  test("right-clicking the project title opens the project menu, not a session menu", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "plain-terminal",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+
+    const projectRow = page.getByRole("button", { name: "Project demo" });
+    const projectTitle = projectRow.getByText("demo", { exact: true });
+    const sessionRow = page
+      .locator("aside")
+      .getByRole("button", { name: /^plain-terminal main · Ready/ });
+    await expect(projectTitle).toBeVisible();
+    await expect(sessionRow).toBeVisible();
+
+    // Hover details wrap the title, so the click has to land on that text.
+    const titleHit = await projectTitle.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        rect.left + rect.width / 2,
+        rect.top + rect.height / 2,
+      );
+      return Boolean(hit && el.contains(hit));
+    });
+    expect(titleHit).toBe(true);
+
+    await projectTitle.click({ button: "right" });
+    await expect(page.getByRole("menu")).toHaveCount(1);
+    const revealLabel = await page.evaluate(() =>
+      navigator.platform.startsWith("Mac")
+        ? "Reveal in Finder"
+        : "Reveal in File Manager",
+    );
+    const projectMenuLabels = await page
+      .locator("[data-acorn-context-menu]")
+      .getByRole("menuitem")
+      .evaluateAll((items) =>
+        items.map((item) =>
+          (item.querySelector("span.truncate")?.textContent ?? "")
+            .replace(/\s+/g, " ")
+            .trim(),
+        ),
+      );
+    expect(projectMenuLabels).toEqual([
+      "New Loop session",
+      "New Graph session",
+      "New session",
+      "New worktree session",
+      "New chat session",
+      "New workspace",
+      "New worktree workspace",
+      "Minimize All Tabs",
+      "Expand All Tabs",
+      "Add source folder",
+      "Project Settings",
+      revealLabel,
+      "Copy path",
+      "Close project",
+    ]);
+    for (const sessionOnly of [
+      "Rename",
+      "Regenerate Name",
+      "Open Work Summary",
+      "Silence Notifications",
+      "Refresh Terminal",
+      "Minimize Tab",
+      "Archive Session",
+      "Remove Session",
+    ]) {
+      await expect(
+        page.getByRole("menuitem", { name: sessionOnly, exact: true }),
+      ).toHaveCount(0);
+    }
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+
+    await sessionRow.click({ button: "right" });
+    await expect(page.getByRole("menu")).toHaveCount(1);
+    await expect(
+      page.getByRole("menuitem", { name: "Rename", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Refresh Terminal", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Archive Session", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Remove Session", exact: true }),
+    ).toBeVisible();
+    for (const projectOnly of [
+      "New session",
+      "New workspace",
+      "Project Settings",
+      "Close project",
+      "Minimize All Tabs",
+      "Add source folder",
+    ]) {
+      await expect(
+        page.getByRole("menuitem", { name: projectOnly, exact: true }),
+      ).toHaveCount(0);
+    }
+  });
+
   test("clicking the instant sessions add button creates a local terminal session", async ({
     page,
     tauri,
