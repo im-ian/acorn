@@ -1036,6 +1036,9 @@ export interface PullRequestDetail {
   changed_files: number;
   /** "MERGEABLE" | "CONFLICTING" | "UNKNOWN" — null when gh omits the field. */
   mergeable: string | null;
+  /** "CLEAN" | "UNSTABLE" | "UNKNOWN" | … — GitHub's own verdict on whether the
+   *  checks are green, which an empty `checks` list cannot express. */
+  merge_state_status: string | null;
   labels: PullRequestLabel[];
   comments: PullRequestComment[];
   reviews: PullRequestReview[];

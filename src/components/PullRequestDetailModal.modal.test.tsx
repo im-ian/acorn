@@ -68,6 +68,7 @@ function fakeDetail(body: string): PullRequestDetail {
     deletions: 0,
     changed_files: 0,
     mergeable: "MERGEABLE",
+    merge_state_status: "CLEAN",
     labels: [],
     comments: [],
     reviews: [],
@@ -124,6 +125,13 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
         worktrees: { base_branch: null },
         start_work: { agent_prompt: null },
       },
+    });
+    // The merge dialog re-reads the detail when it opens, so every test needs a
+    // standing answer behind the per-test `mockResolvedValueOnce`.
+    mockApi.getPullRequestDetail.mockResolvedValue({
+      kind: "ok",
+      account: "tester",
+      detail: fakeDetail(""),
     });
     mockApi.listProjectWorktrees.mockResolvedValue([]);
     mockApi.listProjectBranches.mockResolvedValue([]);

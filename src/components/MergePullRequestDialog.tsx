@@ -10,6 +10,8 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { summarizeMergeChecks } from "../lib/mergeChecksGate";
+import type { MergeChecksGate } from "../lib/mergeChecksGate";
 import { loadLastMergeMethod, saveLastMergeMethod } from "../lib/merge-prefs";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
 import { emitPullRequestMutation } from "../lib/pullRequestEvents";
@@ -83,31 +85,9 @@ function projectNameFromRepoPath(repoPath: string): string {
   return trimmed.split(/[\\/]/).pop() || repoPath;
 }
 
-interface ChecksBlock {
-  blocked: boolean;
-  failed: number;
-  pending: number;
-}
-
-function summarizeBlockingChecks(checks: PullRequestCheck[]): ChecksBlock {
-  let failed = 0;
-  let pending = 0;
-  for (const c of checks) {
-    if (c.status.toUpperCase() !== "COMPLETED") {
-      pending += 1;
-      continue;
-    }
-    switch ((c.conclusion ?? "").toUpperCase()) {
-      case "FAILURE":
-      case "TIMED_OUT":
-      case "ACTION_REQUIRED":
-        failed += 1;
-        break;
-      default:
-        break;
-    }
-  }
-  return { blocked: failed > 0 || pending > 0, failed, pending };
+interface LiveChecks {
+  mergeStateStatus: string | null;
+  checks: PullRequestCheck[];
 }
 
 function formatCount(template: string, count: number): string {
@@ -175,10 +155,20 @@ export function MergePullRequestDialog({
   const [error, setError] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [adminMerge, setAdminMerge] = useState(false);
+  const [liveChecks, setLiveChecks] = useState<LiveChecks | null>(null);
+  const [checksProbing, setChecksProbing] = useState(false);
 
-  const checksBlock = useMemo<ChecksBlock>(
-    () => summarizeBlockingChecks(detail?.checks ?? []),
-    [detail?.checks],
+  const checksBlock = useMemo<MergeChecksGate>(
+    () =>
+      summarizeMergeChecks(
+        checksProbing
+          ? "UNKNOWN"
+          : liveChecks
+            ? liveChecks.mergeStateStatus
+            : detail?.merge_state_status,
+        liveChecks ? liveChecks.checks : (detail?.checks ?? []),
+      ),
+    [checksProbing, liveChecks, detail?.merge_state_status, detail?.checks],
   );
 
   // Monotonic counter that bumps on every open/close so in-flight AI
@@ -206,6 +196,27 @@ export function MergePullRequestDialog({
     setSubmitting(false);
     setGenerating(false);
     setAdminMerge(false);
+    setLiveChecks(null);
+    setChecksProbing(true);
+    void api
+      .getPullRequestDetail(repoPath, detail.number)
+      .then((listing) => {
+        if (cancelled) return;
+        if (listing.kind === "ok") {
+          setLiveChecks({
+            mergeStateStatus: listing.detail.merge_state_status,
+            checks: listing.detail.checks,
+          });
+        }
+        setChecksProbing(false);
+      })
+      .catch(() => {
+        // Fall back to the snapshot the detail modal already holds. A transient
+        // read failure that permanently refuses the merge is worse than one
+        // that reports what we last knew.
+        if (cancelled) return;
+        setChecksProbing(false);
+      });
     void api
       .getProjectSettings(repoPath)
       .then((record) => {
