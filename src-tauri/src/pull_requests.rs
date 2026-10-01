@@ -1395,6 +1395,12 @@ pub struct PullRequestDetail {
     /// by `gh pr view --json mergeable`. The frontend uses this to decide
     /// whether to enable the merge button.
     pub mergeable: Option<String>,
+    /// `CLEAN` / `UNSTABLE` / `UNKNOWN` / ... Mirrors the GraphQL
+    /// `mergeStateStatus`. An empty `checks` list is ambiguous on its own --
+    /// workflows that have not reported yet and a PR no workflow matches both
+    /// arrive with zero checks -- so the merge dialog needs GitHub's verdict to
+    /// tell those apart.
+    pub merge_state_status: Option<String>,
     pub labels: Vec<PullRequestLabel>,
     pub comments: Vec<PullRequestComment>,
     pub reviews: Vec<PullRequestReview>,
@@ -1657,6 +1663,7 @@ fn build_detail(number: u64, view: GhPullRequestView) -> PullRequestDetail {
         deletions: view.deletions.unwrap_or(0),
         changed_files: view.changed_files.unwrap_or(0),
         mergeable: view.mergeable,
+        merge_state_status: view.merge_state_status,
         labels: view
             .labels
             .into_iter()
@@ -1688,6 +1695,7 @@ query($owner:String!, $name:String!, $number:Int!) {
       deletions
       changedFiles
       mergeable
+      mergeStateStatus
       author { login avatarUrl }
       headRefName
       baseRefName
@@ -2537,6 +2545,7 @@ fn pr_view_from_gql(node: &Value) -> GhPullRequestView {
         deletions: node.get("deletions").and_then(Value::as_u64),
         changed_files: node.get("changedFiles").and_then(Value::as_u64),
         mergeable: json_opt_str(node, "mergeable"),
+        merge_state_status: json_opt_str(node, "mergeStateStatus"),
         labels: node
             .pointer("/labels/nodes")
             .and_then(Value::as_array)
@@ -2745,6 +2754,8 @@ struct GhPullRequestView {
     #[serde(rename = "changedFiles")]
     changed_files: Option<u64>,
     mergeable: Option<String>,
+    #[serde(rename = "mergeStateStatus")]
+    merge_state_status: Option<String>,
     #[serde(default)]
     labels: Vec<GhLabel>,
     comments: Option<Vec<GhComment>>,
