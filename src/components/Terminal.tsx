@@ -18,7 +18,11 @@ import { createPortal } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
 import { api, type ClipboardSnapshot } from "../lib/api";
 import { consumeTerminalDetaching } from "../lib/terminalDetach";
-import { isParkedInTerminalLimbo } from "../lib/terminalLimbo";
+import {
+  isParkedInTerminalLimbo,
+  shouldFitTerminal,
+  terminalElementHasLayoutBox,
+} from "../lib/terminalLimbo";
 import type { BackgroundState } from "../lib/background";
 import { multiInputWriteSessionIds } from "../lib/multiInput";
 import {
@@ -1284,18 +1288,24 @@ export function Terminal({
       term,
       () => useSettings.getState().settings.terminal.scrollSpeed,
     );
-    // Set once this terminal has been fitted against a real pane body. Until
-    // then the limbo host's own box is the best size available, which is why
-    // it carries non-zero dimensions.
+    // Set once this terminal has been fitted against a real on-screen box.
+    // Until then the limbo host's own box is the best size available, which
+    // is why it carries non-zero dimensions.
     let fittedOnScreen = false;
+    const canFitTerminal = () =>
+      shouldFitTerminal({
+        parkedInLimbo: isParkedInTerminalLimbo(container),
+        hasLayoutBox: terminalElementHasLayoutBox(container),
+        fittedOnScreen,
+      });
     const fitWithCellMeasurements = () => {
-      // Off-screen terminals measure the limbo host, not their pane. Fitting
-      // there resizes the PTY to a size the user never sees and reflows the
-      // xterm buffer twice per tab switch, which shreds a live TUI's frame.
-      // Keep the last on-screen geometry; the `isActive` repaint effect and
-      // the ResizeObserver both re-fit once the terminal lands back in a pane.
+      // Limbo is 800×600, and a display:none pane (kanban and canvas keep
+      // the layout mounted) has no box. FitAddon turns a 0px parent into a
+      // 2×1 PTY and reflows the scrollback. Hold the last real size until
+      // the slot is in a pane, popover, or canvas card; the ResizeObserver
+      // and the visibility repaint both call this again once it has a box.
       const parked = isParkedInTerminalLimbo(container);
-      if (parked && fittedOnScreen) return;
+      if (!canFitTerminal()) return;
       const cjkEnabled =
         useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
       patchTerminalCellMeasurements(term, {
@@ -1327,7 +1337,9 @@ export function Terminal({
           ),
         );
         try {
-          fitAddon.fit();
+          // Same guard as fitWithCellMeasurements. A direct fit() here
+          // would still collapse a 0px popover or hidden pane to 2×1.
+          if (canFitTerminal()) fitAddon.fit();
         } catch {
           // ignore — ResizeObserver will retry
         }
