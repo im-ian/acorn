@@ -96,6 +96,12 @@
       "message": "This restores every setting to its default value. This can't be undone.",
       "confirm": "Reset"
     },
+    "search": {
+      "placeholder": "Search settings",
+      "aria": "Search settings",
+      "empty": "No settings match.",
+      "clear": "Clear search"
+    },
     "tabs": {
       "interface": "Interface",
       "appearance": "Appearance",

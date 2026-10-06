@@ -1,4 +1,5 @@
 import { cn } from "../../lib/cn";
+import { SettingAnchor } from "./settingHighlight";
 
 interface CheckboxRowProps {
   label: string;
@@ -6,6 +7,8 @@ interface CheckboxRowProps {
   checked: boolean;
   disabled?: boolean;
   onChange: (v: boolean) => void;
+  /** DOM id used by Settings search to scroll this control into view. */
+  settingId?: string;
 }
 
 export function CheckboxRow({
@@ -14,8 +17,9 @@ export function CheckboxRow({
   checked,
   disabled,
   onChange,
+  settingId,
 }: CheckboxRowProps) {
-  return (
+  const row = (
     <label
       className={cn(
         "flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-bg px-3 py-2 transition",
@@ -38,4 +42,6 @@ export function CheckboxRow({
       </span>
     </label>
   );
+  if (!settingId) return row;
+  return <SettingAnchor id={settingId}>{row}</SettingAnchor>;
 }
