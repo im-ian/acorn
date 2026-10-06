@@ -1788,6 +1788,169 @@ describe("SettingsModal font controls", () => {
     expect(permissionButton).toBeUndefined();
     expect(document.body.textContent).not.toContain("macOS privacy permissions");
   });
+
+  it("searches settings and jumps to the matching control", async () => {
+    Element.prototype.scrollIntoView = () => {};
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+
+    const search = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Search settings"]',
+    );
+    expect(search).not.toBeNull();
+    setInputValue(search as HTMLInputElement, "resident terminal");
+
+    const result = document.querySelector<HTMLButtonElement>(
+      '[role="option"]',
+    );
+    expect(result?.textContent).toContain("Resident terminal limit");
+    expect(result?.textContent).toContain("Sessions");
+    pressKey(search as HTMLInputElement, "Enter");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const target = document.getElementById("setting-max-mounted-terminals");
+    expect(target).not.toBeNull();
+    expect(target?.className).toContain("ring-accent/50");
+    expect(search?.value).toBe("");
+    expect(document.body.textContent).toContain("Session lifecycle");
+    expect(document.getElementById("settings-search-results")).toBeNull();
+  });
+
+  it("clears the settings search on Escape before closing", async () => {
+    Element.prototype.scrollIntoView = () => {};
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+
+    const search = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Search settings"]',
+    );
+    setInputValue(search as HTMLInputElement, "no-such-setting");
+    expect(document.body.textContent).toContain("No settings match.");
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(search?.value).toBe("");
+    expect(document.body.textContent).toContain("Language");
+    expect(useSettings.getState().open).toBe(true);
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(useSettings.getState().open).toBe(false);
+  });
+
+  it("closes the session title prompt when a search replaces its tab", async () => {
+    Element.prototype.scrollIntoView = () => {};
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAgentsTab();
+    await openSessionTitlePromptDialog();
+    expect(
+      document.querySelector('textarea[aria-label="Session title prompt"]'),
+    ).toBeInstanceOf(HTMLTextAreaElement);
+
+    const search = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Search settings"]',
+    );
+    setInputValue(search as HTMLInputElement, "font");
+    expect(
+      document.querySelector('textarea[aria-label="Session title prompt"]'),
+    ).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(search?.value).toBe("");
+    expect(useSettings.getState().open).toBe(true);
+    expect(
+      document.querySelector('textarea[aria-label="Session title prompt"]'),
+    ).toBeNull();
+    expect(document.body.textContent).toContain("Auto-generate session titles");
+  });
+
+  it("scrolls the active search hit for arrows but not for hover", async () => {
+    const scrolled: string[] = [];
+    Element.prototype.scrollIntoView = function scrollIntoView() {
+      scrolled.push((this as Element).id);
+    };
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+
+    const search = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Search settings"]',
+    );
+    setInputValue(search as HTMLInputElement, "terminal");
+    const options = document.querySelectorAll<HTMLButtonElement>('[role="option"]');
+    expect(options.length).toBeGreaterThan(2);
+    expect(scrolled).toContain("settings-search-hit-0");
+    const afterQuery = scrolled.length;
+
+    act(() => {
+      options[1]?.dispatchEvent(
+        new MouseEvent("mouseover", {
+          bubbles: true,
+          cancelable: true,
+          movementX: 4,
+          movementY: 2,
+        }),
+      );
+    });
+    expect(options[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(scrolled).toHaveLength(afterQuery);
+
+    act(() => {
+      options[2]?.dispatchEvent(
+        new MouseEvent("mouseover", {
+          bubbles: true,
+          cancelable: true,
+          movementX: 0,
+          movementY: 0,
+        }),
+      );
+    });
+    expect(options[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(scrolled).toHaveLength(afterQuery);
+
+    pressKey(search as HTMLInputElement, "ArrowDown");
+    expect(scrolled[scrolled.length - 1]).toBe("settings-search-hit-2");
+  });
 });
 
 describe("SettingsModal background controls", () => {

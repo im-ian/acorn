@@ -193,6 +193,7 @@ export function BackgroundSessionsSettings() {
   return (
     <section className="space-y-4">
       <Field
+        settingId="setting-background-daemon"
         label={t("backgroundSessions.daemon.label")}
         hint={t("backgroundSessions.daemon.hint")}
       >

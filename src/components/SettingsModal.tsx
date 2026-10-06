@@ -55,6 +55,12 @@ import {
   fetchReleaseNotes,
   type ReleaseNotes,
 } from "../lib/releases";
+import {
+  SETTINGS_SEARCH_TARGETS,
+  searchSettings,
+  type SettingsSearchHit,
+  type SettingsSearchTarget,
+} from "../lib/settingsSearch";
 import { canonicalReleaseUrl } from "../lib/updater";
 import { useUpdater } from "../lib/updater-store";
 import { BackgroundSessionsSettings } from "./BackgroundSessionsSettings";
@@ -124,6 +130,8 @@ import {
   CommandHint,
   Field,
   IconInput,
+  SettingAnchor,
+  SettingHighlightProvider,
   Modal,
   ModalFooter,
   ModalHeader,
@@ -185,6 +193,103 @@ function settingsTabsForPlatform(platform: string): typeof TABS {
 function isWindowsPlatform(platform: string): boolean {
   return /^(Win32|Win64|Windows)/u.test(platform);
 }
+
+function extraSettingsSearchTargets(): SettingsSearchTarget[] {
+  const shortcuts: SettingsSearchTarget[] = SHORTCUT_GROUPS.flatMap((group) =>
+    group.items.map((item) => ({
+      id: `setting-shortcut-${item.id}`,
+      tab: "shortcuts" as const,
+      labelKey: item.labelKey,
+      detailKeys: item.descriptionKey
+        ? [item.descriptionKey, group.titleKey]
+        : [group.titleKey],
+    })),
+  );
+  const permissions: SettingsSearchTarget[] = PERMISSION_LIST_ITEMS.map(
+    (item) => ({
+      id: `setting-permission-${item.id}`,
+      tab: "permissions" as const,
+      labelKey: item.labelKey,
+      detailKeys: [item.descriptionKey],
+      platform: "mac" as const,
+    }),
+  );
+  const storage: SettingsSearchTarget[] = CACHE_CATEGORIES.map((category) => ({
+    id: `setting-storage-${category.id}`,
+    tab: "storage" as const,
+    labelKey: category.labelKey,
+    detailKeys: [category.descriptionKey],
+  }));
+  return [...shortcuts, ...permissions, ...storage];
+}
+
+function SettingsSearchResults({
+  hits,
+  activeIndex,
+  emptyLabel,
+  listLabel,
+  onHover,
+  onOpen,
+}: {
+  hits: readonly SettingsSearchHit[];
+  activeIndex: number;
+  emptyLabel: string;
+  listLabel: string;
+  onHover: (index: number) => void;
+  onOpen: (hit: SettingsSearchHit) => void;
+}) {
+  if (hits.length === 0) {
+    return (
+      <p className="px-2 py-8 text-center text-xs text-fg-muted">{emptyLabel}</p>
+    );
+  }
+  return (
+    <div
+      id="settings-search-results"
+      role="listbox"
+      aria-label={listLabel}
+      className="space-y-0.5"
+    >
+      {hits.map((hit, index) => (
+        <button
+          key={hit.key}
+          id={`settings-search-hit-${index}`}
+          type="button"
+          role="option"
+          aria-selected={index === activeIndex}
+          onMouseEnter={(event) => {
+            // scrollIntoView slides a row under a stationary pointer and
+            // fires mouseenter with no movement. A real hover moves.
+            if (event.movementX === 0 && event.movementY === 0) return;
+            onHover(index);
+          }}
+          onClick={() => onOpen(hit)}
+          className={cn(
+            "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left",
+            index === activeIndex
+              ? "bg-accent/10 text-fg"
+              : "text-fg hover:bg-bg-elevated/60",
+          )}
+        >
+          <span className="flex items-baseline justify-between gap-3">
+            <span className="min-w-0 truncate text-xs font-medium">
+              {hit.label}
+            </span>
+            <span className="shrink-0 text-[10px] text-fg-muted">
+              {hit.tabLabel}
+            </span>
+          </span>
+          {hit.detail ? (
+            <span className="line-clamp-2 text-[11px] text-fg-muted">
+              {hit.detail}
+            </span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 type SettingsTranslator = Translator;
 
 type ShortcutItem = {
@@ -451,6 +556,17 @@ export function SettingsModal() {
   const [tab, setTab] = useState<Tab>("interface");
   const [sessionTitlePromptOpen, setSessionTitlePromptOpen] = useState(false);
   const [confirmResetOpen, setConfirmResetOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [highlighted, setHighlighted] = useState<{
+    id: string;
+    nonce: number;
+  } | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const highlightNonce = useRef(0);
+  // Hover only moves the active row. scrollIntoView on hover shifts the row
+  // under the pointer, and the next mouseenter walks the selection.
+  const followActiveHit = useRef(true);
   const t = useTranslation();
   const availableTabs = useMemo(
     () =>
@@ -477,19 +593,94 @@ export function SettingsModal() {
     const nextTab = pending ? (TAB_ALIASES[pending] ?? pending) : null;
     if (nextTab && availableTabIds.has(nextTab)) {
       setTab(nextTab as Tab);
+      setQuery("");
     }
   }, [open, pendingTab, consumePendingTab, availableTabIds]);
 
   useEffect(() => {
-    if (!open) setSessionTitlePromptOpen(false);
+    if (!open) {
+      setSessionTitlePromptOpen(false);
+      setQuery("");
+      setActiveIndex(0);
+      setHighlighted(null);
+    }
   }, [open]);
 
+  useEffect(() => {
+    if (!highlighted) return;
+    document.getElementById(highlighted.id)?.scrollIntoView({ block: "center" });
+    const timer = window.setTimeout(() => setHighlighted(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [highlighted]);
+
+  const searchTargets = useMemo(
+    () => [...SETTINGS_SEARCH_TARGETS, ...extraSettingsSearchTargets()],
+    [],
+  );
+  const hits = useMemo(
+    () =>
+      searchSettings(query, searchTargets, t, {
+        showMacPermissions: availableTabIds.has("permissions"),
+        showMacPower: IS_MAC,
+      }),
+    [availableTabIds, query, searchTargets, t],
+  );
+  const safeIndex = hits.length === 0 ? 0 : Math.min(activeIndex, hits.length - 1);
+  const searching = query.trim().length > 0;
+
+  const openHit = (hit: SettingsSearchHit) => {
+    highlightNonce.current += 1;
+    setQuery("");
+    setActiveIndex(0);
+    setTab(hit.tab);
+    setHighlighted({ id: hit.id, nonce: highlightNonce.current });
+  };
+
+  const onSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (hits.length === 0) return;
+      followActiveHit.current = true;
+      setActiveIndex((safeIndex + 1) % hits.length);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (hits.length === 0) return;
+      followActiveHit.current = true;
+      setActiveIndex((safeIndex - 1 + hits.length) % hits.length);
+      return;
+    }
+    if (event.key === "Enter" && searching && hits[safeIndex]) {
+      event.preventDefault();
+      openHit(hits[safeIndex]);
+    }
+  };
+
+  useEffect(() => {
+    if (!searching || hits.length === 0 || !followActiveHit.current) return;
+    document
+      .getElementById(`settings-search-hit-${safeIndex}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [hits.length, query, safeIndex, searching]);
+
   // Esc cancels, Enter (outside inputs) closes — settings autosave on every
-  // change so there is no separate confirm step. While a child settings dialog
-  // is open, let that dialog own Escape.
+  // change so there is no separate confirm step. A search query consumes the
+  // first Esc. While a child settings dialog is open, let that dialog own Escape.
   useDialogShortcuts(open && !sessionTitlePromptOpen && !confirmResetOpen, {
-    onCancel: () => setOpen(false),
-    onConfirm: () => setOpen(false),
+    onCancel: () => {
+      if (query.trim()) {
+        setQuery("");
+        setActiveIndex(0);
+        return;
+      }
+      setOpen(false);
+    },
+    onConfirm: () => {
+      if (query.trim()) return;
+      setOpen(false);
+    },
   });
   useDialogShortcuts(confirmResetOpen, {
     onCancel: () => setConfirmResetOpen(false),
@@ -513,69 +704,131 @@ export function SettingsModal() {
       />
       {/* h-[28rem] keeps the body a stable height across tabs (#31); min-h-0
           lets it shrink instead when the window is too short for 28 rem. */}
-      <div className="flex h-[28rem] min-h-0">
-        <nav className="flex w-40 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-bg-sidebar/40 px-1.5 py-2">
-          {availableTabs.map((tabMeta) => (
-            <button
-              key={tabMeta.id}
-              type="button"
-              onClick={() => setTab(tabMeta.id)}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-left text-xs transition",
-                tab === tabMeta.id
-                  ? "acorn-tab-active-bg text-fg"
-                  : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
-              )}
-            >
-              {t(tabMeta.labelKey)}
-            </button>
-          ))}
-          <div className="mt-auto px-2 pb-1 pt-2">
-            <button
-              type="button"
-              onClick={() => setConfirmResetOpen(true)}
-              className="text-[11px] text-fg-muted transition hover:text-danger"
-            >
-              {t("settings.reset")}
-            </button>
-          </div>
-        </nav>
-        <div className="flex-1 overflow-y-auto p-4">
-          {tab === "interface" ? (
-            <InterfaceSettings t={t} />
-          ) : tab === "appearance" ? (
-            <AppearanceSettings />
-          ) : tab === "themes" ? (
-            <ThemeSettings />
-          ) : tab === "terminal" ? (
-            <TerminalSettings />
-          ) : tab === "sessions" ? (
-            <SessionSettings />
-          ) : tab === "agents" ? (
-            <AgentSettings
-              sessionTitlePromptOpen={sessionTitlePromptOpen}
-              onSessionTitlePromptOpenChange={setSessionTitlePromptOpen}
-            />
-          ) : tab === "github" ? (
-            <GithubSettings />
-          ) : tab === "integrations" ? (
-            <IntegrationsSettings />
-          ) : tab === "editor" ? (
-            <EditorSettings />
-          ) : tab === "notifications" ? (
-            <NotificationSettings />
-          ) : tab === "shortcuts" ? (
-            <ShortcutsSettings />
-          ) : tab === "storage" ? (
-            <StorageSettings />
-          ) : tab === "permissions" ? (
-            <PermissionSettings />
-          ) : tab === "experiments" ? (
-            <ExperimentsSettings />
-          ) : (
-            <AboutSettings />
-          )}
+      <div className="flex h-[28rem] min-h-0 flex-col">
+        <div className="border-b border-border px-3 py-2">
+          <IconInput
+            ref={searchInputRef}
+            role="searchbox"
+            value={query}
+            onChange={(event) => {
+              const next = event.target.value;
+              setQuery(next);
+              setActiveIndex(0);
+              followActiveHit.current = true;
+              // Searching replaces the agents tab, so a lifted prompt flag
+              // would keep owning Escape after its dialog unmounts.
+              if (next.trim()) setSessionTitlePromptOpen(false);
+            }}
+            onKeyDown={onSearchKeyDown}
+            placeholder={t("settings.search.placeholder")}
+            aria-label={t("settings.search.aria")}
+            aria-controls="settings-search-results"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              searching && hits.length > 0
+                ? `settings-search-hit-${safeIndex}`
+                : undefined
+            }
+            leading={<Search size={13} aria-hidden="true" />}
+            trailing={
+              query ? (
+                <button
+                  type="button"
+                  aria-label={t("settings.search.clear")}
+                  onClick={() => {
+                    setQuery("");
+                    setActiveIndex(0);
+                    searchInputRef.current?.focus();
+                  }}
+                  className="text-fg-muted hover:text-fg"
+                >
+                  <X size={12} />
+                </button>
+              ) : null
+            }
+          />
         </div>
+        <SettingHighlightProvider settingId={highlighted?.id ?? null}>
+          <div className="flex min-h-0 flex-1">
+            <nav className="flex w-40 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-bg-sidebar/40 px-1.5 py-2">
+              {availableTabs.map((tabMeta) => (
+                <button
+                  key={tabMeta.id}
+                  type="button"
+                  onClick={() => {
+                    setTab(tabMeta.id);
+                    setQuery("");
+                  }}
+                  className={cn(
+                    "rounded-md px-3 py-1.5 text-left text-xs transition",
+                    tab === tabMeta.id
+                      ? "acorn-tab-active-bg text-fg"
+                      : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
+                  )}
+                >
+                  {t(tabMeta.labelKey)}
+                </button>
+              ))}
+              <div className="mt-auto px-2 pb-1 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetOpen(true)}
+                  className="text-[11px] text-fg-muted transition hover:text-danger"
+                >
+                  {t("settings.reset")}
+                </button>
+              </div>
+            </nav>
+            <div className="flex-1 overflow-y-auto p-4">
+              {searching ? (
+                <SettingsSearchResults
+                  hits={hits}
+                  activeIndex={safeIndex}
+                  emptyLabel={t("settings.search.empty")}
+                  listLabel={t("settings.search.aria")}
+                  onHover={(index) => {
+                    followActiveHit.current = false;
+                    setActiveIndex(index);
+                  }}
+                  onOpen={openHit}
+                />
+              ) : tab === "interface" ? (
+                <InterfaceSettings t={t} />
+              ) : tab === "appearance" ? (
+                <AppearanceSettings />
+              ) : tab === "themes" ? (
+                <ThemeSettings />
+              ) : tab === "terminal" ? (
+                <TerminalSettings />
+              ) : tab === "sessions" ? (
+                <SessionSettings />
+              ) : tab === "agents" ? (
+                <AgentSettings
+                  sessionTitlePromptOpen={sessionTitlePromptOpen}
+                  onSessionTitlePromptOpenChange={setSessionTitlePromptOpen}
+                />
+              ) : tab === "github" ? (
+                <GithubSettings />
+              ) : tab === "integrations" ? (
+                <IntegrationsSettings />
+              ) : tab === "editor" ? (
+                <EditorSettings />
+              ) : tab === "notifications" ? (
+                <NotificationSettings />
+              ) : tab === "shortcuts" ? (
+                <ShortcutsSettings />
+              ) : tab === "storage" ? (
+                <StorageSettings />
+              ) : tab === "permissions" ? (
+                <PermissionSettings />
+              ) : tab === "experiments" ? (
+                <ExperimentsSettings />
+              ) : (
+                <AboutSettings />
+              )}
+            </div>
+          </div>
+        </SettingHighlightProvider>
       </div>
       <Modal
         open={confirmResetOpen}
@@ -780,6 +1033,7 @@ function TerminalSettings() {
   return (
     <section className="space-y-4">
       <Field
+        settingId="setting-font-preset"
         label={st(t, "settings.terminal.fontPreset.label")}
         hint={st(t, "settings.terminal.fontPreset.hint")}
       >
@@ -841,6 +1095,7 @@ function TerminalSettings() {
         </div>
       </Field>
       <Field
+        settingId="setting-font-family"
         label={st(t, "settings.terminal.fontFamily.label")}
         hint={st(t, "settings.terminal.fontFamily.hint")}
       >
@@ -850,6 +1105,7 @@ function TerminalSettings() {
         />
       </Field>
       <Field
+        settingId="setting-font-size"
         label={st(t, "settings.terminal.fontSize.label")}
         hint={st(t, "settings.terminal.fontSize.hint")}
       >
@@ -866,6 +1122,7 @@ function TerminalSettings() {
         />
       </Field>
       <Field
+        settingId="setting-letter-spacing"
         label={st(t, "settings.terminal.letterSpacing.label")}
         hint={st(t, "settings.terminal.letterSpacing.hint")}
       >
@@ -880,6 +1137,7 @@ function TerminalSettings() {
         />
       </Field>
       <Field
+        settingId="setting-font-smoothing"
         label={st(t, "settings.terminal.fontSmoothing.label")}
         hint={st(t, "settings.terminal.fontSmoothing.hint")}
       >
@@ -901,6 +1159,7 @@ function TerminalSettings() {
         </Select>
       </Field>
       <Field
+        settingId="setting-font-weight"
         label={st(t, "settings.terminal.fontWeight.label")}
         hint={st(t, "settings.terminal.fontWeight.hint")}
       >
@@ -910,6 +1169,7 @@ function TerminalSettings() {
         />
       </Field>
       <Field
+        settingId="setting-bold-font-weight"
         label={st(t, "settings.terminal.boldFontWeight.label")}
         hint={st(t, "settings.terminal.boldFontWeight.hint")}
       >
@@ -919,6 +1179,7 @@ function TerminalSettings() {
         />
       </Field>
       <Field
+        settingId="setting-line-height"
         label={st(t, "settings.terminal.lineHeight.label")}
         hint={st(t, "settings.terminal.lineHeight.hint")}
       >
@@ -932,6 +1193,7 @@ function TerminalSettings() {
         />
       </Field>
       <Field
+        settingId="setting-cursor-style"
         label={st(t, "settings.terminal.cursorStyle.label")}
         hint={st(t, "settings.terminal.cursorStyle.hint")}
       >
@@ -953,6 +1215,7 @@ function TerminalSettings() {
         </Select>
       </Field>
       <Field
+        settingId="setting-scroll-speed"
         label={st(t, "settings.terminal.scrollSpeed.label")}
         hint={st(t, "settings.terminal.scrollSpeed.hint")}
       >
@@ -966,6 +1229,7 @@ function TerminalSettings() {
         />
       </Field>
       <Field
+        settingId="setting-canvas-refresh"
         label={st(t, "settings.terminal.canvasInactiveRefreshRate.label")}
         hint={st(t, "settings.terminal.canvasInactiveRefreshRate.hint")}
       >
@@ -989,6 +1253,7 @@ function TerminalSettings() {
         />
       </Field>
       <Field
+        settingId="setting-open-links"
         label={st(t, "settings.terminal.openLinksOn.label")}
         hint={st(t, "settings.terminal.openLinksOn.hint")}
       >
@@ -1019,6 +1284,7 @@ function TerminalSettings() {
         </div>
       </Field>
       <CheckboxRow
+        settingId="setting-right-click-paste"
         label={st(t, "settings.terminal.rightClickPasteSelection.label")}
         description={st(
           t,
@@ -1121,6 +1387,7 @@ function SessionSettings() {
       >
         <div className="space-y-4">
           <Field
+            settingId="setting-confirm-remove"
             label={st(t, "settings.sessions.confirmRemove.label")}
             hint={st(t, "settings.sessions.confirmRemove.hint")}
           >
@@ -1137,6 +1404,7 @@ function SessionSettings() {
             </label>
           </Field>
           <Field
+            settingId="setting-warn-close-running"
             label={st(t, "settings.sessions.warnBeforeClosingRunning.label")}
             hint={st(t, "settings.sessions.warnBeforeClosingRunning.hint")}
           >
@@ -1153,6 +1421,7 @@ function SessionSettings() {
             </label>
           </Field>
           <Field
+            settingId="setting-confirm-delete-worktrees"
             label={st(
               t,
               "settings.sessions.confirmDeleteIsolatedWorktrees.label",
@@ -1180,6 +1449,7 @@ function SessionSettings() {
             </label>
           </Field>
           <Field
+            settingId="setting-confirm-delete-empty-workspaces"
             label={st(
               t,
               "settings.sessions.confirmDeleteEmptyWorktreeWorkspaces.label",
@@ -1209,6 +1479,7 @@ function SessionSettings() {
             </label>
           </Field>
           <Field
+            settingId="setting-restart-prompt"
             label={st(t, "settings.sessions.showRestartPromptOnExit.label")}
             hint={st(t, "settings.sessions.showRestartPromptOnExit.hint")}
           >
@@ -1232,6 +1503,7 @@ function SessionSettings() {
       >
         <div className="space-y-4">
           <Field
+            settingId="setting-auto-resume"
             label={st(t, "settings.sessions.autoResume.label")}
             hint={st(t, "settings.sessions.autoResume.hint")}
           >
@@ -1248,6 +1520,7 @@ function SessionSettings() {
             </label>
           </Field>
           <Field
+            settingId="setting-detach-offscreen"
             label={st(t, "settings.terminal.detachOffscreenTerminals.label")}
             hint={st(t, "settings.terminal.detachOffscreenTerminals.hint")}
           >
@@ -1266,6 +1539,7 @@ function SessionSettings() {
             </label>
           </Field>
           <Field
+            settingId="setting-max-mounted-terminals"
             label={st(t, "settings.terminal.maxMountedTerminals.label")}
             hint={st(t, "settings.terminal.maxMountedTerminals.hint")}
           >
@@ -1305,6 +1579,7 @@ function PowerSettings() {
 
   return (
     <CheckboxRow
+      settingId="setting-prevent-sleep"
       label={st(t, "settings.power.preventSleep.label")}
       description={st(t, "settings.power.preventSleep.description")}
       checked={preventSleep}
@@ -1317,13 +1592,15 @@ function SettingsGroup({
   title,
   description,
   children,
+  settingId,
 }: {
   title: string;
   description?: string;
   children: React.ReactNode;
+  settingId?: string;
 }) {
-  return (
-    <div className="space-y-3 border-t border-border pt-5">
+  const body = (
+    <>
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
           {title}
@@ -1333,7 +1610,18 @@ function SettingsGroup({
         ) : null}
       </div>
       {children}
-    </div>
+    </>
+  );
+  if (!settingId) {
+    return <div className="space-y-3 border-t border-border pt-5">{body}</div>;
+  }
+  return (
+    <SettingAnchor
+      id={settingId}
+      className="space-y-3 border-t border-border pt-5"
+    >
+      {body}
+    </SettingAnchor>
   );
 }
 
@@ -1364,6 +1652,7 @@ function ControlSessionInstallSection() {
   if (error) {
     return (
       <Field
+        settingId="setting-control-cli"
         label={st(t, "settings.sessions.controlCli.label")}
         hint={st(t, "settings.sessions.controlCli.errorHint")}
       >
@@ -1375,6 +1664,7 @@ function ControlSessionInstallSection() {
   if (!status) {
     return (
       <Field
+        settingId="setting-control-cli"
         label={st(t, "settings.sessions.controlCli.label")}
         hint={st(t, "settings.sessions.controlCli.loadingHint")}
       >
@@ -1392,6 +1682,7 @@ function ControlSessionInstallSection() {
 
   return (
     <Field
+      settingId="setting-control-cli"
       label={st(t, "settings.sessions.controlCli.label")}
       hint={st(
         t,
@@ -1472,6 +1763,7 @@ function GithubSettings() {
   return (
     <section className="space-y-4">
       <Field
+        settingId="setting-github-refresh"
         label={st(t, "settings.github.refreshInterval.label")}
         hint={st(t, "settings.github.refreshInterval.hint")}
       >
@@ -1496,28 +1788,33 @@ function GithubSettings() {
         {st(t, "settings.github.manualRefresh")}
       </p>
       <Field
+        settingId="setting-github-density"
         label={st(t, "settings.github.listDensity.label")}
         hint={st(t, "settings.github.listDensity.hint")}
       >
         <CheckboxRow
+          settingId="setting-github-avatars"
           label={st(t, "settings.github.showAuthorAvatars.label")}
           description={st(t, "settings.github.showAuthorAvatars.description")}
           checked={settings.github.showAvatars}
           onChange={(v) => patchGithub({ showAvatars: v })}
         />
         <CheckboxRow
+          settingId="setting-github-labels"
           label={st(t, "settings.github.showLabels.label")}
           description={st(t, "settings.github.showLabels.description")}
           checked={settings.github.showLabels}
           onChange={(v) => patchGithub({ showLabels: v })}
         />
         <CheckboxRow
+          settingId="setting-github-branches"
           label={st(t, "settings.github.showBranches.label")}
           description={st(t, "settings.github.showBranches.description")}
           checked={settings.github.showBranches}
           onChange={(v) => patchGithub({ showBranches: v })}
         />
         <CheckboxRow
+          settingId="setting-github-checks"
           label={st(t, "settings.github.showChecks.label")}
           description={st(t, "settings.github.showChecks.description")}
           checked={settings.github.showChecks}
@@ -1614,6 +1911,7 @@ function IntegrationsSettings() {
     <section className="space-y-6">
       {error ? <p className="text-xs text-danger">{error}</p> : null}
       <Field
+        settingId="setting-linear"
         label={st(t, "settings.integrations.linear.title")}
         hint={st(t, "settings.integrations.linear.hint")}
       >
@@ -1662,6 +1960,7 @@ function IntegrationsSettings() {
         </div>
       </Field>
       <Field
+        settingId="setting-jira"
         label={st(t, "settings.integrations.jira.title")}
         hint={st(t, "settings.integrations.jira.hint")}
       >
@@ -1794,10 +2093,12 @@ function ProjectTabPrioritySection({
 }) {
   return (
     <Field
+      settingId="setting-project-tabs"
       label={st(t, "settings.interface.projectTabs.label")}
       hint={st(t, "settings.interface.projectTabs.hint")}
     >
       <CheckboxRow
+        settingId="setting-project-tab-priority"
         label={st(t, "settings.interface.projectTabs.priority.label")}
         description={st(
           t,
@@ -1846,6 +2147,7 @@ function DefaultWorkspaceViewModeSection({
 
   return (
     <Field
+      settingId="setting-default-workspace"
       label={label}
       hint={st(t, "settings.interface.defaultWorkspaceViewMode.hint")}
     >
@@ -1881,6 +2183,7 @@ function KanbanTerminalPopoverSettings({
 }) {
   return (
     <SettingsGroup
+      settingId="setting-kanban-popover"
       title={st(t, "settings.interface.kanbanTerminalPopover.title")}
       description={st(
         t,
@@ -1889,6 +2192,7 @@ function KanbanTerminalPopoverSettings({
     >
       <div className="space-y-4">
         <CheckboxRow
+          settingId="setting-kanban-popover-open"
           label={st(
             t,
             "settings.interface.kanbanTerminalPopover.openOnCreate.label",
@@ -1901,6 +2205,7 @@ function KanbanTerminalPopoverSettings({
           onChange={onOpenOnCreateChange}
         />
         <Field
+          settingId="setting-kanban-popover-placement"
           label={st(
             t,
             "settings.interface.kanbanTerminalPopover.placement.label",
@@ -1942,6 +2247,7 @@ function KanbanTerminalPopoverSettings({
           </div>
         </Field>
         <Field
+          settingId="setting-kanban-popover-size"
           label={st(
             t,
             "settings.interface.kanbanTerminalPopover.defaultSize.label",
@@ -2041,6 +2347,7 @@ function LanguageSection({
 }) {
   return (
     <Field
+      settingId="setting-language"
       label={t("settings.language.label")}
       hint={t("settings.language.hint")}
     >
@@ -2083,6 +2390,7 @@ function UiScaleSection({
 
   return (
     <Field
+      settingId="setting-ui-scale"
       label={st(t, "settings.appearance.uiScale.label")}
       hint={st(t, "settings.appearance.uiScale.hint")}
     >
@@ -2176,6 +2484,7 @@ function ThemeSection({
 
   return (
     <Field
+      settingId="setting-theme"
       label={st(t, "settings.appearance.theme.label")}
       hint={st(t, "settings.appearance.theme.hint")}
     >
@@ -2293,6 +2602,7 @@ function ThemeCatalogSection({
 
   return (
     <SettingsGroup
+      settingId="setting-theme-library"
       title={st(t, "settings.appearance.theme.library.title")}
       description={st(t, "settings.appearance.theme.library.description")}
     >
@@ -2465,6 +2775,7 @@ function ToastPositionSection({
 
   return (
     <Field
+      settingId="setting-toast-position"
       label={st(t, "settings.appearance.toastPosition.label")}
       hint={st(t, "settings.appearance.toastPosition.hint")}
     >
@@ -2556,6 +2867,7 @@ function BackgroundSection({
 
   return (
     <Field
+      settingId="setting-background"
       label={st(t, "settings.appearance.background.label")}
       hint={st(t, "settings.appearance.background.hint")}
     >
@@ -2597,19 +2909,21 @@ function BackgroundSection({
         ) : null}
         <div className="flex flex-col gap-1">
           <CheckboxRow
+            settingId="setting-background-app"
             label={st(t, "settings.appearance.background.applyToApp")}
             checked={state.applyToApp}
             disabled={!state.relativePath}
             onChange={(checked) => onChange({ applyToApp: checked })}
           />
           <CheckboxRow
+            settingId="setting-background-terminal"
             label={st(t, "settings.appearance.background.applyToTerminal")}
             checked={state.applyToTerminal}
             disabled={!state.relativePath}
             onChange={(checked) => onChange({ applyToTerminal: checked })}
           />
         </div>
-        <div className="flex flex-col gap-1.5">
+        <SettingAnchor id="setting-background-fit" className="flex flex-col gap-1.5">
           <span className="text-[11px] font-medium text-fg-muted">
             {st(t, "settings.appearance.background.fit.label")}
           </span>
@@ -2625,9 +2939,10 @@ function BackgroundSection({
               />
             ))}
           </div>
-        </div>
+        </SettingAnchor>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field
+            settingId="setting-background-opacity"
             label={st(t, "settings.appearance.background.opacity.label")}
             hint={st(t, "settings.appearance.background.opacity.hint")}
           >
@@ -2640,7 +2955,10 @@ function BackgroundSection({
               onChange={(value) => onChange({ opacity: value / 100 })}
             />
           </Field>
-          <Field label={st(t, "settings.appearance.background.blur")}>
+          <Field
+            settingId="setting-background-blur"
+            label={st(t, "settings.appearance.background.blur")}
+          >
             <Stepper
               value={state.blur}
               min={0}
@@ -2672,6 +2990,7 @@ function SessionDisplaySection({
   return (
     <>
       <Field
+        settingId="setting-session-title"
         label={st(t, "settings.appearance.sessionDisplay.title.label")}
         hint={st(t, "settings.appearance.sessionDisplay.title.hint")}
       >
@@ -2696,11 +3015,13 @@ function SessionDisplaySection({
         </div>
       </Field>
       <Field
+        settingId="setting-session-metadata"
         label={st(t, "settings.appearance.sessionDisplay.metadata.label")}
         hint={st(t, "settings.appearance.sessionDisplay.metadata.hint")}
       >
         <div className="flex flex-col gap-1">
           <CheckboxRow
+            settingId="setting-session-metadata-branch"
             label={st(
               t,
               "settings.appearance.sessionDisplay.metadata.branch.label",
@@ -2713,6 +3034,7 @@ function SessionDisplaySection({
             onChange={(v) => patch({ metadata: { branch: v } })}
           />
           <CheckboxRow
+            settingId="setting-session-metadata-directory"
             label={st(
               t,
               "settings.appearance.sessionDisplay.metadata.workingDirectory.label",
@@ -2725,6 +3047,7 @@ function SessionDisplaySection({
             onChange={(v) => patch({ metadata: { workingDirectory: v } })}
           />
           <CheckboxRow
+            settingId="setting-session-metadata-status"
             label={st(
               t,
               "settings.appearance.sessionDisplay.metadata.status.label",
@@ -2739,6 +3062,7 @@ function SessionDisplaySection({
         </div>
       </Field>
       <Field
+        settingId="setting-session-hover"
         label={st(t, "settings.appearance.sessionDisplay.hover.label")}
         hint={st(t, "settings.appearance.sessionDisplay.hover.hint")}
       >
@@ -2767,11 +3091,13 @@ function StatusBarSection({
 
   return (
     <Field
+      settingId="setting-status-bar"
       label={st(t, "settings.appearance.statusBar.label")}
       hint={st(t, "settings.appearance.statusBar.hint")}
     >
       <div className="flex flex-col gap-1">
         <CheckboxRow
+          settingId="setting-status-session-activity"
           label={st(t, "settings.appearance.statusBar.sessionActivity.label")}
           description={st(
             t,
@@ -2781,6 +3107,7 @@ function StatusBarSection({
           onChange={(v) => patch({ showSessionActivity: v })}
         />
         <CheckboxRow
+          settingId="setting-status-session-count"
           label={st(t, "settings.appearance.statusBar.sessionCount.label")}
           description={st(
             t,
@@ -2790,6 +3117,7 @@ function StatusBarSection({
           onChange={(v) => patch({ showSessionCount: v })}
         />
         <CheckboxRow
+          settingId="setting-status-active-session"
           label={st(
             t,
             "settings.appearance.statusBar.activeSessionStatus.label",
@@ -2802,6 +3130,7 @@ function StatusBarSection({
           onChange={(v) => patch({ showSessionStatus: v })}
         />
         <CheckboxRow
+          settingId="setting-status-github"
           label={st(t, "settings.appearance.statusBar.githubAccount.label")}
           description={st(
             t,
@@ -2811,6 +3140,7 @@ function StatusBarSection({
           onChange={(v) => patch({ showGithubAccount: v })}
         />
         <CheckboxRow
+          settingId="setting-status-directory"
           label={st(t, "settings.appearance.statusBar.workingDirectory.label")}
           description={st(
             t,
@@ -2820,6 +3150,7 @@ function StatusBarSection({
           onChange={(v) => patch({ showWorkingDirectory: v })}
         />
         <CheckboxRow
+          settingId="setting-status-tokens"
           label={st(t, "settings.appearance.statusBar.agentTokenUsage.label")}
           description={st(
             t,
@@ -2829,6 +3160,7 @@ function StatusBarSection({
           onChange={(v) => patch({ showAgentTokenUsage: v })}
         />
         <CheckboxRow
+          settingId="setting-status-memory"
           label={st(t, "settings.appearance.statusBar.memoryUsage.label")}
           description={st(
             t,
@@ -2850,6 +3182,7 @@ function EditorSettings() {
   return (
     <section className="space-y-4">
       <Field
+        settingId="setting-editor-command"
         label={st(t, "settings.editor.command.label")}
         hint={st(t, "settings.editor.command.hint")}
       >
@@ -2913,6 +3246,7 @@ function NotificationSettings() {
   return (
     <section className="space-y-4">
       <Field
+        settingId="setting-notifications"
         label={st(t, "settings.notifications.system.label")}
         hint={st(t, "settings.notifications.system.hint")}
       >
@@ -2931,6 +3265,7 @@ function NotificationSettings() {
       <Field label={st(t, "settings.notifications.triggers.label")}>
         <div className="flex flex-col gap-1">
           <CheckboxRow
+            settingId="setting-notification-waiting"
             label={st(
               t,
               "settings.notifications.triggers.waitingForInput.label",
@@ -2946,6 +3281,7 @@ function NotificationSettings() {
             }
           />
           <CheckboxRow
+            settingId="setting-notification-errored"
             label={st(t, "settings.notifications.triggers.errored.label")}
             description={st(
               t,
@@ -2958,6 +3294,7 @@ function NotificationSettings() {
         </div>
       </Field>
       <Field
+        settingId="setting-notification-history"
         label={st(t, "settings.notifications.history.label")}
         hint={st(t, "settings.notifications.history.hint")}
       >
@@ -2975,6 +3312,7 @@ function NotificationSettings() {
             />
           </div>
           <CheckboxRow
+            settingId="setting-notification-auto-delete"
             label={st(t, "settings.notifications.history.autoDeleteRead.label")}
             description={st(
               t,
@@ -2988,6 +3326,7 @@ function NotificationSettings() {
         </div>
       </Field>
       <Field
+        settingId="setting-notification-test"
         label={st(t, "settings.notifications.test.label")}
         hint={st(t, "settings.notifications.test.hint")}
       >
@@ -3039,6 +3378,7 @@ function AgentSettings({
         {st(t, "settings.agents.intro.after")}
       </p>
       <Field
+        settingId="setting-agent"
         label={st(t, "settings.agents.agent.label")}
         hint={st(t, "settings.agents.agent.hint")}
       >
@@ -3066,6 +3406,7 @@ function AgentSettings({
       </Field>
       {selected === "custom" ? (
         <Field
+          settingId="setting-custom-command"
           label={st(t, "settings.agents.customCommand.label")}
           hint={st(t, "settings.agents.customCommand.hint")}
         >
@@ -3079,6 +3420,7 @@ function AgentSettings({
         </Field>
       ) : null}
       <Field
+        settingId="setting-session-titles"
         label={st(t, "settings.agents.sessionTitles.label")}
         hint={st(t, "settings.agents.sessionTitles.hint")}
       >
@@ -3115,6 +3457,7 @@ function AgentSettings({
         </div>
       </Field>
       <Field
+        settingId="setting-session-title-sync"
         label={st(t, "settings.agents.sessionTitleSync.label")}
         hint={st(t, "settings.agents.sessionTitleSync.hint")}
       >
@@ -3616,20 +3959,25 @@ function PermissionSettings() {
 
   return (
     <section className="space-y-4">
-      <header className="space-y-1">
-        <h3 className="text-sm font-medium text-fg">
-          {st(t, "settings.permissions.title")}
-        </h3>
-        <p className="text-[11px] text-fg-muted">
-          {st(t, "settings.permissions.description")}
-        </p>
-      </header>
+      <SettingAnchor id="setting-permissions">
+        <header className="space-y-1">
+          <h3 className="text-sm font-medium text-fg">
+            {st(t, "settings.permissions.title")}
+          </h3>
+          <p className="text-[11px] text-fg-muted">
+            {st(t, "settings.permissions.description")}
+          </p>
+        </header>
+      </SettingAnchor>
 
       <Notice tone="info" density="compact">
         {st(t, "settings.permissions.notice")}
       </Notice>
 
-      <div className="flex items-center justify-between gap-3 rounded-[var(--acorn-pane-radius)] border border-border px-3 py-2.5">
+      <SettingAnchor
+        id="setting-permission-folder-access"
+        className="flex items-center justify-between gap-3 rounded-[var(--acorn-pane-radius)] border border-border px-3 py-2.5"
+      >
         <div className="min-w-0 space-y-1">
           <div className="text-xs font-medium text-fg">
             {st(t, "settings.permissions.folderAccess.label")}
@@ -3653,7 +4001,7 @@ function PermissionSettings() {
             ? st(t, "settings.permissions.reset.running")
             : st(t, "settings.permissions.reset.button")}
         </Button>
-      </div>
+      </SettingAnchor>
 
       {confirming ? (
         <Notice tone="warning" className="space-y-2">
@@ -3737,8 +4085,9 @@ function PermissionSettings() {
                     : (resetResult?.error ?? resetResult?.service);
 
                   return (
-                    <div
+                    <SettingAnchor
                       key={item.id}
+                      id={`setting-permission-${item.id}`}
                       className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 last:border-b-0"
                     >
                       <div className="min-w-0">
@@ -3768,7 +4117,7 @@ function PermissionSettings() {
                       >
                         {statusText}
                       </div>
-                    </div>
+                    </SettingAnchor>
                   );
                 })}
               </div>
@@ -3871,20 +4220,27 @@ function StorageSettings() {
 
   return (
     <section className="space-y-4">
-      <header className="space-y-1">
-        <h3 className="text-sm font-medium text-fg">
-          {st(t, "settings.storage.title")}
-        </h3>
-        <p className="text-[11px] text-fg-muted">
-          {st(t, "settings.storage.description")}
-        </p>
-      </header>
+      <SettingAnchor id="setting-storage">
+        <header className="space-y-1">
+          <h3 className="text-sm font-medium text-fg">
+            {st(t, "settings.storage.title")}
+          </h3>
+          <p className="text-[11px] text-fg-muted">
+            {st(t, "settings.storage.description")}
+          </p>
+        </header>
+      </SettingAnchor>
 
       <ul className="divide-y divide-border rounded-[var(--acorn-pane-radius)] border border-border">
         {CACHE_CATEGORIES.map((cat) => {
           const size = sizes[cat.id];
           return (
-            <li key={cat.id} className="space-y-1 px-3 py-2.5">
+            <SettingAnchor
+              key={cat.id}
+              as="li"
+              id={`setting-storage-${cat.id}`}
+              className="space-y-1 px-3 py-2.5"
+            >
               <div className="flex items-baseline justify-between gap-3">
                 <span className="text-xs font-medium text-fg">
                   {st(t, cat.labelKey)}
@@ -3896,7 +4252,7 @@ function StorageSettings() {
               <p className="text-[11px] text-fg-muted">
                 {st(t, cat.descriptionKey)}
               </p>
-            </li>
+            </SettingAnchor>
           );
         })}
       </ul>
@@ -4004,12 +4360,14 @@ function ExperimentsSettings() {
         {st(t, "settings.experiments.warning")}
       </Notice>
       <CheckboxRow
+        settingId="setting-experiment-sticky-prompt"
         checked={experiments.stickyPrompt}
         onChange={(checked) => patchExperiments({ stickyPrompt: checked })}
         label={st(t, "settings.experiments.stickyPrompt.label")}
         description={st(t, "settings.experiments.stickyPrompt.description")}
       />
       <CheckboxRow
+        settingId="setting-experiment-cjk"
         checked={experiments.cjkCellWidthHeuristic}
         onChange={(checked) =>
           patchExperiments({ cjkCellWidthHeuristic: checked })
@@ -4021,6 +4379,7 @@ function ExperimentsSettings() {
         )}
       />
       <CheckboxRow
+        settingId="setting-experiment-unicode-spaces"
         checked={experiments.normalizeTerminalUnicodeSpaces}
         onChange={(checked) =>
           patchExperiments({ normalizeTerminalUnicodeSpaces: checked })
@@ -4035,6 +4394,7 @@ function ExperimentsSettings() {
         )}
       />
       <CheckboxRow
+        settingId="setting-experiment-resume-modal"
         checked={experiments.resumeModal}
         onChange={(checked) => patchExperiments({ resumeModal: checked })}
         label={st(t, "settings.experiments.resumeModal.label")}
@@ -4140,8 +4500,9 @@ function ShortcutsSettings() {
             </div>
             <div className="divide-y divide-border">
               {group.items.map((item) => (
-                <div
+                <SettingAnchor
                   key={item.id}
+                  id={`setting-shortcut-${item.id}`}
                   className={cn(
                     "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2",
                     recordingId === item.id ? "bg-accent/10" : null,
@@ -4225,7 +4586,7 @@ function ShortcutsSettings() {
                       </button>
                     </Tooltip>
                   </div>
-                </div>
+                </SettingAnchor>
               ))}
             </div>
           </section>
@@ -4358,14 +4719,16 @@ function AboutSettings() {
 
   return (
     <section className="space-y-4">
-      <header className="space-y-1">
-        <h3 className="text-sm font-medium text-fg">
-          {st(t, "settings.about.title")}
-        </h3>
-        <p className="text-[11px] text-fg-muted">
-          {st(t, "settings.about.description")}
-        </p>
-      </header>
+      <SettingAnchor id="setting-about">
+        <header className="space-y-1">
+          <h3 className="text-sm font-medium text-fg">
+            {st(t, "settings.about.title")}
+          </h3>
+          <p className="text-[11px] text-fg-muted">
+            {st(t, "settings.about.description")}
+          </p>
+        </header>
+      </SettingAnchor>
 
       <div className="rounded-[var(--acorn-pane-radius)] border border-border">
         <div className="flex items-baseline justify-between gap-3 px-3 py-2.5">
@@ -4453,12 +4816,13 @@ function AboutSettings() {
       ) : null}
 
       <div className="flex items-center justify-between gap-2">
-        <button
-          type="button"
-          onClick={() => void openCurrentNotes()}
-          disabled={!currentVersion || notesLoading}
-          className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:opacity-50"
-        >
+        <SettingAnchor id="setting-whats-new">
+          <button
+            type="button"
+            onClick={() => void openCurrentNotes()}
+            disabled={!currentVersion || notesLoading}
+            className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:opacity-50"
+          >
           <Sparkles size={11} className={notesLoading ? "animate-pulse" : ""} />
           {notesLoading
             ? st(t, "settings.about.loading")
@@ -4467,18 +4831,21 @@ function AboutSettings() {
                   version: currentVersion,
                 })
               : st(t, "settings.about.whatsNew")}
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleCheck()}
-          disabled={busy}
-          className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:opacity-50"
-        >
+          </button>
+        </SettingAnchor>
+        <SettingAnchor id="setting-check-for-updates">
+          <button
+            type="button"
+            onClick={() => void handleCheck()}
+            disabled={busy}
+            className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:opacity-50"
+          >
           <RefreshCcw size={11} className={busy ? "animate-spin" : ""} />
           {busy
             ? st(t, "settings.about.checking")
             : st(t, "settings.about.checkForUpdates")}
-        </button>
+          </button>
+        </SettingAnchor>
       </div>
 
       <WhatsNewModal

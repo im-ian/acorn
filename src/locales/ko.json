@@ -96,6 +96,12 @@
       "message": "모든 설정이 기본값으로 복원됩니다. 되돌릴 수 없습니다.",
       "confirm": "재설정"
     },
+    "search": {
+      "placeholder": "설정 검색",
+      "aria": "설정 검색",
+      "empty": "일치하는 설정이 없습니다.",
+      "clear": "검색어 지우기"
+    },
     "tabs": {
       "interface": "인터페이스",
       "appearance": "모양",

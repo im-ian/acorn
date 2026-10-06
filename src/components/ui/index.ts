@@ -9,6 +9,7 @@ export {
   type ModalFooterVariant,
 } from "./ModalFooter";
 export { Field } from "./Field";
+export { SettingAnchor, SettingHighlightProvider } from "./settingHighlight";
 export { TextInput, TEXT_INPUT_CLASS } from "./TextInput";
 export { IconInput } from "./IconInput";
 export {
