@@ -134,6 +134,9 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 - 터미널에서 `acorn-ipc list-sessions` / `send-keys` / `read-buffer` 로 사용
 - 자세한 사용법 + 보안 모델: [`docs/SESSION_IPC.md`](docs/SESSION_IPC.md)
 - 플랫폼: macOS / Windows / Linux
+- Claude Code 자동 모드에서는 분류기가 셸 명령을 검사합니다. 다른 터미널에 키를 넣는 `acorn-ipc`는 그 검사에서 거절됩니다. 연구 프리뷰는 2026-03-23 주(v2.1.83–v2.1.85), Pro / Max / Team 새 세션 기본값은 2026-08-14, 권한 모드를 정하지 않은 터미널·VS Code 세션의 기본값은 2026-09-28 전후(v2.1.283)입니다.
+- `.claude`는 보호 경로입니다. Claude가 `.claude/settings.json`을 고쳐 스스로 `acorn-ipc`를 허용하지는 못합니다.
+- 허용은 Claude 세션에서 `/permissions`로 `Bash(acorn-ipc *)`를 직접 추가합니다. 규칙은 그 저장소의 `.claude/settings.local.json`에 저장됩니다.
 
 ### 🎯 우측 패널
 세 그룹으로 묶인 탭:
