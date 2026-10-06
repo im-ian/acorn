@@ -93,7 +93,7 @@ describe("terminalElementHasLayoutBox", () => {
             width: 0,
             height: 0,
           }) as DOMRect,
-      }) as DOMRectList;
+      }) as unknown as DOMRectList;
     expect(terminalElementHasLayoutBox(hidden)).toBe(false);
   });
 
@@ -107,7 +107,7 @@ describe("terminalElementHasLayoutBox", () => {
             width: 640,
             height: 400,
           }) as DOMRect,
-      }) as DOMRectList;
+      }) as unknown as DOMRectList;
     expect(terminalElementHasLayoutBox(visible)).toBe(true);
   });
 });
