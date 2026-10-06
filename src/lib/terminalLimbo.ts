@@ -38,3 +38,35 @@ export function getTerminalLimbo(): HTMLDivElement {
 export function isParkedInTerminalLimbo(el: Element | null): boolean {
   return Boolean(el?.closest("[data-acorn-terminal-limbo]"));
 }
+
+/**
+ * True when `el` has a non-zero CSS layout box. `display: none` ancestors
+ * (the pane layout kept mounted in kanban and canvas) produce none, and a
+ * flex child that has not been laid out yet can report a 0×0 rect.
+ */
+export function terminalElementHasLayoutBox(el: Element | null): boolean {
+  if (!el) return false;
+  const rects = el.getClientRects();
+  for (let index = 0; index < rects.length; index += 1) {
+    const rect = rects.item(index);
+    if (rect && rect.width > 0 && rect.height > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether FitAddon may measure this container and resize the PTY.
+ *
+ * A 0px parent becomes a 2×1 terminal, which SIGWINCHes the PTY and reflows
+ * the scrollback. Limbo is the opposite: a real 800×600 box, measured once
+ * before the terminal has ever been fitted on screen, then held.
+ */
+export function shouldFitTerminal(input: {
+  parkedInLimbo: boolean;
+  hasLayoutBox: boolean;
+  fittedOnScreen: boolean;
+}): boolean {
+  if (!input.hasLayoutBox) return false;
+  if (input.parkedInLimbo && input.fittedOnScreen) return false;
+  return true;
+}
