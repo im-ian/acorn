@@ -200,6 +200,31 @@ interface SessionPlacementIntent {
 const sessionPlacementById = new Map<string, SessionPlacementIntent>();
 const activeSessionPlacementIntents = new Set<SessionPlacementIntent>();
 
+// Only a `resume_session` that returned arms a probe. Recorded outside
+// the store so the probe effect can see the id on the refresh that
+// publishes the live row, without `agentResume.ts` importing this module.
+const successfulSessionResumeIds = new Set<string>();
+// A second click can enter before the first refresh marks the row live.
+// Both would arm a probe and the shell would get the resume command twice.
+const resumeSessionInFlightIds = new Set<string>();
+
+export function noteSuccessfulSessionResume(sessionId: string): void {
+  successfulSessionResumeIds.add(sessionId);
+}
+
+export function listSuccessfulSessionResumes(): string[] {
+  return [...successfulSessionResumeIds];
+}
+
+export function dismissSuccessfulSessionResume(sessionId: string): void {
+  successfulSessionResumeIds.delete(sessionId);
+}
+
+export function resetSuccessfulSessionResumesForTests(): void {
+  successfulSessionResumeIds.clear();
+  resumeSessionInFlightIds.clear();
+}
+
 function coalescedSessionNotificationKey(
   notification: SessionNotification,
 ): string | null {
@@ -3653,9 +3678,22 @@ export const useAppStore = create<AppStateModel>()(
       get().openSessionSurface(id);
       return target;
     }
+    if (resumeSessionInFlightIds.has(id)) return target;
+    resumeSessionInFlightIds.add(id);
 
     try {
       const updated = await api.resumeSession(id);
+      // Note before refresh so the probe effect that follows this set
+      // already sees the id. A failed RPC must not arm a probe.
+      noteSuccessfulSessionResume(id);
+      // A resume command queued before archive would drain into the new
+      // shell, and the post-restore probe would send it again.
+      if (
+        useSettings.getState().settings.sessions.autoResume &&
+        get().pendingTerminalInput[id]?.agentProvider
+      ) {
+        get().consumePendingTerminalInput(id);
+      }
       await get().refreshAll();
       set({ error: null });
       get().openSessionSurface(id);
@@ -3663,6 +3701,8 @@ export const useAppStore = create<AppStateModel>()(
     } catch (e) {
       set({ error: errorMessage(e) });
       return null;
+    } finally {
+      resumeSessionInFlightIds.delete(id);
     }
   },
 
