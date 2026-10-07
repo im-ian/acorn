@@ -1,4 +1,4 @@
-import { test, expect } from "./support";
+import { test, expect, pressHotkey } from "./support";
 
 const REPO_PATH = "/tmp/demo";
 const PROJECT = {
@@ -444,6 +444,368 @@ test.describe("agent resume modal", () => {
         [],
     );
     expect(acked).not.toContain(SESSION.id);
+  });
+
+  test("auto-resume sends the resume command after an archived session is restored", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessions: { autoResume: true },
+          experiments: { resumeModal: false },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __archived?: boolean };
+      return [
+        {
+          id: "s-resume",
+          name: "alpha",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          // Archive kills the PTY, but the row can still look busy until a
+          // status poll that this restore path does not guarantee.
+          status: "working",
+          agent_provider: "claude",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+          kind: "regular",
+          archived_at:
+            w.__archived === false ? null : "2026-04-01T00:00:00Z",
+        },
+      ];
+    });
+    await tauri.handle("resume_session", () => {
+      const w = window as unknown as { __archived?: boolean };
+      w.__archived = false;
+      return {
+        id: "s-resume",
+        name: "alpha",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "working",
+        agent_provider: "claude",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        archived_at: null,
+      };
+    });
+    await tauri.handle("get_agent_resume_candidate", (args) => {
+      const w = window as unknown as { __ACORN_RESUME_PROBES__?: number };
+      w.__ACORN_RESUME_PROBES__ = (w.__ACORN_RESUME_PROBES__ ?? 0) + 1;
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind !== "claude") return null;
+      return {
+        uuid: "deadbeef-1234-5678-9abc-def012345678",
+        lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
+        preview: "Preview of the previous conversation",
+      };
+    });
+    await tauri.handle("pty_write", (args) => {
+      const w = window as unknown as {
+        __ACORN_PTY_WRITES__?: { sessionId: string; data: string }[];
+      };
+      w.__ACORN_PTY_WRITES__ = w.__ACORN_PTY_WRITES__ ?? [];
+      const input = (args ?? {}) as { sessionId?: string; data?: string };
+      const decoded = input.data
+        ? new TextDecoder().decode(
+            Uint8Array.from(atob(input.data), (c) => c.charCodeAt(0)),
+          )
+        : "";
+      w.__ACORN_PTY_WRITES__.push({
+        sessionId: input.sessionId ?? "",
+        data: decoded,
+      });
+      return undefined;
+    });
+
+    await page.goto("/");
+    await expect(
+      page.locator('[data-testid="sidebar"]').getByRole("button", {
+        name: /Archived/,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("dialog", { name: /Resume previous conversation/ }),
+    ).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __ACORN_RESUME_PROBES__?: number })
+              .__ACORN_RESUME_PROBES__ ?? 0,
+        ),
+      )
+      .toBe(0);
+
+    await pressHotkey(page, { mod: true, key: "p" });
+    await page.getByRole("option", { name: /Resume alpha/ }).click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __ACORN_PTY_WRITES__?: { sessionId: string; data: string }[];
+              }
+            ).__ACORN_PTY_WRITES__ ?? [],
+        ),
+      )
+      .toEqual([
+        {
+          sessionId: "s-resume",
+          data: "claude --resume deadbeef-1234-5678-9abc-def012345678\r",
+        },
+      ]);
+  });
+
+  test("a failed archive does not send the resume command again", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessions: { autoResume: true },
+          experiments: { resumeModal: false },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION]);
+    await tauri.handle("get_agent_resume_candidate", (args) => {
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind !== "claude") return null;
+      return {
+        uuid: "deadbeef-1234-5678-9abc-def012345678",
+        lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
+        preview: "Preview of the previous conversation",
+      };
+    });
+    await tauri.handle("pty_write", (args) => {
+      const w = window as unknown as {
+        __ACORN_PTY_WRITES__?: { sessionId: string; data: string }[];
+      };
+      w.__ACORN_PTY_WRITES__ = w.__ACORN_PTY_WRITES__ ?? [];
+      const input = (args ?? {}) as { sessionId?: string; data?: string };
+      const decoded = input.data
+        ? new TextDecoder().decode(
+            Uint8Array.from(atob(input.data), (c) => c.charCodeAt(0)),
+          )
+        : "";
+      w.__ACORN_PTY_WRITES__.push({
+        sessionId: input.sessionId ?? "",
+        data: decoded,
+      });
+      return undefined;
+    });
+    await tauri.handle("archive_session", () => {
+      const w = window as unknown as { __archiveFailed?: boolean };
+      w.__archiveFailed = true;
+      throw new Error("archive failed");
+    });
+
+    await page.goto("/");
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __ACORN_PTY_WRITES__?: { sessionId: string; data: string }[];
+              }
+            ).__ACORN_PTY_WRITES__ ?? [],
+        ),
+      )
+      .toEqual([
+        {
+          sessionId: SESSION.id,
+          data: `claude --resume ${CANDIDATE_UUID}\r`,
+        },
+      ]);
+
+    const sidebar = page.locator('[data-testid="sidebar"]');
+    const row = sidebar.getByRole("button", { name: /alpha.*Ready/ }).first();
+    await row.click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Archive Session", exact: true })
+      .click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __archiveFailed?: boolean })
+              .__archiveFailed === true,
+        ),
+      )
+      .toBe(true);
+    await expect(row).toBeVisible();
+
+    let resumedAgain = false;
+    try {
+      await page.waitForFunction(
+        () =>
+          (
+            (
+              window as unknown as {
+                __ACORN_PTY_WRITES__?: { data: string }[];
+              }
+            ).__ACORN_PTY_WRITES__ ?? []
+          ).length > 1,
+        undefined,
+        { timeout: 1_000 },
+      );
+      resumedAgain = true;
+    } catch {
+      resumedAgain = false;
+    }
+    expect(resumedAgain).toBe(false);
+  });
+
+  test("turning auto-resume on later does not resume a session restored while it was off", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessions: { autoResume: false },
+          experiments: { resumeModal: false },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __archived?: boolean };
+      return [
+        {
+          id: "s-resume",
+          name: "alpha",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          status: "working",
+          agent_provider: "claude",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+          kind: "regular",
+          archived_at:
+            w.__archived === false ? null : "2026-04-01T00:00:00Z",
+        },
+      ];
+    });
+    await tauri.handle("resume_session", () => {
+      const w = window as unknown as { __archived?: boolean };
+      w.__archived = false;
+      return {
+        id: "s-resume",
+        name: "alpha",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "working",
+        agent_provider: "claude",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        archived_at: null,
+      };
+    });
+    await tauri.handle("get_agent_resume_candidate", (args) => {
+      const w = window as unknown as { __ACORN_RESUME_PROBES__?: number };
+      w.__ACORN_RESUME_PROBES__ = (w.__ACORN_RESUME_PROBES__ ?? 0) + 1;
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind !== "claude") return null;
+      return {
+        uuid: "deadbeef-1234-5678-9abc-def012345678",
+        lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
+        preview: "Preview of the previous conversation",
+      };
+    });
+    await tauri.handle("pty_write", (args) => {
+      const w = window as unknown as {
+        __ACORN_PTY_WRITES__?: { sessionId: string; data: string }[];
+      };
+      w.__ACORN_PTY_WRITES__ = w.__ACORN_PTY_WRITES__ ?? [];
+      const input = (args ?? {}) as { sessionId?: string; data?: string };
+      const decoded = input.data
+        ? new TextDecoder().decode(
+            Uint8Array.from(atob(input.data), (c) => c.charCodeAt(0)),
+          )
+        : "";
+      w.__ACORN_PTY_WRITES__.push({
+        sessionId: input.sessionId ?? "",
+        data: decoded,
+      });
+      return undefined;
+    });
+
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "p" });
+    await page.getByRole("option", { name: /Resume alpha/ }).click();
+    await expect(
+      page.locator('[data-testid="sidebar"]').getByRole("button", {
+        name: /alpha/i,
+      }),
+    ).toBeVisible();
+
+    await pressHotkey(page, { mod: true, key: "," });
+    const settings = page.getByRole("dialog", { name: /^(Settings|설정)$/ });
+    await settings.getByRole("button", { name: /^(Sessions|세션)$/ }).click();
+    await settings
+      .getByRole("checkbox", {
+        name: /^(Automatically resume previous conversations at launch|실행 시 이전 대화를 자동으로 재개)$/,
+      })
+      .check();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).sessions?.autoResume : null;
+        }),
+      )
+      .toBe(true);
+
+    let resumedLater = false;
+    try {
+      await page.waitForFunction(
+        () =>
+          ((window as unknown as { __ACORN_RESUME_PROBES__?: number })
+            .__ACORN_RESUME_PROBES__ ?? 0) > 0 ||
+          ((
+            window as unknown as {
+              __ACORN_PTY_WRITES__?: unknown[];
+            }
+          ).__ACORN_PTY_WRITES__?.length ?? 0) > 0,
+        undefined,
+        { timeout: 1_500 },
+      );
+      resumedLater = true;
+    } catch {
+      resumedLater = false;
+    }
+    expect(resumedLater).toBe(false);
   });
 
   test("Cancel writes a shell-comment hint with the resume command", async ({

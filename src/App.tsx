@@ -34,8 +34,13 @@ import {
 } from "./lib/api";
 import { AGENT_PROVIDER_ORDER } from "./lib/agentProviderRegistry";
 import {
+  armResumeProbeAfterSuccessfulRestore,
   autoResumeAgentConversation,
   forgetCompletedAgentResumeAutoDispatch,
+  shouldAcceptResumeProbeResult,
+  shouldProbeSessionForResume,
+  shouldRetainBusyResumeCandidate,
+  shouldStampResumeProbeSkip,
 } from "./lib/agentResume";
 import {
   hotkeyBindingsFor,
@@ -122,7 +127,11 @@ import {
 } from "./lib/sessionTracking";
 import { projectRootPaths } from "./lib/projectFolders";
 import { isArchivedSession } from "./lib/sessionArchive";
-import { useAppStore } from "./store";
+import {
+  dismissSuccessfulSessionResume,
+  listSuccessfulSessionResumes,
+  useAppStore,
+} from "./store";
 import type { TranslationKey, Translator } from "./lib/i18n";
 import type { Session } from "./lib/types";
 import { useTranslation } from "./lib/useTranslation";
@@ -575,7 +584,15 @@ function App() {
   const primedResumeSessionsRef = useRef<Set<string>>(new Set());
   const [resumePrimeVersion, setResumePrimeVersion] = useState(0);
   const probedSessionsRef = useRef<Set<string>>(new Set());
-  const previouslyArchivedSessionIdsRef = useRef<Set<string>>(new Set());
+  // Restored sessions that still need one auto-resume probe. A leftover
+  // agent_provider must not stamp them probed, and the probe has to run
+  // while that flag is set: archive already killed the PTY, and the
+  // status poll may not restart to clear it.
+  const pendingRestoreProbeRef = useRef<Set<string>>(new Set());
+  // Restores whose busy flag was ignored. A failed auto-resume stores a
+  // retry candidate, and a later sessions update must not clear it while
+  // that stale flag is still set.
+  const forcedRestoreExemptRef = useRef<Set<string>>(new Set());
   const resumeCandidatesRef = useRef(resumeCandidates);
   resumeCandidatesRef.current = resumeCandidates;
   useEffect(() => {
@@ -584,6 +601,8 @@ function App() {
     );
     pruneSessionIdSet(primedResumeSessionsRef.current, liveSessionIds);
     pruneSessionIdSet(probedSessionsRef.current, liveSessionIds);
+    pruneSessionIdSet(pendingRestoreProbeRef.current, liveSessionIds);
+    pruneSessionIdSet(forcedRestoreExemptRef.current, liveSessionIds);
     retainRememberedTerminalScrollbacks(liveSessionIds);
     titleGenerationLastAttemptAtRef.current = retainSessionMapEntries(
       titleGenerationLastAttemptAtRef.current,
@@ -598,6 +617,11 @@ function App() {
     if (!resumeProbeEnabled) {
       primedResumeSessionsRef.current.clear();
       probedSessionsRef.current.clear();
+      pendingRestoreProbeRef.current.clear();
+      forcedRestoreExemptRef.current.clear();
+      for (const id of listSuccessfulSessionResumes()) {
+        dismissSuccessfulSessionResume(id);
+      }
       forgetCompletedAgentResumeAutoDispatch();
       setResumeCandidates((current) =>
         current.size === 0 ? current : new Map(),
@@ -626,7 +650,17 @@ function App() {
   }, [resumeProbeEnabled, sessionIdsKey]);
 
   useEffect(() => {
-    if (!resumeProbeEnabled) return;
+    if (!resumeProbeEnabled) {
+      // Restore while probing is off must not stay queued. Turning
+      // auto-resume on later would treat that id as a fresh restore and
+      // write into the shell the user already has open.
+      for (const id of listSuccessfulSessionResumes()) {
+        dismissSuccessfulSessionResume(id);
+      }
+      pendingRestoreProbeRef.current.clear();
+      forcedRestoreExemptRef.current.clear();
+      return;
+    }
     const latestById = new Map(
       useAppStore.getState().sessions.map((session) => [session.id, session]),
     );
@@ -643,36 +677,66 @@ function App() {
     const activeSessions = effectiveSessions.filter((session) =>
       shouldSkipResumeProbeForSession(session),
     );
-    if (activeSessions.length > 0) {
-      for (const session of activeSessions) {
+    for (const id of listSuccessfulSessionResumes()) {
+      const session = latestById.get(id);
+      if (!session) {
+        dismissSuccessfulSessionResume(id);
+        continue;
+      }
+      // The row can still be archived if this refresh lost the race with
+      // an older list. Leave the id queued until a later pass shows it live.
+      if (isArchivedSession(session)) continue;
+      armResumeProbeAfterSuccessfulRestore({
+        sessionId: id,
+        autoResumeEnabled,
+        probedIds: probedSessionsRef.current,
+        pendingRestoreProbeIds: pendingRestoreProbeRef.current,
+      });
+      dismissSuccessfulSessionResume(id);
+    }
+    const sessionsToStamp = activeSessions.filter((session) =>
+      shouldStampResumeProbeSkip({
+        session,
+        pendingRestoreProbeIds: pendingRestoreProbeRef.current,
+      }),
+    );
+    if (sessionsToStamp.length > 0) {
+      for (const session of sessionsToStamp) {
         probedSessionsRef.current.add(session.id);
       }
+    }
+    for (const id of [...forcedRestoreExemptRef.current]) {
+      const session = latestById.get(id);
+      if (!session || !shouldSkipResumeProbeForSession(session)) {
+        forcedRestoreExemptRef.current.delete(id);
+      }
+    }
+    if (activeSessions.length > 0) {
       setResumeCandidates((prev) => {
         let changed = false;
         const next = new Map(prev);
         for (const session of activeSessions) {
+          if (
+            shouldRetainBusyResumeCandidate({
+              forcedRestore: forcedRestoreExemptRef.current.has(session.id),
+            })
+          ) {
+            continue;
+          }
           changed = next.delete(session.id) || changed;
         }
         return changed ? next : prev;
       });
     }
-    const archivedIds = new Set(
-      effectiveSessions
-        .filter(isArchivedSession)
-        .map((session) => session.id),
-    );
-    if (!autoResumeEnabled) {
-      for (const id of previouslyArchivedSessionIdsRef.current) {
-        if (!archivedIds.has(id)) probedSessionsRef.current.add(id);
-      }
-    }
-    previouslyArchivedSessionIdsRef.current = archivedIds;
 
     const toProbe = effectiveSessions
-      .filter(
-        (session) =>
-          !shouldSkipResumeProbeForSession(session) &&
-          !probedSessionsRef.current.has(session.id),
+      .filter((session) =>
+        shouldProbeSessionForResume({
+          archived: isArchivedSession(session),
+          alreadyProbed: probedSessionsRef.current.has(session.id),
+          pendingRestore: pendingRestoreProbeRef.current.has(session.id),
+          skipBecauseBusy: shouldSkipResumeProbeForSession(session),
+        }),
       )
       .map((session) => session.id);
     if (toProbe.length === 0) return;
@@ -683,7 +747,18 @@ function App() {
     // on the `.then` — when the effect re-runs and cleans the prior
     // run, the in-flight probe still needs to land its result, and
     // the functional `setResumeCandidates(prev => ...)` is race-safe.
-    for (const sid of toProbe) probedSessionsRef.current.add(sid);
+    // Restore probes stay forced after the pending set is cleared, so
+    // a stale busy flag cannot drop the candidate when it returns.
+    const forcedRestoreProbeIds = new Set(
+      toProbe.filter((sid) => pendingRestoreProbeRef.current.has(sid)),
+    );
+    for (const sid of forcedRestoreProbeIds) {
+      forcedRestoreExemptRef.current.add(sid);
+    }
+    for (const sid of toProbe) {
+      probedSessionsRef.current.add(sid);
+      pendingRestoreProbeRef.current.delete(sid);
+    }
     void Promise.all(
       toProbe.map(async (sid) => {
         const probes = await Promise.all(
@@ -741,7 +816,12 @@ function App() {
           )
           .filter(([sessionId]) => {
             const latest = latestSessions.get(sessionId);
-            return latest != null && !shouldSkipResumeProbeForSession(latest);
+            if (latest == null) return false;
+            return shouldAcceptResumeProbeResult({
+              archived: isArchivedSession(latest),
+              forcedRestoreProbe: forcedRestoreProbeIds.has(sessionId),
+              skipBecauseBusy: shouldSkipResumeProbeForSession(latest),
+            });
           });
         if (additions.length === 0) return;
         if (useSettings.getState().settings.sessions.autoResume) {

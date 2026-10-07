@@ -90,7 +90,11 @@ vi.mock("./lib/api", () => {
 });
 
 import { api, type RemovalOutcome } from "./lib/api";
-import { useAppStore } from "./store";
+import {
+  listSuccessfulSessionResumes,
+  resetSuccessfulSessionResumesForTests,
+  useAppStore,
+} from "./store";
 import { defaultTabByGroup } from "./lib/rightPanelGroups";
 import { DEFAULT_SETTINGS, useSettings } from "./lib/settings";
 import { createGraphSessionDraft } from "./lib/graphSession";
@@ -304,6 +308,7 @@ beforeEach(() => {
     pendingTab: null,
   });
   resetStore();
+  resetSuccessfulSessionResumesForTests();
 });
 
 describe("multi-input", () => {
@@ -1899,6 +1904,98 @@ describe("resumeSession", () => {
     expect(useAppStore.getState().archivedPreviewSessionId).toBeNull();
     expect(useAppStore.getState().panes.root.tabIds).toContain("a1");
     expect(useAppStore.getState().activeSessionId).toBe("a1");
+    expect(listSuccessfulSessionResumes()).toEqual(["a1"]);
+  });
+
+  it("does not arm a resume probe when resume_session fails", async () => {
+    const parked = session("a1", REPO_A, {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    await seed([project(REPO_A, 0)], [parked]);
+    mockApi.resumeSession.mockRejectedValueOnce(new Error("resume failed"));
+
+    const resumed = await useAppStore.getState().resumeSession("a1");
+
+    expect(resumed).toBeNull();
+    expect(listSuccessfulSessionResumes()).toEqual([]);
+  });
+
+  it("does not arm a resume probe when a live session is opened", async () => {
+    const live = session("a1", REPO_A);
+    await seed([project(REPO_A, 0)], [live]);
+
+    await useAppStore.getState().resumeSession("a1");
+
+    expect(mockApi.resumeSession).not.toHaveBeenCalled();
+    expect(listSuccessfulSessionResumes()).toEqual([]);
+  });
+
+  it("drops a queued agent resume so the post-restore probe is the only send", async () => {
+    const parked = session("a1", REPO_A, {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    await seed([project(REPO_A, 0)], [parked]);
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.sessions.autoResume = true;
+    useSettings.setState({ settings, open: false, pendingTab: null });
+    useAppStore.getState().setPendingTerminalInput("a1", "claude --resume abc", {
+      agentProvider: "claude",
+    });
+    useAppStore.getState().setPendingTerminalInput("a2", "echo keep");
+
+    const live = { ...parked, archived_at: null };
+    mockApi.resumeSession.mockResolvedValueOnce(live);
+    mockApi.listSessions.mockResolvedValue([live]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    await useAppStore.getState().resumeSession("a1");
+
+    expect(useAppStore.getState().pendingTerminalInput.a1).toBeUndefined();
+    expect(useAppStore.getState().pendingTerminalInput.a2?.command).toBe(
+      "echo keep",
+    );
+  });
+
+  it("keeps a queued command when auto-resume is off", async () => {
+    const parked = session("a1", REPO_A, {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    await seed([project(REPO_A, 0)], [parked]);
+    useAppStore.getState().setPendingTerminalInput("a1", "claude --resume abc", {
+      agentProvider: "claude",
+    });
+    const live = { ...parked, archived_at: null };
+    mockApi.resumeSession.mockResolvedValueOnce(live);
+    mockApi.listSessions.mockResolvedValue([live]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    await useAppStore.getState().resumeSession("a1");
+
+    expect(useAppStore.getState().pendingTerminalInput.a1?.command).toBe(
+      "claude --resume abc",
+    );
+  });
+
+  it("notes one restore when resume is invoked twice before the first returns", async () => {
+    const parked = session("a1", REPO_A, {
+      archived_at: "2026-04-01T00:00:00Z",
+    });
+    await seed([project(REPO_A, 0)], [parked]);
+    const pending = deferred<Session>();
+    const live = { ...parked, archived_at: null };
+    mockApi.resumeSession.mockReturnValueOnce(pending.promise);
+    mockApi.listSessions.mockResolvedValue([live]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    const first = useAppStore.getState().resumeSession("a1");
+    const second = useAppStore.getState().resumeSession("a1");
+    expect(mockApi.resumeSession).toHaveBeenCalledTimes(1);
+
+    pending.resolve(live);
+    await Promise.all([first, second]);
+
+    expect(listSuccessfulSessionResumes()).toEqual(["a1"]);
+    expect(mockApi.resumeSession).toHaveBeenCalledTimes(1);
   });
 });
 
