@@ -171,6 +171,11 @@ import {
   scopeForSession,
 } from "../lib/sessionCreation";
 import {
+  findOpenHistorySession,
+  openHistoryLaunchGate,
+  rememberedHistorySessionId,
+} from "../lib/agentHistoryLaunch";
+import {
   applyDismissedHistoryWorktrees,
   getDismissedHistoryWorktreeVersion,
   markAgentHistoryWorktreeMissing,
@@ -1442,6 +1447,20 @@ function patchCachedAgentHistoryWorktreeMissing(
   }
 }
 
+function focusExistingHistorySession(item: AgentHistoryItem): boolean {
+  const state = useAppStore.getState();
+  const open = findOpenHistorySession({
+    sessions: state.sessions,
+    pendingTerminalInput: state.pendingTerminalInput,
+    rememberedSessionId: rememberedHistorySessionId(item),
+    activeSessionId: state.activeSessionId,
+    item,
+  });
+  if (!open) return false;
+  state.openSessionSurface(open.id);
+  return true;
+}
+
 function AgentHistoryTab({
   scope,
   repoPath,
@@ -1563,12 +1582,21 @@ function AgentHistoryTab({
       setError(rt(t, "rightPanel.history.worktreeUnavailable"));
       return;
     }
+    const targetRepoPath = sessionHostRepoPath ?? item.cwd;
+    if (!targetRepoPath) {
+      setError(rt(t, "rightPanel.history.createFailed"));
+      return;
+    }
+    if (focusExistingHistorySession(item)) return;
+    // Rapid clicks share this create. A second click focuses the same tab.
+    const launch = openHistoryLaunchGate(item);
+    if (launch.joined) {
+      const sessionId = await launch.joined;
+      if (sessionId) useAppStore.getState().openSessionSurface(sessionId);
+      return;
+    }
+    let launchedId: string | null = null;
     try {
-      const targetRepoPath = sessionHostRepoPath ?? item.cwd;
-      if (!targetRepoPath) {
-        setError(rt(t, "rightPanel.history.createFailed"));
-        return;
-      }
       const created = await applySessionCreateRequest(
         createSession,
         buildSessionCreateRequest(
@@ -1631,6 +1659,8 @@ function AgentHistoryTab({
       setPendingTerminalInput(created.id, item.resume_command, {
         agentProvider,
       });
+      // An adopt failure returns before this, so a blank shell is not reused.
+      launchedId = created.id;
       if (adoptedWorktree && item.worktree) {
         setWorktreeNotice(item.worktree);
       }
@@ -1638,6 +1668,8 @@ function AgentHistoryTab({
       const message = String(e);
       setError(message);
       showToast(`${t("toasts.session.createFailed")} ${message}`);
+    } finally {
+      launch.finish(launchedId);
     }
   }
 

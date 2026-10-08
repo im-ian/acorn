@@ -3315,6 +3315,184 @@ test.describe("right panel: groups", () => {
     ).toBeVisible();
   });
 
+  test("History resume focuses a tab already paired to that transcript", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-1",
+        name: "sess",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+      {
+        id: "s-open",
+        name: "already open",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:06Z",
+        last_message: null,
+        agent_provider: "codex",
+        agent_transcript_provider: "codex",
+        agent_transcript_id: "codex-1",
+      },
+    ]);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "codex",
+        id: "codex-1",
+        title: "Resume the open codex session",
+        preview: null,
+        queued_message_count: 0,
+        subagent_transcript_count: 0,
+        cwd: "/tmp/demo",
+        worktree: null,
+        transcript_path: "/tmp/codex-open.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-1",
+      },
+    ]);
+    await tauri.handle("create_session", () => {
+      const w = window as unknown as { __historyCreates?: number };
+      w.__historyCreates = (w.__historyCreates ?? 0) + 1;
+      return {
+        id: "created-should-not",
+        name: "codex resume",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:07Z",
+        last_message: null,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    const historyRow = page
+      .getByText("Resume the open codex session")
+      .locator("xpath=ancestor::div[contains(@class, 'rounded-md')][1]");
+    await dblclickRowRightSide(page, historyRow);
+
+    await expect(page.locator('[data-sidebar-session="s-open"]')).toHaveClass(
+      /acorn-tab-active-bg/,
+    );
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __historyCreates?: number }).__historyCreates ??
+          0,
+      ),
+    ).toBe(0);
+  });
+
+  test("repeated History resume clicks share one new session", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await page.addInitScript(() => {
+      const w = window as unknown as {
+        __historySessions?: Array<Record<string, unknown>>;
+      };
+      w.__historySessions = [
+        {
+          id: "s-1",
+          name: "sess",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+        },
+      ];
+    });
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __historySessions?: Array<Record<string, unknown>>;
+      };
+      return w.__historySessions ?? [];
+    });
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "codex",
+        id: "codex-spam",
+        title: "Resume once",
+        preview: null,
+        queued_message_count: 0,
+        subagent_transcript_count: 0,
+        cwd: "/tmp/demo",
+        worktree: null,
+        transcript_path: "/tmp/codex-spam.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-spam",
+      },
+    ]);
+    await tauri.handle("create_session", async (args) => {
+      const w = window as unknown as {
+        __historyCreates?: number;
+        __historySessions?: Array<Record<string, unknown>>;
+      };
+      w.__historyCreates = (w.__historyCreates ?? 0) + 1;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const created = {
+        id: "created-1",
+        name: (args as { name: string }).name,
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:07Z",
+        last_message: null,
+        agent_provider: "codex",
+      };
+      w.__historySessions = [...(w.__historySessions ?? []), created];
+      return created;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    const historyRow = page
+      .getByText("Resume once")
+      .locator("xpath=ancestor::div[contains(@class, 'rounded-md')][1]");
+    await dblclickRowRightSide(page, historyRow);
+    await dblclickRowRightSide(page, historyRow);
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __historyCreates?: number })
+              .__historyCreates ?? 0,
+        ),
+      )
+      .toBe(1);
+    await expect(page.locator('[data-sidebar-session="created-1"]')).toHaveClass(
+      /acorn-tab-active-bg/,
+    );
+  });
+
   test("History resume falls back to the project root when its cached worktree disappeared", async ({
     page,
     tauri,
