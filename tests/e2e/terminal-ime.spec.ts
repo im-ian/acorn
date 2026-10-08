@@ -224,6 +224,67 @@ async function imeTailBox(page: Page): Promise<{
   });
 }
 
+/** Overlay vs painted cursor. `drift` is the CSS-pixel gap between that
+ *  cursor and `column * cellWidth` (the old origin). `origin` is the cursor's
+ *  CSS-pixel x. `scale` is the cumulative transform on `.xterm-screen`
+ *  (UI scale and canvas zoom). */
+async function compositionPreviewGap(
+  page: Page,
+  columns: number,
+): Promise<{
+  left: number;
+  top: number;
+  drift: number;
+  origin: number;
+  scale: number;
+  textareaLeft: number;
+  textareaTop: number;
+} | null> {
+  return page.evaluate((columnCount) => {
+    const view = document.querySelector<HTMLElement>(
+      ".composition-view.active",
+    );
+    const cursor = document.querySelector<HTMLElement>(
+      ".xterm-screen .xterm-cursor",
+    );
+    const screen = document.querySelector<HTMLElement>(".xterm-screen");
+    const textarea = document.querySelector<HTMLElement>(
+      ".xterm-helper-textarea",
+    );
+    const parent = view?.offsetParent;
+    if (
+      !view ||
+      !cursor ||
+      !screen ||
+      !textarea ||
+      !(parent instanceof HTMLElement) ||
+      screen.offsetWidth <= 0
+    ) {
+      return null;
+    }
+    const viewRect = view.getBoundingClientRect();
+    const cursorRect = cursor.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    const screenRect = screen.getBoundingClientRect();
+    const textareaRect = textarea.getBoundingClientRect();
+    const cellWidth = Number.parseFloat(
+      getComputedStyle(view).getPropertyValue("--acorn-ime-cell-width"),
+    );
+    const scale = screenRect.width / screen.offsetWidth;
+    const painted =
+      (cursorRect.left - parentRect.left) / scale - parent.clientLeft;
+    return {
+      left: viewRect.left - cursorRect.left,
+      top: viewRect.top - cursorRect.top,
+      drift: painted - columnCount * cellWidth,
+      origin: painted,
+      scale,
+      textareaLeft: textareaRect.left - cursorRect.left,
+      textareaTop: textareaRect.top - cursorRect.top,
+    };
+  }, columns);
+}
+
 async function emitPtyOutput(page: Page, text: string): Promise<void> {
   await expect
     .poll(() =>
@@ -2223,6 +2284,157 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(joined).not.toContain("있있");
     expect(joined).not.toContain("있안있");
     expect(joined.indexOf("있")).toBeLessThan(joined.indexOf("안"));
+  });
+
+  test("composition preview tracks the painted cursor on a long row", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Wide enough to stay on one row in CI, long enough that per-glyph
+    // letter-spacing pulls the painted cursor off `column * cellWidth`.
+    const line = "a".repeat(40);
+    await emitPtyOutput(page, line);
+    await expect(page.locator(".xterm-screen > .xterm-rows")).toContainText(
+      line,
+    );
+    await page.locator(".xterm-rows").evaluate((rows) => {
+      rows.style.letterSpacing = "4px";
+    });
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "안",
+        taValue: "안",
+      },
+    ]);
+
+    const gap = await compositionPreviewGap(page, line.length);
+    expect(gap).not.toBeNull();
+    expect(Math.abs(gap!.drift)).toBeGreaterThan(8);
+    expect(Math.abs(gap!.left)).toBeLessThan(1.5);
+    expect(Math.abs(gap!.top)).toBeLessThan(1.5);
+    expect(Math.abs(gap!.textareaLeft)).toBeLessThan(1.5);
+    expect(Math.abs(gap!.textareaTop)).toBeLessThan(1.5);
+  });
+
+  test("composition preview stays on the cursor when the UI is scaled", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty("--acorn-ui-scale", "1.5");
+    });
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const screen = document.querySelector<HTMLElement>(".xterm-screen");
+          if (!screen || screen.offsetWidth <= 0) return 0;
+          return screen.getBoundingClientRect().width / screen.offsetWidth;
+        }),
+      )
+      .toBeGreaterThan(1.4);
+
+    // The shell's layout width shrinks by 1/1.5. Stay on one row, and far
+    // enough from column 0 that a missed scale division is many pixels off.
+    const line = "a".repeat(24);
+    await emitPtyOutput(page, line);
+    await expect(page.locator(".xterm-rows > div").first()).toContainText(
+      line,
+    );
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "안",
+        taValue: "안",
+      },
+    ]);
+
+    const gap = await compositionPreviewGap(page, line.length);
+    expect(gap).not.toBeNull();
+    expect(gap!.scale).toBeGreaterThan(1.4);
+    expect(gap!.origin).toBeGreaterThan(40);
+    expect(Math.abs(gap!.left)).toBeLessThan(1.5);
+    expect(Math.abs(gap!.top)).toBeLessThan(1.5);
+    expect(Math.abs(gap!.textareaLeft)).toBeLessThan(1.5);
+    expect(Math.abs(gap!.textareaTop)).toBeLessThan(1.5);
+  });
+
+  test("composition preview and IME caret sit after a full row", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    const cols = await page.evaluate(() => {
+      const screen = document.querySelector<HTMLElement>(".xterm-screen");
+      const measure = document.querySelector<HTMLElement>(
+        ".xterm-char-measure-element",
+      );
+      const sample = measure?.textContent?.length ?? 0;
+      if (!screen || !measure || measure.offsetWidth <= 0 || sample <= 0) {
+        return 0;
+      }
+      const cell = measure.offsetWidth / sample;
+      return Math.round(screen.offsetWidth / cell);
+    });
+    expect(cols).toBeGreaterThan(20);
+
+    const line = "a".repeat(cols);
+    await emitPtyOutput(page, line);
+    await expect(page.locator(".xterm-rows > div").first()).toContainText(
+      line,
+    );
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "안",
+        taValue: "안",
+      },
+    ]);
+
+    // xterm paints the cursor on the last cell when `cursorX === cols`.
+    // The next glyph, and the IME caret, start at that cell's right edge.
+    const gap = await page.evaluate(() => {
+      const view = document.querySelector<HTMLElement>(
+        ".composition-view.active",
+      );
+      const cursor = document.querySelector<HTMLElement>(
+        ".xterm-screen .xterm-cursor",
+      );
+      const textarea = document.querySelector<HTMLElement>(
+        ".xterm-helper-textarea",
+      );
+      if (!view || !cursor || !textarea) return null;
+      const viewRect = view.getBoundingClientRect();
+      const cursorRect = cursor.getBoundingClientRect();
+      const textareaRect = textarea.getBoundingClientRect();
+      return {
+        viewFromRight: viewRect.left - cursorRect.right,
+        textareaFromRight: textareaRect.left - cursorRect.right,
+        viewFromLeft: viewRect.left - cursorRect.left,
+        cell: cursorRect.width,
+      };
+    });
+    expect(gap).not.toBeNull();
+    expect(gap!.cell).toBeGreaterThan(2);
+    expect(Math.abs(gap!.viewFromRight)).toBeLessThan(1.5);
+    expect(Math.abs(gap!.textareaFromRight)).toBeLessThan(1.5);
+    expect(Math.abs(gap!.viewFromLeft)).toBeGreaterThan(gap!.cell * 0.5);
   });
 
   test("Composition resumes cleanly after a non-IME insertText (있Abc shape)", async ({
