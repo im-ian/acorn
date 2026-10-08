@@ -616,6 +616,105 @@ function textRangeRectForBufferColumns(
   return textRangeRectForStringOffsets(rowElement, startOffset, endOffset);
 }
 
+/** Containing block for `.composition-view`. It is `display: none` until the
+ *  first paint, and a hidden element has no `offsetParent`. */
+function compositionPinParent(view: HTMLElement): HTMLElement | null {
+  const live = view.offsetParent;
+  if (live instanceof HTMLElement) return live;
+  const helpers = view.closest(".xterm-helpers");
+  return helpers instanceof HTMLElement ? helpers : null;
+}
+
+/** CSS `left`/`top` that places an absolute child of `parent` on `anchor`.
+ *  `right` is for the cell after the last column: xterm still paints the
+ *  cursor on the last cell, but the next glyph starts at that cell's end.
+ *
+ *  `basis` is an element with a real box under the same transforms (UI scale,
+ *  canvas zoom). Viewport rects are visual pixels; `left`/`top` are local CSS
+ *  pixels. `.xterm-helpers` is often 0×0, so it cannot be that basis. */
+function compositionPinOffset(
+  parent: HTMLElement,
+  anchor: DOMRect,
+  edge: "left" | "right",
+  basis: HTMLElement,
+): { left: number; top: number } | null {
+  const parentRect = parent.getBoundingClientRect();
+  const basisRect = basis.getBoundingClientRect();
+  const scaleX =
+    basis.offsetWidth > 0 ? basisRect.width / basis.offsetWidth : 1;
+  const scaleY =
+    basis.offsetHeight > 0 ? basisRect.height / basis.offsetHeight : 1;
+  if (
+    !Number.isFinite(scaleX) ||
+    !Number.isFinite(scaleY) ||
+    scaleX <= 0 ||
+    scaleY <= 0
+  ) {
+    return null;
+  }
+  const x = edge === "right" ? anchor.right : anchor.left;
+  const left = (x - parentRect.left) / scaleX - parent.clientLeft;
+  const top = (anchor.top - parentRect.top) / scaleY - parent.clientTop;
+  if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+  return { left, top };
+}
+
+/** Visual origin of the composition overlay.
+ *
+ *  `column * cellWidth` drifts from the glyphs once a row is long. xterm's
+ *  DOM renderer stacks cells with `letter-spacing`, and a link or a color
+ *  change splits the run into spans that do not share that spacing. The
+ *  painted cursor (or the glyph range at that column) is where the committed
+ *  syllable will actually land. */
+function compositionCursorAnchor(
+  term: XTerm,
+  container: HTMLElement,
+  column: number,
+  absoluteY: number,
+): { rect: DOMRect; edge: "left" | "right" } | null {
+  const buffer = term.buffer.active;
+  const viewportY = absoluteY - buffer.viewportY;
+  if (viewportY < 0) return null;
+  const rows = container.querySelector(".xterm-screen > .xterm-rows");
+  const row = rows?.children.item(viewportY) as HTMLElement | null;
+  if (!row) return null;
+
+  const liveX = buffer.cursorX;
+  const liveY = buffer.baseY + buffer.cursorY;
+  const pastLastColumn = column >= term.cols;
+  if (absoluteY === liveY && (column === liveX || pastLastColumn)) {
+    const cursor = row.querySelector(".xterm-cursor");
+    if (cursor) {
+      const rect = cursor.getBoundingClientRect();
+      if (rect.height > 0) {
+        return { rect, edge: pastLastColumn ? "right" : "left" };
+      }
+    }
+  }
+
+  const line = buffer.getLine(absoluteY);
+  if (!line) return null;
+  if (pastLastColumn) {
+    const last = textRangeRectForBufferColumns(
+      row,
+      line,
+      Math.max(0, term.cols - 1),
+      term.cols,
+    );
+    return last ? { rect: last, edge: "right" } : null;
+  }
+  const cell = textRangeRectForBufferColumns(row, line, column, column + 1);
+  if (cell) return { rect: cell, edge: "left" };
+  if (column <= 0) return null;
+  const previous = textRangeRectForBufferColumns(
+    row,
+    line,
+    column - 1,
+    column,
+  );
+  return previous ? { rect: previous, edge: "right" } : null;
+}
+
 function rectToTooltipAnchorRect(rect: DOMRect): TooltipAnchorRect {
   return {
     top: rect.top,
@@ -1954,8 +2053,38 @@ export function Terminal({
         // -ybase`, parking the overlay thousands of pixels above the
         // visible terminal so the preview vanishes off-screen.
         const cursorViewportY = originY - buf.viewportY;
-        compositionView.style.left = `${originX * cell.width}px`;
-        compositionView.style.top = `${cursorViewportY * cell.height}px`;
+        const anchor = compositionCursorAnchor(
+          term,
+          container,
+          originX,
+          originY,
+        );
+        const pinParent = anchor ? compositionPinParent(compositionView) : null;
+        const screen = container.querySelector(".xterm-screen");
+        const pin =
+          anchor && pinParent && screen instanceof HTMLElement
+            ? compositionPinOffset(
+                pinParent,
+                anchor.rect,
+                anchor.edge,
+                screen,
+              )
+            : null;
+        const place = pin ?? {
+          left: originX * cell.width,
+          top: cursorViewportY * cell.height,
+        };
+        compositionView.style.left = `${place.left}px`;
+        compositionView.style.top = `${place.top}px`;
+        // The OS candidate window tracks this caret. `_syncTextArea` already
+        // ran this turn and left it on the grid.
+        const textarea = container.querySelector<HTMLElement>(
+          ".xterm-helper-textarea",
+        );
+        if (textarea) {
+          textarea.style.left = `${place.left}px`;
+          textarea.style.top = `${place.top}px`;
+        }
         compositionView.style.minHeight = `${cell.height}px`;
         compositionView.style.lineHeight = `${cell.height}px`;
         compositionView.style.setProperty(
