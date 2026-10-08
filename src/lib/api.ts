@@ -1197,6 +1197,24 @@ export const api = {
   acknowledgeStagedRevMismatch(): Promise<void> {
     return invoke<void>("acknowledge_staged_rev_mismatch");
   },
+  /**
+   * Pull the cached boot-time daemon-version reconcile result. `null`
+   * when the running daemon matches this build, holds no live PTYs, or
+   * the reconcile has not run. Frontend calls this at mount so a
+   * listener registered after the matching emit still sees the prompt.
+   */
+  daemonVersionMismatchStatus(): Promise<DaemonVersionMismatch | null> {
+    return invoke<DaemonVersionMismatch | null>(
+      "daemon_version_mismatch_status",
+    );
+  },
+  /**
+   * Drop the cached daemon-version mismatch so the prompt does not
+   * re-show after the user dismisses it or completes the update flow.
+   */
+  acknowledgeDaemonVersionMismatch(): Promise<void> {
+    return invoke<void>("acknowledge_daemon_version_mismatch");
+  },
   preventSleepStatus(): Promise<PreventSleepStatus> {
     return invoke<PreventSleepStatus>("prevent_sleep_status");
   },
@@ -1527,4 +1545,12 @@ export interface StagedRevMismatch {
 }
 
 export const STAGED_REV_MISMATCH_EVENT = "acorn:staged-rev-mismatch";
+
+export const DAEMON_VERSION_MISMATCH_EVENT = "acorn:daemon-version-mismatch";
+
+export interface DaemonVersionMismatch {
+  daemon_version: string;
+  app_version: string;
+  alive_session_count: number;
+}
 export const AGENT_HOOK_STATUS_EVENT = "acorn:agent-hook-status";

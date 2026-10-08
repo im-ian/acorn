@@ -2554,6 +2554,18 @@
       "restartFailed": "백그라운드 세션을 재시작하지 못했습니다:",
       "dismissFailed": "이 알림을 닫지 못했습니다:"
     },
+    "daemonUpdate": {
+      "title": "백그라운드 데몬 업데이트",
+      "sessionSingular": "세션",
+      "sessionPlural": "세션",
+      "bodyIntro": "이번 버전의 Acorn에는 새 백그라운드 세션 데몬이 포함되어 있지만, 실행 중인 세션을 유지하기 위해 이전 데몬이 계속 동작하고 있습니다. 새 세션도 이전 데몬을 통해 생성되므로 최근 터미널 수정 사항이 적용되지 않습니다.",
+      "bodyUpdate": "지금 업데이트하면 데몬이 재시작됩니다. {count}개 {sessions}의 셸이 종료되며, 열려 있던 에이전트 대화는 업데이트 후 자동으로 재개됩니다.",
+      "later": "나중에",
+      "updating": "업데이트 중...",
+      "updateNow": "지금 업데이트",
+      "updateFailed": "백그라운드 데몬을 업데이트하지 못했습니다:",
+      "dismissFailed": "이 알림을 닫지 못했습니다:"
+    },
     "memoryBreakdown": {
       "title": "메모리 세부 정보",
       "totalRssSum": "합계(RSS 합산)",

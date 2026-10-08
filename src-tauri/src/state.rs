@@ -104,6 +104,12 @@ pub struct AppState {
     /// mount so a listener registered after the matching emit still
     /// sees the prompt.
     pub staged_rev_mismatch: Arc<Mutex<Option<StagedRevMismatch>>>,
+    /// Result of the boot-time daemon-version reconcile. `Some` when an
+    /// older-build `acornd` still owns live PTYs (so new spawns keep
+    /// going through it); `None` when in sync, idle, or reconcile has
+    /// not run. Frontend pulls this at mount so a listener registered
+    /// after the matching emit still sees the prompt.
+    pub daemon_version_mismatch: Arc<Mutex<Option<crate::daemon_commands::DaemonVersionMismatch>>>,
     /// Filesystem watcher for the right-panel file explorer. Holds a single
     /// recursive watcher rooted at the active session's cwd; rebound by
     /// `fs_watch_set_root` whenever the active tab (or its cwd) changes.
@@ -159,6 +165,7 @@ impl AppState {
             daemon_bridge: DaemonBridge::new(),
             stream_registry: StreamRegistry::new(),
             staged_rev_mismatch: Arc::new(Mutex::new(None)),
+            daemon_version_mismatch: Arc::new(Mutex::new(None)),
             fs_watcher: WatcherState::new(),
             agent_hooks: Arc::new(Mutex::new(None)),
             folder_grants: Arc::new(Mutex::new(Vec::new())),

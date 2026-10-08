@@ -2554,6 +2554,18 @@
       "restartFailed": "Couldn't restart background sessions:",
       "dismissFailed": "Couldn't dismiss this reminder:"
     },
+    "daemonUpdate": {
+      "title": "Background daemon update",
+      "sessionSingular": "session",
+      "sessionPlural": "sessions",
+      "bodyIntro": "This version of Acorn ships a newer background session daemon, but the previous daemon is still running to keep its live sessions. New sessions keep spawning through the old daemon, so recent terminal fixes do not apply to them.",
+      "bodyUpdate": "Updating restarts the daemon now: the shells in {count} {sessions} are closed, and open agent conversations are resumed automatically afterwards.",
+      "later": "Later",
+      "updating": "Updating...",
+      "updateNow": "Update now",
+      "updateFailed": "Couldn't update the background daemon:",
+      "dismissFailed": "Couldn't dismiss this reminder:"
+    },
     "memoryBreakdown": {
       "title": "Memory breakdown",
       "totalRssSum": "total (RSS, sum)",

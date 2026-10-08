@@ -2554,6 +2554,18 @@
       "restartFailed": "无法重启后台会话：",
       "dismissFailed": "无法关闭此提醒："
     },
+    "daemonUpdate": {
+      "title": "后台守护进程更新",
+      "sessionSingular": "会话",
+      "sessionPlural": "会话",
+      "bodyIntro": "此版本的 Acorn 附带了新的后台会话守护进程，但为了保留正在运行的会话，旧的守护进程仍在运行。新会话也会通过旧守护进程创建，因此最近的终端修复不会生效。",
+      "bodyUpdate": "立即更新将重启守护进程：{count} 个{sessions}的 shell 将被关闭，打开的智能体对话会在更新完成后自动恢复。",
+      "later": "稍后",
+      "updating": "正在更新...",
+      "updateNow": "立即更新",
+      "updateFailed": "无法更新后台守护进程:",
+      "dismissFailed": "无法关闭此提醒:"
+    },
     "memoryBreakdown": {
       "title": "内存细分",
       "totalRssSum": "总计（RSS，总和）",

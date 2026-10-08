@@ -795,6 +795,14 @@ pub fn run() {
                         &state_for_boot,
                         &bridge_for_boot,
                     );
+                    // Detect an older daemon generation preserved for its
+                    // live PTYs — new sessions keep spawning through it,
+                    // so daemon-side fixes never land until it restarts.
+                    daemon_commands::reconcile_daemon_version(
+                        &app_for_boot,
+                        &state_for_boot,
+                        &bridge_for_boot,
+                    );
                 })
                 .ok();
 
@@ -965,6 +973,8 @@ pub fn run() {
             daemon_commands::daemon_forget_session,
             daemon_commands::daemon_forget_inactive_sessions,
             daemon_commands::daemon_adopt_session,
+            daemon_commands::daemon_version_mismatch_status,
+            daemon_commands::acknowledge_daemon_version_mismatch,
             fs_explorer::fs_list_dir,
             fs_explorer::fs_rename,
             fs_explorer::fs_trash,
