@@ -2776,11 +2776,12 @@
     },
     "controls": {
       "label": "Controls",
-      "hint": "Restart reconnects the bridge - useful after killing the daemon from a terminal. Clear inactive removes non-live daemon metadata. Quit kills every running PTY and exits the daemon.",
+      "hint": "Restart stops the daemon and starts a fresh one from this build - shells in live sessions are closed and open agent conversations resume automatically. Clear inactive removes non-live daemon metadata. Quit kills every running PTY and exits the daemon.",
       "restart": "Restart daemon",
       "clearInactive": "Clear inactive sessions",
       "clearInactiveTooltip": "Remove every non-live session row from the daemon registry",
       "confirmShutdownPrompt": "Kill every PTY?",
+      "confirmRestartPrompt": "Restart now? Shells in live sessions are closed; agent conversations resume automatically.",
       "confirm": "Confirm",
       "cancel": "Cancel",
       "quit": "Quit daemon"

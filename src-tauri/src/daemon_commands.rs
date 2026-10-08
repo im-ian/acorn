@@ -202,18 +202,13 @@ pub fn daemon_set_enabled(enabled: bool, state: State<'_, AppState>) {
     state.daemon_bridge.set_enabled(enabled);
 }
 
-/// Cause the bridge to attempt a fresh connection (and spawn the daemon
-/// if necessary). Useful for the Settings "restart daemon" button after
-/// an authenticated shutdown request from the Acorn app.
+/// Fully restart the daemon: shut a running one down (killing its
+/// PTYs), wait for it to release the endpoint, and spawn a fresh
+/// daemon from this build. Backs the Settings "Restart daemon" button.
+/// Destructive — the UI confirmation is the caller's responsibility.
 #[tauri::command]
 pub fn daemon_restart(state: State<'_, AppState>) -> Result<(), String> {
-    // Drop only the app-side channel so `ensure_connection` probes and
-    // reconnects. The enabled preference remains unchanged.
-    state.daemon_bridge.reset_connection();
-    state
-        .daemon_bridge
-        .ensure_connection()
-        .map_err(|e| e.to_string())
+    state.daemon_bridge.restart().map_err(|e| e.to_string())
 }
 
 /// Ask the daemon to shut down (graceful). All PTYs die; the daemon

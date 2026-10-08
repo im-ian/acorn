@@ -162,14 +162,6 @@ impl DaemonBridge {
         self.enabled.store(enabled, Ordering::SeqCst);
     }
 
-    /// Drop only the app-side control connection. The daemon and its PTYs are
-    /// untouched; the next enabled call probes and reconnects.
-    pub fn reset_connection(&self) {
-        let mut conn = self.conn.lock();
-        *conn = None;
-        self.incompatible_daemon.store(false, Ordering::SeqCst);
-    }
-
     /// Resolve and cache the bundled `acornd` binary path. On Windows release
     /// builds, first copy the sidecar into `daemon-bin/<version>/acornd.exe`
     /// below the data directory. Running the cached copy keeps NSIS free to
@@ -322,18 +314,23 @@ impl DaemonBridge {
                     Ok(true)
                 }
                 DaemonVersionAction::RestartIdle => {
-                    self.replace_idle_daemon(&snapshot, expected)?;
+                    self.replace_daemon(&snapshot, expected)?;
                     Ok(false)
                 }
             },
         }
     }
 
-    fn replace_idle_daemon(&self, snapshot: &StatusSnapshot, expected: &str) -> BridgeResult<()> {
+    /// Shut the observed daemon down, wait for it to release the
+    /// endpoint, and bring up one from this build. Used both for the
+    /// idle-outdated replacement (`RestartIdle`) and the user-facing
+    /// [`DaemonBridge::restart`], where the daemon may hold live PTYs.
+    fn replace_daemon(&self, snapshot: &StatusSnapshot, expected: &str) -> BridgeResult<()> {
         tracing::info!(
             daemon_version = %snapshot.daemon_version,
             app_version = expected,
-            "replacing idle daemon from another app version"
+            live_sessions = snapshot.session_count_alive,
+            "replacing daemon generation"
         );
         let response = client::one_shot(ControlPayload::Shutdown)?;
         match Self::unpack_error(response.payload)? {
@@ -348,14 +345,26 @@ impl DaemonBridge {
                     self.spawn_daemon_with_retries()?;
                     return self.require_expected_daemon_version(expected);
                 }
-                Some(current) if current.daemon_version == expected => return Ok(()),
+                // A different process already serves the expected
+                // version — another app instance won the respawn. The
+                // pid guard matters when the daemon being replaced IS
+                // the expected version (user-triggered restart): right
+                // after the Shutdown ack the dying process still
+                // answers probes with a matching version string.
+                Some(current)
+                    if current.daemon_version == expected
+                        && current.pid.is_some()
+                        && current.pid != snapshot.pid =>
+                {
+                    return Ok(());
+                }
                 Some(_) => std::thread::sleep(SOCKET_POLL_INTERVAL),
             }
         }
         Err(BridgeError::Io(io::Error::new(
             io::ErrorKind::TimedOut,
             format!(
-                "idle acornd {} did not release its endpoint for app {expected}",
+                "acornd {} did not release its endpoint for app {expected}",
                 snapshot.daemon_version
             ),
         )))
@@ -667,6 +676,34 @@ impl DaemonBridge {
             }
             other => Err(unexpected(other)),
         }
+    }
+
+    /// User-facing "Restart daemon": shut a running daemon down (its
+    /// PTYs die), wait for it to release the endpoint, and spawn a
+    /// daemon from this build. Unlike `ensure_connection`, an older
+    /// generation holding live PTYs is NOT preserved — replacing it is
+    /// the point. Destructive; UI confirmation is the caller's
+    /// responsibility.
+    pub fn restart(&self) -> BridgeResult<()> {
+        if !self.is_enabled() {
+            return Err(BridgeError::Disabled);
+        }
+        // Hold the lock across shutdown/spawn/connect for the same
+        // reason as `ensure_connection_inner`: a concurrent caller must
+        // not race its own spawn attempt against this sequence.
+        let mut conn = self.conn.lock();
+        *conn = None;
+        let expected = env!("CARGO_PKG_VERSION");
+        match client::probe_status()? {
+            None => {
+                self.spawn_daemon_with_retries()?;
+                self.require_expected_daemon_version(expected)?;
+            }
+            Some(snapshot) => self.replace_daemon(&snapshot, expected)?,
+        }
+        *conn = Some(ControlConn::persistent("acorn-app")?);
+        self.incompatible_daemon.store(false, Ordering::SeqCst);
+        Ok(())
     }
 }
 

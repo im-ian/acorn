@@ -97,6 +97,27 @@ function isResumeEntry(value: unknown): value is DaemonUpdateResumeEntry {
 }
 
 /**
+ * Queue each entry's resume command for its session's next PTY spawn.
+ * Only call for sessions whose shell is (about to be) dead — a queued
+ * command drains into a live PTY immediately. Returns how many were
+ * queued.
+ */
+export function queueDaemonUpdateResumeEntries(
+  entries: DaemonUpdateResumeEntry[],
+): number {
+  let queued = 0;
+  for (const entry of entries) {
+    const command = resumeCommandFor(entry.agent, entry.uuid);
+    if (command === null) continue;
+    useAppStore.getState().setPendingTerminalInput(entry.sessionId, command, {
+      agentProvider: entry.agent,
+    });
+    queued += 1;
+  }
+  return queued;
+}
+
+/**
  * Consume the stashed pass: queue each surviving session's resume
  * command for its next PTY spawn. Idempotent per stash — the key is
  * removed before queueing. Returns how many sessions were queued.
@@ -123,15 +144,7 @@ export function applyDaemonUpdateResumePass(sessions: Session[]): number {
       .filter((session) => !session.archived_at)
       .map((session) => session.id),
   );
-  let queued = 0;
-  for (const entry of entries) {
-    if (!liveSessionIds.has(entry.sessionId)) continue;
-    const command = resumeCommandFor(entry.agent, entry.uuid);
-    if (command === null) continue;
-    useAppStore.getState().setPendingTerminalInput(entry.sessionId, command, {
-      agentProvider: entry.agent,
-    });
-    queued += 1;
-  }
-  return queued;
+  return queueDaemonUpdateResumeEntries(
+    entries.filter((entry) => liveSessionIds.has(entry.sessionId)),
+  );
 }

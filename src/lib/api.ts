@@ -1230,9 +1230,10 @@ export const api = {
     return invoke<void>("daemon_set_enabled", { enabled });
   },
   /**
-   * Force the bridge to reconnect — drops the cached control connection
-   * and re-spawns the daemon if necessary. Used by the Settings
-   * "Restart daemon" button after an app-authorized shutdown.
+   * Fully restart the daemon: a running one is shut down (killing its
+   * PTYs), then a fresh daemon from this build is spawned and
+   * connected. Backs the Settings "Restart daemon" button. Destructive
+   * while sessions are live — caller must confirm with the user.
    */
   daemonRestart(): Promise<void> {
     return invoke<void>("daemon_restart");
