@@ -15,6 +15,7 @@ import { PersistentGroup } from "./components/PersistentGroup";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { AcornRain } from "./components/AcornRain";
 import { AgentResumeModal } from "./components/AgentResumeModal";
+import { DaemonUpdateModal } from "./components/DaemonUpdateModal";
 import { StagedRevMismatchModal } from "./components/StagedRevMismatchModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { SettingsModal } from "./components/SettingsModal";
@@ -27,11 +28,14 @@ import { FileDropHoverOverlay } from "./components/FileDropHoverOverlay";
 import {
   api,
   AGENT_HOOK_STATUS_EVENT,
+  DAEMON_VERSION_MISMATCH_EVENT,
   STAGED_REV_MISMATCH_EVENT,
   type AgentKind,
+  type DaemonVersionMismatch,
   type ResumeCandidate,
   type StagedRevMismatch,
 } from "./lib/api";
+import { applyDaemonUpdateResumePass } from "./lib/daemonUpdateResume";
 import { AGENT_PROVIDER_ORDER } from "./lib/agentProviderRegistry";
 import {
   armResumeProbeAfterSuccessfulRestore,
@@ -461,6 +465,9 @@ function App() {
   const [sessionTitleRetryTick, setSessionTitleRetryTick] = useState(0);
   const [stagedRevMismatch, setStagedRevMismatch] =
     useState<StagedRevMismatch | null>(null);
+  const [daemonVersionMismatch, setDaemonVersionMismatch] =
+    useState<DaemonVersionMismatch | null>(null);
+  const daemonUpdateResumeAppliedRef = useRef(false);
 
   const acceptMultiInputToggle = useRef(createToggleLatch());
   const toggleMultiInput = useCallback(() => {
@@ -537,6 +544,56 @@ function App() {
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    // Same pull-at-mount + listen shape as the staged-rev prompt: the
+    // daemon boot thread may reconcile before this effect attaches.
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+    void api
+      .daemonVersionMismatchStatus()
+      .then((m) => {
+        if (!cancelled && m) setDaemonVersionMismatch(m);
+      })
+      .catch((err) => {
+        console.error("[App] daemon_version_mismatch_status pull failed", err);
+      });
+    listen<DaemonVersionMismatch>(DAEMON_VERSION_MISMATCH_EVENT, (event) => {
+      if (!cancelled) setDaemonVersionMismatch(event.payload);
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error(
+          "[App] daemon-version-mismatch listener attach failed",
+          err,
+        );
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    // One-shot post-daemon-update resume pass. Runs once the boot
+    // session load lands so the stash can be matched against live
+    // session rows; queued commands drain when each PTY (re)spawns.
+    if (daemonUpdateResumeAppliedRef.current) return;
+    if (sessions.length === 0) return;
+    daemonUpdateResumeAppliedRef.current = true;
+    const queued = applyDaemonUpdateResumePass(sessions);
+    if (queued > 0) {
+      console.info(
+        `[App] daemon-update resume pass queued ${queued} session(s)`,
+      );
+    }
+  }, [sessions]);
 
   useEffect(() => {
     const theme = themes.find((t) => t.id === appearance.themeId) ?? themes[0];
@@ -2289,6 +2346,12 @@ function App() {
       <StagedRevMismatchModal
         mismatch={stagedRevMismatch}
         onDismiss={() => setStagedRevMismatch(null)}
+      />
+      <DaemonUpdateModal
+        // The staged-rev prompt resolves through the same daemon
+        // restart — never stack both dialogs.
+        mismatch={stagedRevMismatch ? null : daemonVersionMismatch}
+        onDismiss={() => setDaemonVersionMismatch(null)}
       />
       <AgentResumeModal
         sessionId={resumeCandidate?.sessionId ?? ""}

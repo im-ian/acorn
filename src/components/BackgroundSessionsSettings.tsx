@@ -23,6 +23,11 @@ import {
 } from "react";
 
 import { api, type DaemonSessionSummary, type DaemonStatus } from "../lib/api";
+import {
+  collectDaemonUpdateResumeEntries,
+  queueDaemonUpdateResumeEntries,
+  type DaemonUpdateResumeEntry,
+} from "../lib/daemonUpdateResume";
 import { queueTerminalFocus } from "../lib/terminalFocus";
 import { cn } from "../lib/cn";
 import type { Translator } from "../lib/i18n";
@@ -51,6 +56,7 @@ export function BackgroundSessionsSettings() {
   const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmShutdown, setConfirmShutdown] = useState(false);
+  const [confirmRestart, setConfirmRestart] = useState(false);
   const pollInFlightRef = useRef<Promise<void> | null>(null);
   const appSessions = useAppStore((s) => s.sessions);
   const showToast = useToasts((s) => s.show);
@@ -118,8 +124,36 @@ export function BackgroundSessionsSettings() {
     setBusy("restart");
     setStatusError(null);
     try {
+      // Snapshot which app sessions ride on daemon PTYs *before* the
+      // restart kills them, so their agent conversations can be queued
+      // for auto-resume. Only daemon-backed sessions: an in-process
+      // session's shell survives the restart, and a queued command
+      // would drain straight into its live TUI.
+      let resumeEntries: DaemonUpdateResumeEntry[] = [];
+      if (status?.running) {
+        try {
+          const daemonSessions = await api.daemonListSessions();
+          const daemonIds = new Set(
+            daemonSessions
+              .filter((session) => session.alive)
+              .map((session) => session.id),
+          );
+          resumeEntries = collectDaemonUpdateResumeEntries(
+            useAppStore
+              .getState()
+              .sessions.filter((session) => daemonIds.has(session.id)),
+          );
+        } catch (err) {
+          console.warn(
+            "[BackgroundSessionsSettings] resume snapshot failed",
+            err,
+          );
+        }
+      }
       await api.daemonRestart();
+      setConfirmRestart(false);
       await refresh();
+      queueDaemonUpdateResumeEntries(resumeEntries);
       showToast(t("backgroundSessions.toasts.restarted"));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -128,7 +162,7 @@ export function BackgroundSessionsSettings() {
     } finally {
       setBusy(null);
     }
-  }, [refresh, showToast, t]);
+  }, [refresh, showToast, status, t]);
 
   const handleShutdown = useCallback(async () => {
     setBusy("shutdown");
@@ -262,22 +296,59 @@ export function BackgroundSessionsSettings() {
         hint={t("backgroundSessions.controls.hint")}
       >
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => void handleRestart()}
-            disabled={!enabled || busy !== null}
-            className={cn(
-              "flex items-center gap-1 rounded-md border border-border bg-bg-elevated px-2.5 py-1 text-xs transition",
-              "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-50",
-            )}
-          >
-            {busy === "restart" ? (
-              <Loader2 size={12} className="animate-spin" />
-            ) : (
-              <RefreshCcw size={12} />
-            )}
-            <span>{t("backgroundSessions.controls.restart")}</span>
-          </button>
+          {confirmRestart ? (
+            <Notice
+              tone="danger"
+              density="compact"
+              className="flex items-center gap-2"
+            >
+              <span>
+                {t("backgroundSessions.controls.confirmRestartPrompt")}
+              </span>
+              <Button
+                onClick={() => void handleRestart()}
+                disabled={busy !== null}
+                variant="danger"
+                size="xs"
+              >
+                {busy === "restart" ? (
+                  <Loader2 size={10} className="animate-spin" />
+                ) : (
+                  t("backgroundSessions.controls.confirm")
+                )}
+              </Button>
+              <Button
+                onClick={() => setConfirmRestart(false)}
+                disabled={busy !== null}
+                variant="ghost"
+                size="xs"
+              >
+                {t("backgroundSessions.controls.cancel")}
+              </Button>
+            </Notice>
+          ) : (
+            <button
+              type="button"
+              onClick={() =>
+                // A restart kills the shells in live daemon sessions —
+                // confirm first. With nothing running it is a plain
+                // (re)spawn, so skip the prompt.
+                running ? setConfirmRestart(true) : void handleRestart()
+              }
+              disabled={!enabled || busy !== null}
+              className={cn(
+                "flex items-center gap-1 rounded-md border border-border bg-bg-elevated px-2.5 py-1 text-xs transition",
+                "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-50",
+              )}
+            >
+              {busy === "restart" ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <RefreshCcw size={12} />
+              )}
+              <span>{t("backgroundSessions.controls.restart")}</span>
+            </button>
+          )}
           <Tooltip
             label={t("backgroundSessions.controls.clearInactiveTooltip")}
             side="bottom"

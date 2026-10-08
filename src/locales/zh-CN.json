@@ -2554,6 +2554,18 @@
       "restartFailed": "无法重启后台会话：",
       "dismissFailed": "无法关闭此提醒："
     },
+    "daemonUpdate": {
+      "title": "后台守护进程更新",
+      "sessionSingular": "会话",
+      "sessionPlural": "会话",
+      "bodyIntro": "此版本的 Acorn 附带了新的后台会话守护进程，但为了保留正在运行的会话，旧的守护进程仍在运行。新会话也会通过旧守护进程创建，因此最近的终端修复不会生效。",
+      "bodyUpdate": "立即更新将重启守护进程：{count} 个{sessions}的 shell 将被关闭，打开的智能体对话会在更新完成后自动恢复。",
+      "later": "稍后",
+      "updating": "正在更新...",
+      "updateNow": "立即更新",
+      "updateFailed": "无法更新后台守护进程:",
+      "dismissFailed": "无法关闭此提醒:"
+    },
     "memoryBreakdown": {
       "title": "内存细分",
       "totalRssSum": "总计（RSS，总和）",
@@ -2764,11 +2776,12 @@
     },
     "controls": {
       "label": "控制",
-      "hint": "“重新启动”会重新连接桥接，适用于从终端终止守护进程后的情况。“清除非活动会话”会删除非活动守护进程元数据。“退出”会终止所有运行中的 PTY 并关闭守护进程。",
+      "hint": "重启会停止守护进程并从当前构建启动新的进程——正在运行的会话的 shell 将被关闭，打开的智能体对话会自动恢复。清除非活动项会移除非活动的守护进程元数据。退出会终止所有正在运行的 PTY 并结束守护进程。",
       "restart": "重新启动守护进程",
       "clearInactive": "清除非活动会话",
       "clearInactiveTooltip": "从守护进程注册表中删除每个非活动会话行",
       "confirmShutdownPrompt": "终止所有 PTY？",
+      "confirmRestartPrompt": "立即重启？正在运行的会话的 shell 将被关闭，智能体对话会自动恢复。",
       "confirm": "确认",
       "cancel": "取消",
       "quit": "退出守护进程"

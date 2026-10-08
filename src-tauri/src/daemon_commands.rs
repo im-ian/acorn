@@ -11,12 +11,12 @@
 use serde::Serialize;
 use std::io;
 use std::path::{Path, PathBuf};
-use tauri::State;
+use tauri::{AppHandle, Emitter, Runtime, State};
 use uuid::Uuid;
 
-use crate::daemon_bridge::BridgeError;
+use crate::daemon_bridge::{BridgeError, DaemonBridge};
 use crate::state::AppState;
-use acorn_daemon::protocol::{AgentKind, ErrorCode};
+use acorn_daemon::protocol::{AgentKind, ErrorCode, StatusSnapshot};
 
 /// JSON shape for `daemon_status` — what the StatusBar indicator and the
 /// Settings → Background sessions panel render.
@@ -110,6 +110,90 @@ fn combine_status_errors(primary: Option<String>, secondary: Option<String>) -> 
     }
 }
 
+/// JSON shape for the daemon-update prompt. Present while the running
+/// `acornd` was built by a different app version but still owns live
+/// PTYs — the bridge's `PreserveActive` policy keeps that generation
+/// serving every RPC (new spawns included), so daemon-side fixes such
+/// as PTY spawn env never reach new sessions until it is replaced.
+#[derive(Debug, Clone, Serialize)]
+pub struct DaemonVersionMismatch {
+    pub daemon_version: String,
+    pub app_version: String,
+    pub alive_session_count: u32,
+}
+
+pub const EVENT_DAEMON_VERSION_MISMATCH: &str = "acorn:daemon-version-mismatch";
+
+/// Decision kernel for [`reconcile_daemon_version`]. `None` when the
+/// daemon matches this build, or when it is idle — an idle outdated
+/// daemon is replaced silently by the bridge (`RestartIdle`), so only
+/// a live-PTY holdout warrants prompting the user.
+fn daemon_version_mismatch_from(
+    snapshot: &StatusSnapshot,
+    app_version: &str,
+) -> Option<DaemonVersionMismatch> {
+    if snapshot.daemon_version == app_version || snapshot.session_count_alive == 0 {
+        return None;
+    }
+    Some(DaemonVersionMismatch {
+        daemon_version: snapshot.daemon_version.clone(),
+        app_version: app_version.to_string(),
+        alive_session_count: snapshot.session_count_alive,
+    })
+}
+
+/// Boot-time daemon-version reconcile, run on the daemon boot thread
+/// after `ensure_connection`. Mirrors `staged_rev_reconcile`: cache the
+/// verdict on `AppState` (pulled at mount, defeats the
+/// listener-mount-after-emit race) and emit for already-mounted
+/// listeners. Both branches overwrite the cache so a re-reconcile that
+/// finds the daemon current retracts an earlier prompt.
+pub fn reconcile_daemon_version<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    bridge: &DaemonBridge,
+) {
+    if !bridge.is_enabled() {
+        *state.daemon_version_mismatch.lock() = None;
+        return;
+    }
+    let snapshot = match bridge.status() {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            tracing::warn!(error = %err, "daemon-version reconcile: status probe failed");
+            return;
+        }
+    };
+    let mismatch = daemon_version_mismatch_from(&snapshot, env!("CARGO_PKG_VERSION"));
+    *state.daemon_version_mismatch.lock() = mismatch.clone();
+    let Some(payload) = mismatch else { return };
+    match app.emit(EVENT_DAEMON_VERSION_MISMATCH, payload.clone()) {
+        Ok(()) => tracing::info!(
+            daemon_version = %payload.daemon_version,
+            app_version = %payload.app_version,
+            alive_sessions = payload.alive_session_count,
+            "outdated daemon holds live PTYs; user prompted to update",
+        ),
+        Err(err) => tracing::warn!(error = %err, "daemon-version reconcile: emit failed"),
+    }
+}
+
+/// Returns the cached boot-time daemon-version reconcile result. The
+/// frontend pulls this at mount so the prompt survives a
+/// listener-mount-after-emit race.
+#[tauri::command]
+pub fn daemon_version_mismatch_status(state: State<'_, AppState>) -> Option<DaemonVersionMismatch> {
+    state.daemon_version_mismatch.lock().clone()
+}
+
+/// Clear the cached daemon-version mismatch so the prompt does not
+/// re-show after the user dismisses it or completes the update flow.
+/// Idempotent.
+#[tauri::command]
+pub fn acknowledge_daemon_version_mismatch(state: State<'_, AppState>) {
+    *state.daemon_version_mismatch.lock() = None;
+}
+
 /// Toggle the default path for new sessions. Persistence (so the toggle
 /// survives a restart) happens on the frontend in `localStorage` under
 /// `acorn:daemon-enabled`; existing daemon-bound sessions remain sticky.
@@ -118,18 +202,13 @@ pub fn daemon_set_enabled(enabled: bool, state: State<'_, AppState>) {
     state.daemon_bridge.set_enabled(enabled);
 }
 
-/// Cause the bridge to attempt a fresh connection (and spawn the daemon
-/// if necessary). Useful for the Settings "restart daemon" button after
-/// an authenticated shutdown request from the Acorn app.
+/// Fully restart the daemon: shut a running one down (killing its
+/// PTYs), wait for it to release the endpoint, and spawn a fresh
+/// daemon from this build. Backs the Settings "Restart daemon" button.
+/// Destructive — the UI confirmation is the caller's responsibility.
 #[tauri::command]
 pub fn daemon_restart(state: State<'_, AppState>) -> Result<(), String> {
-    // Drop only the app-side channel so `ensure_connection` probes and
-    // reconnects. The enabled preference remains unchanged.
-    state.daemon_bridge.reset_connection();
-    state
-        .daemon_bridge
-        .ensure_connection()
-        .map_err(|e| e.to_string())
+    state.daemon_bridge.restart().map_err(|e| e.to_string())
 }
 
 /// Ask the daemon to shut down (graceful). All PTYs die; the daemon
@@ -427,5 +506,40 @@ mod tests {
             .as_deref(),
             Some("daemon connection failed; failed to resolve daemon log path: permission denied")
         );
+    }
+
+    fn status_snapshot(daemon_version: &str, alive: u32) -> StatusSnapshot {
+        StatusSnapshot {
+            daemon_version: daemon_version.to_string(),
+            uptime_seconds: 1,
+            session_count_total: alive,
+            session_count_alive: alive,
+            pid: None,
+            rss_bytes: None,
+        }
+    }
+
+    #[test]
+    fn version_mismatch_reported_only_for_live_outdated_daemon() {
+        let mismatch = daemon_version_mismatch_from(
+            &status_snapshot("1.39.1-preview.20260929005847", 10),
+            "1.40.0",
+        )
+        .expect("outdated daemon with live PTYs must prompt");
+        assert_eq!(mismatch.daemon_version, "1.39.1-preview.20260929005847");
+        assert_eq!(mismatch.app_version, "1.40.0");
+        assert_eq!(mismatch.alive_session_count, 10);
+    }
+
+    #[test]
+    fn version_mismatch_silent_when_versions_match() {
+        assert!(daemon_version_mismatch_from(&status_snapshot("1.40.0", 10), "1.40.0").is_none());
+    }
+
+    #[test]
+    fn version_mismatch_silent_when_daemon_idle() {
+        // RestartIdle already replaces an idle outdated daemon without
+        // user involvement — prompting would be noise.
+        assert!(daemon_version_mismatch_from(&status_snapshot("1.39.0", 0), "1.40.0").is_none());
     }
 }
