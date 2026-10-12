@@ -25,7 +25,7 @@ AI는 강력하고 똑똑하지만, 결정과 책임은 결국 사람의 몫이�
 
 ## 개요
 
-Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok Build / Ollama / llm 등) 세션을 한 창에서 병렬로 다루기 위한 데스크톱 앱입니다. 네이티브 PTY와 채팅, 분할 Pane·Kanban·Canvas, Graph·Loop 세션, 세션별 격리된 git worktree, 작업 요약과 진행 상태 표시를 하나의 워크스페이스에서 제공합니다.
+Acorn은 여러 AI 코딩 에이전트 세션을 한 창에서 병렬로 다루는 데스크톱 앱입니다. 터미널과 채팅, 나뉜 작업 공간, 격리된 git worktree, GitHub·Linear·Jira를 한 워크스페이스에 둡니다.
 
 ---
 
@@ -38,7 +38,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
   <br/><br/>
   <img width="1600" height="1000" alt="Acorn Kanban 워크스페이스" src="./assets/screenshots/kanban.png" />
   <br/>
-  <sub>Kanban 워크스페이스 — Idle부터 Done까지 세션 lifecycle 추적</sub>
+  <sub>Kanban 워크스페이스 — 대기부터 완료까지 세션 흐름 추적</sub>
   <br/><br/>
   <img width="1600" height="1000" alt="Acorn Canvas 워크스페이스" src="./assets/screenshots/canvas.png" />
   <br/>
@@ -61,152 +61,25 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Grok 
 
 ## 주요 기능
 
-### 🪟 다중 Pane 워크스페이스
-- 가로/세로 분할 + 자유로운 크기 조절
-- Pane 간 세션 드래그-드롭, 탭 이동·복제·재배치
-- 빈 Pane 더블 클릭으로 새 세션 생성
-- 보이는 세션에 같은 입력을 동시에 보내는 multi-input 모드
+### 워크스페이스
+세션은 나뉜 Pane, Kanban(대기 → 완료), Canvas로 봅니다. 탭은 드래그로 옮기고, 보이는 터미널에는 입력을 한 번에 넣을 수 있습니다. 쓰지 않는 탭은 최소화하거나 보관하고, 보관한 세션은 다시 열 수 있습니다.
 
-### 🗂️ Kanban 워크스페이스
-- Pane과 Kanban 보기를 프로젝트별로 전환·기억하고 새 프로젝트의 기본 보기 설정
-- 세션 상태와 작업 트리 diff, PR 상태를 조합해 **Idle / Working / Waiting / Review / Done**으로 자동 분류
-- 세션 검색·정렬, 단계별 체류 시간과 stall 표시, 수동 완료 처리, 열 너비 조절
-- 카드에서 터미널·채팅 팝오버 열기, 세션 이름 변경, PR 상세 확인, 새 일반·worktree·chat·graph·loop 세션 생성
+### 프로젝트와 git worktree
+프로젝트를 만들거나 기존 저장소를 엽니다. 한 프로젝트가 여러 저장소 루트를 품을 수 있고, 세션은 격리된 worktree에서 같은 저장소를 동시에 작업할 수 있습니다. 프로젝트에 묶이지 않은 터미널은 사이드바 **인스턴트 세션**에서 바로 시작합니다.
 
-### 🧭 Canvas 워크스페이스
-- 라이브 터미널·채팅 세션을 자유롭게 배치하고 드래그·크기 조절
-- 확대·축소, 캔버스 이동, 전체 맞춤, 레이아웃 초기화·실행 취소
-- 미니맵으로 멀리 떨어진 세션을 탐색하고 터미널을 팝오버나 Pane으로 전환
+### AI 에이전트
+세션은 네이티브 셸로 시작합니다. 그 안에서 Claude Code, Codex, Antigravity, Grok, Ollama, llm을 실행하거나, 터미널 없이 채팅할 수 있습니다. 대화 fork, 탭 제목 자동 생성, 사이드바 상태(준비됨 / 작업 중 / 입력 대기 / 오류)를 제공합니다. 이전 대화는 이어하기를 제안하고, 설정하면 앱 시작 시 자동으로 resume합니다.
 
-### 🌳 프로젝트 + 격리된 git Worktree
-- 앱 안에서 새 git 프로젝트 생성 또는 기존 프로젝트 추가
-- 프로젝트 안에 이름 있는 워크스페이스를 만들고 사이드바 그룹핑·드래그 재정렬
-- 세션마다 별도 worktree로 동일 저장소 안전 동시 작업
-- 기존 linked worktree를 워크스페이스로 가져오거나 프로젝트 설정에서 확인·삭제
-- 프로젝트 설정에서 쓰이지 않는 worktree 삭제
-- 종료 시 worktree 정리 옵션 + 지연 삭제 실행 취소 (항상 삭제 모드 포함)
-- 사이드바 **Instant Sessions**에서 프로젝트 없이 로컬 터미널을 바로 시작
+### Graph와 Loop
+Graph는 프롬프트를 실행 그래프로 나누거나, Agent / Validator / Merge / Human 노드로 DAG를 직접 그립니다. Loop는 Claude 또는 Codex가 격리 worktree에서 계획부터 PR까지 진행하고, 단계마다 자동 진행·먼저 확인·사용 안 함을 고릅니다.
 
-### 💻 PTY 터미널
-- 네이티브 PTY 셸 세션, 재오픈 시 스크롤백 자동 복원
-- 터미널 안의 파일 경로 클릭 → 코드 뷰어로 열기
-- 파일을 터미널로 드래그하면 경로 mention으로 삽입, 클립보드 이미지는 붙여넣기
-- URL 클릭, 줄 높이, 스크롤 속도, 마지막 사용자 프롬프트 고정 등 동작 옵션
+### 꺼지지 않는 터미널과 세션 IPC
+백그라운드 세션은 앱을 닫았다가 열어도 PTY를 유지합니다. 세션 안의 에이전트는 `acorn-ipc`로 같은 프로젝트의 다른 세션을 조작할 수 있습니다. Claude Code 자동 모드는 이 명령을 기본으로 거절하므로, 쓰려면 `/permissions`에서 `Bash(acorn-ipc *)`를 허용합니다. 사용법과 보안 모델은 [`docs/SESSION_IPC.md`](docs/SESSION_IPC.md)에 있습니다.
 
-### 🤖 AI 에이전트 세션
-- 세션은 항상 네이티브 대화형 셸(`$SHELL` 또는 Windows PowerShell/cmd)로 시작 — 그 안에서 원하는 AI CLI(`claude` / `codex` / `agy` / `grok` / `ollama` / `llm` 등) 직접 실행
-- Claude / Codex / Antigravity / Grok 세션을 현재 Pane이나 새 worktree로 fork
-- **에이전트 탭 제목 자동 생성** — 대화 내용에 맞춰 탭 제목 갱신
-- 사이드바 라이브 상태 — 유휴 / 입력 대기 / 작업 중 (provider transcript 기반, 지원되는 CLI는 hook 병행)
-- 우측 패널 todo 리스트는 **Claude Code 전용** — transcript의 `TodoWrite` 이벤트 파싱
+### 코드, GitHub, 이슈
+우측 패널에서 파일·diff·커밋, GitHub PR·이슈·Actions, 연결한 Linear·Jira 이슈를 봅니다. PR이나 이슈에서 **작업 시작**을 하면 격리 worktree와 에이전트가 열립니다. 코드·이미지·PDF 뷰어, 작업 요약, 입력 대기·오류 알림도 같은 창에 있습니다.
 
-### 💬 네이티브 AI 채팅
-- 터미널 명령 없이 Claude / Codex / Antigravity / Grok과 대화하는 chat 세션
-- 응답 스트리밍·중지, provider 전환, 파일 첨부, 메시지 복사
-- 사용자 메시지 수정, 응답 재생성, 이후 대화 가지 삭제
-- 원하는 메시지 시점에서 같은 worktree 또는 새 격리 worktree로 대화 fork
-
-### 🕸️ Graph session
-- 프로젝트 안에서 실행 DAG를 그리고 모든 노드를 GOAL로 연결하는 전용 세션
-- Agent / Validator / Merge / Human 노드, 병렬·순차 그룹, 의존·재시도 엣지
-- 내장 프리셋(Implement and verify, Parallel research, Approval gate)과 사용자 프리셋
-- Design에서 편집하고 Run으로 라이브 실행, Human 노드에서 승인·거절·입력
-- Claude / Codex / Antigravity / Grok 중 선택. 사이드바 또는 커맨드 팔레트 → **New Graph session**
-
-### ♾️ Loop session
-- 목표를 주면 Claude 또는 Codex가 격리 worktree에서 Plan → Implementation → Validation → Auto-fix → Self-review → Open PR → Merge를 수행
-- 단계별 정책(Automatic / Ask first / Disabled)과 모델·effort 프리셋
-- 실행 중 목표를 고치면 pause → replan → continue
-- 사이드바 또는 커맨드 팔레트 → **New Loop session**
-
-### 💾 에이전트 대화 영속화
-- `claude` / `codex` / `agy` / `grok` 대화 UUID를 세션별로 추적해 포커스 시 이전 대화 resume 제안
-- Settings → Sessions → **Auto-resume previous conversations**를 켜면 앱 시작 시 모달 없이 idle 세션에 resume 명령을 보냄 (이미 에이전트가 돌고 있는 세션은 건너뜀)
-- 우측 패널 **History** 탭에서 프로젝트별 transcript 히스토리 확인, 더블 클릭으로 새 터미널에서 resume
-
-### 🛏️ Background sessions
-- 앱을 종료·재시작해도 **PTY 세션 그대로 유지** — 다시 열면 화면 복원
-- 기본 ON. Settings → Sessions 에서 상태 확인 + Restart / Clear inactive / Quit 제어
-- 상태 표시줄 아이콘 드롭다운으로 한눈에 확인
-
-### 🛰️ Session IPC — 에이전트가 다른 세션 조작
-- 어떤 Acorn 세션 안의 AI든 같은 프로젝트의 다른 세션을 직접 조작 (입력 전송, 화면 읽기, 새 세션 생성, 선택, 종료)
-- 터미널에서 `acorn-ipc list-sessions` / `send-keys` / `read-buffer` 로 사용
-- 자세한 사용법 + 보안 모델: [`docs/SESSION_IPC.md`](docs/SESSION_IPC.md)
-- 플랫폼: macOS / Windows / Linux
-- Claude Code 자동 모드에서는 분류기가 셸 명령을 검사합니다. 다른 터미널에 키를 넣는 `acorn-ipc`는 그 검사에서 거절됩니다. 연구 프리뷰는 2026-03-23 주(v2.1.83–v2.1.85), Pro / Max / Team 새 세션 기본값은 2026-08-14, 권한 모드를 정하지 않은 터미널·VS Code 세션의 기본값은 2026-09-28 전후(v2.1.283)입니다.
-- `.claude`는 보호 경로입니다. Claude가 `.claude/settings.json`을 고쳐 스스로 `acorn-ipc`를 허용하지는 못합니다.
-- 허용은 Claude 세션에서 `/permissions`로 `Bash(acorn-ipc *)`를 직접 추가합니다. 저장 위치는 그 대화에서 고릅니다. Project settings (local)은 `.claude/settings.local.json`이고, worktree에서는 main checkout 루트에 씁니다.
-
-### 🎯 우측 패널
-세 그룹으로 묶인 탭:
-
-- **Code** — Files / Staged / Commits. 파일 트리·검색·Git 상태, 스테이징 변경, 커밋 + Diff 모달
-- **GitHub** — PRs / Issues / Actions. PR 리스트(라벨/체크/CI 시간), Issues 목록/검색/상세 모달, PR 상세 모달(Conversation·Commits·Checks·Files), 이슈·PR 댓글 작성/수정/삭제, 본문 task 토글, 머지 메시지 AI 자동 생성. GitHub Actions 실행 + workflow 필터
-- **Agents** — Activity / History / Todos. 세션별 알림, transcript 히스토리, Claude Code todo (`TodoWrite` 이벤트)
-
-### 🔍 File Explorer + Code / Diff / Media 뷰어
-- 파일명·내용 검색 (정규식, 대소문자, include/exclude) + dotfile·gitignored 파일 표시 전환
-- 파일·폴더 이름 변경, 휴지통 이동, 상대·절대 경로 복사, 파일 관리자/기본 프로그램/외부 에디터로 열기
-- 파일을 Claude / Codex / Antigravity / Grok 대화에 첨부하고 탭 영역으로 드래그해 열기
-- 파일 탐색기 또는 터미널의 파일 참조 클릭으로 코드 뷰어 진입
-- 신택스 하이라이팅, in-file 검색, markdown source/preview 전환
-- Diff 통합 / 분할 모드, 외부 에디터로 열기
-- 이미지 확대·축소와 PDF 인앱 미리보기
-
-### 📈 작업 요약
-- 세션 메뉴에서 현재 worktree의 변경 파일·라인 증감·상태 분포를 한 탭에 집계
-- 변경 파일을 요약에서 바로 열고 세션·브랜치·transcript metadata 확인
-- 네이티브 채팅의 메시지·턴 현황과 사용 가능한 경우 입력·출력·캐시·추론 토큰 사용량 표시
-
-### 🛎️ Activity center
-- 세션별 알림(입력 대기 / 완료 / 실패)을 우측 패널 Activity 탭과 상태 표시줄에서 모아 보기
-- 데스크톱 알림을 클릭하면 해당 세션으로 포커스
-- 네이티브 알림 이벤트별 토글, 히스토리 보관 기간 설정
-
-### ⌨️ 커맨드 팔레트 + 단축키
-커맨드 팔레트에서 세션 전환, New Graph / Loop / chat session, 워크스페이스 보기 전환도 실행할 수 있습니다.
-
-| Action | Shortcut |
-| --- | --- |
-| 커맨드 팔레트 | `⌘P` |
-| 새 세션 / isolated | `⌘T` / `⌘⌥T` |
-| 새 프로젝트 | `⌘⇧N` |
-| 보기 내 검색 | `⌘F` |
-| Pane 분할 (세로/가로) | `⌘D` / `⌘⇧D` |
-| Pane 크기 균등화 | `⌘⌥E` |
-| Pane 포커스 | `⌘⌥←` / `⌘⌥→` / `⌘⌥⇧↑` / `⌘⌥⇧↓` |
-| 탭 닫기 | `⌘W` |
-| 사이드바 / 메인 / 우측 패널 포커스 | `⌘1` / `⌘2` / `⌘3` |
-| 사이드바 / 우측 패널 토글 | `⌘B` / `⌘J` |
-| Files / Staged / Commits / PRs / Todos | `⌘⇧E` / `⌘⇧S` / `⌘⇧C` / `⌘⇧P` / `⌘⇧T` |
-| multi-input 토글 | `⌘⌥I` |
-| 다음/이전 세션 | `Ctrl+Tab` / `Ctrl+⇧+Tab` |
-| 다음/이전 프로젝트 | `Ctrl+⌥+Tab` / `Ctrl+⌥⇧+Tab` |
-| 최근 입력 대기 세션으로 이동 | `Ctrl+⌥]` |
-| UI 배율 | `⌘-` / `⌘=` / `⌘0` |
-| 터미널 클리어 | `⌘K` |
-| 셸 환경 다시 로드 | `⌘⇧,` |
-| 설정 | `⌘,` |
-
-전체 목록은 Settings → Shortcuts 탭에서 확인하고 원하는 조합으로 변경할 수 있습니다.
-표의 `⌘`는 Windows·Linux에서 `Ctrl`, `⌥`는 `Alt`에 해당합니다. 터미널에 포커스가 있을 때는 `Ctrl+C`가 SIGINT, `Ctrl+Shift+C`가 선택 영역 복사로 동작합니다.
-
-### 🎛️ 설정
-- 언어 (English / 한국어 / 日本語 / 简体中文) / UI 배율 / 배경 이미지 / 기본 Pane·Kanban·Canvas 보기
-- Theme library — 내장 팔레트 + [acorn-themes](https://im-ian.github.io/acorn-themes/) 카탈로그 다운로드·업데이트, 사용자 CSS
-- 터미널 폰트 fallback·프리셋, 크기·굵기·자간·줄 높이·커서·스크롤 속도·안티앨리어싱, 상주 터미널 수
-- 단축키 직접 녹화·충돌 감지·개별/전체 초기화
-- AI 공급자 선택 (`claude` / `codex` / `antigravity` / `grok` / `ollama` / `llm` / 커스텀), 외부 에디터 명령
-- Background sessions 제어, 이전 대화 auto-resume, 작업 중 절전 방지, 종료 경고, orphan worktree·캐시 정리
-- macOS 보호 폴더 권한 점검·재설정
-- 프로젝트별 PR 생성 설정 (사이드바 프로젝트 → Settings)
-
-### 📊 상태 표시줄 + 자동 업데이트
-- 메모리 + 프로세스별 Breakdown, 현재 worktree 브랜치, GitHub 계정 배지
-- Claude / Codex / Grok 토큰 사용량 (Grok은 weekly 윈도우 포함), Background sessions / multi-input 상태 표시
-- macOS·Windows 자동 업데이트 — 새 버전 감지 시 배너, 적용 시점은 사용자가 선택
-- About 탭에서 현재 버전의 GitHub 릴리스 노트 확인
+`⌘P` 커맨드 팔레트, `⌘T` 새 세션, `⌘,` 설정. `⌘`는 Windows·Linux에서 `Ctrl`입니다. 나머지 단축키는 Settings → Shortcuts에서 바꿉니다. 언어는 English / 한국어 / 日本語 / 简体中文이고, 테마·터미널·에이전트·Linear/Jira·알림도 설정에서 바꿉니다. macOS·Windows는 앱 안에서 업데이트합니다.
 
 ---
 
