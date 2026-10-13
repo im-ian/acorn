@@ -1,4 +1,5 @@
 import {
+  Archive,
   BarChart3,
   Bell,
   BellOff,
@@ -10,9 +11,13 @@ import {
   FileImage,
   FileText,
   FileVideo,
+  Folder,
+  FolderGit2,
   FolderOpen,
   FolderPlus,
   GitBranch,
+  Home,
+  LayoutPanelLeft,
   Maximize2,
   MessageSquareText,
   Minimize2,
@@ -23,6 +28,7 @@ import {
   SplitSquareVertical,
   SquareX,
   Terminal as TerminalIcon,
+  Trash2,
   Waypoints,
   X,
 } from "lucide-react";
@@ -92,8 +98,19 @@ import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   defaultProjectFolderId,
+  isDefaultProjectFolder,
   isPathInsideOrEqual,
+  projectFolderDisplayName,
+  resolveProjectFolderIdForSession,
+  type ProjectFolder,
 } from "../lib/projectFolders";
+import { isLocalSession } from "../lib/sessionGrouping";
+import {
+  canAssignSessionToWorkspace,
+  canCreateWorkspaceFromSessionWorktree,
+  createWorkspaceFromSessionWorktree,
+  isWorktreeWorkspace,
+} from "../lib/sessionWorkspaces";
 import {
   buildSessionCreateRequestFromScope,
   resolveProjectScopedForRepoPath,
@@ -165,9 +182,11 @@ function paneT(t: Translator, key: PaneTranslationKey): string {
 type PaneContextMenuGroup =
   | "session"
   | "fork"
+  | "workspace"
   | "layout"
   | "open"
   | "copy"
+  | "danger"
   | "close";
 
 function paneContextMenuGroupTitle(
@@ -185,6 +204,111 @@ function shortcutLabel(
   id: HotkeyId,
 ): string {
   return formatHotkey(shortcuts[id]);
+}
+
+function WorkspaceMenuIcon({ folder }: { folder: ProjectFolder }) {
+  const Icon = isWorktreeWorkspace(folder)
+    ? GitBranch
+    : isDefaultProjectFolder(folder)
+      ? FolderGit2
+      : LayoutPanelLeft;
+  return <Icon size={12} />;
+}
+
+function sessionWorkspaceMenuItems({
+  t,
+  session,
+  projectFolders,
+  currentProjectFolderId,
+  includeMove,
+  onMoveToProjectFolder,
+  onCreateWorkspace,
+}: {
+  t: Translator;
+  session: Session;
+  projectFolders: readonly ProjectFolder[];
+  currentProjectFolderId: string | undefined;
+  includeMove: boolean;
+  onMoveToProjectFolder: (sessionId: string, folderId: string | null) => void;
+  onCreateWorkspace: () => void;
+}): ContextMenuItem[] {
+  const canCreate = canCreateWorkspaceFromSessionWorktree(
+    session,
+    projectFolders,
+    currentProjectFolderId,
+  );
+  const folderMoveMenuItems: ContextMenuItem[] = [];
+  if (includeMove) {
+    const namedProjectFolders = projectFolders.filter(
+      (folder) => !isDefaultProjectFolder(folder),
+    );
+    const currentProjectFolder =
+      projectFolders.find((folder) => folder.id === currentProjectFolderId) ??
+      null;
+    const defaultProjectFolder = projectFolders.find(isDefaultProjectFolder);
+    const rootMoveMenuItems: ContextMenuItem[] = [];
+    if (
+      currentProjectFolder &&
+      defaultProjectFolder &&
+      !isDefaultProjectFolder(currentProjectFolder) &&
+      canAssignSessionToWorkspace(
+        session,
+        currentProjectFolder,
+        defaultProjectFolder,
+      )
+    ) {
+      rootMoveMenuItems.push({
+        label: paneT(t, "pane.menu.moveToProjectRoot"),
+        icon: <Home size={12} />,
+        onClick: () => onMoveToProjectFolder(session.id, null),
+      });
+    }
+    const targetFolderMenuItems: ContextMenuItem[] = [];
+    for (const folder of namedProjectFolders) {
+      if (folder.id === currentProjectFolderId) continue;
+      if (
+        !canAssignSessionToWorkspace(session, currentProjectFolder, folder)
+      ) {
+        continue;
+      }
+      targetFolderMenuItems.push({
+        label: projectFolderDisplayName(folder),
+        icon: <WorkspaceMenuIcon folder={folder} />,
+        onClick: () => onMoveToProjectFolder(session.id, folder.id),
+      });
+    }
+    const moveToMenuItems: ContextMenuItem[] = [
+      ...rootMoveMenuItems,
+      ...(rootMoveMenuItems.length > 0 && targetFolderMenuItems.length > 0
+        ? [{ type: "separator" as const }]
+        : []),
+      ...targetFolderMenuItems,
+    ];
+    if (moveToMenuItems.length > 0) {
+      folderMoveMenuItems.push({
+        type: "submenu",
+        label: paneT(t, "pane.menu.moveToProjectFolder"),
+        icon: <Folder size={12} />,
+        children: moveToMenuItems,
+      });
+    }
+  }
+
+  return [
+    ...(canCreate
+      ? [
+          {
+            label: paneT(t, "pane.menu.createWorkspaceFromWorktree"),
+            icon: <GitBranch size={12} />,
+            onClick: onCreateWorkspace,
+          } satisfies ContextMenuItem,
+        ]
+      : []),
+    ...(canCreate && folderMoveMenuItems.length > 0
+      ? [{ type: "separator" as const }]
+      : []),
+    ...folderMoveMenuItems,
+  ];
 }
 
 interface PaneProps {
@@ -1222,6 +1346,12 @@ function TabItem({
   );
   const setSessionSilenced = useAppStore((s) => s.setSessionSilenced);
   const setTabMinimized = useAppStore((s) => s.setTabMinimized);
+  const requestArchiveSession = useAppStore((s) => s.requestArchiveSession);
+  const moveSessionToProjectFolder = useAppStore(
+    (s) => s.moveSessionToProjectFolder,
+  );
+  const projectFoldersByRepo = useAppStore((s) => s.projectFolders);
+  const sessionFolderIds = useAppStore((s) => s.sessionFolderIds);
   const isGeneratingTitle = useAppStore((s) =>
     session ? Boolean(s.generatingSessionTitleIds[session.id]) : false,
   );
@@ -1268,7 +1398,7 @@ function TabItem({
   );
 
   useEffect(() => {
-    if (!menu || !session) return;
+    if (!menu || !session || isLocalSession(session)) return;
     setAgent(null);
     let cancelled = false;
     api
@@ -1431,7 +1561,7 @@ function TabItem({
   }
 
   const forkItems: ContextMenuItem[] = (() => {
-    if (!agent || !onFork) return [];
+    if (!agent || !onFork || !session || isLocalSession(session)) return [];
     return buildAgentContextMenuItems({
       mode: "fork",
       surface: "pane",
@@ -1440,6 +1570,51 @@ function TabItem({
       onFork,
     });
   })();
+  const transcriptPath = session?.agent_transcript_path?.trim() || null;
+  const sessionProjectFolders = session
+    ? (projectFoldersByRepo[session.repo_path] ?? []).filter(
+        (folder) => folder.repoPath === session.repo_path,
+      )
+    : [];
+  const currentProjectFolderId = session
+    ? resolveProjectFolderIdForSession(
+        sessionProjectFolders,
+        session,
+        sessionFolderIds,
+      )
+    : undefined;
+  const workspaceItems = session
+    ? sessionWorkspaceMenuItems({
+        t,
+        session,
+        projectFolders: sessionProjectFolders,
+        currentProjectFolderId,
+        includeMove: !isLocalSession(session),
+        onMoveToProjectFolder: moveSessionToProjectFolder,
+        onCreateWorkspace: () => {
+          void createWorkspaceFromSessionWorktree(session, showToast, t).then(
+            (folder) => {
+              if (folder) onSelect();
+            },
+          );
+        },
+      })
+    : [];
+  const closeOthersItems: ContextMenuItem[] =
+    siblingCount > 1
+      ? [
+          {
+            label: paneT(t, "pane.menu.closeOthers"),
+            icon: <CircleX size={12} />,
+            onClick: onCloseOthers,
+          },
+          {
+            label: paneT(t, "pane.menu.closeAll"),
+            icon: <SquareX size={12} />,
+            onClick: onCloseAll,
+          },
+        ]
+      : [];
 
   const menuItems: ContextMenuItem[] = [
     ...(session
@@ -1457,11 +1632,16 @@ function TabItem({
             onClick: () => void regenerateTitle(),
             disabled: !canRegenerateTitle,
           },
-          {
-            label: paneT(t, "pane.menu.openWorkSummary"),
-            icon: <BarChart3 size={12} />,
-            onClick: () => void openWorkSummaryTab({ sessionId: session.id }),
-          },
+          ...(isLocalSession(session)
+            ? []
+            : [
+                {
+                  label: paneT(t, "pane.menu.openWorkSummary"),
+                  icon: <BarChart3 size={12} />,
+                  onClick: () =>
+                    void openWorkSummaryTab({ sessionId: session.id }),
+                } satisfies ContextMenuItem,
+              ]),
           {
             label: paneT(
               t,
@@ -1517,19 +1697,26 @@ function TabItem({
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
       },
     },
+    ...(workspaceItems.length > 0
+      ? [paneContextMenuGroupTitle(t, "workspace"), ...workspaceItems]
+      : []),
     paneContextMenuGroupTitle(t, "open"),
-    {
-      label: session
-        ? paneT(t, "pane.menu.openWorktreeInEditor")
-        : tab.kind === "code"
-          ? paneT(t, "pane.menu.openFileInEditor")
-          : paneT(t, "pane.menu.openWorktreeInEditor"),
-      icon: <PencilLine size={12} />,
-      disabled: !editorConfigured,
-      onClick: () => {
-        void openInConfiguredEditorWithFeedback(tabPath);
-      },
-    },
+    ...(session && isLocalSession(session)
+      ? []
+      : [
+          {
+            label: session
+              ? paneT(t, "pane.menu.openWorktreeInEditor")
+              : tab.kind === "code"
+                ? paneT(t, "pane.menu.openFileInEditor")
+                : paneT(t, "pane.menu.openWorktreeInEditor"),
+            icon: <PencilLine size={12} />,
+            disabled: !editorConfigured,
+            onClick: () => {
+              void openInConfiguredEditorWithFeedback(tabPath);
+            },
+          } satisfies ContextMenuItem,
+        ]),
     {
       label: revealInFileManagerText(t),
       icon: <FolderOpen size={12} />,
@@ -1554,18 +1741,31 @@ function TabItem({
             void copyTextWithFeedback(tabPath);
           },
         },
-        {
-          label: session
-            ? paneT(t, "pane.menu.worktreeName")
-            : tab.kind === "code"
-              ? paneT(t, "pane.menu.fileName")
-              : paneT(t, "pane.menu.worktreeName"),
-          icon: <Copy size={12} />,
-          onClick: () => {
-            void copyTextWithFeedback(basename(tabPath));
-          },
-        },
-        ...(session
+        ...(transcriptPath
+          ? [
+              {
+                label: paneT(t, "pane.menu.transcriptPath"),
+                icon: <Copy size={12} />,
+                onClick: () => void copyTextWithFeedback(transcriptPath),
+              } satisfies ContextMenuItem,
+            ]
+          : []),
+        ...(session && isLocalSession(session)
+          ? []
+          : [
+              {
+                label: session
+                  ? paneT(t, "pane.menu.worktreeName")
+                  : tab.kind === "code"
+                    ? paneT(t, "pane.menu.fileName")
+                    : paneT(t, "pane.menu.worktreeName"),
+                icon: <Copy size={12} />,
+                onClick: () => {
+                  void copyTextWithFeedback(basename(tabPath));
+                },
+              } satisfies ContextMenuItem,
+            ]),
+        ...(session && !isLocalSession(session)
           ? [
               {
                 label: paneT(t, "pane.menu.branchName"),
@@ -1574,39 +1774,46 @@ function TabItem({
                   void copyTextWithFeedback(session.branch);
                 },
                 disabled: !session.branch,
-              },
+              } satisfies ContextMenuItem,
               {
                 label: paneT(t, "pane.menu.sessionId"),
                 icon: <Copy size={12} />,
                 onClick: () => {
                   void copyTextWithFeedback(session.id);
                 },
-              },
+              } satisfies ContextMenuItem,
             ]
           : []),
       ],
     },
-    paneContextMenuGroupTitle(t, "close"),
-    {
-      label: paneT(t, "pane.menu.close"),
-      icon: <X size={12} />,
-      shortcut: shortcutLabel(shortcuts, "closeTab"),
-      onClick: onClose,
-    },
-    ...(siblingCount > 1
+    ...(session
       ? [
+          paneContextMenuGroupTitle(t, "danger"),
           {
-            label: paneT(t, "pane.menu.closeOthers"),
-            icon: <CircleX size={12} />,
-            onClick: onCloseOthers,
-          },
+            label: paneT(t, "pane.menu.archiveSession"),
+            icon: <Archive size={12} />,
+            onClick: () => requestArchiveSession(session.id),
+          } satisfies ContextMenuItem,
           {
-            label: paneT(t, "pane.menu.closeAll"),
-            icon: <SquareX size={12} />,
-            onClick: onCloseAll,
-          },
+            label: paneT(t, "pane.menu.removeSession"),
+            icon: <Trash2 size={12} />,
+            shortcut: shortcutLabel(shortcuts, "closeTab"),
+            onClick: onClose,
+          } satisfies ContextMenuItem,
+          ...(closeOthersItems.length > 0
+            ? [paneContextMenuGroupTitle(t, "close"), ...closeOthersItems]
+            : []),
         ]
-      : []),
+      : [
+          paneContextMenuGroupTitle(t, "close"),
+          {
+            label: paneT(t, "pane.menu.close"),
+            icon: <X size={12} />,
+            shortcut: shortcutLabel(shortcuts, "closeTab"),
+            onClick: onClose,
+          } satisfies ContextMenuItem,
+          ...closeOthersItems,
+        ]),
   ];
 
   return (

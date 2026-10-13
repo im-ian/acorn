@@ -167,6 +167,79 @@ test.describe("session archive", () => {
     ).toBeVisible();
   });
 
+  test("archives a session from the tab context menu", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __archived?: boolean };
+      return [
+        {
+          id: "s-1",
+          name: "alpha",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo/.acorn/worktrees/alpha",
+          branch: "main",
+          isolated: true,
+          in_worktree: true,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+          kind: "regular",
+          owner: { kind: "user" },
+          position: null,
+          archived_at: w.__archived ? "2026-04-01T00:00:00Z" : null,
+        },
+      ];
+    });
+    await tauri.handle("archive_session", (args) => {
+      const w = window as unknown as {
+        __archiveCalls?: unknown[];
+        __archived?: boolean;
+      };
+      w.__archiveCalls = w.__archiveCalls ?? [];
+      w.__archiveCalls.push(args);
+      w.__archived = true;
+      return {
+        id: "s-1",
+        name: "alpha",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo/.acorn/worktrees/alpha",
+        branch: "main",
+        isolated: true,
+        in_worktree: true,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        archived_at: "2026-04-01T00:00:00Z",
+      };
+    });
+
+    await page.goto("/");
+
+    await page.locator('[data-pane-tab="s-1"]').click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Archive Session", exact: true })
+      .click();
+
+    const sidebar = page.locator('[data-testid="sidebar"]');
+    await expect(
+      sidebar.getByRole("button", { name: /alpha.*Ready/ }),
+    ).toHaveCount(0);
+    const archiveCalls = (await page.evaluate(
+      () =>
+        (window as unknown as { __archiveCalls?: unknown[] }).__archiveCalls,
+    )) as Array<{ id: string }>;
+    expect(archiveCalls).toHaveLength(1);
+    expect(archiveCalls[0]?.id).toBe("s-1");
+  });
+
   test("restore banner spawns a PTY after preview", async ({ page, tauri }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.handle("list_sessions", () => {

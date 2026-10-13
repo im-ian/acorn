@@ -402,7 +402,16 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(menu).toContainText("Layout");
     await expect(menu).toContainText("Open");
     await expect(menu).toContainText("Copy");
-    await expect(menu).toContainText("Close");
+    await expect(menu).toContainText("Danger");
+    await expect(
+      page.getByRole("menuitem", { name: "Archive Session", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Remove Session", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Close", exact: true }),
+    ).toHaveCount(0);
     await expect(menu).not.toContainText("Duplicate Session");
     await page.getByRole("menuitem", { name: "Regenerate Name" }).click();
 
