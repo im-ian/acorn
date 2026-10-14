@@ -715,15 +715,10 @@ function TaskCommentWindow({
               key={item.id}
               className="group flex items-start gap-2 rounded-md bg-fill px-2.5 py-1.5 text-xs leading-relaxed text-fg"
             >
-              {/* Time trails the body inline so a one-line note reads as
-                  one line instead of a two-column block. */}
-              <p className="min-w-0 flex-1 whitespace-pre-wrap">
-                {item.body}{" "}
-                <TaskAge
-                  iso={item.created_at}
-                  className="ml-1 align-baseline"
-                />
-              </p>
+              <div className="min-w-0 flex-1">
+                <p className="whitespace-pre-wrap">{item.body}</p>
+                <TaskAge iso={item.created_at} className="mt-0.5" />
+              </div>
               <Tooltip label={deleteLabel} side="top" className="shrink-0">
                 <button
                   type="button"
