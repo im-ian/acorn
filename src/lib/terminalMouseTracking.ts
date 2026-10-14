@@ -31,3 +31,29 @@ export function terminalMouseTrackingReleaseAction(args: {
 export function terminalLinkPressShouldOpen(detail: number): boolean {
   return detail < 2;
 }
+
+/**
+ * A mouse-tracking app sees the same click and opens the URL itself.
+ * Keep the press when the terminal is the one opening it.
+ * Alt and Shift select or encode a modifier report, and so does a
+ * modifier that is not the link chord. Those presses stay with the app.
+ * A plain click in modifier-click mode stays with the app.
+ */
+export function terminalLinkClickShouldReachApp(args: {
+  mouseTracking: boolean;
+  hasLink: boolean;
+  linkActivation: "click" | "modifier-click";
+  modifierHeld: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+}): boolean {
+  if (!args.mouseTracking || !args.hasLink) return true;
+  if (args.altKey || args.shiftKey) return true;
+  if ((args.ctrlKey || args.metaKey) && !args.modifierHeld) return true;
+  if (args.linkActivation === "modifier-click" && !args.modifierHeld) {
+    return true;
+  }
+  return false;
+}
