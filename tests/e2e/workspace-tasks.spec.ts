@@ -193,3 +193,61 @@ test("workspace tasks can be created, commented, and closed", async ({
     await panel.screenshot({ path: shot.replace(/\.png$/, "-list.png") });
   }
 });
+
+test("workspace task comments stop growing and reveal earlier notes", async ({
+  page,
+  tauri,
+}) => {
+  await tauri.handle("list_projects", () => [
+    {
+      repo_path: "/tmp/demo",
+      name: "demo",
+      created_at: "2026-01-01T00:00:00Z",
+      position: 0,
+    },
+  ]);
+  await tauri.handle("list_sessions", () => []);
+  await tauri.handle("list_project_tasks", () => [
+    {
+      id: "task-1",
+      number: 1,
+      title: "Fix the panel",
+      description: "Keep the list in Acorn",
+      status: "todo",
+      session_id: null,
+      origin_session_id: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      comments: Array.from({ length: 40 }, (_, index) => ({
+        id: `c${index}`,
+        body: `note ${index}`,
+        created_at: "2026-01-01T00:00:00Z",
+      })),
+      status_changes: [],
+    },
+  ]);
+
+  await page.goto("/");
+  const groups = page.getByRole("navigation", { name: "Right panel group" });
+  const panel = page.locator("aside").filter({ has: groups });
+  await groups.getByRole("button", { name: "Workspace" }).click();
+  await panel.getByRole("button", { name: /Fix the panel/ }).click();
+  const detail = page.getByRole("dialog", { name: /Fix the panel/ });
+  const list = detail.locator("[data-task-comments]");
+  await expect(detail.getByText("note 39")).toBeInViewport();
+  await expect(detail.getByText("note 0")).toHaveCount(0);
+  await expect(
+    detail.getByRole("button", { name: "Earlier comments" }),
+  ).toBeVisible();
+  const box = await list.evaluate((element) => ({
+    client: element.clientHeight,
+    scroll: element.scrollHeight,
+  }));
+  expect(box.scroll).toBeGreaterThan(box.client);
+  expect(box.client).toBeLessThanOrEqual(300);
+  const shot = process.env.ACORN_UI_SHOT;
+  if (shot) await detail.screenshot({ path: shot });
+
+  await detail.getByRole("button", { name: "Earlier comments" }).click();
+  await expect(detail.getByText("note 0")).toHaveCount(1);
+});

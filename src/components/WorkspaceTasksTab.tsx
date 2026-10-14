@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { ListChecks, Pencil, Play, SquareTerminal, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { isSessionAgentProvider } from "../lib/agentProviderRegistry";
@@ -43,6 +49,10 @@ const TASK_LIST_FILTERS: ProjectTaskStatus[] = [
 // The open statuses fit one toolbar row. Done and canceled stay in the
 // grouped list, reached from their section header.
 const CHIP_FILTERS: ProjectTaskStatus[] = ["todo", "in_progress", "in_review"];
+
+// The comment list grows with its notes, then stops and scrolls. Older notes
+// stay out of the DOM until the reader asks for them.
+const COMMENT_PAGE = 20;
 
 const STATUS_LABEL: Record<ProjectTaskStatus, TranslationKey> = {
   todo: "rightPanel.tasks.status.todo",
@@ -576,6 +586,65 @@ function TaskEditorModal({
   );
 }
 
+// The detail modal portals in after its own mount effect, so a scroll effect
+// on the parent runs before this node exists. The effect lives here so it
+// runs on the frame the list is actually in the document.
+function TaskCommentWindow({
+  newestCommentId,
+  shownComments,
+  hiddenComments,
+  earlierLabel,
+  onRevealEarlier,
+  children,
+}: {
+  newestCommentId: string | undefined;
+  shownComments: number;
+  hiddenComments: number;
+  earlierLabel: string;
+  onRevealEarlier: () => void;
+  children: ReactNode;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+  // Height before older notes are prepended, so the viewport stays put.
+  const scrollAnchor = useRef(0);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const before = scrollAnchor.current;
+    if (before > 0) {
+      scrollAnchor.current = 0;
+      list.scrollTop += list.scrollHeight - before;
+      return;
+    }
+    list.scrollTop = list.scrollHeight;
+  }, [newestCommentId, shownComments]);
+
+  return (
+    <>
+      {hiddenComments > 0 ? (
+        <button
+          type="button"
+          className="mb-1.5 w-full rounded-md px-2 py-1 text-left text-[11px] text-fg-muted transition hover:bg-fill hover:text-fg"
+          onClick={() => {
+            scrollAnchor.current = listRef.current?.scrollHeight ?? 0;
+            onRevealEarlier();
+          }}
+        >
+          {earlierLabel}
+        </button>
+      ) : null}
+      <div
+        ref={listRef}
+        data-task-comments
+        className="max-h-72 overflow-y-auto overflow-anchor-none"
+      >
+        {children}
+      </div>
+    </>
+  );
+}
+
 function TaskDetailModal({
   task,
   onClose,
@@ -608,6 +677,15 @@ function TaskDetailModal({
   const titleId = "workspace-task-detail-title";
   const comments = task.comments ?? [];
   const changes = task.status_changes ?? [];
+  const [shownComments, setShownComments] = useState(COMMENT_PAGE);
+  const hiddenComments = Math.max(0, comments.length - shownComments);
+  const visibleComments =
+    hiddenComments > 0 ? comments.slice(hiddenComments) : comments;
+  const newestCommentId = comments[comments.length - 1]?.id;
+
+  useEffect(() => {
+    setShownComments(COMMENT_PAGE);
+  }, [task.id]);
 
   return (
     <Modal
@@ -743,8 +821,17 @@ function TaskDetailModal({
               {t("rightPanel.tasks.noComments")}
             </p>
           ) : (
-            <ul className="flex flex-col gap-1.5">
-              {comments.map((item) => (
+            <TaskCommentWindow
+              newestCommentId={newestCommentId}
+              shownComments={shownComments}
+              hiddenComments={hiddenComments}
+              earlierLabel={t("rightPanel.tasks.earlierComments")}
+              onRevealEarlier={() =>
+                setShownComments((current) => current + COMMENT_PAGE)
+              }
+            >
+              <ul className="flex flex-col gap-1.5">
+              {visibleComments.map((item) => (
                 <li
                   key={item.id}
                   className="group flex items-start gap-2 rounded-md bg-fill px-2.5 py-1.5 text-xs leading-relaxed text-fg"
@@ -782,7 +869,8 @@ function TaskDetailModal({
                   </Tooltip>
                 </li>
               ))}
-            </ul>
+              </ul>
+            </TaskCommentWindow>
           )}
         </section>
       </div>
