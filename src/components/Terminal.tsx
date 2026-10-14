@@ -72,6 +72,7 @@ import {
 import { patchTerminalMouseCoordinateScale } from "../lib/terminalMouseScale";
 import {
   TERMINAL_MOUSE_SELECT_THRESHOLD_PX,
+  terminalLinkClickShouldReachApp,
   terminalLinkPressShouldOpen,
   terminalMouseTrackingReleaseAction,
 } from "../lib/terminalMouseTracking";
@@ -3194,6 +3195,11 @@ export function Terminal({
     } | null = null;
     let leftDragSelecting = false;
     let replayingMouse = false;
+    // Paired with the press. Re-deciding on release drops the mouseup when a
+    // link resolves late, and the tracking app keeps the button down.
+    let withholdLinkClickFromApp = false;
+    const linkClickScreen = (term as unknown as TerminalRenderInternals)._core
+      ?.screenElement;
 
     // xterm splits its mouse listeners across two elements: the mouse protocol
     // and the selection service listen on the root, the linkifier listens on
@@ -3261,6 +3267,11 @@ export function Terminal({
     };
 
     const onTerminalMouseDown = (e: MouseEvent) => {
+      // A press that never crosses the screen must not inherit a withhold
+      // from an earlier link click, or its release over the screen is swallowed.
+      if (!linkClickScreen?.contains(e.target as Node)) {
+        withholdLinkClickFromApp = false;
+      }
       const pasteEnabled =
         useSettings.getState().settings.terminal.rightClickPasteSelection;
 
@@ -3320,6 +3331,9 @@ export function Terminal({
     container.addEventListener("mousedown", onTerminalMouseDown, true);
 
     const onTerminalMouseMove = (e: MouseEvent) => {
+      // The button is already up. The screen listener missed the release
+      // (often off-window), so the withhold must not apply to a later mouseup.
+      if (e.buttons === 0) withholdLinkClickFromApp = false;
       if (!pendingLeftDrag) {
         // Bare hover *over this terminal* while a selection is shown: swallow
         // the motion report so a mouse-tracking app does not repaint and wipe
@@ -3409,6 +3423,48 @@ export function Terminal({
     };
     container.ownerDocument.addEventListener("mousemove", onTerminalMouseMove, true);
     container.ownerDocument.addEventListener("mouseup", onTerminalMouseUp, true);
+
+    // The linkifier listens on the screen and opens the link on mouseup. The
+    // mouse protocol listens on the terminal root above it. A tracking app
+    // that also opens the URL would create a second browser tab, so a click
+    // the terminal itself opens stops after the linkifier has seen it.
+    const keepOpenedLinkClickFromApp = (event: MouseEvent) => {
+      if (event.type === "mousedown") {
+        withholdLinkClickFromApp = !terminalLinkClickShouldReachApp({
+          mouseTracking: isMouseTrackingActive(),
+          hasLink:
+            event.button === 0 &&
+            Boolean(
+              (term as unknown as TerminalRenderInternals)._core?.linkifier
+                ?.currentLink?.link,
+            ),
+          linkActivation,
+          modifierHeld: modifierHeld(event),
+          altKey: event.altKey,
+          shiftKey: event.shiftKey,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+        });
+      }
+      if (!withholdLinkClickFromApp) return;
+      if (event.type === "mousedown") {
+        event.preventDefault();
+        term.focus();
+      }
+      event.stopPropagation();
+      if (event.type === "mouseup") withholdLinkClickFromApp = false;
+    };
+    linkClickScreen?.addEventListener("mousedown", keepOpenedLinkClickFromApp);
+    linkClickScreen?.addEventListener("mouseup", keepOpenedLinkClickFromApp);
+    // Bubble, so a release on the screen still stops first. A release anywhere
+    // else never reaches that listener and would leave the latch set.
+    const releaseWithheldLinkClick = () => {
+      withholdLinkClickFromApp = false;
+    };
+    container.ownerDocument.addEventListener(
+      "mouseup",
+      releaseWithheldLinkClick,
+    );
 
     const onContextMenu = (e: MouseEvent) => {
       if (!useSettings.getState().settings.terminal.rightClickPasteSelection) {
@@ -4543,6 +4599,18 @@ export function Terminal({
         "mouseup",
         onTerminalMouseUp,
         true,
+      );
+      linkClickScreen?.removeEventListener(
+        "mousedown",
+        keepOpenedLinkClickFromApp,
+      );
+      linkClickScreen?.removeEventListener(
+        "mouseup",
+        keepOpenedLinkClickFromApp,
+      );
+      container.ownerDocument.removeEventListener(
+        "mouseup",
+        releaseWithheldLinkClick,
       );
       container.removeEventListener("contextmenu", onContextMenu, true);
       window.removeEventListener(TERMINAL_PASTE_EVENT, onTerminalPaste);

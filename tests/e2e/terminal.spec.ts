@@ -2169,6 +2169,9 @@ test.describe("terminal: spawn", () => {
     const x = linkRect!.left + 10;
     const y = (linkRect!.top + linkRect!.bottom) / 2;
     await page.mouse.move(x, y);
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
     await page.mouse.down();
     // Past the 8px takeover threshold, still inside one 24px cell.
     await page.mouse.move(x + 1, y + 10);
@@ -2188,6 +2191,13 @@ test.describe("terminal: spawn", () => {
         () => (window as unknown as { __openedUrls?: string[] }).__openedUrls,
       ),
     ).toEqual([linkText]);
+    expect(
+      await page.evaluate(
+        () =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+      ),
+    ).not.toMatch(/\x1b\[</);
   });
 
   test("a second jittered click on the same terminal link opens it once more", async ({
@@ -2249,6 +2259,9 @@ test.describe("terminal: spawn", () => {
       await page.mouse.move(x + 1, y + 10);
       await page.mouse.up();
     };
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
     await jitterClick();
     await expect
       .poll(() =>
@@ -2275,6 +2288,13 @@ test.describe("terminal: spawn", () => {
         () => (window as unknown as { __openedUrls?: string[] }).__openedUrls,
       ),
     ).toEqual([linkText, linkText]);
+    expect(
+      await page.evaluate(
+        () =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+      ),
+    ).not.toMatch(/\x1b\[</);
   });
 
   test("a double-click on a terminal link opens it once", async ({
@@ -2342,6 +2362,322 @@ test.describe("terminal: spawn", () => {
         () => (window as unknown as { __openedUrls?: string[] }).__openedUrls,
       ),
     ).toEqual([linkText]);
+  });
+
+  test("a TUI link click opens once and is not forwarded to the app", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { fontSize: 24 } }),
+      );
+    });
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __linkOnceChannelId?: number };
+      w.__linkOnceChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("open_external_url", (args) => {
+      const { url } = args as { url: string };
+      const w = window as unknown as { __openedUrls?: string[] };
+      w.__openedUrls = [...(w.__openedUrls ?? []), url];
+      return true;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __linkOnceChannelId?: number })
+              .__linkOnceChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "https://example.com/acorn";
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkOnceChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkOnceChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    const linkRect = await terminalTextRect(page, linkText);
+    expect(linkRect).not.toBeNull();
+    const x = linkRect!.left + 10;
+    const y = (linkRect!.top + linkRect!.bottom) / 2;
+    await page.mouse.move(x, y);
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+    await page.mouse.click(x, y);
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            ((window as unknown as { __openedUrls?: string[] }).__openedUrls ??
+              []).length,
+        ),
+      )
+      .toBe(1);
+    expect(
+      await page.evaluate(
+        () =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+      ),
+    ).not.toMatch(/\x1b\[</);
+
+    const modifier = process.platform === "darwin" ? "Meta" : "Control";
+    await page.keyboard.down(modifier);
+    await page.mouse.click(x, y);
+    await page.keyboard.up(modifier);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            ((window as unknown as { __openedUrls?: string[] }).__openedUrls ??
+              []).length,
+        ),
+      )
+      .toBe(2);
+    expect(
+      await page.evaluate(
+        () =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+      ),
+    ).not.toMatch(/\x1b\[</);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __openedUrls?: string[] }).__openedUrls,
+      ),
+    ).toEqual([linkText, linkText]);
+  });
+
+  test("modifier-click link mode still forwards a plain TUI click", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          terminal: { fontSize: 24, linkActivation: "modifier-click" },
+        }),
+      );
+    });
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __linkModifierChannelId?: number };
+      w.__linkModifierChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("open_external_url", (args) => {
+      const { url } = args as { url: string };
+      const w = window as unknown as { __openedUrls?: string[] };
+      w.__openedUrls = [...(w.__openedUrls ?? []), url];
+      return true;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __linkModifierChannelId?: number })
+              .__linkModifierChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "https://example.com/acorn";
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkModifierChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkModifierChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    const linkRect = await terminalTextRect(page, linkText);
+    expect(linkRect).not.toBeNull();
+    const x = linkRect!.left + 10;
+    const y = (linkRect!.top + linkRect!.bottom) / 2;
+    await page.mouse.move(x, y);
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+      (window as unknown as { __openedUrls?: string[] }).__openedUrls = [];
+    });
+    await page.mouse.click(x, y);
+
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+        ),
+      )
+      .toMatch(/\x1b\[<0;\d+;\d+M/);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __openedUrls?: string[] }).__openedUrls ?? [],
+      ),
+    ).toEqual([]);
+
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+    const modifier = process.platform === "darwin" ? "Meta" : "Control";
+    await page.keyboard.down(modifier);
+    await page.mouse.click(x, y);
+    await page.keyboard.up(modifier);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            ((window as unknown as { __openedUrls?: string[] }).__openedUrls ??
+              []).length,
+        ),
+      )
+      .toBe(1);
+    expect(
+      await page.evaluate(
+        () =>
+          ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [])
+            .join(""),
+      ),
+    ).not.toMatch(/\x1b\[</);
+  });
+
+  test("modifier clicks on a TUI link still reach the app unless they are the link chord", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { fontSize: 24 } }),
+      );
+    });
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as { __linkReportChannelId?: number };
+      w.__linkReportChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("open_external_url", (args) => {
+      const { url } = args as { url: string };
+      const w = window as unknown as { __openedUrls?: string[] };
+      w.__openedUrls = [...(w.__openedUrls ?? []), url];
+      return true;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __linkReportChannelId?: number })
+              .__linkReportChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "https://example.com/acorn";
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkReportChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkReportChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    const linkRect = await terminalTextRect(page, linkText);
+    expect(linkRect).not.toBeNull();
+    const x = linkRect!.left + 10;
+    const y = (linkRect!.top + linkRect!.bottom) / 2;
+    await page.mouse.move(x, y);
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+      (window as unknown as { __openedUrls?: string[] }).__openedUrls = [];
+    });
+
+    const clickWith = async (key: string) => {
+      await page.keyboard.down(key);
+      await page.mouse.click(x, y);
+      await page.keyboard.up(key);
+    };
+    const ptyWrites = () =>
+      page.evaluate(() =>
+        ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? []).join(
+          "",
+        ),
+      );
+    const openedCount = () =>
+      page.evaluate(
+        () =>
+          ((window as unknown as { __openedUrls?: string[] }).__openedUrls ?? [])
+            .length,
+      );
+
+    await clickWith("Alt");
+    await expect.poll(openedCount).toBe(1);
+    expect(await ptyWrites()).toMatch(/\x1b\[<8;/);
+
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+    await clickWith("Shift");
+    await expect.poll(openedCount).toBe(2);
+    const shiftWrites = await ptyWrites();
+    if (process.platform === "darwin") {
+      expect(shiftWrites).toMatch(/\x1b\[<4;/);
+    } else {
+      expect(shiftWrites).not.toMatch(/\x1b\[</);
+    }
+
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+    await clickWith("Control");
+    await expect.poll(openedCount).toBe(3);
+    const ctrlWrites = await ptyWrites();
+    if (process.platform === "darwin") {
+      expect(ctrlWrites).toMatch(/\x1b\[<16;/);
+    } else {
+      expect(ctrlWrites).not.toMatch(/\x1b\[</);
+    }
   });
 
   test("drag-selecting a terminal link inside a TUI does not open it", async ({
