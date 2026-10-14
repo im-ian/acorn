@@ -37,6 +37,17 @@ const STATUS_LABEL: Record<ProjectTaskStatus, TranslationKey> = {
   canceled: "rightPanel.tasks.status.canceled",
 };
 
+// Status tone mirrors the GitHub rows next door: the `#number` carries
+// open/closed (emerald vs muted, like IssueRow), and the trailing status
+// word carries progress. Keeps a glance at the row enough to tell state.
+const STATUS_TONE: Record<ProjectTaskStatus, string> = {
+  todo: "text-fg-muted",
+  in_progress: "text-emerald-400",
+  in_review: "text-accent",
+  done: "text-emerald-400",
+  canceled: "text-danger",
+};
+
 export function WorkspaceTasksTab({
   repoPath,
   originSessionId,
@@ -229,7 +240,7 @@ export function WorkspaceTasksTab({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-2 px-2 py-1.5">
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
         <Button
           type="button"
           variant="ghost"
@@ -240,22 +251,22 @@ export function WorkspaceTasksTab({
             ? t("rightPanel.tasks.hideClosed")
             : t("rightPanel.tasks.showClosed")}
         </Button>
-        <div className="flex items-center gap-1">
-          <RefreshButton
-            loading={loading}
-            title={t("rightPanel.tasks.refresh")}
-            ariaLabel={t("rightPanel.tasks.refresh")}
-            onClick={() => setRevision((current) => current + 1)}
-          />
-          <Button
-            type="button"
-            variant="primary"
-            size="xs"
-            onClick={() => setEditor({ mode: "create" })}
-          >
-            {t("rightPanel.tasks.new")}
-          </Button>
-        </div>
+        <RefreshButton
+          loading={loading}
+          size={12}
+          title={t("rightPanel.tasks.refresh")}
+          ariaLabel={t("rightPanel.tasks.refresh")}
+          onClick={() => setRevision((current) => current + 1)}
+          className="ml-auto"
+        />
+        <Button
+          type="button"
+          variant="primary"
+          size="xs"
+          onClick={() => setEditor({ mode: "create" })}
+        >
+          {t("rightPanel.tasks.new")}
+        </Button>
       </div>
       {error ? (
         <div className="px-3 pb-2 text-xs text-danger" role="alert">
@@ -273,26 +284,32 @@ export function WorkspaceTasksTab({
               <ListActionRow
                 key={task.id}
                 surface="subtle"
+                density="compact"
                 onOpen={() => setDetail(task)}
                 onClick={() => setDetail(task)}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   setMenu({ x: event.clientX, y: event.clientY, task });
                 }}
-                className="flex items-center gap-2 text-left"
+                className="flex items-center gap-2 text-left text-xs"
               >
-                <span className="w-8 shrink-0 font-mono text-[10px] text-fg-muted">
+                <span
+                  className={cn(
+                    "shrink-0 font-mono tabular-nums",
+                    CLOSED_STATUSES.has(task.status)
+                      ? "text-fg-muted"
+                      : "text-emerald-400",
+                  )}
+                >
                   #{task.number}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-xs text-fg">
+                <span className="min-w-0 flex-1 truncate text-fg">
                   {task.title}
                 </span>
                 <span
                   className={cn(
-                    "shrink-0 text-[10px]",
-                    task.status === "in_review"
-                      ? "text-accent"
-                      : "text-fg-muted",
+                    "shrink-0 text-[10px] font-medium",
+                    STATUS_TONE[task.status],
                   )}
                 >
                   {t(STATUS_LABEL[task.status])}
@@ -417,7 +434,7 @@ function TaskEditorModal({
         onClose={onClose}
       />
       <form
-        className="flex flex-col gap-3 px-4 py-3"
+        className="flex flex-col"
         onSubmit={(event) => {
           event.preventDefault();
           if (!title.trim() || saving) return;
@@ -425,24 +442,35 @@ function TaskEditorModal({
           void onSave(title, description).finally(() => setSaving(false));
         }}
       >
-        <label className="flex flex-col gap-1 text-xs text-fg-muted">
-          {t("rightPanel.tasks.title")}
-          <input
-            className={TEXT_INPUT_CLASS}
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            autoFocus
-            required
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-fg-muted">
-          {t("rightPanel.tasks.description")}
-          <textarea
-            className={cn(TEXT_INPUT_CLASS, "min-h-32 py-2")}
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-          />
-        </label>
+        {/* Fields carry their own inset so ModalFooter's px-4 lines the
+            buttons up with the header instead of doubling the padding. */}
+        <div className="flex flex-col gap-4 px-4 pb-1">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-fg">
+              {t("rightPanel.tasks.title")}
+            </span>
+            <input
+              className={cn(TEXT_INPUT_CLASS, "h-9 font-sans text-[13px]")}
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              autoFocus
+              required
+            />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-fg">
+              {t("rightPanel.tasks.description")}
+            </span>
+            <textarea
+              className={cn(
+                TEXT_INPUT_CLASS,
+                "min-h-40 resize-y py-2 font-sans leading-relaxed",
+              )}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          </label>
+        </div>
         <ModalFooter>
           <Button type="button" variant="ghost" size="sm" onClick={onClose}>
             {t("rightPanel.tasks.cancel")}
