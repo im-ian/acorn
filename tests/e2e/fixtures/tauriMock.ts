@@ -491,6 +491,36 @@ export const tauriMockSource = `
     }
     if (cmd === 'prepare_claude_fork') return Promise.resolve(undefined);
     if (cmd === 'read_session_todos') return Promise.resolve([]);
+    if (cmd === 'list_project_tasks') return Promise.resolve([]);
+    if (cmd === 'create_project_task') {
+      return Promise.resolve({
+        id: 'task-1',
+        number: 1,
+        title: args?.title ?? '',
+        description: args?.description ?? '',
+        status: 'todo',
+        session_id: null,
+        origin_session_id: args?.originSessionId ?? null,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        comments: [],
+      });
+    }
+    if (cmd === 'update_project_task' || cmd === 'add_project_task_comment') {
+      return Promise.resolve({
+        id: args?.id ?? 'task-1',
+        number: 1,
+        title: args?.patch?.title ?? 'Task',
+        description: args?.patch?.description ?? '',
+        status: args?.patch?.status ?? 'todo',
+        session_id: args?.patch?.sessionId ?? null,
+        origin_session_id: null,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        comments: [],
+      });
+    }
+    if (cmd === 'delete_project_task') return Promise.resolve(undefined);
     if (cmd === 'list_commits') return Promise.resolve([]);
     if (cmd === 'resolve_commit_logins') return Promise.resolve({});
     if (cmd === 'list_staged') return Promise.resolve([]);

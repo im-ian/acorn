@@ -110,6 +110,31 @@ pub enum Request {
         #[serde(default)]
         allow_foreign: bool,
     },
+    /// List Acorn-owned tasks for the source session's project.
+    ListTasks,
+    /// Show one task, including comments. `id` accepts the task id or `#number`.
+    ShowTask { id: String },
+    /// Create a task in the source session's project.
+    CreateTask {
+        title: String,
+        #[serde(default)]
+        description: String,
+    },
+    /// Update a task. Omitted fields stay as they are. `session_id` of
+    /// `current` attaches the calling session.
+    UpdateTask {
+        id: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        session_id: Option<String>,
+    },
+    /// Append a comment and return the task.
+    CommentTask { id: String, body: String },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,6 +157,12 @@ pub enum Response {
     },
     Workspaces {
         workspaces: Vec<WorkspaceSummary>,
+    },
+    Tasks {
+        tasks: Vec<TaskSummary>,
+    },
+    Task {
+        task: TaskRecord,
     },
     Ack,
     Buffer {
@@ -196,6 +227,36 @@ pub struct SessionSummary {
     /// True when the source session itself is the one being described —
     /// the CLI uses this to render an arrow / current-session marker.
     pub is_source: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskSummary {
+    pub id: String,
+    pub number: u64,
+    pub title: String,
+    pub status: String,
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskCommentRecord {
+    pub id: String,
+    pub body: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskRecord {
+    pub id: String,
+    pub number: u64,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub session_id: Option<String>,
+    pub origin_session_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub comments: Vec<TaskCommentRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

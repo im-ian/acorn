@@ -33,8 +33,9 @@ use std::time::{Duration, Instant};
 
 use acorn_ipc::primer;
 use acorn_ipc::proto::{
-    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, WorkspaceSummary,
-    MAX_REQUEST_FRAME_BYTES, MAX_RESPONSE_FRAME_BYTES, PROTOCOL_VERSION,
+    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, TaskCommentRecord,
+    TaskRecord, TaskSummary, WorkspaceSummary, MAX_REQUEST_FRAME_BYTES, MAX_RESPONSE_FRAME_BYTES,
+    PROTOCOL_VERSION,
 };
 use acorn_ipc::socket_path;
 use acorn_local_ipc::{
@@ -582,6 +583,19 @@ fn dispatch<R: Runtime>(
             target_session_id,
             allow_foreign: _,
         } => handle_kill_session(&source, &target_session_id, app, state),
+        Request::ListTasks => handle_list_tasks(&source, state),
+        Request::ShowTask { id } => handle_show_task(&source, &id, state),
+        Request::CreateTask { title, description } => {
+            handle_create_task(&source, &title, &description, state)
+        }
+        Request::UpdateTask {
+            id,
+            title,
+            description,
+            status,
+            session_id,
+        } => handle_update_task(&source, &id, title, description, status, session_id, state),
+        Request::CommentTask { id, body } => handle_comment_task(&source, &id, &body, state),
     }
 }
 
@@ -657,6 +671,11 @@ fn request_label(req: &Request) -> &'static str {
         Request::SelectSession { .. } => "select-session",
         Request::CloseSelf => "close-self",
         Request::KillSession { .. } => "kill-session",
+        Request::ListTasks => "tasks-list",
+        Request::ShowTask { .. } => "tasks-show",
+        Request::CreateTask { .. } => "tasks-create",
+        Request::UpdateTask { .. } => "tasks-update",
+        Request::CommentTask { .. } => "tasks-comment",
     }
 }
 
@@ -751,6 +770,176 @@ fn handle_list_sessions(source: &Session, sessions: &SessionStore) -> Response {
         .collect();
     Response::Sessions {
         sessions: summaries,
+    }
+}
+
+fn handle_list_tasks(source: &Session, state: &AppState) -> Response {
+    let repo = match task_repo(source, state) {
+        Ok(repo) => repo,
+        Err(response) => return response,
+    };
+    match crate::project_tasks::list(&repo) {
+        Ok(tasks) => Response::Tasks {
+            tasks: tasks.into_iter().map(task_summary).collect(),
+        },
+        Err(error) => task_error(error),
+    }
+}
+
+fn handle_show_task(source: &Session, id: &str, state: &AppState) -> Response {
+    let repo = match task_repo(source, state) {
+        Ok(repo) => repo,
+        Err(response) => return response,
+    };
+    match crate::project_tasks::get(&repo, id) {
+        Ok(task) => Response::Task {
+            task: task_record(task),
+        },
+        Err(error) => task_error(error),
+    }
+}
+
+fn handle_create_task(
+    source: &Session,
+    title: &str,
+    description: &str,
+    state: &AppState,
+) -> Response {
+    let repo = match task_repo(source, state) {
+        Ok(repo) => repo,
+        Err(response) => return response,
+    };
+    match crate::project_tasks::create(&repo, title, description, Some(source.id.to_string())) {
+        Ok(task) => Response::Task {
+            task: task_record(task),
+        },
+        Err(error) => task_error(error),
+    }
+}
+
+fn handle_update_task(
+    source: &Session,
+    id: &str,
+    title: Option<String>,
+    description: Option<String>,
+    status: Option<String>,
+    session_id: Option<String>,
+    state: &AppState,
+) -> Response {
+    let repo = match task_repo(source, state) {
+        Ok(repo) => repo,
+        Err(response) => return response,
+    };
+    let status = match status
+        .as_deref()
+        .map(crate::project_tasks::TaskStatus::parse)
+    {
+        Some(Ok(status)) => Some(status),
+        Some(Err(error)) => return task_error(error),
+        None => None,
+    };
+    let (set_session_id, session_id) = match session_id {
+        Some(raw) => {
+            let raw = if raw == "current" {
+                source.id.to_string()
+            } else {
+                raw
+            };
+            match crate::commands::require_project_session(state, &repo, &raw) {
+                Ok(id) => (true, Some(id)),
+                Err(error) => {
+                    return Response::Error {
+                        code: ErrorCode::Invalid,
+                        message: error.to_string(),
+                    };
+                }
+            }
+        }
+        None => (false, None),
+    };
+    match crate::project_tasks::update(
+        &repo,
+        id,
+        crate::project_tasks::TaskUpdate {
+            title,
+            description,
+            status,
+            session_id,
+            set_session_id,
+        },
+    ) {
+        Ok(task) => Response::Task {
+            task: task_record(task),
+        },
+        Err(error) => task_error(error),
+    }
+}
+
+fn handle_comment_task(source: &Session, id: &str, body: &str, state: &AppState) -> Response {
+    let repo = match task_repo(source, state) {
+        Ok(repo) => repo,
+        Err(response) => return response,
+    };
+    match crate::project_tasks::add_comment(&repo, id, body) {
+        Ok(task) => Response::Task {
+            task: task_record(task),
+        },
+        Err(error) => task_error(error),
+    }
+}
+
+fn task_repo(source: &Session, state: &AppState) -> Result<std::path::PathBuf, Response> {
+    crate::commands::authorize_registered_project_root(state, &source.repo_path).map_err(|error| {
+        Response::Error {
+            code: ErrorCode::Invalid,
+            message: error.to_string(),
+        }
+    })
+}
+
+fn task_error(error: crate::project_tasks::TaskStoreError) -> Response {
+    let (code, message) = match error {
+        crate::project_tasks::TaskStoreError::NotFound => {
+            (ErrorCode::NotFound, "task not found".to_string())
+        }
+        crate::project_tasks::TaskStoreError::Invalid(message) => (ErrorCode::Invalid, message),
+        crate::project_tasks::TaskStoreError::Failed(error) => {
+            (ErrorCode::Internal, error.to_string())
+        }
+    };
+    Response::Error { code, message }
+}
+
+fn task_summary(task: crate::project_tasks::ProjectTask) -> TaskSummary {
+    TaskSummary {
+        id: task.id,
+        number: task.number,
+        title: task.title,
+        status: task.status.as_str().to_string(),
+        session_id: task.session_id,
+    }
+}
+
+fn task_record(task: crate::project_tasks::ProjectTask) -> TaskRecord {
+    TaskRecord {
+        id: task.id,
+        number: task.number,
+        title: task.title,
+        description: task.description,
+        status: task.status.as_str().to_string(),
+        session_id: task.session_id,
+        origin_session_id: task.origin_session_id,
+        created_at: task.created_at,
+        updated_at: task.updated_at,
+        comments: task
+            .comments
+            .into_iter()
+            .map(|comment| TaskCommentRecord {
+                id: comment.id,
+                body: comment.body,
+                created_at: comment.created_at,
+            })
+            .collect(),
     }
 }
 

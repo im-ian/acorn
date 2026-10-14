@@ -779,6 +779,40 @@ export interface TodoItem {
   activeForm?: string | null;
 }
 
+export type ProjectTaskStatus =
+  | "todo"
+  | "in_progress"
+  | "in_review"
+  | "done"
+  | "canceled";
+
+export interface ProjectTaskComment {
+  id: string;
+  body: string;
+  created_at: string;
+}
+
+export interface ProjectTask {
+  id: string;
+  number: number;
+  title: string;
+  description: string;
+  status: ProjectTaskStatus;
+  session_id: string | null;
+  origin_session_id: string | null;
+  created_at: string;
+  updated_at: string;
+  comments: ProjectTaskComment[];
+}
+
+export interface ProjectTaskPatch {
+  title?: string;
+  description?: string;
+  status?: ProjectTaskStatus;
+  sessionId?: string | null;
+  setSessionId?: boolean;
+}
+
 export type PrStateFilter = "open" | "closed" | "merged" | "all";
 export type PullRequestStateChange = "ready" | "draft" | "reopen";
 export type IssueStateFilter = "open" | "closed" | "all";

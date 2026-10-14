@@ -27,6 +27,7 @@ mod notifications;
 mod persistence;
 mod power_assertion;
 mod project_settings;
+mod project_tasks;
 pub mod pty_env;
 mod pty_output;
 mod pull_requests;
@@ -859,6 +860,11 @@ pub fn run() {
             commands::remove_project,
             commands::get_project_settings,
             commands::update_project_settings,
+            commands::list_project_tasks,
+            commands::create_project_task,
+            commands::update_project_task,
+            commands::delete_project_task,
+            commands::add_project_task_comment,
             commands::reorder_projects,
             commands::reorder_sessions,
             commands::list_commits,

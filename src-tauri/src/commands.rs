@@ -15,6 +15,7 @@ use crate::fs_explorer;
 use crate::git_ops::{self, CommitInfo, DiffImages, DiffPayload, StagedFile};
 use crate::persistence;
 use crate::project_settings::{self, ProjectSettings, ProjectSettingsRecord};
+use crate::project_tasks::{self, ProjectTask, TaskUpdate};
 use crate::pull_requests::{
     self, GeneratedCommitMessage, IssueDetailListing, IssueListing, IssueStateFilter, MergeMethod,
     PrStateFilter, PullRequestDetailListing, PullRequestDiffListing, PullRequestListing,
@@ -7454,6 +7455,94 @@ pub fn update_project_settings(
         worktree::validate_worktree_base_branch(&repo_path, branch)?;
     }
     project_settings::update(&repo_path, settings)
+}
+
+#[tauri::command]
+pub fn list_project_tasks(
+    state: State<'_, AppState>,
+    repo_path: String,
+) -> AppResult<Vec<ProjectTask>> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    project_tasks::list(&repo_path).map_err(project_tasks::task_store_error)
+}
+
+#[tauri::command]
+pub fn create_project_task(
+    state: State<'_, AppState>,
+    repo_path: String,
+    title: String,
+    description: String,
+    origin_session_id: Option<String>,
+) -> AppResult<ProjectTask> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    let origin_session_id = optional_project_session(state.inner(), &repo_path, origin_session_id)
+        .ok()
+        .flatten();
+    project_tasks::create(&repo_path, &title, &description, origin_session_id)
+        .map_err(project_tasks::task_store_error)
+}
+
+#[tauri::command]
+pub fn update_project_task(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+    patch: TaskUpdate,
+) -> AppResult<ProjectTask> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    let mut patch = patch;
+    if patch.set_session_id {
+        patch.session_id = optional_project_session(state.inner(), &repo_path, patch.session_id)?;
+    }
+    project_tasks::update(&repo_path, &id, patch).map_err(project_tasks::task_store_error)
+}
+
+#[tauri::command]
+pub fn delete_project_task(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+) -> AppResult<()> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    project_tasks::delete(&repo_path, &id).map_err(project_tasks::task_store_error)
+}
+
+#[tauri::command]
+pub fn add_project_task_comment(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+    body: String,
+) -> AppResult<ProjectTask> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    project_tasks::add_comment(&repo_path, &id, &body).map_err(project_tasks::task_store_error)
+}
+
+fn optional_project_session(
+    state: &AppState,
+    repo: &Path,
+    raw: Option<String>,
+) -> AppResult<Option<String>> {
+    let Some(raw) = raw.filter(|value| !value.trim().is_empty()) else {
+        return Ok(None);
+    };
+    Ok(Some(require_project_session(state, repo, &raw)?))
+}
+
+pub(crate) fn require_project_session(
+    state: &AppState,
+    repo: &Path,
+    raw: &str,
+) -> AppResult<String> {
+    let id = parse_id(raw)?;
+    let session = state.sessions.get(&id)?;
+    let session_repo = authorize_registered_project_root(state, Path::new(&session.repo_path))?;
+    if session_repo != repo {
+        return Err(AppError::Other(
+            "session is outside this project".to_string(),
+        ));
+    }
+    Ok(session.id.to_string())
 }
 
 fn validate_new_project_name(name: &str, ignore_safe_name: bool) -> AppResult<&str> {
