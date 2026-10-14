@@ -1822,6 +1822,7 @@
   },
   "rightPanel": {
     "groups": {
+      "workspace": "Workspace",
       "code": "代码",
       "github": "GitHub",
       "linear": "Linear",
@@ -1839,7 +1840,46 @@
       "jiraIssues": "议题",
       "activity": "活动",
       "history": "历史记录",
-      "actions": "操作"
+      "actions": "操作",
+      "tasks": "任务"
+    },
+    "tasks": {
+      "new": "新建",
+      "refresh": "刷新",
+      "empty": "还没有任务",
+      "loading": "正在加载任务…",
+      "loadFailed": "无法加载任务。",
+      "save": "保存",
+      "cancel": "取消",
+      "delete": "删除",
+      "edit": "编辑",
+      "title": "标题",
+      "description": "内容",
+      "comments": "评论",
+      "commentPlaceholder": "留下备注…",
+      "commentSubmit": "评论",
+      "noComments": "还没有评论。",
+      "earlierComments": "更早的评论",
+      "noDescription": "没有内容。",
+      "justNow": "刚刚",
+      "createdLabel": "创建",
+      "statusHistory": "记录",
+      "sendToSession": "发到这个会话",
+      "newTitle": "新任务",
+      "editTitle": "编辑任务",
+      "statusLabel": "状态",
+      "saveFailed": "无法保存任务。",
+      "deleteFailed": "无法删除任务。",
+      "commentFailed": "无法添加评论。",
+      "deleteComment": "删除评论",
+      "deleteCommentFailed": "无法删除评论。",
+      "status": {
+        "todo": "待办",
+        "in_progress": "进行中",
+        "in_review": "待审阅",
+        "done": "完成",
+        "canceled": "已取消"
+      }
     },
     "empty": {
       "noTodos": "此会话中没有待办事项",

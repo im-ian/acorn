@@ -13,7 +13,7 @@ function dt(t: Translator, key: DialogTranslationKey): string {
 }
 
 interface ModalHeaderProps {
-  title: string;
+  title: ReactNode;
   subtitle?: ReactNode;
   icon?: ReactNode;
   /** Rendered before the close button. Use for action buttons (e.g. external link). */

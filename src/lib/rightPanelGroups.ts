@@ -1,4 +1,10 @@
-export type RightGroup = "code" | "github" | "linear" | "jira" | "agents";
+export type RightGroup =
+  | "workspace"
+  | "code"
+  | "github"
+  | "linear"
+  | "jira"
+  | "agents";
 
 export type RightTab =
   | "files"
@@ -10,9 +16,11 @@ export type RightTab =
   | "linearIssues"
   | "jiraIssues"
   | "todos"
-  | "history";
+  | "history"
+  | "tasks";
 
 export const RIGHT_GROUPS: ReadonlyArray<RightGroup> = [
+  "workspace",
   "code",
   "github",
   "linear",
@@ -21,6 +29,7 @@ export const RIGHT_GROUPS: ReadonlyArray<RightGroup> = [
 ];
 
 const TABS_BY_GROUP: Record<RightGroup, ReadonlyArray<RightTab>> = {
+  workspace: ["tasks"],
   code: ["files", "staged", "commits"],
   github: ["prs", "issues", "actions"],
   linear: ["linearIssues"],
@@ -43,8 +52,22 @@ export function defaultTabForGroup(group: RightGroup): RightTab {
   return TABS_BY_GROUP[group][0];
 }
 
+export function activeRightGroup(
+  rightTab: RightTab,
+  visibleGroups: readonly RightGroup[],
+): RightGroup {
+  const group = groupOfTab(rightTab);
+  if (visibleGroups.includes(group)) return group;
+  return (
+    visibleGroups.find((candidate) => candidate !== "workspace") ??
+    visibleGroups[0] ??
+    "code"
+  );
+}
+
 export function defaultTabByGroup(): Record<RightGroup, RightTab> {
   return {
+    workspace: defaultTabForGroup("workspace"),
     code: defaultTabForGroup("code"),
     github: defaultTabForGroup("github"),
     linear: defaultTabForGroup("linear"),

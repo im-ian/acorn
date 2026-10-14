@@ -20,8 +20,9 @@ use base64::Engine;
 use clap::{Parser, Subcommand};
 
 use acorn_ipc::proto::{
-    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, WorkspaceSummary,
-    MAX_REQUEST_FRAME_BYTES, MAX_RESPONSE_FRAME_BYTES, PROTOCOL_VERSION,
+    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, TaskRecord,
+    TaskSummary, WorkspaceSummary, MAX_REQUEST_FRAME_BYTES, MAX_RESPONSE_FRAME_BYTES,
+    PROTOCOL_VERSION,
 };
 use acorn_ipc::socket_path;
 use acorn_local_ipc::StreamTrait as _;
@@ -169,6 +170,46 @@ enum Command {
     /// Report IPC reachability: socket path, file presence, and whether
     /// the in-app server accepts connections. No source session id required.
     Status,
+    /// Read and update Acorn tasks for this project.
+    Tasks {
+        #[command(subcommand)]
+        command: TasksCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum TasksCommand {
+    /// List tasks, newest first.
+    List,
+    /// Show one task and its comments. Accepts an id or a number.
+    Show { id: String },
+    /// Create a task.
+    Create {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Update a task. Omitted fields stay unchanged.
+    Update {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        /// todo, in_progress, in_review, done, or canceled.
+        #[arg(long)]
+        status: Option<String>,
+        /// Attach a session. `current` means this session.
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Add a comment to a task.
+    Comment {
+        id: String,
+        #[arg(long)]
+        body: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -338,6 +379,31 @@ fn build_request_with_workspace_env(
             // the dispatch chain is wired wrong, not a user error.
             return Err("status is handled out-of-band; this is a bug".to_string());
         }
+        Command::Tasks { command } => match command {
+            TasksCommand::List => Request::ListTasks,
+            TasksCommand::Show { id } => Request::ShowTask { id: id.clone() },
+            TasksCommand::Create { title, description } => Request::CreateTask {
+                title: title.clone(),
+                description: description.clone().unwrap_or_default(),
+            },
+            TasksCommand::Update {
+                id,
+                title,
+                description,
+                status,
+                session,
+            } => Request::UpdateTask {
+                id: id.clone(),
+                title: title.clone(),
+                description: description.clone(),
+                status: status.clone(),
+                session_id: session.clone(),
+            },
+            TasksCommand::Comment { id, body } => Request::CommentTask {
+                id: id.clone(),
+                body: body.clone(),
+            },
+        },
     })
 }
 
@@ -674,6 +740,14 @@ fn render(response: &Response, json: bool) -> ExitCode {
             print_workspaces(workspaces);
             ExitCode::SUCCESS
         }
+        Response::Tasks { tasks } => {
+            print_tasks(tasks);
+            ExitCode::SUCCESS
+        }
+        Response::Task { task } => {
+            print_task(task);
+            ExitCode::SUCCESS
+        }
         Response::Ack => ExitCode::SUCCESS,
         Response::Buffer {
             data_b64,
@@ -721,6 +795,63 @@ fn render(response: &Response, json: bool) -> ExitCode {
             eprintln!("acorn-ipc: {}", terminal_safe_field(message));
             ExitCode::from(map_error_exit(*code))
         }
+    }
+}
+
+fn print_tasks(tasks: &[TaskSummary]) {
+    if tasks.is_empty() {
+        println!("(no tasks)");
+        return;
+    }
+    for task in tasks {
+        let session = match &task.session_id {
+            Some(id) => format!(" session {}", terminal_safe_field(id)),
+            None => String::new(),
+        };
+        println!(
+            "#{:<4} {:<12} {}{session}",
+            task.number,
+            terminal_safe_field(&task.status),
+            terminal_safe_field(&task.title),
+        );
+    }
+}
+
+fn print_task(task: &TaskRecord) {
+    println!(
+        "#{} {} {}",
+        task.number,
+        terminal_safe_field(&task.status),
+        terminal_safe_field(&task.title),
+    );
+    println!("created {}", terminal_safe_field(&task.created_at));
+    if !task.description.is_empty() {
+        println!();
+        println!("{}", terminal_safe_multiline(&task.description));
+    }
+    if !task.status_changes.is_empty() {
+        println!();
+        println!("status:");
+        for change in &task.status_changes {
+            println!(
+                "- {} -> {} {}",
+                terminal_safe_field(&change.from),
+                terminal_safe_field(&change.to),
+                terminal_safe_field(&change.at),
+            );
+        }
+    }
+    if task.comments.is_empty() {
+        return;
+    }
+    println!();
+    println!("comments:");
+    for comment in &task.comments {
+        println!(
+            "- {} {}",
+            terminal_safe_field(&comment.created_at),
+            terminal_safe_multiline(&comment.body),
+        );
     }
 }
 

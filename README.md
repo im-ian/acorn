@@ -77,7 +77,7 @@ Graph는 프롬프트를 실행 그래프로 나누거나, Agent / Validator / M
 백그라운드 세션은 앱을 닫았다가 열어도 PTY를 유지합니다. 세션 안의 에이전트는 `acorn-ipc`로 같은 프로젝트의 다른 세션을 조작할 수 있습니다. Claude Code 자동 모드는 이 명령을 기본으로 거절하므로, 쓰려면 `/permissions`에서 `Bash(acorn-ipc *)`를 허용합니다. 사용법과 보안 모델은 [`docs/SESSION_IPC.md`](docs/SESSION_IPC.md)에 있습니다.
 
 ### 코드, GitHub, 이슈
-우측 패널에서 파일·diff·커밋, GitHub PR·이슈·Actions, 연결한 Linear·Jira 이슈를 봅니다. PR이나 이슈에서 **작업 시작**을 하면 격리 worktree와 에이전트가 열립니다. 코드·이미지·PDF 뷰어, 작업 요약, 입력 대기·오류 알림도 같은 창에 있습니다.
+우측 패널에서 프로젝트 메모, 파일·diff·커밋, GitHub PR·이슈·Actions, 연결한 Linear·Jira 이슈를 봅니다. 메모·PR·이슈에서 **작업 시작**을 하면 격리 worktree와 에이전트가 열립니다. 코드·이미지·PDF 뷰어, 작업 요약, 입력 대기·오류 알림도 같은 창에 있습니다.
 
 `⌘P` 커맨드 팔레트, `⌘T` 새 세션, `⌘,` 설정. `⌘`는 Windows·Linux에서 `Ctrl`입니다. 나머지 단축키는 Settings → Shortcuts에서 바꿉니다. 언어는 English / 한국어 / 日本語 / 简体中文이고, 테마·터미널·에이전트·Linear/Jira·알림도 설정에서 바꿉니다. macOS·Windows는 앱 안에서 업데이트합니다.
 
