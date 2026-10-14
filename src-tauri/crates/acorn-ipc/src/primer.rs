@@ -93,6 +93,17 @@ pub fn primer() -> &'static str {
            acorn-ipc select-session -t <uuid>            # only when the target has no live PTY; moves focus\n\
            acorn-ipc close-self                         # final action; closes this session and its owned workers\n\
            acorn-ipc kill-session  -t <uuid>\n\
+           acorn-ipc tasks list\n\
+           acorn-ipc tasks show <id-or-number>\n\
+           acorn-ipc tasks create --title <title> [--description <text>]\n\
+           acorn-ipc tasks update <id-or-number> [--status todo|in_progress|in_review|done|canceled] [--session current]\n\
+           acorn-ipc tasks comment <id-or-number> --body <text>\n\
+         \n\
+         Project tasks are this project's own list inside Acorn. Read one\n\
+         with `tasks show` before working it. Comment at a milestone, then\n\
+         set `--status in_review`. Leave `done` for the user. Attach this\n\
+         session with `--session current` instead of opening another\n\
+         worktree unless the user asks.\n\
          \n\
          The newer `acornd` CLI talks to the same project graph via the\n\
          background daemon (currently rolling out). `acornd list-sessions`,\n\
@@ -165,6 +176,8 @@ mod tests {
         assert!(p.contains("$ACORN_IPC_SOCKET"));
         assert!(p.contains("$ACORN_DAEMON_SOCKET"));
         assert!(p.contains("acorn-ipc list-sessions"));
+        assert!(p.contains("acorn-ipc tasks show"));
+        assert!(p.contains("in_review"));
         assert!(p.contains("Do not run `select-session` to send input or read output"));
         assert!(p.contains("no live PTY"));
         assert!(p.contains("https://github.com/im-ian/acorn/blob/main/docs/SESSION_IPC.md"));

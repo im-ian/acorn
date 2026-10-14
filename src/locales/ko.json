@@ -1822,6 +1822,7 @@
   },
   "rightPanel": {
     "groups": {
+      "workspace": "Workspace",
       "code": "코드",
       "github": "GitHub",
       "linear": "Linear",
@@ -1839,7 +1840,46 @@
       "jiraIssues": "이슈",
       "activity": "활동",
       "history": "기록",
-      "actions": "작업"
+      "actions": "작업",
+      "tasks": "메모"
+    },
+    "tasks": {
+      "new": "새로 만들기",
+      "refresh": "새로고침",
+      "empty": "아직 메모가 없습니다",
+      "loading": "메모를 불러오는 중…",
+      "loadFailed": "메모를 불러오지 못했습니다.",
+      "save": "저장",
+      "cancel": "취소",
+      "delete": "삭제",
+      "edit": "수정",
+      "title": "제목",
+      "description": "내용",
+      "comments": "댓글",
+      "commentPlaceholder": "메모를 남겨 두세요…",
+      "commentSubmit": "댓글",
+      "noComments": "댓글이 없습니다.",
+      "earlierComments": "이전 댓글",
+      "noDescription": "내용이 없습니다.",
+      "justNow": "방금",
+      "createdLabel": "등록",
+      "statusHistory": "기록",
+      "sendToSession": "이 세션으로 보내기",
+      "newTitle": "새 메모",
+      "editTitle": "메모 수정",
+      "statusLabel": "상태",
+      "saveFailed": "메모를 저장하지 못했습니다.",
+      "deleteFailed": "메모를 삭제하지 못했습니다.",
+      "commentFailed": "댓글을 남기지 못했습니다.",
+      "deleteComment": "댓글 삭제",
+      "deleteCommentFailed": "댓글을 지우지 못했습니다.",
+      "status": {
+        "todo": "할 일",
+        "in_progress": "진행 중",
+        "in_review": "검토",
+        "done": "완료",
+        "canceled": "취소됨"
+      }
     },
     "empty": {
       "noTodos": "이 세션에 할 일이 없습니다",

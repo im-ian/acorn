@@ -189,7 +189,19 @@ acorn-ipc read-buffer   -t <uuid> [--max-bytes N] [--allow-foreign]
 acorn-ipc select-session -t <uuid> [--allow-foreign]
 acorn-ipc close-self
 acorn-ipc kill-session  -t <uuid> [--allow-foreign]
+acorn-ipc tasks list
+acorn-ipc tasks show <id-or-number>
+acorn-ipc tasks create --title <title> [--description <text>]
+acorn-ipc tasks update <id-or-number> [--status todo|in_progress|in_review|done|canceled] [--session current]
+acorn-ipc tasks comment <id-or-number> --body <text>
 ```
+
+`tasks` reads and writes the Acorn task list for the calling session's
+project. `show`, `update`, and `comment` accept a task id or its number.
+`--session current` attaches the calling session. Agents report finished
+work as `in_review` and leave `done` for the user. Each status change is
+stored on the task. `tasks show` prints when the task, its status changes,
+and its comments were created.
 
 `--allow-foreign` is accepted for compatibility and has no effect. Sibling
 actions in the same project succeed without it.

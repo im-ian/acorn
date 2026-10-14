@@ -41,6 +41,8 @@ import type {
   ProjectSettingsRecord,
   ProjectWorktree,
   EnsuredProjectWorktree,
+  ProjectTask,
+  ProjectTaskPatch,
   PrStateFilter,
   PullRequestDetailListing,
   PullRequestDiffListing,
@@ -967,6 +969,54 @@ export const api = {
   },
   readSessionTodos(sessionId: string, cwd: string): Promise<TodoItem[]> {
     return invoke<TodoItem[]>("read_session_todos", { sessionId, cwd });
+  },
+  listProjectTasks(repoPath: string): Promise<ProjectTask[]> {
+    return invoke<ProjectTask[]>("list_project_tasks", { repoPath });
+  },
+  createProjectTask(
+    repoPath: string,
+    title: string,
+    description: string,
+    originSessionId?: string | null,
+  ): Promise<ProjectTask> {
+    return invoke<ProjectTask>("create_project_task", {
+      repoPath,
+      title,
+      description,
+      originSessionId,
+    });
+  },
+  updateProjectTask(
+    repoPath: string,
+    id: string,
+    patch: ProjectTaskPatch,
+  ): Promise<ProjectTask> {
+    return invoke<ProjectTask>("update_project_task", { repoPath, id, patch });
+  },
+  deleteProjectTask(repoPath: string, id: string): Promise<void> {
+    return invoke<void>("delete_project_task", { repoPath, id });
+  },
+  addProjectTaskComment(
+    repoPath: string,
+    id: string,
+    body: string,
+  ): Promise<ProjectTask> {
+    return invoke<ProjectTask>("add_project_task_comment", {
+      repoPath,
+      id,
+      body,
+    });
+  },
+  deleteProjectTaskComment(
+    repoPath: string,
+    id: string,
+    commentId: string,
+  ): Promise<ProjectTask> {
+    return invoke<ProjectTask>("delete_project_task_comment", {
+      repoPath,
+      id,
+      commentId,
+    });
   },
   detectSessionStatuses(
     ids: string[],

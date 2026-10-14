@@ -33,6 +33,7 @@ import {
   Globe,
   History,
   Loader2,
+  ListChecks,
   ListTodo,
   Maximize2,
   MessageSquare,
@@ -93,6 +94,7 @@ import {
 } from "../lib/useIsGitHubRepo";
 import { useTrackerAccounts } from "../lib/useTrackerAccounts";
 import {
+  activeRightGroup,
   RIGHT_GROUPS,
   groupOfTab,
   tabsForGroup,
@@ -132,6 +134,7 @@ import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
 import { FileExplorer } from "./FileExplorer";
 import { TrackerIssuesTab } from "./TrackerIssuesTab";
+import { WorkspaceTasksTab } from "./WorkspaceTasksTab";
 import { GitHubLabelChip } from "./GitHubLabelChip";
 import { IssueDetailModal } from "./IssueDetailModal";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
@@ -387,6 +390,7 @@ export function RightPanel() {
     Record<RightGroup, ReadonlyArray<RightTab>>
   >(
     () => ({
+      workspace: tabsForGroup("workspace"),
       code:
         codePanelRepoPath === null
           ? []
@@ -413,9 +417,7 @@ export function RightPanel() {
     () => RIGHT_GROUPS.filter((g) => visibleTabsByGroup[g].length > 0),
     [visibleTabsByGroup],
   );
-  const activeGroup: RightGroup = visibleGroups.includes(groupOfTab(rightTab))
-    ? groupOfTab(rightTab)
-    : (visibleGroups[0] ?? "code");
+  const activeGroup = activeRightGroup(rightTab, visibleGroups);
   const visibleTabs = visibleTabsByGroup[activeGroup];
   const shouldLoadGitHubTabs =
     projectRootRepoPath !== null && isGitHubRepo === true;
@@ -559,7 +561,21 @@ export function RightPanel() {
         </nav>
       ) : null}
       <div className="flex-1 overflow-hidden">
-        {rightTab === "todos" ? (
+        {rightTab === "tasks" ? (
+          projectRootRepoPath ? (
+            <WorkspaceTasksTab
+              key={projectRootRepoPath}
+              repoPath={projectRootRepoPath}
+              originSessionId={
+                active && active.repo_path === projectRootRepoPath
+                  ? active.id
+                  : null
+              }
+            />
+          ) : (
+            <Empty msg={rt(t, "rightPanel.empty.noProject")} />
+          )
+        ) : rightTab === "todos" ? (
           active && todosState.error ? (
             <div className="p-3 text-xs text-danger" role="alert">
               {todosState.error}
@@ -834,6 +850,8 @@ function rightTabShortcut(
 
 function groupIcon(group: RightGroup): ReactNode {
   switch (group) {
+    case "workspace":
+      return <ListChecks size={14} />;
     case "code":
       return <Code2 size={14} />;
     case "github":
@@ -849,6 +867,8 @@ function groupIcon(group: RightGroup): ReactNode {
 
 function groupLabelKey(group: RightGroup): RightPanelTranslationKey {
   switch (group) {
+    case "workspace":
+      return "rightPanel.groups.workspace";
     case "code":
       return "rightPanel.groups.code";
     case "github":
@@ -883,6 +903,8 @@ function tabIcon(tab: RightTab): ReactNode {
       return <ListTodo size={12} />;
     case "history":
       return <History size={12} />;
+    case "tasks":
+      return <ListChecks size={12} />;
   }
 }
 

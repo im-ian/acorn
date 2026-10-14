@@ -1822,6 +1822,7 @@
   },
   "rightPanel": {
     "groups": {
+      "workspace": "Workspace",
       "code": "Code",
       "github": "GitHub",
       "linear": "Linear",
@@ -1839,7 +1840,46 @@
       "jiraIssues": "Issues",
       "activity": "Activity",
       "history": "History",
-      "actions": "Actions"
+      "actions": "Actions",
+      "tasks": "Tasks"
+    },
+    "tasks": {
+      "new": "New",
+      "refresh": "Refresh",
+      "empty": "No tasks yet",
+      "loading": "Loading tasks…",
+      "loadFailed": "Couldn't load tasks.",
+      "save": "Save",
+      "cancel": "Cancel",
+      "delete": "Delete",
+      "edit": "Edit",
+      "title": "Title",
+      "description": "Description",
+      "comments": "Comments",
+      "commentPlaceholder": "Leave a note…",
+      "commentSubmit": "Comment",
+      "noComments": "No comments yet.",
+      "earlierComments": "Earlier comments",
+      "noDescription": "No description.",
+      "justNow": "just now",
+      "createdLabel": "Created",
+      "statusHistory": "History",
+      "sendToSession": "Send to this session",
+      "newTitle": "New task",
+      "editTitle": "Edit task",
+      "statusLabel": "Status",
+      "saveFailed": "Couldn't save the task.",
+      "deleteFailed": "Couldn't delete the task.",
+      "commentFailed": "Couldn't add the comment.",
+      "deleteComment": "Delete comment",
+      "deleteCommentFailed": "Couldn't delete the comment.",
+      "status": {
+        "todo": "Todo",
+        "in_progress": "In progress",
+        "in_review": "In review",
+        "done": "Done",
+        "canceled": "Canceled"
+      }
     },
     "empty": {
       "noTodos": "No todos in this session",
