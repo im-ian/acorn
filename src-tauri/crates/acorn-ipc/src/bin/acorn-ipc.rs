@@ -824,9 +824,22 @@ fn print_task(task: &TaskRecord) {
         terminal_safe_field(&task.status),
         terminal_safe_field(&task.title),
     );
+    println!("created {}", terminal_safe_field(&task.created_at));
     if !task.description.is_empty() {
         println!();
         println!("{}", terminal_safe_multiline(&task.description));
+    }
+    if !task.status_changes.is_empty() {
+        println!();
+        println!("status:");
+        for change in &task.status_changes {
+            println!(
+                "- {} -> {} {}",
+                terminal_safe_field(&change.from),
+                terminal_safe_field(&change.to),
+                terminal_safe_field(&change.at),
+            );
+        }
     }
     if task.comments.is_empty() {
         return;
@@ -834,7 +847,11 @@ fn print_task(task: &TaskRecord) {
     println!();
     println!("comments:");
     for comment in &task.comments {
-        println!("- {}", terminal_safe_multiline(&comment.body));
+        println!(
+            "- {} {}",
+            terminal_safe_field(&comment.created_at),
+            terminal_safe_multiline(&comment.body),
+        );
     }
 }
 

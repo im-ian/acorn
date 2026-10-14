@@ -246,6 +246,13 @@ pub struct TaskCommentRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskStatusChangeRecord {
+    pub from: String,
+    pub to: String,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskRecord {
     pub id: String,
     pub number: u64,
@@ -257,6 +264,8 @@ pub struct TaskRecord {
     pub created_at: String,
     pub updated_at: String,
     pub comments: Vec<TaskCommentRecord>,
+    #[serde(default)]
+    pub status_changes: Vec<TaskStatusChangeRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

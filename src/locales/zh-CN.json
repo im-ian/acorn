@@ -1860,6 +1860,9 @@
       "commentSubmit": "评论",
       "noComments": "还没有评论。",
       "noDescription": "没有内容。",
+      "justNow": "刚刚",
+      "createdLabel": "创建",
+      "statusHistory": "记录",
       "listFilter": {
         "open": "打开",
         "closed": "已关闭",

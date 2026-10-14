@@ -792,6 +792,12 @@ export interface ProjectTaskComment {
   created_at: string;
 }
 
+export interface ProjectTaskStatusChange {
+  from: ProjectTaskStatus;
+  to: ProjectTaskStatus;
+  at: string;
+}
+
 export interface ProjectTask {
   id: string;
   number: number;
@@ -803,6 +809,7 @@ export interface ProjectTask {
   created_at: string;
   updated_at: string;
   comments: ProjectTaskComment[];
+  status_changes?: ProjectTaskStatusChange[];
 }
 
 export interface ProjectTaskPatch {

@@ -1860,6 +1860,9 @@
       "commentSubmit": "コメント",
       "noComments": "コメントはまだありません。",
       "noDescription": "内容はありません。",
+      "justNow": "たった今",
+      "createdLabel": "作成",
+      "statusHistory": "履歴",
       "listFilter": {
         "open": "開く",
         "closed": "閉店",

@@ -17,6 +17,7 @@ const PROJECT_TASKS_FILE: &str = "project_tasks.json";
 const MAX_PROJECT_TASKS_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_TASKS_PER_PROJECT: usize = 500;
 const MAX_COMMENTS_PER_TASK: usize = 200;
+const MAX_STATUS_CHANGES: usize = 100;
 const MAX_TITLE_CHARS: usize = 200;
 const MAX_DESCRIPTION_CHARS: usize = 20_000;
 const MAX_COMMENT_CHARS: usize = 8_000;
@@ -65,6 +66,14 @@ pub struct ProjectTaskComment {
     pub created_at: String,
 }
 
+/// One status transition. `at` is when the task entered `to`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskStatusChange {
+    pub from: TaskStatus,
+    pub to: TaskStatus,
+    pub at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectTask {
     pub id: String,
@@ -80,6 +89,8 @@ pub struct ProjectTask {
     pub updated_at: String,
     #[serde(default)]
     pub comments: Vec<ProjectTaskComment>,
+    #[serde(default)]
+    pub status_changes: Vec<TaskStatusChange>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -176,6 +187,7 @@ pub fn create(
         created_at: now.clone(),
         updated_at: now,
         comments: Vec::new(),
+        status_changes: Vec::new(),
     };
     bucket.tasks.push(task.clone());
     save(&file)?;
@@ -205,11 +217,14 @@ pub fn update(
         .get_mut(&project_key)
         .ok_or(TaskStoreError::NotFound)?;
     let index = resolve_index(bucket, key)?;
+    let current_status = bucket.tasks[index].status;
+    let next_status = patch.status.filter(|status| *status != current_status);
     let unchanged =
-        title.is_none() && description.is_none() && patch.status.is_none() && !patch.set_session_id;
+        title.is_none() && description.is_none() && next_status.is_none() && !patch.set_session_id;
     if unchanged {
         return Ok(bucket.tasks[index].clone());
     }
+    let now = timestamp();
     let task = &mut bucket.tasks[index];
     if let Some(title) = title {
         task.title = title;
@@ -217,13 +232,21 @@ pub fn update(
     if let Some(description) = description {
         task.description = description;
     }
-    if let Some(status) = patch.status {
+    if let Some(status) = next_status {
+        if task.status_changes.len() >= MAX_STATUS_CHANGES {
+            task.status_changes.remove(0);
+        }
+        task.status_changes.push(TaskStatusChange {
+            from: task.status,
+            to: status,
+            at: now.clone(),
+        });
         task.status = status;
     }
     if patch.set_session_id {
         task.session_id = patch.session_id;
     }
-    task.updated_at = timestamp();
+    task.updated_at = now;
     let updated = task.clone();
     save(&file)?;
     Ok(updated)
@@ -441,6 +464,54 @@ mod tests {
             assert_eq!(updated.updated_at, created.updated_at);
             assert_eq!(std::fs::read(&path).unwrap(), before);
         });
+    }
+
+    #[test]
+    #[test]
+    fn status_change_is_recorded_and_a_repeat_is_a_noop() {
+        with_data_dir(|dir| {
+            let repo = PathBuf::from("/tmp/acorn-project-tasks-history");
+            let created = create(&repo, "Track status", "", None).unwrap();
+            assert!(created.status_changes.is_empty());
+            let started = update(
+                &repo,
+                "1",
+                TaskUpdate {
+                    status: Some(TaskStatus::InProgress),
+                    ..TaskUpdate::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(started.status, TaskStatus::InProgress);
+            assert_eq!(started.status_changes.len(), 1);
+            assert_eq!(started.status_changes[0].from, TaskStatus::Todo);
+            assert_eq!(started.status_changes[0].to, TaskStatus::InProgress);
+            assert_eq!(started.status_changes[0].at, started.updated_at);
+
+            let path = dir.join("project_tasks.json");
+            let before = std::fs::read(&path).unwrap();
+            let again = update(
+                &repo,
+                "1",
+                TaskUpdate {
+                    status: Some(TaskStatus::InProgress),
+                    ..TaskUpdate::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(again.status_changes.len(), 1);
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        });
+    }
+
+    #[test]
+    fn tasks_without_status_history_still_load() {
+        let task: ProjectTask = serde_json::from_str(
+            r#"{"id":"a","number":1,"title":"t","description":"","status":"todo","created_at":"t","updated_at":"t"}"#,
+        )
+        .unwrap();
+        assert!(task.status_changes.is_empty());
+        assert!(task.comments.is_empty());
     }
 
     #[test]

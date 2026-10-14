@@ -34,8 +34,8 @@ use std::time::{Duration, Instant};
 use acorn_ipc::primer;
 use acorn_ipc::proto::{
     Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, TaskCommentRecord,
-    TaskRecord, TaskSummary, WorkspaceSummary, MAX_REQUEST_FRAME_BYTES, MAX_RESPONSE_FRAME_BYTES,
-    PROTOCOL_VERSION,
+    TaskRecord, TaskStatusChangeRecord, TaskSummary, WorkspaceSummary, MAX_REQUEST_FRAME_BYTES,
+    MAX_RESPONSE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use acorn_ipc::socket_path;
 use acorn_local_ipc::{
@@ -938,6 +938,15 @@ fn task_record(task: crate::project_tasks::ProjectTask) -> TaskRecord {
                 id: comment.id,
                 body: comment.body,
                 created_at: comment.created_at,
+            })
+            .collect(),
+        status_changes: task
+            .status_changes
+            .into_iter()
+            .map(|change| TaskStatusChangeRecord {
+                from: change.from.as_str().to_string(),
+                to: change.to.as_str().to_string(),
+                at: change.at,
             })
             .collect(),
     }

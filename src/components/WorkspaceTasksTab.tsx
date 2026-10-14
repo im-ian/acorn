@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { isSessionAgentProvider } from "../lib/agentProviderRegistry";
 import type { TranslationKey } from "../lib/i18n";
 import { isArchivedSession } from "../lib/sessionArchive";
+import { taskAbsoluteTime, taskAgeLabel } from "../lib/taskAge";
 import { useSettings } from "../lib/settings";
 import {
   buildTaskAgentCommand,
@@ -14,6 +15,7 @@ import type { ProjectTask, ProjectTaskStatus } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { Tooltip } from "./Tooltip";
 import {
   Button,
   ListActionRow,
@@ -331,6 +333,7 @@ export function WorkspaceTasksTab({
                 >
                   {t(STATUS_LABEL[task.status])}
                 </span>
+                <TaskAge iso={task.created_at} />
               </ListActionRow>
             ))}
           </ul>
@@ -530,106 +533,191 @@ function TaskDetailModal({
   const [posting, setPosting] = useState(false);
   const titleId = "workspace-task-detail-title";
   const comments = task.comments ?? [];
+  const changes = task.status_changes ?? [];
 
   return (
-    <Modal open variant="dialog" size="lg" ariaLabelledBy={titleId} onClose={onClose}>
+    <Modal
+      open
+      variant="dialog"
+      size="lg"
+      ariaLabelledBy={titleId}
+      onClose={onClose}
+      // Read-a-note shape: title and composer stay put, only the note scrolls.
+      className="flex flex-col overflow-hidden"
+    >
       <ModalHeader
         title={`#${task.number} ${task.title}`}
         titleId={titleId}
         variant="dialog"
         onClose={onClose}
+        subtitle={
+          <span className="inline-flex items-center gap-1.5">
+            {t("rightPanel.tasks.createdLabel")}
+            <TaskAge iso={task.created_at} />
+          </span>
+        }
         actions={
           <Button type="button" variant="ghost" size="xs" onClick={onEdit}>
             {t("rightPanel.tasks.edit")}
           </Button>
         }
       />
-      <div className="flex flex-col gap-3 px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <label className="flex items-center gap-2 text-xs text-fg-muted">
-            {t("rightPanel.tasks.statusLabel")}
-            <select
-              className={cn(TEXT_INPUT_CLASS, "h-7 w-auto")}
-              value={task.status}
-              onChange={(event) =>
-                void onStatus(event.target.value as ProjectTaskStatus)
-              }
-            >
-              {(Object.keys(STATUS_LABEL) as ProjectTaskStatus[]).map((status) => (
+      <div className="flex shrink-0 items-center justify-between gap-2 border-y border-border bg-fill/40 px-4 py-1.5">
+        <label className="flex items-center gap-2 text-[11px] text-fg-muted">
+          {t("rightPanel.tasks.statusLabel")}
+          <select
+            className={cn(TEXT_INPUT_CLASS, "h-7 w-auto text-xs")}
+            value={task.status}
+            onChange={(event) =>
+              void onStatus(event.target.value as ProjectTaskStatus)
+            }
+          >
+            {(Object.keys(STATUS_LABEL) as ProjectTaskStatus[]).map(
+              (status) => (
                 <option key={status} value={status}>
                   {t(STATUS_LABEL[status])}
                 </option>
-              ))}
-            </select>
-          </label>
-          {onOpenSession ? (
-            <Button type="button" variant="outline" size="xs" onClick={onOpenSession}>
-              {t("rightPanel.menu.openSession")}
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              variant="primary"
-              size="xs"
-              disabled={starting}
-              onClick={onStart}
-            >
-              {t("rightPanel.menu.startWork")}
-            </Button>
+              ),
+            )}
+          </select>
+        </label>
+        {onOpenSession ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={onOpenSession}
+          >
+            {t("rightPanel.menu.openSession")}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            variant="primary"
+            size="xs"
+            disabled={starting}
+            onClick={onStart}
+          >
+            {t("rightPanel.menu.startWork")}
+          </Button>
+        )}
+      </div>
+      <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        <p
+          className={cn(
+            "whitespace-pre-wrap text-[13px] leading-relaxed",
+            task.description.trim() ? "text-fg" : "text-fg-muted",
           )}
-        </div>
-        <p className="whitespace-pre-wrap text-xs text-fg">
+        >
           {task.description.trim()
             ? task.description
             : t("rightPanel.tasks.noDescription")}
         </p>
-        <div className="flex flex-col gap-2">
-          <h3 className="text-xs font-medium text-fg-muted">
+        {changes.length > 0 ? (
+          <section className="mt-4 border-t border-border pt-3">
+            <h3 className="mb-1 text-[10px] font-medium uppercase tracking-wide text-fg-muted">
+              {t("rightPanel.tasks.statusHistory")}
+            </h3>
+            <ul>
+              {changes.map((change) => (
+                <li
+                  key={`${change.at}-${change.to}`}
+                  className="flex items-baseline gap-2 py-0.5 text-[11px] text-fg-muted"
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {t(STATUS_LABEL[change.from])} →{" "}
+                    {t(STATUS_LABEL[change.to])}
+                  </span>
+                  <TaskAge iso={change.at} />
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        <section className="mt-4 border-t border-border pt-3">
+          <h3 className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-fg-muted">
             {t("rightPanel.tasks.comments")}
           </h3>
           {comments.length === 0 ? (
-            <p className="text-xs text-fg-muted">{t("rightPanel.tasks.noComments")}</p>
+            <p className="text-[11px] text-fg-muted">
+              {t("rightPanel.tasks.noComments")}
+            </p>
           ) : (
-            <ul className="flex flex-col gap-2">
+            <ul className="flex flex-col gap-1.5">
               {comments.map((item) => (
                 <li
                   key={item.id}
-                  className="whitespace-pre-wrap rounded-md bg-fill px-2 py-1.5 text-xs text-fg"
+                  className="rounded-md bg-fill px-2.5 py-1.5 text-xs leading-relaxed text-fg"
                 >
-                  {item.body}
+                  {/* Time trails the body inline so a one-line note reads as
+                      one line instead of a two-column block. */}
+                  <p className="whitespace-pre-wrap">
+                    {item.body}{" "}
+                    <TaskAge
+                      iso={item.created_at}
+                      className="ml-1 align-baseline"
+                    />
+                  </p>
                 </li>
               ))}
             </ul>
           )}
-          <form
-            className="flex items-end gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const body = comment.trim();
-              if (!body || posting) return;
-              setPosting(true);
-              void onComment(body)
-                .then(() => setComment(""))
-                .finally(() => setPosting(false));
-            }}
-          >
-            <textarea
-              className={cn(TEXT_INPUT_CLASS, "min-h-16 flex-1 py-2")}
-              value={comment}
-              placeholder={t("rightPanel.tasks.commentPlaceholder")}
-              onChange={(event) => setComment(event.target.value)}
-            />
-            <Button
-              type="submit"
-              variant="neutral"
-              size="sm"
-              disabled={posting || comment.trim().length === 0}
-            >
-              {t("rightPanel.tasks.commentSubmit")}
-            </Button>
-          </form>
-        </div>
+        </section>
       </div>
+      <ModalFooter className="items-end border-t border-border">
+        <form
+          className="flex w-full items-end gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const body = comment.trim();
+            if (!body || posting) return;
+            setPosting(true);
+            void onComment(body)
+              .then(() => setComment(""))
+              .finally(() => setPosting(false));
+          }}
+        >
+          <textarea
+            rows={1}
+            className={cn(
+              TEXT_INPUT_CLASS,
+              "min-h-9 flex-1 resize-y py-1.5 font-sans leading-relaxed",
+            )}
+            value={comment}
+            placeholder={t("rightPanel.tasks.commentPlaceholder")}
+            onChange={(event) => setComment(event.target.value)}
+          />
+          <Button
+            type="submit"
+            variant="neutral"
+            size="sm"
+            disabled={posting || comment.trim().length === 0}
+          >
+            {t("rightPanel.tasks.commentSubmit")}
+          </Button>
+        </form>
+      </ModalFooter>
     </Modal>
+  );
+}
+
+function TaskAge({ iso, className }: { iso: string; className?: string }) {
+  const t = useTranslation();
+  const label = taskAgeLabel(iso, Date.now(), t("rightPanel.tasks.justNow"));
+  if (!label) return null;
+  const absolute = taskAbsoluteTime(iso);
+  return (
+    <Tooltip
+      label={absolute || label}
+      side="top"
+      className={cn("shrink-0", className)}
+    >
+      <time
+        dateTime={iso}
+        className="whitespace-nowrap font-mono text-[10px] text-fg-muted"
+      >
+        {label}
+      </time>
+    </Tooltip>
   );
 }

@@ -504,6 +504,7 @@ export const tauriMockSource = `
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
         comments: [],
+        status_changes: [],
       });
     }
     if (cmd === 'update_project_task' || cmd === 'add_project_task_comment') {
@@ -518,6 +519,7 @@ export const tauriMockSource = `
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
         comments: [],
+        status_changes: [],
       });
     }
     if (cmd === 'delete_project_task') return Promise.resolve(undefined);

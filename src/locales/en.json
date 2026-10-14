@@ -1860,6 +1860,9 @@
       "commentSubmit": "Comment",
       "noComments": "No comments yet.",
       "noDescription": "No description.",
+      "justNow": "just now",
+      "createdLabel": "Created",
+      "statusHistory": "History",
       "listFilter": {
         "open": "Open",
         "closed": "Closed",
