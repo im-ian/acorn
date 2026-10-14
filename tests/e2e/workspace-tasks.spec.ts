@@ -127,7 +127,7 @@ test("workspace tasks can be created, commented, and closed", async ({
   await expect(panel.getByText("No tasks yet")).toBeVisible();
   await detail.getByRole("button", { name: "Close" }).click();
   await expect(detail).toHaveCount(0);
-  await panel.getByRole("button", { name: "Show closed" }).click();
+  await panel.getByRole("button", { name: "Closed", exact: true }).click();
   await expect(panel.getByRole("button", { name: /Fix the panel/ })).toBeVisible();
   await expect(panel.getByText("Done")).toBeVisible();
 });

@@ -1860,8 +1860,11 @@
       "commentSubmit": "댓글",
       "noComments": "댓글이 없습니다.",
       "noDescription": "내용이 없습니다.",
-      "showClosed": "닫힌 항목 보기",
-      "hideClosed": "닫힌 항목 숨기기",
+      "listFilter": {
+        "open": "열림",
+        "closed": "닫힘",
+        "all": "전체"
+      },
       "sendToSession": "이 세션으로 보내기",
       "newTitle": "새 메모",
       "editTitle": "메모 수정",

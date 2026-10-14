@@ -29,6 +29,15 @@ import { cn } from "../lib/cn";
 
 const CLOSED_STATUSES = new Set<ProjectTaskStatus>(["done", "canceled"]);
 
+const TASK_LIST_FILTERS = ["open", "closed", "all"] as const;
+type TaskListFilter = (typeof TASK_LIST_FILTERS)[number];
+
+const FILTER_LABEL: Record<TaskListFilter, TranslationKey> = {
+  open: "rightPanel.tasks.listFilter.open",
+  closed: "rightPanel.tasks.listFilter.closed",
+  all: "rightPanel.tasks.listFilter.all",
+};
+
 const STATUS_LABEL: Record<ProjectTaskStatus, TranslationKey> = {
   todo: "rightPanel.tasks.status.todo",
   in_progress: "rightPanel.tasks.status.in_progress",
@@ -63,7 +72,7 @@ export function WorkspaceTasksTab({
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showClosed, setShowClosed] = useState(false);
+  const [listFilter, setListFilter] = useState<TaskListFilter>("open");
   const [revision, setRevision] = useState(0);
   const [editor, setEditor] = useState<
     { mode: "create" } | { mode: "edit"; task: ProjectTask } | null
@@ -164,9 +173,11 @@ export function WorkspaceTasksTab({
     }
   }
 
-  const visible = tasks.filter(
-    (task) => showClosed || !CLOSED_STATUSES.has(task.status),
-  );
+  const visible = tasks.filter((task) => {
+    if (listFilter === "all") return true;
+    const closed = CLOSED_STATUSES.has(task.status);
+    return listFilter === "closed" ? closed : !closed;
+  });
   const menuTask = menu?.task ?? null;
   const linkedSession = menuTask
     ? sessions.find((session) => session.id === menuTask.session_id)
@@ -241,16 +252,22 @@ export function WorkspaceTasksTab({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          onClick={() => setShowClosed((current) => !current)}
-        >
-          {showClosed
-            ? t("rightPanel.tasks.hideClosed")
-            : t("rightPanel.tasks.showClosed")}
-        </Button>
+        {TASK_LIST_FILTERS.map((filter) => (
+          <button
+            key={filter}
+            type="button"
+            aria-pressed={listFilter === filter}
+            onClick={() => setListFilter(filter)}
+            className={cn(
+              "rounded-md px-2 py-0.5 text-[11px] transition",
+              listFilter === filter
+                ? "bg-bg-elevated text-fg"
+                : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
+            )}
+          >
+            {t(FILTER_LABEL[filter])}
+          </button>
+        ))}
         <RefreshButton
           loading={loading}
           size={12}

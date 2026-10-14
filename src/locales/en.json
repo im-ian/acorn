@@ -1860,8 +1860,11 @@
       "commentSubmit": "Comment",
       "noComments": "No comments yet.",
       "noDescription": "No description.",
-      "showClosed": "Show closed",
-      "hideClosed": "Hide closed",
+      "listFilter": {
+        "open": "Open",
+        "closed": "Closed",
+        "all": "All"
+      },
       "sendToSession": "Send to this session",
       "newTitle": "New task",
       "editTitle": "Edit task",

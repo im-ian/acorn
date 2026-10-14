@@ -1860,8 +1860,11 @@
       "commentSubmit": "评论",
       "noComments": "还没有评论。",
       "noDescription": "没有内容。",
-      "showClosed": "显示已关闭",
-      "hideClosed": "隐藏已关闭",
+      "listFilter": {
+        "open": "打开",
+        "closed": "已关闭",
+        "all": "全部"
+      },
       "sendToSession": "发到这个会话",
       "newTitle": "新任务",
       "editTitle": "编辑任务",

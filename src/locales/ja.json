@@ -1860,8 +1860,11 @@
       "commentSubmit": "コメント",
       "noComments": "コメントはまだありません。",
       "noDescription": "内容はありません。",
-      "showClosed": "閉じた項目を表示",
-      "hideClosed": "閉じた項目を隠す",
+      "listFilter": {
+        "open": "開く",
+        "closed": "閉店",
+        "all": "すべて"
+      },
       "sendToSession": "このセッションに送る",
       "newTitle": "新しいタスク",
       "editTitle": "タスクを編集",
