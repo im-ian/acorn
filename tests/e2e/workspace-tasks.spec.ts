@@ -61,6 +61,7 @@ test("workspace tasks can be created, commented, and closed", async ({
   }));
   await tauri.handle("add_project_task_comment", (args) => {
     const input = args as { id?: string; body?: string };
+    if (input.body === "nope") throw new Error("too long");
     return {
       id: input.id ?? "task-1",
       number: 1,
@@ -146,6 +147,9 @@ test("workspace tasks can be created, commented, and closed", async ({
   await detail.getByPlaceholder("Leave a note…").fill("ready for review");
   await detail.getByRole("button", { name: "Comment" }).click();
   await expect(detail.getByText("ready for review")).toBeVisible();
+  await detail.getByPlaceholder("Leave a note…").fill("nope");
+  await detail.getByRole("button", { name: "Comment", exact: true }).click();
+  await expect(detail.getByPlaceholder("Leave a note…")).toHaveValue("nope");
   await expect(
     detail.getByRole("button", { name: "Delete", exact: true }),
   ).toBeVisible();
@@ -172,11 +176,18 @@ test("workspace tasks can be created, commented, and closed", async ({
   await detail.getByRole("button", { name: "Close" }).click();
   await expect(detail).toHaveCount(0);
   await expect(row.locator("span.text-purple-400")).toHaveText("Done");
-  await panel.getByRole("button", { name: "Done", exact: true }).dblclick();
-  await expect(page.getByRole("dialog", { name: "New task" })).toHaveCount(0);
-  await panel.getByRole("button", { name: "Todo", exact: true }).click();
-  await expect(panel.getByText("No tasks yet")).toBeVisible();
-  await panel.getByRole("button", { name: "Todo", exact: true }).click();
+  await panel.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(row).toBeVisible();
+  await row.click();
+  const reopened = page.getByRole("dialog", { name: /Fix the panel/ });
+  await reopened.getByLabel("Status").selectOption("todo");
+  await expect(panel.getByRole("button", { name: "Done", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(row).toHaveCount(0);
+  await reopened.getByRole("button", { name: "Close" }).click();
+  await panel.getByRole("button", { name: "Done", exact: true }).click();
   await expect(row).toBeVisible();
   if (shot) {
     await panel.screenshot({ path: shot.replace(/\.png$/, "-list.png") });

@@ -503,7 +503,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn status_change_is_recorded_and_a_repeat_is_a_noop() {
         with_data_dir(|dir| {
             let repo = PathBuf::from("/tmp/acorn-project-tasks-history");

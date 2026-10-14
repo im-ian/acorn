@@ -91,6 +91,9 @@ export function WorkspaceTasksTab({
   } | null>(null);
   const startingRef = useRef(false);
   const [starting, setStarting] = useState(false);
+  // A list response that started before a create, edit, or delete must not
+  // paint over that newer write.
+  const listEpoch = useRef(0);
   const onEmptyAreaClick = useSyntheticDoubleClick(() =>
     setEditor({ mode: "create" }),
   );
@@ -99,13 +102,19 @@ export function WorkspaceTasksTab({
 
   useEffect(() => {
     let cancelled = false;
+    const epoch = listEpoch.current;
     setLoading(true);
     setError(null);
     api
       .listProjectTasks(repoPath)
       .then((next) => {
-        if (cancelled) return;
-        setTasks(Array.isArray(next) ? next : []);
+        if (cancelled || listEpoch.current !== epoch) return;
+        const loaded = Array.isArray(next) ? next : [];
+        setTasks(loaded);
+        setDetail((current) => {
+          if (!current) return current;
+          return loaded.find((task) => task.id === current.id) ?? null;
+        });
       })
       .catch((cause: unknown) => {
         if (!cancelled) setError(String(cause));
@@ -119,6 +128,7 @@ export function WorkspaceTasksTab({
   }, [repoPath, revision]);
 
   function replaceTask(next: ProjectTask) {
+    listEpoch.current += 1;
     setTasks((current) =>
       current.map((task) => (task.id === next.id ? next : task)),
     );
@@ -144,10 +154,10 @@ export function WorkspaceTasksTab({
           setSessionId: true,
         });
         replaceTask(next);
-        openSessionSurface(result.session.id);
       } catch (cause) {
         showToast(`${t("rightPanel.tasks.saveFailed")} ${String(cause)}`);
       }
+      openSessionSurface(result.session.id);
     } finally {
       startingRef.current = false;
       setStarting(false);
@@ -178,16 +188,17 @@ export function WorkspaceTasksTab({
         setSessionId: true,
       });
       replaceTask(next);
-      openSessionSurface(session.id);
     } catch (cause) {
       showToast(`${t("rightPanel.tasks.saveFailed")} ${String(cause)}`);
     }
+    openSessionSurface(session.id);
   }
 
   function removeTask(id: string) {
     return api
       .deleteProjectTask(repoPath, id)
       .then(() => {
+        listEpoch.current += 1;
         setTasks((current) => current.filter((task) => task.id !== id));
         setDetail((current) => (current?.id === id ? null : current));
       })
@@ -199,7 +210,9 @@ export function WorkspaceTasksTab({
   const groups = TASK_LIST_FILTERS.flatMap((status) => {
     if (listFilter !== null && status !== listFilter) return [];
     const items = tasks.filter((task) => task.status === status);
-    return items.length === 0 ? [] : [{ status, items }];
+    // The active filter's header is the only way out of Done or Canceled.
+    if (items.length === 0 && listFilter !== status) return [];
+    return [{ status, items }];
   });
   const menuTask = menu?.task ?? null;
   const linkedSession = menuTask
@@ -400,6 +413,7 @@ export function WorkspaceTasksTab({
                   description,
                   originSessionId,
                 );
+                listEpoch.current += 1;
                 setTasks((current) => [created, ...current]);
               } else {
                 const next = await api.updateProjectTask(
@@ -450,6 +464,7 @@ export function WorkspaceTasksTab({
               showToast(
                 `${t("rightPanel.tasks.commentFailed")} ${String(cause)}`,
               );
+              throw cause;
             }
           }}
           onDelete={() => removeTask(detail.id)}
@@ -704,9 +719,9 @@ function TaskDetailModal({
               {t("rightPanel.tasks.statusHistory")}
             </h3>
             <ul>
-              {changes.map((change) => (
+              {changes.map((change, index) => (
                 <li
-                  key={`${change.at}-${change.to}`}
+                  key={`${index}-${change.from}-${change.to}-${change.at}`}
                   className="flex items-baseline gap-2 py-0.5 text-[11px] text-fg-muted"
                 >
                   <span className="min-w-0 flex-1 truncate">
@@ -784,6 +799,9 @@ function TaskDetailModal({
                 setComment("");
                 const field = commentRef.current;
                 if (field) fitCommentBox(field);
+              })
+              .catch(() => {
+                // The parent toasts. A failed submit keeps the draft.
               })
               .finally(() => setPosting(false));
           }}
