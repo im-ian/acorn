@@ -1863,11 +1863,6 @@
       "justNow": "just now",
       "createdLabel": "Created",
       "statusHistory": "History",
-      "listFilter": {
-        "open": "Open",
-        "closed": "Closed",
-        "all": "All"
-      },
       "sendToSession": "Send to this session",
       "newTitle": "New task",
       "editTitle": "Edit task",
@@ -1875,6 +1870,8 @@
       "saveFailed": "Couldn't save the task.",
       "deleteFailed": "Couldn't delete the task.",
       "commentFailed": "Couldn't add the comment.",
+      "deleteComment": "Delete comment",
+      "deleteCommentFailed": "Couldn't delete the comment.",
       "status": {
         "todo": "Todo",
         "in_progress": "In progress",

@@ -1007,6 +1007,17 @@ export const api = {
       body,
     });
   },
+  deleteProjectTaskComment(
+    repoPath: string,
+    id: string,
+    commentId: string,
+  ): Promise<ProjectTask> {
+    return invoke<ProjectTask>("delete_project_task_comment", {
+      repoPath,
+      id,
+      commentId,
+    });
+  },
   detectSessionStatuses(
     ids: string[],
     syncAgentSessionTitles: boolean,

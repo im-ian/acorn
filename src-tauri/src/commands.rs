@@ -7518,6 +7518,18 @@ pub fn add_project_task_comment(
     project_tasks::add_comment(&repo_path, &id, &body).map_err(project_tasks::task_store_error)
 }
 
+#[tauri::command]
+pub fn delete_project_task_comment(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+    comment_id: String,
+) -> AppResult<ProjectTask> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    project_tasks::delete_comment(&repo_path, &id, &comment_id)
+        .map_err(project_tasks::task_store_error)
+}
+
 fn optional_project_session(
     state: &AppState,
     repo: &Path,

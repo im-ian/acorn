@@ -1863,11 +1863,6 @@
       "justNow": "방금",
       "createdLabel": "등록",
       "statusHistory": "기록",
-      "listFilter": {
-        "open": "열림",
-        "closed": "닫힘",
-        "all": "전체"
-      },
       "sendToSession": "이 세션으로 보내기",
       "newTitle": "새 메모",
       "editTitle": "메모 수정",
@@ -1875,6 +1870,8 @@
       "saveFailed": "메모를 저장하지 못했습니다.",
       "deleteFailed": "메모를 삭제하지 못했습니다.",
       "commentFailed": "댓글을 남기지 못했습니다.",
+      "deleteComment": "댓글 삭제",
+      "deleteCommentFailed": "댓글을 지우지 못했습니다.",
       "status": {
         "todo": "할 일",
         "in_progress": "진행 중",

@@ -46,6 +46,19 @@ test("workspace tasks can be created, commented, and closed", async ({
       comments: [],
     };
   });
+  await tauri.handle("delete_project_task_comment", () => ({
+    id: "task-1",
+    number: 1,
+    title: "Fix the panel",
+    description: "Keep the list in Acorn",
+    status: "todo",
+    session_id: null,
+    origin_session_id: "s-1",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    comments: [],
+    status_changes: [],
+  }));
   await tauri.handle("add_project_task_comment", (args) => {
     const input = args as { id?: string; body?: string };
     return {
@@ -107,8 +120,17 @@ test("workspace tasks can be created, commented, and closed", async ({
 
   await groups.getByRole("button", { name: "Workspace" }).click();
   await expect(panel.getByText("No tasks yet")).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "In review", exact: true }),
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Canceled", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    panel.getByRole("button", { name: "New", exact: true }),
+  ).toBeVisible();
 
-  await panel.getByRole("button", { name: "New", exact: true }).click();
+  await panel.getByText("No tasks yet").dblclick();
   const editor = page.getByRole("dialog", { name: "New task" });
   await editor.getByLabel("Title").fill("Fix the panel");
   await editor.getByLabel("Description").fill("Keep the list in Acorn");
@@ -116,18 +138,47 @@ test("workspace tasks can be created, commented, and closed", async ({
   await expect(editor).toHaveCount(0);
   await expect(panel.getByRole("button", { name: /Fix the panel/ })).toBeVisible();
 
-  await panel.getByRole("button", { name: /Fix the panel/ }).click();
+  await panel.getByRole("button", { name: /Fix the panel/ }).dblclick();
+  await expect(page.getByRole("dialog", { name: "New task" })).toHaveCount(0);
   const detail = page.getByRole("dialog", { name: /Fix the panel/ });
   await expect(detail.getByText("Keep the list in Acorn")).toBeVisible();
+  await expect(detail.locator("h3 span").first()).toHaveClass(/text-emerald-400/);
   await detail.getByPlaceholder("Leave a note…").fill("ready for review");
   await detail.getByRole("button", { name: "Comment" }).click();
   await expect(detail.getByText("ready for review")).toBeVisible();
+  await expect(
+    detail.getByRole("button", { name: "Delete", exact: true }),
+  ).toBeVisible();
+  const note = detail.getByPlaceholder("Leave a note…");
+  await note.fill("one");
+  const singleLine = await note.evaluate(
+    (el) => el.getBoundingClientRect().height,
+  );
+  await note.fill("one\ntwo\nthree");
+  await expect
+    .poll(() => note.evaluate((el) => el.getBoundingClientRect().height))
+    .toBeGreaterThan(singleLine);
+  await detail.getByText("ready for review").hover();
+  const shot = process.env.ACORN_UI_SHOT;
+  if (shot) await detail.screenshot({ path: shot });
+
+  await detail.getByRole("button", { name: "Delete comment" }).click();
+  await expect(detail.getByText("ready for review")).toHaveCount(0);
 
   await detail.getByLabel("Status").selectOption("done");
-  await expect(panel.getByText("No tasks yet")).toBeVisible();
+  await expect(detail.locator("h3 span").first()).toHaveClass(/text-purple-400/);
+  const row = panel.getByRole("button", { name: /Fix the panel/ });
+  await expect(row).toBeVisible();
   await detail.getByRole("button", { name: "Close" }).click();
   await expect(detail).toHaveCount(0);
-  await panel.getByRole("button", { name: "Closed", exact: true }).click();
-  await expect(panel.getByRole("button", { name: /Fix the panel/ })).toBeVisible();
-  await expect(panel.getByText("Done")).toBeVisible();
+  await expect(row.locator("span.text-purple-400")).toHaveText("Done");
+  await panel.getByRole("button", { name: "Done", exact: true }).dblclick();
+  await expect(page.getByRole("dialog", { name: "New task" })).toHaveCount(0);
+  await panel.getByRole("button", { name: "Todo", exact: true }).click();
+  await expect(panel.getByText("No tasks yet")).toBeVisible();
+  await panel.getByRole("button", { name: "Todo", exact: true }).click();
+  await expect(row).toBeVisible();
+  if (shot) {
+    await panel.screenshot({ path: shot.replace(/\.png$/, "-list.png") });
+  }
 });

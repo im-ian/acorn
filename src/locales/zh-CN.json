@@ -1863,11 +1863,6 @@
       "justNow": "刚刚",
       "createdLabel": "创建",
       "statusHistory": "记录",
-      "listFilter": {
-        "open": "打开",
-        "closed": "已关闭",
-        "all": "全部"
-      },
       "sendToSession": "发到这个会话",
       "newTitle": "新任务",
       "editTitle": "编辑任务",
@@ -1875,6 +1870,8 @@
       "saveFailed": "无法保存任务。",
       "deleteFailed": "无法删除任务。",
       "commentFailed": "无法添加评论。",
+      "deleteComment": "删除评论",
+      "deleteCommentFailed": "无法删除评论。",
       "status": {
         "todo": "待办",
         "in_progress": "进行中",

@@ -279,6 +279,35 @@ pub fn add_comment(repo_path: &Path, key: &str, body: &str) -> Result<ProjectTas
     Ok(updated)
 }
 
+pub fn delete_comment(
+    repo_path: &Path,
+    key: &str,
+    comment_id: &str,
+) -> Result<ProjectTask, TaskStoreError> {
+    let comment_id = comment_id.trim();
+    if comment_id.is_empty() {
+        return Err(TaskStoreError::Invalid("comment id is empty".to_string()));
+    }
+    let _guard = STORE_LOCK.lock();
+    let project_key = project_settings::key_for_repo(repo_path)?;
+    let mut file = load()?;
+    let bucket = file
+        .projects
+        .get_mut(&project_key)
+        .ok_or(TaskStoreError::NotFound)?;
+    let index = resolve_index(bucket, key)?;
+    let task = &mut bucket.tasks[index];
+    let before = task.comments.len();
+    task.comments.retain(|comment| comment.id != comment_id);
+    if task.comments.len() == before {
+        return Err(TaskStoreError::NotFound);
+    }
+    task.updated_at = timestamp();
+    let updated = task.clone();
+    save(&file)?;
+    Ok(updated)
+}
+
 pub fn delete(repo_path: &Path, key: &str) -> Result<(), TaskStoreError> {
     let _guard = STORE_LOCK.lock();
     let project_key = project_settings::key_for_repo(repo_path)?;
@@ -431,6 +460,13 @@ mod tests {
             assert_eq!(commented.comments.len(), 1);
             assert_eq!(commented.comments[0].body, "ready for review");
             assert_eq!(get(&repo, "#1").unwrap().comments.len(), 1);
+            let comment_id = commented.comments[0].id.clone();
+            let cleared = delete_comment(&repo, "#1", &comment_id).unwrap();
+            assert!(cleared.comments.is_empty());
+            assert!(matches!(
+                delete_comment(&repo, "#1", &comment_id),
+                Err(TaskStoreError::NotFound)
+            ));
 
             delete(&repo, "#2").unwrap();
             assert_eq!(list(&repo).unwrap().len(), 1);

@@ -1863,11 +1863,6 @@
       "justNow": "たった今",
       "createdLabel": "作成",
       "statusHistory": "履歴",
-      "listFilter": {
-        "open": "開く",
-        "closed": "閉店",
-        "all": "すべて"
-      },
       "sendToSession": "このセッションに送る",
       "newTitle": "新しいタスク",
       "editTitle": "タスクを編集",
@@ -1875,6 +1870,8 @@
       "saveFailed": "タスクを保存できませんでした。",
       "deleteFailed": "タスクを削除できませんでした。",
       "commentFailed": "コメントを追加できませんでした。",
+      "deleteComment": "コメントを削除",
+      "deleteCommentFailed": "コメントを削除できませんでした。",
       "status": {
         "todo": "未着手",
         "in_progress": "進行中",

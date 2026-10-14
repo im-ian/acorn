@@ -865,6 +865,7 @@ pub fn run() {
             commands::update_project_task,
             commands::delete_project_task,
             commands::add_project_task_comment,
+            commands::delete_project_task_comment,
             commands::reorder_projects,
             commands::reorder_sessions,
             commands::list_commits,

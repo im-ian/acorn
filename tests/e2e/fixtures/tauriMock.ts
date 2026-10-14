@@ -523,6 +523,21 @@ export const tauriMockSource = `
       });
     }
     if (cmd === 'delete_project_task') return Promise.resolve(undefined);
+    if (cmd === 'delete_project_task_comment') {
+      return Promise.resolve({
+        id: args?.id ?? 'task-1',
+        number: 1,
+        title: 'Task',
+        description: '',
+        status: 'todo',
+        session_id: null,
+        origin_session_id: null,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        comments: [],
+        status_changes: [],
+      });
+    }
     if (cmd === 'list_commits') return Promise.resolve([]);
     if (cmd === 'resolve_commit_logins') return Promise.resolve({});
     if (cmd === 'list_staged') return Promise.resolve([]);

@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { isSessionAgentProvider } from "../lib/agentProviderRegistry";
 import type { TranslationKey } from "../lib/i18n";
 import { isArchivedSession } from "../lib/sessionArchive";
+import { useSyntheticDoubleClick } from "../lib/doubleClick";
 import { taskAbsoluteTime, taskAgeLabel } from "../lib/taskAge";
 import { useSettings } from "../lib/settings";
 import {
@@ -31,14 +32,17 @@ import { cn } from "../lib/cn";
 
 const CLOSED_STATUSES = new Set<ProjectTaskStatus>(["done", "canceled"]);
 
-const TASK_LIST_FILTERS = ["open", "closed", "all"] as const;
-type TaskListFilter = (typeof TASK_LIST_FILTERS)[number];
+const TASK_LIST_FILTERS: ProjectTaskStatus[] = [
+  "todo",
+  "in_progress",
+  "in_review",
+  "done",
+  "canceled",
+];
 
-const FILTER_LABEL: Record<TaskListFilter, TranslationKey> = {
-  open: "rightPanel.tasks.listFilter.open",
-  closed: "rightPanel.tasks.listFilter.closed",
-  all: "rightPanel.tasks.listFilter.all",
-};
+// The open statuses fit one toolbar row. Done and canceled stay in the
+// grouped list, reached from their section header.
+const CHIP_FILTERS: ProjectTaskStatus[] = ["todo", "in_progress", "in_review"];
 
 const STATUS_LABEL: Record<ProjectTaskStatus, TranslationKey> = {
   todo: "rightPanel.tasks.status.todo",
@@ -48,15 +52,15 @@ const STATUS_LABEL: Record<ProjectTaskStatus, TranslationKey> = {
   canceled: "rightPanel.tasks.status.canceled",
 };
 
-// Status tone mirrors the GitHub rows next door: the `#number` carries
-// open/closed (emerald vs muted, like IssueRow), and the trailing status
-// word carries progress. Keeps a glance at the row enough to tell state.
+// Modal `#number` and the list's status word. Distinct hues so a glance
+// tells the state apart. List numbers stay emerald/muted (open vs closed),
+// same as GitHub issue rows.
 const STATUS_TONE: Record<ProjectTaskStatus, string> = {
-  todo: "text-fg-muted",
-  in_progress: "text-emerald-400",
-  in_review: "text-accent",
-  done: "text-emerald-400",
-  canceled: "text-danger",
+  todo: "text-emerald-400",
+  in_progress: "text-amber-400",
+  in_review: "text-sky-400",
+  done: "text-purple-400",
+  canceled: "text-rose-400",
 };
 
 export function WorkspaceTasksTab({
@@ -74,7 +78,7 @@ export function WorkspaceTasksTab({
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [listFilter, setListFilter] = useState<TaskListFilter>("open");
+  const [listFilter, setListFilter] = useState<ProjectTaskStatus | null>(null);
   const [revision, setRevision] = useState(0);
   const [editor, setEditor] = useState<
     { mode: "create" } | { mode: "edit"; task: ProjectTask } | null
@@ -87,6 +91,11 @@ export function WorkspaceTasksTab({
   } | null>(null);
   const startingRef = useRef(false);
   const [starting, setStarting] = useState(false);
+  const onEmptyAreaClick = useSyntheticDoubleClick(() =>
+    setEditor({ mode: "create" }),
+  );
+  const toggleListFilter = (status: ProjectTaskStatus) =>
+    setListFilter((current) => (current === status ? null : status));
 
   useEffect(() => {
     let cancelled = false;
@@ -175,10 +184,22 @@ export function WorkspaceTasksTab({
     }
   }
 
-  const visible = tasks.filter((task) => {
-    if (listFilter === "all") return true;
-    const closed = CLOSED_STATUSES.has(task.status);
-    return listFilter === "closed" ? closed : !closed;
+  function removeTask(id: string) {
+    return api
+      .deleteProjectTask(repoPath, id)
+      .then(() => {
+        setTasks((current) => current.filter((task) => task.id !== id));
+        setDetail((current) => (current?.id === id ? null : current));
+      })
+      .catch((cause: unknown) => {
+        showToast(`${t("rightPanel.tasks.deleteFailed")} ${String(cause)}`);
+      });
+  }
+
+  const groups = TASK_LIST_FILTERS.flatMap((status) => {
+    if (listFilter !== null && status !== listFilter) return [];
+    const items = tasks.filter((task) => task.status === status);
+    return items.length === 0 ? [] : [{ status, items }];
   });
   const menuTask = menu?.task ?? null;
   const linkedSession = menuTask
@@ -230,23 +251,7 @@ export function WorkspaceTasksTab({
         {
           label: t("rightPanel.tasks.delete"),
           icon: <Trash2 size={12} />,
-          onClick: () => {
-            void api
-              .deleteProjectTask(repoPath, menuTask.id)
-              .then(() => {
-                setTasks((current) =>
-                  current.filter((task) => task.id !== menuTask.id),
-                );
-                setDetail((current) =>
-                  current?.id === menuTask.id ? null : current,
-                );
-              })
-              .catch((cause: unknown) => {
-                showToast(
-                  `${t("rightPanel.tasks.deleteFailed")} ${String(cause)}`,
-                );
-              });
-          },
+          onClick: () => void removeTask(menuTask.id),
         },
       ]
     : [];
@@ -254,33 +259,34 @@ export function WorkspaceTasksTab({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
-        {TASK_LIST_FILTERS.map((filter) => (
+        {CHIP_FILTERS.map((filter) => (
           <button
             key={filter}
             type="button"
             aria-pressed={listFilter === filter}
-            onClick={() => setListFilter(filter)}
+            onClick={() => toggleListFilter(filter)}
             className={cn(
-              "rounded-md px-2 py-0.5 text-[11px] transition",
+              "shrink-0 rounded-md px-2 py-0.5 text-[11px] transition",
               listFilter === filter
                 ? "bg-bg-elevated text-fg"
                 : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
             )}
           >
-            {t(FILTER_LABEL[filter])}
+            {t(STATUS_LABEL[filter])}
           </button>
         ))}
+        <span className="min-w-1 flex-1" />
         <RefreshButton
           loading={loading}
           size={12}
           title={t("rightPanel.tasks.refresh")}
           ariaLabel={t("rightPanel.tasks.refresh")}
           onClick={() => setRevision((current) => current + 1)}
-          className="ml-auto"
+          className="shrink-0"
         />
         <Button
           type="button"
-          variant="primary"
+          variant="ghost"
           size="xs"
           onClick={() => setEditor({ mode: "create" })}
         >
@@ -292,51 +298,81 @@ export function WorkspaceTasksTab({
           {t("rightPanel.tasks.loadFailed")} {error}
         </div>
       ) : null}
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div
+        className="min-h-0 flex-1 overflow-auto"
+        onClick={(event) => {
+          // A second click on a row is the row's own open gesture.
+          const target = event.target;
+          if (!(target instanceof Element)) return;
+          if (target.closest("[data-task-row], [data-task-group-header]")) return;
+          onEmptyAreaClick(event);
+        }}
+      >
         {loading && tasks.length === 0 ? (
           <ListEmptyState>{t("rightPanel.tasks.loading")}</ListEmptyState>
-        ) : visible.length === 0 ? (
+        ) : groups.length === 0 ? (
           <ListEmptyState>{t("rightPanel.tasks.empty")}</ListEmptyState>
         ) : (
-          <ul className={listBoxClassName()}>
-            {visible.map((task) => (
-              <ListActionRow
-                key={task.id}
-                surface="subtle"
-                density="compact"
-                onOpen={() => setDetail(task)}
-                onClick={() => setDetail(task)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  setMenu({ x: event.clientX, y: event.clientY, task });
-                }}
-                className="flex items-center gap-2 text-left text-xs"
-              >
-                <span
+          <div className="flex flex-col">
+            {groups.map((group) => (
+              <section key={group.status}>
+                <button
+                  type="button"
+                  data-task-group-header
+                  aria-pressed={listFilter === group.status}
+                  onClick={() => toggleListFilter(group.status)}
                   className={cn(
-                    "shrink-0 font-mono tabular-nums",
-                    CLOSED_STATUSES.has(task.status)
-                      ? "text-fg-muted"
-                      : "text-emerald-400",
+                    "flex w-full items-center px-3 pt-2 pb-0.5 text-left text-[10px] font-medium uppercase tracking-wide",
+                    listFilter === group.status ? "text-fg" : "text-fg-muted",
                   )}
                 >
-                  #{task.number}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-fg">
-                  {task.title}
-                </span>
-                <span
-                  className={cn(
-                    "shrink-0 text-[10px] font-medium",
-                    STATUS_TONE[task.status],
-                  )}
-                >
-                  {t(STATUS_LABEL[task.status])}
-                </span>
-                <TaskAge iso={task.created_at} />
-              </ListActionRow>
+                  <span className={STATUS_TONE[group.status]}>
+                    {t(STATUS_LABEL[group.status])}
+                  </span>
+                </button>
+                <ul className={listBoxClassName()}>
+                  {group.items.map((task) => (
+                    <ListActionRow
+                      key={task.id}
+                      data-task-row
+                      surface="subtle"
+                      density="compact"
+                      onOpen={() => setDetail(task)}
+                      onClick={() => setDetail(task)}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        setMenu({ x: event.clientX, y: event.clientY, task });
+                      }}
+                      className="flex items-center gap-2 text-left text-xs"
+                    >
+                      <span
+                        className={cn(
+                          "shrink-0 font-mono tabular-nums",
+                          CLOSED_STATUSES.has(task.status)
+                            ? "text-fg-muted"
+                            : "text-emerald-400",
+                        )}
+                      >
+                        #{task.number}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-fg">
+                        {task.title}
+                      </span>
+                      <span
+                        className={cn(
+                          "shrink-0 text-[10px] font-medium",
+                          STATUS_TONE[task.status],
+                        )}
+                      >
+                        {t(STATUS_LABEL[task.status])}
+                      </span>
+                      <TaskAge iso={task.created_at} />
+                    </ListActionRow>
+                  ))}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
         )}
       </div>
       <ContextMenu
@@ -413,6 +449,22 @@ export function WorkspaceTasksTab({
             } catch (cause) {
               showToast(
                 `${t("rightPanel.tasks.commentFailed")} ${String(cause)}`,
+              );
+            }
+          }}
+          onDelete={() => removeTask(detail.id)}
+          onDeleteComment={async (commentId) => {
+            try {
+              replaceTask(
+                await api.deleteProjectTaskComment(
+                  repoPath,
+                  detail.id,
+                  commentId,
+                ),
+              );
+            } catch (cause) {
+              showToast(
+                `${t("rightPanel.tasks.deleteCommentFailed")} ${String(cause)}`,
               );
             }
           }}
@@ -518,6 +570,8 @@ function TaskDetailModal({
   onOpenSession,
   onStatus,
   onComment,
+  onDelete,
+  onDeleteComment,
 }: {
   task: ProjectTask;
   onClose: () => void;
@@ -527,10 +581,15 @@ function TaskDetailModal({
   onOpenSession: (() => void) | null;
   onStatus: (status: ProjectTaskStatus) => Promise<void>;
   onComment: (body: string) => Promise<void>;
+  onDelete: () => Promise<void>;
+  onDeleteComment: (commentId: string) => Promise<void>;
 }) {
   const t = useTranslation();
+  const commentRef = useRef<HTMLTextAreaElement>(null);
   const [comment, setComment] = useState("");
   const [posting, setPosting] = useState(false);
+  const [deletingTask, setDeletingTask] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const titleId = "workspace-task-detail-title";
   const comments = task.comments ?? [];
   const changes = task.status_changes ?? [];
@@ -546,7 +605,19 @@ function TaskDetailModal({
       className="flex flex-col overflow-hidden"
     >
       <ModalHeader
-        title={`#${task.number} ${task.title}`}
+        title={
+          <>
+            <span
+              className={cn(
+                "font-mono tabular-nums",
+                STATUS_TONE[task.status],
+              )}
+            >
+              #{task.number}
+            </span>{" "}
+            {task.title}
+          </>
+        }
         titleId={titleId}
         variant="dialog"
         onClose={onClose}
@@ -557,9 +628,23 @@ function TaskDetailModal({
           </span>
         }
         actions={
-          <Button type="button" variant="ghost" size="xs" onClick={onEdit}>
-            {t("rightPanel.tasks.edit")}
-          </Button>
+          <>
+            <Button
+              type="button"
+              variant="dangerSoft"
+              size="xs"
+              disabled={deletingTask}
+              onClick={() => {
+                setDeletingTask(true);
+                void onDelete().finally(() => setDeletingTask(false));
+              }}
+            >
+              {t("rightPanel.tasks.delete")}
+            </Button>
+            <Button type="button" variant="ghost" size="xs" onClick={onEdit}>
+              {t("rightPanel.tasks.edit")}
+            </Button>
+          </>
         }
       />
       <div className="flex shrink-0 items-center justify-between gap-2 border-y border-border bg-fill/40 px-4 py-1.5">
@@ -647,17 +732,39 @@ function TaskDetailModal({
               {comments.map((item) => (
                 <li
                   key={item.id}
-                  className="rounded-md bg-fill px-2.5 py-1.5 text-xs leading-relaxed text-fg"
+                  className="group flex items-start gap-2 rounded-md bg-fill px-2.5 py-1.5 text-xs leading-relaxed text-fg"
                 >
                   {/* Time trails the body inline so a one-line note reads as
                       one line instead of a two-column block. */}
-                  <p className="whitespace-pre-wrap">
+                  <p className="min-w-0 flex-1 whitespace-pre-wrap">
                     {item.body}{" "}
                     <TaskAge
                       iso={item.created_at}
                       className="ml-1 align-baseline"
                     />
                   </p>
+                  <Tooltip
+                    label={t("rightPanel.tasks.deleteComment")}
+                    side="top"
+                    className="shrink-0"
+                  >
+                    <button
+                      type="button"
+                      aria-label={t("rightPanel.tasks.deleteComment")}
+                      disabled={deletingId === item.id}
+                      onClick={() => {
+                        setDeletingId(item.id);
+                        void onDeleteComment(item.id).finally(() =>
+                          setDeletingId((current) =>
+                            current === item.id ? null : current,
+                          ),
+                        );
+                      }}
+                      className="rounded p-1 text-fg-muted opacity-0 transition hover:bg-danger/10 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-40"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </Tooltip>
                 </li>
               ))}
             </ul>
@@ -673,19 +780,27 @@ function TaskDetailModal({
             if (!body || posting) return;
             setPosting(true);
             void onComment(body)
-              .then(() => setComment(""))
+              .then(() => {
+                setComment("");
+                const field = commentRef.current;
+                if (field) fitCommentBox(field);
+              })
               .finally(() => setPosting(false));
           }}
         >
           <textarea
+            ref={commentRef}
             rows={1}
             className={cn(
               TEXT_INPUT_CLASS,
-              "min-h-9 flex-1 resize-y py-1.5 font-sans leading-relaxed",
+              "max-h-40 min-h-9 flex-1 resize-none overflow-y-auto py-1.5 font-sans leading-relaxed",
             )}
             value={comment}
             placeholder={t("rightPanel.tasks.commentPlaceholder")}
-            onChange={(event) => setComment(event.target.value)}
+            onChange={(event) => {
+              setComment(event.target.value);
+              fitCommentBox(event.currentTarget);
+            }}
           />
           <Button
             type="submit"
@@ -699,6 +814,11 @@ function TaskDetailModal({
       </ModalFooter>
     </Modal>
   );
+}
+
+function fitCommentBox(field: HTMLTextAreaElement) {
+  field.style.height = "0px";
+  field.style.height = `${field.scrollHeight}px`;
 }
 
 function TaskAge({ iso, className }: { iso: string; className?: string }) {
