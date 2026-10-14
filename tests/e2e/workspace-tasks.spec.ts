@@ -226,6 +226,26 @@ test("workspace task comments stop growing and reveal earlier notes", async ({
       status_changes: [],
     },
   ]);
+  await tauri.handle("delete_project_task_comment", (args) => {
+    const input = args as { commentId?: string };
+    return {
+      id: "task-1",
+      number: 1,
+      title: "Fix the panel",
+      description: "Keep the list in Acorn",
+      status: "todo",
+      session_id: null,
+      origin_session_id: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      status_changes: [],
+      comments: Array.from({ length: 40 }, (_, index) => ({
+        id: `c${index}`,
+        body: `note ${index}`,
+        created_at: "2026-01-01T00:00:00Z",
+      })).filter((item) => item.id !== input.commentId),
+    };
+  });
 
   await page.goto("/");
   const groups = page.getByRole("navigation", { name: "Right panel group" });
@@ -248,6 +268,39 @@ test("workspace task comments stop growing and reveal earlier notes", async ({
   const shot = process.env.ACORN_UI_SHOT;
   if (shot) await detail.screenshot({ path: shot });
 
+  const doomed = detail.locator("li").filter({ hasText: "note 25" });
+  await doomed.hover();
+  await doomed.getByRole("button", { name: "Delete comment" }).click();
+  await expect(detail.getByText("note 25")).toHaveCount(0);
+  await expect(detail.getByText("note 19")).toHaveCount(0);
+  await expect(detail.getByText("note 20")).toHaveCount(1);
+
+  await list.evaluate((element) => {
+    element.scrollTop = 80;
+  });
+  const marker = await list.evaluate((element) => {
+    const listRect = element.getBoundingClientRect();
+    const row = [...element.querySelectorAll("li")].find((item) => {
+      const rect = item.getBoundingClientRect();
+      return rect.bottom > listRect.top + 1 && rect.top < listRect.bottom;
+    });
+    if (!row) return null;
+    return {
+      text: row.textContent ?? "",
+      offset: row.getBoundingClientRect().top - listRect.top,
+    };
+  });
+  expect(marker).not.toBeNull();
   await detail.getByRole("button", { name: "Earlier comments" }).click();
+  const nextOffset = await list.evaluate((element, text) => {
+    const listRect = element.getBoundingClientRect();
+    const row = [...element.querySelectorAll("li")].find(
+      (item) => item.textContent === text,
+    );
+    if (!row) return null;
+    return row.getBoundingClientRect().top - listRect.top;
+  }, marker?.text ?? "");
+  expect(nextOffset).not.toBeNull();
+  expect(Math.abs((nextOffset ?? 0) - (marker?.offset ?? 0))).toBeLessThan(3);
   await expect(detail.getByText("note 0")).toHaveCount(1);
 });

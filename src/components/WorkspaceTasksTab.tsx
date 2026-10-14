@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ListChecks, Pencil, Play, SquareTerminal, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { isSessionAgentProvider } from "../lib/agentProviderRegistry";
@@ -18,7 +12,11 @@ import {
   launchTaskStartWork,
 } from "../lib/taskStartWork";
 import { useToasts } from "../lib/toasts";
-import type { ProjectTask, ProjectTaskStatus } from "../lib/types";
+import type {
+  ProjectTask,
+  ProjectTaskComment,
+  ProjectTaskStatus,
+} from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -491,6 +489,7 @@ export function WorkspaceTasksTab({
               showToast(
                 `${t("rightPanel.tasks.deleteCommentFailed")} ${String(cause)}`,
               );
+              throw cause;
             }
           }}
         />
@@ -586,49 +585,117 @@ function TaskEditorModal({
   );
 }
 
+type CommentScrollHold = {
+  beforeHeight: number;
+  scrollTop: number;
+  // True when the change is entirely above the viewport. A prepend always is.
+  above: boolean;
+};
+
 // The detail modal portals in after its own mount effect, so a scroll effect
 // on the parent runs before this node exists. The effect lives here so it
 // runs on the frame the list is actually in the document.
 function TaskCommentWindow({
-  newestCommentId,
-  shownComments,
-  hiddenComments,
+  taskId,
+  comments,
   earlierLabel,
-  onRevealEarlier,
-  children,
+  deleteLabel,
+  onDeleteComment,
 }: {
-  newestCommentId: string | undefined;
-  shownComments: number;
-  hiddenComments: number;
+  taskId: string;
+  comments: ProjectTaskComment[];
   earlierLabel: string;
-  onRevealEarlier: () => void;
-  children: ReactNode;
+  deleteLabel: string;
+  onDeleteComment: (commentId: string) => Promise<void>;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
-  // Height before older notes are prepended, so the viewport stays put.
-  const scrollAnchor = useRef(0);
+  const previousKey = useRef<string | null>(null);
+  const pendingAnchor = useRef<CommentScrollHold | null>(null);
+  const [seenTaskId, setSeenTaskId] = useState(taskId);
+  // Null means "the newest page". A stored list pins notes the reader has not
+  // asked for, so a delete cannot slide one of them into the window.
+  const [hiddenIds, setHiddenIds] = useState<string[] | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  if (seenTaskId !== taskId) {
+    previousKey.current = null;
+    pendingAnchor.current = null;
+    setSeenTaskId(taskId);
+    setHiddenIds(null);
+  }
+
+  const implicitHidden = comments
+    .slice(0, Math.max(0, comments.length - COMMENT_PAGE))
+    .map((item) => item.id);
+  const present = new Set(comments.map((item) => item.id));
+  const hidden = (hiddenIds ?? implicitHidden).filter((id) =>
+    present.has(id),
+  );
+  const hiddenSet = new Set(hidden);
+  const visibleComments =
+    hiddenIds == null
+      ? comments.slice(Math.max(0, comments.length - COMMENT_PAGE))
+      : comments.filter((item) => !hiddenSet.has(item.id));
+  const visibleKey = visibleComments.map((item) => item.id).join("\0");
 
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
-    const before = scrollAnchor.current;
-    if (before > 0) {
-      scrollAnchor.current = 0;
-      list.scrollTop += list.scrollHeight - before;
+    const previous = previousKey.current;
+    previousKey.current = visibleKey;
+    if (previous == null) {
+      pendingAnchor.current = null;
+      list.scrollTop = list.scrollHeight;
       return;
     }
-    list.scrollTop = list.scrollHeight;
-  }, [newestCommentId, shownComments]);
+    if (previous === visibleKey) return;
+    const prevIds = previous.split("\0").filter(Boolean);
+    const nextIds = visibleKey.split("\0").filter(Boolean);
+    const nextNewest = nextIds[nextIds.length - 1];
+    const addedAtEnd =
+      nextNewest != null &&
+      nextNewest !== prevIds[prevIds.length - 1] &&
+      !prevIds.includes(nextNewest);
+    if (addedAtEnd) {
+      pendingAnchor.current = null;
+      list.scrollTop = list.scrollHeight;
+      return;
+    }
+    const pending = pendingAnchor.current;
+    pendingAnchor.current = null;
+    if (!pending) return;
+    const delta = list.scrollHeight - pending.beforeHeight;
+    list.scrollTop = pending.above
+      ? pending.scrollTop + delta
+      : pending.scrollTop;
+  }, [visibleKey]);
+
+  function holdScroll(row?: HTMLElement) {
+    const list = listRef.current;
+    if (!list) return;
+    let above = true;
+    if (row) {
+      const rowBottom = row.getBoundingClientRect().bottom;
+      const listTop = list.getBoundingClientRect().top;
+      above = rowBottom <= listTop + 1;
+    }
+    pendingAnchor.current = {
+      beforeHeight: list.scrollHeight,
+      scrollTop: list.scrollTop,
+      above,
+    };
+  }
 
   return (
     <>
-      {hiddenComments > 0 ? (
+      {hidden.length > 0 ? (
         <button
           type="button"
           className="mb-1.5 w-full rounded-md px-2 py-1 text-left text-[11px] text-fg-muted transition hover:bg-fill hover:text-fg"
           onClick={() => {
-            scrollAnchor.current = listRef.current?.scrollHeight ?? 0;
-            onRevealEarlier();
+            holdScroll();
+            const reveal = new Set(hidden.slice(-COMMENT_PAGE));
+            setHiddenIds(hidden.filter((id) => !reveal.has(id)));
           }}
         >
           {earlierLabel}
@@ -637,9 +704,54 @@ function TaskCommentWindow({
       <div
         ref={listRef}
         data-task-comments
-        className="max-h-72 overflow-y-auto overflow-anchor-none"
+        className="max-h-72 overflow-y-auto"
+        // Tailwind does not emit overflow-anchor. Leaving Chromium's default
+        // on would add this same delta again after a prepend.
+        style={{ overflowAnchor: "none" }}
       >
-        {children}
+        <ul className="flex flex-col gap-1.5">
+          {visibleComments.map((item) => (
+            <li
+              key={item.id}
+              className="group flex items-start gap-2 rounded-md bg-fill px-2.5 py-1.5 text-xs leading-relaxed text-fg"
+            >
+              {/* Time trails the body inline so a one-line note reads as
+                  one line instead of a two-column block. */}
+              <p className="min-w-0 flex-1 whitespace-pre-wrap">
+                {item.body}{" "}
+                <TaskAge
+                  iso={item.created_at}
+                  className="ml-1 align-baseline"
+                />
+              </p>
+              <Tooltip label={deleteLabel} side="top" className="shrink-0">
+                <button
+                  type="button"
+                  aria-label={deleteLabel}
+                  disabled={deletingId === item.id}
+                  onClick={(event) => {
+                    const row = event.currentTarget.closest("li");
+                    if (row instanceof HTMLElement) holdScroll(row);
+                    if (hiddenIds == null) setHiddenIds(implicitHidden);
+                    setDeletingId(item.id);
+                    void onDeleteComment(item.id)
+                      .catch(() => {
+                        pendingAnchor.current = null;
+                      })
+                      .finally(() =>
+                        setDeletingId((current) =>
+                          current === item.id ? null : current,
+                        ),
+                      );
+                  }}
+                  className="rounded p-1 text-fg-muted opacity-0 transition hover:bg-danger/10 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-40"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </Tooltip>
+            </li>
+          ))}
+        </ul>
       </div>
     </>
   );
@@ -673,19 +785,9 @@ function TaskDetailModal({
   const [comment, setComment] = useState("");
   const [posting, setPosting] = useState(false);
   const [deletingTask, setDeletingTask] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
   const titleId = "workspace-task-detail-title";
   const comments = task.comments ?? [];
   const changes = task.status_changes ?? [];
-  const [shownComments, setShownComments] = useState(COMMENT_PAGE);
-  const hiddenComments = Math.max(0, comments.length - shownComments);
-  const visibleComments =
-    hiddenComments > 0 ? comments.slice(hiddenComments) : comments;
-  const newestCommentId = comments[comments.length - 1]?.id;
-
-  useEffect(() => {
-    setShownComments(COMMENT_PAGE);
-  }, [task.id]);
 
   return (
     <Modal
@@ -822,55 +924,12 @@ function TaskDetailModal({
             </p>
           ) : (
             <TaskCommentWindow
-              newestCommentId={newestCommentId}
-              shownComments={shownComments}
-              hiddenComments={hiddenComments}
+              taskId={task.id}
+              comments={comments}
               earlierLabel={t("rightPanel.tasks.earlierComments")}
-              onRevealEarlier={() =>
-                setShownComments((current) => current + COMMENT_PAGE)
-              }
-            >
-              <ul className="flex flex-col gap-1.5">
-              {visibleComments.map((item) => (
-                <li
-                  key={item.id}
-                  className="group flex items-start gap-2 rounded-md bg-fill px-2.5 py-1.5 text-xs leading-relaxed text-fg"
-                >
-                  {/* Time trails the body inline so a one-line note reads as
-                      one line instead of a two-column block. */}
-                  <p className="min-w-0 flex-1 whitespace-pre-wrap">
-                    {item.body}{" "}
-                    <TaskAge
-                      iso={item.created_at}
-                      className="ml-1 align-baseline"
-                    />
-                  </p>
-                  <Tooltip
-                    label={t("rightPanel.tasks.deleteComment")}
-                    side="top"
-                    className="shrink-0"
-                  >
-                    <button
-                      type="button"
-                      aria-label={t("rightPanel.tasks.deleteComment")}
-                      disabled={deletingId === item.id}
-                      onClick={() => {
-                        setDeletingId(item.id);
-                        void onDeleteComment(item.id).finally(() =>
-                          setDeletingId((current) =>
-                            current === item.id ? null : current,
-                          ),
-                        );
-                      }}
-                      className="rounded p-1 text-fg-muted opacity-0 transition hover:bg-danger/10 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-40"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </Tooltip>
-                </li>
-              ))}
-              </ul>
-            </TaskCommentWindow>
+              deleteLabel={t("rightPanel.tasks.deleteComment")}
+              onDeleteComment={onDeleteComment}
+            />
           )}
         </section>
       </div>
