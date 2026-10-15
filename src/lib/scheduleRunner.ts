@@ -379,7 +379,6 @@ async function reapFinishedBackgroundSessions(
   repoPath: string,
   nowMs: number,
 ): Promise<void> {
-  const store = useAppStore.getState();
   // Re-read rather than reuse the pre-launch listing: a run launched moments
   // ago is in there now, and its summary state may have changed.
   let schedules: ProjectSchedule[] = [];
@@ -388,6 +387,10 @@ async function reapFinishedBackgroundSessions(
   } catch {
     return;
   }
+  // Read the store *after* the await. A run this tick just launched has only
+  // reached `sessions` and `backgroundSessionIds` by now, and a snapshot taken
+  // before the listing would be missing it.
+  const store = useAppStore.getState();
   const reap = backgroundRunsToReap(
     schedules,
     new Set(store.sessions.map((session) => session.id)),
