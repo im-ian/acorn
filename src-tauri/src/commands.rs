@@ -14,6 +14,10 @@ use crate::error::{AppError, AppResult};
 use crate::fs_explorer;
 use crate::git_ops::{self, CommitInfo, DiffImages, DiffPayload, StagedFile};
 use crate::persistence;
+use crate::project_schedules::{
+    self, ProjectSchedule, ScheduleMode, ScheduleRunInput, ScheduleRunPatch, ScheduleTrigger,
+    ScheduleUpdate,
+};
 use crate::project_settings::{self, ProjectSettings, ProjectSettingsRecord};
 use crate::project_tasks::{self, ProjectTask, TaskUpdate};
 use crate::pull_requests::{
@@ -7528,6 +7532,117 @@ pub fn delete_project_task_comment(
     let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
     project_tasks::delete_comment(&repo_path, &id, &comment_id)
         .map_err(project_tasks::task_store_error)
+}
+
+#[tauri::command]
+pub fn list_project_schedules(
+    state: State<'_, AppState>,
+    repo_path: String,
+) -> AppResult<Vec<ProjectSchedule>> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    project_schedules::list(&repo_path).map_err(project_schedules::schedule_store_error)
+}
+
+#[tauri::command]
+pub fn create_project_schedule(
+    state: State<'_, AppState>,
+    repo_path: String,
+    name: String,
+    prompt: String,
+    trigger: ScheduleTrigger,
+    mode: Option<ScheduleMode>,
+    background: Option<bool>,
+) -> AppResult<ProjectSchedule> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    // Runs write their work summary under `.acorn/`; claim the ignore rule now
+    // so the first one never surfaces as an untracked file.
+    worktree::ensure_acorn_dir_git_excluded(&repo_path).ok();
+    project_schedules::create(
+        &repo_path,
+        &name,
+        &prompt,
+        trigger,
+        mode.unwrap_or_default(),
+        background.unwrap_or(false),
+    )
+    .map_err(project_schedules::schedule_store_error)
+}
+
+#[tauri::command]
+pub fn update_project_schedule(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+    patch: ScheduleUpdate,
+) -> AppResult<ProjectSchedule> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    project_schedules::update(&repo_path, &id, patch)
+        .map_err(project_schedules::schedule_store_error)
+}
+
+#[tauri::command]
+pub fn delete_project_schedule(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+) -> AppResult<()> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    project_schedules::delete(&repo_path, &id).map_err(project_schedules::schedule_store_error)
+}
+
+#[tauri::command]
+pub fn update_project_schedule_run(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+    run_id: String,
+    patch: ScheduleRunPatch,
+) -> AppResult<ProjectSchedule> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    let mut patch = patch;
+    patch.session_id = optional_project_session(state.inner(), &repo_path, patch.session_id)
+        .ok()
+        .flatten();
+    project_schedules::update_run(&repo_path, &id, &run_id, patch)
+        .map_err(project_schedules::schedule_store_error)
+}
+
+#[tauri::command]
+pub fn delete_project_schedule_run(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+    run_id: String,
+) -> AppResult<ProjectSchedule> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    project_schedules::delete_run(&repo_path, &id, &run_id)
+        .map_err(project_schedules::schedule_store_error)
+}
+
+#[tauri::command]
+pub fn clear_project_schedule_runs(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+) -> AppResult<ProjectSchedule> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    project_schedules::clear_runs(&repo_path, &id).map_err(project_schedules::schedule_store_error)
+}
+
+#[tauri::command]
+pub fn record_project_schedule_run(
+    state: State<'_, AppState>,
+    repo_path: String,
+    id: String,
+    run: ScheduleRunInput,
+) -> AppResult<ProjectSchedule> {
+    let repo_path = authorize_registered_project_root(state.inner(), Path::new(&repo_path))?;
+    let mut run = run;
+    run.session_id = optional_project_session(state.inner(), &repo_path, run.session_id)
+        .ok()
+        .flatten();
+    project_schedules::record_run(&repo_path, &id, run)
+        .map_err(project_schedules::schedule_store_error)
 }
 
 fn optional_project_session(

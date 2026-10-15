@@ -36,6 +36,7 @@ import {
   type StagedRevMismatch,
 } from "./lib/api";
 import { applyDaemonUpdateResumePass } from "./lib/daemonUpdateResume";
+import { runDueSchedules, SCHEDULE_TICK_MS } from "./lib/scheduleRunner";
 import { AGENT_PROVIDER_ORDER } from "./lib/agentProviderRegistry";
 import {
   armResumeProbeAfterSuccessfulRestore,
@@ -1128,6 +1129,18 @@ function App() {
       );
     });
   }, [preventSleep, showToast, t]);
+
+  // Schedules fire while Acorn is running; a slot missed with the app closed
+  // fires once on the next tick. One minute is the finest recurrence the
+  // editor offers, so there is nothing to gain from a tighter tick.
+  useEffect(() => {
+    void runDueSchedules();
+    const interval = window.setInterval(
+      () => void runDueSchedules(),
+      SCHEDULE_TICK_MS,
+    );
+    return () => window.clearInterval(interval);
+  }, []);
 
   // Update notification: check once on startup, then every 24h. Both calls are
   // best-effort and non-blocking — surfaced via the App-level

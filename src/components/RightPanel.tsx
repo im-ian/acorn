@@ -13,6 +13,7 @@ import {
 import {
   Activity,
   Bot,
+  CalendarClock,
   Check,
   ChevronRight,
   CircleAlert,
@@ -134,6 +135,7 @@ import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
 import { FileExplorer } from "./FileExplorer";
 import { TrackerIssuesTab } from "./TrackerIssuesTab";
+import { WorkspaceSchedulesTab } from "./WorkspaceSchedulesTab";
 import { WorkspaceTasksTab } from "./WorkspaceTasksTab";
 import { GitHubLabelChip } from "./GitHubLabelChip";
 import { IssueDetailModal } from "./IssueDetailModal";
@@ -575,6 +577,15 @@ export function RightPanel() {
           ) : (
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
+        ) : rightTab === "schedules" ? (
+          projectRootRepoPath ? (
+            <WorkspaceSchedulesTab
+              key={projectRootRepoPath}
+              repoPath={projectRootRepoPath}
+            />
+          ) : (
+            <Empty msg={rt(t, "rightPanel.empty.noProject")} />
+          )
         ) : rightTab === "todos" ? (
           active && todosState.error ? (
             <div className="p-3 text-xs text-danger" role="alert">
@@ -905,6 +916,8 @@ function tabIcon(tab: RightTab): ReactNode {
       return <History size={12} />;
     case "tasks":
       return <ListChecks size={12} />;
+    case "schedules":
+      return <CalendarClock size={12} />;
   }
 }
 
