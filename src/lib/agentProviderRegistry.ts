@@ -18,6 +18,7 @@ export const AGENT_PROVIDER_REGISTRY = {
     label: "Claude",
     agentOptionLabel: "Claude Code",
     oneshotHint: "claude -p --output-format text",
+    oneshotPromptArgs: ["-p", "--output-format", "text"],
     cliCommand: "claude",
     icon: {
       kind: "mask",
@@ -49,6 +50,7 @@ export const AGENT_PROVIDER_REGISTRY = {
     label: "Codex",
     agentOptionLabel: "Codex",
     oneshotHint: "codex exec --skip-git-repo-check",
+    oneshotPromptArgs: ["exec", "--skip-git-repo-check"],
     cliCommand: "codex",
     icon: {
       kind: "mask",
@@ -79,6 +81,7 @@ export const AGENT_PROVIDER_REGISTRY = {
     label: "Antigravity",
     agentOptionLabel: "Antigravity",
     oneshotHint: "agy -p <prompt>",
+    oneshotPromptArgs: ["-p"],
     cliCommand: "agy",
     startPromptFlag: "--prompt-interactive",
     icon: {
@@ -111,6 +114,12 @@ export const AGENT_PROVIDER_REGISTRY = {
     label: "Grok",
     agentOptionLabel: "Grok Build",
     oneshotHint: "grok --no-auto-update --output-format plain -p <prompt>",
+    oneshotPromptArgs: [
+      "--no-auto-update",
+      "--output-format",
+      "plain",
+      "-p",
+    ],
     cliCommand: "grok",
     icon: {
       kind: "mask",
@@ -249,6 +258,24 @@ export function buildAgentStartCommand(
   return definition.startPromptFlag
     ? `${definition.cliCommand} ${definition.startPromptFlag} ${quoted}`
     : `${definition.cliCommand} ${quoted}`;
+}
+
+/**
+ * The provider's print form: run the prompt once, emit the answer, exit. Same
+ * single-PTY-line constraint as {@link buildAgentStartCommand}.
+ */
+export function buildAgentOneshotCommand(
+  provider: SessionAgentProvider,
+  prompt: string,
+): string {
+  const definition = getAgentProviderDefinition(provider);
+  const trimmed = prompt.trim().replace(/\s+/g, " ");
+  if (!trimmed) return definition.cliCommand;
+  return [
+    definition.cliCommand,
+    ...definition.oneshotPromptArgs,
+    quotePosixSingle(trimmed),
+  ].join(" ");
 }
 
 export function buildAgentForkCommand(
