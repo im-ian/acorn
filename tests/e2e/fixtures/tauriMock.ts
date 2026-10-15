@@ -538,6 +538,91 @@ export const tauriMockSource = `
         status_changes: [],
       });
     }
+    if (cmd === 'list_project_schedules') return Promise.resolve([]);
+    if (cmd === 'create_project_schedule') {
+      return Promise.resolve({
+        id: 'schedule-1',
+        name: args?.name ?? '',
+        prompt: args?.prompt ?? '',
+        trigger: args?.trigger ?? { kind: 'daily', time: '09:00' },
+        mode: args?.mode ?? 'session',
+        background: args?.background ?? false,
+        created_at: '2026-01-01T00:00:00Z',
+        last_run_at: null,
+        last_slot_at: null,
+        runs: [],
+      });
+    }
+    if (cmd === 'record_project_schedule_run') {
+      return Promise.resolve({
+        id: args?.id ?? 'schedule-1',
+        name: 'Schedule',
+        prompt: '',
+        trigger: { kind: 'daily', time: '09:00' },
+        mode: 'session',
+        background: false,
+        created_at: '2026-01-01T00:00:00Z',
+        last_run_at: '2026-01-01T09:00:00Z',
+        last_slot_at: '2026-01-01T09:00:00Z',
+        runs: [
+          {
+            id: args?.run?.id ?? 'run-1',
+            started_at: '2026-01-01T09:00:00Z',
+            session_id: args?.run?.sessionId ?? null,
+            worktree_path: args?.run?.worktreePath ?? null,
+            summary_path: args?.run?.summaryPath ?? null,
+            summary_ready: false,
+            error: args?.run?.error ?? null,
+          },
+        ],
+      });
+    }
+    if (cmd === 'clear_project_schedule_runs') {
+      return Promise.resolve({
+        id: args?.id ?? 'schedule-1',
+        name: 'Schedule',
+        prompt: '',
+        trigger: { kind: 'daily', time: '09:00' },
+        mode: 'session',
+        background: false,
+        created_at: '2026-01-01T00:00:00Z',
+        last_run_at: '2026-01-01T09:00:00Z',
+        last_slot_at: '2026-01-01T09:00:00Z',
+        runs: [],
+      });
+    }
+    if (cmd === 'update_project_schedule') {
+      return Promise.resolve({
+        id: args?.id ?? 'schedule-1',
+        name: args?.patch?.name ?? 'Schedule',
+        prompt: args?.patch?.prompt ?? '',
+        trigger: args?.patch?.trigger ?? { kind: 'daily', time: '09:00' },
+        mode: args?.patch?.mode ?? 'session',
+        background: args?.patch?.background ?? false,
+        created_at: '2026-01-01T00:00:00Z',
+        last_run_at: null,
+        last_slot_at: null,
+        runs: [],
+      });
+    }
+    if (
+      cmd === 'update_project_schedule_run' ||
+      cmd === 'delete_project_schedule_run'
+    ) {
+      return Promise.resolve({
+        id: args?.id ?? 'schedule-1',
+        name: 'Schedule',
+        prompt: '',
+        trigger: { kind: 'daily', time: '09:00' },
+        mode: 'session',
+        background: false,
+        created_at: '2026-01-01T00:00:00Z',
+        last_run_at: '2026-01-01T09:00:00Z',
+        last_slot_at: '2026-01-01T09:00:00Z',
+        runs: [],
+      });
+    }
+    if (cmd === 'delete_project_schedule') return Promise.resolve(undefined);
     if (cmd === 'list_commits') return Promise.resolve([]);
     if (cmd === 'resolve_commit_logins') return Promise.resolve({});
     if (cmd === 'list_staged') return Promise.resolve([]);
