@@ -79,6 +79,7 @@ const ACTIVITY_KIND_KEYS: Record<
 > = {
   waiting_for_input: "commandPalette.activity.kind.waitingForInput",
   errored: "commandPalette.activity.kind.errored",
+  schedule_done: "commandPalette.activity.kind.scheduleDone",
 };
 
 function activityKindLabel(

@@ -815,6 +815,7 @@ const NOTIFICATION_KIND_KEYS: Record<
 > = {
   waiting_for_input: "statusBar.notifications.kind.waitingForInput",
   errored: "statusBar.notifications.kind.errored",
+  schedule_done: "statusBar.notifications.kind.scheduleDone",
 };
 
 function ErrorStatusButton({ error }: { error: string }) {
@@ -1179,13 +1180,24 @@ function NotificationRow({
 }) {
   const t = useTranslation();
   const openSessionSurface = useAppStore((s) => s.openSessionSurface);
+  const openScheduleTab = useAppStore((s) => s.openScheduleTab);
   const markRead = useAppStore((s) => s.markSessionNotificationRead);
   const dismiss = useAppStore((s) => s.dismissSessionNotification);
   const unread = !notification.readAt;
 
   const openSession = () => {
     markRead(notification.id);
-    openSessionSurface(notification.sessionId, { centerInCanvas: true });
+    // A finished background run has no session left to open, so its
+    // notification points at the board that holds the report instead.
+    if (notification.scheduleId) {
+      openScheduleTab({
+        repoPath: notification.repoPath,
+        scheduleId: notification.scheduleId,
+        title: notification.sessionName,
+      });
+    } else {
+      openSessionSurface(notification.sessionId, { centerInCanvas: true });
+    }
     onClose();
   };
 
@@ -1259,6 +1271,7 @@ function NotificationRow({
 
 function notificationDotClass(kind: SessionNotificationKind): string {
   if (kind === "errored") return "bg-danger";
+  if (kind === "schedule_done") return "bg-emerald-400";
   return "bg-warning";
 }
 
