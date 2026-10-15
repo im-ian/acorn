@@ -1849,6 +1849,7 @@
     },
     "tasks": {
       "new": "New",
+      "allFilter": "All",
       "refresh": "Refresh",
       "empty": "No tasks yet",
       "loading": "Loading tasks…",

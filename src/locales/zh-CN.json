@@ -1849,6 +1849,7 @@
     },
     "tasks": {
       "new": "新建",
+      "allFilter": "全部",
       "refresh": "刷新",
       "empty": "还没有任务",
       "loading": "正在加载任务…",
