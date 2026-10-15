@@ -1953,6 +1953,7 @@
       "modeForcedByBackground": "后台计划始终以一次性方式运行。",
       "state": {
         "success": "成功",
+        "starting": "启动中",
         "failed": "失败",
         "running": "运行中",
         "ended": "已结束"

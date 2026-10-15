@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   backgroundRunsToReap,
   buildScheduleRunNotification,
+  backgroundSessionIdsForRuns,
   buildScheduleRunCommand,
   buildScheduleRunPrompt,
   scheduleSummaryPath,
@@ -244,5 +245,50 @@ describe("buildScheduleRunNotification", () => {
       run: run({ id: "run-2" }),
     });
     expect(first.id).not.toBe(second.id);
+  });
+});
+
+describe("backgroundSessionIdsForRuns", () => {
+  function withSession(id: string, sessionId: string | null) {
+    return {
+      id,
+      started_at: "2026-03-10T11:55:00Z",
+      session_id: sessionId,
+      worktree_path: "/repo/demo",
+      summary_path: null,
+      summary_ready: false,
+      error: null,
+    };
+  }
+
+  it("picks the hidden sessions a set of records owns", () => {
+    // These are only reachable through their run record, so dropping the
+    // record without removing them leaves a daemon PTY nobody can see.
+    expect(
+      backgroundSessionIdsForRuns(
+        [withSession("r1", "s-bg"), withSession("r2", "s-visible")],
+        { "s-bg": true },
+      ),
+    ).toEqual(["s-bg"]);
+  });
+
+  it("leaves a revealed session alone and tolerates runs with none", () => {
+    // Revealing clears the flag, which is what keeps the user's own tab from
+    // being closed under them.
+    expect(
+      backgroundSessionIdsForRuns([withSession("r1", "s-bg")], {}),
+    ).toEqual([]);
+    expect(
+      backgroundSessionIdsForRuns([withSession("r1", null)], { "s-bg": true }),
+    ).toEqual([]);
+  });
+
+  it("does not repeat a session two records share", () => {
+    expect(
+      backgroundSessionIdsForRuns(
+        [withSession("r1", "s-bg"), withSession("r2", "s-bg")],
+        { "s-bg": true },
+      ),
+    ).toEqual(["s-bg"]);
   });
 });

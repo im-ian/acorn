@@ -25,6 +25,10 @@ const MAX_EVERY_MINUTES: u64 = 7 * 24 * 60;
 /// `SCHEDULE_SUMMARY_DIR` in `src/lib/scheduleRunner.ts`, which is what builds
 /// the path the agent is actually told to write.
 const SUMMARY_DIR: &str = "schedule-summaries";
+/// How long a summary file must sit unmodified before its run counts as
+/// finished. Long enough to cover a multi-write tool, short enough that the
+/// board does not feel stuck.
+const SUMMARY_SETTLE: std::time::Duration = std::time::Duration::from_secs(5);
 const ACORN_DIR: &str = ".acorn";
 
 static STORE_LOCK: Mutex<()> = Mutex::new(());
@@ -347,10 +351,12 @@ pub fn delete(repo_path: &Path, id: &str) -> Result<(), ScheduleStoreError> {
         .ok_or(ScheduleStoreError::NotFound)?;
     let index = resolve_index(bucket, id)?;
     let removed = bucket.remove(index);
+    let keep = retained_run_ids(&file, &key);
     save(&file)?;
     for run in &removed.runs {
         remove_summary_file(repo_path, run);
     }
+    sweep_orphan_summaries(repo_path, &keep);
     Ok(())
 }
 
@@ -368,10 +374,12 @@ pub fn clear_runs(repo_path: &Path, id: &str) -> Result<ProjectSchedule, Schedul
     let index = resolve_index(bucket, id)?;
     let dropped = std::mem::take(&mut bucket[index].runs);
     let updated = bucket[index].clone();
+    let keep = retained_run_ids(&file, &key);
     save(&file)?;
     for run in &dropped {
         remove_summary_file(repo_path, run);
     }
+    sweep_orphan_summaries(repo_path, &keep);
     Ok(updated)
 }
 
@@ -432,9 +440,32 @@ pub fn record_run(
 /// turning this into an arbitrary file-existence oracle.
 fn mark_summary_ready(repo_path: &Path, schedule: &mut ProjectSchedule) {
     for run in &mut schedule.runs {
-        run.summary_ready =
-            summary_file_to_remove(repo_path, run).is_some_and(|path| path.is_file());
+        run.summary_ready = summary_file_to_remove(repo_path, run)
+            .is_some_and(|path| summary_file_is_settled(&path));
     }
+}
+
+/// A summary counts as done only once it has stopped changing. The file exists
+/// from the agent's first write, and treating that instant as completion lets
+/// the reap kill the PTY mid-write and lets the overlap guard release while the
+/// agent is still working — the board would then show a truncated report as a
+/// success.
+fn summary_file_is_settled(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    let Ok(modified) = metadata.modified() else {
+        // No mtime to judge by: fall back to existence rather than never
+        // reporting the run as finished.
+        return true;
+    };
+    modified
+        .elapsed()
+        .map(|age| age >= SUMMARY_SETTLE)
+        .unwrap_or(false)
 }
 
 /// Fill in what the launch produced for a run whose slot was already claimed.
@@ -497,8 +528,10 @@ pub fn delete_run(
         .ok_or(ScheduleStoreError::NotFound)?;
     let removed = schedule.runs.remove(at);
     let mut updated = schedule.clone();
+    let keep = retained_run_ids(&file, &key);
     save(&file)?;
     remove_summary_file(repo_path, &removed);
+    sweep_orphan_summaries(repo_path, &keep);
     mark_summary_ready(repo_path, &mut updated);
     Ok(updated)
 }
@@ -514,6 +547,52 @@ fn summary_file_to_remove(repo_path: &Path, run: &ScheduleRun) -> Option<PathBuf
         .join(SUMMARY_DIR)
         .join(format!("{}.md", run.id));
     (recorded == expected).then_some(expected)
+}
+
+/// Delete every `.md` in the project's summary directory that no retained run
+/// can reference.
+///
+/// `remove_summary_file` only covers a file that already existed when its
+/// record went away. A run deleted while still in flight writes its summary
+/// seconds later, with no record left to ever name it — and the 100-run cap
+/// evicts in-flight runs the same way. Those files would sit in the repository
+/// forever, so every path that drops records sweeps afterwards.
+fn sweep_orphan_summaries(repo_path: &Path, keep: &std::collections::HashSet<String>) {
+    let dir = repo_path.join(ACORN_DIR).join(SUMMARY_DIR);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if keep.contains(stem) {
+            continue;
+        }
+        // Same shape gate the targeted delete uses, so a file that is not one
+        // of ours is never touched even if it landed in this directory.
+        if run_token(stem).is_err() {
+            continue;
+        }
+        std::fs::remove_file(&path).ok();
+    }
+}
+
+/// Every run id the project still has a record for, across all its schedules.
+fn retained_run_ids(file: &ScheduleFile, key: &str) -> std::collections::HashSet<String> {
+    file.projects
+        .get(key)
+        .map(|bucket| {
+            bucket
+                .iter()
+                .flat_map(|schedule| schedule.runs.iter().map(|run| run.id.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn remove_summary_file(repo_path: &Path, run: &ScheduleRun) {
@@ -613,6 +692,19 @@ fn save(file: &ScheduleFile) -> Result<(), ScheduleStoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Push a file's mtime into the past so settle-based checks see it as
+    /// finished without the test sleeping.
+    fn backdate(path: &Path, by: std::time::Duration) {
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        let when = std::time::SystemTime::now() - by;
+        file.set_times(
+            std::fs::FileTimes::new()
+                .set_accessed(when)
+                .set_modified(when),
+        )
+        .unwrap();
+    }
 
     fn with_data_dir(test: impl FnOnce()) {
         let dir = tempfile::tempdir().unwrap();
@@ -824,6 +916,11 @@ mod tests {
 
             std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
             std::fs::write(&summary, "## Result\nok\n").unwrap();
+            // Freshly written is not yet finished: the agent may still be
+            // appending, and reaping here would kill it mid-write.
+            assert!(!list(&repo).unwrap()[0].runs[0].summary_ready);
+
+            backdate(&summary, SUMMARY_SETTLE * 2);
             assert!(list(&repo).unwrap()[0].runs[0].summary_ready);
 
             // A file that disappears takes the flag with it, so the board can
@@ -1091,6 +1188,76 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_record_sweeps_a_summary_written_afterwards() {
+        with_data_dir(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = dir.path().to_path_buf();
+            let created = create(
+                &repo,
+                "Crawl",
+                "fetch",
+                ScheduleTrigger::Interval { every_minutes: 30 },
+                ScheduleMode::Oneshot,
+                false,
+            )
+            .unwrap();
+            let summary_dir = repo.join(".acorn/schedule-summaries");
+            std::fs::create_dir_all(&summary_dir).unwrap();
+            for id in ["run-gone", "run-kept"] {
+                record_run(
+                    &repo,
+                    &created.id,
+                    ScheduleRunInput {
+                        id: Some(id.to_string()),
+                        summary_path: Some(
+                            summary_dir
+                                .join(format!("{id}.md"))
+                                .to_string_lossy()
+                                .to_string(),
+                        ),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            }
+
+            // The in-flight run is deleted before its agent writes anything,
+            // so the targeted delete finds no file...
+            delete_run(&repo, &created.id, "run-gone").unwrap();
+            // ...and the agent lands it a moment later, with no record left to
+            // ever name it.
+            std::fs::write(summary_dir.join("run-gone.md"), "## Result\nlate\n").unwrap();
+            std::fs::write(summary_dir.join("run-kept.md"), "## Result\nkept\n").unwrap();
+
+            // Any later record drop sweeps what nothing can reference.
+            delete_run(&repo, &created.id, "run-kept").unwrap();
+            assert!(!summary_dir.join("run-gone.md").exists());
+            assert!(!summary_dir.join("run-kept.md").exists());
+        });
+    }
+
+    #[test]
+    fn the_sweep_leaves_files_that_are_not_ours() {
+        with_data_dir(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = dir.path().to_path_buf();
+            let summary_dir = repo.join(".acorn/schedule-summaries");
+            std::fs::create_dir_all(&summary_dir).unwrap();
+            let foreign = summary_dir.join("notes for later.md");
+            let wrong_ext = summary_dir.join("run-1.txt");
+            std::fs::write(&foreign, "mine").unwrap();
+            std::fs::write(&wrong_ext, "mine").unwrap();
+
+            sweep_orphan_summaries(&repo, &std::collections::HashSet::new());
+
+            // A name that is not a run token, and anything that is not `.md`,
+            // are both left alone even with an empty keep set.
+            assert!(foreign.exists());
+            assert!(wrong_ext.exists());
+        });
+    }
+
+    #[test]
     fn summary_cleanup_only_touches_files_we_wrote() {
         let repo = Path::new("/tmp/acorn-schedule-summary-guard");
         let run = |summary: Option<&str>| ScheduleRun {
@@ -1146,6 +1313,7 @@ mod tests {
             let summary = repo.join(".acorn/schedule-summaries/run-keep.md");
             std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
             std::fs::write(&summary, "## Result\nall good\n").unwrap();
+            backdate(&summary, SUMMARY_SETTLE * 2);
             record_run(
                 &repo,
                 &created.id,

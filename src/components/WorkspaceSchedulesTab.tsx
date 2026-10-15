@@ -2,7 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { CalendarClock, Pencil, Play, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
-import { launchScheduleRun, SCHEDULES_CHANGED_EVENT } from "../lib/scheduleRunner";
+import {
+  launchScheduleRun,
+  releaseBackgroundSessionsForRuns,
+  SCHEDULES_CHANGED_EVENT,
+} from "../lib/scheduleRunner";
 import {
   SCHEDULE_TRIGGER_KINDS,
   scheduleTriggerSummary,
@@ -140,8 +144,8 @@ export function WorkspaceSchedulesTab({ repoPath }: { repoPath: string }) {
           label: t("rightPanel.schedules.delete"),
           icon: <Trash2 size={12} />,
           onClick: () => {
-            void api
-              .deleteProjectSchedule(repoPath, menuSchedule.id)
+            void releaseBackgroundSessionsForRuns(menuSchedule.runs)
+              .then(() => api.deleteProjectSchedule(repoPath, menuSchedule.id))
               .then(() => {
                 setSchedules((current) =>
                   current.filter((item) => item.id !== menuSchedule.id),
@@ -488,8 +492,14 @@ export function ScheduleEditorModal({
                 ? t("rightPanel.schedules.backgroundHint")
                 : t("rightPanel.schedules.backgroundDaemonOff")
             }
-            checked={background && daemonEnabled}
-            disabled={!daemonEnabled}
+            // Show what will be saved. Rendering this unchecked while the
+            // state stayed `true` meant editing an existing background
+            // schedule with the daemon off looked like it was turning
+            // background off while quietly keeping it on.
+            checked={background}
+            // Turning it *on* needs the daemon; turning it off never does, so
+            // an existing background schedule stays fixable either way.
+            disabled={!daemonEnabled && !background}
             onChange={setBackground}
           />
           <label className="flex flex-col gap-1.5">

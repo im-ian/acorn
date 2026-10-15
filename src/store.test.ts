@@ -494,6 +494,25 @@ describe("backgroundSessionIds", () => {
 });
 
 describe("sessionNotifications", () => {
+  it("keeps a schedule notification and its board target", () => {
+    // Regression: the kind normalizer dropped `schedule_done` outright and the
+    // normalizer never copied `scheduleId`, so a finished background run
+    // produced no inbox entry and its click target was always undefined.
+    useAppStore.getState().addSessionNotification({
+      ...notification("n-sched", { sessionId: "s-reaped" }),
+      kind: "schedule_done",
+      status: "ready",
+      sessionName: "Nightly audit",
+      scheduleId: "schedule-1",
+    });
+
+    const stored = useAppStore.getState().sessionNotifications;
+    expect(stored.map((item) => item.id)).toEqual(["n-sched"]);
+    expect(stored[0]?.kind).toBe("schedule_done");
+    expect(stored[0]?.scheduleId).toBe("schedule-1");
+    expect(stored[0]?.sessionName).toBe("Nightly audit");
+  });
+
   it("ignores new activity for silenced sessions", () => {
     useAppStore.getState().setSessionSilenced("s1", true);
 

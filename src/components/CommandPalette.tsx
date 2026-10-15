@@ -44,7 +44,10 @@ import {
 import { suggestDefaultSessionName } from "../lib/sessionName";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
-import type { SessionNotificationKind } from "../lib/types";
+import type {
+  SessionNotification,
+  SessionNotificationKind,
+} from "../lib/types";
 import { showRemovalOutcomeIssues } from "../lib/operationToasts";
 
 interface CommandPaletteProps {
@@ -253,10 +256,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     close();
   }
 
-  function handleOpenActivity(notificationId: string, sessionId: string) {
-    const state = useAppStore.getState();
-    state.markSessionNotificationRead(notificationId);
-    state.openSessionSurface(sessionId, { centerInCanvas: true });
+  function handleOpenActivity(notification: SessionNotification) {
+    useAppStore.getState().openSessionNotification(notification);
     close();
   }
 
@@ -493,9 +494,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               <Command.Item
                 key={`activity-${notification.id}`}
                 value={`activity ${notification.projectName} ${notification.sessionName} ${notification.kind}`}
-                onSelect={() =>
-                  handleOpenActivity(notification.id, notification.sessionId)
-                }
+                onSelect={() => handleOpenActivity(notification)}
                 keywords={[
                   notification.projectName,
                   notification.sessionName,

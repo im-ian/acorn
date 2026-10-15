@@ -1953,6 +1953,7 @@
       "modeForcedByBackground": "バックグラウンドのスケジュールは常にワンショットで実行されます。",
       "state": {
         "success": "成功",
+        "starting": "開始中",
         "failed": "失敗",
         "running": "実行中",
         "ended": "終了"

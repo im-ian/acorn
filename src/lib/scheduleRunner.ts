@@ -229,9 +229,16 @@ export async function launchScheduleRun(
         true,
         "terminal",
       );
-      const storeError = useAppStore.getState().consumeError();
-      if (!created || storeError) {
-        error = storeError ?? "failed to create the scheduled session";
+      // `createSession` returns null on failure and sets the store error. The
+      // return value is the only signal that belongs to *this* call: the error
+      // is global, and anything else failing during the awaited create (a
+      // concurrent refresh, a status probe, a removal) would otherwise be
+      // recorded as this run's failure and skip typing the prompt — leaving a
+      // real session sitting at a bare shell.
+      if (!created) {
+        error =
+          useAppStore.getState().consumeError() ??
+          "failed to create the scheduled session";
       } else {
         sessionId = created.id;
         worktreePath = created.worktree_path;
@@ -320,6 +327,51 @@ export function buildScheduleRunNotification(input: {
     repoPath: input.repoPath,
     createdAt: input.createdAt,
   };
+}
+
+/**
+ * Remove the hidden sessions owned by run records that are about to be dropped.
+ *
+ * A background run is only reachable through its run record: `reapFinishedBack
+ * groundSessions` finds it via `runs[].session_id`, and the board's only reveal
+ * path is that row's button. Drop the record first and the session is left
+ * flagged background — invisible in the sidebar, no tab, never reaped — holding
+ * a live daemon PTY nobody can see or stop. Every path that removes records
+ * calls this before it does.
+ */
+export function backgroundSessionIdsForRuns(
+  runs: readonly ScheduleRun[],
+  backgroundSessionIds: Record<string, true>,
+): string[] {
+  const ids: string[] = [];
+  for (const run of runs) {
+    const sessionId = run.session_id;
+    if (!sessionId) continue;
+    if (!backgroundSessionIds[sessionId]) continue;
+    if (ids.includes(sessionId)) continue;
+    ids.push(sessionId);
+  }
+  return ids;
+}
+
+export async function releaseBackgroundSessionsForRuns(
+  runs: readonly ScheduleRun[],
+): Promise<void> {
+  const ids = backgroundSessionIdsForRuns(
+    runs,
+    useAppStore.getState().backgroundSessionIds,
+  );
+  for (const sessionId of ids) {
+    try {
+      await useAppStore.getState().removeSession(sessionId, false);
+    } catch (cause) {
+      console.debug(
+        "[schedules] releasing a hidden session failed",
+        sessionId,
+        cause,
+      );
+    }
+  }
 }
 
 let scheduleNotificationSeq = 0;

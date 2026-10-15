@@ -1953,6 +1953,7 @@
       "modeForcedByBackground": "A background schedule always runs one-shot.",
       "state": {
         "success": "SUCCESS",
+        "starting": "STARTING",
         "failed": "FAILED",
         "running": "RUNNING",
         "ended": "ENDED"

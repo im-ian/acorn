@@ -1953,6 +1953,7 @@
       "modeForcedByBackground": "백그라운드 스케줄은 항상 일회성으로 실행됩니다.",
       "state": {
         "success": "성공",
+        "starting": "시작 중",
         "failed": "실패",
         "running": "실행 중",
         "ended": "종료"

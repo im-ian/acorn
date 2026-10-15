@@ -4815,14 +4815,14 @@ function SidebarActivityRow({
   notification: SessionNotification;
 }) {
   const t = useTranslation();
-  const openSessionSurface = useAppStore((s) => s.openSessionSurface);
-  const markRead = useAppStore((s) => s.markSessionNotificationRead);
+  const openSessionNotification = useAppStore(
+    (s) => s.openSessionNotification,
+  );
   const dismiss = useAppStore((s) => s.dismissSessionNotification);
   const unread = !notification.readAt;
 
   const openSession = () => {
-    markRead(notification.id);
-    openSessionSurface(notification.sessionId, { centerInCanvas: true });
+    openSessionNotification(notification);
   };
 
   return (
@@ -4887,6 +4887,7 @@ function SidebarActivityRow({
 
 function sidebarActivityDotTone(kind: SessionNotificationKind): StatusTone {
   if (kind === "errored") return "danger";
+  if (kind === "schedule_done") return "success";
   return "warning";
 }
 

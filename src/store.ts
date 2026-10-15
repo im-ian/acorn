@@ -254,7 +254,8 @@ function normalizeSessionNotificationKind(
 ): SessionNotificationKind | null {
   if (
     value === "waiting_for_input" ||
-    value === "errored"
+    value === "errored" ||
+    value === "schedule_done"
   ) {
     return value;
   }
@@ -307,6 +308,9 @@ function normalizeSessionNotification(
     repoPath,
     createdAt,
     ...(typeof raw.readAt === "string" ? { readAt: raw.readAt } : {}),
+    // Schedule notifications route to a board rather than to a session, which
+    // has usually been reaped by the time one is clicked.
+    ...(typeof raw.scheduleId === "string" ? { scheduleId: raw.scheduleId } : {}),
   };
 }
 
@@ -713,6 +717,11 @@ interface AppStateModel {
   ) => void;
   /** Open a work summary tab for the current session or a provided worktree. */
   openWorkSummaryTab: (scope?: WorkSummaryTabScope) => Promise<void>;
+  /**
+   * Open whatever a notification points at. Schedule notifications route to a
+   * board because their session is reaped before the notification is posted.
+   */
+  openSessionNotification: (notification: SessionNotification) => void;
   /** Open the board tab for one project schedule in the focused pane. */
   openScheduleTab: (input: {
     repoPath: string;
@@ -4877,7 +4886,27 @@ export const useAppStore = create<AppStateModel>()(
     }
   },
 
+  openSessionNotification(notification) {
+    get().markSessionNotificationRead(notification.id);
+    if (notification.scheduleId) {
+      get().openScheduleTab({
+        repoPath: notification.repoPath,
+        scheduleId: notification.scheduleId,
+        title: notification.sessionName,
+      });
+      return;
+    }
+    get().openSessionSurface(notification.sessionId, { centerInCanvas: true });
+  },
+
   openScheduleTab(input) {
+    // A notification can be clicked while another project is focused, and the
+    // board carries its own `repoPath` — opening it into the focused pane would
+    // put project B's board inside project A's workspace. `openSessionSurface`,
+    // the path this replaces for schedule notifications, switches first too.
+    if (get().activeProject !== input.repoPath) {
+      get().setActiveProject(input.repoPath);
+    }
     set((s) => {
       const workspaceId = activeWorkspaceId(s);
       if (!workspaceId) return s;

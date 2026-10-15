@@ -14,6 +14,7 @@ import { useDialogShortcuts } from "../lib/dialog";
 import {
   launchScheduleRun,
   notifySchedulesChanged,
+  releaseBackgroundSessionsForRuns,
   SCHEDULE_RUN_POLL_MS,
 } from "../lib/scheduleRunner";
 import {
@@ -147,6 +148,8 @@ export function ScheduleRunsView({ tab }: { tab: ScheduleWorkspaceTab }) {
   async function deleteRun(run: ScheduleRun) {
     if (!schedule) return;
     try {
+      // Before the record goes, or its hidden session becomes unreachable.
+      await releaseBackgroundSessionsForRuns([run]);
       const next = await api.deleteProjectScheduleRun(
         tab.repoPath,
         schedule.id,
@@ -353,6 +356,7 @@ export function ScheduleRunsView({ tab }: { tab: ScheduleWorkspaceTab }) {
         onCancel={() => setClearing(false)}
         onConfirm={async () => {
           try {
+            await releaseBackgroundSessionsForRuns(schedule.runs);
             await api.clearProjectScheduleRuns(tab.repoPath, schedule.id);
             setSummaryRun(null);
             setRevision((current) => current + 1);
@@ -374,6 +378,7 @@ export function ScheduleRunsView({ tab }: { tab: ScheduleWorkspaceTab }) {
         onCancel={() => setDeleting(false)}
         onConfirm={async () => {
           try {
+            await releaseBackgroundSessionsForRuns(schedule.runs);
             await api.deleteProjectSchedule(tab.repoPath, schedule.id);
             notifySchedulesChanged();
             // Nothing left for this tab to show.
