@@ -41,9 +41,15 @@ import type {
   ProjectSettingsRecord,
   ProjectWorktree,
   EnsuredProjectWorktree,
+  ProjectSchedule,
   ProjectTask,
   ProjectTaskPatch,
   PrStateFilter,
+  ScheduleMode,
+  ScheduleRunInput,
+  ScheduleRunPatch,
+  ScheduleTrigger,
+  ScheduleUpdate,
   PullRequestDetailListing,
   PullRequestDiffListing,
   PullRequestListing,
@@ -1018,6 +1024,84 @@ export const api = {
       commentId,
     });
   },
+  listProjectSchedules(repoPath: string): Promise<ProjectSchedule[]> {
+    return invoke<ProjectSchedule[]>("list_project_schedules", { repoPath });
+  },
+  createProjectSchedule(
+    repoPath: string,
+    name: string,
+    prompt: string,
+    trigger: ScheduleTrigger,
+    mode: ScheduleMode,
+    background: boolean,
+  ): Promise<ProjectSchedule> {
+    return invoke<ProjectSchedule>("create_project_schedule", {
+      repoPath,
+      name,
+      prompt,
+      trigger,
+      mode,
+      background,
+    });
+  },
+  updateProjectSchedule(
+    repoPath: string,
+    id: string,
+    patch: ScheduleUpdate,
+  ): Promise<ProjectSchedule> {
+    return invoke<ProjectSchedule>("update_project_schedule", {
+      repoPath,
+      id,
+      patch,
+    });
+  },
+  deleteProjectSchedule(repoPath: string, id: string): Promise<void> {
+    return invoke<void>("delete_project_schedule", { repoPath, id });
+  },
+  updateProjectScheduleRun(
+    repoPath: string,
+    id: string,
+    runId: string,
+    patch: ScheduleRunPatch,
+  ): Promise<ProjectSchedule> {
+    return invoke<ProjectSchedule>("update_project_schedule_run", {
+      repoPath,
+      id,
+      runId,
+      patch,
+    });
+  },
+  deleteProjectScheduleRun(
+    repoPath: string,
+    id: string,
+    runId: string,
+  ): Promise<ProjectSchedule> {
+    return invoke<ProjectSchedule>("delete_project_schedule_run", {
+      repoPath,
+      id,
+      runId,
+    });
+  },
+  clearProjectScheduleRuns(
+    repoPath: string,
+    id: string,
+  ): Promise<ProjectSchedule> {
+    return invoke<ProjectSchedule>("clear_project_schedule_runs", {
+      repoPath,
+      id,
+    });
+  },
+  recordProjectScheduleRun(
+    repoPath: string,
+    id: string,
+    run: ScheduleRunInput,
+  ): Promise<ProjectSchedule> {
+    return invoke<ProjectSchedule>("record_project_schedule_run", {
+      repoPath,
+      id,
+      run,
+    });
+  },
   detectSessionStatuses(
     ids: string[],
     syncAgentSessionTitles: boolean,
@@ -1376,6 +1460,21 @@ export const api = {
    * with `\n` if they want them to execute; otherwise the bytes land
    * on the shell's line buffer untouched.
    */
+  /**
+   * Start a session's shell. `Terminal` owns this for sessions on screen and
+   * passes its own xterm geometry; headless callers (background schedule runs)
+   * give a nominal size because nothing renders the output. With the daemon
+   * killswitch on, the backend routes the PTY to `acornd`, which is what keeps
+   * the shell alive while no terminal is mounted.
+   */
+  ptySpawn(
+    sessionId: string,
+    cwd: string,
+    cols: number,
+    rows: number,
+  ): Promise<void> {
+    return invoke<void>("pty_spawn", { sessionId, cwd, cols, rows });
+  },
   ptyWrite(sessionId: string, data: string): Promise<void> {
     return enqueuePtyWrite(sessionId, data);
   },

@@ -20,7 +20,10 @@ export type AgentStatusSource =
   | "transcript_fallback"
   | "process_fallback";
 
-export type SessionNotificationKind = "waiting_for_input" | "errored";
+export type SessionNotificationKind =
+  | "waiting_for_input"
+  | "errored"
+  | "schedule_done";
 
 export interface SessionNotification {
   id: string;
@@ -33,6 +36,12 @@ export interface SessionNotification {
   repoPath: string;
   createdAt: string;
   readAt?: string;
+  /**
+   * Set for schedule-run notifications. A background run's session is reaped
+   * once it finishes, so these open the schedule's board instead of a session
+   * that is no longer there.
+   */
+  scheduleId?: string;
 }
 
 /**
@@ -334,6 +343,12 @@ export interface AgentProviderDefinition<
   cliCommand: string;
   /** Flag that precedes an initial interactive prompt. Omit for a positional query. */
   startPromptFlag?: string;
+  /**
+   * Args between the CLI and a positional prompt for the provider's print /
+   * non-interactive form — the `-p` family. Mirrors `oneshotHint`, which is
+   * the same invocation written out for Settings.
+   */
+  oneshotPromptArgs: readonly string[];
   icon: AgentProviderIconMetadata;
   capabilities: readonly AgentProviderCapability[];
   hooks: AgentProviderHookMetadata;
@@ -818,6 +833,72 @@ export interface ProjectTaskPatch {
   status?: ProjectTaskStatus;
   sessionId?: string | null;
   setSessionId?: boolean;
+}
+
+/** Recurrence for a project schedule. `time` is local wall-clock `HH:MM`. */
+export type ScheduleTrigger =
+  | { kind: "interval"; every_minutes: number }
+  | { kind: "daily"; time: string }
+  | { kind: "weekly"; weekday: number; time: string };
+
+/**
+ * `session` leaves an interactive agent in the run's terminal; `oneshot` types
+ * the provider's print (`-p`) form, which answers and exits.
+ */
+export type ScheduleMode = "session" | "oneshot";
+
+export interface ScheduleRun {
+  id: string;
+  started_at: string;
+  session_id: string | null;
+  worktree_path: string | null;
+  /** Where the run's prompt told the agent to write its work summary. */
+  summary_path: string | null;
+  /** Whether that file exists. Computed by the backend on every read. */
+  summary_ready: boolean;
+  error: string | null;
+}
+
+export interface ProjectSchedule {
+  id: string;
+  name: string;
+  prompt: string;
+  trigger: ScheduleTrigger;
+  mode: ScheduleMode;
+  /** Run without placing the session in the workspace. Needs the daemon. */
+  background: boolean;
+  created_at: string;
+  /** When a run last happened, for display. Manual runs move this. */
+  last_run_at: string | null;
+  /** The last slot the timer consumed. Only the scheduler advances it. */
+  last_slot_at: string | null;
+  runs: ScheduleRun[];
+}
+
+/** Editable schedule fields. Omitted fields keep their current value. */
+export interface ScheduleUpdate {
+  name?: string;
+  prompt?: string;
+  trigger?: ScheduleTrigger;
+  mode?: ScheduleMode;
+  background?: boolean;
+}
+
+/** What a launch learned after its slot was already claimed. */
+export interface ScheduleRunPatch {
+  sessionId: string | null;
+  worktreePath: string | null;
+  error: string | null;
+}
+
+export interface ScheduleRunInput {
+  id: string;
+  /** The slot a scheduled run consumes. `null` for a manual run. */
+  slotAt: string | null;
+  sessionId: string | null;
+  worktreePath: string | null;
+  summaryPath: string | null;
+  error: string | null;
 }
 
 export type PrStateFilter = "open" | "closed" | "merged" | "all";
