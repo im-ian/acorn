@@ -1046,7 +1046,8 @@
       "itemTitle": "{project} · {session}",
       "kind": {
         "waitingForInput": "入力を待っています",
-        "errored": "エラー"
+        "errored": "エラー",
+        "scheduleDone": "スケジュール完了"
       },
       "actions": {
         "markAllRead": "すべて既読としてマークする",
@@ -1432,7 +1433,8 @@
       "itemTitle": "{project} · {session}",
       "kind": {
         "waitingForInput": "入力を待っています",
-        "errored": "エラー"
+        "errored": "エラー",
+        "scheduleDone": "スケジュール完了"
       },
       "actions": {
         "markAllRead": "すべて既読としてマークする",
@@ -1682,6 +1684,7 @@
       "chatSession": "チャットセッション",
       "goalSession": "Loop セッション",
       "workSummary": "作品概要",
+      "schedule": "スケジュールボード",
       "generatingSessionTitle": "セッションタイトルの生成",
       "notificationsSilenced": "通知をサイレントにしました",
       "closeSession": "セッションを閉じる",
@@ -1841,7 +1844,8 @@
       "activity": "アクティビティ",
       "history": "歴史",
       "actions": "アクション",
-      "tasks": "タスク"
+      "tasks": "タスク",
+      "schedules": "スケジュール"
     },
     "tasks": {
       "new": "新規",
@@ -1879,6 +1883,80 @@
         "in_review": "レビュー",
         "done": "完了",
         "canceled": "取り消し"
+      }
+    },
+    "schedules": {
+      "new": "新規",
+      "refresh": "再読み込み",
+      "empty": "スケジュールはまだありません",
+      "loading": "スケジュールを読み込み中…",
+      "loadFailed": "スケジュールを読み込めませんでした。",
+      "save": "保存",
+      "cancel": "キャンセル",
+      "delete": "削除",
+      "newTitle": "新しいスケジュール",
+      "name": "名前",
+      "prompt": "エージェントへのプロンプト",
+      "promptHint": "スケジュール実行時にエージェントへ送信されます。",
+      "trigger": "繰り返し",
+      "everyPrefix": "毎",
+      "minutes": "分",
+      "time": "時刻",
+      "weekday": "曜日",
+      "nextRun": "次回",
+      "lastRun": "前回の実行",
+      "neverRun": "未実行",
+      "runNow": "今すぐ実行",
+      "openBoard": "ボードを開く",
+      "runs": "実行履歴",
+      "noRuns": "実行履歴はまだありません。",
+      "runFailed": "起動に失敗",
+      "resume": "セッションを開く",
+      "summary": "サマリー",
+      "notFound": "このスケジュールは存在しません。",
+      "saveFailed": "スケジュールを保存できませんでした。",
+      "deleteFailed": "スケジュールを削除できませんでした。",
+      "runFailedToast": "スケジュールを開始できませんでした。",
+      "justNow": "たった今",
+      "mode": "実行方式",
+      "modeSession": "対話型セッション",
+      "modeSessionHint": "エージェントが実行ターミナルに残り、会話を続けられます。",
+      "modeOneshot": "ワンショット (-p)",
+      "modeOneshotHint": "エージェントが一度応答して終了し、シェルだけが残ります。",
+      "summaryTitle": "作業サマリー",
+      "summaryPending": "この実行の作業サマリーはまだ書かれていません。",
+      "summaryFailed": "作業サマリーを読み込めませんでした。",
+      "close": "閉じる",
+      "clearRuns": "履歴を削除",
+      "clearRunsTitle": "このスケジュールの実行履歴を削除しますか?",
+      "clearRunsBody": "すべての実行履歴と、その際に書かれた作業サマリーのファイルが削除されます。スケジュール自体は動き続けます。",
+      "clearRunsConfirm": "削除",
+      "clearRunsFailed": "実行履歴を削除できませんでした。",
+      "retention": "古い実行履歴とサマリーファイルは自動で整理されます。",
+      "background": "バックグラウンドで実行",
+      "backgroundHint": "タブは開かず、完了するとセッションも片付けられます — 残るのは作業サマリーだけです。クローリング、リンク検査、依存関係スキャンのように結果だけを報告する単発の作業に向いています。常にワンショットで実行されます。",
+      "backgroundDaemonOff": "acornd デーモンが必要ですが、設定 → バックグラウンドセッションで無効です。",
+      "backgroundBadge": "バックグラウンド",
+      "deleteRun": "この実行履歴を削除",
+      "deleteRunFailed": "実行履歴を削除できませんでした。",
+      "edit": "編集",
+      "editTitle": "スケジュールを編集",
+      "kind": {
+        "interval": "間隔",
+        "daily": "毎日",
+        "weekly": "毎週"
+      },
+      "deleteTitle": "このスケジュールを削除しますか?",
+      "deleteBody": "スケジュール、実行履歴、作業サマリーのファイルがすべて削除されます。すでに開始されたセッションはそのまま残ります。",
+      "copySummary": "コピー",
+      "copiedSummary": "コピーしました",
+      "modeForcedByBackground": "バックグラウンドのスケジュールは常にワンショットで実行されます。",
+      "state": {
+        "success": "成功",
+        "starting": "開始中",
+        "failed": "失敗",
+        "running": "実行中",
+        "ended": "終了"
       }
     },
     "empty": {
@@ -2800,7 +2878,8 @@
     "activity": {
       "kind": {
         "waitingForInput": "入力を待っています",
-        "errored": "エラー"
+        "errored": "エラー",
+        "scheduleDone": "スケジュール完了"
       }
     }
   },

@@ -93,6 +93,7 @@ import { api, type RemovalOutcome } from "./lib/api";
 import {
   listSuccessfulSessionResumes,
   resetSuccessfulSessionResumesForTests,
+  selectWorkspaceSessions,
   useAppStore,
 } from "./store";
 import { defaultTabByGroup } from "./lib/rightPanelGroups";
@@ -235,6 +236,7 @@ function resetStore(): void {
       pendingTerminalInput: {},
       sessionNotifications: [],
       silencedSessionIds: {},
+      backgroundSessionIds: {},
       multiInputEnabled: false,
       loading: false,
       error: null,
@@ -403,7 +405,114 @@ describe("needs-input navigation", () => {
   });
 });
 
+describe("backgroundSessionIds", () => {
+  it("keeps a background session out of every pane", async () => {
+    resetStore();
+    await seed(
+      [project(REPO_A, 0)],
+      [session("s1", REPO_A), session("bg", REPO_A)],
+    );
+    expect(
+      useAppStore.getState().panes.root?.tabIds,
+    ).toEqual(expect.arrayContaining(["s1", "bg"]));
+
+    useAppStore.getState().markSessionBackground("bg");
+    expect(useAppStore.getState().panes.root?.tabIds).toEqual(["s1"]);
+
+    // A later refresh must not hand the tab back.
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    mockApi.listSessions.mockResolvedValueOnce([
+      session("s1", REPO_A),
+      session("bg", REPO_A),
+    ]);
+    await useAppStore.getState().refreshAll();
+    expect(useAppStore.getState().panes.root?.tabIds).toEqual(["s1"]);
+  });
+
+  it("gives the session a tab once it is selected", async () => {
+    resetStore();
+    await seed([project(REPO_A, 0)], [session("bg", REPO_A)]);
+    useAppStore.getState().markSessionBackground("bg");
+    expect(useAppStore.getState().panes.root?.tabIds).toEqual([]);
+
+    useAppStore.getState().openSessionSurface("bg");
+
+    expect(useAppStore.getState().backgroundSessionIds).toEqual({});
+    expect(useAppStore.getState().panes.root?.tabIds).toEqual(["bg"]);
+    expect(useAppStore.getState().activeSessionId).toBe("bg");
+  });
+
+  it("keeps the needs-input hotkey out of a background run", async () => {
+    resetStore();
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("visible", REPO_A, { status: "waiting_for_input" }),
+        session("bg", REPO_A, { status: "waiting_for_input" }),
+      ],
+    );
+    useAppStore.getState().markSessionBackground("bg");
+
+    // `bg` is the newest waiting session, so without the guard the hotkey would
+    // pull it on screen — and `selectTab` would have given it a tab for good.
+    expect(useAppStore.getState().selectLatestNeedsInputSession()).toBe(true);
+    expect(useAppStore.getState().activeSessionId).toBe("visible");
+    expect(useAppStore.getState().backgroundSessionIds).toEqual({ bg: true });
+    expect(useAppStore.getState().panes.root?.tabIds).toEqual(["visible"]);
+  });
+
+  it("hides a background run from the workspace session list", async () => {
+    resetStore();
+    await seed(
+      [project(REPO_A, 0)],
+      [session("visible", REPO_A), session("bg", REPO_A)],
+    );
+    useAppStore.getState().markSessionBackground("bg");
+
+    const state = useAppStore.getState();
+    expect(selectWorkspaceSessions(state).map((item) => item.id)).toEqual([
+      "visible",
+    ]);
+    // Same array back when nothing is hidden, so the common case allocates
+    // nothing and triggers no extra renders.
+    expect(selectWorkspaceSessions({ ...state, backgroundSessionIds: {} })).toBe(
+      state.sessions,
+    );
+  });
+
+  it("drops the flag when the session is gone", async () => {
+    resetStore();
+    await seed([project(REPO_A, 0)], [session("bg", REPO_A)]);
+    useAppStore.getState().markSessionBackground("bg");
+
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    mockApi.listSessions.mockResolvedValueOnce([]);
+    await useAppStore.getState().refreshAll();
+
+    expect(useAppStore.getState().backgroundSessionIds).toEqual({});
+  });
+});
+
 describe("sessionNotifications", () => {
+  it("keeps a schedule notification and its board target", () => {
+    // Regression: the kind normalizer dropped `schedule_done` outright and the
+    // normalizer never copied `scheduleId`, so a finished background run
+    // produced no inbox entry and its click target was always undefined.
+    useAppStore.getState().addSessionNotification({
+      ...notification("n-sched", { sessionId: "s-reaped" }),
+      kind: "schedule_done",
+      status: "ready",
+      sessionName: "Nightly audit",
+      scheduleId: "schedule-1",
+    });
+
+    const stored = useAppStore.getState().sessionNotifications;
+    expect(stored.map((item) => item.id)).toEqual(["n-sched"]);
+    expect(stored[0]?.kind).toBe("schedule_done");
+    expect(stored[0]?.scheduleId).toBe("schedule-1");
+    expect(stored[0]?.sessionName).toBe("Nightly audit");
+  });
+
   it("ignores new activity for silenced sessions", () => {
     useAppStore.getState().setSessionSilenced("s1", true);
 

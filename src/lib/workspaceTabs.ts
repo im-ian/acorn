@@ -2,7 +2,11 @@ import type { WorkSummaryTokenBaseline } from "./workSummary";
 import { basename } from "./pathUtils";
 
 export type WorkspaceTabId = string;
-export type WorkspaceTabKind = "session" | "code" | "work-summary";
+export type WorkspaceTabKind =
+  | "session"
+  | "code"
+  | "work-summary"
+  | "schedule";
 export type WorkspaceTabLifecycle =
   | "ephemeral"
   | "restorable"
@@ -38,6 +42,12 @@ export interface WorkSummaryWorkspaceTab
   tokenBaseline?: WorkSummaryTokenBaseline;
 }
 
+/** Board for one project schedule: its recurrence plus its run history. */
+export interface ScheduleWorkspaceTab
+  extends WorkspaceTabBase<"schedule", "ephemeral"> {
+  scheduleId: string;
+}
+
 export interface CodeWorkspaceTabTarget {
   line: number;
   column?: number;
@@ -65,8 +75,12 @@ export interface CodeWorkspaceTabViewState {
 export type WorkspaceTab =
   | SessionWorkspaceTab
   | CodeWorkspaceTab
-  | WorkSummaryWorkspaceTab;
-export type FrontendWorkspaceTab = CodeWorkspaceTab | WorkSummaryWorkspaceTab;
+  | WorkSummaryWorkspaceTab
+  | ScheduleWorkspaceTab;
+export type FrontendWorkspaceTab =
+  | CodeWorkspaceTab
+  | WorkSummaryWorkspaceTab
+  | ScheduleWorkspaceTab;
 export type RestorableWorkspaceTab = Extract<
   WorkspaceTab,
   { lifecycle: "restorable" }
@@ -78,12 +92,14 @@ export type ProcessBackedWorkspaceTab = Extract<
 
 export const CODE_VIEWER_TAB_PREFIX = "code-viewer:";
 export const WORK_SUMMARY_TAB_PREFIX = "work-summary:";
+export const SCHEDULE_TAB_PREFIX = "schedule:";
 const LEGACY_VIEWER_TAB_PREFIX = "viewer:";
 
 export function isWorkspaceTabId(id: string): boolean {
   return (
     id.startsWith(CODE_VIEWER_TAB_PREFIX) ||
     id.startsWith(WORK_SUMMARY_TAB_PREFIX) ||
+    id.startsWith(SCHEDULE_TAB_PREFIX) ||
     id.startsWith(LEGACY_VIEWER_TAB_PREFIX)
   );
 }
@@ -154,6 +170,21 @@ export function makeWorkSummaryWorkspaceTab(input: {
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.tokenBaseline ? { tokenBaseline: input.tokenBaseline } : {}),
     title: input.title ?? "Work Summary",
+  };
+}
+
+export function makeScheduleWorkspaceTab(input: {
+  repoPath: string;
+  scheduleId: string;
+  title: string;
+}): ScheduleWorkspaceTab {
+  return {
+    id: `${SCHEDULE_TAB_PREFIX}${input.scheduleId}`,
+    kind: "schedule",
+    lifecycle: "ephemeral",
+    repoPath: input.repoPath,
+    scheduleId: input.scheduleId,
+    title: input.title,
   };
 }
 

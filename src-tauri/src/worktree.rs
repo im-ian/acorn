@@ -137,6 +137,13 @@ pub fn worktree_root(repo_path: &Path) -> PathBuf {
     repo_path.join(ACORN_DIR).join("worktrees")
 }
 
+/// Add the `.acorn/` ignore rule for a project that has never had a worktree
+/// created in it. Schedule run summaries land under `.acorn/`, and without
+/// this the first one shows up as an untracked file in the user's repository.
+pub fn ensure_acorn_dir_git_excluded(repo_path: &Path) -> AppResult<()> {
+    ensure_git_excluded(&ensure_repo(repo_path)?)
+}
+
 fn ensure_git_excluded(repo: &Repository) -> AppResult<()> {
     // A linked worktree's `Repository::path()` is its per-worktree admin
     // directory. Ignore rules live in the shared Git common directory, so use

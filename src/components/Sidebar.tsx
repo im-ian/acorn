@@ -66,7 +66,11 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useAppStore, type WorkspaceViewMode } from "../store";
+import {
+  selectWorkspaceSessions,
+  useAppStore,
+  type WorkspaceViewMode,
+} from "../store";
 import { openExternalUrlWithFeedback } from "../lib/externalOpener";
 import { pathsEqual } from "../lib/pathUtils";
 import {
@@ -415,7 +419,7 @@ export function Sidebar() {
   const t = useTranslation();
   const shortcuts = useSettings((s) => s.settings.shortcuts);
   const showToast = useToasts((s) => s.show);
-  const sessions = useAppStore((s) => s.sessions);
+  const sessions = useAppStore(selectWorkspaceSessions);
   const projects = useAppStore((s) => s.projects);
   const projectFolders = useAppStore((s) => s.projectFolders);
   const sessionFolderIds = useAppStore((s) => s.sessionFolderIds);
@@ -848,7 +852,7 @@ export function Sidebar() {
     const activeScope = (): SessionCreateScope | null => {
       const state = useAppStore.getState();
       return resolveActiveSessionScope({
-        sessions: state.sessions,
+        sessions: selectWorkspaceSessions(state),
         projects: state.projects,
         activeSessionId: state.activeSessionId,
         activeWorkspaceRepoPath: state.activeProject,
@@ -900,7 +904,7 @@ export function Sidebar() {
       const scope =
         requestedScope ??
         resolveActiveProjectSessionScope({
-          sessions: state.sessions,
+          sessions: selectWorkspaceSessions(state),
           projects: state.projects,
           activeSessionId: state.activeSessionId,
           activeWorkspaceRepoPath: state.activeProject,
@@ -928,7 +932,7 @@ export function Sidebar() {
       const scope =
         requestedScope ??
         resolveActiveProjectSessionScope({
-          sessions: state.sessions,
+          sessions: selectWorkspaceSessions(state),
           projects: state.projects,
           activeSessionId: state.activeSessionId,
           activeWorkspaceRepoPath: state.activeProject,
@@ -1242,22 +1246,25 @@ export function Sidebar() {
 
   function currentSessionDragSnapshot() {
     const state = useAppStore.getState();
+    // Must agree with what the sidebar rendered, or a drag resolves against
+    // rows the user cannot see.
+    const visible = selectWorkspaceSessions(state);
     const currentProjectGroups = buildProjectFolderGroups(
       state.projects,
-      state.sessions,
+      visible,
       state.projectFolders,
       state.sessionFolderIds,
     );
     const currentLocalWorkspaceGroups = buildLocalSessionFolderGroups(
       state.projects,
-      state.sessions,
+      visible,
       state.projectFolders,
       state.sessionFolderIds,
     );
     return {
-      sessions: state.sessions,
+      sessions: visible,
       projectGroups: currentProjectGroups,
-      localSessions: buildLocalSessions(state.sessions),
+      localSessions: buildLocalSessions(visible),
       allWorkspaceGroups: [
         ...currentProjectGroups,
         ...currentLocalWorkspaceGroups,
@@ -4600,6 +4607,7 @@ const SIDEBAR_ACTIVITY_KIND_KEYS: Record<
 > = {
   waiting_for_input: "sidebar.activity.kind.waitingForInput",
   errored: "sidebar.activity.kind.errored",
+  schedule_done: "sidebar.activity.kind.scheduleDone",
 };
 
 function SessionActivityInbox() {
@@ -4807,14 +4815,14 @@ function SidebarActivityRow({
   notification: SessionNotification;
 }) {
   const t = useTranslation();
-  const openSessionSurface = useAppStore((s) => s.openSessionSurface);
-  const markRead = useAppStore((s) => s.markSessionNotificationRead);
+  const openSessionNotification = useAppStore(
+    (s) => s.openSessionNotification,
+  );
   const dismiss = useAppStore((s) => s.dismissSessionNotification);
   const unread = !notification.readAt;
 
   const openSession = () => {
-    markRead(notification.id);
-    openSessionSurface(notification.sessionId, { centerInCanvas: true });
+    openSessionNotification(notification);
   };
 
   return (
@@ -4879,6 +4887,7 @@ function SidebarActivityRow({
 
 function sidebarActivityDotTone(kind: SessionNotificationKind): StatusTone {
   if (kind === "errored") return "danger";
+  if (kind === "schedule_done") return "success";
   return "warning";
 }
 

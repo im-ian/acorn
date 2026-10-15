@@ -17,7 +17,8 @@ export type RightTab =
   | "jiraIssues"
   | "todos"
   | "history"
-  | "tasks";
+  | "tasks"
+  | "schedules";
 
 export const RIGHT_GROUPS: ReadonlyArray<RightGroup> = [
   "workspace",
@@ -29,7 +30,7 @@ export const RIGHT_GROUPS: ReadonlyArray<RightGroup> = [
 ];
 
 const TABS_BY_GROUP: Record<RightGroup, ReadonlyArray<RightTab>> = {
-  workspace: ["tasks"],
+  workspace: ["tasks", "schedules"],
   code: ["files", "staged", "commits"],
   github: ["prs", "issues", "actions"],
   linear: ["linearIssues"],

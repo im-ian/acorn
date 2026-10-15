@@ -26,6 +26,7 @@ mod linear;
 mod notifications;
 mod persistence;
 mod power_assertion;
+mod project_schedules;
 mod project_settings;
 mod project_tasks;
 pub mod pty_env;
@@ -866,6 +867,14 @@ pub fn run() {
             commands::delete_project_task,
             commands::add_project_task_comment,
             commands::delete_project_task_comment,
+            commands::list_project_schedules,
+            commands::create_project_schedule,
+            commands::update_project_schedule,
+            commands::delete_project_schedule,
+            commands::record_project_schedule_run,
+            commands::update_project_schedule_run,
+            commands::delete_project_schedule_run,
+            commands::clear_project_schedule_runs,
             commands::reorder_projects,
             commands::reorder_sessions,
             commands::list_commits,

@@ -1046,7 +1046,8 @@
       "itemTitle": "{project}·{session}",
       "kind": {
         "waitingForInput": "等待输入",
-        "errored": "错误"
+        "errored": "错误",
+        "scheduleDone": "计划已完成"
       },
       "actions": {
         "markAllRead": "标记全部已读",
@@ -1432,7 +1433,8 @@
       "itemTitle": "{project}·{session}",
       "kind": {
         "waitingForInput": "等待输入",
-        "errored": "错误"
+        "errored": "错误",
+        "scheduleDone": "计划已完成"
       },
       "actions": {
         "markAllRead": "标记全部已读",
@@ -1682,6 +1684,7 @@
       "chatSession": "聊天会话",
       "goalSession": "Loop 会话",
       "workSummary": "工作总结",
+      "schedule": "计划看板",
       "generatingSessionTitle": "生成会话标题",
       "notificationsSilenced": "通知已静音",
       "closeSession": "关闭会话",
@@ -1841,7 +1844,8 @@
       "activity": "活动",
       "history": "历史记录",
       "actions": "操作",
-      "tasks": "任务"
+      "tasks": "任务",
+      "schedules": "计划"
     },
     "tasks": {
       "new": "新建",
@@ -1879,6 +1883,80 @@
         "in_review": "待审阅",
         "done": "完成",
         "canceled": "已取消"
+      }
+    },
+    "schedules": {
+      "new": "新建",
+      "refresh": "刷新",
+      "empty": "还没有计划",
+      "loading": "正在加载计划…",
+      "loadFailed": "无法加载计划。",
+      "save": "保存",
+      "cancel": "取消",
+      "delete": "删除",
+      "newTitle": "新建计划",
+      "name": "名称",
+      "prompt": "代理提示词",
+      "promptHint": "计划运行时发送给代理。",
+      "trigger": "重复",
+      "everyPrefix": "每",
+      "minutes": "分钟",
+      "time": "时间",
+      "weekday": "星期",
+      "nextRun": "下次",
+      "lastRun": "上次运行",
+      "neverRun": "尚未运行",
+      "runNow": "立即运行",
+      "openBoard": "打开看板",
+      "runs": "运行记录",
+      "noRuns": "还没有运行记录。",
+      "runFailed": "启动失败",
+      "resume": "打开会话",
+      "summary": "摘要",
+      "notFound": "该计划已不存在。",
+      "saveFailed": "无法保存计划。",
+      "deleteFailed": "无法删除计划。",
+      "runFailedToast": "无法启动计划。",
+      "justNow": "刚刚",
+      "mode": "运行方式",
+      "modeSession": "交互式会话",
+      "modeSessionHint": "代理留在运行终端中，可以继续对话。",
+      "modeOneshot": "一次性 (-p)",
+      "modeOneshotHint": "代理回答一次后退出，只留下 shell。",
+      "summaryTitle": "工作摘要",
+      "summaryPending": "本次运行的工作摘要尚未写入。",
+      "summaryFailed": "无法读取工作摘要。",
+      "close": "关闭",
+      "clearRuns": "清除记录",
+      "clearRunsTitle": "要清除此计划的运行记录吗？",
+      "clearRunsBody": "所有运行记录以及当时写入的工作摘要文件都会被删除。计划本身会继续运行。",
+      "clearRunsConfirm": "清除",
+      "clearRunsFailed": "无法清除运行记录。",
+      "retention": "较早的运行记录及其摘要文件会自动清理。",
+      "background": "在后台运行",
+      "backgroundHint": "不会打开标签页，运行结束后会话也会被清理 — 只留下工作摘要。适合只需汇报结果的一次性任务：爬取、链接检查、依赖扫描。始终以一次性方式运行。",
+      "backgroundDaemonOff": "需要 acornd 守护进程，但它在设置 → 后台会话中已关闭。",
+      "backgroundBadge": "后台",
+      "deleteRun": "删除此运行记录",
+      "deleteRunFailed": "无法删除运行记录。",
+      "edit": "编辑",
+      "editTitle": "编辑计划",
+      "kind": {
+        "interval": "间隔",
+        "daily": "每天",
+        "weekly": "每周"
+      },
+      "deleteTitle": "要删除此计划吗？",
+      "deleteBody": "计划、运行记录和工作摘要文件都会被删除。已启动的会话会保留。",
+      "copySummary": "复制",
+      "copiedSummary": "已复制",
+      "modeForcedByBackground": "后台计划始终以一次性方式运行。",
+      "state": {
+        "success": "成功",
+        "starting": "启动中",
+        "failed": "失败",
+        "running": "运行中",
+        "ended": "已结束"
       }
     },
     "empty": {
@@ -2800,7 +2878,8 @@
     "activity": {
       "kind": {
         "waitingForInput": "等待输入",
-        "errored": "错误"
+        "errored": "错误",
+        "scheduleDone": "计划已完成"
       }
     }
   },

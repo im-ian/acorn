@@ -1046,7 +1046,8 @@
       "itemTitle": "{project} · {session}",
       "kind": {
         "waitingForInput": "Waiting for input",
-        "errored": "Error"
+        "errored": "Error",
+        "scheduleDone": "Schedule finished"
       },
       "actions": {
         "markAllRead": "Mark all read",
@@ -1432,7 +1433,8 @@
       "itemTitle": "{project} · {session}",
       "kind": {
         "waitingForInput": "Waiting for input",
-        "errored": "Error"
+        "errored": "Error",
+        "scheduleDone": "Schedule finished"
       },
       "actions": {
         "markAllRead": "Mark all read",
@@ -1682,6 +1684,7 @@
       "chatSession": "chat session",
       "goalSession": "Loop session",
       "workSummary": "work summary",
+      "schedule": "schedule board",
       "generatingSessionTitle": "Generating session title",
       "notificationsSilenced": "Notifications silenced",
       "closeSession": "Close session",
@@ -1841,7 +1844,8 @@
       "activity": "Activity",
       "history": "History",
       "actions": "Actions",
-      "tasks": "Tasks"
+      "tasks": "Tasks",
+      "schedules": "Schedules"
     },
     "tasks": {
       "new": "New",
@@ -1879,6 +1883,80 @@
         "in_review": "In review",
         "done": "Done",
         "canceled": "Canceled"
+      }
+    },
+    "schedules": {
+      "new": "New",
+      "refresh": "Refresh",
+      "empty": "No schedules yet",
+      "loading": "Loading schedules…",
+      "loadFailed": "Couldn't load schedules.",
+      "save": "Save",
+      "cancel": "Cancel",
+      "delete": "Delete",
+      "newTitle": "New schedule",
+      "name": "Name",
+      "prompt": "Agent prompt",
+      "promptHint": "Sent to the agent when the schedule runs.",
+      "trigger": "Repeat",
+      "everyPrefix": "Every",
+      "minutes": "Minutes",
+      "time": "Time",
+      "weekday": "Day",
+      "nextRun": "Next",
+      "lastRun": "Last run",
+      "neverRun": "Never run",
+      "runNow": "Run now",
+      "openBoard": "Open board",
+      "runs": "Runs",
+      "noRuns": "No runs yet.",
+      "runFailed": "Launch failed",
+      "resume": "Resume session",
+      "summary": "Summary",
+      "notFound": "This schedule no longer exists.",
+      "saveFailed": "Couldn't save the schedule.",
+      "deleteFailed": "Couldn't delete the schedule.",
+      "runFailedToast": "Couldn't start the schedule.",
+      "justNow": "just now",
+      "mode": "Run as",
+      "modeSession": "Interactive session",
+      "modeSessionHint": "The agent stays open in the run's terminal so you can pick the conversation up.",
+      "modeOneshot": "One-shot (-p)",
+      "modeOneshotHint": "The agent answers once and exits, leaving only the shell.",
+      "summaryTitle": "Work summary",
+      "summaryPending": "The agent hasn't written a summary for this run yet.",
+      "summaryFailed": "Couldn't read the work summary.",
+      "close": "Close",
+      "clearRuns": "Clear history",
+      "clearRunsTitle": "Clear this schedule's run history?",
+      "clearRunsBody": "Every run and the work summary files they wrote are deleted. The schedule itself keeps running.",
+      "clearRunsConfirm": "Clear",
+      "clearRunsFailed": "Couldn't clear the run history.",
+      "retention": "Older runs and their summary files are removed automatically.",
+      "background": "Run in the background",
+      "backgroundHint": "No tab opens and the run is removed when it finishes — only its work summary comes back. Best for one-off jobs that just report: crawling, link checks, dependency scans. Always runs one-shot.",
+      "backgroundDaemonOff": "Needs the acornd daemon, which is off in Settings → Background sessions.",
+      "backgroundBadge": "background",
+      "deleteRun": "Delete this run",
+      "deleteRunFailed": "Couldn't delete the run.",
+      "edit": "Edit",
+      "editTitle": "Edit schedule",
+      "kind": {
+        "interval": "Interval",
+        "daily": "Daily",
+        "weekly": "Weekly"
+      },
+      "deleteTitle": "Delete this schedule?",
+      "deleteBody": "The schedule, its run history, and the work summary files are all deleted. Sessions it already started are left alone.",
+      "copySummary": "Copy",
+      "copiedSummary": "Copied",
+      "modeForcedByBackground": "A background schedule always runs one-shot.",
+      "state": {
+        "success": "SUCCESS",
+        "starting": "STARTING",
+        "failed": "FAILED",
+        "running": "RUNNING",
+        "ended": "ENDED"
       }
     },
     "empty": {
@@ -2800,7 +2878,8 @@
     "activity": {
       "kind": {
         "waitingForInput": "Waiting for input",
-        "errored": "Error"
+        "errored": "Error",
+        "scheduleDone": "Schedule finished"
       }
     }
   },
