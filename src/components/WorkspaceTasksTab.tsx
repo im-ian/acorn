@@ -44,9 +44,15 @@ const TASK_LIST_FILTERS: ProjectTaskStatus[] = [
   "canceled",
 ];
 
-// The open statuses fit one toolbar row. Done and canceled stay in the
+// `null` is All: every group at once, and the default view. The open
+// statuses fit the rest of the toolbar row; done and canceled stay in the
 // grouped list, reached from their section header.
-const CHIP_FILTERS: ProjectTaskStatus[] = ["todo", "in_progress", "in_review"];
+const CHIP_FILTERS: (ProjectTaskStatus | null)[] = [
+  null,
+  "todo",
+  "in_progress",
+  "in_review",
+];
 
 // The comment list grows with its notes, then stops and scrolls. Older notes
 // stay out of the DOM until the reader asks for them.
@@ -282,10 +288,12 @@ export function WorkspaceTasksTab({
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
         {CHIP_FILTERS.map((filter) => (
           <button
-            key={filter}
+            key={filter ?? "all"}
             type="button"
             aria-pressed={listFilter === filter}
-            onClick={() => toggleListFilter(filter)}
+            onClick={() =>
+              filter === null ? setListFilter(null) : toggleListFilter(filter)
+            }
             className={cn(
               "shrink-0 rounded-md px-2 py-0.5 text-[11px] transition",
               listFilter === filter
@@ -293,7 +301,9 @@ export function WorkspaceTasksTab({
                 : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
             )}
           >
-            {t(STATUS_LABEL[filter])}
+            {filter === null
+              ? t("rightPanel.tasks.allFilter")
+              : t(STATUS_LABEL[filter])}
           </button>
         ))}
         <span className="min-w-1 flex-1" />
